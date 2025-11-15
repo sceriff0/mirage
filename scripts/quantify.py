@@ -25,6 +25,7 @@ from numpy.typing import NDArray
 
 from utils.io import load_pickle
 from utils import logging_config
+from scripts._common import ensure_dir, setup_file_logger
 
 # Setup logging
 logging_config.setup_logging()
@@ -381,7 +382,9 @@ def main():
 
     try:
         # Create output directory
-        os.makedirs(args.outdir, exist_ok=True)
+        ensure_dir(args.outdir)
+        if args.log_file:
+            setup_file_logger(args.log_file)
 
         # Get channel files
         channel_files = [

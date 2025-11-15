@@ -15,7 +15,7 @@ Key files to inspect
   - `profiles` defines `slurm` and `gpu` profiles used for cluster runs.
 - `workflows/wsi_processing/main.nf` — core workflow implementation and orchestration.
 - `modules/*/main.nf` — per-stage implementations; check `process` definitions, labels, resource directives (cpus/mem/time).
-- `conf/cluster_slurm_gpus.config` — cluster-specific settings (used for Slurm runs).
+- `conf/` — cluster/institutional configs live here (provide site-specific SLURM config as needed).
 - `scripts/*.py` — small Python entrypoints used by processes; inspect for expected CLI args and side-effects.
 - `tests/run_tests.sh` — minimal smoke test script (run with `bash tests/run_tests.sh`).
 

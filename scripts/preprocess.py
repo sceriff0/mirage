@@ -29,6 +29,7 @@ from basicpy import BaSiC
 # Local imports
 from utils.io import save_h5
 from utils import logging_config
+from scripts._common import ensure_dir, setup_file_logger
 
 # Setup logging
 logging_config.setup_logging()
@@ -420,7 +421,9 @@ def main():
         logger.addHandler(handler)
 
     # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    ensure_dir(args.output_dir)
+    if args.log_file:
+        setup_file_logger(args.log_file)
 
     # Determine output path
     image_basename = os.path.basename(args.image)

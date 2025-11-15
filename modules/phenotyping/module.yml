@@ -1,0 +1,23 @@
+name: phenotyping
+description: "Assign phenotypes to cells based on quantified marker values and output phenotype mask and CSV under pheno/."
+inputs:
+  - name: quant_csv
+    type: file
+    description: "Per-cell quantification CSV produced by quantification module"
+  - name: segmentation_mask
+    type: file
+    description: "Segmentation mask used to map phenotype numbers to labels"
+outputs:
+  - name: pheno_csv
+    path: pheno/merged_pheno.csv
+    description: "Per-cell phenotype annotation CSV"
+  - name: pheno_mask
+    path: pheno/merged_pheno_mask.tiff
+    description: "Phenotype mask image mapping labels to phenotype numbers"
+params:
+  - name: phenotype_thresholds
+    default: null
+    description: "Optional JSON or YAML mapping of marker thresholds used by the phenotype rules"
+notes: |
+  The phenotyping module currently runs `scripts/phenotype.py` which expects a
+  quant CSV and segmentation mask and writes outputs to `pheno/`.

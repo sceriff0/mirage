@@ -10,21 +10,13 @@ from scipy.stats import norm, zscore
 import logging
 from datetime import datetime
 
-# Configure logging
-def setup_logging(output_dir):
-    """Set up comprehensive logging configuration."""
-    log_file = os.path.join(output_dir, f"phenotyping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    
-    print(os.path.exists(log_file)) 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
-    )
-    logging.info(f"Logging initialized. Log file: {log_file}")
+from scripts._common import ensure_dir, setup_file_logger
+
+def setup_logging(output_dir, log_file=None):
+    """Simple logging setup: ensure output dir and optional file logger."""
+    ensure_dir(output_dir)
+    if log_file:
+        setup_file_logger(log_file)
 
 def labels_to_phenotype(arr, phenotype_df):
     """Map label array to phenotype numbers."""
