@@ -8,6 +8,7 @@ nextflow.enable.dsl=2
 
 process PREPROC_PROC {
     tag nd2file.simpleName
+    container params.container.preprocess
 
     input:
     path nd2file

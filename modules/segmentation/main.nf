@@ -10,7 +10,8 @@ nextflow.enable.dsl=2
 process SEGMENT_PROC {
     tag merged_file
 
-    label "${params.seg_gpu ? 'gpu' : 'standard'}"
+        label "${params.seg_gpu ? 'gpu' : 'standard'}"
+        container params.container.segmentation
 
     input:
     path merged_file

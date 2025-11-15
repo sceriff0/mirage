@@ -1,0 +1,13 @@
+nextflow
+numpy
+scipy
+pandas
+aicsimageio
+tifffile
+stardist
+csbdeep
+scikit-image
+dask[distributed]
+tqdm
+basicpy
+PyYAML

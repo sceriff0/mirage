@@ -1,0 +1,21 @@
+name: ateia
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - numpy
+  - pandas
+  - scipy
+  - scikit-image
+  - tifffile
+  - aicsimageio
+  - dask
+  - distributed
+  - numba
+  - pip
+  - pip:
+    - stardist
+    - csbdeep
+    - tqdm
+    - basicpy
+    - nf-core

@@ -7,6 +7,7 @@ nextflow.enable.dsl=2
 
 process PHENO_PROC {
     tag "phenotype"
+    container params.container.phenotyping
 
     input:
     path quant_csv

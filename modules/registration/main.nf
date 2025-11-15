@@ -9,6 +9,7 @@ nextflow.enable.dsl=2
 
 process REGISTER_ALL {
     tag "register_all"
+    container params.container.registration
 
     /* Accept a list of files as a single input (use .collect() at the workflow call site) */
     input:
