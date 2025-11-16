@@ -1,91 +1,40 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-"""Cell quantification utilities.
+"""Cell quantification using CPU or GPU.
 
-Compute per-cell marker intensities from a segmentation mask and single-
-channel images. The module provides a CPU implementation; an optional GPU
-implementation lives in ``scripts/quantify_gpu.py`` and is invoked when
-``--mode gpu`` is passed and the GPU helper module is available.
-
-Functions follow NumPy docstring conventions and are lightweight and
-functional for easy testing.
+This module provides cell quantification by computing marker intensities
+and morphological properties from segmentation masks. Supports both CPU
+(via scikit-image) and GPU (via quantify_gpu module) processing.
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 import numpy as np
 import pandas as pd
-import tifffile
 from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
-try:
-    from utils import logging_config
-except Exception:
-    # Minimal fallback so the module can be imported in test/dev environments
-    import logging as _logging
+from scripts._common import (
+    setup_logging,
+    setup_file_logger,
+    ensure_dir,
+    load_image,
+)
 
-    class _FallbackLoggingConfig:
-        @staticmethod
-        def setup_logging():
-            _logging.basicConfig(level=_logging.INFO)
 
-    logging_config = _FallbackLoggingConfig()
-from scripts._common import ensure_dir, setup_file_logger
-
-# Setup logging.
-logging_config.setup_logging()
 logger = logging.getLogger(__name__)
 
-# Keep this module focused on CPU helpers.
-# GPU helpers are implemented in scripts/quantify_gpu.py and imported dynamically when requested.
 
 __all__ = [
-    "load_channel_image",
     "compute_cell_intensities",
     "quantify_multichannel",
     "run_quantification",
 ]
-
-
-def load_channel_image(
-    channel_path: str
-) -> Tuple[NDArray, dict]:
-    """Load a single-channel image and return best-effort metadata.
-
-    This function intentionally uses ``tifffile`` to keep the codebase
-    lightweight and avoid extra imaging backends. The returned ``metadata``
-    dict may be empty if no OME metadata is available.
-
-    Parameters
-    ----------
-    channel_path : str
-        Path to channel image file (TIFF/OME-TIFF recommended).
-
-    Returns
-    -------
-    image : ndarray
-        2D image array (YX).
-    metadata : dict
-        Best-effort metadata dictionary (may include OME XML under 'ome').
-    """
-    image_data = tifffile.imread(channel_path)
-    metadata: dict = {}
-    try:
-        # TiffFile provides access to OME metadata when present.
-        with tifffile.TiffFile(channel_path) as tf:
-            ome = tf.ome_metadata
-            if ome:
-                metadata['ome'] = ome
-    except Exception:
-        # Do not fail on metadata extraction; image data is the primary output.
-        pass
-
-    return image_data, metadata
 
 
 def compute_cell_intensities(
@@ -94,8 +43,7 @@ def compute_cell_intensities(
     channel_name: str,
     min_area: int = 0
 ) -> pd.DataFrame:
-    """
-    Compute mean intensity per cell for a single channel.
+    """Compute mean intensity per cell for a single channel.
 
     Parameters
     ----------
@@ -106,34 +54,28 @@ def compute_cell_intensities(
     channel_name : str
         Name of the channel.
     min_area : int, optional
-        Minimum cell area in pixels. Default is 0.
+        Minimum cell area in pixels.
 
     Returns
     -------
-    df : DataFrame
-        Cell measurements with columns: label, [channel_name], area, centroid, etc.
-
-    Notes
-    -----
-    Uses efficient bincount for intensity computation.
+    DataFrame
+        Cell measurements with columns: label, channel_name, area, x, y, etc.
     """
-    logger.info(f"  Computing intensities for {channel_name}")
+    logger.info(f"Computing intensities for {channel_name}")
 
-    # Filter cells by area. We treat label 0 as background and keep labels
-    # with pixel counts > min_area. Using numpy.unique is efficient for
-    # relatively small label sets and keeps memory usage low.
+    # Filter cells by area
     labels, counts = np.unique(mask, return_counts=True)
     valid_labels = labels[(labels != 0) & (counts > min_area)]
 
     if len(valid_labels) == 0:
-        logger.warning(f"    No valid cells found")
+        logger.warning(f"No valid cells found for {channel_name}")
         return pd.DataFrame()
 
-    # Filter mask
+    # Create filtered mask
     mask_filtered = np.where(np.isin(mask, valid_labels), mask, 0)
 
     if np.all(mask_filtered == 0):
-        logger.warning(f"    Filtered mask is empty")
+        logger.warning(f"Filtered mask is empty for {channel_name}")
         return pd.DataFrame()
 
     # Compute morphological properties
@@ -147,15 +89,13 @@ def compute_cell_intensities(
     )
     props_df = pd.DataFrame(props).set_index('label', drop=False)
 
-    # Compute mean intensities using np.bincount which is fast and avoids
-    # per-label loops. We flatten arrays and compute sums/counts per label.
+    # Compute mean intensities using bincount (efficient)
     flat_mask = mask_filtered.ravel()
     flat_channel = channel.ravel()
 
     sum_per_label = np.bincount(flat_mask, weights=flat_channel)
     count_per_label = np.bincount(flat_mask)
 
-    # Avoid division by zero
     with np.errstate(divide='ignore', invalid='ignore'):
         mean_intensities = np.true_divide(sum_per_label, count_per_label)
         mean_intensities[np.isnan(mean_intensities)] = 0
@@ -174,15 +114,12 @@ def compute_cell_intensities(
 
     # Join with morphological properties
     result_df = intensity_df.join(props_df)
-
-    # Rename centroid columns
     result_df.rename(
         columns={'centroid-0': 'y', 'centroid-1': 'x'},
         inplace=True
     )
 
-    logger.info(f"    Cells quantified: {len(result_df)}")
-
+    logger.info(f"Cells quantified: {len(result_df)}")
     return result_df
 
 
@@ -191,8 +128,7 @@ def quantify_multichannel(
     channel_paths: List[str],
     min_area: int = 0
 ) -> pd.DataFrame:
-    """
-    Quantify all channels for all cells.
+    """Quantify all channels for all cells.
 
     Parameters
     ----------
@@ -201,16 +137,12 @@ def quantify_multichannel(
     channel_paths : list of str
         Paths to channel image files.
     min_area : int, optional
-        Minimum cell area filter. Default is 0.
+        Minimum cell area filter.
 
     Returns
     -------
-    df : DataFrame
+    DataFrame
         Combined measurements for all channels.
-
-    Notes
-    -----
-    Processes channels sequentially to avoid memory issues.
     """
     logger.info(f"Quantifying {len(channel_paths)} channels")
 
@@ -221,7 +153,7 @@ def quantify_multichannel(
         logger.info(f"[{idx + 1}/{len(channel_paths)}] {channel_name}")
 
         # Load channel
-        channel_image, _ = load_channel_image(channel_path)
+        channel_image, _ = load_image(channel_path)
 
         # Compute intensities
         channel_df = compute_cell_intensities(
@@ -237,7 +169,6 @@ def quantify_multichannel(
     # Combine all channels
     if all_channel_dfs:
         result_df = pd.concat(all_channel_dfs, axis=1)
-        # Remove duplicate columns
         result_df = result_df.loc[:, ~result_df.columns.duplicated()]
         logger.info(f"Total cells: {len(result_df)}")
         return result_df
@@ -253,8 +184,7 @@ def run_quantification(
     min_area: int = 0,
     log_file: str = None
 ) -> pd.DataFrame:
-    """
-    Run complete quantification pipeline.
+    """Run complete quantification pipeline.
 
     Parameters
     ----------
@@ -265,23 +195,17 @@ def run_quantification(
     output_path : str
         Path to save output CSV.
     min_area : int, optional
-        Minimum cell area filter. Default is 0.
+        Minimum cell area filter.
     log_file : str, optional
-        Log file path. Default is None.
+        Log file path.
 
     Returns
     -------
-    df : DataFrame
+    DataFrame
         Quantification results.
     """
-    # Setup logging.
     if log_file:
-        handler = logging.FileHandler(log_file)
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+        setup_file_logger(log_file)
 
     logger.info("=" * 80)
     logger.info("Starting Quantification Pipeline (CPU)")
@@ -290,22 +214,17 @@ def run_quantification(
     # Load segmentation mask
     logger.info(f"Loading segmentation mask: {mask_path}")
     mask = np.load(mask_path)
-    logger.info(f"  Mask shape: {mask.shape}")
-    logger.info(f"  Unique labels: {len(np.unique(mask)) - 1}")  # Subtract background
+    logger.info(f"Mask shape: {mask.shape}")
+    logger.info(f"Unique labels: {len(np.unique(mask)) - 1}")
 
     # Quantify
-    result_df = quantify_multichannel(
-        mask,
-        channel_paths,
-        min_area=min_area
-    )
+    result_df = quantify_multichannel(mask, channel_paths, min_area=min_area)
 
     # Save
     if not result_df.empty:
         logger.info(f"Saving results: {output_path}")
         result_df.to_csv(output_path, index=False)
-        logger.info(f"  Rows: {len(result_df)}")
-        logger.info(f"  Columns: {len(result_df.columns)}")
+        logger.info(f"Rows: {len(result_df)}, Columns: {len(result_df.columns)}")
     else:
         logger.warning("No results to save")
 
@@ -317,12 +236,7 @@ def run_quantification(
 
 
 def parse_args():
-    """Parse command-line arguments.
-
-    Supports two modes: cpu (default) and gpu. If GPU libraries are not
-    available and mode=gpu is requested, the script will fall back to CPU
-    processing with a warning.
-    """
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Cell quantification (CPU/GPU modes)',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -332,51 +246,42 @@ def parse_args():
         '--mode',
         choices=['cpu', 'gpu'],
         default='cpu',
-        help='Processing mode: cpu (default) or gpu (requires cupy/cucim)'
+        help='Processing mode'
     )
-
     parser.add_argument(
         '--patient_id',
         type=str,
-        required=False,
         help='Patient identifier (optional)'
     )
-
     parser.add_argument(
         '--mask_file',
         type=str,
         required=True,
         help='Path to segmentation mask (.npy)'
     )
-
     parser.add_argument(
         '--indir',
         type=str,
         required=True,
         help='Directory containing channel images'
     )
-
     parser.add_argument(
         '--outdir',
         type=str,
         required=True,
         help='Output directory'
     )
-
     parser.add_argument(
         '--output_file',
         type=str,
-        required=False,
-        help='Exact output file path for CSV (overrides patient_id/outdir naming)'
+        help='Exact output file path for CSV'
     )
-
     parser.add_argument(
         '--min_area',
         type=int,
         default=0,
         help='Minimum cell area (pixels)'
     )
-
     parser.add_argument(
         '--log_file',
         type=str,
@@ -387,11 +292,12 @@ def parse_args():
 
 
 def main():
-    """Main entry point which dispatches to CPU or GPU processing based on args.mode."""
+    """Main entry point dispatching to CPU or GPU processing."""
     args = parse_args()
 
     try:
-        # Create output directory
+        # Setup
+        setup_logging()
         ensure_dir(args.outdir)
         if args.log_file:
             setup_file_logger(args.log_file)
@@ -408,13 +314,14 @@ def main():
 
         logger.info(f"Found {len(channel_files)} channel files")
 
-        # Resolve output path (explicit output_file wins)
+        # Resolve output path
         if args.output_file:
             output_path = args.output_file
         else:
             pid = args.patient_id or Path(args.mask_file).stem
             output_path = os.path.join(args.outdir, f"{pid}_quantification.csv")
 
+        # Run quantification
         if args.mode == 'cpu':
             logger.info('Running CPU quantification')
             run_quantification(
@@ -426,14 +333,13 @@ def main():
             )
 
         else:  # gpu mode
-            logger.info('Running GPU quantification (if GPU helper module available)')
-            # Resolve patient id for naming
+            logger.info('Running GPU quantification')
             pid = args.patient_id or Path(args.mask_file).stem
 
             try:
                 from scripts import quantify_gpu
-            except Exception:
-                logger.warning('GPU helper module not available; falling back to CPU implementation')
+            except ImportError:
+                logger.warning('GPU module unavailable; falling back to CPU')
                 run_quantification(
                     mask_path=args.mask_file,
                     channel_paths=channel_files,
@@ -443,7 +349,6 @@ def main():
                 )
             else:
                 try:
-                    # GPU helper writes output itself; pass patient id and outdir
                     quantify_gpu.run_marker_quantification(
                         indir=args.indir,
                         mask_file=args.mask_file,

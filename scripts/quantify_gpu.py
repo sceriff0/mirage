@@ -1,49 +1,61 @@
 #!/usr/bin/env python3
-"""GPU helpers for marker quantification.
+"""GPU-accelerated marker quantification.
 
-This module contains GPU-accelerated helpers extracted from the original
-`quantify.py`. It is safe to import on systems without GPU support because
-imports are guarded.
+This module provides GPU-accelerated cell quantification using CuPy and CUCIM.
+It gracefully falls back to CPU if GPU libraries are unavailable.
 """
+
 from __future__ import annotations
 
+import logging
 import os
-import time
-import pickle
 from typing import List, Optional
 
 import numpy as np
 import pandas as pd
-import tifffile
 
-# Optional GPU libraries.
+from scripts._common import load_image, load_pickle, save_pickle
+
+# Optional GPU libraries
 try:
     import psutil
-except Exception:
+except ImportError:
     psutil = None
 
 try:
     import cupy as cp
     import cucim.skimage as cskimage
     from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
-except Exception:
+except ImportError:
     cp = None
     cskimage = None
     gpu_regionprops_table = None
 
 
+logger = logging.getLogger(__name__)
+
+
+__all__ = [
+    "print_memory_usage",
+    "gpu_extract_features",
+    "extract_features_gpu",
+    "run_marker_quantification",
+]
+
+
 def print_memory_usage(prefix: str = "") -> None:
-    """Print CPU and GPU memory usage (best-effort).
+    """Print CPU and GPU memory usage for debugging.
 
     Parameters
     ----------
-    prefix : str
-        Optional prefix string for the print statement.
+    prefix : str, optional
+        Prefix string for the print statement.
     """
     if psutil is None:
         return
+
     process = psutil.Process(os.getpid())
-    cpu_mem = process.memory_info().rss / 1024**3  # in GB
+    cpu_mem = process.memory_info().rss / 1024**3
 
     gpu_mem = 0.0
     gpu_total = 0.0
@@ -53,62 +65,9 @@ def print_memory_usage(prefix: str = "") -> None:
             gpu_mem = mempool.used_bytes() / 1024**3
             gpu_total = mempool.total_bytes() / 1024**3
         except Exception:
-            gpu_mem = 0.0
-            gpu_total = 0.0
+            pass
 
-    print(f"{prefix}CPU Memory: {cpu_mem:.2f} GB | GPU Memory: {gpu_mem:.2f}/{gpu_total:.2f} GB")
-
-
-def load_pickle(path: str):
-    """Load a pickle file.
-
-    Returns
-    -------
-    object
-        Loaded Python object.
-    """
-    with open(path, "rb") as file:
-        return pickle.load(file)
-
-
-def save_pickle(obj, path: str) -> None:
-    """Save object to pickle file.
-
-    Parameters
-    ----------
-    obj
-        Pickle-able Python object.
-    path : str
-        Destination path.
-    """
-    with open(path, "wb") as file:
-        pickle.dump(obj, file)
-
-
-def import_images(path: str):
-    """Import image and best-effort metadata using ``tifffile``.
-
-    Parameters
-    ----------
-    path : str
-        Path to image file.
-
-    Returns
-    -------
-    ndarray, dict
-        Image array and a metadata dict (may be empty if metadata not found).
-    """
-    image = tifffile.imread(path)
-    metadata = {}
-    try:
-        with tifffile.TiffFile(path) as tf:
-            ome = tf.ome_metadata
-            if ome:
-                metadata['ome'] = ome
-    except Exception:
-        pass
-
-    return image, metadata
+    print(f"{prefix}CPU: {cpu_mem:.2f} GB | GPU: {gpu_mem:.2f}/{gpu_total:.2f} GB")
 
 
 def gpu_extract_features(
@@ -123,50 +82,56 @@ def gpu_extract_features(
     Parameters
     ----------
     segmentation_mask : ndarray
-        Label mask (Y,X) with integer cell IDs.
+        Label mask with cell IDs (Y, X).
     channel_image : ndarray
-        Channel image (Y,X).
+        Channel image (Y, X).
     chan_name : str
-        Channel name used as column.
-    size_cutoff : int
-        Minimum pixel area for labels to keep.
-    verbose : bool
-        Verbosity flag.
+        Channel name for column naming.
+    size_cutoff : int, optional
+        Minimum cell area in pixels.
+    verbose : bool, optional
+        Enable verbose logging.
 
     Returns
     -------
-    pandas.DataFrame
-        Data frame with properties and mean intensity per label.
+    DataFrame
+        Cell measurements with intensity and morphological properties.
+
+    Raises
+    ------
+    RuntimeError
+        If GPU libraries are not available.
     """
     if cp is None or gpu_regionprops_table is None:
-        raise RuntimeError("GPU libraries not available")
+        raise RuntimeError("GPU libraries (cupy/cucim) not available")
 
     if verbose:
-        print(f"Processing channel: {chan_name}")
+        logger.info(f"Processing channel: {chan_name}")
         print_memory_usage(f"  Before GPU transfer ({chan_name}): ")
 
-    # Transfer arrays to GPU memory. We squeeze to ensure 2D shapes, then
-    # operate using CuPy-backed arrays and cucim regionprops for performance.
+    # Transfer to GPU
     mask_gpu = cp.asarray(segmentation_mask.squeeze())
     channel_gpu = cp.asarray(channel_image.squeeze())
 
     if verbose:
         print_memory_usage(f"  After GPU transfer ({chan_name}): ")
 
-    # Get unique labels and filter by size
+    # Filter labels by size
     labels, counts = cp.unique(mask_gpu, return_counts=True)
     valid_ids = labels[(labels != 0) & (counts > size_cutoff)]
 
     if len(valid_ids) == 0:
+        logger.warning(f"No valid cells for {chan_name}")
         return pd.DataFrame()
 
-    # Filter mask to only include valid labels
+    # Create filtered mask
     mask_filtered = cp.where(cp.isin(mask_gpu, valid_ids), mask_gpu, 0)
 
     if (mask_filtered == 0).all():
+        logger.warning(f"Filtered mask is empty for {chan_name}")
         return pd.DataFrame()
 
-    # Use GPU-accelerated regionprops
+    # GPU-accelerated regionprops
     props = gpu_regionprops_table(
         mask_filtered,
         properties=[
@@ -175,10 +140,11 @@ def gpu_extract_features(
         ]
     )
 
+    # Transfer props to CPU
     props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in props.items()}
     props_df = pd.DataFrame(props_cpu).set_index("label", drop=False)
 
-    # Calculate mean intensities using CuPy
+    # Compute mean intensities
     flat_mask = mask_filtered.ravel()
     flat_image = channel_gpu.ravel()
 
@@ -186,27 +152,22 @@ def gpu_extract_features(
     count_per_label = cp.bincount(flat_mask)
 
     means = cp.where(count_per_label != 0, sum_per_label / count_per_label, 0.0)
+    mean_values = cp.array([means[int(lbl)] if lbl < len(means) else 0 for lbl in valid_ids])
 
-    mean_values = cp.array([means[int(label)] if label < len(means) else 0 for label in valid_ids])
-
-    # Move results back to host (CPU) memory for pandas consumption.
+    # Transfer to CPU
     mean_values_cpu = mean_values.get()
     valid_ids_cpu = valid_ids.get()
 
     intensity_df = pd.DataFrame({chan_name: mean_values_cpu}, index=valid_ids_cpu)
-
     df = intensity_df.join(props_df)
     df.rename(columns={"centroid-0": "y", "centroid-1": "x"}, inplace=True)
 
-    # Clear GPU memory explicitly to avoid lingering allocations between
-    # channels. This helps when processing many channels sequentially.
+    # Free GPU memory
     del mask_gpu, channel_gpu, mask_filtered, flat_mask, flat_image
     del sum_per_label, count_per_label, means, mean_values
     try:
         cp.get_default_memory_pool().free_all_blocks()
     except Exception:
-        # Best-effort free; continue even if the runtime does not expose
-        # or allow explicit pool freeing on some CuPy versions.
         pass
 
     return df
@@ -220,9 +181,27 @@ def extract_features_gpu(
     verbose: bool = True,
     write: bool = False
 ) -> pd.DataFrame:
-    """Main feature extraction function using GPU acceleration.
+    """Extract features for all channels using GPU.
 
-    Returns combined DataFrame across channels and optionally writes CSV.
+    Parameters
+    ----------
+    channels_files : list of str
+        Paths to channel image files.
+    segmentation_mask : ndarray
+        Segmentation mask.
+    output_file : str, optional
+        Path to save CSV output.
+    size_cutoff : int, optional
+        Minimum cell area filter.
+    verbose : bool, optional
+        Enable verbose output.
+    write : bool, optional
+        Write results to file.
+
+    Returns
+    -------
+    DataFrame
+        Combined quantification results.
     """
     segmentation_mask = segmentation_mask.squeeze()
     results_all = []
@@ -231,10 +210,9 @@ def extract_features_gpu(
         chan_name = os.path.basename(file).split('.')[0].split('_')[-1]
 
         if verbose:
-            print(f"\n--- Processing channel: {chan_name} ---")
+            logger.info(f"Processing channel: {chan_name}")
 
-        # import_images returns a numpy array and metadata dict
-        channel_image, _ = import_images(file)
+        channel_image, _ = load_image(file)
 
         df = gpu_extract_features(
             segmentation_mask,
@@ -247,7 +225,7 @@ def extract_features_gpu(
         if not df.empty:
             results_all.append(df)
 
-        # Free per-channel memory promptly
+        # Free memory
         del channel_image
         try:
             cp.get_default_memory_pool().free_all_blocks()
@@ -261,15 +239,13 @@ def extract_features_gpu(
         if write and output_file:
             result_df.to_csv(output_file, index=False)
             if verbose:
-                print(f"Saved output to: {output_file}")
+                logger.info(f"Saved output: {output_file}")
 
         return result_df
 
     return pd.DataFrame()
 
 
-# Lightweight runner kept for convenience. In the pipeline, the Nextflow module
-# should call appropriate functions directly.
 def run_marker_quantification(
     indir: str,
     mask_file: str,
@@ -278,15 +254,38 @@ def run_marker_quantification(
     size_cutoff: int = 0,
     verbose: bool = True
 ) -> pd.DataFrame:
-    """Run the marker quantification pipeline using GPU helpers."""
+    """Run GPU-accelerated marker quantification pipeline.
+
+    Parameters
+    ----------
+    indir : str
+        Directory containing channel images.
+    mask_file : str
+        Path to segmentation mask (.npy).
+    outdir : str
+        Output directory.
+    patient_id : str
+        Patient identifier for output naming.
+    size_cutoff : int, optional
+        Minimum cell area.
+    verbose : bool, optional
+        Enable verbose logging.
+
+    Returns
+    -------
+    DataFrame
+        Quantification results.
+    """
     os.makedirs(outdir, exist_ok=True)
 
-    output_file = os.path.join(outdir, f"{patient_id}_segmentation_markers_data_FULL.csv")
-
+    output_file = os.path.join(outdir, f"{patient_id}_quantification_gpu.csv")
     segmentation_mask = np.load(mask_file).squeeze()
 
-    files = [os.path.join(indir, file) for file in os.listdir(indir)
-             if file.endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))]
+    files = [
+        os.path.join(indir, f)
+        for f in os.listdir(indir)
+        if f.endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))
+    ]
 
     markers_data = extract_features_gpu(
         channels_files=files,
@@ -301,14 +300,18 @@ def run_marker_quantification(
 
 
 if __name__ == '__main__':
-    # Minimal CLI for manual runs; keep simple to avoid coupling with Nextflow args.
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run GPU quantification (helper)")
-    parser.add_argument("--patient_id", required=True)
-    parser.add_argument("--indir", required=True)
-    parser.add_argument("--mask_file", required=True)
-    parser.add_argument("--outdir", required=True)
+    parser = argparse.ArgumentParser(
+        description='GPU-accelerated cell quantification'
+    )
+    parser.add_argument("--patient_id", required=True, help="Patient ID")
+    parser.add_argument("--indir", required=True, help="Channel images directory")
+    parser.add_argument("--mask_file", required=True, help="Segmentation mask path")
+    parser.add_argument("--outdir", required=True, help="Output directory")
     args = parser.parse_args()
 
-    run_marker_quantification(args.indir, args.mask_file, args.outdir, args.patient_id)
+    logging.basicConfig(level=logging.INFO)
+    run_marker_quantification(
+        args.indir, args.mask_file, args.outdir, args.patient_id
+    )
