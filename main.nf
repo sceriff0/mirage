@@ -1,8 +1,8 @@
 #!/usr/bin/env nextflow
 /*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    ateia/wsi-processing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
+    ATEIA WSI Processing Pipeline
+========================================================================================
     Whole Slide Image Processing Pipeline
     Github: https://github.com/ateia/wsi-processing
 ----------------------------------------------------------------------------------------
@@ -11,17 +11,23 @@
 nextflow.enable.dsl = 2
 
 /*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    VALIDATE & PRINT PARAMETER SUMMARY
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
+    IMPORT MODULES
+========================================================================================
 */
 
-// Validate input parameters
-if (!params.input) {
-    error "Please provide an input glob pattern with --input"
-}
+include { PREPROCESS } from './modules/local/preprocess'
+include { REGISTER   } from './modules/local/register'
+include { SEGMENT    } from './modules/local/segment'
+include { QUANTIFY   } from './modules/local/quantify'
+include { PHENOTYPE  } from './modules/local/phenotype'
 
-// Print parameter summary
+/*
+========================================================================================
+    PRINT PARAMETER SUMMARY
+========================================================================================
+*/
+
 log.info """\
     ATEIA WSI PROCESSING PIPELINE
     =============================
@@ -32,38 +38,44 @@ log.info """\
     .stripIndent()
 
 /*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    NAMED WORKFLOWS FOR PIPELINE
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
-
-include { WSI_PROCESSING } from './subworkflows/local/wsi_processing'
-
-//
-// WORKFLOW: Run main analysis pipeline
-//
-workflow ATEIA_WSI {
-    // Create input channel from glob pattern
-    ch_input = Channel.fromPath(params.input, checkIfExists: true)
-
-    //
-    // SUBWORKFLOW: Process WSI files
-    //
-    WSI_PROCESSING ( ch_input )
-}
-
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
     RUN MAIN WORKFLOW
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
 */
 
 workflow {
-    ATEIA_WSI ()
+    // Validate input parameters
+    if (!params.input) {
+        error "Please provide an input glob pattern with --input"
+    }
+
+    // Create input channel from glob pattern
+    ch_input = Channel.fromPath(params.input, checkIfExists: true)
+
+    // MODULE: Preprocess each input file
+    PREPROCESS ( ch_input )
+
+    // MODULE: Register/merge all preprocessed files
+    REGISTER ( PREPROCESS.out.preprocessed.collect() )
+
+    // MODULE: Segment the merged WSI
+    SEGMENT ( REGISTER.out.merged )
+
+    // MODULE: Quantify cells
+    QUANTIFY (
+        REGISTER.out.merged,
+        SEGMENT.out.mask
+    )
+
+    // MODULE: Phenotype cells
+    PHENOTYPE (
+        QUANTIFY.out.csv,
+        SEGMENT.out.mask
+    )
 }
 
 /*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
     THE END
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+========================================================================================
 */
