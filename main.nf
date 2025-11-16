@@ -1,13 +1,3 @@
-#!/usr/bin/env nextflow
-/*
-========================================================================================
-    ATEIA WSI Processing Pipeline
-========================================================================================
-    Whole Slide Image Processing Pipeline
-    Github: https://github.com/ateia/wsi-processing
-----------------------------------------------------------------------------------------
-*/
-
 nextflow.enable.dsl = 2
 
 /*
@@ -16,26 +6,13 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { PREPROCESS } from './modules/local/preprocess'
-include { REGISTER   } from './modules/local/register'
-include { SEGMENT    } from './modules/local/segment'
-include { QUANTIFY   } from './modules/local/quantify'
-include { PHENOTYPE  } from './modules/local/phenotype'
+include { PREPROCESS } from 'modules/local/preprocess'
+include { REGISTER   } from 'modules/local/register'
+include { SEGMENT    } from 'modules/local/segment'
+include { QUANTIFY   } from 'modules/local/quantify'
+include { PHENOTYPE  } from 'modules/local/phenotype'
+include { GET_PREPROCESS_DIR } from 'modules/local/get_preprocess_dir' // The helper module
 
-/*
-========================================================================================
-    PRINT PARAMETER SUMMARY
-========================================================================================
-*/
-
-log.info """\
-    ATEIA WSI PROCESSING PIPELINE
-    =============================
-    input        : ${params.input}
-    outdir       : ${params.outdir}
-    GPU enabled  : ${params.use_gpu}
-    """
-    .stripIndent()
 
 /*
 ========================================================================================
@@ -49,33 +26,32 @@ workflow {
         error "Please provide an input glob pattern with --input"
     }
 
-    // Create input channel from glob pattern
+    // 1. Create input channel from glob pattern
     ch_input = Channel.fromPath(params.input, checkIfExists: true)
 
-    // MODULE: Preprocess each input file
+    // 2. MODULE: Preprocess each input file (Parallel)
     PREPROCESS ( ch_input )
 
-    // MODULE: Register/merge all preprocessed files
-    REGISTER ( PREPROCESS.out.preprocessed.collect() )
+    // 3. SYNCHRONIZATION STEP: 
+    //    Waits for all PREPROCESS tasks to finish, then triggers GET_PREPROCESS_DIR.
+    ch_preprocessed_files_list = PREPROCESS.out.preprocessed.collect()
+    GET_PREPROCESS_DIR( ch_preprocessed_files_list )
+    
+    // 4. MODULE: Register/merge all preprocessed files (Serial Merge)
+    REGISTER ( GET_PREPROCESS_DIR.out.preprocess_dir )
 
-    // MODULE: Segment the merged WSI
+    // 5. MODULE: Segment the merged WSI (Serial)
     SEGMENT ( REGISTER.out.merged )
 
-    // MODULE: Quantify cells
+    // 6. MODULE: Quantify cells (Serial)
     QUANTIFY (
         REGISTER.out.merged,
         SEGMENT.out.mask
     )
 
-    // MODULE: Phenotype cells
+    // 7. MODULE: Phenotype cells (Serial)
     PHENOTYPE (
         QUANTIFY.out.csv,
         SEGMENT.out.mask
     )
 }
-
-/*
-========================================================================================
-    THE END
-========================================================================================
-*/

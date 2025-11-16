@@ -248,11 +248,7 @@ def parse_args():
         default='cpu',
         help='Processing mode'
     )
-    parser.add_argument(
-        '--patient_id',
-        type=str,
-        help='Patient identifier (optional)'
-    )
+    # Removed --patient_id: not needed for this script or pipeline.
     parser.add_argument(
         '--mask_file',
         type=str,
@@ -318,8 +314,7 @@ def main():
         if args.output_file:
             output_path = args.output_file
         else:
-            pid = args.patient_id or Path(args.mask_file).stem
-            output_path = os.path.join(args.outdir, f"{pid}_quantification.csv")
+            output_path = os.path.join(args.outdir, f"{Path(args.mask_file).stem}_quantification.csv")
 
         # Run quantification
         if args.mode == 'cpu':
@@ -334,8 +329,6 @@ def main():
 
         else:  # gpu mode
             logger.info('Running GPU quantification')
-            pid = args.patient_id or Path(args.mask_file).stem
-
             try:
                 from scripts import quantify_gpu
             except ImportError:
@@ -353,7 +346,6 @@ def main():
                         indir=args.indir,
                         mask_file=args.mask_file,
                         outdir=args.outdir,
-                        patient_id=pid,
                         size_cutoff=args.min_area,
                     )
                 except Exception as e:

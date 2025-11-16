@@ -1,7 +1,11 @@
+nextflow.enable.dsl = 2
+
 process PREPROCESS {
     tag "${nd2file.simpleName}"
     label 'process_medium'
     container "${params.container.preprocess}"
+
+    publishDir "${params.outdir}/preprocessed", mode: 'copy'
 
     input:
     path nd2file

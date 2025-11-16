@@ -3,6 +3,8 @@
 
 This module provides utilities to apply BaSiC shading correction to large
 multichannel images by tiling into FOVs and reconstructing the corrected image.
+This version loads a single multichannel image, processes channels in parallel,
+and saves the result back to a single TIFF file.
 """
 
 from __future__ import annotations
@@ -11,8 +13,10 @@ import os
 import time
 import argparse
 import logging
+import re
 from pathlib import Path
 from typing import Tuple, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import tifffile
@@ -27,22 +31,7 @@ try:
 except Exception:  # pragma: no cover - environment dependent
     BaSiC = None
 
-# Local imports (guarded fallbacks for utils helpers)
-try:
-    from utils.io import save_h5
-except Exception:
-    # Minimal HDF5 saver used when utils.io isn't available in test envs
-    try:
-        import h5py
-
-        def save_h5(arr, path):
-            with h5py.File(path, 'w') as f:
-                f.create_dataset('data', data=arr)
-    except Exception:
-        def save_h5(arr, path):
-            # Last-resort: write a numpy .npy file if h5py missing
-            np.save(path.replace('.h5', '.npy'), arr)
-
+# --- Minimal Fallbacks for Local Imports (Ensuring script is self-contained) ---
 try:
     from utils import logging_config
 except Exception:
@@ -55,7 +44,19 @@ except Exception:
 
     logging_config = _FallbackLoggingConfig()
 
-from _common import ensure_dir, setup_file_logger
+# Dummy implementations for required local imports if missing
+try:
+    from _common import ensure_dir, setup_file_logger
+except Exception:
+    def ensure_dir(path):
+        Path(path).mkdir(parents=True, exist_ok=True)
+    
+    def setup_file_logger(log_file):
+        handler = logging.FileHandler(log_file)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+# --- End Fallbacks ---
 
 # Setup logging.
 logging_config.setup_logging()
@@ -75,34 +76,13 @@ def split_image_into_fovs(
     overlap: int = 0
 ) -> Tuple[NDArray, List[Tuple[int, int, int, int]], Tuple[int, int]]:
     """
-    Split image into field-of-view (FOV) tiles for BaSiC processing.
-
-    Parameters
-    ----------
-    image : ndarray, shape (H, W) or (H, W, C)
-        Input image to split.
-    fov_size : tuple of int
-        FOV dimensions as (height, width).
-    overlap : int, optional
-        Overlap between adjacent FOVs. Default is 0.
-
-    Returns
-    -------
-    fov_stack : ndarray, shape (N, fov_h, fov_w) or (N, fov_h, fov_w, C)
-        Stack of FOV tiles.
-    positions : list of tuple
-        FOV positions as (row_start, col_start, height, width).
-    max_fov_size : tuple of int
-        Maximum FOV size used for padding.
-
-    Notes
-    -----
-    FOVs are padded to uniform size. Use positions to reconstruct original image.
+    Split image (H, W) into field-of-view (FOV) tiles for BaSiC processing.
     """
-    if image.ndim < 2:
-        raise ValueError(f"Image must be at least 2D, got {image.ndim}D")
+    if image.ndim != 2:
+        # Enforcing 2D input as BaSiC works on single channels (H, W)
+        raise ValueError(f"Image must be 2D, got shape {image.shape}")
 
-    image_h, image_w = image.shape[:2]
+    image_h, image_w = image.shape
     fov_h, fov_w = fov_size
 
     if overlap >= min(fov_h, fov_w):
@@ -118,17 +98,13 @@ def split_image_into_fovs(
 
     n_fovs = n_fovs_h * n_fovs_w
 
-    logger.info(
+    logger.debug(
         f"Splitting {image.shape} image into {n_fovs} FOVs "
         f"({n_fovs_h}×{n_fovs_w}) of size {fov_size}"
     )
 
-    # Prepare output array
-    if image.ndim == 2:
-        fov_stack = np.zeros((n_fovs, fov_h, fov_w), dtype=image.dtype)
-    else:
-        fov_stack = np.zeros((n_fovs, fov_h, fov_w, image.shape[2]), dtype=image.dtype)
-
+    # Prepare output array (N, fov_h, fov_w)
+    fov_stack = np.zeros((n_fovs, fov_h, fov_w), dtype=image.dtype)
     positions = []
     idx = 0
 
@@ -144,12 +120,8 @@ def split_image_into_fovs(
             actual_w = col_end - col_start
 
             # Extract FOV
-            if image.ndim == 2:
-                fov_stack[idx, :actual_h, :actual_w] = \
-                    image[row_start:row_end, col_start:col_end]
-            else:
-                fov_stack[idx, :actual_h, :actual_w, :] = \
-                    image[row_start:row_end, col_start:col_end, :]
+            fov_stack[idx, :actual_h, :actual_w] = \
+                image[row_start:row_end, col_start:col_end]
 
             positions.append((row_start, col_start, actual_h, actual_w))
             idx += 1
@@ -163,31 +135,14 @@ def reconstruct_image_from_fovs(
     original_shape: Tuple[int, ...]
 ) -> NDArray:
     """
-    Reconstruct image from FOV tiles.
-
-    Parameters
-    ----------
-    fov_stack : ndarray, shape (N, fov_h, fov_w) or (N, fov_h, fov_w, C)
-        Stack of FOV tiles.
-    positions : list of tuple
-        FOV positions as (row_start, col_start, height, width).
-    original_shape : tuple of int
-        Shape of the reconstructed image.
-
-    Returns
-    -------
-    reconstructed : ndarray
-        Reconstructed image with original_shape.
+    Reconstruct 2D image from 3D FOV tiles stack.
     """
     reconstructed = np.zeros(original_shape, dtype=fov_stack.dtype)
 
     for idx, (row_start, col_start, h, w) in enumerate(positions):
-        if reconstructed.ndim == 2:
-            reconstructed[row_start:row_start + h, col_start:col_start + w] = \
-                fov_stack[idx, :h, :w]
-        else:
-            reconstructed[row_start:row_start + h, col_start:col_start + w, :] = \
-                fov_stack[idx, :h, :w, :]
+        # fov_stack is 3D (N, fov_h, fov_w), reconstructed is 2D (H, W)
+        reconstructed[row_start:row_start + h, col_start:col_start + w] = \
+            fov_stack[idx, :h, :w]
 
     return reconstructed
 
@@ -201,79 +156,40 @@ def apply_basic_correction(
     **basic_kwargs
 ) -> Tuple[NDArray, object]:
     """
-    Apply BaSiC illumination correction to image.
-
-    Parameters
-    ----------
-    image : ndarray, shape (H, W)
-        Input image (single channel).
-    fov_size : tuple of int, optional
-        FOV size for tiling. Default is (1950, 1950).
-    get_darkfield : bool, optional
-        Whether to estimate darkfield. Default is True.
-    autotune : bool, optional
-        Whether to autotune BaSiC parameters. Default is False.
-    n_iter : int, optional
-        Number of autotuning iterations. Default is 3.
-    **basic_kwargs
-        Additional arguments passed to BaSiC constructor.
-
-    Returns
-    -------
-    corrected : ndarray
-        Illumination-corrected image.
-    basic_model : BaSiC
-        Fitted BaSiC model.
-
-    Notes
-    -----
-    The image is split into FOVs for processing, then reconstructed.
-    This is the correct way to apply BaSiC to large images.
+    Apply BaSiC illumination correction to a single channel image (H, W).
     """
+    if image.ndim != 2:
+        raise ValueError(f"apply_basic_correction requires a 2D image, got shape {image.shape}")
+
     logger.info(f"Applying BaSiC correction to {image.shape} image")
     start_time = time.time()
+    
+    if BaSiC is None:
+        raise ImportError("basicpy (BaSiC) is required but not installed.")
 
     # Split into FOVs
-    fov_stack, positions, max_fov_size = split_image_into_fovs(
+    fov_stack, positions, _ = split_image_into_fovs(
         image, fov_size, overlap=0
     )
 
-    # Initialize BaSiC model
+    # Initialize BaSiC model and (Autotune if requested)...
     basic = BaSiC(get_darkfield=get_darkfield, **basic_kwargs)
 
-    logger.info(
-        f"BaSiC parameters: smoothness_flatfield={basic.smoothness_flatfield}, "
-        f"smoothness_darkfield={basic.smoothness_darkfield}, "
-        f"sparse_cost_darkfield={basic.sparse_cost_darkfield}"
-    )
-
-    # Autotune if requested
     if autotune:
         logger.info(f"Autotuning BaSiC parameters ({n_iter} iterations)...")
         autotune_start = time.time()
-
         basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
-
-        autotune_time = time.time() - autotune_start
-        logger.info(f"Autotuning completed in {autotune_time:.2f}s")
-        logger.info(
-            f"Tuned parameters: smoothness_flatfield={basic.smoothness_flatfield}, "
-            f"smoothness_darkfield={basic.smoothness_darkfield}, "
-            f"sparse_cost_darkfield={basic.sparse_cost_darkfield}"
-        )
-
+        logger.info(f"Autotuning completed in {time.time() - autotune_start:.2f}s")
+        
     # Fit and transform
     logger.info("Fitting and transforming FOVs...")
     transform_start = time.time()
-
     corrected_fovs = basic.fit_transform(fov_stack)
+    logger.info(f"Transformation completed in {time.time() - transform_start:.2f}s")
 
-    transform_time = time.time() - transform_start
-    logger.info(f"Transformation completed in {transform_time:.2f}s")
-
-    # Reconstruct image (FIXED: use corrected_fovs, not fov_stack!)
+    # Reconstruct image
     reconstructed = reconstruct_image_from_fovs(
-        corrected_fovs,  # CRITICAL FIX: was using fov_stack before
+        corrected_fovs,
         positions,
         image.shape
     )
@@ -284,87 +200,141 @@ def apply_basic_correction(
     return reconstructed, basic
 
 
+def _process_single_channel_from_stack(
+    channel_image: NDArray,
+    channel_index: int,
+    channel_name: str,
+    fov_size: Tuple[int, int],
+    skip_dapi: bool,
+    autotune: bool,
+    n_iter: int,
+    basic_kwargs: dict
+) -> Tuple[int, NDArray]:
+    """Worker function to process a single channel slice from a stack."""
+    logger.info(f"Processing channel #{channel_index} ({channel_name}) - shape: {channel_image.shape}")
+
+    # Skip DAPI if requested
+    if skip_dapi and 'DAPI' in channel_name.upper():
+        logger.info(f"  Skipping BaSiC correction for DAPI")
+        return channel_index, channel_image
+
+    # Apply BaSiC correction
+    try:
+        corrected, _ = apply_basic_correction(
+            channel_image,
+            fov_size=fov_size,
+            autotune=autotune,
+            n_iter=n_iter,
+            **basic_kwargs
+        )
+        return channel_index, corrected
+
+    except Exception as e:
+        logger.error(f"  BaSiC correction failed for {channel_name}: {e}")
+        logger.warning(f"  Using uncorrected channel for {channel_name}")
+        return channel_index, channel_image
+
+
 def preprocess_multichannel_image(
-    channels: List[str],
-    output_path: str,
+    image_path: str,
+    channel_names: List[str],
+    output_path: str, # Now a TIFF path
     fov_size: Tuple[int, int] = (1950, 1950),
     skip_dapi: bool = True,
     autotune: bool = False,
     n_iter: int = 3,
+    n_workers: int = 4,
     **basic_kwargs
 ) -> NDArray:
     """
-    Apply BaSiC preprocessing to multichannel image.
-
-    Parameters
-    ----------
-    channels : list of str
-        List of paths to single-channel TIFF files.
-    output_path : str
-        Path to save preprocessed H5 file.
-    fov_size : tuple of int, optional
-        FOV size for BaSiC tiling. Default is (1950, 1950).
-    skip_dapi : bool, optional
-        Skip BaSiC correction for DAPI channel. Default is True.
-    autotune : bool, optional
-        Autotune BaSiC parameters. Default is False.
-    n_iter : int, optional
-        Number of autotuning iterations. Default is 3.
-    **basic_kwargs
-        Additional BaSiC parameters.
-
-    Returns
-    -------
-    preprocessed : ndarray, shape (C, H, W)
-        Preprocessed multichannel image.
-
-    Notes
-    -----
-    The output is saved as HDF5 in CYX format.
+    Apply BaSiC preprocessing to a single multichannel image in parallel and save as TIFF.
     """
-    logger.info(f"Preprocessing {len(channels)} channels")
+    logger.info(f"Loading multichannel image from {image_path}")
+    
+    # 1. Load the entire multichannel image (C, H, W)
+    try:
+        # Reading as Dask array, then computing to ensure (C, H, W) or (Z, C, H, W) is handled
+        # For simplicity with BaSiC, we primarily target (C, H, W).
+        multichannel_stack = tifffile.imread(image_path)
+        
+        # Adjust dimensions if tifffile returns (H, W) or (H, W, C)
+        if multichannel_stack.ndim == 2:
+            multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
+        elif multichannel_stack.ndim == 3 and multichannel_stack.shape[2] == len(channel_names):
+            # If (H, W, C), transpose to (C, H, W)
+            multichannel_stack = np.transpose(multichannel_stack, (2, 0, 1))
 
-    preprocessed_channels = []
+    except Exception as e:
+        logger.critical(f"Failed to load multichannel image {image_path}: {e}")
+        raise
+        
+    n_channels, H, W = multichannel_stack.shape
+    
+    if n_channels != len(channel_names):
+        logger.warning(
+            f"Channel count mismatch: Found {n_channels} layers, "
+            f"but detected {len(channel_names)} names from filename. "
+            f"Using generic names for excess channels."
+        )
+        channel_names = channel_names[:n_channels] + [f"Channel_{i}" for i in range(len(channel_names), n_channels)]
 
-    for idx, channel_path in enumerate(channels):
-        channel_name = Path(channel_path).stem.split('_')[-1]
-        logger.info(f"[{idx + 1}/{len(channels)}] Processing channel: {channel_name}")
+    logger.info(
+        f"Processing {n_channels} channels ({H}x{W}) in parallel "
+        f"with {n_workers} workers."
+    )
 
-        # Load channel using tifffile (consistent, fast TIFF IO)
-        load_start = time.time()
-        channel_image = tifffile.imread(channel_path)
-        load_time = time.time() - load_start
-        logger.info(f"  Loaded in {load_time:.2f}s - shape: {channel_image.shape}")
-
-        # Skip DAPI if requested
-        if skip_dapi and 'DAPI' in channel_name.upper():
-            logger.info(f"  Skipping BaSiC correction for DAPI")
-            preprocessed_channels.append(channel_image)
-            continue
-
-        # Apply BaSiC correction
-        try:
-            corrected, _ = apply_basic_correction(
-                channel_image,
-                fov_size=fov_size,
-                autotune=autotune,
-                n_iter=n_iter,
-                **basic_kwargs
+    results = {}
+    
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = []
+        for i in range(n_channels):
+            # Pass the 2D slice (H, W) for processing
+            future = executor.submit(
+                _process_single_channel_from_stack,
+                multichannel_stack[i, ...],
+                i,
+                channel_names[i],
+                fov_size,
+                skip_dapi,
+                autotune,
+                n_iter,
+                basic_kwargs
             )
-            preprocessed_channels.append(corrected)
+            futures.append(future)
 
-        except Exception as e:
-            logger.error(f"  BaSiC correction failed for {channel_name}: {e}")
-            logger.warning(f"  Using uncorrected channel")
-            preprocessed_channels.append(channel_image)
+        # Collect results, ensuring correct order via channel index
+        for future in as_completed(futures):
+            try:
+                channel_index, result_array = future.result()
+                results[channel_index] = result_array
+            except Exception as e:
+                logger.error(f"❌ Parallel channel processing failed: {e}")
+                raise RuntimeError("Parallel channel processing failed.")
+                
+    # 2. Reconstruct the final stack in the original index order
+    preprocessed_channels = [
+        results[i] for i in range(n_channels)
+    ]
 
-    # Stack channels (CYX format)
+    # Stack channels (C, Y, X format)
     preprocessed = np.stack(preprocessed_channels, axis=0)
     logger.info(f"Stacked shape: {preprocessed.shape}")
 
-    # Save as HDF5
-    logger.info(f"Saving to {output_path}")
-    save_h5(preprocessed, output_path)
+    # 3. Save as TIFF/OME-TIFF
+    logger.info(f"Saving corrected multichannel image to {output_path}")
+    try:
+        # Use tifffile to save, potentially preserving OME-TIFF metadata 
+        # (though complex metadata transfer is beyond simple tifffile use)
+        tifffile.imwrite(
+            output_path, 
+            preprocessed, 
+            imagej=True, # Common for biomedical images
+            photometric='minisblack'
+        )
+        logger.info(f"Successfully saved corrected image to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to save output TIFF to {output_path}: {e}")
+        raise
 
     return preprocessed
 
@@ -377,25 +347,10 @@ def parse_args():
     )
 
     parser.add_argument(
-        '--channels',
-        type=str,
-        nargs='+',
-        required=True,
-        help='Paths to single-channel TIFF files'
-    )
-
-    parser.add_argument(
         '--image',
         type=str,
         required=True,
-        help='Original image path (for naming)'
-    )
-
-    parser.add_argument(
-        '--patient_id',
-        type=str,
-        required=True,
-        help='Patient ID'
+        help='Path to the multichannel image file (e.g., <ID>_DAPI_<MARKER1>...ome.tiff)'
     )
 
     parser.add_argument(
@@ -410,6 +365,13 @@ def parse_args():
         type=int,
         default=1950,
         help='FOV size for BaSiC tiling'
+    )
+    
+    parser.add_argument(
+        '--n_workers',
+        type=int,
+        default=4,
+        help='Maximum number of channels to process in parallel.'
     )
 
     parser.add_argument(
@@ -439,6 +401,30 @@ def parse_args():
 
     return parser.parse_args()
 
+def find_channel_names_from_path(image_path: str) -> List[str]:
+    """
+    Extracts channel names from a multichannel image path assuming the format:
+    <ID>_<CHANNEL1>_<CHANNEL2>...<EXT>
+    e.g., 'id1_DAPI_Marker1_Marker2.ome.tiff' -> ['DAPI', 'Marker1', 'Marker2']
+    """
+    p = Path(image_path)
+    base_name = p.stem # 'id1_DAPI_Marker1_Marker2'
+    
+    parts = base_name.split('_')
+    
+    if len(parts) < 2:
+        logger.warning(f"Could not parse channel names from path: {image_path}. Using generic names.")
+        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"] # Provide a sufficient list
+
+    # Skip the first part (the ID)
+    channel_names = parts[1:]
+    
+    if not channel_names:
+        logger.warning("Filename contained an ID but no subsequent channel names. Using generic names.")
+        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
+
+    return channel_names
+
 
 def main():
     """Main entry point."""
@@ -446,61 +432,47 @@ def main():
 
     # Setup logging.
     if args.log_file:
-        handler = logging.FileHandler(args.log_file)
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
+        setup_file_logger(args.log_file)
+        
     # Create output directory.
     ensure_dir(args.output_dir)
-    if args.log_file:
-        setup_file_logger(args.log_file)
 
-    # Determine output path
-    image_basename = os.path.basename(args.image)
+    image_path = args.image
+    image_basename = os.path.basename(image_path)
+    
+    # Extract channel names from the filename
+    channel_names = find_channel_names_from_path(image_path)
+
+    # Determine the output path, appending '_corrected' before the extension
+    base, ext = os.path.splitext(image_basename)
+    
+    # Handle extensions like .ome.tiff
+    if base.endswith(".ome"):
+        base = base[:-4]
+        ext = ".ome" + ext # Recombine to keep the full extension
+
+    output_filename = f"{base}_corrected{ext}"
     output_path = os.path.join(
         args.output_dir,
-        f"preprocessed_{image_basename}"
+        output_filename
     )
 
-    # Handle different extensions.
-    for ext in ['.nd2', '.tiff', '.tif']:
-        if output_path.endswith(ext):
-            output_path = output_path.replace(ext, '.h5')
-            break
+    logger.info(f"Expected channel order (from filename): {channel_names}")
 
-    if not output_path.endswith('.h5'):
-        output_path += '.h5'
-
-    # Sort channels by expected order.
-    channel_order = image_basename.split('.')[0].split('_')[1:][::-1]
-    sorted_channels = []
-
-    for ch_name in channel_order:
-        matching = [f for f in args.channels if ch_name in f]
-        if matching:
-            sorted_channels.append(matching[0])
-
-    if not sorted_channels:
-        sorted_channels = args.channels
-
-    logger.info(f"Channel order: {channel_order}")
-    logger.info(f"Sorted files: {[Path(f).name for f in sorted_channels]}")
-
-    # Process.
+    # Process the single multichannel image.
     try:
         preprocess_multichannel_image(
-            channels=sorted_channels,
+            image_path=image_path,
+            channel_names=channel_names,
             output_path=output_path,
             fov_size=(args.fov_size, args.fov_size),
             skip_dapi=args.skip_dapi,
             autotune=args.autotune,
-            n_iter=args.n_iter
+            n_iter=args.n_iter,
+            n_workers=args.n_workers
         )
 
-        logger.info(f"Preprocessing completed successfully")
+        logger.info(f"Preprocessing completed successfully for {image_path}. Output saved to {output_path}")
         return 0
 
     except Exception as e:
