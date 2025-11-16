@@ -1,25 +1,57 @@
 #!/usr/bin/env python3
+"""Cell phenotyping helpers and small CLI.
+
+Provides utilities to map cell-level measurements to phenotype labels and
+produce a phenotype mask. Docstrings follow NumPy style and functions are
+annotated for clarity.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+from typing import List, Tuple, Optional
+
 import pandas as pd
 import numpy as np
-import os
-import json
 import tifffile as tiff
-from typing import List, Union
-import argparse
-from scipy.stats import norm, zscore
-import logging
-from datetime import datetime
+from scipy.stats import zscore
+from numpy.typing import NDArray
 
 from scripts._common import ensure_dir, setup_file_logger
 
-def setup_logging(output_dir, log_file=None):
-    """Simple logging setup: ensure output dir and optional file logger."""
+__all__ = ["labels_to_phenotype", "run_phenotyping_pipeline", "parse_arguments"]
+
+def setup_logging(output_dir: str, log_file: Optional[str] = None) -> None:
+    """Simple logging setup: ensure output dir and optional file logger.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory to create for outputs/logs.
+    log_file : str, optional
+        Optional path to a log file to attach.
+    """
     ensure_dir(output_dir)
     if log_file:
         setup_file_logger(log_file)
 
-def labels_to_phenotype(arr, phenotype_df):
-    """Map label array to phenotype numbers."""
+def labels_to_phenotype(arr: np.ndarray, phenotype_df: pd.DataFrame) -> np.ndarray:
+    """Map label array to phenotype numbers.
+
+    Parameters
+    ----------
+    arr : ndarray
+        Label image / array where each integer corresponds to a cell label.
+    phenotype_df : pandas.DataFrame
+        DataFrame containing at least columns ``label`` and ``phenotype_num``.
+
+    Returns
+    -------
+    ndarray
+        Array same shape as ``arr`` where labels are replaced by phenotype
+        numeric codes.
+    """
     logging.info("Mapping labels to phenotypes")
     try:
         map_arr = phenotype_df[['label', 'phenotype_num']].to_numpy()
@@ -33,7 +65,7 @@ def labels_to_phenotype(arr, phenotype_df):
         logging.error(f"Error in labels_to_phenotype: {str(e)}")
         raise
 
-def run_phenotyping_pipeline(cell_df, mask, output_dir):
+def run_phenotyping_pipeline(cell_df: 'pd.DataFrame', mask: np.ndarray, output_dir: str) -> Tuple['pd.DataFrame', np.ndarray]:
     """
     Run the original pipeline (from the first script)
     This simulates the original functions with same logic
@@ -149,8 +181,14 @@ def run_phenotyping_pipeline(cell_df, mask, output_dir):
     return df_nn, phenotype_mask
 
 
-def parse_arguments():
-    """Parse command line arguments."""
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments.
+
+    Returns
+    -------
+    argparse.Namespace
+        Parsed arguments.
+    """
     parser = argparse.ArgumentParser(
         description='Cell phenotyping analysis based on marker expression',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -183,7 +221,7 @@ if __name__ == "__main__":
         args = parse_arguments()
         cell_df = pd.read_csv(args.cell_data).drop_duplicates(subset='label', keep='first')
         mask = np.load(args.segmentation_mask)
-        # Setup logging
+    # Setup logging.
         setup_logging(args.output_dir)
         logging.info("Starting cell phenotyping pipeline")
         logging.info(f"Arguments: {vars(args)}")

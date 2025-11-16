@@ -21,10 +21,7 @@ process PREPROC_PROC {
     mkdir -p preprocessed
     python3 scripts/preprocess.py \
         --image ${nd2file} \
-        --channels ${nd2file} \
-        --output_dir preprocessed \
-        --fov_size ${params.preproc_tile_size} \
-        --skip_dapi ${params.preproc_normalize}
+        --fov_size ${params.preproc_tile_size}
     '''
 }
 

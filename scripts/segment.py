@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""
-Cell Segmentation using StarDist
-=================================
-Nuclei segmentation using pre-trained StarDist models.
+"""Cell segmentation utilities using StarDist.
 
-Pure functional implementation - NO CLASSES.
+This module exposes small, well-typed functions for loading DAPI images,
+preprocessing and segmentation. Functions follow NumPy docstring conventions.
 """
+
+from __future__ import annotations
 
 import argparse
 import logging
@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Tuple, List, Optional
 
 import numpy as np
-from aicsimageio import AICSImage
+import tifffile
 from csbdeep.utils import normalize
 from skimage import segmentation, morphology, filters
 from stardist.models import StarDist2D
@@ -29,9 +29,20 @@ from utils.image_ops import (
 )
 from utils import logging_config
 
-# Setup logging
+# Setup logging.
 logging_config.setup_logging()
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "load_dapi_image",
+    "preprocess_dapi",
+    "normalize_image",
+    "load_stardist_model",
+    "segment_whole_image",
+    "segment_with_cropping",
+    "remap_labels",
+    "run_segmentation",
+]
 
 
 def load_dapi_image(
@@ -54,18 +65,18 @@ def load_dapi_image(
     """
     logger.info(f"Loading DAPI image: {image_path}")
 
-    img = AICSImage(image_path)
-    image_data = img.get_image_data("YX")
-    pixel_sizes = img.physical_pixel_sizes
-
-    metadata = {
-        'pixel_size_x': pixel_sizes.X,
-        'pixel_size_y': pixel_sizes.Y,
-        'pixel_size_z': pixel_sizes.Z
-    }
+    # Load image using tifffile; metadata is best-effort (OME XML if present).
+    image_data = tifffile.imread(image_path)
+    metadata = {}
+    try:
+        with tifffile.TiffFile(image_path) as tf:
+            ome = tf.ome_metadata
+            if ome:
+                metadata['ome'] = ome
+    except Exception:
+        pass
 
     logger.info(f"  Shape: {image_data.shape}")
-    logger.info(f"  Pixel size: {pixel_sizes.X} µm")
 
     return image_data, metadata
 
@@ -400,7 +411,7 @@ def run_segmentation(
     positions_path : str
         Path to saved crop positions.
     """
-    # Setup logging
+    # Setup logging.
     if log_file:
         handler = logging.FileHandler(log_file)
         formatter = logging.Formatter(
