@@ -8,13 +8,8 @@ process SEGMENT {
 
     output:
     path "segmentation/${merged_file.simpleName}_segmentation.tif", emit: mask
-    path "versions.yml"                                           , emit: versions
-
-    when:
-    task.ext.when == null || task.ext.when
 
     script:
-    def args = task.ext.args ?: ''
     def whole_image_flag = params.seg_whole_image ? '--whole_image' : ''
     """
     mkdir -p segmentation
@@ -27,19 +22,6 @@ process SEGMENT {
         --crop_size ${params.seg_crop_size} \\
         --overlap ${params.segmentation_overlap} \\
         --gamma ${params.seg_gamma} \\
-        ${whole_image_flag} \\
-        ${args}
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        python: \$(python3 --version | sed 's/Python //g')
-    END_VERSIONS
-    """
-
-    stub:
-    """
-    mkdir -p segmentation
-    touch segmentation/${merged_file.simpleName}_segmentation.tif
-    touch versions.yml
+        ${whole_image_flag}
     """
 }
