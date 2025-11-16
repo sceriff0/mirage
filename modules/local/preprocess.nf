@@ -12,7 +12,7 @@ process PREPROCESS {
     script:
     """
     mkdir -p preprocessed
-    python3 scripts/preprocess.py \\
+    preprocess.py \\
         --image ${nd2file} \\
         --fov_size ${params.preproc_tile_size}
     """

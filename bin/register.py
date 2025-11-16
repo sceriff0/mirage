@@ -1,67 +1,373 @@
 #!/usr/bin/env python3
-"""Minimal registration script used by the pipeline.
+"""VALIS registration script for WSI processing pipeline.
 
-This conservative implementation accepts multiple input preprocessed files and
-creates a single merged output. Currently it copies the first available input to
-the output path as a lightweight fallback. Replace with a real registration
-implementation when available.
+This script performs multi-modal image registration using VALIS (Virtual Alignment 
+of pathoLogy Image Series). It aligns multiple preprocessed OME-TIFF files and 
+creates a merged output with all channels registered to a reference image.
 
-The functions are small and annotated so they can be unit tested or replaced
-with an actual registration implementation later.
+The registration uses:
+- SuperPoint feature detection with SuperGlue matching
+- Micro-rigid registration for high-resolution alignment
+- Optical flow-based non-rigid deformation
 """
 from __future__ import annotations
 
 import argparse
-import shutil
 import os
-from typing import List, Optional
+import sys
+import numpy as np
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
-from scripts._common import ensure_dir
+from _common import ensure_dir
+
+# Force library paths for VALIS
+os.environ['LD_LIBRARY_PATH'] = '/usr/local/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:' + os.environ.get('LD_LIBRARY_PATH', '')
+
+try:
+    from valis import registration
+    from valis.micro_rigid_registrar import MicroRigidRegistrar
+    from valis import feature_detectors
+    from valis import feature_matcher
+    from valis import non_rigid_registrars
+    VALIS_AVAILABLE = True
+except ImportError:
+    VALIS_AVAILABLE = False
+    print("WARNING: VALIS not available, will use fallback registration")
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments.
-
-    Returns
-    -------
-    argparse.Namespace
-        Parsed arguments with attributes: input_files, out, qc_dir
-    """
-    parser = argparse.ArgumentParser(description='Minimal registration placeholder')
-    parser.add_argument('--input-files', nargs='+', required=True, help='Preprocessed input files')
-    parser.add_argument('--out', required=True, help='Output merged path')
-    parser.add_argument('--qc-dir', required=False, help='QC directory for optional output')
-    return parser.parse_args()
+def log_progress(message: str) -> None:
+    """Print timestamped progress messages."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
 
 
-def merge_first_file(input_files: List[str], out: str, qc_dir: Optional[str] = None) -> int:
-    """Copy the first available input file to ``out`` as a conservative merge.
-
+def get_channel_names(filename: str) -> list[str]:
+    """Parse channel names from filename.
+    
+    Expected format: PatientID_DAPI_Marker1_Marker2.ome.tif
+    
     Parameters
     ----------
-    input_files : list of str
-        Paths to preprocessed input files (the first is used).
-    out : str
-        Destination path for merged output.
-    qc_dir : str, optional
-        Optional QC directory to create.
+    filename : str
+        Base filename (not full path)
+    
+    Returns
+    -------
+    list of str
+        Channel names extracted from filename (excludes Patient ID)
+    """
+    base_name = os.path.basename(filename)
+    name_stem = base_name.split('.')[0]
+    parts = name_stem.split('_')
+    channels = parts[1:]  # Skip Patient ID
+    return channels
 
+
+def find_reference_image(directory: str, required_markers: list[str], 
+                        valid_extensions: Optional[list[str]] = None) -> str:
+    """Find image file containing all required markers in filename.
+    
+    Parameters
+    ----------
+    directory : str
+        Path to directory containing images
+    required_markers : list of str
+        Marker names that must appear in filename (case-insensitive)
+    valid_extensions : list of str, optional
+        Valid file extensions. Default: ['.tif', '.tiff', '.ome.tif']
+    
+    Returns
+    -------
+    str
+        Filename (not full path) of matching image
+    
+    Raises
+    ------
+    FileNotFoundError
+        If no matching file found
+    ValueError
+        If multiple matching files found
+    """
+    if valid_extensions is None:
+        valid_extensions = ['.tif', '.tiff', '.ome.tif', '.ome.tiff']
+    
+    all_files = os.listdir(directory)
+    image_files = [
+        f for f in all_files 
+        if any(f.lower().endswith(ext) for ext in valid_extensions)
+    ]
+    
+    log_progress(f"Found {len(image_files)} image files in {directory}")
+    
+    matching_files = []
+    for filename in image_files:
+        filename_upper = filename.upper()
+        if all(marker.upper() in filename_upper for marker in required_markers):
+            matching_files.append(filename)
+    
+    if len(matching_files) == 0:
+        error_msg = (
+            f"No image found containing all markers: {required_markers}\n"
+            f"Available files: {image_files[:5]}..."
+        )
+        raise FileNotFoundError(error_msg)
+    
+    elif len(matching_files) == 1:
+        log_progress(f"✓ Found reference image: {matching_files[0]}")
+        return matching_files[0]
+    
+    else:
+        error_msg = (
+            f"Found {len(matching_files)} images with markers {required_markers}:\n"
+            + "\n".join(f"  - {f}" for f in matching_files)
+        )
+        raise ValueError(error_msg)
+
+
+def fallback_registration(input_dir: str, out: str, qc_dir: Optional[str] = None) -> int:
+    """Fallback when VALIS is not available - copy first file.
+    
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing preprocessed files
+    out : str
+        Output merged file path
+    qc_dir : str, optional
+        QC directory to create
+    
     Returns
     -------
     int
-        Exit code (0 for success).
+        Exit code (0 for success)
     """
+    import glob
+    import shutil
+    
+    log_progress("VALIS not available - using fallback (copy first file)")
+    
     ensure_dir(os.path.dirname(out) or '.')
+    
+    pattern = os.path.join(input_dir, '*.ome.tif')
+    input_files = sorted(glob.glob(pattern))
+    
+    if not input_files:
+        raise FileNotFoundError(f"No .ome.tif files found in {input_dir}")
+    
     src = input_files[0]
+    log_progress(f"Copying {os.path.basename(src)} -> {out}")
     shutil.copy2(src, out)
+    
     if qc_dir:
         ensure_dir(qc_dir)
+    
     return 0
 
 
+def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
+                       reference_markers: Optional[list[str]] = None) -> int:
+    """Perform VALIS registration on preprocessed images.
+    
+    Parameters
+    ----------
+    input_dir : str
+        Directory containing preprocessed OME-TIFF files
+    out : str
+        Output merged file path
+    qc_dir : str, optional
+        QC directory for registration outputs
+    reference_markers : list of str, optional
+        Markers to identify reference image. Default: ['DAPI', 'SMA']
+    
+    Returns
+    -------
+    int
+        Exit code (0 for success)
+    """
+    if not VALIS_AVAILABLE:
+        return fallback_registration(input_dir, out, qc_dir)
+    
+    # Initialize JVM for VALIS
+    registration.init_jvm()
+    
+    # Configuration
+    if reference_markers is None:
+        reference_markers = ['DAPI', 'SMA']
+    
+    ensure_dir(os.path.dirname(out) or '.')
+    if qc_dir:
+        ensure_dir(qc_dir)
+    
+    # Use qc_dir as results directory if available, otherwise use output directory
+    results_dir = qc_dir if qc_dir else os.path.dirname(out)
+    
+    # ========================================================================
+    # VALIS Parameters - Optimized for dense tissue
+    # ========================================================================
+    MAX_PROCESSED_IMAGE_DIM_PX = 1800
+    MAX_NON_RIGID_DIM_PX = 3500
+    MICRO_REG_FRACTION = 0.5
+    NUM_FEATURES = 5000
+    
+    log_progress("=" * 70)
+    log_progress("VALIS Registration Configuration")
+    log_progress("=" * 70)
+    log_progress(f"Rigid resolution: {MAX_PROCESSED_IMAGE_DIM_PX}px")
+    log_progress(f"Non-rigid resolution: {MAX_NON_RIGID_DIM_PX}px")
+    log_progress(f"Feature detector: SuperPoint with {NUM_FEATURES} features")
+    log_progress("=" * 70)
+    
+    # Find reference image
+    log_progress(f"Searching for reference image with markers: {reference_markers}")
+    
+    try:
+        ref_image = find_reference_image(input_dir, required_markers=reference_markers)
+    except (FileNotFoundError, ValueError) as e:
+        log_progress(f"ERROR: {e}")
+        log_progress("Falling back to first available image")
+        import glob
+        files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
+        if not files:
+            raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
+        ref_image = os.path.basename(files[0])
+    
+    log_progress(f"Using reference image: {ref_image}")
+    
+    # ========================================================================
+    # Initialize VALIS Registrar
+    # ========================================================================
+    log_progress("Initializing VALIS registration...")
+    
+    registrar = registration.Valis(
+        input_dir,
+        results_dir,
+        
+        # Reference image
+        reference_img_f=ref_image,
+        align_to_reference=True,
+        crop="reference",
+        
+        # Image size parameters
+        max_processed_image_dim_px=MAX_PROCESSED_IMAGE_DIM_PX,
+        max_non_rigid_registration_dim_px=MAX_NON_RIGID_DIM_PX,
+        
+        # Feature detection - SuperPoint/SuperGlue
+        feature_detector_cls=feature_detectors.SuperPointFD,
+        matcher=feature_matcher.SuperGlueMatcher(),
+        
+        # Non-rigid registration
+        non_rigid_registrar_cls=non_rigid_registrars.OpticalFlowWarper,
+        
+        # Micro-rigid registration
+        micro_rigid_registrar_cls=MicroRigidRegistrar,
+        
+        # Registration behavior
+        compose_non_rigid=False,
+        create_masks=True,
+    )
+    
+    # ========================================================================
+    # Perform Registration
+    # ========================================================================
+    log_progress("Starting rigid and non-rigid registration...")
+    log_progress("This may take 15-45 minutes...")
+    
+    rigid_registrar, non_rigid_registrar, error_df = registrar.register()
+    
+    log_progress("✓ Initial registration completed")
+    log_progress(f"\nRegistration errors:\n{error_df}")
+    
+    # ========================================================================
+    # Micro-registration
+    # ========================================================================
+    log_progress("\nCalculating micro-registration parameters...")
+    
+    img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+    min_max_size = np.min([np.max(d) for d in img_dims])
+    micro_reg_size = int(np.floor(min_max_size * MICRO_REG_FRACTION))
+    
+    log_progress(f"Micro-registration size: {micro_reg_size}px")
+    log_progress("Starting micro-registration (may take 30-120 minutes)...")
+    
+    micro_reg, micro_error = registrar.register_micro(
+        max_non_rigid_registration_dim_px=micro_reg_size,
+        reference_img_f=ref_image,
+        align_to_reference=True,
+    )
+    
+    log_progress("✓ Micro-registration completed")
+    log_progress(f"\nMicro-registration errors:\n{micro_error}")
+    
+    # ========================================================================
+    # Merge and Save
+    # ========================================================================
+    log_progress("\nPreparing to merge channels...")
+    
+    # Parse channel names from filenames
+    channel_name_dict = {
+        f: get_channel_names(f)
+        for f in registrar.original_img_list
+    }
+    
+    log_progress("Channel mapping detected:")
+    for filename, channels in channel_name_dict.items():
+        log_progress(f"  {filename}: {channels}")
+    
+    log_progress(f"\nMerging and warping slides to: {out}")
+    
+    merged_img, channel_names, ome_xml = registrar.warp_and_merge_slides(
+        out,
+        channel_name_dict=channel_name_dict,
+        drop_duplicates=True,
+    )
+    
+    log_progress(f"✓ Merged image shape: {merged_img.shape}")
+    log_progress(f"✓ Channel names: {channel_names}")
+    
+    # Save individual registered slides to QC directory
+    if qc_dir:
+        log_progress("\nSaving individual registered slides to QC directory...")
+        registrar.warp_and_save_slides(qc_dir)
+    
+    log_progress("\n" + "=" * 70)
+    log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
+    log_progress("=" * 70)
+    
+    # Cleanup
+    registration.kill_jvm()
+    
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description='VALIS registration for WSI processing')
+    parser.add_argument('--input-dir', required=True, help='Directory containing preprocessed files')
+    parser.add_argument('--out', required=True, help='Output merged path')
+    parser.add_argument('--qc-dir', required=False, help='QC directory for registration outputs')
+    parser.add_argument('--reference-markers', nargs='+', default=['DAPI', 'SMA'],
+                       help='Markers to identify reference image (default: DAPI SMA)')
+    return parser.parse_args()
+
+
 def main() -> int:
+    """Main entry point."""
     args = parse_args()
-    return merge_first_file(args.input_files, args.out, getattr(args, 'qc_dir', None))
+    
+    try:
+        return valis_registration(
+            args.input_dir,
+            args.out,
+            args.qc_dir,
+            args.reference_markers
+        )
+    except Exception as e:
+        log_progress(f"ERROR: Registration failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
 if __name__ == '__main__':

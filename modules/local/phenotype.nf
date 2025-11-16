@@ -15,7 +15,7 @@ process PHENOTYPE {
     def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
     """
     mkdir -p pheno
-    python3 scripts/phenotype.py \\
+    phenotype.py \\
         --cell_data ${quant_csv} \\
         --segmentation_mask ${seg_mask} \\
         -o pheno \\

@@ -14,7 +14,7 @@ process QUANTIFY {
     script:
     """
     mkdir -p quant
-    python3 scripts/quantify.py \\
+    quantify.py \\
         --mode ${params.quant_gpu ? 'gpu' : 'cpu'} \\
         --mask_file ${seg_mask} \\
         --indir \$(dirname ${merged_ome}) \\

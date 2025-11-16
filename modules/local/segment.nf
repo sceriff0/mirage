@@ -13,7 +13,7 @@ process SEGMENT {
     def whole_image_flag = params.seg_whole_image ? '--whole_image' : ''
     """
     mkdir -p segmentation
-    python3 scripts/segment.py \\
+    segment.py \\
         --input ${merged_file} \\
         --out segmentation/${merged_file.simpleName}_segmentation.tif \\
         --use-gpu ${params.seg_gpu} \\

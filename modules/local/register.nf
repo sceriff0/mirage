@@ -4,19 +4,20 @@ process REGISTER {
     container "${params.container.registration}"
 
     input:
-    path preproc_files
+    path preproc_dir
 
     output:
     path "merged/merged_all.ome.tif", emit: merged
     path "merged_qc/*.png"          , emit: qc, optional: true
 
     script:
+    def ref_markers = params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
     """
     mkdir -p merged merged_qc
-    python3 scripts/register.py \\
-        --input-files ${preproc_files.join(' ')} \\
+    register.py \\
+        --input-dir ${preproc_dir} \\
         --out merged/merged_all.ome.tif \\
         --qc-dir merged_qc \\
-        || cp ${preproc_files[0]} merged/merged_all.ome.tif
+        ${ref_markers}
     """
 }
