@@ -16,12 +16,18 @@ process PHENOTYPE {
 
     script:
     def args = task.ext.args ?: ''
+    def markers_arg = params.pheno_markers ? "--markers ${params.pheno_markers.join(' ')}" : ''
+    def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
     """
     mkdir -p pheno
     python3 scripts/phenotype.py \\
         --cell_data ${quant_csv} \\
         --segmentation_mask ${seg_mask} \\
         -o pheno \\
+        ${markers_arg} \\
+        ${cutoffs_arg} \\
+        --quality_percentile ${params.pheno_quality_percentile} \\
+        --noise_percentile ${params.pheno_noise_percentile} \\
         ${args} || true
 
     cat <<-END_VERSIONS > versions.yml

@@ -15,6 +15,7 @@ process SEGMENT {
 
     script:
     def args = task.ext.args ?: ''
+    def whole_image_flag = params.seg_whole_image ? '--whole_image' : ''
     """
     mkdir -p segmentation
     python3 scripts/segment.py \\
@@ -22,6 +23,11 @@ process SEGMENT {
         --out segmentation/${merged_file.simpleName}_segmentation.tif \\
         --use-gpu ${params.seg_gpu} \\
         --model ${params.seg_model} \\
+        --model_dir ${params.segmentation_model_dir} \\
+        --crop_size ${params.seg_crop_size} \\
+        --overlap ${params.segmentation_overlap} \\
+        --gamma ${params.seg_gamma} \\
+        ${whole_image_flag} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

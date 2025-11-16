@@ -25,6 +25,7 @@ process QUANTIFY {
         --indir \$(dirname ${merged_ome}) \\
         --outdir quant \\
         --output_file quant/merged_quant.csv \\
+        --min_area ${params.quant_min_area} \\
         --log_file quant/quant.log \\
         ${args} || true
 
