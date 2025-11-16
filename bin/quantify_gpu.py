@@ -14,7 +14,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from scripts._common import load_image, load_pickle, save_pickle
+from _common import load_image, load_pickle, save_pickle
 
 # Optional GPU libraries
 try:

@@ -19,7 +19,7 @@ import pandas as pd
 from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
-from scripts._common import (
+from _common import (
     setup_logging,
     setup_file_logger,
     ensure_dir,

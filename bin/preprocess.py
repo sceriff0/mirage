@@ -55,7 +55,7 @@ except Exception:
 
     logging_config = _FallbackLoggingConfig()
 
-from scripts._common import ensure_dir, setup_file_logger
+from _common import ensure_dir, setup_file_logger
 
 # Setup logging.
 logging_config.setup_logging()

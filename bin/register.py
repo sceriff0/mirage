@@ -14,10 +14,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
+import glob
 import numpy as np
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from _common import ensure_dir
@@ -25,16 +24,11 @@ from _common import ensure_dir
 # Force library paths for VALIS
 os.environ['LD_LIBRARY_PATH'] = '/usr/local/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:' + os.environ.get('LD_LIBRARY_PATH', '')
 
-try:
-    from valis import registration
-    from valis.micro_rigid_registrar import MicroRigidRegistrar
-    from valis import feature_detectors
-    from valis import feature_matcher
-    from valis import non_rigid_registrars
-    VALIS_AVAILABLE = True
-except ImportError:
-    VALIS_AVAILABLE = False
-    print("WARNING: VALIS not available, will use fallback registration")
+from valis import registration
+from valis.micro_rigid_registrar import MicroRigidRegistrar
+from valis import feature_detectors
+from valis import feature_matcher
+from valis import non_rigid_registrars
 
 
 def log_progress(message: str) -> None:
@@ -126,46 +120,6 @@ def find_reference_image(directory: str, required_markers: list[str],
         raise ValueError(error_msg)
 
 
-def fallback_registration(input_dir: str, out: str, qc_dir: Optional[str] = None) -> int:
-    """Fallback when VALIS is not available - copy first file.
-    
-    Parameters
-    ----------
-    input_dir : str
-        Directory containing preprocessed files
-    out : str
-        Output merged file path
-    qc_dir : str, optional
-        QC directory to create
-    
-    Returns
-    -------
-    int
-        Exit code (0 for success)
-    """
-    import glob
-    import shutil
-    
-    log_progress("VALIS not available - using fallback (copy first file)")
-    
-    ensure_dir(os.path.dirname(out) or '.')
-    
-    pattern = os.path.join(input_dir, '*.ome.tif')
-    input_files = sorted(glob.glob(pattern))
-    
-    if not input_files:
-        raise FileNotFoundError(f"No .ome.tif files found in {input_dir}")
-    
-    src = input_files[0]
-    log_progress(f"Copying {os.path.basename(src)} -> {out}")
-    shutil.copy2(src, out)
-    
-    if qc_dir:
-        ensure_dir(qc_dir)
-    
-    return 0
-
-
 def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
                        reference_markers: Optional[list[str]] = None) -> int:
     """Perform VALIS registration on preprocessed images.
@@ -186,9 +140,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     int
         Exit code (0 for success)
     """
-    if not VALIS_AVAILABLE:
-        return fallback_registration(input_dir, out, qc_dir)
-    
     # Initialize JVM for VALIS
     registration.init_jvm()
     
@@ -227,7 +178,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     except (FileNotFoundError, ValueError) as e:
         log_progress(f"ERROR: {e}")
         log_progress("Falling back to first available image")
-        import glob
         files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
         if not files:
             raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
@@ -274,7 +224,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress("Starting rigid and non-rigid registration...")
     log_progress("This may take 15-45 minutes...")
     
-    rigid_registrar, non_rigid_registrar, error_df = registrar.register()
+    _, _, error_df = registrar.register()
     
     log_progress("✓ Initial registration completed")
     log_progress(f"\nRegistration errors:\n{error_df}")
@@ -291,7 +241,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"Micro-registration size: {micro_reg_size}px")
     log_progress("Starting micro-registration (may take 30-120 minutes)...")
     
-    micro_reg, micro_error = registrar.register_micro(
+    _, micro_error = registrar.register_micro(
         max_non_rigid_registration_dim_px=micro_reg_size,
         reference_img_f=ref_image,
         align_to_reference=True,
@@ -317,7 +267,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     
     log_progress(f"\nMerging and warping slides to: {out}")
     
-    merged_img, channel_names, ome_xml = registrar.warp_and_merge_slides(
+    merged_img, channel_names, _ = registrar.warp_and_merge_slides(
         out,
         channel_name_dict=channel_name_dict,
         drop_duplicates=True,

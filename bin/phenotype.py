@@ -17,7 +17,7 @@ import pandas as pd
 from scipy.stats import zscore
 from numpy.typing import NDArray
 
-from scripts._common import (
+from _common import (
     setup_logging,
     setup_file_logger,
     ensure_dir,
