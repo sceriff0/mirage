@@ -8,7 +8,7 @@ process REGISTER {
     publishDir "${params.outdir}/registered", mode: 'copy'
 
     input:
-    val preproc_files
+    path preproc_files
 
     output:
     path "merged/merged_all.ome.tif", emit: merged
@@ -18,10 +18,15 @@ process REGISTER {
     def ref_markers = params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
 
     """
-    mkdir -p merged merged_qc
+    mkdir -p merged merged_qc preprocessed
+
+    # Stage all preprocessed files into a directory
+    for file in ${preproc_files}; do
+        ln -s "\$(readlink -f "\$file")" preprocessed/
+    done
 
     register.py \\
-        --input-dir ${params.outdir}/preprocessed \\
+        --input-dir preprocessed \\
         --out merged/merged_all.ome.tif \\
         --qc-dir merged_qc \\
         ${ref_markers}
