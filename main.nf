@@ -21,11 +21,13 @@ include { PHENOTYPE  } from './modules/local/phenotype'
 */
 
 workflow {
+     
+    // TODO Add patient id for multi-patient runs
     // Validate input parameters
     if (!params.input) {
         error "Please provide an input glob pattern with --input"
     }
-
+    // TODO: Frst file is reference
     // 1. Create input channel from glob pattern (ND2 files)
     ch_input = Channel.fromPath(params.input, checkIfExists: true)
 
@@ -37,6 +39,7 @@ workflow {
     // 3. MODULE: Preprocess each converted file
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
+    // TODO: Add classic registration
     // 4. MODULE: Register/merge all preprocessed files
     //    Collects all preprocessed files and passes them to REGISTER
     REGISTER ( PREPROCESS.out.preprocessed.collect() )
