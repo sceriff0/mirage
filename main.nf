@@ -30,6 +30,8 @@ workflow {
     // 1. Create input channel from glob pattern (ND2 files)
     ch_input = Channel.fromPath(params.input, checkIfExists: true)
 
+    // TODO: Accept multiple input formats (e.g., OME-TIFF) and set metadata 
+    // TODO: based on filename and channel order (correct / reversed)
     // 2. MODULE: Convert ND2 to OME-TIFF 
     CONVERT_ND2 ( ch_input )
 
