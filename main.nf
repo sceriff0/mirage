@@ -30,10 +30,10 @@ workflow {
     // 1. Create input channel from glob pattern (ND2 files)
     ch_input = Channel.fromPath(params.input, checkIfExists: true)
 
-    // 2. MODULE: Convert ND2 to OME-TIFF (Parallel)
+    // 2. MODULE: Convert ND2 to OME-TIFF 
     CONVERT_ND2 ( ch_input )
 
-    // 3. MODULE: Preprocess each converted file (Parallel)
+    // 3. MODULE: Preprocess each converted file 
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
     // 4. SYNCHRONIZATION STEP:
@@ -41,19 +41,19 @@ workflow {
     ch_preprocessed_files_list = PREPROCESS.out.preprocessed.collect()
     GET_PREPROCESS_DIR( ch_preprocessed_files_list )
 
-    // 5. MODULE: Register/merge all preprocessed files (Serial Merge)
+    // 5. MODULE: Register/merge all preprocessed files 
     REGISTER ( GET_PREPROCESS_DIR.out.preprocess_dir )
 
-    // 6. MODULE: Segment the merged WSI (Serial)
+    // 6. MODULE: Segment the merged WSI 
     SEGMENT ( REGISTER.out.merged )
 
-    // 7. MODULE: Quantify cells (Serial)
+    // 7. MODULE: Quantify cells 
     QUANTIFY (
         REGISTER.out.merged,
         SEGMENT.out.mask
     )
 
-    // 8. MODULE: Phenotype cells (Serial)
+    // 8. MODULE: Phenotype cells
     PHENOTYPE (
         QUANTIFY.out.csv,
         SEGMENT.out.mask
