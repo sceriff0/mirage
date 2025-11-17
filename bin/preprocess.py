@@ -157,7 +157,7 @@ def _process_single_channel_from_stack(
         fov_size=fov_size,
         autotune=autotune,
         n_iter=n_iter,
-        **basic_kwargs
+        #**basic_kwargs
     )
     return channel_index, corrected
 
