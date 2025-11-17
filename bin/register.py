@@ -44,14 +44,14 @@ def log_progress(message: str) -> None:
 
 def get_channel_names(filename: str) -> list[str]:
     """Parse channel names from filename.
-    
+
     Expected format: PatientID_DAPI_Marker1_Marker2.ome.tif
-    
+
     Parameters
     ----------
     filename : str
         Base filename (not full path)
-    
+
     Returns
     -------
     list of str
@@ -62,6 +62,73 @@ def get_channel_names(filename: str) -> list[str]:
     parts = name_stem.split('_')
     channels = parts[1:]  # Skip Patient ID
     return channels
+
+
+def save_qc_with_reference_dapi(registrar, qc_dir: str, ref_image: str) -> None:
+    """Save QC images with reference DAPI as first channel and registered images.
+
+    Parameters
+    ----------
+    registrar : registration.Valis
+        VALIS registrar object after registration
+    qc_dir : str
+        Directory to save QC images
+    ref_image : str
+        Reference image filename
+    """
+    import tifffile
+
+    log_progress("\nSaving QC images with reference DAPI as first channel...")
+
+    # Get reference slide
+    ref_slide = registrar.slide_dict[ref_image]
+    ref_channels = get_channel_names(ref_image)
+
+    # Find DAPI channel index in reference image
+    dapi_idx = None
+    for idx, ch in enumerate(ref_channels):
+        if 'DAPI' in ch.upper():
+            dapi_idx = idx
+            break
+
+    if dapi_idx is None:
+        log_progress("Warning: No DAPI channel found in reference image, using first channel")
+        dapi_idx = 0
+
+    # Get reference DAPI channel (unwarped, from original reference)
+    ref_dapi = ref_slide.slide2vips().numpy()[..., dapi_idx]
+
+    log_progress(f"Reference DAPI channel shape: {ref_dapi.shape}")
+    log_progress(f"Reference image: {ref_image}, DAPI channel index: {dapi_idx}")
+
+    # Process each slide
+    for slide_name, slide_obj in registrar.slide_dict.items():
+        if slide_name == ref_image:
+            # For reference image, save as-is
+            log_progress(f"Saving reference image: {slide_name}")
+            output_path = os.path.join(qc_dir, slide_name)
+            original_img = slide_obj.slide2vips().numpy()
+            tifffile.imwrite(output_path, original_img, photometric='minisblack')
+        else:
+            # For other images, prepend reference DAPI then add registered channels
+            log_progress(f"Processing {slide_name}")
+
+            # Get warped/registered version of this slide
+            warped_img = slide_obj.warp_slide(
+                non_rigid=True,
+                crop=registrar.crop
+            )
+
+            # Combine: reference DAPI + all registered channels from this slide
+            combined = np.dstack([ref_dapi, warped_img])
+
+            log_progress(f"  Reference DAPI: {ref_dapi.shape}, Registered: {warped_img.shape}, Combined: {combined.shape}")
+
+            # Save
+            output_path = os.path.join(qc_dir, slide_name)
+            tifffile.imwrite(output_path, combined, photometric='minisblack')
+
+    log_progress("✓ QC images saved with reference DAPI as first channel")
 
 
 def find_reference_image(directory: str, required_markers: list[str], 
@@ -281,10 +348,9 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"✓ Merged image shape: {merged_img.shape}")
     log_progress(f"✓ Channel names: {channel_names}")
     
-    # Save individual registered slides to QC directory
+    # Save individual registered slides to QC directory with reference DAPI first
     if qc_dir:
-        log_progress("\nSaving individual registered slides to QC directory...")
-        registrar.warp_and_save_slides(qc_dir)
+        save_qc_with_reference_dapi(registrar, qc_dir, ref_image)
     
     log_progress("\n" + "=" * 70)
     log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
