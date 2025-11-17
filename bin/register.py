@@ -303,8 +303,8 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
         
         # Feature detection - SuperPoint/SuperGlue
-        feature_detector_cls=feature_detectors.SuperPointFD,
-        matcher=feature_matcher.SuperGlueMatcher(),
+        #feature_detector_cls=feature_detectors.SuperPointFD,
+        #matcher=feature_matcher.SuperGlueMatcher(),
         
         # Non-rigid registration
         non_rigid_registrar_cls=non_rigid_registrars.OpticalFlowWarper,
