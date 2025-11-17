@@ -45,7 +45,7 @@ def log_progress(message: str) -> None:
 def get_channel_names(filename: str) -> list[str]:
     """Parse channel names from filename.
 
-    Expected format: PatientID_DAPI_Marker1_Marker2.ome.tif
+    Expected format: PatientID_DAPI_Marker1_Marker2_corrected.ome.tif
 
     Parameters
     ----------
@@ -57,10 +57,10 @@ def get_channel_names(filename: str) -> list[str]:
     list of str
         Channel names extracted from filename (excludes Patient ID)
     """
-    base_name = os.path.basename(filename)
-    name_stem = base_name.split('.')[0]
-    parts = name_stem.split('_')
-    channels = parts[1:]  # Skip Patient ID
+    base = os.path.basename(filename)
+    name_part = base.split('_corrected')[0]
+    parts = name_part.split('_')
+    channels = parts[1:]  # Exclude Patient ID
     return channels
 
 
