@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """VALIS registration script for WSI processing pipeline.
 
-This script performs multi-modal image registration using VALIS (Virtual Alignment 
-of pathoLogy Image Series). It aligns multiple preprocessed OME-TIFF files and 
+This script performs multi-modal image registration using VALIS (Virtual Alignment
+of pathoLogy Image Series). It aligns multiple preprocessed OME-TIFF files and
 creates a merged output with all channels registered to a reference image.
 
 The registration uses:
@@ -20,6 +20,11 @@ from datetime import datetime
 from typing import Optional
 
 from _common import ensure_dir
+
+# Disable numba caching to avoid file system issues in containers
+os.environ['NUMBA_DISABLE_JIT'] = '0'
+os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
+os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 # Force library paths for VALIS
 os.environ['LD_LIBRARY_PATH'] = '/usr/local/lib:/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:' + os.environ.get('LD_LIBRARY_PATH', '')
