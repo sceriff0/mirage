@@ -16,7 +16,6 @@ import pandas as pd
 
 from _common import load_image, load_pickle, save_pickle
 
-# Optional GPU libraries
 try:
     import psutil
 except ImportError:
@@ -30,7 +29,6 @@ except ImportError:
     cp = None
     cskimage = None
     gpu_regionprops_table = None
-
 
 logger = logging.getLogger(__name__)
 

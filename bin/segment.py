@@ -27,10 +27,7 @@ from utils.image_ops import (
     reconstruct_image_from_crops,
     apply_gamma_correction
 )
-from utils import logging_config
 
-# Setup logging.
-logging_config.setup_logging()
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -562,27 +559,27 @@ def parse_args():
 
 def main():
     """Main entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     args = parse_args()
 
-    try:
-        run_segmentation(
-            dapi_path=args.dapi_file,
-            output_dir=args.output_dir,
-            model_dir=args.model_dir,
-            model_name=args.model_name,
-            use_gpu=args.use_gpu,
-            process_whole_image=args.whole_image,
-            crop_size=args.crop_size,
-            overlap=args.overlap,
-            gamma=args.gamma,
-            log_file=args.log_file
-        )
+    run_segmentation(
+        dapi_path=args.dapi_file,
+        output_dir=args.output_dir,
+        model_dir=args.model_dir,
+        model_name=args.model_name,
+        use_gpu=args.use_gpu,
+        process_whole_image=args.whole_image,
+        crop_size=args.crop_size,
+        overlap=args.overlap,
+        gamma=args.gamma,
+        log_file=args.log_file
+    )
 
-        return 0
-
-    except Exception as e:
-        logger.error(f"Segmentation failed: {e}", exc_info=True)
-        return 1
+    return 0
 
 
 if __name__ == '__main__':

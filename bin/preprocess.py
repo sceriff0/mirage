@@ -10,8 +10,8 @@ and saves the result back to a single TIFF file.
 from __future__ import annotations
 
 import os
-import time
 import argparse
+import logging
 from pathlib import Path
 from typing import Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,6 +24,8 @@ os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
 
 from _common import ensure_dir
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "split_image_into_fovs",
@@ -144,34 +146,26 @@ def _process_single_channel_from_stack(
     basic_kwargs: dict
 ) -> Tuple[int, NDArray]:
     """Worker function to process a single channel slice from a stack."""
-    logger.info(f"Processing channel #{channel_index} ({channel_name}) - shape: {channel_image.shape}")
+    logger.info(f"Processing channel #{channel_index} ({channel_name})")
 
-    # Skip DAPI if requested
     if skip_dapi and 'DAPI' in channel_name.upper():
         logger.info(f"  Skipping BaSiC correction for DAPI")
         return channel_index, channel_image
 
-    # Apply BaSiC correction
-    try:
-        corrected, _ = apply_basic_correction(
-            channel_image,
-            fov_size=fov_size,
-            autotune=autotune,
-            n_iter=n_iter,
-            **basic_kwargs
-        )
-        return channel_index, corrected
-
-    except Exception as e:
-        logger.error(f"  BaSiC correction failed for {channel_name}: {e}")
-        logger.warning(f"  Using uncorrected channel for {channel_name}")
-        return channel_index, channel_image
+    corrected, _ = apply_basic_correction(
+        channel_image,
+        fov_size=fov_size,
+        autotune=autotune,
+        n_iter=n_iter,
+        **basic_kwargs
+    )
+    return channel_index, corrected
 
 
 def preprocess_multichannel_image(
     image_path: str,
     channel_names: List[str],
-    output_path: str, # Now a TIFF path
+    output_path: str,
     fov_size: Tuple[int, int] = (1950, 1950),
     skip_dapi: bool = True,
     autotune: bool = False,
@@ -183,45 +177,24 @@ def preprocess_multichannel_image(
     Apply BaSiC preprocessing to a single multichannel image in parallel and save as TIFF.
     """
     logger.info(f"Loading multichannel image from {image_path}")
-    
-    # 1. Load the entire multichannel image (C, H, W)
-    try:
-        # Reading as Dask array, then computing to ensure (C, H, W) or (Z, C, H, W) is handled
-        # For simplicity with BaSiC, we primarily target (C, H, W).
-        multichannel_stack = tifffile.imread(image_path)
-        
-        # Adjust dimensions if tifffile returns (H, W) or (H, W, C)
-        if multichannel_stack.ndim == 2:
-            multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
-        elif multichannel_stack.ndim == 3 and multichannel_stack.shape[2] == len(channel_names):
-            # If (H, W, C), transpose to (C, H, W)
-            multichannel_stack = np.transpose(multichannel_stack, (2, 0, 1))
+    multichannel_stack = tifffile.imread(image_path)
 
-    except Exception as e:
-        logger.critical(f"Failed to load multichannel image {image_path}: {e}")
-        raise
-        
+    if multichannel_stack.ndim == 2:
+        multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
+    elif multichannel_stack.ndim == 3 and multichannel_stack.shape[2] == len(channel_names):
+        multichannel_stack = np.transpose(multichannel_stack, (2, 0, 1))
+
     n_channels, H, W = multichannel_stack.shape
-    
+    logger.info(f"Processing {n_channels} channels ({H}x{W}) with {n_workers} workers")
+
     if n_channels != len(channel_names):
-        logger.warning(
-            f"Channel count mismatch: Found {n_channels} layers, "
-            f"but detected {len(channel_names)} names from filename. "
-            f"Using generic names for excess channels."
-        )
         channel_names = channel_names[:n_channels] + [f"Channel_{i}" for i in range(len(channel_names), n_channels)]
 
-    logger.info(
-        f"Processing {n_channels} channels ({H}x{W}) in parallel "
-        f"with {n_workers} workers."
-    )
-
     results = {}
-    
+
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         futures = []
         for i in range(n_channels):
-            # Pass the 2D slice (H, W) for processing
             future = executor.submit(
                 _process_single_channel_from_stack,
                 multichannel_stack[i, ...],
@@ -235,39 +208,23 @@ def preprocess_multichannel_image(
             )
             futures.append(future)
 
-        # Collect results, ensuring correct order via channel index
         for future in as_completed(futures):
-            try:
-                channel_index, result_array = future.result()
-                results[channel_index] = result_array
-            except Exception as e:
-                logger.error(f"❌ Parallel channel processing failed: {e}")
-                raise RuntimeError("Parallel channel processing failed.")
-                
-    # 2. Reconstruct the final stack in the original index order
+            channel_index, result_array = future.result()
+            results[channel_index] = result_array
+
     preprocessed_channels = [
         results[i] for i in range(n_channels)
     ]
 
-    # Stack channels (C, Y, X format)
     preprocessed = np.stack(preprocessed_channels, axis=0)
-    logger.info(f"Stacked shape: {preprocessed.shape}")
 
-    # 3. Save as TIFF/OME-TIFF
-    logger.info(f"Saving corrected multichannel image to {output_path}")
-    try:
-        # Use tifffile to save, potentially preserving OME-TIFF metadata 
-        # (though complex metadata transfer is beyond simple tifffile use)
-        tifffile.imwrite(
-            output_path, 
-            preprocessed, 
-            imagej=True, # Common for biomedical images
-            photometric='minisblack'
-        )
-        logger.info(f"Successfully saved corrected image to {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to save output TIFF to {output_path}: {e}")
-        raise
+    logger.info(f"Saving corrected image to {output_path}")
+    tifffile.imwrite(
+        output_path,
+        preprocessed,
+        imagej=True,
+        photometric='minisblack'
+    )
 
     return preprocessed
 
@@ -326,12 +283,6 @@ def parse_args():
         help='Number of autotuning iterations'
     )
 
-    parser.add_argument(
-        '-l', '--log_file',
-        type=str,
-        help='Path to log file'
-    )
-
     return parser.parse_args()
 
 def find_channel_names_from_path(image_path: str) -> List[str]:
@@ -341,19 +292,16 @@ def find_channel_names_from_path(image_path: str) -> List[str]:
     e.g., 'id1_DAPI_Marker1_Marker2.ome.tiff' -> ['DAPI', 'Marker1', 'Marker2']
     """
     p = Path(image_path)
-    base_name = p.stem # 'id1_DAPI_Marker1_Marker2'
-    
-    parts = base_name.split('_')
-    
-    if len(parts) < 2:
-        logger.warning(f"Could not parse channel names from path: {image_path}. Using generic names.")
-        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"] # Provide a sufficient list
+    base_name = p.stem
 
-    # Skip the first part (the ID)
+    parts = base_name.split('_')
+
+    if len(parts) < 2:
+        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
+
     channel_names = parts[1:]
-    
+
     if not channel_names:
-        logger.warning("Filename contained an ID but no subsequent channel names. Using generic names.")
         return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
 
     return channel_names
@@ -361,28 +309,25 @@ def find_channel_names_from_path(image_path: str) -> List[str]:
 
 def main():
     """Main entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     args = parse_args()
 
-    # Setup logging.
-    if args.log_file:
-        setup_file_logger(args.log_file)
-        
-    # Create output directory.
     ensure_dir(args.output_dir)
 
     image_path = args.image
     image_basename = os.path.basename(image_path)
-    
-    # Extract channel names from the filename
+
     channel_names = find_channel_names_from_path(image_path)
 
-    # Determine the output path, appending '_corrected' before the extension
     base, ext = os.path.splitext(image_basename)
-    
-    # Handle extensions like .ome.tiff
+
     if base.endswith(".ome"):
         base = base[:-4]
-        ext = ".ome" + ext # Recombine to keep the full extension
+        ext = ".ome" + ext
 
     output_filename = f"{base}_corrected{ext}"
     output_path = os.path.join(
@@ -390,27 +335,22 @@ def main():
         output_filename
     )
 
-    logger.info(f"Expected channel order (from filename): {channel_names}")
+    logger.info(f"Starting preprocessing: {image_path}")
+    logger.info(f"Expected channel order: {channel_names}")
 
-    # Process the single multichannel image.
-    try:
-        preprocess_multichannel_image(
-            image_path=image_path,
-            channel_names=channel_names,
-            output_path=output_path,
-            fov_size=(args.fov_size, args.fov_size),
-            skip_dapi=args.skip_dapi,
-            autotune=args.autotune,
-            n_iter=args.n_iter,
-            n_workers=args.n_workers
-        )
+    preprocess_multichannel_image(
+        image_path=image_path,
+        channel_names=channel_names,
+        output_path=output_path,
+        fov_size=(args.fov_size, args.fov_size),
+        skip_dapi=args.skip_dapi,
+        autotune=args.autotune,
+        n_iter=args.n_iter,
+        n_workers=args.n_workers
+    )
 
-        logger.info(f"Preprocessing completed successfully for {image_path}. Output saved to {output_path}")
-        return 0
-
-    except Exception as e:
-        logger.error(f"Preprocessing failed: {e}", exc_info=True)
-        return 1
+    logger.info(f"Preprocessing completed successfully. Output: {output_path}")
+    return 0
 
 
 if __name__ == '__main__':

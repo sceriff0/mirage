@@ -20,12 +20,9 @@ from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
 from _common import (
-    setup_logging,
-    setup_file_logger,
     ensure_dir,
     load_image,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +178,7 @@ def run_quantification(
     mask_path: str,
     channel_paths: List[str],
     output_path: str,
-    min_area: int = 0,
-    log_file: str = None
+    min_area: int = 0
 ) -> pd.DataFrame:
     """Run complete quantification pipeline.
 
@@ -196,17 +192,12 @@ def run_quantification(
         Path to save output CSV.
     min_area : int, optional
         Minimum cell area filter.
-    log_file : str, optional
-        Log file path.
 
     Returns
     -------
     DataFrame
         Quantification results.
     """
-    if log_file:
-        setup_file_logger(log_file)
-
     logger.info("=" * 80)
     logger.info("Starting Quantification Pipeline (CPU)")
     logger.info("=" * 80)
@@ -278,92 +269,70 @@ def parse_args():
         default=0,
         help='Minimum cell area (pixels)'
     )
-    parser.add_argument(
-        '--log_file',
-        type=str,
-        help='Log file path'
-    )
 
     return parser.parse_args()
 
 
 def main():
     """Main entry point dispatching to CPU or GPU processing."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     args = parse_args()
 
-    try:
-        # Setup
-        setup_logging()
-        ensure_dir(args.outdir)
-        if args.log_file:
-            setup_file_logger(args.log_file)
+    ensure_dir(args.outdir)
 
-        # Get channel files
-        channel_files = [
-            os.path.join(args.indir, f)
-            for f in os.listdir(args.indir)
-            if f.lower().endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))
-        ]
+    # Get channel files
+    channel_files = [
+        os.path.join(args.indir, f)
+        for f in os.listdir(args.indir)
+        if f.lower().endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))
+    ]
 
-        if not channel_files:
-            raise ValueError(f"No channel files found in {args.indir}")
+    if not channel_files:
+        raise ValueError(f"No channel files found in {args.indir}")
 
-        logger.info(f"Found {len(channel_files)} channel files")
+    logger.info(f"Found {len(channel_files)} channel files")
 
-        # Resolve output path
-        if args.output_file:
-            output_path = args.output_file
-        else:
-            output_path = os.path.join(args.outdir, f"{Path(args.mask_file).stem}_quantification.csv")
+    # Resolve output path
+    if args.output_file:
+        output_path = args.output_file
+    else:
+        output_path = os.path.join(args.outdir, f"{Path(args.mask_file).stem}_quantification.csv")
 
-        # Run quantification
-        if args.mode == 'cpu':
-            logger.info('Running CPU quantification')
+    # Run quantification
+    if args.mode == 'cpu':
+        logger.info('Running CPU quantification')
+        run_quantification(
+            mask_path=args.mask_file,
+            channel_paths=channel_files,
+            output_path=output_path,
+            min_area=args.min_area
+        )
+
+    else:  # gpu mode
+        logger.info('Running GPU quantification')
+        try:
+            from bin import quantify_gpu
+        except ImportError:
+            logger.warning('GPU module unavailable; falling back to CPU')
             run_quantification(
                 mask_path=args.mask_file,
                 channel_paths=channel_files,
                 output_path=output_path,
-                min_area=args.min_area,
-                log_file=args.log_file
+                min_area=args.min_area
+            )
+        else:
+            quantify_gpu.run_marker_quantification(
+                indir=args.indir,
+                mask_file=args.mask_file,
+                outdir=args.outdir,
+                size_cutoff=args.min_area,
             )
 
-        else:  # gpu mode
-            logger.info('Running GPU quantification')
-            try:
-                from scripts import quantify_gpu
-            except ImportError:
-                logger.warning('GPU module unavailable; falling back to CPU')
-                run_quantification(
-                    mask_path=args.mask_file,
-                    channel_paths=channel_files,
-                    output_path=output_path,
-                    min_area=args.min_area,
-                    log_file=args.log_file
-                )
-            else:
-                try:
-                    quantify_gpu.run_marker_quantification(
-                        indir=args.indir,
-                        mask_file=args.mask_file,
-                        outdir=args.outdir,
-                        size_cutoff=args.min_area,
-                    )
-                except Exception as e:
-                    logger.error(f'GPU quantification failed: {e}', exc_info=True)
-                    logger.info('Falling back to CPU quantification')
-                    run_quantification(
-                        mask_path=args.mask_file,
-                        channel_paths=channel_files,
-                        output_path=output_path,
-                        min_area=args.min_area,
-                        log_file=args.log_file
-                    )
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Quantification failed: {e}", exc_info=True)
-        return 1
+    return 0
 
 
 if __name__ == '__main__':

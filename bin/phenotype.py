@@ -18,12 +18,9 @@ from scipy.stats import zscore
 from numpy.typing import NDArray
 
 from _common import (
-    setup_logging,
-    setup_file_logger,
     ensure_dir,
     save_tiff,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +62,14 @@ def labels_to_phenotype(mask: NDArray, phenotype_df: pd.DataFrame) -> NDArray:
     """
     logger.info("Mapping labels to phenotypes")
 
-    try:
-        map_arr = phenotype_df[['label', 'phenotype_num']].to_numpy()
-        max_val = max(map_arr[:, 0].max(), mask.max()) + 1
-        lookup = np.zeros(max_val + 1, dtype=map_arr[:, 1].dtype)
-        lookup[map_arr[:, 0]] = map_arr[:, 1]
-        remapped = lookup[mask]
+    map_arr = phenotype_df[['label', 'phenotype_num']].to_numpy()
+    max_val = max(map_arr[:, 0].max(), mask.max()) + 1
+    lookup = np.zeros(max_val + 1, dtype=map_arr[:, 1].dtype)
+    lookup[map_arr[:, 0]] = map_arr[:, 1]
+    remapped = lookup[mask]
 
-        logger.info("Label to phenotype mapping completed")
-        return remapped
-
-    except Exception as e:
-        logger.error(f"Error in labels_to_phenotype: {e}")
-        raise
+    logger.info("Label to phenotype mapping completed")
+    return remapped
 
 
 def run_phenotyping_pipeline(
@@ -362,67 +354,57 @@ def parse_args():
         default=0.01,
         help='Percentile for noise removal'
     )
-    parser.add_argument(
-        '--log_file',
-        type=str,
-        help='Log file path'
-    )
 
     return parser.parse_args()
 
 
 def main():
     """Main entry point."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     args = parse_args()
 
-    try:
-        # Setup
-        setup_logging()
-        ensure_dir(args.output_dir)
-        if args.log_file:
-            setup_file_logger(args.log_file)
+    ensure_dir(args.output_dir)
 
-        logger.info("=" * 80)
-        logger.info("Starting Cell Phenotyping Pipeline")
-        logger.info("=" * 80)
-        logger.info(f"Arguments: {vars(args)}")
+    logger.info("=" * 80)
+    logger.info("Starting Cell Phenotyping Pipeline")
+    logger.info("=" * 80)
 
-        # Load data
-        logger.info(f"Loading cell data: {args.cell_data}")
-        cell_df = pd.read_csv(args.cell_data).drop_duplicates(subset='label', keep='first')
+    # Load data
+    logger.info(f"Loading cell data: {args.cell_data}")
+    cell_df = pd.read_csv(args.cell_data).drop_duplicates(subset='label', keep='first')
 
-        logger.info(f"Loading segmentation mask: {args.segmentation_mask}")
-        mask = np.load(args.segmentation_mask)
+    logger.info(f"Loading segmentation mask: {args.segmentation_mask}")
+    mask = np.load(args.segmentation_mask)
 
-        # Run phenotyping
-        phenotypes_data, phenotypes_mask = run_phenotyping_pipeline(
-            cell_df.copy(),
-            mask.copy(),
-            markers=args.markers,
-            cutoffs=args.cutoffs,
-            quality_percentile=args.quality_percentile,
-            noise_percentile=args.noise_percentile
-        )
+    # Run phenotyping
+    phenotypes_data, phenotypes_mask = run_phenotyping_pipeline(
+        cell_df.copy(),
+        mask.copy(),
+        markers=args.markers,
+        cutoffs=args.cutoffs,
+        quality_percentile=args.quality_percentile,
+        noise_percentile=args.noise_percentile
+    )
 
-        # Save outputs
-        output_csv = os.path.join(args.output_dir, 'phenotypes_data.csv')
-        output_mask = os.path.join(args.output_dir, 'phenotypes_mask.tiff')
+    # Save outputs
+    output_csv = os.path.join(args.output_dir, 'phenotypes_data.csv')
+    output_mask = os.path.join(args.output_dir, 'phenotypes_mask.tiff')
 
-        logger.info(f"Saving phenotype data: {output_csv}")
-        phenotypes_data.to_csv(output_csv, index=False)
+    logger.info(f"Saving phenotype data: {output_csv}")
+    phenotypes_data.to_csv(output_csv, index=False)
 
-        logger.info(f"Saving phenotype mask: {output_mask}")
-        save_tiff(phenotypes_mask, output_mask)
+    logger.info(f"Saving phenotype mask: {output_mask}")
+    save_tiff(phenotypes_mask, output_mask)
 
-        logger.info("=" * 80)
-        logger.info("Cell Phenotyping Pipeline Completed Successfully")
-        logger.info("=" * 80)
+    logger.info("=" * 80)
+    logger.info("Cell Phenotyping Pipeline Completed Successfully")
+    logger.info("=" * 80)
 
-        return 0
-
-    except Exception as e:
-        logger.error(f"Pipeline failed: {e}", exc_info=True)
-        return 1
+    return 0
 
 
 if __name__ == "__main__":
