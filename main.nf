@@ -47,8 +47,9 @@ workflow {
     SEGMENT ( REGISTER.out.merged )
 
     // 6. MODULE: Classify cell types using deepcell-types
+    //    Using cell_mask (expanded) for classification
     CLASSIFY (
         REGISTER.out.merged,
-        SEGMENT.out.mask
+        SEGMENT.out.cell_mask
     )
 }

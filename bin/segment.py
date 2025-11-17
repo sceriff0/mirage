@@ -184,7 +184,7 @@ def segment_whole_image(
     image: NDArray,
     model: StarDist2D,
     n_tiles: Tuple[int, int] = (16, 16)
-) -> NDArray:
+) -> Tuple[NDArray, NDArray]:
     """
     Segment entire image without cropping.
 
@@ -199,30 +199,34 @@ def segment_whole_image(
 
     Returns
     -------
-    mask : ndarray, shape (Y, X)
-        Segmentation mask with cell labels.
+    nuclei_mask : ndarray, shape (Y, X)
+        Nuclei segmentation mask with cell labels.
+    cell_mask : ndarray, shape (Y, X)
+        Whole cell segmentation mask with expanded cell labels.
     """
     logger.info(f"Segmenting whole image (shape: {image.shape})")
 
     start_time = time.time()
 
-    # Predict instances
-    labels, _ = model.predict_instances(image, n_tiles=n_tiles, verbose=False)
+    # Predict instances - this gives nuclei masks
+    nuclei_labels, _ = model.predict_instances(image, n_tiles=n_tiles, verbose=False)
 
-    # Expand labels to fill gaps
-    labels_expanded = segmentation.expand_labels(
-        labels,
+    # Expand labels to create whole cell masks
+    cell_labels = segmentation.expand_labels(
+        nuclei_labels,
         distance=10,
         spacing=1
     )
 
     elapsed = time.time() - start_time
 
-    n_cells = len(np.unique(labels_expanded)) - 1  # Subtract background
-    logger.info(f"  Cells detected: {n_cells}")
+    n_nuclei = len(np.unique(nuclei_labels)) - 1  # Subtract background
+    n_cells = len(np.unique(cell_labels)) - 1
+    logger.info(f"  Nuclei detected: {n_nuclei}")
+    logger.info(f"  Cells (expanded): {n_cells}")
     logger.info(f"  Time: {elapsed:.2f}s")
 
-    return labels_expanded
+    return nuclei_labels, cell_labels
 
 
 def segment_with_cropping(
@@ -230,7 +234,7 @@ def segment_with_cropping(
     model: StarDist2D,
     crop_size: int = 8000,
     overlap: int = 500
-) -> Tuple[NDArray, List[Tuple[int, int, int, int]]]:
+) -> Tuple[NDArray, NDArray, List[Tuple[int, int, int, int]]]:
     """
     Segment image using overlapping crops.
 
@@ -247,8 +251,10 @@ def segment_with_cropping(
 
     Returns
     -------
-    mask : ndarray, shape (Y, X)
-        Stitched segmentation mask.
+    nuclei_mask : ndarray, shape (Y, X)
+        Stitched nuclei segmentation mask.
+    cell_mask : ndarray, shape (Y, X)
+        Stitched whole cell segmentation mask.
     positions : list of tuple
         Crop positions used.
 
@@ -271,7 +277,8 @@ def segment_with_cropping(
     logger.info(f"  Number of crops: {len(positions)}")
 
     # Segment each crop
-    segmented_crops = []
+    nuclei_crops = []
+    cell_crops = []
     max_label = 0
 
     for idx, pos in enumerate(positions):
@@ -280,44 +287,57 @@ def segment_with_cropping(
         # Extract crop
         crop = extract_crop(image, pos)
 
-        # Segment
-        labels, _ = model.predict_instances(crop, verbose=False)
+        # Segment - this gives nuclei labels
+        nuclei_labels, _ = model.predict_instances(crop, verbose=False)
 
         # Remap labels to ensure uniqueness
         if max_label > 0:
-            labels[labels > 0] += max_label
+            nuclei_labels[nuclei_labels > 0] += max_label
 
-        # Expand labels
-        labels_expanded = segmentation.expand_labels(
-            labels,
+        # Expand labels to create cell masks
+        cell_labels = segmentation.expand_labels(
+            nuclei_labels,
             distance=10,
             spacing=1
         )
 
-        max_label = np.max(labels_expanded)
+        max_label = np.max(cell_labels)
 
-        segmented_crops.append(labels_expanded)
+        nuclei_crops.append(nuclei_labels)
+        cell_crops.append(cell_labels)
 
-        n_cells = len(np.unique(labels_expanded)) - 1
-        logger.info(f"    Cells in crop: {n_cells}")
+        n_nuclei = len(np.unique(nuclei_labels)) - 1
+        n_cells = len(np.unique(cell_labels)) - 1
+        logger.info(f"    Nuclei in crop: {n_nuclei}, Cells (expanded): {n_cells}")
 
-    # Reconstruct full image
+    # Reconstruct full images
     logger.info("Stitching crops...")
-    mask = reconstruct_image_from_crops(
-        crops=segmented_crops,
+    nuclei_mask = reconstruct_image_from_crops(
+        crops=nuclei_crops,
         positions=positions,
         image_shape=image.shape,
         overlap=overlap,
         blend_mode='max'  # Use max for segmentation masks
     )
 
-    # Remap to consecutive labels
-    mask = remap_labels(mask)
+    cell_mask = reconstruct_image_from_crops(
+        crops=cell_crops,
+        positions=positions,
+        image_shape=image.shape,
+        overlap=overlap,
+        blend_mode='max'
+    )
 
-    n_cells = len(np.unique(mask)) - 1
+    # Remap to consecutive labels
+    nuclei_mask = remap_labels(nuclei_mask)
+    cell_mask = remap_labels(cell_mask)
+
+    n_nuclei = len(np.unique(nuclei_mask)) - 1
+    n_cells = len(np.unique(cell_mask)) - 1
+    logger.info(f"Total nuclei after stitching: {n_nuclei}")
     logger.info(f"Total cells after stitching: {n_cells}")
 
-    return mask, positions
+    return nuclei_mask, cell_mask, positions
 
 
 def remap_labels(mask: NDArray) -> NDArray:
@@ -403,8 +423,10 @@ def run_segmentation(
 
     Returns
     -------
-    mask_path : str
-        Path to saved segmentation mask.
+    nuclei_mask_path : str
+        Path to saved nuclei segmentation mask.
+    cell_mask_path : str
+        Path to saved whole cell segmentation mask.
     positions_path : str
         Path to saved crop positions.
     """
@@ -445,14 +467,14 @@ def run_segmentation(
 
     # Segment
     if process_whole_image:
-        mask = segment_whole_image(normalized, model)
+        nuclei_mask, cell_mask = segment_whole_image(normalized, model)
         positions = generate_crop_positions(
             image_shape=dapi_image.shape,
             crop_size=crop_size,
             overlap=overlap
         )
     else:
-        mask, positions = segment_with_cropping(
+        nuclei_mask, cell_mask, positions = segment_with_cropping(
             normalized,
             model,
             crop_size=crop_size,
@@ -461,11 +483,15 @@ def run_segmentation(
 
     # Save outputs
     basename = Path(dapi_path).stem
-    mask_path = Path(output_dir) / f"{basename}_segmentation_mask.npy"
+    nuclei_mask_path = Path(output_dir) / f"{basename}_nuclei_mask.tif"
+    cell_mask_path = Path(output_dir) / f"{basename}_cell_mask.tif"
     positions_path = Path(output_dir) / f"{basename}_positions.pkl"
 
-    logger.info(f"Saving segmentation mask: {mask_path.name}")
-    np.save(mask_path, mask)
+    logger.info(f"Saving nuclei mask: {nuclei_mask_path.name}")
+    tifffile.imwrite(nuclei_mask_path, nuclei_mask.astype(np.uint32))
+
+    logger.info(f"Saving cell mask: {cell_mask_path.name}")
+    tifffile.imwrite(cell_mask_path, cell_mask.astype(np.uint32))
 
     logger.info(f"Saving crop positions: {positions_path.name}")
     save_pickle(positions, str(positions_path))
@@ -474,7 +500,7 @@ def run_segmentation(
     logger.info("Segmentation Complete")
     logger.info("=" * 80)
 
-    return str(mask_path), str(positions_path)
+    return str(nuclei_mask_path), str(cell_mask_path), str(positions_path)
 
 
 def parse_args():
