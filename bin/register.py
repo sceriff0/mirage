@@ -65,7 +65,13 @@ def get_channel_names(filename: str) -> list[str]:
 
 
 def save_qc_with_reference_dapi(registrar, qc_dir: str, ref_image: str) -> None:
-    """Save QC images with reference DAPI as first channel and registered images.
+    """Save QC images with reference DAPI and registered DAPI only.
+
+    Each QC image contains only 2 channels:
+    - Channel 0: Reference DAPI (unwarped, from reference image)
+    - Channel 1: Registered DAPI (warped, from the current image)
+
+    The reference image itself is not saved to QC.
 
     Parameters
     ----------
@@ -78,57 +84,70 @@ def save_qc_with_reference_dapi(registrar, qc_dir: str, ref_image: str) -> None:
     """
     import tifffile
 
-    log_progress("\nSaving QC images with reference DAPI as first channel...")
+    log_progress("\nSaving QC images with reference DAPI + registered DAPI...")
 
     # Get reference slide
     ref_slide = registrar.slide_dict[ref_image]
     ref_channels = get_channel_names(ref_image)
 
     # Find DAPI channel index in reference image
-    dapi_idx = None
+    ref_dapi_idx = None
     for idx, ch in enumerate(ref_channels):
         if 'DAPI' in ch.upper():
-            dapi_idx = idx
+            ref_dapi_idx = idx
             break
 
-    if dapi_idx is None:
+    if ref_dapi_idx is None:
         log_progress("Warning: No DAPI channel found in reference image, using first channel")
-        dapi_idx = 0
+        ref_dapi_idx = 0
 
     # Get reference DAPI channel (unwarped, from original reference)
-    ref_dapi = ref_slide.slide2vips().numpy()[..., dapi_idx]
+    ref_dapi = ref_slide.slide2vips().numpy()[..., ref_dapi_idx]
 
     log_progress(f"Reference DAPI channel shape: {ref_dapi.shape}")
-    log_progress(f"Reference image: {ref_image}, DAPI channel index: {dapi_idx}")
+    log_progress(f"Reference image: {ref_image}, DAPI channel index: {ref_dapi_idx}")
 
-    # Process each slide
+    # Process each slide (except reference)
     for slide_name, slide_obj in registrar.slide_dict.items():
         if slide_name == ref_image:
-            # For reference image, save as-is
-            log_progress(f"Saving reference image: {slide_name}")
-            output_path = os.path.join(qc_dir, slide_name)
-            original_img = slide_obj.slide2vips().numpy()
-            tifffile.imwrite(output_path, original_img, photometric='minisblack')
-        else:
-            # For other images, prepend reference DAPI then add registered channels
-            log_progress(f"Processing {slide_name}")
+            log_progress(f"Skipping reference image: {slide_name}")
+            continue
 
-            # Get warped/registered version of this slide
-            warped_img = slide_obj.warp_slide(
-                non_rigid=True,
-                crop=registrar.crop
-            )
+        log_progress(f"Processing {slide_name}")
 
-            # Combine: reference DAPI + all registered channels from this slide
-            combined = np.dstack([ref_dapi, warped_img])
+        # Get channels for this slide
+        slide_channels = get_channel_names(slide_name)
 
-            log_progress(f"  Reference DAPI: {ref_dapi.shape}, Registered: {warped_img.shape}, Combined: {combined.shape}")
+        # Find DAPI channel index in this slide
+        slide_dapi_idx = None
+        for idx, ch in enumerate(slide_channels):
+            if 'DAPI' in ch.upper():
+                slide_dapi_idx = idx
+                break
 
-            # Save
-            output_path = os.path.join(qc_dir, slide_name)
-            tifffile.imwrite(output_path, combined, photometric='minisblack')
+        if slide_dapi_idx is None:
+            log_progress(f"  Warning: No DAPI channel found in {slide_name}, using first channel")
+            slide_dapi_idx = 0
 
-    log_progress("✓ QC images saved with reference DAPI as first channel")
+        # Get warped/registered version of this slide
+        warped_img = slide_obj.warp_slide(
+            non_rigid=True,
+            crop=registrar.crop
+        )
+
+        # Extract only the registered DAPI channel
+        registered_dapi = warped_img[..., slide_dapi_idx]
+
+        # Combine: reference DAPI + registered DAPI (2 channels only)
+        qc_img = np.dstack([ref_dapi, registered_dapi])
+
+        log_progress(f"  QC image shape: {qc_img.shape} (ref DAPI + registered DAPI)")
+
+        # Save with original filename to preserve cycle information
+        output_path = os.path.join(qc_dir, slide_name)
+        tifffile.imwrite(output_path, qc_img, photometric='minisblack')
+
+    log_progress("✓ QC images saved (reference DAPI + registered DAPI only)")
 
 
 def find_reference_image(directory: str, required_markers: list[str], 
