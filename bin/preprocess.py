@@ -12,8 +12,6 @@ from __future__ import annotations
 import os
 import time
 import argparse
-import logging
-import re
 from pathlib import Path
 from typing import Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,45 +20,10 @@ import numpy as np
 import tifffile
 from numpy.typing import NDArray
 
-# BaSiC imports - optional. Keep import guarded so tests can import this module
-# without installing basicpy. If BaSiC is unavailable, apply_basic_correction
-# will raise if called (or users can handle fallback behavior).
-try:
-    os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
-    from basicpy import BaSiC  # type: ignore
-except Exception:  # pragma: no cover - environment dependent
-    BaSiC = None
+os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
+from basicpy import BaSiC  # type: ignore
 
-# --- Minimal Fallbacks for Local Imports (Ensuring script is self-contained) ---
-try:
-    from utils import logging_config
-except Exception:
-    import logging as _logging
-
-    class _FallbackLoggingConfig:
-        @staticmethod
-        def setup_logging():
-            _logging.basicConfig(level=_logging.INFO)
-
-    logging_config = _FallbackLoggingConfig()
-
-# Dummy implementations for required local imports if missing
-try:
-    from _common import ensure_dir, setup_file_logger
-except Exception:
-    def ensure_dir(path):
-        Path(path).mkdir(parents=True, exist_ok=True)
-    
-    def setup_file_logger(log_file):
-        handler = logging.FileHandler(log_file)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-# --- End Fallbacks ---
-
-# Setup logging.
-logging_config.setup_logging()
-logger = logging.getLogger(__name__)
+from _common import ensure_dir
 
 __all__ = [
     "split_image_into_fovs",
@@ -79,7 +42,6 @@ def split_image_into_fovs(
     Split image (H, W) into field-of-view (FOV) tiles for BaSiC processing.
     """
     if image.ndim != 2:
-        # Enforcing 2D input as BaSiC works on single channels (H, W)
         raise ValueError(f"Image must be 2D, got shape {image.shape}")
 
     image_h, image_w = image.shape
@@ -88,27 +50,18 @@ def split_image_into_fovs(
     if overlap >= min(fov_h, fov_w):
         raise ValueError(f"Overlap ({overlap}) must be < FOV size {fov_size}")
 
-    # Calculate stride
     stride_h = fov_h - overlap
     stride_w = fov_w - overlap
 
-    # Calculate number of FOVs needed
     n_fovs_h = int(np.ceil((image_h - overlap) / stride_h))
     n_fovs_w = int(np.ceil((image_w - overlap) / stride_w))
 
     n_fovs = n_fovs_h * n_fovs_w
 
-    logger.debug(
-        f"Splitting {image.shape} image into {n_fovs} FOVs "
-        f"({n_fovs_h}×{n_fovs_w}) of size {fov_size}"
-    )
-
-    # Prepare output array (N, fov_h, fov_w)
     fov_stack = np.zeros((n_fovs, fov_h, fov_w), dtype=image.dtype)
     positions = []
     idx = 0
 
-    # Extract FOVs
     for i in range(n_fovs_h):
         row_start = i * stride_h
         row_end = min(row_start + fov_h, image_h)
@@ -119,7 +72,6 @@ def split_image_into_fovs(
             col_end = min(col_start + fov_w, image_w)
             actual_w = col_end - col_start
 
-            # Extract FOV
             fov_stack[idx, :actual_h, :actual_w] = \
                 image[row_start:row_end, col_start:col_end]
 
@@ -161,41 +113,22 @@ def apply_basic_correction(
     if image.ndim != 2:
         raise ValueError(f"apply_basic_correction requires a 2D image, got shape {image.shape}")
 
-    logger.info(f"Applying BaSiC correction to {image.shape} image")
-    start_time = time.time()
-    
-    if BaSiC is None:
-        raise ImportError("basicpy (BaSiC) is required but not installed.")
-
-    # Split into FOVs
     fov_stack, positions, _ = split_image_into_fovs(
         image, fov_size, overlap=0
     )
 
-    # Initialize BaSiC model and (Autotune if requested)...
     basic = BaSiC(get_darkfield=get_darkfield, **basic_kwargs)
 
     if autotune:
-        logger.info(f"Autotuning BaSiC parameters ({n_iter} iterations)...")
-        autotune_start = time.time()
         basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
-        logger.info(f"Autotuning completed in {time.time() - autotune_start:.2f}s")
-        
-    # Fit and transform
-    logger.info("Fitting and transforming FOVs...")
-    transform_start = time.time()
-    corrected_fovs = basic.fit_transform(fov_stack)
-    logger.info(f"Transformation completed in {time.time() - transform_start:.2f}s")
 
-    # Reconstruct image
+    corrected_fovs = basic.fit_transform(fov_stack)
+
     reconstructed = reconstruct_image_from_fovs(
         corrected_fovs,
         positions,
         image.shape
     )
-
-    total_time = time.time() - start_time
-    logger.info(f"BaSiC correction completed in {total_time:.2f}s")
 
     return reconstructed, basic
 
