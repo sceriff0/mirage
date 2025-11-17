@@ -5,7 +5,7 @@ echo "Generating test fixtures..."
 python3 tests/generate_testdata.py
 
 echo "Running pytest unit tests..."
-pytest -q
+pytest -v tests/
 
 echo "Running nf-core lint (if installed)..."
 if command -v nf-core >/dev/null 2>&1; then
@@ -15,6 +15,3 @@ else
 fi
 
 echo "Tests complete"
-#!/bin/bash
-# Minimal smoke test
-echo 'Running one-patient test pipeline'

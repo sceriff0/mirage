@@ -9,33 +9,52 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y default-jre
+          sudo apt-get update
+          sudo apt-get install -y default-jre
 
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install nf-core
+          python -m pip install --upgrade pip setuptools wheel
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+          pip install pytest pytest-cov tifffile numpy pandas scikit-image
 
       - name: Install Nextflow
         run: |
           curl -s https://get.nextflow.io | bash
-          sudo mv nextflow /usr/local/bin/nextflow
+          sudo mv nextflow /usr/local/bin/
+          chmod +x /usr/local/bin/nextflow
+
+      - name: Verify installations
+        run: |
+          python --version
+          pip list
+          nextflow -version
 
       - name: Run unit tests
         run: |
           bash tests/run_tests.sh
 
-      - name: Show testdata
+      - name: Show test artifacts
+        if: always()
         run: |
-          echo "Testdata files:" && ls -l tests/testdata || true
+          echo "Test data files:"
+          ls -lh tests/testdata/ || true
 
