@@ -11,14 +11,13 @@ process PREPROCESS {
     path ome_tiff
 
     output:
-    path "preprocessed/${ome_tiff.simpleName}_corrected.ome.tif", emit: preprocessed
+    path "${ome_tiff.simpleName}_corrected.ome.tif", emit: preprocessed
 
     script:
     """
-    mkdir -p preprocessed
     preprocess.py \\
         --image ${ome_tiff} \\
-        --output_dir preprocessed \\
+        --output_dir . \\
         --fov_size ${params.preproc_tile_size}
     """
 }
