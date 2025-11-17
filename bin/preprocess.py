@@ -289,10 +289,14 @@ def find_channel_names_from_path(image_path: str) -> List[str]:
     """
     Extracts channel names from a multichannel image path assuming the format:
     <ID>_<CHANNEL1>_<CHANNEL2>...<EXT>
-    e.g., 'id1_DAPI_Marker1_Marker2.ome.tiff' -> ['DAPI', 'Marker1', 'Marker2']
+    e.g., 'id1_DAPI_Marker1_Marker2.ome.tif' -> ['DAPI', 'Marker1', 'Marker2']
     """
     p = Path(image_path)
     base_name = p.stem
+
+    # Remove .ome extension if present
+    if base_name.endswith('.ome'):
+        base_name = base_name[:-4]
 
     parts = base_name.split('_')
 
@@ -323,11 +327,15 @@ def main():
 
     channel_names = find_channel_names_from_path(image_path)
 
-    base, ext = os.path.splitext(image_basename)
-
-    if base.endswith(".ome"):
-        base = base[:-4]
-        ext = ".ome" + ext
+    # Handle .ome.tif extension properly
+    if image_basename.endswith('.ome.tif'):
+        base = image_basename[:-8]  # Remove .ome.tif
+        ext = '.ome.tif'
+    elif image_basename.endswith('.ome.tiff'):
+        base = image_basename[:-9]  # Remove .ome.tiff
+        ext = '.ome.tiff'
+    else:
+        base, ext = os.path.splitext(image_basename)
 
     output_filename = f"{base}_corrected{ext}"
     output_path = os.path.join(

@@ -1,23 +1,24 @@
 nextflow.enable.dsl = 2
 
 process PREPROCESS {
-    tag "${nd2file.simpleName}"
+    tag "${ome_tiff.simpleName}"
     label 'process_medium'
     container "${params.container.preprocess}"
 
     publishDir "${params.outdir}/preprocessed", mode: 'copy'
 
     input:
-    path nd2file
+    path ome_tiff
 
     output:
-    path "preprocessed/${nd2file.simpleName}.preproc.ome.tif", emit: preprocessed
+    path "preprocessed/${ome_tiff.simpleName}_corrected.ome.tif", emit: preprocessed
 
     script:
     """
     mkdir -p preprocessed
     preprocess.py \\
-        --image ${nd2file} \\
+        --image ${ome_tiff} \\
+        --output_dir preprocessed \\
         --fov_size ${params.preproc_tile_size}
     """
 }
