@@ -148,9 +148,9 @@ def _process_single_channel_from_stack(
     """Worker function to process a single channel slice from a stack."""
     logger.info(f"Processing channel #{channel_index} ({channel_name})")
 
-    if skip_dapi and 'DAPI' in channel_name.upper():
+    '''if skip_dapi and 'DAPI' in channel_name.upper():
         logger.info(f"  Skipping BaSiC correction for DAPI")
-        return channel_index, channel_image
+        return channel_index, channel_image'''
 
     corrected, _ = apply_basic_correction(
         channel_image,
@@ -167,7 +167,7 @@ def preprocess_multichannel_image(
     channel_names: List[str],
     output_path: str,
     fov_size: Tuple[int, int] = (1950, 1950),
-    skip_dapi: bool = True,
+   skip_dapi : bool = True,
     autotune: bool = False,
     n_iter: int = 3,
     n_workers: int = 4,
