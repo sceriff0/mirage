@@ -283,6 +283,19 @@ def parse_args():
         help='Number of autotuning iterations'
     )
 
+    parser.add_argument(
+        '--overlap',
+        type=int,
+        default=0,
+        help='Overlap between FOV tiles for BaSiC correction'
+    )
+
+    parser.add_argument(
+        '--no_darkfield',
+        action='store_true',
+        help='Disable darkfield estimation in BaSiC'
+    )
+
     return parser.parse_args()
 
 def find_channel_names_from_path(image_path: str) -> List[str]:
@@ -346,6 +359,12 @@ def main():
     logger.info(f"Starting preprocessing: {image_path}")
     logger.info(f"Expected channel order: {channel_names}")
 
+    # Build BaSiC kwargs
+    basic_kwargs = {
+        'overlap': args.overlap,
+        'get_darkfield': not args.no_darkfield
+    }
+
     preprocess_multichannel_image(
         image_path=image_path,
         channel_names=channel_names,
@@ -354,7 +373,8 @@ def main():
         skip_dapi=args.skip_dapi,
         autotune=args.autotune,
         n_iter=args.n_iter,
-        n_workers=args.n_workers
+        n_workers=args.n_workers,
+        **basic_kwargs
     )
 
     logger.info(f"Preprocessing completed successfully. Output: {output_path}")

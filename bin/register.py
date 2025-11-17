@@ -212,9 +212,13 @@ def find_reference_image(directory: str, required_markers: list[str],
 
 
 def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
-                       reference_markers: Optional[list[str]] = None) -> int:
+                       reference_markers: Optional[list[str]] = None,
+                       max_processed_image_dim_px: int = 1800,
+                       max_non_rigid_dim_px: int = 3500,
+                       micro_reg_fraction: float = 0.5,
+                       num_features: int = 5000) -> int:
     """Perform VALIS registration on preprocessed images.
-    
+
     Parameters
     ----------
     input_dir : str
@@ -225,7 +229,15 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         QC directory for registration outputs
     reference_markers : list of str, optional
         Markers to identify reference image. Default: ['DAPI', 'SMA']
-    
+    max_processed_image_dim_px : int, optional
+        Maximum image dimension for rigid registration. Default: 1800
+    max_non_rigid_dim_px : int, optional
+        Maximum dimension for non-rigid registration. Default: 3500
+    micro_reg_fraction : float, optional
+        Fraction of image size for micro-registration. Default: 0.5
+    num_features : int, optional
+        Number of SuperPoint features to detect. Default: 5000
+
     Returns
     -------
     int
@@ -244,21 +256,17 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     
     # Use qc_dir as results directory if available, otherwise use output directory
     results_dir = qc_dir if qc_dir else os.path.dirname(out)
-    
+
     # ========================================================================
-    # VALIS Parameters - Optimized for dense tissue
+    # VALIS Parameters - Use provided values or defaults
     # ========================================================================
-    MAX_PROCESSED_IMAGE_DIM_PX = 1800
-    MAX_NON_RIGID_DIM_PX = 3500
-    MICRO_REG_FRACTION = 0.5
-    NUM_FEATURES = 5000
-    
     log_progress("=" * 70)
     log_progress("VALIS Registration Configuration")
     log_progress("=" * 70)
-    log_progress(f"Rigid resolution: {MAX_PROCESSED_IMAGE_DIM_PX}px")
-    log_progress(f"Non-rigid resolution: {MAX_NON_RIGID_DIM_PX}px")
-    log_progress(f"Feature detector: SuperPoint with {NUM_FEATURES} features")
+    log_progress(f"Rigid resolution: {max_processed_image_dim_px}px")
+    log_progress(f"Non-rigid resolution: {max_non_rigid_dim_px}px")
+    log_progress(f"Micro-registration fraction: {micro_reg_fraction}")
+    log_progress(f"Feature detector: SuperPoint with {num_features} features")
     log_progress("=" * 70)
     
     # Find reference image
@@ -291,8 +299,8 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         crop="reference",
         
         # Image size parameters
-        max_processed_image_dim_px=MAX_PROCESSED_IMAGE_DIM_PX,
-        max_non_rigid_registration_dim_px=MAX_NON_RIGID_DIM_PX,
+        max_processed_image_dim_px=max_processed_image_dim_px,
+        max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
         
         # Feature detection - SuperPoint/SuperGlue
         feature_detector_cls=feature_detectors.SuperPointFD,
@@ -327,7 +335,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     
     img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
     min_max_size = np.min([np.max(d) for d in img_dims])
-    micro_reg_size = int(np.floor(min_max_size * MICRO_REG_FRACTION))
+    micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
     
     log_progress(f"Micro-registration size: {micro_reg_size}px")
     log_progress("Starting micro-registration (may take 30-120 minutes)...")
@@ -389,6 +397,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--qc-dir', required=False, help='QC directory for registration outputs')
     parser.add_argument('--reference-markers', nargs='+', default=['DAPI', 'SMA'],
                        help='Markers to identify reference image (default: DAPI SMA)')
+    parser.add_argument('--max-processed-dim', type=int, default=1800,
+                       help='Maximum image dimension for rigid registration (default: 1800)')
+    parser.add_argument('--max-non-rigid-dim', type=int, default=3500,
+                       help='Maximum dimension for non-rigid registration (default: 3500)')
+    parser.add_argument('--micro-reg-fraction', type=float, default=0.5,
+                       help='Fraction of image size for micro-registration (default: 0.5)')
+    parser.add_argument('--num-features', type=int, default=5000,
+                       help='Number of SuperPoint features to detect (default: 5000)')
     return parser.parse_args()
 
 
@@ -401,7 +417,11 @@ def main() -> int:
             args.input_dir,
             args.out,
             args.qc_dir,
-            args.reference_markers
+            args.reference_markers,
+            args.max_processed_dim,
+            args.max_non_rigid_dim,
+            args.micro_reg_fraction,
+            args.num_features
         )
     except Exception as e:
         log_progress(f"ERROR: Registration failed: {e}")

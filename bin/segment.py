@@ -549,6 +549,34 @@ def parse_args():
     )
 
     parser.add_argument(
+        '--tophat_radius',
+        type=int,
+        default=50,
+        help='Top-hat morphological filter radius'
+    )
+
+    parser.add_argument(
+        '--gaussian_sigma',
+        type=float,
+        default=1.0,
+        help='Gaussian filter sigma for smoothing'
+    )
+
+    parser.add_argument(
+        '--pmin',
+        type=float,
+        default=1.0,
+        help='Normalization lower percentile'
+    )
+
+    parser.add_argument(
+        '--pmax',
+        type=float,
+        default=99.8,
+        help='Normalization upper percentile'
+    )
+
+    parser.add_argument(
         '--log_file',
         type=str,
         help='Log file path'
@@ -576,6 +604,10 @@ def main():
         crop_size=args.crop_size,
         overlap=args.overlap,
         gamma=args.gamma,
+        tophat_radius=args.tophat_radius,
+        gaussian_sigma=args.gaussian_sigma,
+        pmin=args.pmin,
+        pmax=args.pmax,
         log_file=args.log_file
     )
 
