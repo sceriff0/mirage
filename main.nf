@@ -6,13 +6,13 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { CONVERT_ND2 } from 'modules/local/convert_nd2'
-include { PREPROCESS } from 'modules/local/preprocess'
-include { REGISTER   } from 'modules/local/register'
-include { SEGMENT    } from 'modules/local/segment'
-include { QUANTIFY   } from 'modules/local/quantify'
-include { PHENOTYPE  } from 'modules/local/phenotype'
-include { GET_PREPROCESS_DIR } from 'modules/local/get_preprocess_dir' // The helper module
+include { CONVERT_ND2 } from './modules/local/convert_nd2'
+include { PREPROCESS } from './modules/local/preprocess'
+include { REGISTER   } from './modules/local/register'
+include { SEGMENT    } from './modules/local/segment'
+include { QUANTIFY   } from './modules/local/quantify'
+include { PHENOTYPE  } from './modules/local/phenotype'
+include { GET_PREPROCESS_DIR } from './modules/local/get_preprocess_dir' // The helper module
 
 
 /*
