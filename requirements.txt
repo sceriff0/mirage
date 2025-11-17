@@ -11,3 +11,4 @@ dask[distributed]
 tqdm
 basicpy
 PyYAML
+git+https://github.com/vanvalenlab/deepcell-types@master

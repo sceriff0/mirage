@@ -10,8 +10,7 @@ include { CONVERT_ND2 } from './modules/local/convert_nd2'
 include { PREPROCESS } from './modules/local/preprocess'
 include { REGISTER   } from './modules/local/register'
 include { SEGMENT    } from './modules/local/segment'
-include { QUANTIFY   } from './modules/local/quantify'
-include { PHENOTYPE  } from './modules/local/phenotype'
+include { CLASSIFY   } from './modules/local/classify'
 
 
 /*
@@ -47,15 +46,9 @@ workflow {
     // 5. MODULE: Segment the merged WSI
     SEGMENT ( REGISTER.out.merged )
 
-    // 6. MODULE: Quantify cells
-    QUANTIFY (
+    // 6. MODULE: Classify cell types using deepcell-types
+    CLASSIFY (
         REGISTER.out.merged,
-        SEGMENT.out.mask
-    )
-
-    // 7. MODULE: Phenotype cells
-    PHENOTYPE (
-        QUANTIFY.out.csv,
         SEGMENT.out.mask
     )
 }

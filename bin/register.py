@@ -58,7 +58,7 @@ def get_channel_names(filename: str) -> list[str]:
         Channel names extracted from filename (excludes Patient ID)
     """
     base = os.path.basename(filename)
-    name_part = base.split('_corrected')[0]
+    name_part = base.split('_corrected')[0] # Remove suffix
     parts = name_part.split('_')
     channels = parts[1:]  # Exclude Patient ID
     return channels
