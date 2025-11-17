@@ -12,7 +12,6 @@ include { REGISTER   } from './modules/local/register'
 include { SEGMENT    } from './modules/local/segment'
 include { QUANTIFY   } from './modules/local/quantify'
 include { PHENOTYPE  } from './modules/local/phenotype'
-include { GET_PREPROCESS_DIR } from './modules/local/get_preprocess_dir' // The helper module
 
 
 /*
@@ -35,27 +34,23 @@ workflow {
     // 2. MODULE: Convert ND2 to OME-TIFF 
     CONVERT_ND2 ( ch_input )
 
-    // 3. MODULE: Preprocess each converted file 
+    // 3. MODULE: Preprocess each converted file
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
-    // 4. SYNCHRONIZATION STEP:
-    //    Waits for all PREPROCESS tasks to finish, then triggers GET_PREPROCESS_DIR.
-    ch_preprocessed_files_list = PREPROCESS.out.preprocessed.collect()
-    GET_PREPROCESS_DIR( ch_preprocessed_files_list )
+    // 4. MODULE: Register/merge all preprocessed files
+    //    Collects all preprocessed files and passes them to REGISTER
+    REGISTER ( PREPROCESS.out.preprocessed.collect() )
 
-    // 5. MODULE: Register/merge all preprocessed files 
-    REGISTER ( GET_PREPROCESS_DIR.out.preprocess_dir )
-
-    // 6. MODULE: Segment the merged WSI 
+    // 5. MODULE: Segment the merged WSI
     SEGMENT ( REGISTER.out.merged )
 
-    // 7. MODULE: Quantify cells 
+    // 6. MODULE: Quantify cells
     QUANTIFY (
         REGISTER.out.merged,
         SEGMENT.out.mask
     )
 
-    // 8. MODULE: Phenotype cells
+    // 7. MODULE: Phenotype cells
     PHENOTYPE (
         QUANTIFY.out.csv,
         SEGMENT.out.mask

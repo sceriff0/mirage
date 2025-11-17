@@ -8,7 +8,7 @@ process REGISTER {
     publishDir "${params.outdir}/registered", mode: 'copy'
 
     input:
-    path preproc_dir 
+    val preproc_files
 
     output:
     path "merged/merged_all.ome.tif", emit: merged
@@ -21,7 +21,7 @@ process REGISTER {
     mkdir -p merged merged_qc
 
     register.py \\
-        --input-dir ${preproc_dir} \\
+        --input-dir ${params.outdir}/preprocessed \\
         --out merged/merged_all.ome.tif \\
         --qc-dir merged_qc \\
         ${ref_markers}
