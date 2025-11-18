@@ -22,15 +22,10 @@ process REGISTER {
     def num_features = params.reg_num_features ?: 5000
 
     """
-    mkdir -p merged merged_qc preprocessed
-
-    # Stage all preprocessed files into a directory
-    for file in ${preproc_files}; do
-        ln -s "\$(readlink -f "\$file")" preprocessed/
-    done
+    mkdir -p merged merged_qc
 
     register.py \\
-        --input-dir preprocessed \\
+        --input-dir . \\
         --out merged/merged_all.ome.tif \\
         --qc-dir merged_qc \\
         ${ref_markers} \\
