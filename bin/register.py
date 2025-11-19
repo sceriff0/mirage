@@ -41,7 +41,7 @@ def debug_check_slide2vips(registrar):
     log_progress("\n=== slide2vips() DEBUG ===")
     for name, slide in registrar.slide_dict.items():
         try:
-            v = slide.slide2vips()
+            v = slide.slide2vips(level=0)
             if v is None:
                 log_progress(f"❌ {name}: slide2vips() returned None")
             else:
