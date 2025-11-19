@@ -78,90 +78,69 @@ def get_channel_names(filename: str) -> list[str]:
     return channels
 
 
-def save_qc_with_reference_dapi(registrar, qc_dir: str, ref_image: str) -> None:
-    """Save QC images with reference DAPI and registered DAPI only.
+import numpy as np
+import os
+import tifffile
 
-    Each QC image contains only 2 channels:
-    - Channel 0: Reference DAPI (unwarped, from reference image)
-    - Channel 1: Registered DAPI (warped, from the current image)
 
-    The reference image itself is not saved to QC.
+def autoscale(img, low_p=1, high_p=99):
+    """Auto brightness/contrast similar to ImageJ's 'Auto'."""
+    lo = np.percentile(img, low_p)
+    hi = np.percentile(img, high_p)
+    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
+    return (img * 255).astype(np.uint8)
 
-    Parameters
-    ----------
-    registrar : registration.Valis
-        VALIS registrar object after registration
-    qc_dir : str
-        Directory to save QC images
-    ref_image : str
-        Reference image filename
+
+def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
     """
-    import tifffile
+    Create QC RGB composites equivalently to ImageJ:
+      - ref DAPI  → GREEN
+      - reg DAPI  → RED
+      - optional BLUE = zeros
+    """
+    os.makedirs(qc_dir, exist_ok=True)
 
-    log_progress("\nSaving QC images with reference DAPI + registered DAPI...")
-
-    # Get reference slide
+    # -------- Get REFERENCE DAPI --------
     ref_slide = registrar.slide_dict[ref_image]
     ref_channels = get_channel_names(ref_image)
 
-    # Find DAPI channel index in reference image
-    ref_dapi_idx = None
-    for idx, ch in enumerate(ref_channels):
-        if 'DAPI' in ch.upper():
-            ref_dapi_idx = idx
-            break
-
-    if ref_dapi_idx is None:
-        log_progress("Warning: No DAPI channel found in reference image, using first channel")
-        ref_dapi_idx = 0
-
-    # Get reference DAPI channel (unwarped, from original reference)
+    ref_dapi_idx = next((i for i,ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
     ref_dapi = ref_slide.slide2vips().numpy()[..., ref_dapi_idx]
 
-    log_progress(f"Reference DAPI channel shape: {ref_dapi.shape}")
-    log_progress(f"Reference image: {ref_image}, DAPI channel index: {ref_dapi_idx}")
-
-    # Process each slide (except reference)
     for slide_name, slide_obj in registrar.slide_dict.items():
         if slide_name == ref_image:
-            log_progress(f"Skipping reference image: {slide_name}")
             continue
 
-        log_progress(f"Processing {slide_name}")
-
-        # Get channels for this slide
         slide_channels = get_channel_names(slide_name)
+        slide_dapi_idx = next((i for i,ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
 
-        # Find DAPI channel index in this slide
-        slide_dapi_idx = None
-        for idx, ch in enumerate(slide_channels):
-            if 'DAPI' in ch.upper():
-                slide_dapi_idx = idx
-                break
+        # Registered (warped) image
+        warped = slide_obj.warp_slide(non_rigid=True, crop=registrar.crop)
 
-        if slide_dapi_idx is None:
-            log_progress(f"  Warning: No DAPI channel found in {slide_name}, using first channel")
-            slide_dapi_idx = 0
+        # Registered DAPI channel
+        reg_dapi = warped[..., slide_dapi_idx]
 
-        # Get warped/registered version of this slide
-        warped_img = slide_obj.warp_slide(
-            non_rigid=True,
-            crop=registrar.crop
-        )
+        # ----- Auto brightness/contrast -----
+        ref_dapi_scaled = autoscale(ref_dapi)
+        reg_dapi_scaled = autoscale(reg_dapi)
 
-        # Extract only the registered DAPI channel
-        registered_dapi = warped_img[..., slide_dapi_idx]
+        # ----- Merge channels (ImageJ-style RGB) -----
+        # R = registered DAPI
+        # G = reference DAPI
+        # B = zero
+        rgb = np.dstack([
+            reg_dapi_scaled,    # Red channel
+            ref_dapi_scaled,    # Green channel
+            np.zeros_like(ref_dapi_scaled)  # Blue channel
+        ]).astype(np.uint8)
 
-        # Combine: reference DAPI + registered DAPI (2 channels only)
-        qc_img = np.dstack([ref_dapi, registered_dapi])
+        # Save RGB composite
+        out_path = os.path.join(qc_dir, slide_name + "_QC_RGB.tif")
+        tifffile.imwrite(out_path, rgb, photometric='rgb')
+        del 
 
-        log_progress(f"  QC image shape: {qc_img.shape} (ref DAPI + registered DAPI)")
+    print("✓ QC RGB composites saved.")
 
-        # Save with original filename to preserve cycle information
-        output_path = os.path.join(qc_dir, slide_name)
-        tifffile.imwrite(output_path, qc_img, photometric='minisblack')
-
-    log_progress("✓ QC images saved (reference DAPI + registered DAPI only)")
 
 
 def find_reference_image(directory: str, required_markers: list[str], 
