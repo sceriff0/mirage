@@ -358,7 +358,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # Parse channel names from filenames
     channel_name_dict = {
         f: get_channel_names(f)
-        for f in registrar.original_img_list
+        for f in registrar.slide_dict.keys()
     }
 
     log_progress("Channel mapping detected:")
