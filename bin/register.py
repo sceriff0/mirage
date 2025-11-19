@@ -18,6 +18,7 @@ import glob
 import numpy as np
 from datetime import datetime
 from typing import Optional
+import tifffile
 
 from _common import ensure_dir
 
@@ -132,7 +133,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         # Save RGB composite
         out_path = os.path.join(qc_dir, slide_name + "_QC_RGB.tif")
         tifffile.imwrite(out_path, rgb, photometric='rgb')
-        del 
+        del rgb
 
     print("✓ QC RGB composites saved.")
 
