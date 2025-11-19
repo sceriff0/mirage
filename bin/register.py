@@ -375,6 +375,8 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"✓ Merged image shape: {merged_img.shape}")
     log_progress(f"✓ Channel names: {channel_names}")
     
+    del merged_img  # Free memory
+    
     # Save individual registered slides to QC directory with reference DAPI first
     if qc_dir:
         save_qc_with_reference_dapi(registrar, qc_dir, ref_image)
