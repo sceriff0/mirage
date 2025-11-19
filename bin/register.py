@@ -78,11 +78,6 @@ def get_channel_names(filename: str) -> list[str]:
     return channels
 
 
-import numpy as np
-import os
-import tifffile
-
-
 def autoscale(img, low_p=1, high_p=99):
     """Auto brightness/contrast similar to ImageJ's 'Auto'."""
     lo = np.percentile(img, low_p)
@@ -378,7 +373,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     # Save individual registered slides to QC directory with reference DAPI first
     if qc_dir:
-        save_qc_with_reference_dapi(registrar, qc_dir, ref_image)
+        save_qc_dapi_rgb(registrar, qc_dir, ref_image)
 
     log_progress("\n" + "=" * 70)
     log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
