@@ -243,152 +243,190 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     int
         Exit code (0 for success)
     """
+    import tempfile
+    import shutil
+
     # Initialize JVM for VALIS
     registration.init_jvm()
-    
+
     # Configuration
     if reference_markers is None:
         reference_markers = ['DAPI', 'SMA']
-    
+
     ensure_dir(os.path.dirname(out) or '.')
     if qc_dir:
         ensure_dir(qc_dir)
-    
+
     # Use qc_dir as results directory if available, otherwise use output directory
     results_dir = qc_dir if qc_dir else os.path.dirname(out)
 
-    # ========================================================================
-    # VALIS Parameters - Use provided values or defaults
-    # ========================================================================
-    log_progress("=" * 70)
-    log_progress("VALIS Registration Configuration")
-    log_progress("=" * 70)
-    log_progress(f"Rigid resolution: {max_processed_image_dim_px}px")
-    log_progress(f"Non-rigid resolution: {max_non_rigid_dim_px}px")
-    log_progress(f"Micro-registration fraction: {micro_reg_fraction}")
-    log_progress(f"Feature detector: SuperPoint with {num_features} features")
-    log_progress("=" * 70)
-    
-    # Find reference image
-    log_progress(f"Searching for reference image with markers: {reference_markers}")
-    
+    # Filter input directory to only include valid OME-TIFF files
+    log_progress("Filtering input directory for valid image files...")
+    all_files = os.listdir(input_dir)
+    valid_extensions = ['.ome.tif', '.ome.tiff']
+    image_files = [
+        f for f in all_files
+        if any(f.endswith(ext) for ext in valid_extensions)
+        and os.path.isfile(os.path.join(input_dir, f))
+    ]
+
+    log_progress(f"Found {len(image_files)} valid OME-TIFF files out of {len(all_files)} items")
+
+    if len(image_files) == 0:
+        raise FileNotFoundError(f"No OME-TIFF files found in {input_dir}")
+
+    # Create temporary directory with only valid images
+    temp_dir = tempfile.mkdtemp(prefix='valis_input_')
+    log_progress(f"Creating filtered input directory: {temp_dir}")
+
     try:
-        ref_image = find_reference_image(input_dir, required_markers=reference_markers)
-    except (FileNotFoundError, ValueError) as e:
-        log_progress(f"ERROR: {e}")
-        log_progress("Falling back to first available image")
-        files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
-        if not files:
-            raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
-        ref_image = os.path.basename(files[0])
-    
-    log_progress(f"Using reference image: {ref_image}")
-    
-    # ========================================================================
-    # Initialize VALIS Registrar
-    # ========================================================================
-    log_progress("Initializing VALIS registration...")
-    
-    registrar = registration.Valis(
-        input_dir,
-        results_dir,
-        
-        # Reference image
-        reference_img_f=ref_image,
-        align_to_reference=True,
-        crop="reference",
-        
-        # Image size parameters
-        max_processed_image_dim_px=max_processed_image_dim_px,
-        max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
-        
-        # Feature detection - SuperPoint/SuperGlue
-        #feature_detector_cls=feature_detectors.SuperPointFD,
-        #matcher=feature_matcher.SuperGlueMatcher(),
-        
-        # Non-rigid registration
-        non_rigid_registrar_cls=non_rigid_registrars.OpticalFlowWarper,
-        
-        # Micro-rigid registration
-        micro_rigid_registrar_cls=MicroRigidRegistrar,
-        
-        # Registration behavior
-        compose_non_rigid=False,
-        create_masks=True,
-    )
-    
-    # ========================================================================
-    # Perform Registration
-    # ========================================================================
-    log_progress("Starting rigid and non-rigid registration...")
-    log_progress("This may take 15-45 minutes...")
-    
-    _, _, error_df = registrar.register()
-    
-    log_progress("✓ Initial registration completed")
-    log_progress(f"\nRegistration errors:\n{error_df}")
-    
-    # ========================================================================
-    # Micro-registration
-    # ========================================================================
-    log_progress("\nCalculating micro-registration parameters...")
-    
-    img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
-    min_max_size = np.min([np.max(d) for d in img_dims])
-    micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
-    
-    log_progress(f"Micro-registration size: {micro_reg_size}px")
-    log_progress("Starting micro-registration (may take 30-120 minutes)...")
-    
-    _, micro_error = registrar.register_micro(
-        max_non_rigid_registration_dim_px=micro_reg_size,
-        reference_img_f=ref_image,
-        align_to_reference=True,
-    )
-    
-    log_progress("✓ Micro-registration completed")
-    log_progress(f"\nMicro-registration errors:\n{micro_error}")
-    
-    # ========================================================================
-    # Merge and Save
-    # ========================================================================
-    log_progress("\nPreparing to merge channels...")
-    
-    # Parse channel names from filenames
-    channel_name_dict = {
-        f: get_channel_names(f)
-        for f in registrar.original_img_list
-    }
-    
-    log_progress("Channel mapping detected:")
-    for filename, channels in channel_name_dict.items():
-        log_progress(f"  {filename}: {channels}")
-    
-    log_progress(f"\nMerging and warping slides to: {out}")
-    
-    merged_img, channel_names, _ = registrar.warp_and_merge_slides(
-        out,
-        channel_name_dict=channel_name_dict,
-        drop_duplicates=True,
-    )
-    
-    log_progress(f"✓ Merged image shape: {merged_img.shape}")
-    log_progress(f"✓ Channel names: {channel_names}")
-    
-    del merged_img  # Free memory
-    
-    # Save individual registered slides to QC directory with reference DAPI first
-    if qc_dir:
-        save_qc_with_reference_dapi(registrar, qc_dir, ref_image)
-    
-    log_progress("\n" + "=" * 70)
-    log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
-    log_progress("=" * 70)
-    
-    # Cleanup
-    registration.kill_jvm()
-    
-    return 0
+        for img_file in image_files:
+            src = os.path.join(input_dir, img_file)
+            dst = os.path.join(temp_dir, img_file)
+            os.symlink(src, dst)
+            log_progress(f"  Linked: {img_file}")
+
+        # Use filtered directory for registration
+        input_dir = temp_dir
+
+        # ========================================================================
+        # VALIS Parameters - Use provided values or defaults
+        # ========================================================================
+        log_progress("=" * 70)
+        log_progress("VALIS Registration Configuration")
+        log_progress("=" * 70)
+        log_progress(f"Rigid resolution: {max_processed_image_dim_px}px")
+        log_progress(f"Non-rigid resolution: {max_non_rigid_dim_px}px")
+        log_progress(f"Micro-registration fraction: {micro_reg_fraction}")
+        log_progress(f"Feature detector: SuperPoint with {num_features} features")
+        log_progress("=" * 70)
+
+        # Find reference image
+        log_progress(f"Searching for reference image with markers: {reference_markers}")
+
+        try:
+            ref_image = find_reference_image(input_dir, required_markers=reference_markers)
+        except (FileNotFoundError, ValueError) as e:
+            log_progress(f"ERROR: {e}")
+            log_progress("Falling back to first available image")
+            files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
+            if not files:
+                raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
+            ref_image = os.path.basename(files[0])
+
+        log_progress(f"Using reference image: {ref_image}")
+
+        # ========================================================================
+        # Initialize VALIS Registrar
+        # ========================================================================
+        log_progress("Initializing VALIS registration...")
+
+        registrar = registration.Valis(
+            input_dir,
+            results_dir,
+
+            # Reference image
+            reference_img_f=ref_image,
+            align_to_reference=True,
+            crop="reference",
+
+            # Image size parameters
+            max_processed_image_dim_px=max_processed_image_dim_px,
+            max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
+
+            # Feature detection - SuperPoint/SuperGlue
+            #feature_detector_cls=feature_detectors.SuperPointFD,
+            #matcher=feature_matcher.SuperGlueMatcher(),
+
+            # Non-rigid registration
+            non_rigid_registrar_cls=non_rigid_registrars.OpticalFlowWarper,
+
+            # Micro-rigid registration
+            micro_rigid_registrar_cls=MicroRigidRegistrar,
+
+            # Registration behavior
+            compose_non_rigid=False,
+            create_masks=True,
+        )
+
+        # ========================================================================
+        # Perform Registration
+        # ========================================================================
+        log_progress("Starting rigid and non-rigid registration...")
+        log_progress("This may take 15-45 minutes...")
+
+        _, _, error_df = registrar.register()
+
+        log_progress("✓ Initial registration completed")
+        log_progress(f"\nRegistration errors:\n{error_df}")
+
+        # ========================================================================
+        # Micro-registration
+        # ========================================================================
+        log_progress("\nCalculating micro-registration parameters...")
+
+        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+        min_max_size = np.min([np.max(d) for d in img_dims])
+        micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
+
+        log_progress(f"Micro-registration size: {micro_reg_size}px")
+        log_progress("Starting micro-registration (may take 30-120 minutes)...")
+
+        _, micro_error = registrar.register_micro(
+            max_non_rigid_registration_dim_px=micro_reg_size,
+            reference_img_f=ref_image,
+            align_to_reference=True,
+        )
+
+        log_progress("✓ Micro-registration completed")
+        log_progress(f"\nMicro-registration errors:\n{micro_error}")
+
+        # ========================================================================
+        # Merge and Save
+        # ========================================================================
+        log_progress("\nPreparing to merge channels...")
+
+        # Parse channel names from filenames
+        channel_name_dict = {
+            f: get_channel_names(f)
+            for f in registrar.original_img_list
+        }
+
+        log_progress("Channel mapping detected:")
+        for filename, channels in channel_name_dict.items():
+            log_progress(f"  {filename}: {channels}")
+
+        log_progress(f"\nMerging and warping slides to: {out}")
+
+        merged_img, channel_names, _ = registrar.warp_and_merge_slides(
+            out,
+            channel_name_dict=channel_name_dict,
+            drop_duplicates=True,
+        )
+
+        log_progress(f"✓ Merged image shape: {merged_img.shape}")
+        log_progress(f"✓ Channel names: {channel_names}")
+
+        del merged_img  # Free memory
+
+        # Save individual registered slides to QC directory with reference DAPI first
+        if qc_dir:
+            save_qc_with_reference_dapi(registrar, qc_dir, ref_image)
+
+        log_progress("\n" + "=" * 70)
+        log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
+        log_progress("=" * 70)
+
+        # Cleanup
+        registration.kill_jvm()
+
+        return 0
+
+    finally:
+        # Clean up temporary directory
+        if os.path.exists(temp_dir):
+            log_progress(f"Cleaning up temporary directory: {temp_dir}")
+            shutil.rmtree(temp_dir)
 
 
 def parse_args() -> argparse.Namespace:
