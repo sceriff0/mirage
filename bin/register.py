@@ -329,7 +329,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"Micro-registration size: {micro_reg_size}px")
     log_progress("Starting micro-registration (may take 30-120 minutes)...")
 
-    
+    '''
     _, micro_error = registrar.register_micro(
         max_non_rigid_registration_dim_px=micro_reg_size,
         reference_img_f=ref_image,
@@ -338,7 +338,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     log_progress("✓ Micro-registration completed")
     log_progress(f"\nMicro-registration errors:\n{micro_error}")
-    
+    '''
     # ========================================================================
     # Merge and Save
     # ========================================================================
