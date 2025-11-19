@@ -358,23 +358,26 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # Parse channel names from filenames
     channel_name_dict = {
         f: get_channel_names(f)
-        for f in registrar.slide_dict.keys()
+        for f in registrar.original_img_list
     }
 
     log_progress("Channel mapping detected:")
     for filename, channels in channel_name_dict.items():
         log_progress(f"  {filename}: {channels}")
 
-    log_progress(f"\nMerging and warping slides to: {out}")
+    merged_dst_f = os.path.join(
+    out,
+    registrar.name + "_merged.ome.tif"
+    )
 
-    log_progress(channel_name_dict)
+    log_progress(f"\nMerging and warping slides to: {merged_dst_f}")
+    
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
-        out,
+        merged_dst_f,
         channel_name_dict=channel_name_dict,
         drop_duplicates=True,
     )
 
-    log_progress(f"✓ Merged image shape: {merged_img.shape}")
     log_progress(f"✓ Channel names: {channel_names}")
 
     del merged_img  # Free memory
