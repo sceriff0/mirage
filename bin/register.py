@@ -374,7 +374,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
         merged_dst_f,
-        channel_name_dict=channel_name_dict,
+        #channel_name_dict=channel_name_dict,
         drop_duplicates=True,
     )
 
