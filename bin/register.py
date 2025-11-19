@@ -367,6 +367,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     log_progress(f"\nMerging and warping slides to: {out}")
 
+    log_progress(channel_name_dict)
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
         out,
         channel_name_dict=channel_name_dict,
