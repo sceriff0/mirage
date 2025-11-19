@@ -25,10 +25,10 @@ process REGISTER {
     mkdir -p merged merged_qc preprocessed
 
     # Stage all preprocessed files into a directory
-    # Only link .ome.tif files to avoid processing non-image files
+    # Only copy .ome.tif files to avoid processing non-image files
     for file in ${preproc_files}; do
         if [[ "\$file" == *.ome.tif ]] || [[ "\$file" == *.ome.tiff ]]; then
-            ln -s "\$(readlink -f "\$file")" preprocessed/
+            cp "\$file" preprocessed/
         fi
     done
 
