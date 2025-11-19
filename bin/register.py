@@ -36,6 +36,20 @@ from valis import feature_matcher
 from valis import non_rigid_registrars
 
 
+def debug_check_slide2vips(registrar):
+    log_progress("\n=== slide2vips() DEBUG ===")
+    for name, slide in registrar.slide_dict.items():
+        try:
+            v = slide.slide2vips()
+            if v is None:
+                log_progress(f"❌ {name}: slide2vips() returned None")
+            else:
+                log_progress(f"✅ {name}: bands={v.bands}, size={v.width}x{v.height}")
+        except Exception as e:
+            log_progress(f"🔥 {name}: slide2vips() raised error: {e}")
+    log_progress("=== END DEBUG ===\n")
+
+
 def log_progress(message: str) -> None:
     """Print timestamped progress messages."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -367,9 +381,10 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     merged_dst_f = os.path.join(
     out,
-    registrar.name + "_merged.ome.tif"
+    registrar.name + "_merged.ome.tiff"
     )
 
+    debug_check_slide2vips(registrar)
     log_progress(f"\nMerging and warping slides to: {merged_dst_f}")
 
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
