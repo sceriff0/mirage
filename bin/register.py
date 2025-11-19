@@ -310,7 +310,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         non_rigid_registrar_cls=non_rigid_registrars.OpticalFlowWarper,
 
         # Micro-rigid registration
-        micro_rigid_registrar_cls=MicroRigidRegistrar,
+        #micro_rigid_registrar_cls=MicroRigidRegistrar,
 
         # Registration behavior
         compose_non_rigid=False,
