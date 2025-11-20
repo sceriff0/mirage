@@ -96,18 +96,28 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
     """
     os.makedirs(qc_dir, exist_ok=True)
 
+    # Find the full path key for ref_image in slide_dict
+    ref_slide_key = None
+    for key in registrar.slide_dict.keys():
+        if os.path.basename(key) == ref_image or key == ref_image:
+            ref_slide_key = key
+            break
+
+    if ref_slide_key is None:
+        raise KeyError(f"Reference image '{ref_image}' not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
+
     # -------- Get REFERENCE DAPI --------
-    ref_slide = registrar.slide_dict[ref_image]
-    ref_channels = get_channel_names(ref_image)
+    ref_slide = registrar.slide_dict[ref_slide_key]
+    ref_channels = get_channel_names(os.path.basename(ref_slide_key))
 
     ref_dapi_idx = next((i for i,ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    ref_dapi = ref_slide.slide2vips().numpy()[..., ref_dapi_idx]
+    ref_dapi = ref_slide.slide2vips(level=0).numpy()[..., ref_dapi_idx]
 
     for slide_name, slide_obj in registrar.slide_dict.items():
-        if slide_name == ref_image:
+        if slide_name == ref_slide_key:
             continue
 
-        slide_channels = get_channel_names(slide_name)
+        slide_channels = get_channel_names(os.path.basename(slide_name))
         slide_dapi_idx = next((i for i,ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
 
         # Registered (warped) image
@@ -131,11 +141,11 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         ]).astype(np.uint8)
 
         # Save RGB composite
-        out_path = os.path.join(qc_dir, slide_name + "_QC_RGB.tif")
+        out_path = os.path.join(qc_dir, os.path.basename(slide_name) + "_QC_RGB.tif")
         tifffile.imwrite(out_path, rgb, photometric='rgb')
         del rgb
 
-    print("✓ QC RGB composites saved.")
+    log_progress("✓ QC RGB composites saved.")
 
 
 
@@ -344,27 +354,32 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # ========================================================================
     log_progress("\nPreparing to merge channels...")
 
-    # Parse channel names from filenames
-    channel_name_dict = {
-        f: get_channel_names(f)
-        for f in registrar.original_img_list
-    }
+    # Parse channel names from filenames and match with actual channel counts
+    channel_name_dict = {}
+    for f in registrar.original_img_list:
+        # Get expected channel names from filename
+        expected_names = get_channel_names(os.path.basename(f))
 
-    log_progress("Channel mapping detected:")
-    for filename, channels in channel_name_dict.items():
-        log_progress(f"  {filename}: {channels}")
+        # Get actual number of channels in the slide
+        slide_obj = registrar.slide_dict[f]
+        actual_channels = slide_obj.slide2vips(level=0).bands
 
-    merged_dst_f = os.path.join(
-    out,
-    registrar.name + "_merged.ome.tiff"
-    )
+        # Only use as many names as there are actual channels
+        channel_names_to_use = expected_names[:actual_channels]
 
-    debug_check_slide2vips(registrar)
-    log_progress(f"\nMerging and warping slides to: {merged_dst_f}")
+        # If we have more channels than names, pad with generic names
+        if actual_channels > len(expected_names):
+            for i in range(len(expected_names), actual_channels):
+                channel_names_to_use.append(f"Channel_{i}")
+
+        channel_name_dict[f] = channel_names_to_use
+        log_progress(f"  {os.path.basename(f)}: expected={len(expected_names)}, actual={actual_channels}, using={channel_names_to_use}")
+
+    log_progress(f"\nMerging and warping slides to: {out}")
 
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
-        merged_dst_f,
-        #channel_name_dict=channel_name_dict,
+        out,
+        channel_name_dict=channel_name_dict,
         drop_duplicates=True,
     )
 
