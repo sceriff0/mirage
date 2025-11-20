@@ -419,16 +419,21 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         basename = os.path.basename(f)
         log_progress(f"    - Basename: {basename}")
 
+        # Get slide name (basename without extension)
+        slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
+        log_progress(f"    - Slide name (no extension): {slide_name}")
+
         expected_names = get_channel_names(basename)
         log_progress(f"    - Expected channel names from filename: {expected_names}")
 
         # Get actual number of channels in the slide
-        if f not in registrar.slide_dict:
-            log_progress(f"    - ERROR: '{f}' not found in registrar.slide_dict!")
+        # Use slide_name to look up in slide_dict
+        if slide_name not in registrar.slide_dict:
+            log_progress(f"    - ERROR: '{slide_name}' not found in registrar.slide_dict!")
             log_progress(f"    - Available keys: {list(registrar.slide_dict.keys())}")
             continue
 
-        slide_obj = registrar.slide_dict[f]
+        slide_obj = registrar.slide_dict[slide_name]
         log_progress(f"    - Slide object name: {slide_obj.name}")
 
         vips_img = slide_obj.slide2vips(level=0)
