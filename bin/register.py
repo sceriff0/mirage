@@ -387,7 +387,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration
-        non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
+        #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
 
         # Micro-rigid registration
         micro_rigid_registrar_cls=MicroRigidRegistrar,
