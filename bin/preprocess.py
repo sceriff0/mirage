@@ -223,12 +223,22 @@ def preprocess_multichannel_image(
     logger.info(f"Channel names to save: {channel_names[:preprocessed.shape[0]]}")
 
     # Save as OME-TIFF with proper metadata
-    # VALIS expects OME-TIFF with proper channel dimension
+    # VALIS expects OME-TIFF with proper channel dimension and physical size metadata
+    # Default pixel size is 0.325 µm (matching convert_nd2.py)
+    metadata = {
+        'axes': 'CYX',
+        'Channel': {'Name': channel_names[:preprocessed.shape[0]]},
+        'PhysicalSizeX': 0.325,
+        'PhysicalSizeXUnit': 'µm',
+        'PhysicalSizeY': 0.325,
+        'PhysicalSizeYUnit': 'µm'
+    }
+
     tifffile.imwrite(
         output_path,
         preprocessed,
         photometric='minisblack',
-        metadata={'axes': 'CYX'},
+        metadata=metadata,
         ome=True
     )
 

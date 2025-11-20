@@ -125,7 +125,8 @@ def convert_nd2_to_ome_tiff(
         output_filename,
         reversed_image,
         metadata=metadata,
-        photometric='minisblack'
+        photometric='minisblack',
+        ome=True
     )
 
     logger.info(f"Saved: {output_filename.name}")
