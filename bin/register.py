@@ -417,25 +417,32 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"\nRegistration errors:\n{error_df}")
 
     # ========================================================================
-    # Micro-registration
+    # Micro-registration - Try with error handling
     # ========================================================================
-    log_progress("\nCalculating micro-registration parameters...")
+    log_progress("\nAttempting micro-registration...")
+    log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
 
-    img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
-    min_max_size = np.min([np.max(d) for d in img_dims])
-    micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
+    try:
+        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+        min_max_size = np.min([np.max(d) for d in img_dims])
+        micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
 
-    log_progress(f"Micro-registration size: {micro_reg_size}px")
-    log_progress("Starting micro-registration (may take 30-120 minutes)...")
+        log_progress(f"Micro-registration size: {micro_reg_size}px")
+        log_progress("Starting micro-registration (may take 30-120 minutes)...")
 
-    _, micro_error = registrar.register_micro(
-        max_non_rigid_registration_dim_px=micro_reg_size,
-        reference_img_f=ref_image,
-        align_to_reference=True,
-    )
+        _, micro_error = registrar.register_micro(
+            max_non_rigid_registration_dim_px=micro_reg_size,
+            reference_img_f=ref_image,
+            align_to_reference=True,
+        )
 
-    log_progress("✓ Micro-registration completed")
-    log_progress(f"\nMicro-registration errors:\n{micro_error}")
+        log_progress("✓ Micro-registration completed")
+        log_progress(f"\nMicro-registration errors:\n{micro_error}")
+
+    except Exception as e:
+        log_progress(f"\n⚠ Micro-registration FAILED: {e}")
+        log_progress("Continuing without micro-registration...")
+        log_progress("(This is usually caused by SimpleElastix not being available)")
 
     # ========================================================================
     # Merge and Save
