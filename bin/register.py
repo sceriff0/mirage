@@ -383,14 +383,14 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
 
         # Feature detection - SuperPoint/SuperGlue
-        feature_detector_cls=feature_detectors.BriskFD,
-        #matcher=feature_matcher.SuperGlueMatcher(),
+        feature_detector_cls=feature_detectors.SuperPointFD,
+        matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration
-        non_rigid_registrar_cls=None,#non_rigid_registrars.OpticalFlowWarper,
+        non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
 
         # Micro-rigid registration
-        #micro_rigid_registrar_cls=MicroRigidRegistrar,
+        micro_rigid_registrar_cls=MicroRigidRegistrar,
 
         # Registration behavior
         create_masks=True,
@@ -419,7 +419,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"Micro-registration size: {micro_reg_size}px")
     log_progress("Starting micro-registration (may take 30-120 minutes)...")
 
-    '''
     _, micro_error = registrar.register_micro(
         max_non_rigid_registration_dim_px=micro_reg_size,
         reference_img_f=ref_image,
@@ -428,7 +427,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     log_progress("✓ Micro-registration completed")
     log_progress(f"\nMicro-registration errors:\n{micro_error}")
-    '''
+
     # ========================================================================
     # Merge and Save
     # ========================================================================

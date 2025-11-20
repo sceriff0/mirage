@@ -11,7 +11,7 @@ process REGISTER {
     path preproc_files
 
     output:
-    path "merged/merged_all.ome.tif", emit: merged
+    path "merged/merged_all.ome.tiff", emit: merged
     path "merged_qc"          , emit: qc, optional: true
 
     script:
@@ -34,7 +34,7 @@ process REGISTER {
 
     register.py \\
         --input-dir preprocessed \\
-        --out merged/merged_all.ome.tif \\
+        --out merged/merged_all.ome.tiff \\
         --qc-dir merged_qc \\
         ${ref_markers} \\
         --max-processed-dim ${max_processed_dim} \\
