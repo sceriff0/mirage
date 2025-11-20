@@ -102,17 +102,20 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
     log_progress(f"  - Looking for: {ref_image}")
     log_progress(f"  - slide_dict keys: {list(registrar.slide_dict.keys())}")
 
+    # Remove extension from ref_image for comparison
+    ref_image_no_ext = ref_image.replace('.ome.tif', '').replace('.ome.tiff', '')
+    log_progress(f"  - Comparing against: {ref_image_no_ext}")
+
     ref_slide_key = None
     for key in registrar.slide_dict.keys():
-        basename = os.path.basename(key)
-        log_progress(f"  - Checking key: {key} (basename: {basename})")
-        if basename == ref_image or key == ref_image:
+        # slide_dict keys are slide names without extension
+        if key == ref_image_no_ext:
             ref_slide_key = key
             log_progress(f"  ✓ Match found: {ref_slide_key}")
             break
 
     if ref_slide_key is None:
-        raise KeyError(f"Reference image '{ref_image}' not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
+        raise KeyError(f"Reference image '{ref_image}' (as '{ref_image_no_ext}') not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
 
     # -------- Get REFERENCE DAPI --------
     log_progress(f"\nExtracting reference DAPI channel...")
