@@ -177,11 +177,32 @@ def preprocess_multichannel_image(
     Apply BaSiC preprocessing to a single multichannel image in parallel and save as TIFF.
     """
     logger.info(f"Loading multichannel image from {image_path}")
+
+    # Read and log input file metadata
+    logger.info("Reading input file metadata...")
+    with tifffile.TiffFile(image_path) as tif:
+        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            logger.info(f"  ✓ Input has OME metadata (length: {len(tif.ome_metadata)} chars)")
+            if 'PhysicalSizeX' in tif.ome_metadata:
+                logger.info(f"  ✓ Input has PhysicalSizeX metadata")
+            if 'PhysicalSizeXUnit' in tif.ome_metadata:
+                logger.info(f"  ✓ Input has PhysicalSizeXUnit metadata")
+        else:
+            logger.warning(f"  ⚠ Input file has no OME metadata")
+
+        if tif.pages and len(tif.pages) > 0:
+            first_page = tif.pages[0]
+            logger.info(f"  - First page shape: {first_page.shape}")
+            logger.info(f"  - First page dtype: {first_page.dtype}")
+
     multichannel_stack = tifffile.imread(image_path)
+    logger.info(f"Loaded image shape: {multichannel_stack.shape}")
 
     if multichannel_stack.ndim == 2:
+        logger.info("  - Converting 2D to 3D (adding channel dimension)")
         multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
     elif multichannel_stack.ndim == 3 and multichannel_stack.shape[2] == len(channel_names):
+        logger.info("  - Transposing from (Y, X, C) to (C, Y, X)")
         multichannel_stack = np.transpose(multichannel_stack, (2, 0, 1))
 
     n_channels, H, W = multichannel_stack.shape
@@ -234,6 +255,12 @@ def preprocess_multichannel_image(
         'PhysicalSizeYUnit': 'µm'
     }
 
+    logger.info("Writing OME-TIFF with metadata:")
+    logger.info(f"  - Axes: {metadata['axes']}")
+    logger.info(f"  - Channels: {metadata['Channel']['Name']}")
+    logger.info(f"  - PhysicalSizeX: {metadata['PhysicalSizeX']} {metadata['PhysicalSizeXUnit']}")
+    logger.info(f"  - PhysicalSizeY: {metadata['PhysicalSizeY']} {metadata['PhysicalSizeYUnit']}")
+
     tifffile.imwrite(
         output_path,
         preprocessed,
@@ -245,12 +272,25 @@ def preprocess_multichannel_image(
     logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")
 
     # Verify the saved file
+    logger.info("Verifying saved file...")
+    with tifffile.TiffFile(output_path) as tif:
+        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            logger.info(f"  ✓ OME-XML metadata present (length: {len(tif.ome_metadata)} chars)")
+            if 'PhysicalSizeX' in tif.ome_metadata:
+                logger.info(f"  ✓ PhysicalSizeX found in metadata")
+            if 'PhysicalSizeXUnit' in tif.ome_metadata or 'µm' in tif.ome_metadata:
+                logger.info(f"  ✓ Physical size units found in metadata")
+            else:
+                logger.warning(f"  ⚠ Physical size units may not be in metadata")
+        else:
+            logger.warning(f"  ⚠ No OME metadata in saved file!")
+
     verify_img = tifffile.imread(output_path)
-    logger.info(f"Verification - reloaded shape: {verify_img.shape}")
+    logger.info(f"  - Reloaded image shape: {verify_img.shape}")
     if verify_img.ndim == 3:
-        logger.info(f"✓ File saved correctly with {verify_img.shape[0]} channels")
+        logger.info(f"  ✓ File saved correctly with {verify_img.shape[0]} channels")
     else:
-        logger.warning(f"⚠ File may not have correct dimensions: {verify_img.shape}")
+        logger.warning(f"  ⚠ File may not have correct dimensions: {verify_img.shape}")
 
     return preprocessed
 

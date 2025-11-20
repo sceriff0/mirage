@@ -330,9 +330,41 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"Using reference image: {ref_image}")
 
     # ========================================================================
+    # Check input file metadata
+    # ========================================================================
+    log_progress("\nChecking input files metadata...")
+    input_files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
+    log_progress(f"Found {len(input_files)} OME-TIFF files")
+
+    for idx, fpath in enumerate(input_files[:3], 1):  # Check first 3 files
+        fname = os.path.basename(fpath)
+        log_progress(f"\n[{idx}] Checking: {fname}")
+        try:
+            with tifffile.TiffFile(fpath) as tif:
+                img = tif.asarray()
+                log_progress(f"  - Image shape: {img.shape}")
+                log_progress(f"  - Image dtype: {img.dtype}")
+
+                if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                    log_progress(f"  ✓ Has OME metadata ({len(tif.ome_metadata)} chars)")
+                    if 'PhysicalSizeX' in tif.ome_metadata:
+                        log_progress(f"  ✓ Has PhysicalSizeX")
+                    if 'PhysicalSizeXUnit' in tif.ome_metadata:
+                        log_progress(f"  ✓ Has PhysicalSizeXUnit")
+                    if 'µm' in tif.ome_metadata or 'um' in tif.ome_metadata:
+                        log_progress(f"  ✓ Has micrometer units")
+                else:
+                    log_progress(f"  ⚠ NO OME metadata!")
+        except Exception as e:
+            log_progress(f"  ⚠ Error reading file: {e}")
+
+    if len(input_files) > 3:
+        log_progress(f"\n... and {len(input_files) - 3} more files")
+
+    # ========================================================================
     # Initialize VALIS Registrar
     # ========================================================================
-    log_progress("Initializing VALIS registration...")
+    log_progress("\nInitializing VALIS registration...")
 
     registrar = registration.Valis(
         input_dir,

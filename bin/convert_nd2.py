@@ -121,6 +121,13 @@ def convert_nd2_to_ome_tiff(
     }
 
     # Save as OME-TIFF
+    logger.info(f"Writing OME-TIFF with metadata:")
+    logger.info(f"  - Axes: {metadata['axes']}")
+    logger.info(f"  - Channels: {metadata['Channel']['Name']}")
+    logger.info(f"  - PhysicalSizeX: {metadata['PhysicalSizeX']} {metadata['PhysicalSizeXUnit']}")
+    logger.info(f"  - PhysicalSizeY: {metadata['PhysicalSizeY']} {metadata['PhysicalSizeYUnit']}")
+    logger.info(f"  - Image shape: {reversed_image.shape}")
+
     tifffile.imwrite(
         output_filename,
         reversed_image,
@@ -130,6 +137,23 @@ def convert_nd2_to_ome_tiff(
     )
 
     logger.info(f"Saved: {output_filename.name}")
+
+    # Verify metadata was written correctly
+    logger.info("Verifying saved metadata...")
+    with tifffile.TiffFile(output_filename) as tif:
+        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            logger.info(f"  ✓ OME-XML metadata present (length: {len(tif.ome_metadata)} chars)")
+            # Check if physical size units are in the metadata
+            if 'PhysicalSizeXUnit' in tif.ome_metadata or 'µm' in tif.ome_metadata:
+                logger.info(f"  ✓ Physical size units found in metadata")
+            else:
+                logger.warning(f"  ⚠ Physical size units may not be properly saved")
+        else:
+            logger.warning(f"  ⚠ No OME metadata in saved file!")
+
+        saved_img = tifffile.imread(output_filename)
+        logger.info(f"  - Reloaded image shape: {saved_img.shape}")
+
     return output_filename
 
 
