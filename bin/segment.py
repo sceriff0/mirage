@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Cell segmentation utilities using StarDist.
+"""Cell segmentation using StarDist on DAPI channel from multichannel images.
 
-This module exposes small, well-typed functions for loading DAPI images,
-preprocessing and segmentation. Functions follow NumPy docstring conventions.
+Simplified segmentation pipeline:
+- Loads multichannel OME-TIFF (from registration output)
+- Extracts DAPI channel (first channel)
+- Normalizes using CSBDeep normalize
+- Segments using StarDist whole-image processing
 """
 
 from __future__ import annotations
@@ -11,141 +14,137 @@ import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple
 
 import numpy as np
 import tifffile
 from csbdeep.utils import normalize
-from skimage import segmentation, morphology, filters
+from skimage import segmentation
 from stardist.models import StarDist2D
 from numpy.typing import NDArray
 
-from utils.io import save_pickle
-from utils.image_ops import (
-    generate_crop_positions,
-    extract_crop,
-    reconstruct_image_from_crops,
-    apply_gamma_correction
-)
+from _common import ensure_dir
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "load_dapi_image",
-    "preprocess_dapi",
-    "normalize_image",
+    "extract_dapi_channel",
+    "normalize_dapi",
     "load_stardist_model",
-    "segment_whole_image",
-    "segment_with_cropping",
-    "remap_labels",
+    "segment_nuclei",
     "run_segmentation",
 ]
 
 
-def load_dapi_image(
-    image_path: str
+def extract_dapi_channel(
+    multichannel_image_path: str,
+    dapi_channel_index: int = 0
 ) -> Tuple[NDArray, dict]:
     """
-    Load DAPI image from file.
+    Extract DAPI channel from multichannel OME-TIFF image.
 
     Parameters
     ----------
-    image_path : str
-        Path to image file.
+    multichannel_image_path : str
+        Path to multichannel OME-TIFF file (e.g., from VALIS registration).
+    dapi_channel_index : int, optional
+        Index of DAPI channel. Default is 0 (first channel).
 
     Returns
     -------
-    image : ndarray, shape (Y, X)
-        DAPI image.
+    dapi_image : ndarray, shape (Y, X)
+        DAPI channel image.
     metadata : dict
-        Image metadata including pixel sizes.
+        Image metadata from OME-TIFF.
+
+    Raises
+    ------
+    ValueError
+        If image has wrong dimensions or DAPI channel doesn't exist.
     """
-    logger.info(f"Loading DAPI image: {image_path}")
+    logger.info(f"Loading multichannel image: {multichannel_image_path}")
 
-    # Load image using tifffile; metadata is best-effort (OME XML if present).
-    image_data = tifffile.imread(image_path)
-    metadata = {}
-    try:
-        with tifffile.TiffFile(image_path) as tf:
-            ome = tf.ome_metadata
-            if ome:
-                metadata['ome'] = ome
-    except Exception:
-        pass
+    # Load multichannel image
+    with tifffile.TiffFile(multichannel_image_path) as tif:
+        image_data = tif.asarray()
 
-    logger.info(f"  Shape: {image_data.shape}")
+        # Extract OME metadata if available
+        metadata = {}
+        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            metadata['ome'] = tif.ome_metadata
+            logger.info(f"  ✓ OME metadata found")
 
-    return image_data, metadata
+    logger.info(f"  Image shape: {image_data.shape}")
+    logger.info(f"  Image dtype: {image_data.dtype}")
 
+    # Handle different image formats
+    if image_data.ndim == 2:
+        # Single channel image, assume it's DAPI
+        logger.info("  - Single channel image (assuming DAPI)")
+        dapi_image = image_data
+    elif image_data.ndim == 3:
+        # Multichannel image (C, Y, X) format
+        n_channels = image_data.shape[0]
+        logger.info(f"  - Multichannel image with {n_channels} channels")
 
-def preprocess_dapi(
-    image: NDArray,
-    gamma: float = 0.6,
-    tophat_radius: int = 50,
-    gaussian_sigma: float = 1.0
-) -> NDArray:
-    """
-    Preprocess DAPI image for segmentation.
+        if dapi_channel_index >= n_channels:
+            raise ValueError(
+                f"DAPI channel index {dapi_channel_index} out of range "
+                f"for image with {n_channels} channels"
+            )
 
-    Parameters
-    ----------
-    image : ndarray
-        Input DAPI image.
-    gamma : float, optional
-        Gamma correction value. Default is 0.6.
-    tophat_radius : int, optional
-        White top-hat morphological radius. Default is 50.
-    gaussian_sigma : float, optional
-        Gaussian smoothing sigma. Default is 1.0.
+        # Extract DAPI channel
+        dapi_image = image_data[dapi_channel_index, :, :]
+        logger.info(f"  - Extracted DAPI channel (index {dapi_channel_index})")
+    else:
+        raise ValueError(
+            f"Unexpected image dimensions: {image_data.shape}. "
+            f"Expected 2D (Y, X) or 3D (C, Y, X)"
+        )
 
-    Returns
-    -------
-    preprocessed : ndarray
-        Preprocessed image.
+    logger.info(f"  DAPI channel shape: {dapi_image.shape}")
+    logger.info(f"  DAPI dtype: {dapi_image.dtype}")
+    logger.info(f"  DAPI value range: [{dapi_image.min()}, {dapi_image.max()}]")
 
-    Notes
-    -----
-    Pipeline: gamma correction → white top-hat → gaussian smoothing
-    """
-    # Gamma correction
-    preprocessed = apply_gamma_correction(image, gamma)
-
-    # White top-hat for background correction
-    footprint = morphology.disk(tophat_radius)
-    preprocessed = morphology.white_tophat(preprocessed, footprint=footprint)
-
-    # Gaussian smoothing
-    preprocessed = filters.gaussian(
-        preprocessed.astype(np.float32),
-        sigma=gaussian_sigma
-    )
-
-    return preprocessed
+    return dapi_image, metadata
 
 
-def normalize_image(
-    image: NDArray,
+def normalize_dapi(
+    dapi_image: NDArray,
     pmin: float = 1.0,
     pmax: float = 99.8
 ) -> NDArray:
     """
-    Normalize image intensity using percentiles.
+    Normalize DAPI image using CSBDeep percentile normalization.
 
     Parameters
     ----------
-    image : ndarray
-        Input image.
+    dapi_image : ndarray, shape (Y, X)
+        DAPI channel image.
     pmin : float, optional
-        Lower percentile. Default is 1.0.
+        Lower percentile for normalization. Default is 1.0.
     pmax : float, optional
-        Upper percentile. Default is 99.8.
+        Upper percentile for normalization. Default is 99.8.
 
     Returns
     -------
-    normalized : ndarray
-        Normalized image with values in [0, 1].
+    normalized : ndarray, shape (Y, X)
+        Normalized DAPI image with values in [0, 1].
+
+    Notes
+    -----
+    Uses CSBDeep's normalize function which clips to percentiles
+    and scales to [0, 1] range.
     """
-    return normalize(image, pmin, pmax, axis=(0, 1))
+    logger.info("Normalizing DAPI channel...")
+    logger.info(f"  Percentiles: [{pmin}, {pmax}]")
+
+    # CSBDeep normalize clips to percentiles and scales to [0, 1]
+    normalized = normalize(dapi_image, pmin, pmax, axis=(0, 1))
+
+    logger.info(f"  Normalized range: [{normalized.min():.4f}, {normalized.max():.4f}]")
+
+    return normalized
 
 
 def load_stardist_model(
@@ -161,451 +160,273 @@ def load_stardist_model(
     model_dir : str
         Directory containing the model.
     model_name : str
-        Name of the model.
+        Name of the model (e.g., '2D_versatile_fluo').
     use_gpu : bool, optional
-        Use GPU acceleration. Default is True.
+        Use GPU acceleration if available. Default is True.
 
     Returns
     -------
     model : StarDist2D
-        Loaded model.
+        Loaded StarDist model.
     """
-    logger.info(f"Loading StarDist model: {model_name}")
+    logger.info(f"Loading StarDist model...")
+    logger.info(f"  Model name: {model_name}")
     logger.info(f"  Model directory: {model_dir}")
-    logger.info(f"  Use GPU: {use_gpu}")
+    logger.info(f"  GPU enabled: {use_gpu}")
 
     model = StarDist2D(None, name=model_name, basedir=model_dir)
-    model.config.use_gpu = use_gpu
+
+    if hasattr(model, 'config'):
+        model.config.use_gpu = use_gpu
+
+    logger.info("  ✓ Model loaded successfully")
 
     return model
 
 
-def segment_whole_image(
-    image: NDArray,
+def segment_nuclei(
+    normalized_dapi: NDArray,
     model: StarDist2D,
-    n_tiles: Tuple[int, int] = (16, 16)
+    n_tiles: Tuple[int, int] = (16, 16),
+    expand_distance: int = 10
 ) -> Tuple[NDArray, NDArray]:
     """
-    Segment entire image without cropping.
+    Segment nuclei and create whole-cell masks.
 
     Parameters
     ----------
-    image : ndarray, shape (Y, X)
-        Preprocessed and normalized image.
+    normalized_dapi : ndarray, shape (Y, X)
+        Normalized DAPI image.
     model : StarDist2D
         Loaded StarDist model.
     n_tiles : tuple of int, optional
-        Number of tiles for processing. Default is (16, 16).
+        Number of tiles for tiled processing. Default is (16, 16).
+        Larger images benefit from tiling.
+    expand_distance : int, optional
+        Distance (pixels) to expand nuclei labels to create whole-cell masks.
+        Default is 10.
 
     Returns
     -------
-    nuclei_mask : ndarray, shape (Y, X)
-        Nuclei segmentation mask with cell labels.
-    cell_mask : ndarray, shape (Y, X)
-        Whole cell segmentation mask with expanded cell labels.
+    nuclei_mask : ndarray, shape (Y, X), dtype uint32
+        Nuclei segmentation mask with unique cell labels.
+    cell_mask : ndarray, shape (Y, X), dtype uint32
+        Whole-cell segmentation mask (expanded from nuclei).
+
+    Notes
+    -----
+    - Uses StarDist predict_instances with tiling for memory efficiency
+    - Expands nuclei labels using skimage.segmentation.expand_labels
+    - Label 0 is background, labels ≥1 are cells
     """
-    logger.info(f"Segmenting whole image (shape: {image.shape})")
+    logger.info(f"Segmenting nuclei on whole image...")
+    logger.info(f"  Image shape: {normalized_dapi.shape}")
+    logger.info(f"  Tiling: {n_tiles}")
+    logger.info(f"  Cell expansion distance: {expand_distance}px")
 
     start_time = time.time()
 
-    # Predict instances - this gives nuclei masks
-    nuclei_labels, _ = model.predict_instances(image, n_tiles=n_tiles, verbose=False)
+    # Predict nuclei instances using StarDist
+    nuclei_labels, _ = model.predict_instances(
+        normalized_dapi,
+        n_tiles=n_tiles,
+        show_tile_progress=False,
+        verbose=False
+    )
 
-    # Expand labels to create whole cell masks
+    logger.info(f"  ✓ Nuclei detection complete")
+
+    # Expand nuclei labels to create whole-cell masks
     cell_labels = segmentation.expand_labels(
         nuclei_labels,
-        distance=10,
-        spacing=1
+        distance=expand_distance
     )
 
     elapsed = time.time() - start_time
 
-    n_nuclei = len(np.unique(nuclei_labels)) - 1  # Subtract background
+    n_nuclei = len(np.unique(nuclei_labels)) - 1  # Subtract background (0)
     n_cells = len(np.unique(cell_labels)) - 1
+
     logger.info(f"  Nuclei detected: {n_nuclei}")
-    logger.info(f"  Cells (expanded): {n_cells}")
-    logger.info(f"  Time: {elapsed:.2f}s")
+    logger.info(f"  Cells (after expansion): {n_cells}")
+    logger.info(f"  Segmentation time: {elapsed:.2f}s")
 
-    return nuclei_labels, cell_labels
-
-
-def segment_with_cropping(
-    image: NDArray,
-    model: StarDist2D,
-    crop_size: int = 8000,
-    overlap: int = 500
-) -> Tuple[NDArray, NDArray, List[Tuple[int, int, int, int]]]:
-    """
-    Segment image using overlapping crops.
-
-    Parameters
-    ----------
-    image : ndarray, shape (Y, X)
-        Preprocessed and normalized image.
-    model : StarDist2D
-        Loaded StarDist model.
-    crop_size : int, optional
-        Size of crops. Default is 8000.
-    overlap : int, optional
-        Overlap between crops. Default is 500.
-
-    Returns
-    -------
-    nuclei_mask : ndarray, shape (Y, X)
-        Stitched nuclei segmentation mask.
-    cell_mask : ndarray, shape (Y, X)
-        Stitched whole cell segmentation mask.
-    positions : list of tuple
-        Crop positions used.
-
-    Notes
-    -----
-    This function handles label remapping to ensure unique cell IDs
-    across all crops.
-    """
-    logger.info(f"Segmenting with cropping")
-    logger.info(f"  Crop size: {crop_size}")
-    logger.info(f"  Overlap: {overlap}")
-
-    # Generate crop positions
-    positions = generate_crop_positions(
-        image_shape=image.shape,
-        crop_size=crop_size,
-        overlap=overlap
-    )
-
-    logger.info(f"  Number of crops: {len(positions)}")
-
-    # Segment each crop
-    nuclei_crops = []
-    cell_crops = []
-    max_label = 0
-
-    for idx, pos in enumerate(positions):
-        logger.info(f"  Processing crop {idx + 1}/{len(positions)}")
-
-        # Extract crop
-        crop = extract_crop(image, pos)
-
-        # Segment - this gives nuclei labels
-        nuclei_labels, _ = model.predict_instances(crop, verbose=False)
-
-        # Remap labels to ensure uniqueness
-        if max_label > 0:
-            nuclei_labels[nuclei_labels > 0] += max_label
-
-        # Expand labels to create cell masks
-        cell_labels = segmentation.expand_labels(
-            nuclei_labels,
-            distance=10,
-            spacing=1
-        )
-
-        max_label = np.max(cell_labels)
-
-        nuclei_crops.append(nuclei_labels)
-        cell_crops.append(cell_labels)
-
-        n_nuclei = len(np.unique(nuclei_labels)) - 1
-        n_cells = len(np.unique(cell_labels)) - 1
-        logger.info(f"    Nuclei in crop: {n_nuclei}, Cells (expanded): {n_cells}")
-
-    # Reconstruct full images
-    logger.info("Stitching crops...")
-    nuclei_mask = reconstruct_image_from_crops(
-        crops=nuclei_crops,
-        positions=positions,
-        image_shape=image.shape,
-        overlap=overlap,
-        blend_mode='max'  # Use max for segmentation masks
-    )
-
-    cell_mask = reconstruct_image_from_crops(
-        crops=cell_crops,
-        positions=positions,
-        image_shape=image.shape,
-        overlap=overlap,
-        blend_mode='max'
-    )
-
-    # Remap to consecutive labels
-    nuclei_mask = remap_labels(nuclei_mask)
-    cell_mask = remap_labels(cell_mask)
-
-    n_nuclei = len(np.unique(nuclei_mask)) - 1
-    n_cells = len(np.unique(cell_mask)) - 1
-    logger.info(f"Total nuclei after stitching: {n_nuclei}")
-    logger.info(f"Total cells after stitching: {n_cells}")
-
-    return nuclei_mask, cell_mask, positions
-
-
-def remap_labels(mask: NDArray) -> NDArray:
-    """
-    Remap mask labels to consecutive integers starting from 1.
-
-    Parameters
-    ----------
-    mask : ndarray
-        Segmentation mask with potentially non-consecutive labels.
-
-    Returns
-    -------
-    remapped : ndarray
-        Mask with consecutive labels [0, 1, 2, ..., N].
-
-    Examples
-    --------
-    >>> mask = np.array([[0, 5, 5], [0, 10, 10]])
-    >>> remapped = remap_labels(mask)
-    >>> np.unique(remapped)
-    array([0, 1, 2])
-    """
-    unique_labels = np.unique(mask[mask > 0])
-
-    remapped = np.zeros_like(mask)
-
-    for new_label, old_label in enumerate(unique_labels, start=1):
-        remapped[mask == old_label] = new_label
-
-    return remapped
+    # Ensure uint32 for large label counts
+    return nuclei_labels.astype(np.uint32), cell_labels.astype(np.uint32)
 
 
 def run_segmentation(
-    dapi_path: str,
+    image_path: str,
     output_dir: str,
     model_dir: str,
     model_name: str,
+    dapi_channel_index: int = 0,
     use_gpu: bool = True,
-    process_whole_image: bool = True,
-    crop_size: int = 8000,
-    overlap: int = 500,
-    gamma: float = 0.6,
-    tophat_radius: int = 50,
-    gaussian_sigma: float = 1.0,
+    n_tiles: Tuple[int, int] = (16, 16),
+    expand_distance: int = 10,
     pmin: float = 1.0,
-    pmax: float = 99.8,
-    log_file: str = None
+    pmax: float = 99.8
 ) -> Tuple[str, str]:
     """
-    Run complete segmentation pipeline.
+    Run complete segmentation pipeline on multichannel image.
 
     Parameters
     ----------
-    dapi_path : str
-        Path to DAPI image.
+    image_path : str
+        Path to multichannel OME-TIFF image (e.g., from VALIS registration).
     output_dir : str
-        Output directory.
+        Output directory for segmentation masks.
     model_dir : str
         StarDist model directory.
     model_name : str
         StarDist model name.
+    dapi_channel_index : int, optional
+        Index of DAPI channel in multichannel image. Default is 0.
     use_gpu : bool, optional
-        Use GPU. Default is True.
-    process_whole_image : bool, optional
-        Process whole image without cropping. Default is True.
-    crop_size : int, optional
-        Crop size if using cropping. Default is 8000.
-    overlap : int, optional
-        Overlap if using cropping. Default is 500.
-    gamma : float, optional
-        Gamma correction. Default is 0.6.
-    tophat_radius : int, optional
-        Top-hat radius. Default is 50.
-    gaussian_sigma : float, optional
-        Gaussian sigma. Default is 1.0.
+        Use GPU acceleration. Default is True.
+    n_tiles : tuple of int, optional
+        Number of tiles for processing. Default is (16, 16).
+    expand_distance : int, optional
+        Distance to expand nuclei for whole-cell masks. Default is 10.
     pmin : float, optional
-        Normalization lower percentile. Default is 1.0.
+        Lower percentile for normalization. Default is 1.0.
     pmax : float, optional
-        Normalization upper percentile. Default is 99.8.
-    log_file : str, optional
-        Log file path. Default is None.
+        Upper percentile for normalization. Default is 99.8.
 
     Returns
     -------
     nuclei_mask_path : str
         Path to saved nuclei segmentation mask.
     cell_mask_path : str
-        Path to saved whole cell segmentation mask.
-    positions_path : str
-        Path to saved crop positions.
+        Path to saved whole-cell segmentation mask.
     """
-    # Setup logging.
-    if log_file:
-        handler = logging.FileHandler(log_file)
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
     logger.info("=" * 80)
-    logger.info("Starting Segmentation Pipeline")
+    logger.info("CELL SEGMENTATION PIPELINE")
     logger.info("=" * 80)
+    logger.info(f"Input image: {image_path}")
+    logger.info(f"Output directory: {output_dir}")
+    logger.info("")
 
     # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    ensure_dir(output_dir)
 
-    # Load image
-    dapi_image, metadata = load_dapi_image(dapi_path)
+    # 1. Extract DAPI channel from multichannel image
+    dapi_image, metadata = extract_dapi_channel(image_path, dapi_channel_index)
 
-    # Preprocess
-    logger.info("Preprocessing DAPI image...")
-    preprocessed = preprocess_dapi(
-        dapi_image,
-        gamma=gamma,
-        tophat_radius=tophat_radius,
-        gaussian_sigma=gaussian_sigma
-    )
+    # 2. Normalize using CSBDeep
+    normalized_dapi = normalize_dapi(dapi_image, pmin=pmin, pmax=pmax)
 
-    # Normalize
-    logger.info("Normalizing image...")
-    normalized = normalize_image(preprocessed, pmin=pmin, pmax=pmax)
-
-    # Load model
+    # 3. Load StarDist model
     model = load_stardist_model(model_dir, model_name, use_gpu=use_gpu)
 
-    # Segment
-    if process_whole_image:
-        nuclei_mask, cell_mask = segment_whole_image(normalized, model)
-        positions = generate_crop_positions(
-            image_shape=dapi_image.shape,
-            crop_size=crop_size,
-            overlap=overlap
-        )
-    else:
-        nuclei_mask, cell_mask, positions = segment_with_cropping(
-            normalized,
-            model,
-            crop_size=crop_size,
-            overlap=overlap
-        )
+    # 4. Segment nuclei and create cell masks
+    nuclei_mask, cell_mask = segment_nuclei(
+        normalized_dapi,
+        model,
+        n_tiles=n_tiles,
+        expand_distance=expand_distance
+    )
 
-    # Save outputs
-    basename = Path(dapi_path).stem
+    # 5. Save outputs
+    basename = Path(image_path).stem
     nuclei_mask_path = Path(output_dir) / f"{basename}_nuclei_mask.tif"
     cell_mask_path = Path(output_dir) / f"{basename}_cell_mask.tif"
-    positions_path = Path(output_dir) / f"{basename}_positions.pkl"
 
-    logger.info(f"Saving nuclei mask: {nuclei_mask_path.name}")
-    tifffile.imwrite(nuclei_mask_path, nuclei_mask.astype(np.uint32))
+    logger.info("")
+    logger.info("Saving segmentation masks...")
+    logger.info(f"  Nuclei mask: {nuclei_mask_path.name}")
+    tifffile.imwrite(nuclei_mask_path, nuclei_mask, compression='zlib')
 
-    logger.info(f"Saving cell mask: {cell_mask_path.name}")
-    tifffile.imwrite(cell_mask_path, cell_mask.astype(np.uint32))
+    logger.info(f"  Cell mask: {cell_mask_path.name}")
+    tifffile.imwrite(cell_mask_path, cell_mask, compression='zlib')
 
-    logger.info(f"Saving crop positions: {positions_path.name}")
-    save_pickle(positions, str(positions_path))
-
+    logger.info("")
     logger.info("=" * 80)
-    logger.info("Segmentation Complete")
+    logger.info("✓ SEGMENTATION COMPLETE")
     logger.info("=" * 80)
 
-    return str(nuclei_mask_path), str(cell_mask_path), str(positions_path)
+    return str(nuclei_mask_path), str(cell_mask_path)
 
 
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Cell segmentation using StarDist',
+        description='Cell segmentation using StarDist on multichannel images',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    # Required
+    # Required arguments
     parser.add_argument(
-        '--dapi_file',
+        '--image',
         type=str,
         required=True,
-        help='Path to DAPI image'
+        help='Path to multichannel OME-TIFF image (e.g., registered image from VALIS)'
     )
 
     parser.add_argument(
-        '--model_dir',
+        '--model-dir',
         type=str,
         required=True,
-        help='StarDist model directory'
+        help='Directory containing StarDist model'
     )
 
     parser.add_argument(
-        '--model_name',
+        '--model-name',
         type=str,
         required=True,
-        help='StarDist model name'
+        help='StarDist model name (e.g., "2D_versatile_fluo")'
     )
 
-    # Optional
+    # Optional arguments
     parser.add_argument(
-        '--output_dir',
+        '--output-dir',
         type=str,
-        default='./output',
-        help='Output directory'
+        default='./segmentation_output',
+        help='Output directory for segmentation masks'
     )
 
     parser.add_argument(
-        '--use_gpu',
+        '--dapi-channel',
+        type=int,
+        default=0,
+        help='Index of DAPI channel in multichannel image'
+    )
+
+    parser.add_argument(
+        '--use-gpu',
         action='store_true',
-        default=True,
-        help='Use GPU acceleration'
+        default=False,
+        help='Use GPU acceleration (if available)'
     )
 
     parser.add_argument(
-        '--whole_image',
-        action='store_true',
-        help='Process whole image (no cropping)'
-    )
-
-    parser.add_argument(
-        '--crop_size',
+        '--n-tiles',
         type=int,
-        default=8000,
-        help='Crop size if using cropping'
+        nargs=2,
+        default=[16, 16],
+        metavar=('Y', 'X'),
+        help='Number of tiles for processing (Y X)'
     )
 
     parser.add_argument(
-        '--overlap',
+        '--expand-distance',
         type=int,
-        default=500,
-        help='Overlap between crops'
-    )
-
-    parser.add_argument(
-        '--gamma',
-        type=float,
-        default=0.6,
-        help='Gamma correction value'
-    )
-
-    parser.add_argument(
-        '--tophat_radius',
-        type=int,
-        default=50,
-        help='Top-hat morphological filter radius'
-    )
-
-    parser.add_argument(
-        '--gaussian_sigma',
-        type=float,
-        default=1.0,
-        help='Gaussian filter sigma for smoothing'
+        default=10,
+        help='Distance (pixels) to expand nuclei labels for whole-cell masks'
     )
 
     parser.add_argument(
         '--pmin',
         type=float,
         default=1.0,
-        help='Normalization lower percentile'
+        help='Lower percentile for normalization'
     )
 
     parser.add_argument(
         '--pmax',
         type=float,
         default=99.8,
-        help='Normalization upper percentile'
-    )
-
-    parser.add_argument(
-        '--log_file',
-        type=str,
-        help='Log file path'
+        help='Upper percentile for normalization'
     )
 
     return parser.parse_args()
@@ -615,26 +436,22 @@ def main():
     """Main entry point."""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(levelname)s - %(message)s'
     )
 
     args = parse_args()
 
     run_segmentation(
-        dapi_path=args.dapi_file,
+        image_path=args.image,
         output_dir=args.output_dir,
         model_dir=args.model_dir,
         model_name=args.model_name,
+        dapi_channel_index=args.dapi_channel,
         use_gpu=args.use_gpu,
-        process_whole_image=args.whole_image,
-        crop_size=args.crop_size,
-        overlap=args.overlap,
-        gamma=args.gamma,
-        tophat_radius=args.tophat_radius,
-        gaussian_sigma=args.gaussian_sigma,
+        n_tiles=tuple(args.n_tiles),
+        expand_distance=args.expand_distance,
         pmin=args.pmin,
-        pmax=args.pmax,
-        log_file=args.log_file
+        pmax=args.pmax
     )
 
     return 0
