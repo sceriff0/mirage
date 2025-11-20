@@ -219,12 +219,28 @@ def preprocess_multichannel_image(
     preprocessed = np.stack(preprocessed_channels, axis=0)
 
     logger.info(f"Saving corrected image to {output_path}")
+    logger.info(f"Final stack shape: {preprocessed.shape} (expecting C, Y, X)")
+    logger.info(f"Channel names to save: {channel_names[:preprocessed.shape[0]]}")
+
+    # Save as OME-TIFF with proper metadata
+    # VALIS expects OME-TIFF with proper channel dimension
     tifffile.imwrite(
         output_path,
         preprocessed,
-        imagej=True,
-        photometric='minisblack'
+        photometric='minisblack',
+        metadata={'axes': 'CYX'},
+        ome=True
     )
+
+    logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")
+
+    # Verify the saved file
+    verify_img = tifffile.imread(output_path)
+    logger.info(f"Verification - reloaded shape: {verify_img.shape}")
+    if verify_img.ndim == 3:
+        logger.info(f"✓ File saved correctly with {verify_img.shape[0]} channels")
+    else:
+        logger.warning(f"⚠ File may not have correct dimensions: {verify_img.shape}")
 
     return preprocessed
 
