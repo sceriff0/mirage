@@ -246,6 +246,7 @@ def main():
     # Verify (optional)
     if args.verify:
         verify_conversion(nd2_path, ome_tiff_path)
+    verify_conversion(nd2_path, ome_tiff_path) # Mandatory verification for the moment
 
     logger.info("=" * 80)
     logger.info(f"✓ Conversion complete: {ome_tiff_path.name}")
