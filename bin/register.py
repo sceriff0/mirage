@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import glob
+import gc
 import numpy as np
 from datetime import datetime
 from typing import Optional
@@ -132,7 +133,8 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
     ref_vips = ref_slide.slide2vips(level=0)
     log_progress(f"  - Reference slide dimensions: {ref_vips.width}x{ref_vips.height}, bands: {ref_vips.bands}")
 
-    ref_dapi = ref_vips.numpy()[..., ref_dapi_idx]
+    # Extract only the DAPI channel to save memory (don't load full numpy array)
+    ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
     log_progress(f"  - Reference DAPI shape: {ref_dapi.shape}, dtype: {ref_dapi.dtype}")
 
     log_progress(f"\nProcessing {len(registrar.slide_dict) - 1} slides for QC...")
@@ -158,14 +160,9 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
         log_progress(f"  - Warped dimensions: {warped_vips.width}x{warped_vips.height}, bands: {warped_vips.bands}")
 
-        # Convert to numpy
-        log_progress(f"  - Converting warped slide to numpy...")
-        warped = warped_vips.numpy()
-        log_progress(f"  - Warped numpy shape: {warped.shape}, dtype: {warped.dtype}")
-
-        # Registered DAPI channel
+        # Extract only the DAPI channel to save memory (don't load full numpy array)
         log_progress(f"  - Extracting DAPI channel at index {slide_dapi_idx}...")
-        reg_dapi = warped[..., slide_dapi_idx]
+        reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
         log_progress(f"  - Registered DAPI shape: {reg_dapi.shape}, dtype: {reg_dapi.dtype}")
 
         # ----- Auto brightness/contrast -----
@@ -174,17 +171,26 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         reg_dapi_scaled = autoscale(reg_dapi)
         log_progress(f"  - Scaled shapes: ref={ref_dapi_scaled.shape}, reg={reg_dapi_scaled.shape}")
 
+        # Free memory immediately after use
+        del reg_dapi
+
         # ----- Merge channels (ImageJ-style RGB) -----
         # R = registered DAPI
         # G = reference DAPI
         # B = zero
         log_progress(f"  - Creating RGB composite (R=reg, G=ref, B=zeros)...")
-        rgb = np.dstack([
-            reg_dapi_scaled,    # Red channel
-            ref_dapi_scaled,    # Green channel
-            np.zeros_like(ref_dapi_scaled)  # Blue channel
-        ]).astype(np.uint8)
+
+        # Create RGB in a memory-efficient way (stack directly to uint8)
+        h, w = reg_dapi_scaled.shape
+        rgb = np.empty((h, w, 3), dtype=np.uint8)
+        rgb[:, :, 0] = reg_dapi_scaled  # Red channel
+        rgb[:, :, 1] = ref_dapi_scaled  # Green channel
+        rgb[:, :, 2] = 0                # Blue channel
+
         log_progress(f"  - RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
+
+        # Free memory before saving
+        del reg_dapi_scaled
 
         # Save RGB composite
         out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
@@ -193,6 +199,9 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         tifffile.imwrite(out_path, rgb, photometric='rgb')
         log_progress(f"  ✓ Saved")
         del rgb
+
+        # Force garbage collection after each QC image to free memory
+        gc.collect()
 
     log_progress("\n✓ All QC RGB composites saved.")
 
@@ -470,10 +479,15 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         slide_obj = registrar.slide_dict[slide_name]
         log_progress(f"    - Slide object name: {slide_obj.name}")
 
+        # Get metadata without loading full image into memory
         vips_img = slide_obj.slide2vips(level=0)
         actual_channels = vips_img.bands
+        img_width, img_height = vips_img.width, vips_img.height
         log_progress(f"    - Actual channels in slide: {actual_channels}")
-        log_progress(f"    - Slide dimensions: {vips_img.width}x{vips_img.height}")
+        log_progress(f"    - Slide dimensions: {img_width}x{img_height}")
+
+        # Free vips object immediately
+        del vips_img
 
         # Only use as many names as there are actual channels
         channel_names_to_use = expected_names[:actual_channels]
@@ -509,6 +523,8 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"  - Channel names ({len(channel_names)}): {channel_names}")
 
     del merged_img  # Free memory
+    del channel_name_dict  # No longer needed
+    gc.collect()
 
     # Save individual registered slides to QC directory with reference DAPI first
     if qc_dir:
