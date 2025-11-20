@@ -94,58 +94,104 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
       - reg DAPI  → RED
       - optional BLUE = zeros
     """
+    log_progress(f"Creating QC directory: {qc_dir}")
     os.makedirs(qc_dir, exist_ok=True)
 
     # Find the full path key for ref_image in slide_dict
+    log_progress(f"\nSearching for reference image in slide_dict...")
+    log_progress(f"  - Looking for: {ref_image}")
+    log_progress(f"  - slide_dict keys: {list(registrar.slide_dict.keys())}")
+
     ref_slide_key = None
     for key in registrar.slide_dict.keys():
-        if os.path.basename(key) == ref_image or key == ref_image:
+        basename = os.path.basename(key)
+        log_progress(f"  - Checking key: {key} (basename: {basename})")
+        if basename == ref_image or key == ref_image:
             ref_slide_key = key
+            log_progress(f"  ✓ Match found: {ref_slide_key}")
             break
 
     if ref_slide_key is None:
         raise KeyError(f"Reference image '{ref_image}' not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
 
     # -------- Get REFERENCE DAPI --------
+    log_progress(f"\nExtracting reference DAPI channel...")
     ref_slide = registrar.slide_dict[ref_slide_key]
-    ref_channels = get_channel_names(os.path.basename(ref_slide_key))
+    ref_basename = os.path.basename(ref_slide_key)
+    log_progress(f"  - Reference slide basename: {ref_basename}")
+
+    ref_channels = get_channel_names(ref_basename)
+    log_progress(f"  - Reference channels: {ref_channels}")
 
     ref_dapi_idx = next((i for i,ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    ref_dapi = ref_slide.slide2vips(level=0).numpy()[..., ref_dapi_idx]
+    log_progress(f"  - Reference DAPI index: {ref_dapi_idx}")
 
-    for slide_name, slide_obj in registrar.slide_dict.items():
+    ref_vips = ref_slide.slide2vips(level=0)
+    log_progress(f"  - Reference slide dimensions: {ref_vips.width}x{ref_vips.height}, bands: {ref_vips.bands}")
+
+    ref_dapi = ref_vips.numpy()[..., ref_dapi_idx]
+    log_progress(f"  - Reference DAPI shape: {ref_dapi.shape}, dtype: {ref_dapi.dtype}")
+
+    log_progress(f"\nProcessing {len(registrar.slide_dict) - 1} slides for QC...")
+
+    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
         if slide_name == ref_slide_key:
+            log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Skipping reference: {slide_name}")
             continue
 
-        slide_channels = get_channel_names(os.path.basename(slide_name))
+        log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Processing: {slide_name}")
+
+        slide_basename = os.path.basename(slide_name)
+        log_progress(f"  - Basename: {slide_basename}")
+
+        slide_channels = get_channel_names(slide_basename)
+        log_progress(f"  - Channels: {slide_channels}")
+
         slide_dapi_idx = next((i for i,ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
+        log_progress(f"  - DAPI index: {slide_dapi_idx}")
 
         # Registered (warped) image
-        warped = slide_obj.warp_slide(non_rigid=True, crop=registrar.crop)
+        log_progress(f"  - Warping slide (non_rigid=True, crop={registrar.crop})...")
+        warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
+        log_progress(f"  - Warped dimensions: {warped_vips.width}x{warped_vips.height}, bands: {warped_vips.bands}")
+
+        # Convert to numpy
+        log_progress(f"  - Converting warped slide to numpy...")
+        warped = warped_vips.numpy()
+        log_progress(f"  - Warped numpy shape: {warped.shape}, dtype: {warped.dtype}")
 
         # Registered DAPI channel
+        log_progress(f"  - Extracting DAPI channel at index {slide_dapi_idx}...")
         reg_dapi = warped[..., slide_dapi_idx]
+        log_progress(f"  - Registered DAPI shape: {reg_dapi.shape}, dtype: {reg_dapi.dtype}")
 
         # ----- Auto brightness/contrast -----
+        log_progress(f"  - Applying autoscale...")
         ref_dapi_scaled = autoscale(ref_dapi)
         reg_dapi_scaled = autoscale(reg_dapi)
+        log_progress(f"  - Scaled shapes: ref={ref_dapi_scaled.shape}, reg={reg_dapi_scaled.shape}")
 
         # ----- Merge channels (ImageJ-style RGB) -----
         # R = registered DAPI
         # G = reference DAPI
         # B = zero
+        log_progress(f"  - Creating RGB composite (R=reg, G=ref, B=zeros)...")
         rgb = np.dstack([
             reg_dapi_scaled,    # Red channel
             ref_dapi_scaled,    # Green channel
             np.zeros_like(ref_dapi_scaled)  # Blue channel
         ]).astype(np.uint8)
+        log_progress(f"  - RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
 
         # Save RGB composite
-        out_path = os.path.join(qc_dir, os.path.basename(slide_name) + "_QC_RGB.tif")
+        out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
+        out_path = os.path.join(qc_dir, out_filename)
+        log_progress(f"  - Saving to: {out_path}")
         tifffile.imwrite(out_path, rgb, photometric='rgb')
+        log_progress(f"  ✓ Saved")
         del rgb
 
-    log_progress("✓ QC RGB composites saved.")
+    log_progress("\n✓ All QC RGB composites saved.")
 
 
 
@@ -352,30 +398,66 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # ========================================================================
     # Merge and Save
     # ========================================================================
-    log_progress("\nPreparing to merge channels...")
+    log_progress("\n" + "=" * 70)
+    log_progress("MERGE AND SAVE PHASE")
+    log_progress("=" * 70)
+    log_progress("Preparing to merge channels...")
+
+    # Log registrar state
+    log_progress(f"\nRegistrar state:")
+    log_progress(f"  - Number of slides: {len(registrar.slide_dict)}")
+    log_progress(f"  - Original image list: {registrar.original_img_list}")
+    log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
     # Parse channel names from filenames and match with actual channel counts
+    log_progress("\nBuilding channel_name_dict...")
     channel_name_dict = {}
+
     for f in registrar.original_img_list:
+        log_progress(f"\n  Processing file: {f}")
+
         # Get expected channel names from filename
-        expected_names = get_channel_names(os.path.basename(f))
+        basename = os.path.basename(f)
+        log_progress(f"    - Basename: {basename}")
+
+        expected_names = get_channel_names(basename)
+        log_progress(f"    - Expected channel names from filename: {expected_names}")
 
         # Get actual number of channels in the slide
+        if f not in registrar.slide_dict:
+            log_progress(f"    - ERROR: '{f}' not found in registrar.slide_dict!")
+            log_progress(f"    - Available keys: {list(registrar.slide_dict.keys())}")
+            continue
+
         slide_obj = registrar.slide_dict[f]
-        actual_channels = slide_obj.slide2vips(level=0).bands
+        log_progress(f"    - Slide object name: {slide_obj.name}")
+
+        vips_img = slide_obj.slide2vips(level=0)
+        actual_channels = vips_img.bands
+        log_progress(f"    - Actual channels in slide: {actual_channels}")
+        log_progress(f"    - Slide dimensions: {vips_img.width}x{vips_img.height}")
 
         # Only use as many names as there are actual channels
         channel_names_to_use = expected_names[:actual_channels]
 
         # If we have more channels than names, pad with generic names
         if actual_channels > len(expected_names):
+            log_progress(f"    - WARNING: More channels ({actual_channels}) than names ({len(expected_names)}), padding...")
             for i in range(len(expected_names), actual_channels):
                 channel_names_to_use.append(f"Channel_{i}")
 
         channel_name_dict[f] = channel_names_to_use
-        log_progress(f"  {os.path.basename(f)}: expected={len(expected_names)}, actual={actual_channels}, using={channel_names_to_use}")
+        log_progress(f"    - Final channel names to use: {channel_names_to_use}")
+
+    log_progress(f"\n✓ channel_name_dict built with {len(channel_name_dict)} entries")
+    log_progress(f"\nFull channel_name_dict:")
+    for key, value in channel_name_dict.items():
+        log_progress(f"  '{key}': {value}")
 
     log_progress(f"\nMerging and warping slides to: {out}")
+    log_progress(f"  - Output file: {out}")
+    log_progress(f"  - Output directory: {os.path.dirname(out)}")
+    log_progress(f"  - drop_duplicates: True")
 
     merged_img, channel_names, _ = registrar.warp_and_merge_slides(
         out,
@@ -383,12 +465,20 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         drop_duplicates=True,
     )
 
-    log_progress(f"✓ Channel names: {channel_names}")
+    log_progress(f"\n✓ Merge completed!")
+    log_progress(f"  - Merged image shape: {merged_img.width}x{merged_img.height}")
+    log_progress(f"  - Number of channels: {merged_img.bands}")
+    log_progress(f"  - Channel names ({len(channel_names)}): {channel_names}")
 
     del merged_img  # Free memory
 
     # Save individual registered slides to QC directory with reference DAPI first
     if qc_dir:
+        log_progress(f"\n" + "=" * 70)
+        log_progress("QC IMAGE GENERATION")
+        log_progress("=" * 70)
+        log_progress(f"QC directory: {qc_dir}")
+        log_progress(f"Reference image: {ref_image}")
         save_qc_dapi_rgb(registrar, qc_dir, ref_image)
 
     log_progress("\n" + "=" * 70)
