@@ -12,10 +12,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import pickle
 import time
 from pathlib import Path
 from typing import Optional
+
+# Disable Numba caching to avoid file locator errors
+os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
+os.environ['NUMBA_DISABLE_PERFORMANCE_WARNINGS'] = '1'
 
 from valis import registration
 
