@@ -23,15 +23,83 @@ os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_PERFORMANCE_WARNINGS'] = '1'
 
 from valis import registration
+from valis.micro_rigid_registrar import MicroRigidRegistrar
+from valis import feature_detectors
+from valis import feature_matcher
+from valis import non_rigid_registrars
 
 from _common import ensure_dir
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "find_reference_image",
     "compute_registrar",
     "save_registrar_pickle",
 ]
+
+
+def find_reference_image(directory: str, required_markers: list[str],
+                        valid_extensions: Optional[list[str]] = None) -> str:
+    """Find image file containing all required markers in filename.
+
+    Parameters
+    ----------
+    directory : str
+        Path to directory containing images
+    required_markers : list of str
+        Marker names that must appear in filename (case-insensitive)
+    valid_extensions : list of str, optional
+        Valid file extensions. Default: ['.tif', '.tiff', '.ome.tif']
+
+    Returns
+    -------
+    str
+        Filename (not full path) of matching image
+
+    Raises
+    ------
+    FileNotFoundError
+        If no matching file found
+    ValueError
+        If multiple matching files found
+    """
+    import os
+
+    if valid_extensions is None:
+        valid_extensions = ['.tif', '.tiff', '.ome.tif', '.ome.tiff']
+
+    all_files = os.listdir(directory)
+    image_files = [
+        f for f in all_files
+        if any(f.lower().endswith(ext) for ext in valid_extensions)
+    ]
+
+    logger.info(f"Found {len(image_files)} image files in {directory}")
+
+    matching_files = []
+    for filename in image_files:
+        filename_upper = filename.upper()
+        if all(marker.upper() in filename_upper for marker in required_markers):
+            matching_files.append(filename)
+
+    if len(matching_files) == 0:
+        error_msg = (
+            f"No image found containing all markers: {required_markers}\n"
+            f"Available files: {image_files[:5]}..."
+        )
+        raise FileNotFoundError(error_msg)
+
+    elif len(matching_files) == 1:
+        logger.info(f"✓ Found reference image: {matching_files[0]}")
+        return matching_files[0]
+
+    else:
+        error_msg = (
+            f"Found {len(matching_files)} images with markers {required_markers}:\n"
+            + "\n".join(f"  - {f}" for f in matching_files)
+        )
+        raise ValueError(error_msg)
 
 
 def compute_registrar(
@@ -78,13 +146,57 @@ def compute_registrar(
 
     start_time = time.time()
 
+    # Configuration
+    if reference_markers is None:
+        reference_markers = ['DAPI', 'SMA']
+
+    # Find reference image
+    logger.info(f"Searching for reference image with markers: {reference_markers}")
+    import glob
+
+    try:
+        ref_image = find_reference_image(input_dir, required_markers=reference_markers)
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning(f"WARNING: {e}")
+        logger.warning("Falling back to first available image")
+        files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
+        if not files:
+            raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
+        ref_image = os.path.basename(files[0])
+
+    logger.info(f"Using reference image: {ref_image}")
+
+    # Initialize JVM for VALIS
+    logger.info("Initializing JVM...")
+    registration.init_jvm()
+
     # Initialize registrar
     logger.info("Initializing VALIS registrar...")
     registrar = registration.Valis(
-        src_dir=input_dir,
-        dst_dir=".",  # No output yet
-        reference_img_f=reference_markers[0] if reference_markers else None,
-        name="ateia_registration"
+        input_dir,
+        ".",
+
+        # Reference image (filename only, not full path)
+        reference_img_f=ref_image,
+        align_to_reference=True,
+        crop="reference",
+
+        # Image size parameters
+        max_processed_image_dim_px=max_processed_dim,
+        max_non_rigid_registration_dim_px=max_non_rigid_dim,
+
+        # Feature detection - SuperPoint/SuperGlue
+        feature_detector_cls=feature_detectors.SuperPointFD,
+        matcher=feature_matcher.SuperGlueMatcher(),
+
+        # Non-rigid registration
+        #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
+
+        # Micro-rigid registration
+        micro_rigid_registrar_cls=MicroRigidRegistrar,
+
+        # Registration behavior
+        create_masks=True,
     )
 
     # Register slides - this computes all transforms
@@ -104,15 +216,30 @@ def compute_registrar(
     # Micro-registration for high-resolution refinement
     logger.info("")
     logger.info("Computing micro-registration transforms...")
+    logger.info("NOTE: This may fail if SimpleElastix is not properly installed")
+
     try:
+        # Calculate micro_reg_size based on actual slide dimensions and fraction
+        # Same logic as register.py
+        import numpy as np
+        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+        min_max_size = np.min([np.max(d) for d in img_dims])
+        micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
+
+        logger.info(f"Micro-registration size: {micro_reg_size}px (fraction: {micro_reg_fraction})")
+        logger.info("Starting micro-registration (may take 30-120 minutes)...")
+
         _, micro_error = registrar.register_micro(
-            max_non_rigid_registraion_dim_px=max_non_rigid_dim,
-            micro_rigid_registrar_cls=None,  # Use default
+            max_non_rigid_registration_dim_px=micro_reg_size,
+            reference_img_f=ref_image,
+            align_to_reference=True,
         )
         logger.info("✓ Micro-registration complete")
+        logger.info(f"\nMicro-registration errors:\n{micro_error}")
     except Exception as e:
-        logger.warning(f"⚠ Micro-registration failed: {e}")
-        logger.warning("Continuing without micro-registration transforms...")
+        logger.warning(f"⚠ Micro-registration FAILED: {e}")
+        logger.warning("Continuing without micro-registration...")
+        logger.warning("(This is usually caused by SimpleElastix not being available)")
 
     elapsed = time.time() - start_time
 
