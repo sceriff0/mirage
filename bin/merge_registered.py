@@ -3,7 +3,8 @@
 Merge individually registered slides into a single OME-TIFF file.
 
 This script takes a directory of registered slides (output from VALIS warp_and_save_slide)
-and merges them into a single multi-channel OME-TIFF, skipping duplicate channels.
+and merges them into a single multi-channel OME-TIFF. Keeps all channels from all slides,
+but for DAPI only retains it from the reference image.
 
 Uses VALIS slide_io for robust image reading.
 """
@@ -29,12 +30,6 @@ def log(msg: str):
     """Print timestamped message."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {msg}", flush=True)
-
-
-def get_channel_name(filename: str) -> str:
-    """Extract channel name from filename."""
-    name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
-    return name.replace('_corrected', '')
 
 
 def get_channel_names_from_ome(filepath: str) -> list:
@@ -66,6 +61,13 @@ def extract_markers_from_filename(filename: str) -> list:
     markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
 
     return markers if markers else [name]
+
+
+def is_reference_slide(slide_name: str, reference_markers: list) -> bool:
+    """Check if slide contains reference markers."""
+    slide_name_upper = slide_name.upper()
+    # Slide is reference if it contains ALL reference markers
+    return all(marker.upper() in slide_name_upper for marker in reference_markers)
 
 
 def read_slide(filepath: str) -> tuple:
@@ -108,11 +110,23 @@ def read_slide(filepath: str) -> tuple:
     return img, channel_names
 
 
-def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True):
-    """Merge all registered slides into a single OME-TIFF."""
+def merge_slides(input_dir: str, output_path: str, reference_markers: list = None):
+    """
+    Merge all registered slides into a single OME-TIFF.
+
+    Keeps all channels from all slides, except DAPI which is only kept from the reference slide.
+
+    Args:
+        input_dir: Directory containing registered slides
+        output_path: Output OME-TIFF path
+        reference_markers: List of markers that identify the reference slide (e.g., ['DAPI', 'SMA'])
+    """
+    if reference_markers is None:
+        reference_markers = ['DAPI']  # Default
 
     log(f"Merging slides from: {input_dir}")
     log(f"Output: {output_path}")
+    log(f"Reference markers: {reference_markers}")
 
     # Find all registered slides
     slide_files = sorted(
@@ -125,29 +139,52 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
 
     log(f"Found {len(slide_files)} slides")
 
+    # Identify reference slide
+    reference_slide = None
+    for slide_file in slide_files:
+        if is_reference_slide(slide_file.name, reference_markers):
+            reference_slide = slide_file
+            log(f"Reference slide: {slide_file.name}")
+            break
+
+    if not reference_slide:
+        log(f"WARNING: No reference slide found with markers {reference_markers}")
+        log(f"Will keep DAPI from first slide")
+        reference_slide = slide_files[0]
+
     # Load all channels
     channels = []
     channel_names = []
-    seen = set()
 
     for slide_file in slide_files:
         log(f"Loading: {slide_file.name}")
+        is_reference = (slide_file == reference_slide)
 
         # Read using VALIS slide_io (returns image and channel names)
         img, names = read_slide(str(slide_file))
 
         log(f"  Shape: {img.shape}, channels: {names}")
+        log(f"  Is reference: {is_reference}")
 
         # Add each channel
         for i, name in enumerate(names):
-            if skip_duplicates and name in seen:
-                log(f"  ⊗ Skipping duplicate: {name}")
-                continue
+            # Check if this is DAPI channel
+            is_dapi = name.upper() == 'DAPI'
 
-            channels.append(img[i])
-            channel_names.append(name)
-            seen.add(name)
-            log(f"  ✓ Added: {name}")
+            if is_dapi:
+                if is_reference:
+                    # Keep DAPI from reference slide
+                    channels.append(img[i])
+                    channel_names.append(name)
+                    log(f"  ✓ Added DAPI (from reference)")
+                else:
+                    # Skip DAPI from non-reference slides
+                    log(f"  ⊗ Skipping DAPI (not reference)")
+            else:
+                # Keep all non-DAPI channels
+                channels.append(img[i])
+                channel_names.append(name)
+                log(f"  ✓ Added: {name}")
 
     # Stack all channels
     log(f"Stacking {len(channels)} channels...")
@@ -183,18 +220,26 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
 
     file_size = Path(output_path).stat().st_size / (1024 * 1024)
     log(f"✓ Saved: {output_path} ({file_size:.1f} MB, {num_channels} channels)")
+    log(f"✓ Channel list: {', '.join(channel_names)}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Merge registered slides into single OME-TIFF')
+    parser = argparse.ArgumentParser(
+        description='Merge registered slides into single OME-TIFF (keeps all channels except duplicate DAPI)'
+    )
     parser.add_argument('--input-dir', required=True, help='Directory with registered slides')
     parser.add_argument('--output', required=True, help='Output OME-TIFF path')
-    parser.add_argument('--keep-duplicates', action='store_true', help='Keep duplicate channels')
+    parser.add_argument(
+        '--reference-markers',
+        nargs='+',
+        default=['DAPI'],
+        help='Markers that identify reference slide (default: DAPI)'
+    )
 
     args = parser.parse_args()
 
     try:
-        merge_slides(args.input_dir, args.output, skip_duplicates=not args.keep_duplicates)
+        merge_slides(args.input_dir, args.output, reference_markers=args.reference_markers)
         slide_io.kill_jvm()
         log("✓ Complete!")
     except Exception as e:
