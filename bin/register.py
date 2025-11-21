@@ -521,10 +521,31 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # Create output directory
     ensure_dir(out)
 
+    # Build mapping from slide name to original file path
+    slide_name_to_path = {}
+    for f in registrar.original_img_list:
+        basename = os.path.basename(f)
+        slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
+        slide_name_to_path[slide_name] = f
+
+    log_progress(f"\nSlide name to path mapping:")
+    for name, path in slide_name_to_path.items():
+        log_progress(f"  '{name}' -> '{path}'")
+    log_progress("")
+
     # Warp each slide individually and save
     warped_count = 0
     for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
         log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
+
+        # Get original file path
+        if slide_name not in slide_name_to_path:
+            log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
+            log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+            continue
+
+        src_path = slide_name_to_path[slide_name]
+        log_progress(f"  Source: {src_path}")
 
         # Output path for this slide
         out_path = os.path.join(out, f"{slide_name}_registered.ome.tif")
@@ -532,7 +553,12 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         # Warp and save using official VALIS method
         log_progress(f"  Applying transforms (rigid + non-rigid + micro)...")
         slide_obj.warp_and_save_slide(
+            src_f=src_path,
             dst_f=out_path,
+            level=0,              # Full resolution
+            non_rigid=True,       # Apply non-rigid transforms
+            crop=True,            # Crop to reference overlap
+            interp_method="bicubic",
         )
 
         file_size_mb = os.path.getsize(out_path) / (1024 * 1024)
@@ -541,7 +567,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         warped_count += 1
 
         # Force garbage collection after each slide to free RAM
-        del slide_obj
         gc.collect()
 
     log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
