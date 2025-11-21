@@ -513,24 +513,44 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     for key, value in channel_name_dict.items():
         log_progress(f"  '{key}': {value}")
 
-    log_progress(f"\nMerging and warping slides to: {out}")
-    log_progress(f"  - Output file: {out}")
-    log_progress(f"  - Output directory: {os.path.dirname(out)}")
-    log_progress(f"  - drop_duplicates: True")
+    log_progress(f"\nWarping slides individually to: {out}")
+    log_progress(f"  - Output directory: {out}")
+    log_progress(f"  - Strategy: Individual warp_and_save_slide() for low RAM")
+    log_progress("")
 
-    merged_img, channel_names, _ = registrar.warp_and_merge_slides(
-        out,
-        channel_name_dict=channel_name_dict,
-        drop_duplicates=True,
-    )
+    # Create output directory
+    ensure_dir(out)
 
-    log_progress(f"\n✓ Merge completed!")
-    log_progress(f"  - Merged image shape: {merged_img.width}x{merged_img.height}")
-    log_progress(f"  - Number of channels: {merged_img.bands}")
-    log_progress(f"  - Channel names ({len(channel_names)}): {channel_names}")
+    # Warp each slide individually and save
+    warped_count = 0
+    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
+        log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
 
-    del merged_img  # Free memory
-    del channel_name_dict  # No longer needed
+        # Output path for this slide
+        out_path = os.path.join(out, f"{slide_name}_registered.ome.tif")
+
+        # Warp and save using official VALIS method
+        log_progress(f"  Applying transforms (rigid + non-rigid + micro)...")
+        slide_obj.warp_and_save_slide(
+            dst_f=out_path,
+            level=0,              # Full resolution
+            non_rigid=True,       # Apply non-rigid transforms
+            crop=True,            # Crop to reference overlap
+            interp_method="bicubic",
+            pyramid=False,        # Disable pyramid to save space
+        )
+
+        file_size_mb = os.path.getsize(out_path) / (1024 * 1024)
+        log_progress(f"  ✓ Saved: {out_path} ({file_size_mb:.2f} MB)")
+
+        warped_count += 1
+
+        # Force garbage collection after each slide to free RAM
+        del slide_obj
+        gc.collect()
+
+    log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
+    del channel_name_dict
     gc.collect()
 
     # Save individual registered slides to QC directory with reference DAPI first
