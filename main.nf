@@ -38,16 +38,14 @@ workflow {
     // 3. MODULE: Preprocess each converted file
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
-    // 4. SUBWORKFLOW: Register/merge all preprocessed files
-    //    New architecture: compute registrar → apply in parallel → merge with deduplication
+    // 4. SUBWORKFLOW: Register/merge all preprocessed files + generate QC
+    //    Simplified architecture: compute → warp in parallel → merge → QC
     REGISTRATION ( PREPROCESS.out.preprocessed )
 
-    // 5. MODULE: Segment the reference slide DAPI
-    //    Uses reference slide for segmentation (as requested)
-    SEGMENT ( REGISTRATION.out.ref_slide )
+    // 5. MODULE: Segment the merged registered image
+    SEGMENT ( REGISTRATION.out.merged )
 
     // 6. MODULE: Classify cell types using deepcell-types
-    //    Using merged image and cell_mask (expanded) for classification
     CLASSIFY (
         REGISTRATION.out.merged,
         SEGMENT.out.cell_mask

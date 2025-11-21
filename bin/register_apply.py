@@ -69,7 +69,6 @@ def warp_and_save_slide(
     registrar: registration.Valis,
     slide_name: str,
     output_path: str,
-    is_reference: bool = False,
 ) -> None:
     """
     Warp and save a single slide using VALIS official method.
@@ -82,8 +81,6 @@ def warp_and_save_slide(
         Name of slide to warp (basename without path/extension).
     output_path : str
         Path to save registered OME-TIFF file.
-    is_reference : bool, optional
-        Whether this is the reference slide. Default is False.
 
     Notes
     -----
@@ -96,7 +93,6 @@ def warp_and_save_slide(
     logger.info("=" * 80)
     logger.info(f"WARPING AND SAVING SLIDE: {slide_name}")
     logger.info("=" * 80)
-    logger.info(f"Is reference slide: {is_reference}")
     logger.info(f"Output path: {output_path}")
 
     start_time = time.time()
@@ -121,10 +117,7 @@ def warp_and_save_slide(
 
     # Warp and save using official VALIS method
     logger.info("Warping slide with computed transforms...")
-    if is_reference:
-        logger.info("  Reference slide - transforms already applied")
-    else:
-        logger.info("  Applying: rigid + non-rigid + micro transforms")
+    logger.info("  Applying: rigid + non-rigid + micro transforms")
 
     # Use official VALIS warp_and_save_slide method
     # This handles everything: warping, OME-TIFF format, metadata
@@ -187,13 +180,6 @@ def parse_args():
         help='Path to save registered OME-TIFF file'
     )
 
-    # Optional arguments
-    parser.add_argument(
-        '--is-reference',
-        action='store_true',
-        help='This is the reference slide'
-    )
-
     return parser.parse_args()
 
 
@@ -214,7 +200,6 @@ def main():
         registrar=registrar,
         slide_name=args.slide_name,
         output_path=args.output_file,
-        is_reference=args.is_reference,
     )
 
     logger.info("=" * 80)

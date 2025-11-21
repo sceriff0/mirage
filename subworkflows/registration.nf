@@ -4,17 +4,14 @@ nextflow.enable.dsl = 2
 ========================================================================================
     REGISTRATION SUBWORKFLOW
 ========================================================================================
-This subworkflow performs VALIS image registration in three stages:
+Simplified VALIS image registration workflow (KISS & DRY):
 
-1. COMPUTE_REGISTRAR: Computes VALIS registration transforms and saves as pickle
-2. APPLY_REGISTRATION: Applies transforms to each slide in parallel (including reference)
-3. MERGE_REGISTERED: Merges all registered slides with channel deduplication
+1. COMPUTE_REGISTRAR: Compute transforms and save pickle
+2. APPLY_REGISTRATION: Warp slides in parallel using pickle
+3. MERGE_REGISTERED: Merge with deduplication
+4. GENERATE_QC: Create RGB overlay QC images
 
-This architecture enables:
-- Parallel processing of individual slides
-- Memory-efficient registration
-- Proper reference slide handling
-- Channel deduplication across slides
+Benefits: Parallel processing, memory efficient, proper channel deduplication
 ========================================================================================
 */
 
@@ -89,16 +86,7 @@ process COMPUTE_REGISTRAR {
     PROCESS: APPLY_REGISTRATION
 ========================================================================================
 Apply registration transforms to a single slide using pickled registrar.
-This process runs in parallel for each slide.
-
-Input:
-  - path registrar_pkl: Pickled VALIS registrar
-  - val slide_name: Name of slide to register (basename without extension)
-  - path preproc_dir: Directory containing preprocessed files
-
-Output:
-  - path *_registered.ome.tif: Registered slide as OME-TIFF
-  - val slide_name: Slide name (for reference tracking)
+Runs in parallel for each slide.
 ========================================================================================
 */
 
@@ -116,18 +104,13 @@ process APPLY_REGISTRATION {
 
     output:
     path "${slide_name}_registered.ome.tif", emit: registered
-    val slide_name, emit: slide_name
 
     script:
-    // Check if this is the reference slide
-    def ref_flag = params.reg_reference_markers && slide_name.contains(params.reg_reference_markers[0]) ? '--is-reference' : ''
-
     """
     register_apply.py \\
         --registrar-pickle ${registrar_pkl} \\
         --slide-name ${slide_name} \\
-        --output-file ${slide_name}_registered.ome.tif \\
-        ${ref_flag}
+        --output-file ${slide_name}_registered.ome.tif
     """
 }
 
@@ -135,14 +118,7 @@ process APPLY_REGISTRATION {
 ========================================================================================
     PROCESS: MERGE_REGISTERED
 ========================================================================================
-Merge all registered slides into a single multichannel image with channel deduplication.
-
-Input:
-  - path registered_files: All registered OME-TIFF files (collected)
-  - val ref_slide_name: Name of reference slide (optional)
-
-Output:
-  - path merged_all.ome.tiff: Final merged multichannel image
+Merge all registered slides with channel deduplication.
 ========================================================================================
 */
 
@@ -155,19 +131,46 @@ process MERGE_REGISTERED {
 
     input:
     path registered_files
-    val ref_slide_name
 
     output:
     path "merged_all.ome.tiff", emit: merged
 
     script:
-    def ref_flag = ref_slide_name ? "--reference-slide ${ref_slide_name}" : ''
-
     """
     merge_registered.py \\
         --input-files ${registered_files} \\
-        --output-file merged_all.ome.tiff \\
-        ${ref_flag}
+        --output-file merged_all.ome.tiff
+    """
+}
+
+/*
+========================================================================================
+    PROCESS: GENERATE_QC
+========================================================================================
+Generate QC RGB overlay images comparing registered slides to reference.
+========================================================================================
+*/
+
+process GENERATE_QC {
+    tag "generate_qc"
+    label 'process_medium'
+    container "${params.container.registration}"
+
+    publishDir "${params.outdir}/registration_qc", mode: 'copy'
+
+    input:
+    path registrar_pkl
+    path registered_files
+
+    output:
+    path "qc/*_QC_RGB.tif", emit: qc_images, optional: true
+
+    script:
+    """
+    generate_registration_qc.py \\
+        --registrar-pickle ${registrar_pkl} \\
+        --registered-dir . \\
+        --output-dir qc
     """
 }
 
@@ -175,14 +178,7 @@ process MERGE_REGISTERED {
 ========================================================================================
     SUBWORKFLOW: REGISTRATION
 ========================================================================================
-Main registration subworkflow that orchestrates the three stages.
-
-Input:
-  - ch_preprocessed: Channel of preprocessed OME-TIFF files
-
-Output:
-  - merged: Merged multichannel registered image
-  - ref_slide: Reference slide (for segmentation)
+Simplified registration workflow following KISS principle.
 ========================================================================================
 */
 
@@ -191,55 +187,31 @@ workflow REGISTRATION {
     ch_preprocessed  // Channel of preprocessed files
 
     main:
-    // Stage 1: Compute registrar and save as pickle
-    // Collect all preprocessed files for registration
-    ch_preproc_collected = ch_preprocessed.collect()
+    // Stage 1: Compute registrar
+    COMPUTE_REGISTRAR(ch_preprocessed.collect())
 
-    COMPUTE_REGISTRAR(ch_preproc_collected)
-
-    // Stage 2: Apply registration to each slide in parallel
-    // Create channel from slide names (one per slide)
+    // Stage 2: Apply registration in parallel
     ch_slide_names = COMPUTE_REGISTRAR.out.slide_names
         .splitText()
         .map { it.trim() }
 
-    // Apply registration to each slide in parallel
-    // Pass registrar pickle, slide name, and preprocessed directory
     APPLY_REGISTRATION(
         COMPUTE_REGISTRAR.out.registrar,
         ch_slide_names,
         COMPUTE_REGISTRAR.out.preproc_dir
     )
 
-    // Identify reference slide
-    // Extract reference slide name from slide names
-    ch_ref_slide = APPLY_REGISTRATION.out.slide_name
-        .filter { slide_name ->
-            params.reg_reference_markers &&
-            params.reg_reference_markers.any { marker -> slide_name.contains(marker) }
-        }
-        .first()
-        .ifEmpty('') // Default to empty if no reference found
-
-    // Get reference slide registered file
-    ch_ref_slide_file = APPLY_REGISTRATION.out.registered
-        .filter { file ->
-            def slide_name = file.baseName.replace('_registered', '')
-            params.reg_reference_markers &&
-            params.reg_reference_markers.any { marker -> slide_name.contains(marker) }
-        }
-        .first()
-
-    // Stage 3: Merge all registered slides with deduplication
-    // Collect all registered slides
+    // Stage 3: Merge all registered slides
     ch_registered_collected = APPLY_REGISTRATION.out.registered.collect()
+    MERGE_REGISTERED(ch_registered_collected)
 
-    MERGE_REGISTERED(
-        ch_registered_collected,
-        ch_ref_slide
+    // Stage 4: Generate QC images
+    GENERATE_QC(
+        COMPUTE_REGISTRAR.out.registrar,
+        ch_registered_collected
     )
 
     emit:
     merged = MERGE_REGISTERED.out.merged
-    ref_slide = ch_ref_slide_file
+    qc = GENERATE_QC.out.qc_images
 }

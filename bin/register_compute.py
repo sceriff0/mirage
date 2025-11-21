@@ -171,7 +171,23 @@ def compute_registrar(
     registration.init_jvm()
 
     # Initialize registrar
-    logger.info("Initializing VALIS registrar...")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("INITIALIZING VALIS REGISTRAR")
+    logger.info("=" * 70)
+    logger.info("Configuration:")
+    logger.info(f"  - Input directory: {input_dir}")
+    logger.info(f"  - Reference image: {ref_image}")
+    logger.info(f"  - Align to reference: True")
+    logger.info(f"  - Crop: reference")
+    logger.info(f"  - Max processed dim: {max_processed_dim}px")
+    logger.info(f"  - Max non-rigid dim: {max_non_rigid_dim}px")
+    logger.info(f"  - Feature detector: SuperPointFD")
+    logger.info(f"  - Matcher: SuperGlueMatcher")
+    logger.info(f"  - Micro-rigid: MicroRigidRegistrar")
+    logger.info(f"  - Create masks: True")
+    logger.info("")
+
     registrar = registration.Valis(
         input_dir,
         ".",
@@ -199,20 +215,42 @@ def compute_registrar(
         create_masks=True,
     )
 
+    logger.info("✓ Registrar initialized")
+    logger.info(f"  Number of slides detected: {len(registrar.slide_dict)}")
+    logger.info(f"  Slide names: {list(registrar.slide_dict.keys())}")
+
     # Register slides - this computes all transforms
-    logger.info("Running registration to compute transforms...")
-    logger.info("This will compute:")
-    logger.info("  - Rigid registration transforms")
-    logger.info("  - Non-rigid registration transforms")
-    logger.info("  - Micro-registration transforms")
     logger.info("")
-    
+    logger.info("=" * 70)
+    logger.info("PERFORMING REGISTRATION")
+    logger.info("=" * 70)
+    logger.info("Starting rigid and non-rigid registration...")
+    logger.info("This will compute:")
+    logger.info("  - Rigid registration transforms (affine alignment)")
+    logger.info("  - Non-rigid registration transforms (deformable warping)")
+    logger.info("")
+    logger.info("NOTE: This may take 15-45 minutes depending on image size...")
+    logger.info("")
+
+    reg_start_time = time.time()
     _, _, error_df = registrar.register()
+    reg_elapsed = time.time() - reg_start_time
+
+    logger.info("")
+    logger.info("✓ Initial registration completed")
+    logger.info(f"  Time elapsed: {reg_elapsed:.2f}s ({reg_elapsed/60:.1f} min)")
+    logger.info("")
+    logger.info("Registration errors:")
+    logger.info(f"{error_df}")
+    logger.info("")
 
     # Micro-registration for high-resolution refinement
-    logger.info("")
-    logger.info("Computing micro-registration transforms...")
+    logger.info("=" * 70)
+    logger.info("PERFORMING MICRO-REGISTRATION")
+    logger.info("=" * 70)
+    logger.info("Computing high-resolution refinement transforms...")
     logger.info("NOTE: This may fail if SimpleElastix is not properly installed")
+    logger.info("")
 
     try:
         # Calculate micro_reg_size based on actual slide dimensions and fraction
@@ -222,20 +260,44 @@ def compute_registrar(
         min_max_size = np.min([np.max(d) for d in img_dims])
         micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
 
-        logger.info(f"Micro-registration size: {micro_reg_size}px (fraction: {micro_reg_fraction})")
+        logger.info("Micro-registration parameters:")
+        logger.info(f"  - Minimum max dimension: {min_max_size}px")
+        logger.info(f"  - Micro-reg fraction: {micro_reg_fraction}")
+        logger.info(f"  - Micro-reg size: {micro_reg_size}px")
+        logger.info(f"  - Reference image: {ref_image}")
+        logger.info(f"  - Align to reference: True")
+        logger.info("")
         logger.info("Starting micro-registration (may take 30-120 minutes)...")
+        logger.info("")
 
+        micro_start_time = time.time()
         _, micro_error = registrar.register_micro(
             max_non_rigid_registration_dim_px=micro_reg_size,
             reference_img_f=ref_image,
             align_to_reference=True,
         )
+        micro_elapsed = time.time() - micro_start_time
+
+        logger.info("")
         logger.info("✓ Micro-registration complete")
-        logger.info(f"\nMicro-registration errors:\n{micro_error}")
+        logger.info(f"  Time elapsed: {micro_elapsed:.2f}s ({micro_elapsed/60:.1f} min)")
+        logger.info("")
+        logger.info("Micro-registration errors:")
+        logger.info(f"{micro_error}")
+        logger.info("")
     except Exception as e:
-        logger.warning(f"⚠ Micro-registration FAILED: {e}")
-        logger.warning("Continuing without micro-registration...")
-        logger.warning("(This is usually caused by SimpleElastix not being available)")
+        logger.error("")
+        logger.error("=" * 70)
+        logger.error("⚠ MICRO-REGISTRATION FAILED")
+        logger.error("=" * 70)
+        logger.error(f"Error: {e}")
+        logger.error("")
+        logger.error("Continuing without micro-registration...")
+        logger.error("This is usually caused by:")
+        logger.error("  - SimpleElastix not being available")
+        logger.error("  - Memory constraints")
+        logger.error("  - Image size issues")
+        logger.error("")
 
     elapsed = time.time() - start_time
 

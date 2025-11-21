@@ -53,7 +53,8 @@ def load_registered_slide(slide_path: str) -> tuple[np.ndarray, list[str], dict]
     metadata : dict
         Image metadata including physical pixel size.
     """
-    logger.info(f"Loading: {Path(slide_path).name}")
+    file_size_mb = Path(slide_path).stat().st_size / (1024 * 1024)
+    logger.info(f"  File size: {file_size_mb:.2f} MB")
 
     with tifffile.TiffFile(slide_path) as tif:
         image_data = tif.asarray()
@@ -61,6 +62,7 @@ def load_registered_slide(slide_path: str) -> tuple[np.ndarray, list[str], dict]
         # Extract channel names from OME metadata
         channel_names = []
         if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            logger.info(f"  ✓ OME metadata present ({len(tif.ome_metadata)} chars)")
             # Parse OME-XML for channel names
             ome_xml = tif.ome_metadata
             # Simple parsing - look for Channel Name attributes
@@ -72,23 +74,26 @@ def load_registered_slide(slide_path: str) -> tuple[np.ndarray, list[str], dict]
                     name = channel.get('Name')
                     if name:
                         channel_names.append(name)
+                logger.info(f"  Extracted {len(channel_names)} channel names from OME-XML")
             except Exception as e:
-                logger.warning(f"  Could not parse channel names from OME-XML: {e}")
+                logger.warning(f"  ⚠ Could not parse channel names from OME-XML: {e}")
+        else:
+            logger.warning(f"  ⚠ No OME metadata found!")
 
         # If no channel names found, use indices
         if not channel_names:
             n_channels = image_data.shape[0] if image_data.ndim == 3 else 1
             channel_names = [f"Channel_{i}" for i in range(n_channels)]
-            logger.warning(f"  No channel names in metadata, using: {channel_names}")
-        else:
-            logger.info(f"  Channels: {channel_names}")
+            logger.warning(f"  Using default channel names: {channel_names}")
 
     # Ensure (C, Y, X) format
     if image_data.ndim == 2:
+        logger.info(f"  Converting 2D to 3D (adding channel dimension)")
         image_data = image_data[np.newaxis, :, :]
 
-    logger.info(f"  Shape: {image_data.shape}")
-    logger.info(f"  Dtype: {image_data.dtype}")
+    logger.info(f"  Image shape: {image_data.shape}")
+    logger.info(f"  Image dtype: {image_data.dtype}")
+    logger.info(f"  Value range: [{image_data.min()}, {image_data.max()}]")
 
     # Extract metadata (use first slide's metadata for physical size)
     metadata = {
@@ -228,14 +233,19 @@ def merge_slides(
     start_time = time.time()
 
     # Load all registered slides
-    logger.info("Loading registered slides...")
+    logger.info("=" * 70)
+    logger.info("LOADING REGISTERED SLIDES")
+    logger.info("=" * 70)
     slides_data = []
-    for slide_path in slide_paths:
+    for idx, slide_path in enumerate(slide_paths, 1):
+        logger.info(f"[{idx}/{len(slide_paths)}] Loading: {Path(slide_path).name}")
         image_data, channel_names, metadata = load_registered_slide(slide_path)
         slide_name = Path(slide_path).stem.replace('_registered', '')
         slides_data.append((image_data, channel_names, slide_name))
+        logger.info(f"  ✓ Loaded {len(channel_names)} channels from {slide_name}")
 
     logger.info("")
+    logger.info(f"✓ All {len(slides_data)} slides loaded")
 
     # Deduplicate channels and merge
     merged_image, unique_channel_names = deduplicate_channels(slides_data)
