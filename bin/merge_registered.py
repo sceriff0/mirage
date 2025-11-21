@@ -37,8 +37,39 @@ def get_channel_name(filename: str) -> str:
     return name.replace('_corrected', '')
 
 
-def read_slide(filepath: str) -> np.ndarray:
-    """Read slide using VALIS slide_io. Returns numpy array (C, H, W) or (H, W)."""
+def get_channel_names_from_ome(filepath: str) -> list:
+    """Extract channel names from OME-TIFF metadata. Returns empty list if fails."""
+    try:
+        with tifffile.TiffFile(filepath) as tif:
+            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(tif.ome_metadata)
+                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                channels = root.findall('.//ome:Channel', ns)
+                if channels:
+                    return [ch.get('Name', '') for ch in channels]
+    except:
+        pass
+    return []
+
+
+def extract_markers_from_filename(filename: str) -> list:
+    """Extract marker names from filename like 'B19-10215_DAPI_SMA_panck_corrected'."""
+    # Remove _registered and _corrected suffixes
+    name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
+    name = name.replace('_corrected', '')
+
+    # Split by underscore and filter out sample ID
+    parts = name.split('_')
+
+    # Assume first part is sample ID (starts with letter+numbers), rest are markers
+    markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
+
+    return markers if markers else [name]
+
+
+def read_slide(filepath: str) -> tuple:
+    """Read slide using VALIS slide_io. Returns (numpy array (C, H, W), channel_names)."""
     # Get reader class and instantiate it
     reader_cls = slide_io.get_slide_reader(str(filepath))
     reader = reader_cls(str(filepath))
@@ -56,7 +87,25 @@ def read_slide(filepath: str) -> np.ndarray:
         if img.shape[2] < img.shape[0]:
             img = np.transpose(img, (2, 0, 1))
 
-    return img
+    # Try to get channel names from OME metadata first
+    channel_names = get_channel_names_from_ome(str(filepath))
+
+    # If metadata fails, extract from filename
+    if not channel_names or len(channel_names) != img.shape[0]:
+        filename = Path(filepath).name
+        markers = extract_markers_from_filename(filename)
+
+        # Match number of channels
+        if len(markers) == img.shape[0]:
+            channel_names = markers
+        elif len(markers) < img.shape[0]:
+            # Pad with generic names
+            channel_names = markers + [f"Channel_{i}" for i in range(len(markers), img.shape[0])]
+        else:
+            # Use first N markers
+            channel_names = markers[:img.shape[0]]
+
+    return img, channel_names
 
 
 def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True):
@@ -84,19 +133,10 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
     for slide_file in slide_files:
         log(f"Loading: {slide_file.name}")
 
-        # Read using VALIS slide_io
-        img = read_slide(str(slide_file))
+        # Read using VALIS slide_io (returns image and channel names)
+        img, names = read_slide(str(slide_file))
 
-        # Get channel name
-        base_name = get_channel_name(slide_file.name)
-
-        # Generate channel names
-        if img.shape[0] == 1:
-            names = [base_name]
-        else:
-            names = [f"{base_name}_C{i}" for i in range(img.shape[0])]
-
-        log(f"  Shape: {img.shape}, channels: {len(names)}")
+        log(f"  Shape: {img.shape}, channels: {names}")
 
         # Add each channel
         for i, name in enumerate(names):
@@ -122,7 +162,7 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
         <Pixels ID="Pixels:0" Type="uint16"
                 SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
                 DimensionOrder="XYCZT"
-                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="µm" PhysicalSizeYUnit="µm">
+                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
             {chr(10).join(f'<Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
             <TiffData />
         </Pixels>
@@ -155,6 +195,7 @@ def main():
 
     try:
         merge_slides(args.input_dir, args.output, skip_duplicates=not args.keep_duplicates)
+        slide_io.kill_jvm()
         log("✓ Complete!")
     except Exception as e:
         log(f"✗ Error: {e}")
