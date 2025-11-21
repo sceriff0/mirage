@@ -4,6 +4,8 @@ Merge individually registered slides into a single OME-TIFF file.
 
 This script takes a directory of registered slides (output from VALIS warp_and_save_slide)
 and merges them into a single multi-channel OME-TIFF, skipping duplicate channels.
+
+Uses VALIS slide_io for robust image reading.
 """
 
 import argparse
@@ -12,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 import tifffile
+from valis import slide_io
 
 
 def log(msg: str):
@@ -24,6 +27,26 @@ def get_channel_name(filename: str) -> str:
     """Extract channel name from filename."""
     name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
     return name.replace('_corrected', '')
+
+
+def read_slide(filepath: str) -> np.ndarray:
+    """Read slide using VALIS slide_io. Returns numpy array (C, H, W) or (H, W)."""
+    reader = slide_io.get_slide_reader(str(filepath))
+    slide = reader.slide2image(level=0)  # Full resolution
+
+    # Convert to numpy array
+    img = np.array(slide)
+
+    # Ensure (C, H, W) format
+    if img.ndim == 2:
+        # Single channel: (H, W) -> (1, H, W)
+        img = img[np.newaxis, ...]
+    elif img.ndim == 3:
+        # Check if (H, W, C) and transpose to (C, H, W)
+        if img.shape[2] < img.shape[0]:
+            img = np.transpose(img, (2, 0, 1))
+
+    return img
 
 
 def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True):
@@ -51,29 +74,17 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
     for slide_file in slide_files:
         log(f"Loading: {slide_file.name}")
 
-        # Read image
-        img = tifffile.imread(str(slide_file))
+        # Read using VALIS slide_io
+        img = read_slide(str(slide_file))
 
         # Get channel name
         base_name = get_channel_name(slide_file.name)
 
-        # Handle single or multi-channel images
-        if img.ndim == 2:
-            # Single channel: (H, W)
-            img = img[np.newaxis, ...]  # Add channel dimension: (1, H, W)
+        # Generate channel names
+        if img.shape[0] == 1:
             names = [base_name]
-        elif img.ndim == 3:
-            # Multi-channel: could be (H, W, C) or (C, H, W)
-            # Detect based on typical image dimensions
-            if img.shape[0] < img.shape[2]:
-                # Likely (C, H, W) format
-                names = [f"{base_name}_C{i}" for i in range(img.shape[0])]
-            else:
-                # Likely (H, W, C) format - transpose to (C, H, W)
-                img = np.transpose(img, (2, 0, 1))
-                names = [f"{base_name}_C{i}" for i in range(img.shape[0])]
         else:
-            raise ValueError(f"Unsupported image dimensions: {img.shape}")
+            names = [f"{base_name}_C{i}" for i in range(img.shape[0])]
 
         log(f"  Shape: {img.shape}, channels: {len(names)}")
 
