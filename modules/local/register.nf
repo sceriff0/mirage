@@ -11,8 +11,8 @@ process REGISTER {
     path preproc_files
 
     output:
-    path "merged/merged_all.ome.tiff", emit: merged
-    path "merged_qc"          , emit: qc, optional: true
+    path "registered_slides/*_registered.ome.tif", emit: registered_slides
+    path "registered_qc"                         , emit: qc, optional: true
 
     script:
     def ref_markers = params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
@@ -22,7 +22,7 @@ process REGISTER {
     def num_features = params.reg_num_features ?: 5000
 
     """
-    mkdir -p merged merged_qc preprocessed
+    mkdir -p registered_slides registered_qc preprocessed
 
     # Stage all preprocessed files into a directory
     # Only copy .ome.tif files to avoid processing non-image files
@@ -34,8 +34,8 @@ process REGISTER {
 
     register.py \\
         --input-dir preprocessed \\
-        --out merged/merged_all.ome.tiff \\
-        --qc-dir merged_qc \\
+        --out registered_slides \\
+        --qc-dir registered_qc \\
         ${ref_markers} \\
         --max-processed-dim ${max_processed_dim} \\
         --max-non-rigid-dim ${max_non_rigid_dim} \\
