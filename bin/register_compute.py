@@ -82,7 +82,7 @@ def compute_registrar(
     logger.info("Initializing VALIS registrar...")
     registrar = registration.Valis(
         src_dir=input_dir,
-        dst_dir=None,  # No output yet
+        dst_dir=".",  # No output yet
         reference_img_f=reference_markers[0] if reference_markers else None,
         name="ateia_registration"
     )
