@@ -399,7 +399,7 @@ def run_registration(
         matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration - disabled for memory
-        non_rigid_registrar_cls=None,
+        #non_rigid_registrar_cls=None,
 
         # Micro-rigid registration
         micro_rigid_registrar_cls=MicroRigidRegistrar if not skip_micro else None,
@@ -545,7 +545,7 @@ def main():
             max_non_rigid_dim_px=args.max_non_rigid_dim,
             micro_reg_fraction=args.micro_reg_fraction,
             num_features=args.num_features,
-            skip_micro=args.skip_micro,
+            skip_micro=False,#args.skip_micro,
             qc_level=args.qc_level
         )
     except Exception as e:

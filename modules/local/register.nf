@@ -32,7 +32,7 @@ process REGISTER {
         fi
     done
 
-    register.py \\
+    register_low_mem.py \\
         --input-dir preprocessed \\
         --out merged/merged_all.ome.tiff \\
         --qc-dir merged_qc \\
