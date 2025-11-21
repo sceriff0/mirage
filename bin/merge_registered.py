@@ -39,7 +39,9 @@ def get_channel_name(filename: str) -> str:
 
 def read_slide(filepath: str) -> np.ndarray:
     """Read slide using VALIS slide_io. Returns numpy array (C, H, W) or (H, W)."""
-    reader = slide_io.get_slide_reader(str(filepath))
+    # Get reader class and instantiate it
+    reader_cls = slide_io.get_slide_reader(str(filepath))
+    reader = reader_cls(str(filepath))
     slide = reader.slide2image(level=0)  # Full resolution
 
     # Convert to numpy array
