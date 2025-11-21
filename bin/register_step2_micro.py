@@ -41,6 +41,10 @@ def main():
 
     args = parser.parse_args()
 
+    # Initialize JVM
+    log_progress("\nInitializing JVM...")
+    registration.init_jvm()
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     log_progress("=" * 80)
@@ -141,6 +145,8 @@ def main():
     log_progress(f"Pickle: {args.output_pickle}")
     log_progress("")
 
+    # Cleanup
+    registration.kill_jvm()
     return 0
 
 
