@@ -134,11 +134,20 @@ def main():
     parser = argparse.ArgumentParser(description='Step 3: Warp, merge, and generate QC')
     parser.add_argument('--input-pickle', required=True, help='Registrar pickle from Step 2')
     parser.add_argument('--output-merged', required=True, help='Path for merged OME-TIFF output')
+    parser.add_argument('--preprocessed-dir', required=True, help='Directory with preprocessed files')
     parser.add_argument('--qc-dir', default=None, help='QC output directory (optional)')
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Change to preprocessed directory so registrar can find files
+    os.chdir(args.preprocessed_dir)
+    log_progress(f"Changed to directory: {args.preprocessed_dir}")
+
+    # Initialize JVM
+    log_progress("\nInitializing JVM...")
+    registration.init_jvm()
 
     log_progress("=" * 80)
     log_progress("STEP 3: WARP, MERGE, AND GENERATE QC")
@@ -259,6 +268,8 @@ def main():
         log_progress(f"QC: {args.qc_dir}")
     log_progress("")
 
+    # Cleanup
+    registration.kill_jvm()
     return 0
 
 

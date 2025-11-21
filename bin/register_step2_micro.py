@@ -37,9 +37,14 @@ def main():
     parser = argparse.ArgumentParser(description='Step 2: Compute micro-registration')
     parser.add_argument('--input-pickle', required=True, help='Registrar pickle from Step 1')
     parser.add_argument('--output-pickle', required=True, help='Path to save updated pickle')
+    parser.add_argument('--preprocessed-dir', required=True, help='Directory with preprocessed files')
     parser.add_argument('--micro-reg-fraction', type=float, default=0.25, help='Micro-reg fraction')
 
     args = parser.parse_args()
+
+    # Change to preprocessed directory so registrar can find files
+    os.chdir(args.preprocessed_dir)
+    log_progress(f"Changed to directory: {args.preprocessed_dir}")
 
     # Initialize JVM
     log_progress("\nInitializing JVM...")

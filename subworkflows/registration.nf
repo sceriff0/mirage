@@ -14,6 +14,8 @@ process COMPUTE_REGISTRATION {
     label 'process_high'
     container "${params.container.registration}"
 
+    publishDir "${params.outdir}/registration/step1", mode: 'copy'
+
     input:
     path preproc_files
 
@@ -52,8 +54,11 @@ process COMPUTE_MICRO_REGISTRATION {
     label 'process_high'
     container "${params.container.registration}"
 
+    publishDir "${params.outdir}/registration/step2", mode: 'copy'
+
     input:
     path registrar_pkl
+    path preproc_dir
 
     output:
     path "step2_registrar.pkl", emit: registrar_pkl
@@ -65,6 +70,7 @@ process COMPUTE_MICRO_REGISTRATION {
     register_step2_micro.py \\
         --input-pickle ${registrar_pkl} \\
         --output-pickle step2_registrar.pkl \\
+        --preprocessed-dir ${preproc_dir} \\
         --micro-reg-fraction ${micro_reg_fraction}
     """
 }
@@ -78,6 +84,7 @@ process WARP_AND_MERGE {
 
     input:
     path registrar_pkl
+    path preproc_dir
 
     output:
     path "merged_all.ome.tiff", emit: merged
@@ -90,6 +97,7 @@ process WARP_AND_MERGE {
     register_step3_warp.py \\
         --input-pickle ${registrar_pkl} \\
         --output-merged merged_all.ome.tiff \\
+        --preprocessed-dir ${preproc_dir} \\
         ${qc_flag}
     """
 }
@@ -103,10 +111,16 @@ workflow REGISTRATION {
     COMPUTE_REGISTRATION(preproc_files)
 
     // Step 2: Compute micro-registration
-    COMPUTE_MICRO_REGISTRATION(COMPUTE_REGISTRATION.out.registrar_pkl)
+    COMPUTE_MICRO_REGISTRATION(
+        COMPUTE_REGISTRATION.out.registrar_pkl,
+        COMPUTE_REGISTRATION.out.preprocessed_dir
+    )
 
     // Step 3: Warp, merge, and generate QC
-    WARP_AND_MERGE(COMPUTE_MICRO_REGISTRATION.out.registrar_pkl)
+    WARP_AND_MERGE(
+        COMPUTE_MICRO_REGISTRATION.out.registrar_pkl,
+        COMPUTE_REGISTRATION.out.preprocessed_dir
+    )
 
     emit:
     merged = WARP_AND_MERGE.out.merged
