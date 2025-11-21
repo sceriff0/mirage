@@ -14,7 +14,6 @@ import argparse
 import gc
 import logging
 import os
-import pickle
 import time
 from pathlib import Path
 from typing import Optional
@@ -23,9 +22,8 @@ from typing import Optional
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_PERFORMANCE_WARNINGS'] = '1'
 
-import numpy as np
 import tifffile
-from valis import registration, slide_tools
+from valis import registration
 
 from _common import ensure_dir
 
@@ -33,14 +31,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "load_registrar_pickle",
-    "apply_registration_to_slide",
-    "save_registered_slide",
+    "warp_and_save_slide",
 ]
 
 
 def load_registrar_pickle(pickle_path: str) -> registration.Valis:
     """
-    Load pickled VALIS registrar.
+    Load pickled VALIS registrar using official VALIS method.
 
     Parameters
     ----------
@@ -51,11 +48,16 @@ def load_registrar_pickle(pickle_path: str) -> registration.Valis:
     -------
     registrar : Valis
         Loaded VALIS registrar with all computed transforms.
+
+    Notes
+    -----
+    Uses registration.load_registrar() which is the official VALIS method
+    for loading pickled registrar objects.
     """
     logger.info(f"Loading registrar pickle: {pickle_path}")
 
-    with open(pickle_path, 'rb') as f:
-        registrar = pickle.load(f)
+    # Use official VALIS method to load registrar
+    registrar = registration.load_registrar(pickle_path)
 
     logger.info(f"✓ Registrar loaded ({len(registrar.slide_dict)} slides)")
     logger.info(f"  Reference image: {registrar.reference_img_f}")
@@ -63,13 +65,14 @@ def load_registrar_pickle(pickle_path: str) -> registration.Valis:
     return registrar
 
 
-def apply_registration_to_slide(
+def warp_and_save_slide(
     registrar: registration.Valis,
     slide_name: str,
+    output_path: str,
     is_reference: bool = False,
-) -> tuple[np.ndarray, list[str], dict]:
+) -> None:
     """
-    Apply registration transforms to warp a single slide.
+    Warp and save a single slide using VALIS official method.
 
     Parameters
     ----------
@@ -77,146 +80,82 @@ def apply_registration_to_slide(
         Loaded VALIS registrar with computed transforms.
     slide_name : str
         Name of slide to warp (basename without path/extension).
+    output_path : str
+        Path to save registered OME-TIFF file.
     is_reference : bool, optional
         Whether this is the reference slide. Default is False.
 
-    Returns
-    -------
-    warped_image : ndarray, shape (C, Y, X)
-        Warped multichannel image.
-    channel_names : list of str
-        Channel names for this slide.
-    metadata : dict
-        Slide metadata including physical pixel size.
-
     Notes
     -----
+    Uses the official VALIS Slide.warp_and_save_slide() method which:
+    - Applies all computed transforms (rigid + non-rigid + micro)
+    - Saves directly as OME-TIFF with proper metadata
+    - Handles reference slides automatically
     - Uses level 0 (full resolution) for warping
-    - Converts pyvips.Image to numpy array
-    - Handles reference slide specially (no transformation needed)
     """
     logger.info("=" * 80)
-    logger.info(f"APPLYING REGISTRATION: {slide_name}")
+    logger.info(f"WARPING AND SAVING SLIDE: {slide_name}")
     logger.info("=" * 80)
     logger.info(f"Is reference slide: {is_reference}")
+    logger.info(f"Output path: {output_path}")
 
     start_time = time.time()
 
-    # Get slide object from registrar
+    # Get slide object from registrar using official method
     if slide_name not in registrar.slide_dict:
         raise KeyError(f"Slide '{slide_name}' not found in registrar")
 
     slide_obj = registrar.slide_dict[slide_name]
 
-    # Get channel names
+    # Get slide information
     channel_names = slide_obj.reader.metadata.channel_names
     logger.info(f"Channels: {channel_names} ({len(channel_names)} channels)")
 
-    # Warp slide using computed transforms
-    logger.info("Warping slide with computed transforms...")
-    if is_reference:
-        logger.info("  Using reference slide (identity transform)")
-    else:
-        logger.info("  Applying rigid + non-rigid + micro transforms")
-
-    # Warp at full resolution (level 0)
-    warped_vips = slide_obj.warp_slide(
-        level=0,
-        non_rigid=True,
-        crop=True,
-    )
-
-    logger.info(f"  Warped image size: {warped_vips.width} x {warped_vips.height}")
-    logger.info(f"  Warped image bands: {warped_vips.bands}")
-
-    # Convert pyvips.Image to numpy array (C, Y, X)
-    logger.info("Converting to numpy array...")
-    warped_image = warped_vips.numpy()
-
-    # Ensure correct shape (C, Y, X)
-    if warped_image.ndim == 2:
-        # Single channel - add channel dimension
-        warped_image = warped_image[np.newaxis, :, :]
-    elif warped_image.ndim == 3 and warped_image.shape[2] == warped_vips.bands:
-        # (Y, X, C) format - transpose to (C, Y, X)
-        warped_image = np.transpose(warped_image, (2, 0, 1))
-
-    logger.info(f"  Final numpy shape: {warped_image.shape}")
-    logger.info(f"  Data type: {warped_image.dtype}")
-    logger.info(f"  Value range: [{warped_image.min()}, {warped_image.max()}]")
-
-    # Get metadata
-    metadata = {
-        'physical_size_x': slide_obj.reader.metadata.pixel_physical_size_xyu[0],
-        'physical_size_y': slide_obj.reader.metadata.pixel_physical_size_xyu[1],
-        'physical_size_unit': slide_obj.reader.metadata.pixel_physical_size_xyu[2],
-    }
-
-    logger.info(f"  Physical size: {metadata['physical_size_x']:.4f} {metadata['physical_size_unit']}")
-
-    # Clean up
-    del warped_vips
-    gc.collect()
-
-    elapsed = time.time() - start_time
-    logger.info(f"Registration applied in {elapsed:.2f}s")
-    logger.info("")
-
-    return warped_image, channel_names, metadata
-
-
-def save_registered_slide(
-    warped_image: np.ndarray,
-    channel_names: list[str],
-    metadata: dict,
-    output_path: str,
-) -> None:
-    """
-    Save warped slide as OME-TIFF.
-
-    Parameters
-    ----------
-    warped_image : ndarray, shape (C, Y, X)
-        Warped multichannel image.
-    channel_names : list of str
-        Channel names.
-    metadata : dict
-        Slide metadata with physical_size_x, physical_size_y, physical_size_unit.
-    output_path : str
-        Path to save registered OME-TIFF file.
-    """
-    logger.info(f"Saving registered slide: {output_path}")
+    # Get slide dimensions before warping
+    slide_dims = slide_obj.slide_dimensions_wh
+    logger.info(f"Original dimensions: {slide_dims[0]} x {slide_dims[1]}")
 
     # Ensure output directory exists
     output_dir = Path(output_path).parent
     ensure_dir(str(output_dir))
 
-    # Prepare OME-TIFF metadata
-    ome_metadata = {
-        'axes': 'CYX',
-        'Channel': {'Name': channel_names},
-        'PhysicalSizeX': metadata['physical_size_x'],
-        'PhysicalSizeXUnit': metadata['physical_size_unit'],
-        'PhysicalSizeY': metadata['physical_size_y'],
-        'PhysicalSizeYUnit': metadata['physical_size_unit'],
-    }
+    # Warp and save using official VALIS method
+    logger.info("Warping slide with computed transforms...")
+    if is_reference:
+        logger.info("  Reference slide - transforms already applied")
+    else:
+        logger.info("  Applying: rigid + non-rigid + micro transforms")
 
-    logger.info(f"  Axes: {ome_metadata['axes']}")
-    logger.info(f"  Channels: {ome_metadata['Channel']['Name']}")
-    logger.info(f"  Physical size: {ome_metadata['PhysicalSizeX']} {ome_metadata['PhysicalSizeXUnit']}")
-
-    # Save as OME-TIFF with compression
-    tifffile.imwrite(
-        output_path,
-        warped_image,
-        metadata=ome_metadata,
-        photometric='minisblack',
-        compression='zlib',
-        ome=True,
+    # Use official VALIS warp_and_save_slide method
+    # This handles everything: warping, OME-TIFF format, metadata
+    slide_obj.warp_and_save_slide(
+        dst_f=output_path,
+        level=0,              # Full resolution
+        non_rigid=True,       # Apply non-rigid transforms
+        crop=True,            # Crop to reference overlap
+        interp_method="bicubic"  # High-quality interpolation
     )
 
+    # Verify saved file
     file_size_mb = Path(output_path).stat().st_size / (1024 * 1024)
-    logger.info(f"✓ Registered slide saved ({file_size_mb:.2f} MB)")
+    elapsed = time.time() - start_time
+
+    logger.info("")
+    logger.info(f"✓ Slide warped and saved ({file_size_mb:.2f} MB)")
+    logger.info(f"  Time elapsed: {elapsed:.2f}s")
+
+    # Log output file info
+    with tifffile.TiffFile(output_path) as tif:
+        img = tif.asarray()
+        logger.info(f"  Output shape: {img.shape}")
+        logger.info(f"  Output dtype: {img.dtype}")
+        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+            logger.info(f"  ✓ OME metadata present")
+
+    # Clean up
+    gc.collect()
+
+    logger.info("")
 
 
 def parse_args():
@@ -270,19 +209,12 @@ def main():
     # Load registrar
     registrar = load_registrar_pickle(args.registrar_pickle)
 
-    # Apply registration to slide
-    warped_image, channel_names, metadata = apply_registration_to_slide(
+    # Warp and save slide (single operation using official VALIS method)
+    warp_and_save_slide(
         registrar=registrar,
         slide_name=args.slide_name,
-        is_reference=args.is_reference,
-    )
-
-    # Save registered slide
-    save_registered_slide(
-        warped_image=warped_image,
-        channel_names=channel_names,
-        metadata=metadata,
         output_path=args.output_file,
+        is_reference=args.is_reference,
     )
 
     logger.info("=" * 80)
