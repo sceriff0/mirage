@@ -206,12 +206,8 @@ def compute_registrar(
     logger.info("  - Non-rigid registration transforms")
     logger.info("  - Micro-registration transforms")
     logger.info("")
-
-    rigid_registrar, non_rigid_registrar, error_df = registrar.register(
-        reference_channel=reference_markers if reference_markers else None,
-        max_processed_image_dim_px=max_processed_dim,
-        max_non_rigid_registraion_dim_px=max_non_rigid_dim,
-    )
+    
+    _, _, error_df = registrar.register()
 
     # Micro-registration for high-resolution refinement
     logger.info("")
