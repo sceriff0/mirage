@@ -44,7 +44,6 @@ process COMPUTE_REGISTRATION {
         ${ref_markers} \\
         --max-processed-dim ${max_processed_dim} \\
         --max-non-rigid-dim ${max_non_rigid_dim} \\
-        --num-features ${num_features}
     """
 }
 
