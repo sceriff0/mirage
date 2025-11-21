@@ -533,11 +533,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"  Applying transforms (rigid + non-rigid + micro)...")
         slide_obj.warp_and_save_slide(
             dst_f=out_path,
-            level=0,              # Full resolution
-            non_rigid=True,       # Apply non-rigid transforms
-            crop=True,            # Crop to reference overlap
-            interp_method="bicubic",
-            pyramid=False,        # Disable pyramid to save space
         )
 
         file_size_mb = os.path.getsize(out_path) / (1024 * 1024)
