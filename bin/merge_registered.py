@@ -115,7 +115,6 @@ def merge_slides(input_dir: str, output_path: str, skip_duplicates: bool = True)
     tifffile.imwrite(
         output_path,
         merged,
-        compression='lzw',
         tile=(256, 256),
         metadata={'axes': 'CYX'},
         description=ome_xml,
