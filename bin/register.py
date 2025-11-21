@@ -392,14 +392,14 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
 
         # Feature detection - SuperPoint/SuperGlue
-        feature_detector_cls=feature_detectors.SuperPointFD,
-        matcher=feature_matcher.SuperGlueMatcher(),
+        #feature_detector_cls=feature_detectors.SuperPointFD,
+        #matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration
         #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
 
         # Micro-rigid registration
-        micro_rigid_registrar_cls=MicroRigidRegistrar,
+        #micro_rigid_registrar_cls=MicroRigidRegistrar,
 
         # Registration behavior
         create_masks=True,
@@ -421,7 +421,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # ========================================================================
     log_progress("\nAttempting micro-registration...")
     log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
-
+    '''
     try:
         img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
         min_max_size = np.min([np.max(d) for d in img_dims])
@@ -443,7 +443,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"\n⚠ Micro-registration FAILED: {e}")
         log_progress("Continuing without micro-registration...")
         log_progress("(This is usually caused by SimpleElastix not being available)")
-
+    '''
     # ========================================================================
     # Merge and Save
     # ========================================================================
