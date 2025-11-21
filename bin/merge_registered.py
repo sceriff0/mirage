@@ -14,7 +14,15 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 import tifffile
-from valis import slide_io
+import os
+
+os.environ['NUMBA_DISABLE_JIT'] = '0'
+os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
+os.environ['NUMBA_DISABLE_CACHING'] = '1'
+
+
+# Import only slide_io to avoid heavy VALIS dependencies
+import valis.slide_io as slide_io
 
 
 def log(msg: str):
