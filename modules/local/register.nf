@@ -11,7 +11,7 @@ process REGISTER {
     path preproc_files
 
     output:
-    path "registered_slides/*_registered.ome.tif", emit: registered_slides
+    path "registered_slides/*_registered.ome.tiff", emit: registered_slides
     path "registered_qc"                         , emit: qc, optional: true
 
     script:

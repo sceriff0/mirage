@@ -458,61 +458,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"  - Original image list: {registrar.original_img_list}")
     log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
-    # Parse channel names from filenames and match with actual channel counts
-    log_progress("\nBuilding channel_name_dict...")
-    channel_name_dict = {}
-
-    for f in registrar.original_img_list:
-        log_progress(f"\n  Processing file: {f}")
-
-        # Get expected channel names from filename
-        basename = os.path.basename(f)
-        log_progress(f"    - Basename: {basename}")
-
-        # Get slide name (basename without extension)
-        slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
-        log_progress(f"    - Slide name (no extension): {slide_name}")
-
-        expected_names = get_channel_names(basename)
-        log_progress(f"    - Expected channel names from filename: {expected_names}")
-
-        # Get actual number of channels in the slide
-        # Use slide_name to look up in slide_dict
-        if slide_name not in registrar.slide_dict:
-            log_progress(f"    - ERROR: '{slide_name}' not found in registrar.slide_dict!")
-            log_progress(f"    - Available keys: {list(registrar.slide_dict.keys())}")
-            continue
-
-        slide_obj = registrar.slide_dict[slide_name]
-        log_progress(f"    - Slide object name: {slide_obj.name}")
-
-        # Get metadata without loading full image into memory
-        vips_img = slide_obj.slide2vips(level=0)
-        actual_channels = vips_img.bands
-        img_width, img_height = vips_img.width, vips_img.height
-        log_progress(f"    - Actual channels in slide: {actual_channels}")
-        log_progress(f"    - Slide dimensions: {img_width}x{img_height}")
-
-        # Free vips object immediately
-        del vips_img
-
-        # Only use as many names as there are actual channels
-        channel_names_to_use = expected_names[:actual_channels]
-
-        # If we have more channels than names, pad with generic names
-        if actual_channels > len(expected_names):
-            log_progress(f"    - WARNING: More channels ({actual_channels}) than names ({len(expected_names)}), padding...")
-            for i in range(len(expected_names), actual_channels):
-                channel_names_to_use.append(f"Channel_{i}")
-
-        channel_name_dict[f] = channel_names_to_use
-        log_progress(f"    - Final channel names to use: {channel_names_to_use}")
-
-    log_progress(f"\n✓ channel_name_dict built with {len(channel_name_dict)} entries")
-    log_progress(f"\nFull channel_name_dict:")
-    for key, value in channel_name_dict.items():
-        log_progress(f"  '{key}': {value}")
-
     log_progress(f"\nWarping slides individually to: {out}")
     log_progress(f"  - Output directory: {out}")
     log_progress(f"  - Strategy: Individual warp_and_save_slide() for low RAM")
@@ -548,7 +493,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"  Source: {src_path}")
 
         # Output path for this slide
-        out_path = os.path.join(out, f"{slide_name}_registered.ome.tif")
+        out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
 
         # Warp and save using official VALIS method
         log_progress(f"  Applying transforms (rigid + non-rigid + micro)...")
@@ -561,16 +506,13 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
             interp_method="bicubic",
         )
 
-        file_size_mb = os.path.getsize(out_path) / (1024 * 1024)
-        log_progress(f"  ✓ Saved: {out_path} ({file_size_mb:.2f} MB)")
-
         warped_count += 1
 
         # Force garbage collection after each slide to free RAM
         gc.collect()
 
     log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
-    del channel_name_dict
+
     gc.collect()
 
     # Save individual registered slides to QC directory with reference DAPI first
