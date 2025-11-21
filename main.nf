@@ -2,13 +2,13 @@ nextflow.enable.dsl = 2
 
 /*
 ========================================================================================
-    IMPORT MODULES
+    IMPORT MODULES AND SUBWORKFLOWS
 ========================================================================================
 */
 
 include { CONVERT_ND2 } from './modules/local/convert_nd2'
 include { PREPROCESS } from './modules/local/preprocess'
-include { REGISTER   } from './modules/local/register'
+include { REGISTRATION } from './subworkflows/registration'
 include { SEGMENT    } from './modules/local/segment'
 include { CLASSIFY   } from './modules/local/classify'
 
@@ -38,18 +38,18 @@ workflow {
     // 3. MODULE: Preprocess each converted file
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
-    // TODO: Add classic registration
-    // 4. MODULE: Register/merge all preprocessed files
-    //    Collects all preprocessed files and passes them to REGISTER
-    REGISTER ( PREPROCESS.out.preprocessed.collect() )
+    // 4. SUBWORKFLOW: Register/merge all preprocessed files
+    //    New architecture: compute registrar → apply in parallel → merge with deduplication
+    REGISTRATION ( PREPROCESS.out.preprocessed )
 
-    // 5. MODULE: Segment the merged WSI
-    SEGMENT ( REGISTER.out.merged )
+    // 5. MODULE: Segment the reference slide DAPI
+    //    Uses reference slide for segmentation (as requested)
+    SEGMENT ( REGISTRATION.out.ref_slide )
 
     // 6. MODULE: Classify cell types using deepcell-types
-    //    Using cell_mask (expanded) for classification
+    //    Using merged image and cell_mask (expanded) for classification
     CLASSIFY (
-        REGISTER.out.merged,
+        REGISTRATION.out.merged,
         SEGMENT.out.cell_mask
     )
 }
