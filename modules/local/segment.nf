@@ -13,10 +13,7 @@ process SEGMENT {
     path "*_cell_mask.tif"  , emit: cell_mask
 
     script:
-    def use_gpu_flag = params.seg_gpu ? '--use_gpu' : ''
-    def whole_image_flag = params.seg_whole_image ? '--whole_image' : ''
-    def tophat_radius = params.seg_tophat_radius ?: 50
-    def gaussian_sigma = params.seg_gaussian_sigma ?: 1.0
+    def use_gpu_flag = params.seg_gpu ? '--use-gpu' : ''
     def pmin = params.seg_pmin ?: 1.0
     def pmax = params.seg_pmax ?: 99.8
     """
