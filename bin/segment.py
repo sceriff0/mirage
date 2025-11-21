@@ -174,6 +174,20 @@ def load_stardist_model(
     logger.info(f"  Model directory: {model_dir}")
     logger.info(f"  GPU enabled: {use_gpu}")
 
+    # Verify the model path exists
+    model_path = Path(model_dir) / model_name
+    config_file = model_path / "config.json"
+
+    logger.info(f"  Expected model path: {model_path}")
+    logger.info(f"  Expected config file: {config_file}")
+    logger.info(f"  Model path exists: {model_path.exists()}")
+    logger.info(f"  Config file exists: {config_file.exists()}")
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_path}")
+    if not config_file.exists():
+        raise FileNotFoundError(f"Config file not found: {config_file}")
+
     model = StarDist2D(None, name=model_name, basedir=model_dir)
 
     if hasattr(model, 'config'):
