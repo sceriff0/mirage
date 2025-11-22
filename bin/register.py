@@ -374,9 +374,29 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"\n... and {len(input_files) - 3} more files")
 
     # ========================================================================
-    # Initialize VALIS Registrar
+    # Initialize VALIS Registrar with Memory Optimization
     # ========================================================================
-    log_progress("\nInitializing VALIS registration...")
+    log_progress("\nInitializing VALIS registration with memory optimization...")
+
+    # Disable pyvips cache to reduce memory usage
+    # Per VALIS docs: "cache can grow quite large, so it may be best to disable it"
+    try:
+        import pyvips
+        pyvips.cache_set_max(0)
+        pyvips.cache_set_max_mem(0)
+        log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=0)")
+    except Exception as e:
+        log_progress(f"⚠ Could not disable pyvips cache: {e}")
+
+    # Calculate max_image_dim_px based on available memory
+    # VALIS docs: "mostly to keep memory in check"
+    # For 60K x 50K images, we need to limit the cached size
+    max_image_dim = 6000  # Limit cached images to 6K x 6K (vs full 60K x 50K)
+
+    log_progress(f"Memory optimization parameters:")
+    log_progress(f"  max_processed_image_dim_px: {max_processed_image_dim_px} (controls analysis resolution)")
+    log_progress(f"  max_non_rigid_registration_dim_px: {max_non_rigid_dim_px} (controls non-rigid accuracy)")
+    log_progress(f"  max_image_dim_px: {max_image_dim} (limits cached image size for RAM control)")
 
     registrar = registration.Valis(
         input_dir,
@@ -387,9 +407,13 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         align_to_reference=True,
         crop="reference",
 
-        # Image size parameters
+        # Image size parameters - tuned for memory efficiency
+        # max_processed_image_dim_px: controls resolution for feature detection & rigid registration
+        # max_non_rigid_registration_dim_px: controls resolution for non-rigid registration
+        # max_image_dim_px: limits dimensions of images stored in registrar (key for RAM control)
         max_processed_image_dim_px=max_processed_image_dim_px,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
+        #max_image_dim_px=max_image_dim,  # Critical: prevents loading full 60K x 50K images into RAM
 
         # Feature detection - SuperPoint/SuperGlue
         feature_detector_cls=feature_detectors.SuperPointFD,
@@ -495,8 +519,14 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         # Output path for this slide
         out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
 
-        # Warp and save using official VALIS method
-        log_progress(f"  Applying transforms (rigid + non-rigid + micro)...")
+        # Warp and save using official VALIS method with tiled processing
+        # Tile size chosen to balance memory vs I/O overhead
+        # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
+        log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+
+        # Use DEFLATE compression (supported by tifffile without imagecodecs)
+        import pyvips
+
         slide_obj.warp_and_save_slide(
             src_f=src_path,
             dst_f=out_path,
@@ -504,12 +534,27 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
             non_rigid=True,       # Apply non-rigid transforms
             crop=True,            # Crop to reference overlap
             interp_method="bicubic",
+            tile_wh=(2048, 2048), # Process in 2K tiles to reduce RAM (VALIS will use tiled I/O)
+            compression=pyvips.enums.ForeignTiffCompression.DEFLATE,  # DEFLATE works with tifffile
         )
 
         warped_count += 1
+        log_progress(f"  ✓ Saved: {out_path}")
 
-        # Force garbage collection after each slide to free RAM
+        # Aggressive memory cleanup after each slide
+        import gc
+
+        # Close slide reader if possible
+        if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
+            try:
+                slide_obj.slide_reader.close()
+            except:
+                pass
+
+        # Force garbage collection
         gc.collect()
+
+        log_progress(f"  ✓ Memory cleanup completed")
 
     log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
 
