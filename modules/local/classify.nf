@@ -16,7 +16,7 @@ process CLASSIFY {
 
     script:
     def device = params.classify_gpu ? 'cuda:0' : 'cpu'
-    def model = params.classify_model ?: 'deepcell-types_2025-06-09'
+    def model = params.classify_model ?: 'deepcell-types_2025-06-09_public-data-only'
     def num_workers = params.classify_num_workers ?: 4
     """
     classify.py \\
