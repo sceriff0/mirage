@@ -71,22 +71,22 @@ def is_reference_slide(slide_name: str, reference_markers: list) -> bool:
 
 
 def read_slide(filepath: str) -> tuple:
-    """Read slide using VALIS slide_io. Returns (numpy array (C, H, W), channel_names)."""
-    # Get reader class and instantiate it
-    reader_cls = slide_io.get_slide_reader(str(filepath))
-    reader = reader_cls(str(filepath))
-    slide = reader.slide2image(level=0)  # Full resolution
-
-    # Convert to numpy array
-    img = np.array(slide)
+    """Read slide using tifffile (RAM-efficient). Returns (numpy array (C, H, W), channel_names)."""
+    # Read with tifffile which handles large TIFFs efficiently
+    img = tifffile.imread(str(filepath))
 
     # Ensure (C, H, W) format
     if img.ndim == 2:
         # Single channel: (H, W) -> (1, H, W)
         img = img[np.newaxis, ...]
     elif img.ndim == 3:
-        # Check if (H, W, C) and transpose to (C, H, W)
-        if img.shape[2] < img.shape[0]:
+        # Multi-channel: could be (H, W, C) or (C, H, W)
+        # Detect based on typical image dimensions
+        if img.shape[0] < img.shape[2]:
+            # Already (C, H, W) format
+            pass
+        else:
+            # (H, W, C) format - transpose to (C, H, W)
             img = np.transpose(img, (2, 0, 1))
 
     # Try to get channel names from OME metadata first
