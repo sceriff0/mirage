@@ -524,7 +524,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
         log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
 
-        # Use DEFLATE compression (supported by tifffile without imagecodecs)
+        # Note: tile_wh must be integer (single value), not tuple
         import pyvips
 
         slide_obj.warp_and_save_slide(
@@ -534,8 +534,8 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
             non_rigid=True,       # Apply non-rigid transforms
             crop=True,            # Crop to reference overlap
             interp_method="bicubic",
-            tile_wh=(2048, 2048), # Process in 2K tiles to reduce RAM (VALIS will use tiled I/O)
-            compression=pyvips.enums.ForeignTiffCompression.DEFLATE,  # DEFLATE works with tifffile
+            tile_wh=2048,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
+            compression=pyvips.enums.ForeignTiffCompression.DEFLATE,  
         )
 
         warped_count += 1
