@@ -199,13 +199,26 @@ def classify_cells(
     )
 
     logger.info(f"Classified {len(cell_types)} cells")
-    logger.info(f"Unique cell types: {len(set(cell_types))}")
 
     # Log cell type distribution
-    type_counts = pd.Series(cell_types).value_counts()
-    logger.info("Cell type distribution:")
-    for cell_type, count in type_counts.items():
-        logger.info(f"  {cell_type}: {count}")
+    # Note: cell_types might be a list of lists, so we need to handle that
+    try:
+        # Convert to pandas Series for value_counts
+        # If elements are lists, convert to tuples (hashable)
+        if len(cell_types) > 0 and isinstance(cell_types[0], (list, np.ndarray)):
+            cell_types_hashable = [tuple(ct) if isinstance(ct, (list, np.ndarray)) else ct for ct in cell_types]
+        else:
+            cell_types_hashable = cell_types
+
+        type_counts = pd.Series(cell_types_hashable).value_counts()
+        logger.info("Cell type distribution:")
+        for cell_type, count in type_counts.head(10).items():  # Show top 10
+            logger.info(f"  {cell_type}: {count}")
+
+        logger.info(f"Unique cell types: {len(type_counts)}")
+    except Exception as e:
+        logger.warning(f"Could not log cell type distribution: {e}")
+        logger.warning(f"Cell types sample: {cell_types[:10]}")
 
     return cell_types
 
