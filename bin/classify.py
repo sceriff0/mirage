@@ -188,7 +188,7 @@ def classify_cells(
     logger.info(f"Pixel size: {pixel_size_um} μm/px")
 
     # Run prediction
-    cell_types = deepcell_types.predict(
+    cell_types, marker_pos_attn = deepcell_types.predict(
         image,
         mask,
         channel_names,
@@ -199,6 +199,7 @@ def classify_cells(
     )
 
     logger.info(f"Classified {len(cell_types)} cells")
+    logger.info(f"Marker positivity shape: {marker_pos_attn.shape}")
 
     # Log cell type distribution
     # Note: cell_types might be a list of lists, so we need to handle that
