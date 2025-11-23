@@ -23,14 +23,18 @@ logger = logging.getLogger(__name__)
 def aggregate_cell_predictions(cell_types, cell_index):
     """
     Convert patch-level predictions into one label per cell.
-    
+
+    DeepCell-types processes images by dividing them into overlapping patches.
+    Each cell can appear in multiple patches, resulting in multiple predictions
+    per cell. This function aggregates those predictions using majority voting.
+
     Parameters
     ----------
     cell_types : list[str]
         Cell type predicted for each patch
     cell_index : np.ndarray
         Corresponding segmentation label for each patch
-    
+
     Returns
     -------
     list[str]
@@ -329,21 +333,22 @@ def classify_cells(
         tissue_exclude="Reproductive"
     )
 
-    logger.info(f"Classified {len(cell_types)} cells")
+    logger.info(f"Classified {len(cell_types)} patch predictions")
     logger.info(f"Marker positivity {marker_pos_attn}")
 
+    # Aggregate patch-level predictions to cell-level predictions
     cell_types_per_cell = aggregate_cell_predictions(cell_types, cell_index)
-    print(f"Predicted {len(cell_types_per_cell)} cell types (one per cell)")
+    logger.info(f"Aggregated to {len(cell_types_per_cell)} cells (one prediction per cell)")
 
     # Log cell type distribution
-    # Note: cell_types might be a list of lists, so we need to handle that
+    # Note: cell_types_per_cell should be a list of strings now
     try:
         # Convert to pandas Series for value_counts
         # If elements are lists, convert to tuples (hashable)
-        if len(cell_types) > 0 and isinstance(cell_types[0], (list, np.ndarray)):
-            cell_types_hashable = [tuple(ct) if isinstance(ct, (list, np.ndarray)) else ct for ct in cell_types]
+        if len(cell_types_per_cell) > 0 and isinstance(cell_types_per_cell[0], (list, np.ndarray)):
+            cell_types_hashable = [tuple(ct) if isinstance(ct, (list, np.ndarray)) else ct for ct in cell_types_per_cell]
         else:
-            cell_types_hashable = cell_types
+            cell_types_hashable = cell_types_per_cell
 
         type_counts = pd.Series(cell_types_hashable).value_counts()
         logger.info("Cell type distribution:")
@@ -353,9 +358,9 @@ def classify_cells(
         logger.info(f"Unique cell types: {len(type_counts)}")
     except Exception as e:
         logger.warning(f"Could not log cell type distribution: {e}")
-        logger.warning(f"Cell types sample: {cell_types[:10]}")
+        logger.warning(f"Cell types sample: {cell_types_per_cell[:10]}")
 
-    return cell_types
+    return cell_types_per_cell
 
 
 def create_cell_dataframe(
