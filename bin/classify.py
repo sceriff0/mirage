@@ -295,6 +295,7 @@ def classify_cells(
         model_name=model_name,
         device_num=device,
         num_workers=num_workers,
+        tissue_exclude="Reproductive"
     )
 
     logger.info(f"Classified {len(cell_types)} cells")
