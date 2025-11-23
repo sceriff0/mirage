@@ -19,6 +19,102 @@ import tifffile
 
 logger = logging.getLogger(__name__)
 
+def map_channels(channel_list):
+    """
+    Substitutes channel names in channel_list based on mapping_dict using
+    case-insensitive matching (upper vs upper).
+    """
+
+    mapping_dict = {
+    'Beta-catenin': 'Beta-catenin',
+    'CD11b': 'CD11b',
+    'CD11c': 'CD11c',
+    'CD138': 'CD138',
+    'CD16': 'CD16',
+    'CD163': 'CD163',
+    'CD20': 'CD20',
+    'CD209': 'CD209',
+    'CD3': 'CD3',
+    'CD31': 'CD31',
+    'CD4': 'CD4',
+    'CD45': 'CD45',
+    'CD45RO': 'CD45RO',
+    'CD56': 'CD56',
+    'CD63': 'CD63',
+    'CD68': 'CD68',
+    'CD8': 'CD8',
+    'EGFR': 'EGFR',
+    'FoxP3': 'FoxP3',
+    'HLA-Class-2': 'HLA-Class-2',
+    'HLA-Class-1': 'HLA-Class-1',
+    'IDO': 'IDO',
+    'CK17': 'CK17',
+    'CK6': 'CK6',
+    'Ki67': 'Ki67',
+    'LAG3': 'LAG3',
+    'MPO': 'MPO',
+    'OX40': 'OX40',
+    'PDL1': 'PDL1',
+    'PD1': 'PD1',
+    'PanCK': 'PanCK',
+    'SMA': 'SMA',
+    'Vimentin': 'Vimentin',
+    'p53': 'p53',
+    'ADEFENSIN5': 'DEFA5',
+    'ASMA': 'SMA',
+    'BCL2': 'Bcl-2',
+    'CD117': 'c-kit',
+    'CD11C': 'CD11c',
+    'CD123': 'CD123',
+    'CD127': 'CD127',
+    'CD15': 'CD15',
+    'CD161': 'CD161',
+    'CD19': 'CD19',
+    'CD206': 'CD206',
+    'CD21': 'CD21',
+    'CD25': 'CD25',
+    'CD34': 'CD34',
+    'CD36': 'CD36',
+    'CD38': 'CD38',
+    'CD44': 'CD44',
+    'CD57': 'CD57',
+    'CD66': 'CD66',
+    'CD69': 'CD69',
+    'CD7': 'CD7',
+    'CD90': 'CD90',
+    'CHGA': 'CgA',
+    'CK7': 'CK7',
+    'COLLAGENIV': 'Col4',
+    'CYTOKERATIN': 'PanCK',
+    'FAP': 'FAP',
+    'HLADR': 'HLA-Class-2',
+    'ITLN1': 'Intelectin-1',
+    'KI67': 'Ki67',
+    'MUC1': 'MUC1',
+    'MUC2': 'MUC2',
+    'NKG2G': 'NKG2D',
+    'OLFM4': 'OLFM4',
+    'PODOPLANIN': 'PDPN',
+    'SOX9': 'SOX9',
+    'SYNAPTOPHYSIN': 'Synaptophysin',
+    'VIMENTIN': 'Vimentin'
+    }
+    # Create a lookup dictionary where keys are uppercased for easy matching
+    upper_lookup = {k.upper(): v for k, v in mapping_dict.items()}
+    
+    new_list = []
+    for channel in channel_list:
+        # Convert current channel to uppercase to find a match
+        upper_name = channel.upper()
+        
+        if upper_name in upper_lookup:
+            # Found a match: use the value from the dictionary
+            new_list.append(upper_lookup[upper_name])
+        else:
+            # No match: keep the original name
+            new_list.append(channel)
+            
+    return new_list
 
 def load_multichannel_image(image_path: str) -> tuple[np.ndarray, list[str]]:
     """Load multichannel OME-TIFF image and extract channel names.
@@ -71,6 +167,9 @@ def load_multichannel_image(image_path: str) -> tuple[np.ndarray, list[str]]:
 
     logger.info(f"Image shape: {img.shape}")
     logger.info(f"Channel names: {channel_names}")
+
+    channel_names = map_channels(channel_names)
+    logger.info(f"Mapped channel names: {channel_names}")
 
     # Convert to uint16 if needed
     if img.dtype != np.uint16:
@@ -199,7 +298,7 @@ def classify_cells(
     )
 
     logger.info(f"Classified {len(cell_types)} cells")
-    logger.info(f"Marker positivity shape: {marker_pos_attn.shape}")
+    logger.info(f"Marker positivity {marker_pos_attn}")
 
     # Log cell type distribution
     # Note: cell_types might be a list of lists, so we need to handle that
@@ -321,6 +420,7 @@ def run_classification_pipeline(
     # Load data
     image, channel_names = load_multichannel_image(image_path)
     mask = load_segmentation_mask(mask_path)
+
 
     # Validate dimensions match
     if image.shape[1:] != mask.shape:
