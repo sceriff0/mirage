@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional
+import skimage
 
 import numpy as np
 import pandas as pd
@@ -228,6 +229,8 @@ def load_segmentation_mask(mask_path: str) -> np.ndarray:
         logger.warning(f"Mask has {mask.ndim} dimensions, taking first channel")
         mask = mask[..., 0] if mask.shape[-1] < mask.shape[0] else mask[0]
 
+    mask, _, _ = skimage.segmentation.relabel_sequential(mask)
+    
     # Convert to uint32
     if mask.dtype != np.uint32:
         mask = mask.astype(np.uint32)
