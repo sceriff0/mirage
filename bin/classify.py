@@ -13,12 +13,40 @@ import os
 from pathlib import Path
 from typing import Optional
 import skimage
-
+from collections import defaultdict, Counter
 import numpy as np
 import pandas as pd
 import tifffile
 
 logger = logging.getLogger(__name__)
+
+def aggregate_cell_predictions(cell_types, cell_index):
+    """
+    Convert patch-level predictions into one label per cell.
+    
+    Parameters
+    ----------
+    cell_types : list[str]
+        Cell type predicted for each patch
+    cell_index : np.ndarray
+        Corresponding segmentation label for each patch
+    
+    Returns
+    -------
+    list[str]
+        One cell type per unique cell label, sorted by ascending label
+    """
+    cell_to_patches = defaultdict(list)
+    for idx, ct in zip(cell_index, cell_types):
+        cell_to_patches[idx].append(ct)
+
+    cell_type_per_cell = []
+    for label in sorted(cell_to_patches.keys()):
+        patch_preds = cell_to_patches[label]
+        majority_label = Counter(patch_preds).most_common(1)[0][0]
+        cell_type_per_cell.append(majority_label)
+
+    return cell_type_per_cell
 
 def map_channels(channel_list):
     """
@@ -230,7 +258,7 @@ def load_segmentation_mask(mask_path: str) -> np.ndarray:
         mask = mask[..., 0] if mask.shape[-1] < mask.shape[0] else mask[0]
 
     mask, _, _ = skimage.segmentation.relabel_sequential(mask)
-    
+
     # Convert to uint32
     if mask.dtype != np.uint32:
         mask = mask.astype(np.uint32)
@@ -290,7 +318,7 @@ def classify_cells(
     logger.info(f"Pixel size: {pixel_size_um} μm/px")
 
     # Run prediction
-    cell_types, marker_pos_attn = deepcell_types.predict(
+    cell_types, marker_pos_attn, cell_index = deepcell_types.predict(
         image,
         mask,
         channel_names,
@@ -303,6 +331,9 @@ def classify_cells(
 
     logger.info(f"Classified {len(cell_types)} cells")
     logger.info(f"Marker positivity {marker_pos_attn}")
+
+    cell_types_per_cell = aggregate_cell_predictions(cell_types, cell_index)
+    print(f"Predicted {len(cell_types_per_cell)} cell types (one per cell)")
 
     # Log cell type distribution
     # Note: cell_types might be a list of lists, so we need to handle that
