@@ -66,6 +66,79 @@ def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarr
     return (img * 255).astype(np.uint8)
 
 
+def pad_to_reference(moving_img: np.ndarray, reference_shape: Tuple[int, ...], mode: str = 'constant') -> np.ndarray:
+    """Pad moving image to match reference image dimensions.
+
+    Uses symmetric padding to center the moving image within the reference dimensions.
+    This ensures proper spatial alignment during registration.
+
+    Parameters:
+        moving_img (ndarray): Moving image in (C, H, W) format
+        reference_shape (tuple): Target shape (C, H, W)
+        mode (str): Padding mode - 'constant' (zeros), 'edge' (replicate edges),
+                   'reflect' (mirror), or 'symmetric'. Default: 'constant'
+
+    Returns:
+        ndarray: Padded image with shape matching reference_shape
+
+    Raises:
+        ValueError: If moving image is larger than reference in any dimension
+    """
+    c_mov, h_mov, w_mov = moving_img.shape
+    c_ref, h_ref, w_ref = reference_shape
+
+    # Validate channel counts match
+    if c_mov != c_ref:
+        raise ValueError(f"Channel mismatch: moving has {c_mov} channels, reference has {c_ref}")
+
+    # Check if moving is larger than reference
+    if h_mov > h_ref or w_mov > w_ref:
+        raise ValueError(
+            f"Moving image ({h_mov}x{w_mov}) is larger than reference ({h_ref}x{w_ref}). "
+            f"Cannot pad a larger image to smaller dimensions. Consider cropping instead."
+        )
+
+    # Calculate padding needed
+    pad_h = h_ref - h_mov
+    pad_w = w_ref - w_mov
+
+    # No padding needed
+    if pad_h == 0 and pad_w == 0:
+        logger.info("  No padding required - dimensions match")
+        return moving_img
+
+    # Calculate symmetric padding (distribute padding evenly on both sides)
+    pad_h_before = pad_h // 2
+    pad_h_after = pad_h - pad_h_before
+    pad_w_before = pad_w // 2
+    pad_w_after = pad_w - pad_w_before
+
+    logger.info(f"  Padding moving image from ({c_mov}, {h_mov}, {w_mov}) to ({c_ref}, {h_ref}, {w_ref})")
+    logger.info(f"  Padding strategy: {mode}")
+    logger.info(f"    Height: {pad_h_before} pixels before, {pad_h_after} pixels after")
+    logger.info(f"    Width: {pad_w_before} pixels before, {pad_w_after} pixels after")
+
+    # Create padding specification: ((before, after), ...) for each dimension
+    # Format: ((C_before, C_after), (H_before, H_after), (W_before, W_after))
+    pad_width = (
+        (0, 0),                           # No padding on channel dimension
+        (pad_h_before, pad_h_after),      # Height padding
+        (pad_w_before, pad_w_after),      # Width padding
+    )
+
+    # Apply padding
+    if mode == 'constant':
+        # Pad with zeros (most common for microscopy images)
+        padded = np.pad(moving_img, pad_width, mode='constant', constant_values=0)
+    else:
+        # Other padding modes (edge, reflect, symmetric)
+        padded = np.pad(moving_img, pad_width, mode=mode)
+
+    logger.info(f"  Padded image shape: {padded.shape}")
+
+    return padded
+
+
 def create_qc_rgb_composite(
     reference_path: Path,
     registered_path: Path,
@@ -503,6 +576,7 @@ def register_image_pair(
     n_features: int = 2000,
     n_workers: int = 4,
     qc_dir: Optional[Path] = None,
+    pad_mode: str = 'constant',
 ):
     """
     Register a moving image to a reference image using GPU-based registration.
@@ -516,6 +590,7 @@ def register_image_pair(
         n_features (int): Number of features for affine registration
         n_workers (int): Number of parallel workers for CPU operations
         qc_dir (Path, optional): Directory to save QC outputs
+        pad_mode (str): Padding mode ('constant', 'edge', 'reflect', 'symmetric')
     """
     # Check GPU availability
     if not GPU_AVAILABLE:
@@ -545,6 +620,15 @@ def register_image_pair(
             f"Channel count mismatch: reference has {ref_img.shape[0]} channels, "
             f"moving has {mov_img.shape[0]} channels. Both images must have the same number of channels."
         )
+
+    # Pad moving image to match reference dimensions if needed
+    logger.info("Checking image dimensions for padding...")
+    if mov_img.shape != ref_img.shape:
+        logger.info(f"  Reference: {ref_img.shape}, Moving: {mov_img.shape}")
+        mov_img = pad_to_reference(mov_img, ref_img.shape, mode=pad_mode)
+        logger.info(f"  Moving image after padding: {mov_img.shape}")
+    else:
+        logger.info(f"  Dimensions match: {ref_img.shape} - no padding needed")
 
     # Extract crops from both images in parallel
     logger.info(f"Extracting crops with size={crop_size}, overlap={overlap}")
@@ -641,6 +725,9 @@ def main():
     parser.add_argument("--overlap", type=int, default=200, help="Overlap between crops in pixels")
     parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
     parser.add_argument("--n-workers", type=int, default=4, help="Number of parallel workers")
+    parser.add_argument("--pad-mode", type=str, default="constant",
+                       choices=["constant", "edge", "reflect", "symmetric"],
+                       help="Padding mode if images have different sizes (default: constant/zeros)")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
 
     args = parser.parse_args()
@@ -661,6 +748,7 @@ def main():
             n_features=args.n_features,
             n_workers=args.n_workers,
             qc_dir=Path(args.qc_dir) if args.qc_dir else None,
+            pad_mode=args.pad_mode,
         )
         return 0
     except Exception as e:
