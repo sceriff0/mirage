@@ -576,10 +576,11 @@ def register_image_pair(
     n_features: int = 2000,
     n_workers: int = 4,
     qc_dir: Optional[Path] = None,
-    pad_mode: str = 'constant',
 ):
     """
     Register a moving image to a reference image using GPU-based registration.
+
+    Note: Images should be pre-padded to matching dimensions by PAD_IMAGES process.
 
     Parameters:
         reference_path (Path): Path to reference image
@@ -590,7 +591,6 @@ def register_image_pair(
         n_features (int): Number of features for affine registration
         n_workers (int): Number of parallel workers for CPU operations
         qc_dir (Path, optional): Directory to save QC outputs
-        pad_mode (str): Padding mode ('constant', 'edge', 'reflect', 'symmetric')
     """
     # Check GPU availability
     if not GPU_AVAILABLE:
@@ -614,21 +614,14 @@ def register_image_pair(
     if mov_img.ndim == 2:
         mov_img = mov_img[np.newaxis, ...]
 
-    # Validate channel counts match
-    if ref_img.shape[0] != mov_img.shape[0]:
+    # Validate images have matching dimensions (should be pre-padded by PAD_IMAGES process)
+    if ref_img.shape != mov_img.shape:
         raise ValueError(
-            f"Channel count mismatch: reference has {ref_img.shape[0]} channels, "
-            f"moving has {mov_img.shape[0]} channels. Both images must have the same number of channels."
+            f"Image dimension mismatch: reference {ref_img.shape} != moving {mov_img.shape}. "
+            f"Images should be pre-padded to the same dimensions by PAD_IMAGES process."
         )
 
-    # Pad moving image to match reference dimensions if needed
-    logger.info("Checking image dimensions for padding...")
-    if mov_img.shape != ref_img.shape:
-        logger.info(f"  Reference: {ref_img.shape}, Moving: {mov_img.shape}")
-        mov_img = pad_to_reference(mov_img, ref_img.shape, mode=pad_mode)
-        logger.info(f"  Moving image after padding: {mov_img.shape}")
-    else:
-        logger.info(f"  Dimensions match: {ref_img.shape} - no padding needed")
+    logger.info(f"Images have matching dimensions: {ref_img.shape}")
 
     # Extract crops from both images in parallel
     logger.info(f"Extracting crops with size={crop_size}, overlap={overlap}")
@@ -725,9 +718,6 @@ def main():
     parser.add_argument("--overlap", type=int, default=200, help="Overlap between crops in pixels")
     parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
     parser.add_argument("--n-workers", type=int, default=4, help="Number of parallel workers")
-    parser.add_argument("--pad-mode", type=str, default="constant",
-                       choices=["constant", "edge", "reflect", "symmetric"],
-                       help="Padding mode if images have different sizes (default: constant/zeros)")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
 
     args = parser.parse_args()
@@ -748,7 +738,6 @@ def main():
             n_features=args.n_features,
             n_workers=args.n_workers,
             qc_dir=Path(args.qc_dir) if args.qc_dir else None,
-            pad_mode=args.pad_mode,
         )
         return 0
     except Exception as e:

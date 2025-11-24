@@ -20,7 +20,6 @@ process GPU_REGISTER {
     def overlap = params.gpu_reg_overlap ?: 200
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
-    def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
     """
     mkdir -p qc
 
@@ -32,7 +31,6 @@ process GPU_REGISTER {
         --crop-size ${crop_size} \\
         --overlap ${overlap} \\
         --n-features ${n_features} \\
-        --n-workers ${n_workers} \\
-        --pad-mode ${pad_mode}
+        --n-workers ${n_workers}
     """
 }
