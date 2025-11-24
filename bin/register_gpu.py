@@ -600,6 +600,34 @@ def register_image_pair(
             f"Please install with: pip install cupy-cuda12x cudipy"
         )
 
+    # Initialize CUDA before threading to catch driver issues early
+    logger.info("Initializing CUDA...")
+    try:
+        # Test CUDA availability and get device info
+        device = cp.cuda.Device()
+        logger.info(f"  CUDA device: {device.attributes['Name']}")
+        logger.info(f"  Compute capability: {device.compute_capability}")
+
+        # Get CUDA versions
+        cuda_runtime = cp.cuda.runtime.runtimeGetVersion()
+        cuda_driver = cp.cuda.runtime.driverGetVersion()
+        logger.info(f"  CUDA runtime version: {cuda_runtime}")
+        logger.info(f"  CUDA driver version: {cuda_driver}")
+
+        if cuda_driver < cuda_runtime:
+            logger.warning(
+                f"⚠ CUDA driver ({cuda_driver}) is older than runtime ({cuda_runtime}). "
+                f"This may cause errors. Consider updating CUDA driver."
+            )
+    except Exception as e:
+        raise RuntimeError(
+            f"CUDA initialization failed: {e}\n"
+            f"This usually means:\n"
+            f"  1. CUDA driver version is too old for CuPy runtime\n"
+            f"  2. GPU is not accessible\n"
+            f"Check 'nvidia-smi' and install matching CuPy version for your CUDA driver."
+        ) from e
+
     logger.info(f"Loading reference image: {reference_path}")
     ref_img = tifffile.imread(str(reference_path))
 
