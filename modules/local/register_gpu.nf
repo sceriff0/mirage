@@ -2,7 +2,7 @@ nextflow.enable.dsl = 2
 
 process GPU_REGISTER {
     tag "${moving.simpleName}"
-    label 'process_gpu'
+    label 'gpu'
     container "${params.container.register_gpu}"
 
     publishDir "${params.outdir}/registered", mode: 'copy', pattern: "*.ome.tiff"
