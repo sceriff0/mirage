@@ -7,11 +7,12 @@ using overlapping crops processed in parallel on both CPU and GPU.
 
 import argparse
 import logging
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -28,6 +29,103 @@ except ImportError as e:
     _gpu_import_error = str(e)
 
 logger = logging.getLogger(__name__)
+
+
+def get_channel_names(filename: str) -> List[str]:
+    """Parse channel names from filename.
+
+    Expected format: PatientID_DAPI_Marker1_Marker2_corrected.ome.tif
+
+    Parameters:
+        filename (str): Base filename (not full path)
+
+    Returns:
+        list of str: Channel names extracted from filename (excludes Patient ID)
+    """
+    base = os.path.basename(filename)
+    name_part = base.split('_corrected')[0]  # Remove suffix
+    parts = name_part.split('_')
+    channels = parts[1:]  # Exclude Patient ID
+    return channels
+
+
+def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarray:
+    """Auto brightness/contrast similar to ImageJ's 'Auto'.
+
+    Parameters:
+        img (ndarray): Input image
+        low_p (float): Lower percentile for scaling
+        high_p (float): Upper percentile for scaling
+
+    Returns:
+        ndarray: Scaled uint8 image
+    """
+    lo = np.percentile(img, low_p)
+    hi = np.percentile(img, high_p)
+    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
+    return (img * 255).astype(np.uint8)
+
+
+def create_qc_rgb_composite(
+    reference_path: Path,
+    registered_path: Path,
+    output_path: Path,
+) -> None:
+    """Create QC RGB composite for visual inspection of registration quality.
+
+    RGB channels:
+        - RED: registered DAPI
+        - GREEN: reference DAPI
+        - BLUE: zeros
+
+    Good alignment appears yellow (red + green), misalignment shows red/green artifacts.
+
+    Parameters:
+        reference_path (Path): Path to reference image
+        registered_path (Path): Path to registered image
+        output_path (Path): Path to save QC composite
+    """
+    logger.info(f"Creating QC composite: {output_path.name}")
+
+    # Load images
+    ref_img = tifffile.imread(str(reference_path))
+    reg_img = tifffile.imread(str(registered_path))
+
+    # Ensure (C, H, W) format
+    if ref_img.ndim == 2:
+        ref_img = ref_img[np.newaxis, ...]
+    if reg_img.ndim == 2:
+        reg_img = reg_img[np.newaxis, ...]
+
+    # Get channel names to find DAPI
+    ref_channels = get_channel_names(reference_path.name)
+    reg_channels = get_channel_names(registered_path.name)
+
+    # Find DAPI channel indices
+    ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
+    reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
+
+    logger.info(f"  Reference DAPI channel: {ref_dapi_idx} ({ref_channels[ref_dapi_idx] if ref_dapi_idx < len(ref_channels) else 'channel_0'})")
+    logger.info(f"  Registered DAPI channel: {reg_dapi_idx} ({reg_channels[reg_dapi_idx] if reg_dapi_idx < len(reg_channels) else 'channel_0'})")
+
+    # Extract DAPI channels
+    ref_dapi = ref_img[ref_dapi_idx]
+    reg_dapi = reg_img[reg_dapi_idx]
+
+    # Autoscale
+    ref_dapi_scaled = autoscale(ref_dapi)
+    reg_dapi_scaled = autoscale(reg_dapi)
+
+    # Create RGB composite (R=registered, G=reference, B=0)
+    h, w = reg_dapi_scaled.shape
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb[:, :, 0] = reg_dapi_scaled  # Red = registered
+    rgb[:, :, 1] = ref_dapi_scaled  # Green = reference
+    rgb[:, :, 2] = 0                # Blue = zeros
+
+    # Save with JPEG compression for smaller file size
+    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression='jpeg')
+    logger.info(f"  Saved QC composite: {output_path}")
 
 
 def apply_mapping(mapping, x, method="dipy"):
@@ -404,6 +502,7 @@ def register_image_pair(
     overlap: int = 200,
     n_features: int = 2000,
     n_workers: int = 4,
+    qc_dir: Optional[Path] = None,
 ):
     """
     Register a moving image to a reference image using GPU-based registration.
@@ -416,6 +515,7 @@ def register_image_pair(
         overlap (int): Overlap between crops
         n_features (int): Number of features for affine registration
         n_workers (int): Number of parallel workers for CPU operations
+        qc_dir (Path, optional): Directory to save QC outputs
     """
     # Check GPU availability
     if not GPU_AVAILABLE:
@@ -507,6 +607,27 @@ def register_image_pair(
     logger.info(f"Saving registered image to: {output_path}")
     tifffile.imwrite(str(output_path), registered_img, photometric="minisblack", compression="zlib")
 
+    # Generate QC outputs if requested
+    if qc_dir:
+        logger.info(f"\nGenerating QC outputs to: {qc_dir}")
+        qc_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create QC RGB composite for visual inspection
+        qc_filename = f"{moving_path.stem}_QC_RGB.tif"
+        qc_output_path = qc_dir / qc_filename
+
+        try:
+            create_qc_rgb_composite(
+                reference_path=reference_path,
+                registered_path=Path(output_path),
+                output_path=qc_output_path,
+            )
+            logger.info(f"QC composite saved successfully")
+        except Exception as e:
+            logger.warning(f"Failed to generate QC composite: {e}")
+            import traceback
+            traceback.print_exc()
+
     logger.info("Registration complete")
 
 
@@ -515,6 +636,7 @@ def main():
     parser.add_argument("--reference", type=str, required=True, help="Path to reference image")
     parser.add_argument("--moving", type=str, required=True, help="Path to moving image to register")
     parser.add_argument("--output", type=str, required=True, help="Path to save registered image")
+    parser.add_argument("--qc-dir", type=str, default=None, help="Directory to save QC outputs (optional)")
     parser.add_argument("--crop-size", type=int, default=2000, help="Size of crops for processing")
     parser.add_argument("--overlap", type=int, default=200, help="Overlap between crops in pixels")
     parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
@@ -538,6 +660,7 @@ def main():
             overlap=args.overlap,
             n_features=args.n_features,
             n_workers=args.n_workers,
+            qc_dir=Path(args.qc_dir) if args.qc_dir else None,
         )
         return 0
     except Exception as e:
