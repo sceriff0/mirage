@@ -40,16 +40,19 @@ workflow {
     // 4. MODULE: Register using either classic or GPU method
     if (params.registration_method == 'gpu') {
         // GPU registration: first file is reference, register all others to it
-        ch_reference = PREPROCESS.out.preprocessed.first()
-        ch_moving = PREPROCESS.out.preprocessed.drop(1)
-
-        // Create pairs of (reference, moving) for each moving image
-        ch_pairs = ch_moving.combine(ch_reference)
-                            .map { moving, ref -> tuple(ref, moving) }
+        // Collect all files and create (reference, moving) pairs
+        ch_pairs = PREPROCESS.out.preprocessed
+            .collect()
+            .flatMap { files ->
+                def reference = files[0]
+                def moving_files = files.drop(1)
+                return moving_files.collect { m -> tuple(reference, m) }
+            }
 
         GPU_REGISTER ( ch_pairs )
 
         // Combine reference (unchanged) with registered moving images
+        ch_reference = PREPROCESS.out.preprocessed.first()
         ch_registered = ch_reference.concat(GPU_REGISTER.out.registered)
 
     } else {
