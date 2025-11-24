@@ -119,7 +119,7 @@ def apply_basic_correction(
         image, fov_size, overlap=0
     )
 
-    basic = BaSiC(get_darkfield=get_darkfield, **basic_kwargs)
+    basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
 
     if autotune:
         basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)

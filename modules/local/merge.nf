@@ -12,7 +12,7 @@ nextflow.enable.dsl = 2
 process MERGE {
     tag "merge_registered"
     label 'process_medium'
-    container "${params.container.registration}"
+    container "${params.container.merge}"
 
     publishDir "${params.outdir}/merged", mode: 'copy'
 

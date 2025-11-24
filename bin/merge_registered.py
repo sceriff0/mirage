@@ -122,7 +122,7 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         reference_markers: List of markers that identify the reference slide (e.g., ['DAPI', 'SMA'])
     """
     if reference_markers is None:
-        reference_markers = ['DAPI']  # Default
+        reference_markers = ['DAPI', 'SMA']  # Default
 
     log(f"Merging slides from: {input_dir}")
     log(f"Output: {output_path}")

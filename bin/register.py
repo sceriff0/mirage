@@ -20,6 +20,7 @@ import numpy as np
 from datetime import datetime
 from typing import Optional
 import tifffile
+import pyvips
 
 from _common import ensure_dir
 
@@ -196,7 +197,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
         out_path = os.path.join(qc_dir, out_filename)
         log_progress(f"  - Saving to: {out_path}")
-        tifffile.imwrite(out_path, rgb, photometric='rgb')
+        tifffile.imwrite(out_path, rgb, photometric='rgb', compression='jpeg')
         log_progress(f"  ✓ Saved")
         del rgb
 
@@ -525,7 +526,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
 
         # Note: tile_wh must be integer (single value), not tuple
-        import pyvips
 
         slide_obj.warp_and_save_slide(
             src_f=src_path,
@@ -534,8 +534,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
             non_rigid=True,       # Apply non-rigid transforms
             crop=True,            # Crop to reference overlap
             interp_method="bicubic",
-            tile_wh=2048,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
-            compression=pyvips.enums.ForeignTiffCompression.DEFLATE,  
+            tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
         )
 
         warped_count += 1
