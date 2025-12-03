@@ -5,8 +5,8 @@ process GPU_REGISTER {
     label 'gpu'
     container "${params.container.register_gpu}"
 
-    publishDir "${params.outdir}/registered", mode: 'copy', pattern: "*.ome.tiff"
-    publishDir "${params.outdir}/registered", mode: 'copy', pattern: "qc/*"
+    publishDir "${params.outdir}/${params.id}/gpu/registered", mode: 'copy', pattern: "*.ome.tiff"
+    publishDir "${params.outdir}/${params.id}/gpu/registered_qc", mode: 'copy', pattern: "qc/*"
 
     input:
     tuple path(reference), path(moving)

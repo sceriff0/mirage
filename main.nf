@@ -14,6 +14,8 @@ include { GPU_REGISTER } from './modules/local/register_gpu'
 include { MERGE        } from './modules/local/merge'
 include { SEGMENT      } from './modules/local/segment'
 include { CLASSIFY     } from './modules/local/classify'
+include { QUANTIFY     } from './modules/local/quantify'
+include { PHENOTYPE    } from './modules/local/phenotype'
 
 
 /*
@@ -72,9 +74,21 @@ workflow {
     // 6. MODULE: Segment the merged WSI
     SEGMENT ( MERGE.out.merged )
 
-    // 7. MODULE: Classify cell types using deepcell-types
+    // 7. MODULE: Cell classification using DeepCellTypes
     CLASSIFY (
         MERGE.out.merged,
+        SEGMENT.out.cell_mask
+    )
+    
+    // 8. MODULE: Quantify marker expression per cell
+    QUANTIFY (
+        MERGE.out.merged,
+        SEGMENT.out.cell_mask
+    )
+
+    // 9. MODULE: Phenotype cells based on predefined rules
+    PHENOTYPE (
+        QUANTIFY.out.csv,
         SEGMENT.out.cell_mask
     )
 }

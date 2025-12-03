@@ -1,7 +1,11 @@
+nextflow.enable.dsl = 2
+
 process QUANTIFY {
     tag "quantify"
     label "${params.quant_gpu ? 'gpu' : 'process_high'}"
     container "${params.container.quantification}"
+
+    publishDir "${params.outdir}/${params.id}/quantification", mode: 'copy'
 
     input:
     path merged_ome
@@ -14,7 +18,7 @@ process QUANTIFY {
     script:
     """
     mkdir -p quant
-    quantify.py \\
+    quantify_gpu.py \\
         --mode ${params.quant_gpu ? 'gpu' : 'cpu'} \\
         --mask_file ${seg_mask} \\
         --indir \$(dirname ${merged_ome}) \\

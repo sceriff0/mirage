@@ -5,7 +5,7 @@ process CLASSIFY {
     label "${params.classify_gpu ? 'gpu' : 'process_high'}"
     container "${params.container.classify}"
 
-    publishDir "${params.outdir}/classified", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/classified", mode: 'copy'
 
     input:
     path merged_image

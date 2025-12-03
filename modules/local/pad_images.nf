@@ -5,7 +5,7 @@ process PAD_IMAGES {
     label 'process_medium'
     container "${params.container.preprocess}"
 
-    publishDir "${params.outdir}/padded", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/padded", mode: 'copy'
 
     input:
     path preprocessed_files
