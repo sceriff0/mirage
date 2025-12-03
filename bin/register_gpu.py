@@ -449,13 +449,22 @@ def register_image_pair(
     if mov_img.ndim == 2:
         mov_img = mov_img[np.newaxis, ...]
 
-    if ref_img.shape != mov_img.shape:
+    # Validate spatial dimensions match (channels may differ)
+    if ref_img.shape[1:] != mov_img.shape[1:]:
         raise ValueError(
-            f"Image dimension mismatch: reference {ref_img.shape} != moving {mov_img.shape}. "
-            f"Images should be pre-padded to the same dimensions by PAD_IMAGES process."
+            f"Spatial dimension mismatch: reference {ref_img.shape[1:]} != moving {mov_img.shape[1:]}. "
+            f"Images should be pre-padded to the same spatial dimensions by PAD_IMAGES process."
         )
 
-    logger.info(f"Images have matching dimensions: {ref_img.shape}")
+    # Warn if channel counts differ
+    if ref_img.shape[0] != mov_img.shape[0]:
+        logger.warning(
+            f"Channel count mismatch: reference has {ref_img.shape[0]} channels, "
+            f"moving has {mov_img.shape[0]} channels. Registration will use first channel only."
+        )
+
+    logger.info(f"Reference shape: {ref_img.shape}, Moving shape: {mov_img.shape}")
+    logger.info(f"Spatial dimensions match: {ref_img.shape[1:]} (H, W)")
 
     logger.info(f"Extracting crops with size={crop_size}, overlap={overlap}")
     logger.info(f"Using {n_workers} workers for parallel cropping")

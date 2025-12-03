@@ -18,25 +18,29 @@ import tifffile
 logger = logging.getLogger(__name__)
 
 
-def find_max_dimensions(image_paths: List[Path]) -> Tuple[int, int, int]:
-    """Find maximum dimensions across all images.
+def find_max_dimensions(image_paths: List[Path]) -> Tuple[int, int]:
+    """Find maximum spatial dimensions across all images.
+
+    Note: Does NOT pad channels - each image keeps its own channel count.
+    Only height and width are padded to match maximum dimensions.
 
     Parameters:
         image_paths (list): List of paths to OME-TIFF images
 
     Returns:
-        tuple: (max_channels, max_height, max_width)
+        tuple: (max_height, max_width)
     """
-    max_c, max_h, max_w = 0, 0, 0
+    max_h, max_w = 0, 0
 
-    logger.info(f"Scanning {len(image_paths)} images to find maximum dimensions...")
+    logger.info(f"Scanning {len(image_paths)} images to find maximum spatial dimensions...")
 
     for img_path in image_paths:
         img = tifffile.imread(str(img_path))
 
         # Ensure (C, H, W) format
         if img.ndim == 2:
-            c, h, w = 1, img.shape[0], img.shape[1]
+            h, w = img.shape[0], img.shape[1]
+            c = 1
         elif img.ndim == 3:
             c, h, w = img.shape
         else:
@@ -44,46 +48,48 @@ def find_max_dimensions(image_paths: List[Path]) -> Tuple[int, int, int]:
 
         logger.info(f"  {img_path.name}: ({c}, {h}, {w})")
 
-        max_c = max(max_c, c)
         max_h = max(max_h, h)
         max_w = max(max_w, w)
 
-    logger.info(f"\nMaximum dimensions found: ({max_c}, {max_h}, {max_w})")
-    return max_c, max_h, max_w
+    logger.info(f"\nMaximum spatial dimensions found: H={max_h}, W={max_w}")
+    logger.info("Note: Channel counts will NOT be padded - each image keeps its own channels")
+    return max_h, max_w
 
 
 def pad_image_to_shape(
     img: np.ndarray,
-    target_shape: Tuple[int, int, int],
+    target_h: int,
+    target_w: int,
     mode: str = 'constant'
 ) -> np.ndarray:
-    """Pad image to target shape using symmetric padding.
+    """Pad image to target spatial dimensions using symmetric padding.
+
+    Note: Only pads height and width - channel count is preserved.
 
     Parameters:
         img (ndarray): Input image in (C, H, W) format
-        target_shape (tuple): Target (C, H, W) shape
+        target_h (int): Target height
+        target_w (int): Target width
         mode (str): Padding mode ('constant', 'edge', 'reflect', 'symmetric')
 
     Returns:
         ndarray: Padded image
     """
     c_img, h_img, w_img = img.shape
-    c_target, h_target, w_target = target_shape
-
-    # Validate channels match
-    if c_img != c_target:
-        raise ValueError(
-            f"Channel mismatch: image has {c_img} channels, "
-            f"target has {c_target} channels"
-        )
 
     # Calculate padding
-    pad_h = h_target - h_img
-    pad_w = w_target - w_img
+    pad_h = target_h - h_img
+    pad_w = target_w - w_img
 
     # No padding needed
     if pad_h == 0 and pad_w == 0:
         return img
+
+    # Check if image is already larger
+    if pad_h < 0 or pad_w < 0:
+        raise ValueError(
+            f"Image ({h_img}x{w_img}) is larger than target ({target_h}x{target_w})"
+        )
 
     # Symmetric padding (center the image)
     pad_h_before = pad_h // 2
@@ -95,9 +101,9 @@ def pad_image_to_shape(
 
     # Pad specification: ((C_before, C_after), (H_before, H_after), (W_before, W_after))
     pad_width = (
-        (0, 0),
-        (pad_h_before, pad_h_after),
-        (pad_w_before, pad_w_after),
+        (0, 0),                       # No channel padding
+        (pad_h_before, pad_h_after),  # Height padding
+        (pad_w_before, pad_w_after),  # Width padding
     )
 
     # Apply padding
@@ -114,22 +120,23 @@ def pad_images(
     output_dir: Path,
     pad_mode: str = 'constant'
 ) -> None:
-    """Pad all images to common maximum dimensions.
+    """Pad all images to common maximum spatial dimensions.
+
+    Note: Only pads height and width - channel counts are preserved.
 
     Parameters:
         input_paths (list): List of input image paths
         output_dir (Path): Output directory for padded images
         pad_mode (str): Padding mode
     """
-    # Find maximum dimensions
-    max_c, max_h, max_w = find_max_dimensions(input_paths)
-    target_shape = (max_c, max_h, max_w)
+    # Find maximum spatial dimensions
+    max_h, max_w = find_max_dimensions(input_paths)
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Pad each image
-    logger.info(f"\nPadding all images to ({max_c}, {max_h}, {max_w})...")
+    logger.info(f"\nPadding all images to H={max_h}, W={max_w}...")
     logger.info(f"Padding mode: {pad_mode}\n")
 
     for idx, img_path in enumerate(input_paths, 1):
@@ -145,12 +152,20 @@ def pad_images(
 
         logger.info(f"  Original shape: {img.shape}")
 
-        # Pad to target dimensions
-        padded_img = pad_image_to_shape(img, target_shape, mode=pad_mode)
+        # Pad to target spatial dimensions (channels preserved)
+        padded_img = pad_image_to_shape(img, max_h, max_w, mode=pad_mode)
         logger.info(f"  Padded shape: {padded_img.shape}")
 
         # Preserve original dtype
         padded_img = padded_img.astype(original_dtype)
+
+        # Calculate file size to determine if BigTIFF is needed
+        # BigTIFF needed if file will exceed 4GB
+        estimated_size = padded_img.nbytes
+        use_bigtiff = estimated_size > 2**32  # 4GB limit
+
+        if use_bigtiff:
+            logger.info(f"  Using BigTIFF format (estimated size: {estimated_size / (1024**3):.2f} GB)")
 
         # Save padded image
         output_path = output_dir / img_path.name
@@ -159,7 +174,8 @@ def pad_images(
             str(output_path),
             padded_img,
             photometric='minisblack',
-            compression='zlib'
+            compression='zlib',
+            bigtiff=use_bigtiff  # Enable BigTIFF for large files
         )
         logger.info("  ✓ Saved\n")
 
