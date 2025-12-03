@@ -3,7 +3,7 @@ process SEGMENT {
     label "${params.seg_gpu ? 'gpu' : 'process_high'}"
     container "${params.container.segmentation}"
 
-    publishDir "${params.outdir}/${params.id}/segmentation", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/segmentation", mode: 'copy'
 
     input:
     path merged_file

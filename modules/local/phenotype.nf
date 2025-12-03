@@ -3,7 +3,7 @@ process PHENOTYPE {
     label 'process_medium'
     container "${params.container.phenotyping}"
 
-    publishDir "${params.outdir}/${params.id}/phenotype", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/phenotype", mode: 'copy'
 
     input:
     path quant_csv

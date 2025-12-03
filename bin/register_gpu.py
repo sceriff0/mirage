@@ -223,7 +223,7 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
 
     # Define the metric and create the Symmetric Diffeomorphic Registration object
     metric = CCMetric(2, sigma_diff=sigma_diff, radius=radius)
-    sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=1e-12, inv_tol=1e-12)
+    sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=1e-16, inv_tol=1e-16)
 
     mapping = sdr.optimize(y_gpu, x_gpu)
     return mapping

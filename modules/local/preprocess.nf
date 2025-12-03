@@ -5,7 +5,7 @@ process PREPROCESS {
     label 'process_medium'
     container "${params.container.preprocess}"
 
-    publishDir "${params.outdir}/${params.id}/preprocessed", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/preprocessed", mode: 'copy'
 
     input:
     path ome_tiff

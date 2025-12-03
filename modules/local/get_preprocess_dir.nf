@@ -7,7 +7,7 @@ process GET_PREPROCESS_DIR {
     val files 
 
     output:
-    path "${params.outdir}/preprocessed", emit: preprocess_dir
+    path "${params.outdir}/${params.id}/${params.registration_method}/preprocessed", emit: preprocess_dir
 
     script:
     """

@@ -3,7 +3,7 @@ process CONVERT_ND2 {
     label 'process_medium'
     container "${params.container.preprocess}"
 
-    publishDir "${params.outdir}/converted", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/converted", mode: 'copy'
 
     input:
     path nd2_file

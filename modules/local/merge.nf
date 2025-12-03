@@ -14,7 +14,7 @@ process MERGE {
     label 'process_medium'
     container "${params.container.merge}"
 
-    publishDir "${params.outdir}/${params.id}/merged", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/merged", mode: 'copy'
 
     input:
     path registered_slides

@@ -5,7 +5,7 @@ process QUANTIFY {
     label "${params.quant_gpu ? 'gpu' : 'process_high'}"
     container "${params.container.quantification}"
 
-    publishDir "${params.outdir}/${params.id}/quantification", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification", mode: 'copy'
 
     input:
     path merged_ome

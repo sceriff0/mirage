@@ -5,7 +5,7 @@ process REGISTER {
     label 'process_high'
     container "${params.container.merge}"
 
-    publishDir "${params.outdir}/${params.id}/valis/registered", mode: 'copy'
+    publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy'
 
     input:
     path preproc_files
