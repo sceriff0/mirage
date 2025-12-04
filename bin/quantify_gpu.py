@@ -30,6 +30,8 @@ except ImportError:
     cskimage = None
     gpu_regionprops_table = None
 
+os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
+
 logger = logging.getLogger(__name__)
 
 
