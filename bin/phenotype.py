@@ -114,6 +114,14 @@ def run_phenotyping_pipeline(
     logger.info(f"Markers: {markers}")
     logger.info(f"Number of cells: {len(cell_df)}")
 
+    # Convert percentile parameters if they're passed as percentages (>1) instead of decimals
+    if quality_percentile > 1:
+        logger.info(f"Converting quality_percentile from {quality_percentile}% to {quality_percentile/100}")
+        quality_percentile = quality_percentile / 100.0
+    if noise_percentile > 1:
+        logger.info(f"Converting noise_percentile from {noise_percentile}% to {noise_percentile/100}")
+        noise_percentile = noise_percentile / 100.0
+
     # Reorder columns (keep available ones)
     base_cols = ['y', 'x', 'eccentricity', 'perimeter', 'convex_area', 'area',
                  'axis_major_length', 'axis_minor_length', 'label']
