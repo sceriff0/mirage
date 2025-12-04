@@ -16,6 +16,7 @@ include { SEGMENT      } from './modules/local/segment'
 include { CLASSIFY     } from './modules/local/classify'
 include { QUANTIFY     } from './modules/local/quantify'
 include { PHENOTYPE    } from './modules/local/phenotype'
+include { SAVE_RESULTS } from './modules/local/save_results'
 
 
 /*
@@ -110,5 +111,26 @@ workflow {
     PHENOTYPE (
         QUANTIFY.out.csv,
         SEGMENT.out.cell_mask
+    )
+
+    // 10. MODULE: Save all results to final output directory
+    // Collect all outputs to ensure all processes complete before saving
+    ch_all_outputs = channel.empty()
+        .mix(
+            MERGE.out.merged,
+            SEGMENT.out.cell_mask,
+            CLASSIFY.out.csv,
+            QUANTIFY.out.csv,
+            PHENOTYPE.out.csv
+        )
+        .collect()
+        .map { _files ->
+            // All files are published under the same parent directory
+            return file("${params.outdir}/${params.id}/")
+        }
+
+    SAVE_RESULTS (
+        ch_all_outputs,
+        params.savedir
     )
 }
