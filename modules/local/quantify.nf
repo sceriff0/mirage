@@ -26,6 +26,5 @@ process QUANTIFY {
         --min_area ${params.quant_min_area} \\
         --log_file quant/quant.log \\
         --verbose \\
-        || true
     """
 }

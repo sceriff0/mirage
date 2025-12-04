@@ -25,6 +25,5 @@ process PHENOTYPE {
         ${cutoffs_arg} \\
         --quality_percentile ${params.pheno_quality_percentile} \\
         --noise_percentile ${params.pheno_noise_percentile} \\
-        || true
     """
 }
