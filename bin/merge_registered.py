@@ -130,8 +130,8 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
 
     # Find all registered slides
     slide_files = sorted(
-        list(Path(input_dir).glob("*_registered.ome.tif")) +
-        list(Path(input_dir).glob("*_registered.ome.tiff"))
+        list(Path(input_dir).glob("*.ome.tif")) +
+        list(Path(input_dir).glob("*.ome.tiff"))
     )
 
     if not slide_files:
