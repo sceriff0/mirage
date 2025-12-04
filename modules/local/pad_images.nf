@@ -11,7 +11,7 @@ process PAD_IMAGES {
     tuple path(preprocessed_file), val(max_height), val(max_width)
 
     output:
-    path "*.ome.tif*", emit: padded
+    path "${preprocessed_file.name}", emit: padded
 
     script:
     def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
