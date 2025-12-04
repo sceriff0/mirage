@@ -10,7 +10,8 @@ process PHENOTYPE {
     path seg_mask
 
     output:
-    path "pheno/merged_pheno.csv", emit: csv
+    path "pheno/phenotypes_data.csv", emit: csv
+    path "pheno/phenotypes_mask.tiff", emit: mask
 
     script:
     def markers_arg = params.pheno_markers ? "--markers ${params.pheno_markers.join(' ')}" : ''
