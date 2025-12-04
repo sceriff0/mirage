@@ -457,13 +457,16 @@ def register_image_pair(
 
     # Fallback: extract from filename
     if not channel_names or len(channel_names) != out.shape[0]:
-        from pathlib import Path
         filename = Path(moving_path).stem
-        # Extract markers from filename (e.g., "B19-10215_DAPI_SMA_panck_corrected")
-        name_part = filename.replace('_corrected', '').replace('_preprocessed', '')
+        # Extract markers from filename (e.g., "B19-10215_DAPI_SMA_panck_corrected" or "01B19-10215_DAPI_FOXP3_VIMENTIN_corrected")
+        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '')
         parts = name_part.split('_')
-        # Skip patient ID (first part with dash and numbers)
-        markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
+
+        # Skip first part if it looks like a patient/sample ID (contains dash and numbers)
+        if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
+            markers = parts[1:]  # Skip first part (patient ID)
+        else:
+            markers = parts  # No obvious patient ID, use all parts
 
         if len(markers) == out.shape[0]:
             channel_names = markers
