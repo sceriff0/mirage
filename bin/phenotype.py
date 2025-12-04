@@ -14,6 +14,7 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
+import tifffile
 from scipy.stats import zscore
 from numpy.typing import NDArray
 
