@@ -444,6 +444,17 @@ def main():
     )
 
     logger.info(f"Preprocessing completed successfully. Output: {output_path}")
+
+    # Write dimensions to file for downstream processes
+    import tifffile
+    img = tifffile.imread(output_path)
+    shape = img.shape if img.ndim == 3 else (1, img.shape[0], img.shape[1])
+    dims_filename = f"{base}_dims.txt"
+    dims_path = os.path.join(args.output_dir, dims_filename)
+    with open(dims_path, 'w') as f:
+        f.write(f"{shape[0]} {shape[1]} {shape[2]}")
+    logger.info(f"Image dimensions saved to: {dims_path} (C={shape[0]}, H={shape[1]}, W={shape[2]})")
+
     return 0
 
 

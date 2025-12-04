@@ -43,12 +43,32 @@ workflow {
     // 4. MODULE: Register using either classic or GPU method
     if (params.registration_method == 'gpu') {
         // GPU registration workflow:
-        // Step 1: Pad all images to common maximum dimensions
-        PAD_IMAGES ( PREPROCESS.out.preprocessed.collect() )
+        // Step 1: Compute max dimensions from all preprocessed images
+        ch_max_dims = PREPROCESS.out.dims
+            .collectFile(name: 'all_dims.txt', newLine: true)
+            .map { file ->
+                def lines = file.readLines()
+                def max_h = 0
+                def max_w = 0
+                lines.each { line ->
+                    def parts = line.split()
+                    def h = parts[1].toInteger()
+                    def w = parts[2].toInteger()
+                    max_h = Math.max(max_h, h)
+                    max_w = Math.max(max_w, w)
+                }
+                return tuple(max_h, max_w)
+            }
 
-        // Step 2: Create (reference, moving) pairs from padded images
+        // Step 2: Pad each image in parallel
+        ch_to_pad = PREPROCESS.out.preprocessed
+            .combine(ch_max_dims)
+            .map { file, dims -> tuple(file, dims[0], dims[1]) }
+
+        PAD_IMAGES ( ch_to_pad )
+
+        // Step 3: Create (reference, moving) pairs from padded images
         ch_pairs = PAD_IMAGES.out.padded
-            .flatten()
             .collect()
             .flatMap { files ->
                 def reference = files[0]
@@ -59,7 +79,7 @@ workflow {
         GPU_REGISTER ( ch_pairs )
 
         // Combine reference (unchanged) with registered moving images
-        ch_reference = PAD_IMAGES.out.padded.flatten().first()
+        ch_reference = PAD_IMAGES.out.padded.first()
         ch_registered = ch_reference.concat(GPU_REGISTER.out.registered)
 
     } else {

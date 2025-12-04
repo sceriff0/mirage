@@ -206,8 +206,16 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     if y.shape != x.shape:
         raise ValueError("Reference image (y) and moving image (x) must have the same shape.")
 
-    y_gpu = cp.asarray(y)
-    x_gpu = cp.asarray(x)
+    # CRITICAL: Ensure contiguous memory layout before GPU transfer
+    # Non-contiguous arrays can cause cudaErrorIllegalAddress
+    y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
+    x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
+
+    y_gpu = cp.asarray(y_contiguous)
+    x_gpu = cp.asarray(x_contiguous)
+
+    # Free CPU copies immediately
+    del y_contiguous, x_contiguous
 
     # Auto-detect crop_size from the input image
     crop_size = y.shape[0]  # Assuming square crops
@@ -507,6 +515,19 @@ def register_image_pair(
     logger.info("STEP B: running GPU diffeomorphic registration sequentially (one crop at a time)...")
     registered_crops = [None] * len(ref_crops)
 
+    # Reset GPU memory pool before starting to ensure clean state
+    try:
+        device = cp.cuda.Device()
+        device.synchronize()
+        mempool = cp.get_default_memory_pool()
+        pinned_mempool = cp.get_default_pinned_memory_pool()
+        mempool.free_all_blocks()
+        pinned_mempool.free_all_blocks()
+        logger.info("Cleared GPU memory pools before processing")
+        logger.info(f"GPU memory: {mempool.used_bytes() / 1e9:.2f} GB used, {mempool.total_bytes() / 1e9:.2f} GB total")
+    except Exception as e:
+        logger.warning(f"Could not clear GPU memory pool: {e}")
+
     for i, cpu_res in enumerate(cpu_stage_results):
         crop_idx = cpu_res["crop_idx"]
         y, x, h, w = cpu_res["y"], cpu_res["x"], cpu_res["h"], cpu_res["w"]
@@ -530,30 +551,42 @@ def register_image_pair(
             mov_affine = cpu_res["mov_affine"]
             mov_affine_2d = cpu_res["mov_affine_2d"]
 
-            # Move small 2D arrays to GPU
-            ref_gpu = cp.asarray(ref_2d)
-            mov_gpu = cp.asarray(mov_affine_2d)
-
-            # Compute mapping on GPU (cudipy)
-            diffeo_mapping = compute_diffeomorphic_mapping_dipy(ref_gpu, mov_gpu)
-
-            # Make sure kernel finished
+            # Aggressive pre-transfer cleanup
             try:
                 cp.cuda.get_device().synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+
+            # Compute mapping on GPU (cudipy)
+            # Pass CPU arrays directly - compute_diffeomorphic_mapping_dipy handles GPU transfer
+            diffeo_mapping = compute_diffeomorphic_mapping_dipy(ref_2d, mov_affine_2d)
+
+            # Aggressive post-computation cleanup
+            try:
+                cp.cuda.get_device().synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
             except Exception:
                 pass
 
             # Apply diffeo to all channels (mapping.transform may return cupy or numpy)
             registered_data = np.zeros_like(mov_affine, dtype=np.float32)
             for c in range(mov_affine.shape[0]):
-                registered_data[c] = apply_mapping(diffeo_mapping, mov_affine[c], method="dipy")
+                # Ensure channel slice is contiguous before GPU transform
+                channel_data = np.ascontiguousarray(mov_affine[c], dtype=np.float32)
+                result = apply_mapping(diffeo_mapping, channel_data, method="dipy")
+                registered_data[c] = result
+                # Free intermediate arrays
+                del channel_data
+                if hasattr(result, 'get'):
+                    del result
 
-            # Sync and aggressively free memory pool to avoid fragmentation
+            # Delete mapping object to free GPU memory
+            del diffeo_mapping
+
+            # Aggressive post-processing cleanup
             try:
                 cp.cuda.get_device().synchronize()
-            except Exception:
-                pass
-            try:
                 cp.get_default_memory_pool().free_all_blocks()
             except Exception:
                 pass
@@ -569,12 +602,46 @@ def register_image_pair(
             }
             logger.info(f"GPU stage crop {crop_idx+1}/{len(ref_crops)} at ({y},{x}): success")
 
+            # Every 10 crops, do extra aggressive cleanup and report memory
+            if (crop_idx + 1) % 10 == 0:
+                try:
+                    device.synchronize()
+                    mempool.free_all_blocks()
+                    pinned_mempool.free_all_blocks()
+                    logger.info(f"[Crop {crop_idx+1}] GPU memory: {mempool.used_bytes() / 1e9:.2f} GB used, {mempool.total_bytes() / 1e9:.2f} GB total")
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.error(f"Failed to register crop {crop_idx}: {e}")
             logger.error(traceback.format_exc())
+
+            # Aggressive error cleanup
+            try:
+                cp.cuda.get_device().synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+
+            # Check if this is a recoverable GPU error
+            error_str = str(e).lower()
+            if 'cuda' in error_str and ('memory' in error_str or 'illegal' in error_str):
+                logger.warning(f"GPU memory error detected - attempting GPU reset")
+                try:
+                    # Try to reset GPU context
+                    cp.cuda.Device().synchronize()
+                    cp.get_default_memory_pool().free_all_blocks()
+
+                    # If we've processed more than 50% of crops, continue
+                    if crop_idx > len(ref_crops) // 2:
+                        logger.info("Processed majority of crops - continuing with remaining")
+
+                except Exception as reset_err:
+                    logger.error(f"GPU reset failed: {reset_err}")
+
             # fallback to CPU-affined data
             registered_crops[crop_idx] = {
-                "data": mov_affine,
+                "data": cpu_res["mov_affine"],
                 "y": y,
                 "x": x,
                 "h": h,
@@ -583,14 +650,6 @@ def register_image_pair(
                 "crop_idx": crop_idx,
                 "error": str(e),
             }
-            try:
-                cp.cuda.get_device().synchronize()
-            except Exception:
-                pass
-            try:
-                cp.get_default_memory_pool().free_all_blocks()
-            except Exception:
-                pass
 
     # Remove status fields before merging
     for crop in registered_crops:

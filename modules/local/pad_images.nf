@@ -1,26 +1,26 @@
 nextflow.enable.dsl = 2
 
 process PAD_IMAGES {
-    tag "pad_all_images"
+    tag "${preprocessed_file.simpleName}"
     label 'process_medium'
     container "${params.container.preprocess}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/padded", mode: 'copy'
 
     input:
-    path preprocessed_files
+    tuple path(preprocessed_file), val(max_height), val(max_width)
 
     output:
-    path "padded/*.ome.tif*", emit: padded
+    path "*.ome.tif*", emit: padded
 
     script:
     def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
     """
-    mkdir -p padded
-
-    pad_images.py \\
-        --input ${preprocessed_files} \\
-        --output-dir padded \\
+    pad_image.py \\
+        --input ${preprocessed_file} \\
+        --output ${preprocessed_file.name} \\
+        --target-height ${max_height} \\
+        --target-width ${max_width} \\
         --pad-mode ${pad_mode}
     """
 }

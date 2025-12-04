@@ -12,6 +12,7 @@ process PREPROCESS {
 
     output:
     path "${ome_tiff.simpleName}_corrected.ome.tif", emit: preprocessed
+    path "${ome_tiff.simpleName}_dims.txt", emit: dims
 
     script:
     def skip_dapi_flag = params.preproc_skip_dapi ? '--skip_dapi' : ''
