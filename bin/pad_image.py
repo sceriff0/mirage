@@ -93,6 +93,34 @@ def pad_single_image(
     """
     logger.info(f"Processing: {input_path.name}")
 
+    # Extract channel names from input file before loading
+    channel_names = []
+    try:
+        with tifffile.TiffFile(str(input_path)) as tif:
+            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(tif.ome_metadata)
+                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                channels = root.findall('.//ome:Channel', ns)
+                channel_names = [ch.get('Name', '') for ch in channels]
+                channel_names = [name for name in channel_names if name]
+                if channel_names:
+                    logger.info(f"  Extracted {len(channel_names)} channel names from OME metadata")
+    except Exception as e:
+        logger.warning(f"  Could not extract channel names from metadata: {e}")
+
+    # Fallback: extract from filename
+    if not channel_names:
+        filename = input_path.stem
+        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '')
+        parts = name_part.split('_')
+        # Skip first part if it looks like a patient/sample ID
+        if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
+            channel_names = parts[1:]
+        else:
+            channel_names = parts
+        logger.info(f"  Inferred channel names from filename: {channel_names}")
+
     # Load image
     img = tifffile.imread(str(input_path))
     original_dtype = img.dtype
@@ -103,6 +131,15 @@ def pad_single_image(
 
     logger.info(f"  Original shape: {img.shape}")
     logger.info(f"  Target dimensions: H={target_h}, W={target_w}")
+
+    # Ensure channel_names matches number of channels
+    num_channels = img.shape[0]
+    if len(channel_names) != num_channels:
+        logger.warning(f"  Channel name count mismatch: {len(channel_names)} names vs {num_channels} channels")
+        if len(channel_names) < num_channels:
+            channel_names.extend([f"channel_{i}" for i in range(len(channel_names), num_channels)])
+        else:
+            channel_names = channel_names[:num_channels]
 
     # Pad to target spatial dimensions (channels preserved)
     padded_img = pad_image_to_shape(img, target_h, target_w, mode=pad_mode)
@@ -118,12 +155,28 @@ def pad_single_image(
     if use_bigtiff:
         logger.info(f"  Using BigTIFF format (estimated size: {estimated_size / (1024**3):.2f} GB)")
 
+    # Generate OME-XML metadata with channel names
+    num_channels, height, width = padded_img.shape
+    ome_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+    <Image ID="Image:0" Name="Padded">
+        <Pixels ID="Pixels:0" Type="{padded_img.dtype.name}"
+                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
+                DimensionOrder="XYCZT"
+                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="µm" PhysicalSizeYUnit="µm">
+            {chr(10).join(f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
+            <TiffData />
+        </Pixels>
+    </Image>
+</OME>'''
+
     # Save padded image without compression (temporary file for GPU registration)
-    logger.info(f"  Saving to: {output_path.name}")
+    logger.info(f"  Saving to: {output_path.name} with channel names: {channel_names}")
     tifffile.imwrite(
         str(output_path),
         padded_img,
-        photometric='minisblack',
+        metadata={'axes': 'CYX'},
+        description=ome_xml,
         compression=None,  # No compression for faster I/O and lower memory
         bigtiff=use_bigtiff
     )

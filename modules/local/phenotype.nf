@@ -1,7 +1,7 @@
 process PHENOTYPE {
     tag "phenotype"
     label 'process_medium'
-    container "${params.container.phenotyping}"
+    // container "${params.container.phenotyping}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/phenotype", mode: 'copy'
 
