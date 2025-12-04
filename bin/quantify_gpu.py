@@ -172,7 +172,8 @@ def gpu_extract_features(
 
 
 def extract_features_gpu(
-    channels_files: List[str],
+    multichannel_image: np.ndarray,
+    channel_names: List[str],
     segmentation_mask: np.ndarray,
     output_file: Optional[str] = None,
     size_cutoff: int = 0,
@@ -183,8 +184,10 @@ def extract_features_gpu(
 
     Parameters
     ----------
-    channels_files : list of str
-        Paths to channel image files.
+    multichannel_image : ndarray
+        Multi-channel image array (C, H, W).
+    channel_names : list of str
+        Names for each channel.
     segmentation_mask : ndarray
         Segmentation mask.
     output_file : str, optional
@@ -204,13 +207,19 @@ def extract_features_gpu(
     segmentation_mask = segmentation_mask.squeeze()
     results_all = []
 
-    for file in channels_files:
-        chan_name = os.path.basename(file).split('.')[0].split('_')[-1]
+    # Ensure multichannel_image is (C, H, W)
+    if multichannel_image.ndim == 2:
+        multichannel_image = multichannel_image[np.newaxis, ...]
+
+    num_channels = multichannel_image.shape[0]
+
+    for i in range(num_channels):
+        chan_name = channel_names[i] if i < len(channel_names) else f"channel_{i}"
 
         if verbose:
-            logger.info(f"Processing channel: {chan_name}")
+            logger.info(f"Processing channel {i+1}/{num_channels}: {chan_name}")
 
-        channel_image, _ = load_image(file)
+        channel_image = multichannel_image[i]
 
         df = gpu_extract_features(
             segmentation_mask,
@@ -226,7 +235,8 @@ def extract_features_gpu(
         # Free memory
         del channel_image
         try:
-            cp.get_default_memory_pool().free_all_blocks()
+            if cp is not None:
+                cp.get_default_memory_pool().free_all_blocks()
         except Exception:
             pass
 
@@ -245,27 +255,27 @@ def extract_features_gpu(
 
 
 def run_marker_quantification(
-    indir: str,
+    merged_image_path: str,
     mask_file: str,
-    outdir: str,
-    patient_id: str,
+    output_file: str,
     size_cutoff: int = 0,
+    mode: str = 'gpu',
     verbose: bool = True
 ) -> pd.DataFrame:
-    """Run GPU-accelerated marker quantification pipeline.
+    """Run marker quantification pipeline.
 
     Parameters
     ----------
-    indir : str
-        Directory containing channel images.
+    merged_image_path : str
+        Path to merged multi-channel OME-TIFF file.
     mask_file : str
-        Path to segmentation mask (.npy).
-    outdir : str
-        Output directory.
-    patient_id : str
-        Patient identifier for output naming.
+        Path to segmentation mask (.npy or .tif/.tiff).
+    output_file : str
+        Path for output CSV file.
     size_cutoff : int, optional
         Minimum cell area.
+    mode : str, optional
+        Processing mode: 'gpu' or 'cpu'.
     verbose : bool, optional
         Enable verbose logging.
 
@@ -274,19 +284,63 @@ def run_marker_quantification(
     DataFrame
         Quantification results.
     """
-    os.makedirs(outdir, exist_ok=True)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
-    output_file = os.path.join(outdir, f"{patient_id}_quantification_gpu.csv")
-    segmentation_mask = np.load(mask_file).squeeze()
+    # Check GPU availability if mode is 'gpu'
+    if mode == 'gpu':
+        if cp is None or gpu_regionprops_table is None:
+            logger.warning("GPU libraries not available, falling back to CPU mode")
+            mode = 'cpu'
 
-    files = [
-        os.path.join(indir, f)
-        for f in os.listdir(indir)
-        if f.endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))
-    ]
+    if mode == 'cpu':
+        raise NotImplementedError("CPU mode not yet implemented - use GPU mode")
 
+    # Load merged multi-channel image
+    if verbose:
+        logger.info(f"Loading merged image: {merged_image_path}")
+
+    multichannel_image, metadata = load_image(merged_image_path)
+
+    # Extract channel names from metadata if available
+    channel_names = []
+    if metadata and 'axes' in metadata:
+        # Try to get channel names from OME metadata
+        try:
+            import tifffile
+            with tifffile.TiffFile(merged_image_path) as tif:
+                if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                    # Parse OME-XML for channel names
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(tif.ome_metadata)
+                    ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                    channels = root.findall('.//ome:Channel', ns)
+                    channel_names = [ch.get('Name', f'channel_{i}') for i, ch in enumerate(channels)]
+        except Exception as e:
+            if verbose:
+                logger.warning(f"Could not extract channel names from metadata: {e}")
+
+    # Fallback to generic names if extraction failed
+    if len(channel_names) != multichannel_image.shape[0]:
+        channel_names = [f"channel_{i}" for i in range(multichannel_image.shape[0])]
+
+    if verbose:
+        logger.info(f"Image shape: {multichannel_image.shape}")
+        logger.info(f"Channel names: {channel_names}")
+
+    # Load segmentation mask - support both .npy and TIFF formats
+    if verbose:
+        logger.info(f"Loading segmentation mask: {mask_file}")
+
+    if mask_file.endswith('.npy'):
+        segmentation_mask = np.load(mask_file).squeeze()
+    else:
+        segmentation_mask, _ = load_image(mask_file)
+        segmentation_mask = segmentation_mask.squeeze()
+
+    # Run quantification
     markers_data = extract_features_gpu(
-        channels_files=files,
+        multichannel_image=multichannel_image,
+        channel_names=channel_names,
         segmentation_mask=segmentation_mask,
         output_file=output_file,
         size_cutoff=size_cutoff,
@@ -303,13 +357,71 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='GPU-accelerated cell quantification'
     )
-    parser.add_argument("--patient_id", required=True, help="Patient ID")
-    parser.add_argument("--indir", required=True, help="Channel images directory")
-    parser.add_argument("--mask_file", required=True, help="Segmentation mask path")
-    parser.add_argument("--outdir", required=True, help="Output directory")
+    parser.add_argument(
+        "--mode",
+        choices=['cpu', 'gpu'],
+        default='gpu',
+        help="Processing mode: gpu or cpu"
+    )
+    parser.add_argument(
+        "--mask_file",
+        required=True,
+        help="Path to segmentation mask (.npy or .tif/.tiff)"
+    )
+    parser.add_argument(
+        "--merged_image",
+        required=True,
+        help="Path to merged multi-channel OME-TIFF file"
+    )
+    parser.add_argument(
+        "--output_file",
+        required=True,
+        help="Output CSV file path"
+    )
+    parser.add_argument(
+        "--min_area",
+        type=int,
+        default=0,
+        help="Minimum cell area in pixels"
+    )
+    parser.add_argument(
+        "--log_file",
+        default=None,
+        help="Log file path (optional)"
+    )
+    parser.add_argument(
+        "--verbose",
+        action='store_true',
+        help="Enable verbose output"
+    )
+
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
-    run_marker_quantification(
-        args.indir, args.mask_file, args.outdir, args.patient_id
+    # Setup logging
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    handlers = [logging.StreamHandler()]
+
+    if args.log_file:
+        os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
+        handlers.append(logging.FileHandler(args.log_file))
+
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=handlers
     )
+
+    # Run quantification
+    try:
+        run_marker_quantification(
+            merged_image_path=args.merged_image,
+            mask_file=args.mask_file,
+            output_file=args.output_file,
+            size_cutoff=args.min_area,
+            mode=args.mode,
+            verbose=args.verbose
+        )
+        logger.info("Quantification completed successfully")
+    except Exception as e:
+        logger.error(f"Quantification failed: {e}")
+        raise

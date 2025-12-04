@@ -21,11 +21,11 @@ process QUANTIFY {
     quantify_gpu.py \\
         --mode ${params.quant_gpu ? 'gpu' : 'cpu'} \\
         --mask_file ${seg_mask} \\
-        --indir \$(dirname ${merged_ome}) \\
-        --outdir quant \\
+        --merged_image ${merged_ome} \\
         --output_file quant/merged_quant.csv \\
         --min_area ${params.quant_min_area} \\
         --log_file quant/quant.log \\
+        --verbose \\
         || true
     """
 }

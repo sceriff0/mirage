@@ -2,7 +2,7 @@ nextflow.enable.dsl = 2
 
 process PAD_IMAGES {
     tag "${preprocessed_file.simpleName}"
-    label 'process_medium'
+    label 'process_high'
     container "${params.container.preprocess}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/padded", mode: 'copy'
