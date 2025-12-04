@@ -301,28 +301,81 @@ def run_marker_quantification(
     if verbose:
         logger.info(f"Loading merged image: {merged_image_path}")
 
-    multichannel_image, metadata = load_image(merged_image_path)
+    multichannel_image, _ = load_image(merged_image_path)
 
-    # Extract channel names from metadata if available
+    # Extract channel names from OME metadata
     channel_names = []
-    if metadata and 'axes' in metadata:
-        # Try to get channel names from OME metadata
+    try:
+        import tifffile
+        import xml.etree.ElementTree as ET
+
+        with tifffile.TiffFile(merged_image_path) as tif:
+            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                # Parse OME-XML for channel names
+                root = ET.fromstring(tif.ome_metadata)
+                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                channels = root.findall('.//ome:Channel', ns)
+                channel_names = [ch.get('Name', '') for ch in channels]
+                # Filter out empty names
+                channel_names = [name for name in channel_names if name]
+
+                if verbose and channel_names:
+                    logger.info(f"Extracted {len(channel_names)} channel names from OME metadata")
+    except Exception as e:
+        if verbose:
+            logger.warning(f"Could not extract channel names from OME metadata: {e}")
+
+    # If metadata extraction failed or returned wrong number of channels, try looking at directory
+    if len(channel_names) != multichannel_image.shape[0]:
+        if verbose:
+            logger.info(f"Metadata gave {len(channel_names)} names but image has {multichannel_image.shape[0]} channels")
+            logger.info(f"Attempting to infer channel names from registered files...")
+
         try:
-            import tifffile
-            with tifffile.TiffFile(merged_image_path) as tif:
-                if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                    # Parse OME-XML for channel names
-                    import xml.etree.ElementTree as ET
-                    root = ET.fromstring(tif.ome_metadata)
-                    ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                    channels = root.findall('.//ome:Channel', ns)
-                    channel_names = [ch.get('Name', f'channel_{i}') for i, ch in enumerate(channels)]
+            from pathlib import Path
+
+            # Look for registered files to infer channel composition
+            parent_dir = Path(merged_image_path).parent
+            search_paths = [
+                parent_dir / '..' / 'registered',
+                parent_dir / '..',
+                parent_dir / '..' / 'gpu' / 'registered',
+            ]
+
+            registered_files = []
+            for search_path in search_paths:
+                if search_path.exists():
+                    registered_files = list(search_path.glob('*registered*.tif*'))
+                    if registered_files:
+                        break
+
+            if registered_files:
+                # Collect all unique markers from all registered files
+                all_markers = set()
+                for reg_file in registered_files:
+                    name_part = reg_file.stem.replace('_registered', '').replace('_corrected', '')
+                    parts = name_part.split('_')
+                    # Filter out patient ID (has dash and numbers)
+                    file_markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
+                    all_markers.update(file_markers)
+
+                # Sort alphabetically for consistent ordering
+                sorted_markers = sorted(list(all_markers))
+
+                if len(sorted_markers) == multichannel_image.shape[0]:
+                    channel_names = sorted_markers
+                    if verbose:
+                        logger.info(f"Inferred channel names from registered files: {channel_names}")
+                elif verbose:
+                    logger.warning(f"Found {len(sorted_markers)} unique markers but image has {multichannel_image.shape[0]} channels")
         except Exception as e:
             if verbose:
-                logger.warning(f"Could not extract channel names from metadata: {e}")
+                logger.warning(f"Could not infer channel names from registered files: {e}")
 
-    # Fallback to generic names if extraction failed
+    # Final fallback to generic names
     if len(channel_names) != multichannel_image.shape[0]:
+        if verbose:
+            logger.warning(f"Using generic channel names (channel_0, channel_1, ...)")
         channel_names = [f"channel_{i}" for i in range(multichannel_image.shape[0])]
 
     if verbose:

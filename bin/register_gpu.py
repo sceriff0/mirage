@@ -441,7 +441,63 @@ def register_image_pair(
         out = final.astype(orig_dtype)
 
     logger.info(f"Saving registered image to: {output_path}")
-    tifffile.imwrite(str(output_path), out, photometric="minisblack", compression="zlib")
+
+    # Extract channel names from moving image to preserve them in output
+    channel_names = []
+    try:
+        with tifffile.TiffFile(str(moving_path)) as tif:
+            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(tif.ome_metadata)
+                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                channels = root.findall('.//ome:Channel', ns)
+                channel_names = [ch.get('Name', f'channel_{i}') for i, ch in enumerate(channels)]
+    except Exception as e:
+        logger.warning(f"Could not extract channel names from metadata: {e}")
+
+    # Fallback: extract from filename
+    if not channel_names or len(channel_names) != out.shape[0]:
+        from pathlib import Path
+        filename = Path(moving_path).stem
+        # Extract markers from filename (e.g., "B19-10215_DAPI_SMA_panck_corrected")
+        name_part = filename.replace('_corrected', '').replace('_preprocessed', '')
+        parts = name_part.split('_')
+        # Skip patient ID (first part with dash and numbers)
+        markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
+
+        if len(markers) == out.shape[0]:
+            channel_names = markers
+        else:
+            channel_names = [f"channel_{i}" for i in range(out.shape[0])]
+
+    logger.info(f"Channel names: {channel_names}")
+
+    # Create OME-XML metadata with channel names
+    num_channels, height, width = out.shape if out.ndim == 3 else (1, out.shape[0], out.shape[1])
+    if out.ndim == 2:
+        out = out[np.newaxis, ...]
+        channel_names = ['channel_0']
+
+    ome_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+    <Image ID="Image:0" Name="Registered">
+        <Pixels ID="Pixels:0" Type="{out.dtype.name}"
+                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
+                DimensionOrder="XYCZT"
+                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
+            {chr(10).join(f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
+            <TiffData />
+        </Pixels>
+    </Image>
+</OME>'''
+
+    tifffile.imwrite(
+        str(output_path),
+        out,
+        metadata={'axes': 'CYX'},
+        description=ome_xml,
+        compression="zlib"
+    )
 
     # optional QC
     if qc_dir:
