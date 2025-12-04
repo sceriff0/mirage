@@ -163,7 +163,7 @@ def pad_single_image(
         <Pixels ID="Pixels:0" Type="{padded_img.dtype.name}"
                 SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
                 DimensionOrder="XYCZT"
-                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="µm" PhysicalSizeYUnit="µm">
+                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
             {chr(10).join(f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
             <TiffData />
         </Pixels>
