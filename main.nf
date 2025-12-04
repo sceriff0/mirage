@@ -72,15 +72,43 @@ workflow {
         ch_pairs = PAD_IMAGES.out.padded
             .collect()
             .flatMap { files ->
-                def reference = files[0]
-                def moving_files = files.drop(1)
+                // Find reference image based on params.reg_reference_markers
+                def reference_markers = params.reg_reference_markers
+
+                def reference = files.find { f ->
+                    def filename = f.name.toUpperCase()
+                    reference_markers.every { marker ->
+                        filename.contains(marker.toUpperCase())
+                    }
+                }
+
+                // Fallback to first file if no match found
+                if (reference == null) {
+                    log.warn "No file found with all reference markers ${reference_markers}, using first file"
+                    reference = files[0]
+                }
+
+                // Create pairs: all other files registered to reference
+                def moving_files = files.findAll { f -> f != reference }
                 return moving_files.collect { m -> tuple(reference, m) }
             }
 
         GPU_REGISTER ( ch_pairs )
 
         // Combine reference (unchanged) with registered moving images
-        ch_reference = PAD_IMAGES.out.padded.first()
+        // Find the reference image again using the same logic
+        ch_reference = PAD_IMAGES.out.padded
+            .collect()
+            .map { files ->
+                def reference_markers = params.reg_reference_markers
+                def reference = files.find { file ->
+                    def filename = file.name.toUpperCase()
+                    reference_markers.every { marker -> filename.contains(marker.toUpperCase()) }
+                }
+                return reference ?: files[0]
+            }
+            .flatten()
+
         ch_registered = ch_reference.concat(GPU_REGISTER.out.registered)
 
     } else {
