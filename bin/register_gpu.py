@@ -451,7 +451,7 @@ def register_image_pair(
                 root = ET.fromstring(tif.ome_metadata)
                 ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
                 channels = root.findall('.//ome:Channel', ns)
-                channel_names = [ch.get('Name', f'channel_{i}') for i, ch in enumerate(channels)]
+                channel_names = [ch.get('Name') for ch in channels]
     except Exception as e:
         logger.warning(f"Could not extract channel names from metadata: {e}")
 
