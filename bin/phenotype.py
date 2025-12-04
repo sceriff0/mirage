@@ -378,12 +378,21 @@ def main():
     cell_df = pd.read_csv(args.cell_data).drop_duplicates(subset='label', keep='first')
 
     logger.info(f"Loading segmentation mask: {args.segmentation_mask}")
-    mask = np.load(args.segmentation_mask)
+    # Support both .npy and TIFF formats
+    if args.segmentation_mask.endswith('.npy'):
+        mask = np.load(args.segmentation_mask)
+    else:
+        # Load TIFF format
+        mask = tifffile.imread(args.segmentation_mask)
+        # Ensure 2D
+        if mask.ndim > 2:
+            logger.warning(f"Mask has {mask.ndim} dimensions, taking first channel")
+            mask = mask[0] if mask.shape[0] < mask.shape[-1] else mask[..., 0]
 
     # Run phenotyping
     phenotypes_data, phenotypes_mask = run_phenotyping_pipeline(
-        cell_df.copy(),
-        mask.copy(),
+        cell_df,
+        mask,
         markers=args.markers,
         cutoffs=args.cutoffs,
         quality_percentile=args.quality_percentile,

@@ -123,6 +123,16 @@ def pad_single_image(
 
     # Load image
     img = tifffile.imread(str(input_path))
+
+    # Check if image is empty or corrupted
+    if img.size == 0 or img.ndim < 2:
+        raise ValueError(
+            f"Input image is empty or corrupted: {input_path.name}\n"
+            f"  Shape: {img.shape}\n"
+            f"  Size: {img.size}\n"
+            f"  This usually means the preprocessing step failed or the file is corrupted."
+        )
+
     original_dtype = img.dtype
 
     # Ensure (C, H, W) format

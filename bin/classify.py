@@ -376,48 +376,27 @@ def create_cell_dataframe(
     mask : np.ndarray
         Segmentation mask (H, W)
     image : np.ndarray
-        Multichannel image (C, H, W)
+        Multichannel image (C, H, W) - not used, kept for API compatibility
     channel_names : list of str
-        Channel names
+        Channel names - not used, kept for API compatibility
     cell_types : list of str
         Cell type predictions
 
     Returns
     -------
     pd.DataFrame
-        Cell data with label, cell_type, and channel intensities
+        Cell data with label and cell_type only (no regionprops)
     """
-    from skimage import measure
-
-    logger.info("Extracting cell properties...")
+    logger.info("Creating cell predictions dataframe (without regionprops)...")
 
     # Get cell labels (exclude background 0)
     cell_labels = np.unique(mask)[1:]
 
-    # Compute region properties
-    props = measure.regionprops(mask)
-
-    # Build dataframe
-    data = []
-    for i, (prop, cell_type) in enumerate(zip(props, cell_types)):
-        row = {
-            'label': prop.label,
-            'cell_type': cell_type,
-            'centroid_y': prop.centroid[0],
-            'centroid_x': prop.centroid[1],
-            'area': prop.area,
-        }
-
-        # Add mean intensity for each channel
-        for ch_idx, ch_name in enumerate(channel_names):
-            # Get pixel intensities for this cell in this channel
-            cell_mask = mask == prop.label
-            intensities = image[ch_idx][cell_mask]
-            row[ch_name] = np.mean(intensities)
-
-        data.append(row)
-
-    df = pd.DataFrame(data)
+    # Create simple dataframe with only label and cell_type
+    df = pd.DataFrame({
+        'label': cell_labels,
+        'cell_type': cell_types
+    })
 
     logger.info(f"Created dataframe with {len(df)} cells and {len(df.columns)} columns")
 
