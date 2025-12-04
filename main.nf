@@ -63,7 +63,7 @@ workflow {
         // Step 2: Pad each image in parallel
         ch_to_pad = PREPROCESS.out.preprocessed
             .combine(ch_max_dims)
-            .map { file, dims -> tuple(file, dims[0], dims[1]) }
+            .map { it -> tuple(it[0], it[1][0], it[1][1]) }
 
         PAD_IMAGES ( ch_to_pad )
 
