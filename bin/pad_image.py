@@ -118,13 +118,13 @@ def pad_single_image(
     if use_bigtiff:
         logger.info(f"  Using BigTIFF format (estimated size: {estimated_size / (1024**3):.2f} GB)")
 
-    # Save padded image
+    # Save padded image without compression (temporary file for GPU registration)
     logger.info(f"  Saving to: {output_path.name}")
     tifffile.imwrite(
         str(output_path),
         padded_img,
         photometric='minisblack',
-        compression='zlib',
+        compression=None,  # No compression for faster I/O and lower memory
         bigtiff=use_bigtiff
     )
     logger.info("  ✓ Saved")
