@@ -161,13 +161,33 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     if y.shape != x.shape:
         raise ValueError("Reference image (y) and moving image (x) must have the same shape.")
 
-    y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
-    x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
+    # Validate for invalid values that cause CUDA errors
+    if np.any(np.isnan(y)) or np.any(np.isinf(y)):
+        raise ValueError("Reference image contains NaN or Inf values")
+    if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+        raise ValueError("Moving image contains NaN or Inf values")
+
+    # Robust normalization to [0, 1] range using percentiles to handle outliers
+    y_min, y_max = np.percentile(y, [0.1, 99.9])
+    x_min, x_max = np.percentile(x, [0.1, 99.9])
+
+    # Check for uniform intensity (causes numerical issues)
+    if y_max <= y_min:
+        raise ValueError(f"Reference crop has uniform intensity (min={y_min:.2f}, max={y_max:.2f})")
+    if x_max <= x_min:
+        raise ValueError(f"Moving crop has uniform intensity (min={x_min:.2f}, max={x_max:.2f})")
+
+    # Normalize to [0, 1] with clipping
+    y_norm = np.clip((y - y_min) / (y_max - y_min), 0, 1).astype(np.float32)
+    x_norm = np.clip((x - x_min) / (x_max - x_min), 0, 1).astype(np.float32)
+
+    y_contiguous = np.ascontiguousarray(y_norm, dtype=np.float32)
+    x_contiguous = np.ascontiguousarray(x_norm, dtype=np.float32)
 
     y_gpu = cp.asarray(y_contiguous)
     x_gpu = cp.asarray(x_contiguous)
 
-    del y_contiguous, x_contiguous
+    del y_norm, x_norm, y_contiguous, x_contiguous
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
@@ -396,7 +416,9 @@ def register_image_pair(
     merged_mem, weights_mem, tmp_dir = _create_memmaps_for_merge(mov_shape, dtype=np.float32)
     logger.info(f"Created memmaps for merge in {tmp_dir}")
 
-    # Reset GPU memory pools
+    # Reset GPU memory pools - aggressive cleanup before GPU stage
+    import gc
+    gc.collect()
     try:
         device = cp.cuda.Device()
         device.synchronize()
@@ -404,6 +426,8 @@ def register_image_pair(
         pinned_mempool = cp.get_default_pinned_memory_pool()
         mempool.free_all_blocks()
         pinned_mempool.free_all_blocks()
+        # Force synchronization again to ensure cleanup completes
+        device.synchronize()
         logger.info("Cleared GPU memory pools before processing")
     except Exception as e:
         logger.warning(f"Could not clear GPU memory pool: {e}")
@@ -448,7 +472,27 @@ def register_image_pair(
             else:
                 ref_crop = ref_mem[y : y + h, x : x + w].astype(np.float32)
 
-            mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=opt_tol, inv_tol=inv_tol)
+            # Try diffeomorphic registration with retry on failure
+            try:
+                mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=opt_tol, inv_tol=inv_tol)
+            except Exception as diffeo_error:
+                # Retry with more relaxed tolerance if it's a numerical/CUDA error
+                error_msg = str(diffeo_error).lower()
+                if any(keyword in error_msg for keyword in ['cuda', 'illegal', 'memory', 'numerical', 'uniform']):
+                    logger.warning(f"Diffeo failed on crop {idx} (attempt 1), retrying with relaxed tolerance: {diffeo_error}")
+                    # Clear GPU memory before retry
+                    try:
+                        cp.get_default_memory_pool().free_all_blocks()
+                        cp.get_default_pinned_memory_pool().free_all_blocks()
+                        cp.cuda.Device().synchronize()
+                    except:
+                        pass
+                    # Retry with more conservative tolerance
+                    mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=1e-3, inv_tol=1e-3)
+                    logger.info(f"  → Retry succeeded with relaxed tolerance (1e-3)")
+                else:
+                    # Not a numerical error, re-raise
+                    raise
 
             # apply mapping channel-wise and accumulate into memmaps using weight mask
             weight_mask = weight_cache.get((h, w))
