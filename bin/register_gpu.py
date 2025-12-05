@@ -90,7 +90,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     rgb[:, :, 1] = ref_dapi_scaled
     rgb[:, :, 2] = 0
 
-    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression=None)
+    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression=None, bigtiff=True)
     logger.info(f"  Saved QC composite: {output_path}")
 
 
@@ -499,7 +499,8 @@ def register_image_pair(
         out,
         metadata={'axes': 'CYX'},
         description=ome_xml,
-        compression="zlib"
+        compression="zlib",
+        bigtiff=True
     )
 
     # optional QC
