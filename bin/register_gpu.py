@@ -157,7 +157,7 @@ def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
 
 
 
-def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=20, radius=20):
+def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=20, radius=20, opt_tol=1e-5, inv_tol=1e-5):
     if y.shape != x.shape:
         raise ValueError("Reference image (y) and moving image (x) must have the same shape.")
 
@@ -175,7 +175,7 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     sigma_diff = int(20 * np.sqrt(scale_factor))
 
     metric = CCMetric(2, sigma_diff=sigma_diff, radius=radius)
-    sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=1e-16, inv_tol=1e-16)
+    sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=opt_tol, inv_tol=inv_tol)
 
     mapping = sdr.optimize(y_gpu, x_gpu)
     return mapping
@@ -290,6 +290,8 @@ def register_image_pair(
     overlap_percent: float = 10.0,
     n_features: int = 2000,
     n_workers: int = 4,
+    opt_tol: float = 1e-5,
+    inv_tol: float = 1e-5,
     qc_dir: Optional[Path] = None,
 ):
     if not GPU_AVAILABLE:
@@ -446,7 +448,7 @@ def register_image_pair(
             else:
                 ref_crop = ref_mem[y : y + h, x : x + w].astype(np.float32)
 
-            mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine)
+            mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=opt_tol, inv_tol=inv_tol)
 
             # apply mapping channel-wise and accumulate into memmaps using weight mask
             weight_mask = weight_cache.get((h, w))
@@ -634,6 +636,8 @@ def main():
     parser.add_argument("--overlap-percent", type=float, default=10.0, help="Overlap between crops as percentage of crop size (default: 10%%, recommended: 10-20%%)")
     parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
     parser.add_argument("--n-workers", type=int, default=4, help="Number of parallel workers")
+    parser.add_argument("--opt-tol", type=float, default=1e-5, help="Optimization tolerance for diffeomorphic registration (default: 1e-5, recommended: 1e-5 to 1e-7)")
+    parser.add_argument("--inv-tol", type=float, default=1e-5, help="Inverse tolerance for diffeomorphic registration (default: 1e-5)")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
 
     args = parser.parse_args()
@@ -652,6 +656,8 @@ def main():
             overlap_percent=args.overlap_percent,
             n_features=args.n_features,
             n_workers=args.n_workers,
+            opt_tol=args.opt_tol,
+            inv_tol=args.inv_tol,
             qc_dir=Path(args.qc_dir) if args.qc_dir else None,
         )
         return 0

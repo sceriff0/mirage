@@ -20,6 +20,8 @@ process GPU_REGISTER {
     def overlap_percent = params.gpu_reg_overlap_percent ?: 10.0
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
+    def opt_tol = params.gpu_reg_opt_tol ?: 1e-5
+    def inv_tol = params.gpu_reg_inv_tol ?: 1e-5
     """
     mkdir -p qc
 
@@ -31,6 +33,8 @@ process GPU_REGISTER {
         --crop-size ${crop_size} \\
         --overlap-percent ${overlap_percent} \\
         --n-features ${n_features} \\
-        --n-workers ${n_workers}
+        --n-workers ${n_workers} \\
+        --opt-tol ${opt_tol} \\
+        --inv-tol ${inv_tol}
     """
 }
