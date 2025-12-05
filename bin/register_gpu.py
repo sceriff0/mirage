@@ -117,7 +117,12 @@ def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
     keypoints2, descriptors2 = orb.detectAndCompute(x, None)
 
     if descriptors1 is None or descriptors2 is None:
-        return None
+        fail_reason = []
+        if descriptors1 is None:
+            fail_reason.append(f"reference: {len(keypoints1) if keypoints1 else 0} keypoints but no descriptors")
+        if descriptors2 is None:
+            fail_reason.append(f"moving: {len(keypoints2) if keypoints2 else 0} keypoints but no descriptors")
+        return None, {"reason": "no_features", "detail": "; ".join(fail_reason)}
 
     if descriptors1.dtype != np.uint8:
         descriptors1 = descriptors1.astype(np.uint8)
@@ -129,13 +134,27 @@ def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
     matches = sorted(matches, key=lambda x: x.distance)
 
     if len(matches) < 3:
-        return None
+        return None, {
+            "reason": "insufficient_matches",
+            "detail": f"{len(matches)} matches < 3 required (ref: {len(descriptors1)} features, mov: {len(descriptors2)} features)"
+        }
 
     points1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
     points2 = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
 
     matrix, mask = cv2.estimateAffinePartial2D(points2, points1)
-    return matrix
+
+    if matrix is None:
+        inlier_count = 0
+        return None, {
+            "reason": "ransac_failed",
+            "detail": f"{len(matches)} matches but RANSAC rejected all as outliers (likely non-rigid deformation or false matches)"
+        }
+
+    # Count inliers for success case
+    inlier_count = np.sum(mask) if mask is not None else len(matches)
+    return matrix, {"reason": "success", "detail": f"{inlier_count}/{len(matches)} inliers"}
+
 
 
 def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=20, radius=20):
@@ -240,12 +259,25 @@ def process_crop_cpu_stage_affine_only(crop_idx: int, ref_mem, mov_mem, coord: D
         ref_2d = np.ascontiguousarray(ref_crop.astype(np.float32))
         mov_2d = np.ascontiguousarray(mov_crop.astype(np.float32))
 
-        matrix = compute_affine_mapping_cv2(ref_2d, mov_2d, n_features=n_features)
+        matrix, diag = compute_affine_mapping_cv2(ref_2d, mov_2d, n_features=n_features)
         if matrix is None:
-            return {"status": "failed", "error": "affine_fail", "crop_idx": crop_idx, "coord": coord, "matrix": None}
-        return {"status": "success", "matrix": matrix, "crop_idx": crop_idx, "coord": coord}
+            return {
+                "status": "failed",
+                "error": diag["reason"],
+                "error_detail": diag["detail"],
+                "crop_idx": crop_idx,
+                "coord": coord,
+                "matrix": None
+            }
+        return {
+            "status": "success",
+            "matrix": matrix,
+            "crop_idx": crop_idx,
+            "coord": coord,
+            "match_info": diag["detail"]
+        }
     except Exception as e:
-        return {"status": "failed", "error": str(e), "crop_idx": crop_idx, "coord": coord, "matrix": None}
+        return {"status": "failed", "error": "exception", "error_detail": str(e), "crop_idx": crop_idx, "coord": coord, "matrix": None}
 
 
 # --------------------- main streaming registration -----------------------
@@ -304,9 +336,47 @@ def register_image_pair(
             idx = res["crop_idx"]
             cpu_results[idx] = res
             status = res.get("status", "failed")
-            logger.info(f"CPU affine crop {idx+1}/{len(coords)}: {status}")
-            if status != "success":
-                logger.warning(f"  CPU affine error on crop {idx}: {res.get('error')}")
+            coord = res["coord"]
+
+            if status == "success":
+                logger.info(f"CPU affine crop {idx+1}/{len(coords)} at ({coord['y']},{coord['x']}): ✓ {res.get('match_info', 'success')}")
+            else:
+                error_type = res.get('error', 'unknown')
+                error_detail = res.get('error_detail', 'no details')
+                logger.warning(f"CPU affine crop {idx+1}/{len(coords)} at ({coord['y']},{coord['x']}): ✗ {error_type} - {error_detail}")
+
+    # Analyze and summarize CPU affine results
+    successful_crops = [r for r in cpu_results if r.get("status") == "success"]
+    failed_crops = [r for r in cpu_results if r.get("status") != "success"]
+
+    logger.info("=" * 80)
+    logger.info(f"CPU Affine Stage Summary: {len(successful_crops)}/{len(coords)} crops succeeded ({len(successful_crops)/len(coords)*100:.1f}%)")
+
+    if failed_crops:
+        # Categorize failures
+        failure_reasons = {}
+        for r in failed_crops:
+            reason = r.get('error', 'unknown')
+            failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+
+        logger.warning(f"Failure breakdown:")
+        for reason, count in sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True):
+            logger.warning(f"  - {reason}: {count} crops ({count/len(coords)*100:.1f}%)")
+
+    if len(successful_crops) == 0:
+        raise RuntimeError(
+            f"All {len(coords)} crops failed affine registration. Cannot proceed.\n"
+            f"Common causes: uniform/blank image, severe misalignment, or low contrast.\n"
+            f"Try adjusting --crop-size or check input image quality."
+        )
+
+    if len(failed_crops) > len(coords) * 0.3:
+        logger.warning(
+            f"High failure rate: {len(failed_crops)}/{len(coords)} crops failed ({len(failed_crops)/len(coords)*100:.1f}%).\n"
+            f"Registration quality may be poor. Consider checking image quality or adjusting parameters."
+        )
+
+    logger.info("=" * 80)
 
     # Prepare memmaps for merged accumulation
     merged_mem, weights_mem, tmp_dir = _create_memmaps_for_merge(mov_shape, dtype=np.float32)
@@ -327,6 +397,8 @@ def register_image_pair(
     # STEP B: Sequential GPU stage — process one crop at a time, write to memmap
     logger.info("STEP B: Sequential GPU diffeo stage (streaming)")
     weight_cache = {}
+    diffeo_fallback_count = 0
+    diffeo_success_count = 0
     for idx, cres in enumerate(cpu_results):
         coord = cres["coord"]
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
@@ -404,10 +476,17 @@ def register_image_pair(
             except Exception:
                 pass
 
+            diffeo_success_count += 1
             logger.info(f"Processed crop {idx+1}/{len(coords)} at ({y},{x})")
 
         except Exception as e:
-            logger.error(f"Diffeo failed on crop {idx}: {e}")
+            diffeo_fallback_count += 1
+            error_msg = str(e).lower()
+            if "memory" in error_msg or "cuda" in error_msg or "out of memory" in error_msg:
+                logger.error(f"Diffeo failed on crop {idx} - GPU MEMORY ERROR: {e}")
+                logger.error("  → Consider reducing --crop-size to use less GPU memory")
+            else:
+                logger.error(f"Diffeo failed on crop {idx}: {e}")
             logger.error(traceback.format_exc())
             # fallback: accumulate affine result (no diffeo)
             weight_mask = weight_cache.get((h, w))
@@ -423,6 +502,16 @@ def register_image_pair(
                 weights_mem[y : y + h, x : x + w] += weight_mask
             del mov_affine
             gc.collect()
+
+    # Summarize GPU diffeomorphic stage
+    logger.info("=" * 80)
+    logger.info(f"GPU Diffeomorphic Stage Summary:")
+    logger.info(f"  - Processed: {len(successful_crops)} crops (skipped {len(failed_crops)} due to affine failure)")
+    logger.info(f"  - Diffeo success: {diffeo_success_count}/{len(successful_crops)} crops")
+    if diffeo_fallback_count > 0:
+        logger.warning(f"  - Diffeo fallback to affine-only: {diffeo_fallback_count}/{len(successful_crops)} crops ({diffeo_fallback_count/len(successful_crops)*100:.1f}%)")
+        logger.warning(f"    → {diffeo_fallback_count} crops used only affine registration (no diffeomorphic refinement)")
+    logger.info("=" * 80)
 
     # finalize merge: avoid division by zero
     weights_nonzero = weights_mem.copy()
