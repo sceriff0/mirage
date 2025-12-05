@@ -287,7 +287,7 @@ def register_image_pair(
     moving_path: Path,
     output_path: Path,
     crop_size: int = 2000,
-    overlap: int = 200,
+    overlap_percent: float = 10.0,
     n_features: int = 2000,
     n_workers: int = 4,
     qc_dir: Optional[Path] = None,
@@ -320,6 +320,18 @@ def register_image_pair(
 
     if ref_shape[0] != mov_shape[0]:
         logger.warning(f"Channel count mismatch: reference has {ref_shape[0]}, moving has {mov_shape[0]}. Using all channels but metric uses first channel.")
+
+    # Validate overlap_percent
+    if overlap_percent < 0 or overlap_percent >= 100:
+        raise ValueError(f"overlap_percent must be in range [0, 100), got {overlap_percent}")
+    if overlap_percent < 5:
+        logger.warning(f"Overlap {overlap_percent}% is very low. Recommended minimum: 10%")
+    if overlap_percent > 30:
+        logger.warning(f"Overlap {overlap_percent}% is very high. Recommended maximum: 20-30%. High overlap increases processing time significantly.")
+
+    # Compute overlap size from percentage
+    overlap = int(crop_size * overlap_percent / 100.0)
+    logger.info(f"Using overlap: {overlap_percent}% of crop_size ({overlap} pixels)")
 
     # Create list of crop coords only
     logger.info(f"Extracting crop coordinates with size={crop_size}, overlap={overlap}")
@@ -619,7 +631,7 @@ def main():
     parser.add_argument("--output", type=str, required=True, help="Path to save registered image")
     parser.add_argument("--qc-dir", type=str, default=None, help="Directory to save QC outputs (optional)")
     parser.add_argument("--crop-size", type=int, default=2000, help="Size of crops for processing")
-    parser.add_argument("--overlap", type=int, default=200, help="Overlap between crops in pixels")
+    parser.add_argument("--overlap-percent", type=float, default=10.0, help="Overlap between crops as percentage of crop size (default: 10%%, recommended: 10-20%%)")
     parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
     parser.add_argument("--n-workers", type=int, default=4, help="Number of parallel workers")
     parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
@@ -637,7 +649,7 @@ def main():
             moving_path=Path(args.moving),
             output_path=Path(args.output),
             crop_size=args.crop_size,
-            overlap=args.overlap,
+            overlap_percent=args.overlap_percent,
             n_features=args.n_features,
             n_workers=args.n_workers,
             qc_dir=Path(args.qc_dir) if args.qc_dir else None,
