@@ -17,7 +17,7 @@ process GPU_REGISTER {
 
     script:
     def crop_size = params.gpu_reg_crop_size ?: 2000
-    def overlap = params.gpu_reg_overlap ?: 200
+    def overlap_percent = params.gpu_reg_overlap_percent ?: 10.0
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
     """
@@ -29,7 +29,7 @@ process GPU_REGISTER {
         --output ${moving.simpleName}_registered.ome.tiff \\
         --qc-dir qc \\
         --crop-size ${crop_size} \\
-        --overlap ${overlap} \\
+        --overlap-percent ${overlap_percent} \\
         --n-features ${n_features} \\
         --n-workers ${n_workers}
     """
