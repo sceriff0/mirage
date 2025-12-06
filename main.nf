@@ -11,6 +11,7 @@ include { PREPROCESS   } from './modules/local/preprocess'
 include { PAD_IMAGES   } from './modules/local/pad_images'
 include { REGISTER     } from './modules/local/register'
 include { GPU_REGISTER } from './modules/local/register_gpu'
+include { CPU_REGISTER } from './modules/local/register_cpu'
 include { MERGE        } from './modules/local/merge'
 include { SEGMENT      } from './modules/local/segment'
 include { CLASSIFY     } from './modules/local/classify'
@@ -42,7 +43,7 @@ workflow {
     PREPROCESS ( CONVERT_ND2.out.ome_tiff )
 
     // 4. MODULE: Register using either classic or GPU method
-    if (params.registration_method == 'gpu') {
+    if (params.registration_method != 'valis') {
         // GPU registration workflow:
         // Step 1: Compute max dimensions from all preprocessed images
         ch_max_dims = PREPROCESS.out.dims
@@ -93,7 +94,15 @@ workflow {
                 return moving_files.collect { m -> tuple(reference, m) }
             }
 
-        GPU_REGISTER ( ch_pairs )
+        if (params.registration_method == 'gpu') {
+            // Step 4a: GPU Registration
+            GPU_REGISTER ( ch_pairs )
+            ch_registered = GPU_REGISTER.out.registered
+        } else {
+            // Step 4b: CPU Registration
+            CPU_REGISTER ( ch_pairs )
+            ch_registered = CPU_REGISTER.out.registered
+        }
 
         // Combine reference (unchanged) with registered moving images
         // Find the reference image again using the same logic
