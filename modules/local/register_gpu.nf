@@ -16,7 +16,7 @@ process GPU_REGISTER {
     time {
         moving.size() < 10.GB  ? '2.h' :      // Small images
         moving.size() < 30.GB  ? '3.h' :      // Medium images
-        '4.h'                                  // Large images
+        '6.h'                                  // Large images
     }
 
     cpus 2
