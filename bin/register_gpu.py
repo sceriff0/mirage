@@ -177,17 +177,13 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     if x_max <= x_min:
         raise ValueError(f"Moving crop has uniform intensity (min={x_min:.2f}, max={x_max:.2f})")
 
-    # Normalize to [0, 1] with clipping
-    y_norm = np.clip((y - y_min) / (y_max - y_min), 0, 1).astype(np.float32)
-    x_norm = np.clip((x - x_min) / (x_max - x_min), 0, 1).astype(np.float32)
-
-    y_contiguous = np.ascontiguousarray(y_norm, dtype=np.float32)
-    x_contiguous = np.ascontiguousarray(x_norm, dtype=np.float32)
+    y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
+    x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
 
     y_gpu = cp.asarray(y_contiguous)
     x_gpu = cp.asarray(x_contiguous)
 
-    del y_norm, x_norm, y_contiguous, x_contiguous
+    del y_contiguous, x_contiguous
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
@@ -419,7 +415,7 @@ def register_image_pair(
     # Reset GPU memory pools - aggressive cleanup before GPU stage
     import gc
     gc.collect()
-    try:
+    '''try:
         device = cp.cuda.Device()
         device.synchronize()
         mempool = cp.get_default_memory_pool()
@@ -431,7 +427,7 @@ def register_image_pair(
         logger.info("Cleared GPU memory pools before processing")
     except Exception as e:
         logger.warning(f"Could not clear GPU memory pool: {e}")
-
+    '''
     # STEP B: Sequential GPU stage — process one crop at a time, write to memmap
     logger.info("STEP B: Sequential GPU diffeo stage (streaming)")
     weight_cache = {}
@@ -465,6 +461,34 @@ def register_image_pair(
         del mov_crop
         gc.collect()
 
+        # Check if affine-transformed crop is valid (not all zeros)
+        mov_affine_channel = mov_affine[0] if mov_affine.ndim == 3 else mov_affine
+        mov_min, mov_max = mov_affine_channel.min(), mov_affine_channel.max()
+
+        if mov_max == 0 or (mov_max - mov_min) < 1e-6:
+            # Affine result is blank/uniform - skip diffeomorphic and use affine-only
+            logger.warning(f"Crop {idx} at ({y},{x}): Affine result is blank/uniform (range: [{mov_min:.2f}, {mov_max:.2f}])")
+            logger.warning(f"  → Skipping diffeomorphic registration, using affine-only result")
+            diffeo_fallback_count += 1
+
+            # Accumulate affine-only result
+            weight_mask = weight_cache.get((h, w))
+            if weight_mask is None:
+                weight_mask = _create_weight_mask(h, w, overlap).astype(np.float32)
+                weight_cache[(h, w)] = weight_mask
+
+            if mov_affine.ndim == 3:
+                for c in range(mov_affine.shape[0]):
+                    merged_mem[c, y : y + h, x : x + w] += mov_affine[c] * weight_mask
+                    weights_mem[c, y : y + h, x : x + w] += weight_mask
+            else:
+                merged_mem[y : y + h, x : x + w] += mov_affine * weight_mask
+                weights_mem[y : y + h, x : x + w] += weight_mask
+
+            del mov_affine
+            gc.collect()
+            continue  # Skip to next crop
+
         # run diffeo on the first channel and apply mapping to all channels
         try:
             if ref_mem.ndim == 3:
@@ -472,13 +496,16 @@ def register_image_pair(
             else:
                 ref_crop = ref_mem[y : y + h, x : x + w].astype(np.float32)
 
-            # Try diffeomorphic registration with retry on failure
+            # Try diffeomorphic registration (no retry for uniform intensity - already checked above)
             try:
-                mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=opt_tol, inv_tol=inv_tol)
+                mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine_channel, opt_tol=opt_tol, inv_tol=inv_tol)
             except Exception as diffeo_error:
-                # Retry with more relaxed tolerance if it's a numerical/CUDA error
+                # Retry with more relaxed tolerance if it's a CUDA error (not uniform intensity)
                 error_msg = str(diffeo_error).lower()
-                if any(keyword in error_msg for keyword in ['cuda', 'illegal', 'memory', 'numerical', 'uniform']):
+                if 'uniform' in error_msg:
+                    # Should have been caught above, re-raise
+                    raise
+                elif any(keyword in error_msg for keyword in ['cuda', 'illegal', 'memory', 'numerical']):
                     logger.warning(f"Diffeo failed on crop {idx} (attempt 1), retrying with relaxed tolerance: {diffeo_error}")
                     # Clear GPU memory before retry
                     try:
@@ -488,7 +515,7 @@ def register_image_pair(
                     except:
                         pass
                     # Retry with more conservative tolerance
-                    mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine[0] if mov_affine.ndim == 3 else mov_affine, opt_tol=1e-3, inv_tol=1e-3)
+                    mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine_channel, opt_tol=1e-3, inv_tol=1e-3)
                     logger.info(f"  → Retry succeeded with relaxed tolerance (1e-3)")
                 else:
                     # Not a numerical error, re-raise
