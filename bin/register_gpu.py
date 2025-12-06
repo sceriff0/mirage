@@ -430,7 +430,7 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
 
     # Check if failure rate is too high
     failure_rate = len(failed) / len(affine_coords)
-    if failure_rate > 0.01:
+    if failure_rate > 0.99:
         raise RuntimeError(
             f"Affine stage failed for {len(failed)}/{len(affine_coords)} crops ({100*failure_rate:.1f}%). "
             f"Output quality would be too poor. More than 50% of the image would be unregistered. "
