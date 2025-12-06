@@ -177,13 +177,13 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     if x_max <= x_min:
         raise ValueError(f"Moving crop has uniform intensity (min={x_min:.2f}, max={x_max:.2f})")
 
-    y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
-    x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
+    #y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
+    #x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
 
-    y_gpu = cp.asarray(y_contiguous)
-    x_gpu = cp.asarray(x_contiguous)
+    y_gpu = cp.asarray(y)
+    x_gpu = cp.asarray(x)
 
-    del y_contiguous, x_contiguous
+    #del y_contiguous, x_contiguous
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
