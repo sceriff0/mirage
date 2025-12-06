@@ -775,13 +775,13 @@ def main():
 
     args = parser.parse_args()
 
+    # Print CUDA diagnostics BEFORE logging setup (to ensure it prints immediately)
+    print_cuda_diagnostics()
+
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-
-    # Print CUDA diagnostics at startup
-    print_cuda_diagnostics()
 
     try:
         register_image_pair(
