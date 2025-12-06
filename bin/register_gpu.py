@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """GPU-based image registration (refactored streaming version).
 
-Optimizations applied:
-- extract_crops now returns only coordinates (y, x, h, w) — no .data copies
-- CPU stage computes and stores only affine matrices (6 floats) per crop
-- GPU stage loads crop data on-demand, applies affine, computes diffeo, applies transform
-- Merging is streamed into on-disk numpy.memmap accumulators (merged + weights)
-- Avoids building large result lists; processes results as generators/streams
+Properly separates affine and diffeomorphic stages with different crop sizes:
+- Stage 1 (CPU): Affine registration on affine_crop_size crops → merged affine-transformed image
+- Stage 2 (GPU): Diffeomorphic registration on diffeo_crop_size crops → final registered image
+
+Memory-aware design:
+- Uses memmap for large intermediate results
+- Streams crops one at a time in GPU stage
+- Aggressively frees memory after each crop
 
 Usage: same CLI as original script. Requires CuPy + cuDIPY for GPU diffeo.
 """
@@ -16,7 +18,6 @@ import logging
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -24,11 +25,10 @@ import cv2
 import numpy as np
 import tifffile
 import tempfile
-import math
 import gc
 import traceback
 
-# Keep a stable Cupy cache directory (optional)
+# Keep a stable Cupy cache directory
 os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
 
 # GPU imports with availability check
@@ -55,13 +55,11 @@ def print_cuda_diagnostics():
         logger.info("=" * 80)
         return
 
-    # CuPy version (doesn't trigger CUDA initialization)
     try:
         logger.info(f"CuPy version: {cp.__version__}")
     except Exception as e:
         logger.error(f"Could not get CuPy version: {e}")
 
-    # CUDA runtime version (may trigger initialization and fail)
     try:
         runtime_version = cp.cuda.runtime.runtimeGetVersion()
         major = runtime_version // 1000
@@ -69,9 +67,7 @@ def print_cuda_diagnostics():
         logger.info(f"CUDA Runtime Version (CuPy): {major}.{minor}")
     except Exception as e:
         logger.error(f"✗ CUDA Runtime check FAILED: {e}")
-        logger.error(f"   This likely means CuPy's CUDA runtime is incompatible with your driver")
 
-    # CUDA driver version
     try:
         driver_version = cp.cuda.runtime.driverGetVersion()
         major = driver_version // 1000
@@ -80,7 +76,6 @@ def print_cuda_diagnostics():
     except Exception as e:
         logger.error(f"✗ CUDA Driver check FAILED: {e}")
 
-    # GPU device info
     try:
         device = cp.cuda.Device(0)
         props = cp.cuda.runtime.getDeviceProperties(device.id)
@@ -89,9 +84,7 @@ def print_cuda_diagnostics():
         logger.info(f"Total Memory: {props['totalGlobalMem'] / 1024**3:.2f} GB")
     except Exception as e:
         logger.error(f"✗ GPU Device check FAILED: {e}")
-        logger.error(f"   Error type: {type(e).__name__}")
 
-    # cuDIPY info
     try:
         import cudipy
         if hasattr(cudipy, '__version__'):
@@ -104,7 +97,7 @@ def print_cuda_diagnostics():
     logger.info("=" * 80)
 
 
-# ------------------------- small helpers ---------------------------------
+# ------------------------- Helper Functions ---------------------------------
 
 def get_channel_names(filename: str) -> List[str]:
     base = os.path.basename(filename)
@@ -154,21 +147,22 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     logger.info(f"  Saved QC composite: {output_path}")
 
 
-def apply_mapping(mapping, x, method="dipy"):
-    if method not in ["cv2", "dipy"]:
-        raise ValueError("Invalid method specified. Choose either 'cv2' or 'dipy'.")
-
-    if method == "dipy":
-        mapped = mapping.transform(x)
-        if hasattr(mapped, "get"):
-            mapped = mapped.get()
-        return mapped
-    elif method == "cv2":
-        height, width = x.shape[:2]
-        return cv2.warpAffine(x, mapping, (width, height))
+def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    """Apply affine transformation using OpenCV."""
+    height, width = x.shape[:2]
+    return cv2.warpAffine(x, matrix, (width, height), flags=cv2.INTER_LINEAR)
 
 
-def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
+def apply_diffeo_mapping(mapping, x: np.ndarray) -> np.ndarray:
+    """Apply diffeomorphic mapping using cuDIPY."""
+    mapped = mapping.transform(x)
+    if hasattr(mapped, "get"):
+        mapped = mapped.get()
+    return mapped
+
+
+def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features: int = 2000) -> Tuple[Optional[np.ndarray], Dict]:
+    """Compute affine transformation matrix using ORB feature matching."""
     y = cv2.normalize(y, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     x = cv2.normalize(x, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
@@ -191,12 +185,12 @@ def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
     matches = bf.match(descriptors1, descriptors2)
-    matches = sorted(matches, key=lambda x: x.distance)
+    matches = sorted(matches, key=lambda m: m.distance)
 
     if len(matches) < 3:
         return None, {
             "reason": "insufficient_matches",
-            "detail": f"{len(matches)} matches < 3 required (ref: {len(descriptors1)} features, mov: {len(descriptors2)} features)"
+            "detail": f"{len(matches)} matches < 3 required"
         }
 
     points1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
@@ -205,45 +199,37 @@ def compute_affine_mapping_cv2(y: np.ndarray, x: np.ndarray, n_features=2000):
     matrix, mask = cv2.estimateAffinePartial2D(points2, points1)
 
     if matrix is None:
-        inlier_count = 0
         return None, {
             "reason": "ransac_failed",
-            "detail": f"{len(matches)} matches but RANSAC rejected all as outliers (likely non-rigid deformation or false matches)"
+            "detail": f"{len(matches)} matches but RANSAC rejected all"
         }
 
-    # Count inliers for success case
     inlier_count = np.sum(mask) if mask is not None else len(matches)
     return matrix, {"reason": "success", "detail": f"{inlier_count}/{len(matches)} inliers"}
 
 
-
-def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=20, radius=20, opt_tol=1e-5, inv_tol=1e-5):
+def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, 
+                                        sigma_diff: int = 20, radius: int = 20,
+                                        opt_tol: float = 1e-5, inv_tol: float = 1e-5):
+    """Compute diffeomorphic mapping using cuDIPY."""
     if y.shape != x.shape:
-        raise ValueError("Reference image (y) and moving image (x) must have the same shape.")
+        raise ValueError("Reference and moving images must have the same shape.")
 
-    # Validate for invalid values that cause CUDA errors
     if np.any(np.isnan(y)) or np.any(np.isinf(y)):
         raise ValueError("Reference image contains NaN or Inf values")
     if np.any(np.isnan(x)) or np.any(np.isinf(x)):
         raise ValueError("Moving image contains NaN or Inf values")
 
-    # Robust normalization to [0, 1] range using percentiles to handle outliers
     y_min, y_max = np.percentile(y, [0.1, 99.9])
     x_min, x_max = np.percentile(x, [0.1, 99.9])
 
-    # Check for uniform intensity (causes numerical issues)
     if y_max <= y_min:
         raise ValueError(f"Reference crop has uniform intensity (min={y_min:.2f}, max={y_max:.2f})")
     if x_max <= x_min:
         raise ValueError(f"Moving crop has uniform intensity (min={x_min:.2f}, max={x_max:.2f})")
 
-    #y_contiguous = np.ascontiguousarray(y, dtype=np.float32)
-    #x_contiguous = np.ascontiguousarray(x, dtype=np.float32)
-
     y_gpu = cp.asarray(y)
     x_gpu = cp.asarray(x)
-
-    #del y_contiguous, x_contiguous
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
@@ -254,20 +240,27 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray, sigma_diff=
     sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=opt_tol, inv_tol=inv_tol)
 
     mapping = sdr.optimize(y_gpu, x_gpu)
+    
+    # Clean up GPU arrays immediately
+    del y_gpu, x_gpu
+    
     return mapping
 
 
-# --------------------- streaming crop utilities ---------------------------
-
 def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: int) -> List[Dict]:
-    """Return list of coordinate dicts (y,x,h,w) for the image shape.
-
-    image_shape is either (C, H, W) or (H, W)
-    """
+    """Return list of coordinate dicts (y, x, h, w) for tiling the image."""
     if len(image_shape) == 3:
         _, height, width = image_shape
     else:
         height, width = image_shape
+
+    # Validate overlap to prevent infinite loop
+    if overlap >= crop_size:
+        raise ValueError(f"Overlap ({overlap}) must be less than crop_size ({crop_size})")
+
+    # Warn if crop size is larger than image
+    if crop_size > height or crop_size > width:
+        logger.warning(f"crop_size ({crop_size}) is larger than image dimensions ({width}x{height}). Using full image as single crop.")
 
     stride = crop_size - overlap
     coords = []
@@ -283,7 +276,8 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
     return coords
 
 
-def _create_weight_mask(h, w, overlap):
+def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
+    """Create a weight mask for blending overlapping crops."""
     mask = np.ones((h, w), dtype=np.float32)
     if overlap > 0:
         ramp = np.linspace(0, 1, overlap)
@@ -294,48 +288,58 @@ def _create_weight_mask(h, w, overlap):
     return mask
 
 
-def _create_memmaps_for_merge(output_shape, dtype=np.float32):
-    tmp_dir = Path(tempfile.mkdtemp(prefix="reg_merge_"))
-    if len(output_shape) == 3:
-        c, H, W = output_shape
-        merged_path = tmp_dir / "merged.npy"
-        weights_path = tmp_dir / "weights.npy"
-        merged = np.memmap(str(merged_path), dtype=dtype, mode="w+", shape=(c, H, W))
-        weights = np.memmap(str(weights_path), dtype=dtype, mode="w+", shape=(c, H, W))
-    else:
-        H, W = output_shape
-        merged_path = tmp_dir / "merged.npy"
-        weights_path = tmp_dir / "weights.npy"
-        merged = np.memmap(str(merged_path), dtype=dtype, mode="w+", shape=(H, W))
-        weights = np.memmap(str(weights_path), dtype=dtype, mode="w+", shape=(H, W))
+def create_memmaps_for_merge(output_shape: Tuple[int, ...], 
+                              dtype: np.dtype = np.float32,
+                              prefix: str = "reg_merge_") -> Tuple[np.memmap, np.memmap, Path]:
+    """Create memory-mapped arrays for accumulating merged results."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+    
+    merged_path = tmp_dir / "merged.npy"
+    weights_path = tmp_dir / "weights.npy"
+    
+    merged = np.memmap(str(merged_path), dtype=dtype, mode="w+", shape=output_shape)
+    weights = np.memmap(str(weights_path), dtype=dtype, mode="w+", shape=output_shape)
+    
     merged[:] = 0
     weights[:] = 0
+    
     return merged, weights, tmp_dir
 
 
-# --------------------- CPU stage: affine-only -----------------------------
-
-def process_crop_cpu_stage_affine_only(crop_idx: int, ref_mem, mov_mem, coord: Dict, n_features: int) -> Dict:
-    """Read only the channel-0 crop on demand and compute affine matrix.
-
-    ref_mem/mov_mem should be array-like (support slicing). Returns small dict with matrix.
-    """
-    y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
+def cleanup_memmaps(tmp_dir: Path):
+    """Clean up temporary memmap files."""
+    import shutil
     try:
-        # read slice lazily
+        shutil.rmtree(tmp_dir)
+    except Exception as e:
+        logger.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
+
+
+# --------------------- CPU Stage: Affine Registration ---------------------
+
+def process_affine_crop(crop_idx: int, ref_mem: np.ndarray, mov_mem: np.ndarray, 
+                        coord: Dict, n_features: int) -> Dict:
+    """Compute affine matrix for a single crop."""
+    y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
+    
+    try:
+        # Read reference channel 0
         if ref_mem.ndim == 3:
-            ref_crop = ref_mem[0, y : y + h, x : x + w]
+            ref_crop = ref_mem[0, y:y+h, x:x+w]
         else:
-            ref_crop = ref_mem[y : y + h, x : x + w]
+            ref_crop = ref_mem[y:y+h, x:x+w]
+            
+        # Read moving channel 0
         if mov_mem.ndim == 3:
-            mov_crop = mov_mem[0, y : y + h, x : x + w]
+            mov_crop = mov_mem[0, y:y+h, x:x+w]
         else:
-            mov_crop = mov_mem[y : y + h, x : x + w]
+            mov_crop = mov_mem[y:y+h, x:x+w]
 
         ref_2d = np.ascontiguousarray(ref_crop.astype(np.float32))
         mov_2d = np.ascontiguousarray(mov_crop.astype(np.float32))
 
         matrix, diag = compute_affine_mapping_cv2(ref_2d, mov_2d, n_features=n_features)
+        
         if matrix is None:
             return {
                 "status": "failed",
@@ -345,6 +349,7 @@ def process_crop_cpu_stage_affine_only(crop_idx: int, ref_mem, mov_mem, coord: D
                 "coord": coord,
                 "matrix": None
             }
+            
         return {
             "status": "success",
             "matrix": matrix,
@@ -352,332 +357,346 @@ def process_crop_cpu_stage_affine_only(crop_idx: int, ref_mem, mov_mem, coord: D
             "coord": coord,
             "match_info": diag["detail"]
         }
+        
     except Exception as e:
-        return {"status": "failed", "error": "exception", "error_detail": str(e), "crop_idx": crop_idx, "coord": coord, "matrix": None}
+        return {
+            "status": "failed",
+            "error": "exception",
+            "error_detail": str(e),
+            "crop_idx": crop_idx,
+            "coord": coord,
+            "matrix": None
+        }
 
 
-# --------------------- main streaming registration -----------------------
-
-def register_image_pair(
-    reference_path: Path,
-    moving_path: Path,
-    output_path: Path,
-    crop_size: int = 2000,
-    overlap_percent: float = 10.0,
-    n_features: int = 2000,
-    n_workers: int = 4,
-    opt_tol: float = 1e-5,
-    inv_tol: float = 1e-5,
-    qc_dir: Optional[Path] = None,
-):
-    if not GPU_AVAILABLE:
-        raise RuntimeError(
-            f"GPU registration requires CuPy and cuDIPY libraries.\nImport error: {_gpu_import_error}\nPlease install with: pip install cupy-cuda12x cudipy"
-        )
-
-    logger.info(f"Opening reference (memmap): {reference_path}")
-    ref_mem = tifffile.memmap(str(reference_path))
-    logger.info(f"Opening moving (memmap): {moving_path}")
-    mov_mem = tifffile.memmap(str(moving_path))
-
-    # Normalize shapes to (C, H, W)
-    if ref_mem.ndim == 2:
-        ref_shape = (1, ref_mem.shape[0], ref_mem.shape[1])
-    else:
-        ref_shape = ref_mem.shape
-    if mov_mem.ndim == 2:
-        mov_shape = (1, mov_mem.shape[0], mov_mem.shape[1])
-    else:
-        mov_shape = mov_mem.shape
-
-    logger.info(f"Reference shape: {ref_shape}, Moving shape: {mov_shape}")
-
-    # Validate spatial dimensions match
-    if ref_shape[1:] != mov_shape[1:]:
-        raise ValueError(f"Spatial dimension mismatch: reference {ref_shape[1:]} != moving {mov_shape[1:]}")
-
-    if ref_shape[0] != mov_shape[0]:
-        logger.warning(f"Channel count mismatch: reference has {ref_shape[0]}, moving has {mov_shape[0]}. Using all channels but metric uses first channel.")
-
-    # Validate overlap_percent
-    if overlap_percent < 0 or overlap_percent >= 100:
-        raise ValueError(f"overlap_percent must be in range [0, 100), got {overlap_percent}")
-    if overlap_percent < 5:
-        logger.warning(f"Overlap {overlap_percent}% is very low. Recommended minimum: 10%")
-    if overlap_percent > 30:
-        logger.warning(f"Overlap {overlap_percent}% is very high. Recommended maximum: 20-30%. High overlap increases processing time significantly.")
-
-    # Compute overlap size from percentage
-    overlap = int(crop_size * overlap_percent / 100.0)
-    logger.info(f"Using overlap: {overlap_percent}% of crop_size ({overlap} pixels)")
-
-    # Create list of crop coords only
-    logger.info(f"Extracting crop coordinates with size={crop_size}, overlap={overlap}")
-    coords = extract_crop_coords(ref_shape, crop_size, overlap)
-    logger.info(f"Total crops: {len(coords)}")
-
-    # STEP A: CPU stage — compute affine matrices only (parallel)
-    logger.info("STEP A: CPU affine-only stage — computing matrices (no big copies)")
-    cpu_results = [None] * len(coords)
-    with ThreadPoolExecutor(max_workers=n_workers) as exe:
-        futures = {exe.submit(process_crop_cpu_stage_affine_only, i, ref_mem, mov_mem, coords[i], n_features): i for i in range(len(coords))}
+def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
+                     mov_shape: Tuple[int, ...], orig_dtype: np.dtype,
+                     affine_crop_size: int, affine_overlap: int,
+                     n_features: int, n_workers: int) -> Tuple[np.memmap, Path, int, int]:
+    """
+    Run CPU affine stage: compute matrices and merge into affine-transformed image.
+    
+    Returns:
+        affine_mem: memmap of affine-transformed moving image
+        affine_tmp_dir: temp directory containing memmaps
+        success_count: number of successful crops
+        total_crops: total number of crops
+    """
+    logger.info("=" * 80)
+    logger.info("STAGE 1: CPU AFFINE REGISTRATION")
+    logger.info("=" * 80)
+    
+    # Extract crop coordinates
+    affine_coords = extract_crop_coords(mov_shape, affine_crop_size, affine_overlap)
+    logger.info(f"Affine stage: {len(affine_coords)} crops (size={affine_crop_size}, overlap={affine_overlap})")
+    
+    # Compute affine matrices in parallel
+    logger.info("Computing affine matrices...")
+    cpu_results = [None] * len(affine_coords)
+    
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {
+            executor.submit(process_affine_crop, i, ref_mem, mov_mem, affine_coords[i], n_features): i 
+            for i in range(len(affine_coords))
+        }
+        
         for future in as_completed(futures):
             res = future.result()
             idx = res["crop_idx"]
             cpu_results[idx] = res
-            status = res.get("status", "failed")
             coord = res["coord"]
-
-            if status == "success":
-                logger.info(f"CPU affine crop {idx+1}/{len(coords)} at ({coord['y']},{coord['x']}): ✓ {res.get('match_info', 'success')}")
+            
+            if res["status"] == "success":
+                logger.debug(f"  Affine crop {idx+1}/{len(affine_coords)} at ({coord['y']},{coord['x']}): ✓")
             else:
-                error_type = res.get('error', 'unknown')
-                error_detail = res.get('error_detail', 'no details')
-                logger.warning(f"CPU affine crop {idx+1}/{len(coords)} at ({coord['y']},{coord['x']}): ✗ {error_type} - {error_detail}")
+                logger.warning(f"  Affine crop {idx+1}/{len(affine_coords)} at ({coord['y']},{coord['x']}): ✗ {res.get('error', 'unknown')}")
+    
+    # Summarize results
+    successful = [r for r in cpu_results if r["status"] == "success"]
+    failed = [r for r in cpu_results if r["status"] != "success"]
 
-    # Analyze and summarize CPU affine results
-    successful_crops = [r for r in cpu_results if r.get("status") == "success"]
-    failed_crops = [r for r in cpu_results if r.get("status") != "success"]
+    logger.info(f"Affine stage: {len(successful)}/{len(affine_coords)} crops succeeded ({100*len(successful)/len(affine_coords):.1f}%)")
 
-    logger.info("=" * 80)
-    logger.info(f"CPU Affine Stage Summary: {len(successful_crops)}/{len(coords)} crops succeeded ({len(successful_crops)/len(coords)*100:.1f}%)")
-
-    if failed_crops:
-        # Categorize failures
+    if failed:
         failure_reasons = {}
-        for r in failed_crops:
+        for r in failed:
             reason = r.get('error', 'unknown')
             failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
-
-        logger.warning(f"Failure breakdown:")
         for reason, count in sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True):
-            logger.warning(f"  - {reason}: {count} crops ({count/len(coords)*100:.1f}%)")
+            logger.warning(f"  - {reason}: {count} crops")
 
-    if len(successful_crops) == 0:
+    if len(successful) == 0:
+        raise RuntimeError("All affine crops failed. Cannot proceed.")
+
+    # Check if failure rate is too high
+    failure_rate = len(failed) / len(affine_coords)
+    if failure_rate > 0.01:
         raise RuntimeError(
-            f"All {len(coords)} crops failed affine registration. Cannot proceed.\n"
-            f"Common causes: uniform/blank image, severe misalignment, or low contrast.\n"
-            f"Try adjusting --crop-size or check input image quality."
+            f"Affine stage failed for {len(failed)}/{len(affine_coords)} crops ({100*failure_rate:.1f}%). "
+            f"Output quality would be too poor. More than 50% of the image would be unregistered. "
+            f"Consider checking image quality or adjusting parameters."
         )
-
-    if len(failed_crops) > len(coords) * 0.3:
-        logger.warning(
-            f"High failure rate: {len(failed_crops)}/{len(coords)} crops failed ({len(failed_crops)/len(coords)*100:.1f}%).\n"
-            f"Registration quality may be poor. Consider checking image quality or adjusting parameters."
-        )
-
-    logger.info("=" * 80)
-
-    # Prepare memmaps for merged accumulation
-    merged_mem, weights_mem, tmp_dir = _create_memmaps_for_merge(mov_shape, dtype=np.float32)
-    logger.info(f"Created memmaps for merge in {tmp_dir}")
-
-    # Reset GPU memory pools - aggressive cleanup before GPU stage
-    import gc
-    gc.collect()
-    '''try:
-        device = cp.cuda.Device()
-        device.synchronize()
-        mempool = cp.get_default_memory_pool()
-        pinned_mempool = cp.get_default_pinned_memory_pool()
-        mempool.free_all_blocks()
-        pinned_mempool.free_all_blocks()
-        # Force synchronization again to ensure cleanup completes
-        device.synchronize()
-        logger.info("Cleared GPU memory pools before processing")
-    except Exception as e:
-        logger.warning(f"Could not clear GPU memory pool: {e}")
-    '''
-    # STEP B: Sequential GPU stage — process one crop at a time, write to memmap
-    logger.info("STEP B: Sequential GPU diffeo stage (streaming)")
+    
+    # Create memmap for affine-transformed image
+    affine_mem, affine_weights, affine_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "affine_")
+    logger.info(f"Created affine memmap in {affine_tmp_dir}")
+    
+    # Apply affine transformations and merge
+    logger.info("Applying affine transformations and merging...")
     weight_cache = {}
-    diffeo_fallback_count = 0
-    diffeo_success_count = 0
-    for idx, cres in enumerate(cpu_results):
-        coord = cres["coord"]
+    
+    for res in cpu_results:
+        coord = res["coord"]
+        y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
+        
+        # Get or create weight mask
+        if (h, w) not in weight_cache:
+            weight_cache[(h, w)] = create_weight_mask(h, w, affine_overlap)
+        weight_mask = weight_cache[(h, w)]
+        
+        if res["status"] != "success":
+            # For failed crops, use original (identity transform)
+            if mov_mem.ndim == 3:
+                for c in range(mov_mem.shape[0]):
+                    crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
+                    affine_mem[c, y:y+h, x:x+w] += crop * weight_mask
+                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+            else:
+                crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
+                affine_mem[y:y+h, x:x+w] += crop * weight_mask
+                affine_weights[y:y+h, x:x+w] += weight_mask
+        else:
+            # Apply affine transformation
+            matrix = res["matrix"]
+            if mov_mem.ndim == 3:
+                for c in range(mov_mem.shape[0]):
+                    crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
+                    transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
+                    affine_mem[c, y:y+h, x:x+w] += transformed * weight_mask
+                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+                    del crop, transformed
+            else:
+                crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
+                transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
+                affine_mem[y:y+h, x:x+w] += transformed * weight_mask
+                affine_weights[y:y+h, x:x+w] += weight_mask
+                del crop, transformed
+        
+        gc.collect()
+    
+    # Normalize by weights
+    logger.info("Normalizing affine result...")
+    nonzero_mask = affine_weights > 0
+    if not np.any(nonzero_mask):
+        raise RuntimeError("All regions have zero weight - no valid affine registration data")
+    affine_mem[nonzero_mask] /= affine_weights[nonzero_mask]
+    
+    # Flush to disk
+    affine_mem.flush()
+    
+    # Clean up weights memmap
+    del affine_weights
+    gc.collect()
+    
+    logger.info("Affine stage complete")
+    return affine_mem, affine_tmp_dir, len(successful), len(affine_coords)
+
+
+# --------------------- GPU Stage: Diffeomorphic Registration ---------------------
+
+def clear_gpu_memory():
+    """Aggressively clear GPU memory pools."""
+    try:
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        cp.cuda.Device().synchronize()
+    except Exception:
+        pass
+
+
+def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
+                     mov_shape: Tuple[int, ...],
+                     diffeo_crop_size: int, diffeo_overlap: int,
+                     opt_tol: float, inv_tol: float) -> Tuple[np.memmap, Path, int, int, int]:
+    """
+    Run GPU diffeomorphic stage on the affine-transformed image.
+    
+    Returns:
+        diffeo_mem: memmap of final registered image
+        diffeo_tmp_dir: temp directory containing memmaps
+        success_count: successful diffeo crops
+        fallback_count: crops that fell back to affine-only
+        total_crops: total diffeo crops
+    """
+    logger.info("=" * 80)
+    logger.info("STAGE 2: GPU DIFFEOMORPHIC REGISTRATION")
+    logger.info("=" * 80)
+    
+    # Clear GPU memory before starting
+    gc.collect()
+    clear_gpu_memory()
+    
+    # Extract crop coordinates for diffeo stage
+    diffeo_coords = extract_crop_coords(mov_shape, diffeo_crop_size, diffeo_overlap)
+    logger.info(f"Diffeo stage: {len(diffeo_coords)} crops (size={diffeo_crop_size}, overlap={diffeo_overlap})")
+    
+    # Create memmap for final result
+    diffeo_mem, diffeo_weights, diffeo_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "diffeo_")
+    logger.info(f"Created diffeo memmap in {diffeo_tmp_dir}")
+    
+    # Process crops sequentially (GPU memory constraint)
+    weight_cache = {}
+    success_count = 0
+    fallback_count = 0
+    
+    for idx, coord in enumerate(diffeo_coords):
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
-        if cres.get("status") != "success":
-            logger.warning(f"Skipping crop {idx} due to CPU affine failure")
-            continue
+        # Get or create weight mask
+        if (h, w) not in weight_cache:
+            weight_cache[(h, w)] = create_weight_mask(h, w, diffeo_overlap)
+        weight_mask = weight_cache[(h, w)]
 
-        matrix = cres["matrix"]
+        # Initialize variables to None for proper cleanup in finally block
+        mapping = None
+        ref_crop = None
+        affine_crop = None
 
-        # read moving crop (all channels) on demand
-        if mov_mem.ndim == 3:
-            mov_crop = mov_mem[:, y : y + h, x : x + w].astype(np.float32)
-        else:
-            mov_crop = mov_mem[y : y + h, x : x + w].astype(np.float32)
-
-        # apply affine per-channel (cv2.warpAffine expects 2D)
-        if mov_crop.ndim == 3:
-            mov_affine = np.zeros_like(mov_crop, dtype=np.float32)
-            for c in range(mov_crop.shape[0]):
-                mov_affine[c] = apply_mapping(matrix, np.ascontiguousarray(mov_crop[c].astype(np.float32)), method="cv2")
-        else:
-            mov_affine = apply_mapping(matrix, np.ascontiguousarray(mov_crop.astype(np.float32)), method="cv2")
-
-        # drop mov_crop ASAP
-        del mov_crop
-        gc.collect()
-
-        # Check if affine-transformed crop is valid (not all zeros)
-        mov_affine_channel = mov_affine[0] if mov_affine.ndim == 3 else mov_affine
-        mov_min, mov_max = mov_affine_channel.min(), mov_affine_channel.max()
-
-        if mov_max == 0 or (mov_max - mov_min) < 1e-6:
-            # Affine result is blank/uniform - skip diffeomorphic and use affine-only
-            logger.warning(f"Crop {idx} at ({y},{x}): Affine result is blank/uniform (range: [{mov_min:.2f}, {mov_max:.2f}])")
-            logger.warning(f"  → Skipping diffeomorphic registration, using affine-only result")
-            diffeo_fallback_count += 1
-
-            # Accumulate affine-only result
-            weight_mask = weight_cache.get((h, w))
-            if weight_mask is None:
-                weight_mask = _create_weight_mask(h, w, overlap).astype(np.float32)
-                weight_cache[(h, w)] = weight_mask
-
-            if mov_affine.ndim == 3:
-                for c in range(mov_affine.shape[0]):
-                    merged_mem[c, y : y + h, x : x + w] += mov_affine[c] * weight_mask
-                    weights_mem[c, y : y + h, x : x + w] += weight_mask
-            else:
-                merged_mem[y : y + h, x : x + w] += mov_affine * weight_mask
-                weights_mem[y : y + h, x : x + w] += weight_mask
-
-            del mov_affine
-            gc.collect()
-            continue  # Skip to next crop
-
-        # run diffeo on the first channel and apply mapping to all channels
         try:
+            # Read reference crop (channel 0 for metric computation)
             if ref_mem.ndim == 3:
-                ref_crop = ref_mem[0, y : y + h, x : x + w].astype(np.float32)
+                ref_crop = ref_mem[0, y:y+h, x:x+w].astype(np.float32)
             else:
-                ref_crop = ref_mem[y : y + h, x : x + w].astype(np.float32)
+                ref_crop = ref_mem[y:y+h, x:x+w].astype(np.float32)
 
-            # Try diffeomorphic registration (no retry for uniform intensity - already checked above)
-            try:
-                mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine_channel, opt_tol=opt_tol, inv_tol=inv_tol)
-            except Exception as diffeo_error:
-                # Retry with more relaxed tolerance if it's a CUDA error (not uniform intensity)
-                error_msg = str(diffeo_error).lower()
-                if 'uniform' in error_msg:
-                    # Should have been caught above, re-raise
-                    raise
-                elif any(keyword in error_msg for keyword in ['cuda', 'illegal', 'memory', 'numerical']):
-                    logger.warning(f"Diffeo failed on crop {idx} (attempt 1), retrying with relaxed tolerance: {diffeo_error}")
-                    # Clear GPU memory before retry
-                    try:
-                        cp.get_default_memory_pool().free_all_blocks()
-                        cp.get_default_pinned_memory_pool().free_all_blocks()
-                        cp.cuda.Device().synchronize()
-                    except:
-                        pass
-                    # Retry with more conservative tolerance
-                    mapping = compute_diffeomorphic_mapping_dipy(ref_crop, mov_affine_channel, opt_tol=1e-3, inv_tol=1e-3)
-                    logger.info(f"  → Retry succeeded with relaxed tolerance (1e-3)")
+            # Read affine-transformed moving crop (all channels)
+            if affine_mem.ndim == 3:
+                affine_crop = affine_mem[:, y:y+h, x:x+w].astype(np.float32)
+                affine_crop_ch0 = affine_crop[0]
+            else:
+                affine_crop = affine_mem[y:y+h, x:x+w].astype(np.float32)
+                affine_crop_ch0 = affine_crop
+
+            # Check for valid intensity range
+            crop_min, crop_max = affine_crop_ch0.min(), affine_crop_ch0.max()
+            if crop_max - crop_min < 1e-6:
+                logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): uniform intensity, using affine-only")
+                fallback_count += 1
+
+                # Use affine result directly
+                if affine_mem.ndim == 3:
+                    for c in range(affine_mem.shape[0]):
+                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
+                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
                 else:
-                    # Not a numerical error, re-raise
+                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
+                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+
+                continue
+
+            # Compute diffeomorphic mapping
+            ref_crop_cont = np.ascontiguousarray(ref_crop)
+            affine_crop_ch0_cont = np.ascontiguousarray(affine_crop_ch0)
+
+            try:
+                mapping = compute_diffeomorphic_mapping_dipy(
+                    ref_crop_cont, affine_crop_ch0_cont,
+                    opt_tol=opt_tol, inv_tol=inv_tol
+                )
+            except Exception as diffeo_err:
+                error_msg = str(diffeo_err).lower()
+
+                # Retry with relaxed tolerance for CUDA errors
+                if any(kw in error_msg for kw in ['cuda', 'illegal', 'memory', 'numerical']):
+                    logger.warning(f"Diffeo crop {idx+1}: retrying with relaxed tolerance: {diffeo_err}")
+                    clear_gpu_memory()
+
+                    try:
+                        mapping = compute_diffeomorphic_mapping_dipy(
+                            ref_crop_cont, affine_crop_ch0_cont,
+                            opt_tol=1e-3, inv_tol=1e-3
+                        )
+                        logger.info(f"  → Retry succeeded")
+                    except Exception:
+                        raise diffeo_err
+                else:
                     raise
 
-            # apply mapping channel-wise and accumulate into memmaps using weight mask
-            weight_mask = weight_cache.get((h, w))
-            if weight_mask is None:
-                weight_mask = _create_weight_mask(h, w, overlap).astype(np.float32)
-                weight_cache[(h, w)] = weight_mask
+            del ref_crop_cont, affine_crop_ch0_cont
 
-            if mov_affine.ndim == 3:
-                for c in range(mov_affine.shape[0]):
-                    channel = np.ascontiguousarray(mov_affine[c].astype(np.float32))
-                    mapped = apply_mapping(mapping, channel, method="dipy")
-                    if hasattr(mapped, "get"):
-                        mapped = mapped.get()
-                    merged_mem[c, y : y + h, x : x + w] += mapped * weight_mask
-                    weights_mem[c, y : y + h, x : x + w] += weight_mask
-                    del channel
-                    del mapped
-                    gc.collect()
+            # Apply mapping to all channels
+            if affine_mem.ndim == 3:
+                for c in range(affine_mem.shape[0]):
+                    channel = np.ascontiguousarray(affine_crop[c])
+                    mapped = apply_diffeo_mapping(mapping, channel)
+                    diffeo_mem[c, y:y+h, x:x+w] += mapped * weight_mask
+                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                    del channel, mapped
             else:
-                channel = np.ascontiguousarray(mov_affine.astype(np.float32))
-                mapped = apply_mapping(mapping, channel, method="dipy")
-                if hasattr(mapped, "get"):
-                    mapped = mapped.get()
-                merged_mem[y : y + h, x : x + w] += mapped * weight_mask
-                weights_mem[y : y + h, x : x + w] += weight_mask
-                del channel
-                del mapped
-                gc.collect()
+                channel = np.ascontiguousarray(affine_crop)
+                mapped = apply_diffeo_mapping(mapping, channel)
+                diffeo_mem[y:y+h, x:x+w] += mapped * weight_mask
+                diffeo_weights[y:y+h, x:x+w] += weight_mask
+                del channel, mapped
 
-            # cleanup mapping and mov_affine
-            del mapping
-            del mov_affine
-            gc.collect()
-
-            # free cupy pools
-            try:
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
-            except Exception:
-                pass
-
-            diffeo_success_count += 1
-            logger.info(f"Processed crop {idx+1}/{len(coords)} at ({y},{x})")
+            success_count += 1
+            logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
 
         except Exception as e:
-            diffeo_fallback_count += 1
+            fallback_count += 1
             error_msg = str(e).lower()
-            if "memory" in error_msg or "cuda" in error_msg or "out of memory" in error_msg:
-                logger.error(f"Diffeo failed on crop {idx} - GPU MEMORY ERROR: {e}")
-                logger.error("  → Consider reducing --crop-size to use less GPU memory")
+
+            if any(kw in error_msg for kw in ['memory', 'cuda', 'out of memory']):
+                logger.error(f"Diffeo crop {idx+1} at ({y},{x}): GPU MEMORY ERROR - {e}")
+                logger.error("  → Consider reducing --diffeo-crop-size")
             else:
-                logger.error(f"Diffeo failed on crop {idx}: {e}")
-            logger.error(traceback.format_exc())
-            # fallback: accumulate affine result (no diffeo)
-            weight_mask = weight_cache.get((h, w))
-            if weight_mask is None:
-                weight_mask = _create_weight_mask(h, w, overlap).astype(np.float32)
-                weight_cache[(h, w)] = weight_mask
-            if mov_affine.ndim == 3:
-                for c in range(mov_affine.shape[0]):
-                    merged_mem[c, y : y + h, x : x + w] += mov_affine[c] * weight_mask
-                    weights_mem[c, y : y + h, x : x + w] += weight_mask
+                logger.error(f"Diffeo crop {idx+1} at ({y},{x}): {e}")
+
+            # Fallback: use affine result
+            if affine_mem.ndim == 3:
+                for c in range(affine_mem.shape[0]):
+                    crop = affine_mem[c, y:y+h, x:x+w].astype(np.float32)
+                    diffeo_mem[c, y:y+h, x:x+w] += crop * weight_mask
+                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
             else:
-                merged_mem[y : y + h, x : x + w] += mov_affine * weight_mask
-                weights_mem[y : y + h, x : x + w] += weight_mask
-            del mov_affine
+                crop = affine_mem[y:y+h, x:x+w].astype(np.float32)
+                diffeo_mem[y:y+h, x:x+w] += crop * weight_mask
+                diffeo_weights[y:y+h, x:x+w] += weight_mask
+
+        finally:
+            # Always clean up GPU resources, even on exception
+            if mapping is not None:
+                del mapping
+            if ref_crop is not None:
+                del ref_crop
+            if affine_crop is not None:
+                del affine_crop
             gc.collect()
+            clear_gpu_memory()
+    
+    # Normalize by weights
+    logger.info("Normalizing diffeo result...")
+    nonzero_mask = diffeo_weights > 0
+    if not np.any(nonzero_mask):
+        raise RuntimeError("All regions have zero weight - no valid diffeomorphic registration data")
+    diffeo_mem[nonzero_mask] /= diffeo_weights[nonzero_mask]
+    
+    # Flush and cleanup
+    diffeo_mem.flush()
+    del diffeo_weights
+    gc.collect()
+    
+    logger.info(f"Diffeo stage complete: {success_count} success, {fallback_count} fallback")
+    return diffeo_mem, diffeo_tmp_dir, success_count, fallback_count, len(diffeo_coords)
 
-    # Summarize GPU diffeomorphic stage
-    logger.info("=" * 80)
-    logger.info(f"GPU Diffeomorphic Stage Summary:")
-    logger.info(f"  - Processed: {len(successful_crops)} crops (skipped {len(failed_crops)} due to affine failure)")
-    logger.info(f"  - Diffeo success: {diffeo_success_count}/{len(successful_crops)} crops")
-    if diffeo_fallback_count > 0:
-        logger.warning(f"  - Diffeo fallback to affine-only: {diffeo_fallback_count}/{len(successful_crops)} crops ({diffeo_fallback_count/len(successful_crops)*100:.1f}%)")
-        logger.warning(f"    → {diffeo_fallback_count} crops used only affine registration (no diffeomorphic refinement)")
-    logger.info("=" * 80)
 
-    # finalize merge: avoid division by zero
-    weights_nonzero = weights_mem.copy()
-    weights_nonzero[weights_nonzero == 0] = 1.0
-    merged_mem[:] = merged_mem / weights_nonzero
+# --------------------- Main Registration Pipeline ---------------------
 
-    # cast back to original dtype
-    final = merged_mem
-    # if original moving file dtype is not float32, cast back
-    orig_dtype = mov_mem.dtype
-    if orig_dtype == np.uint16:
-        out = np.clip(final, 0, 65535).astype(np.uint16)
-    elif orig_dtype == np.uint8:
-        out = np.clip(final, 0, 255).astype(np.uint8)
-    else:
-        out = final.astype(orig_dtype)
-
-    logger.info(f"Saving registered image to: {output_path}")
-
-    # Extract channel names from moving image to preserve them in output
+def extract_channel_names(moving_path: Path, num_channels: int) -> List[str]:
+    """Extract channel names from file metadata or filename."""
     channel_names = []
+    
+    # Try OME metadata first
     try:
         with tifffile.TiffFile(str(moving_path)) as tif:
             if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
@@ -687,89 +706,243 @@ def register_image_pair(
                 channels = root.findall('.//ome:Channel', ns)
                 channel_names = [ch.get('Name') for ch in channels]
     except Exception as e:
-        logger.warning(f"Could not extract channel names from metadata: {e}")
-
-    # Fallback: extract from filename
-    if not channel_names or len(channel_names) != out.shape[0]:
-        filename = Path(moving_path).stem
-        # Extract markers from filename (e.g., "B19-10215_DAPI_SMA_panck_corrected" or "01B19-10215_DAPI_FOXP3_VIMENTIN_corrected")
+        logger.debug(f"Could not extract channel names from OME metadata: {e}")
+    
+    # Validate or fallback to filename parsing
+    if not channel_names or len(channel_names) != num_channels:
+        filename = moving_path.stem
         name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '')
         parts = name_part.split('_')
-
-        # Skip first part if it looks like a patient/sample ID (contains dash and numbers)
+        
         if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
-            markers = parts[1:]  # Skip first part (patient ID)
+            markers = parts[1:]
         else:
-            markers = parts  # No obvious patient ID, use all parts
-
-        if len(markers) == out.shape[0]:
+            markers = parts
+        
+        if len(markers) == num_channels:
             channel_names = markers
         else:
-            channel_names = [f"channel_{i}" for i in range(out.shape[0])]
+            channel_names = [f"channel_{i}" for i in range(num_channels)]
+    
+    return channel_names
 
-    logger.info(f"Channel names: {channel_names}")
 
-    # Create OME-XML metadata with channel names
-    num_channels, height, width = out.shape if out.ndim == 3 else (1, out.shape[0], out.shape[1])
-    if out.ndim == 2:
-        out = out[np.newaxis, ...]
-        channel_names = ['channel_0']
-
-    ome_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+def create_ome_xml(channel_names: List[str], dtype: np.dtype, 
+                   width: int, height: int) -> str:
+    """Create OME-XML metadata string."""
+    num_channels = len(channel_names)
+    
+    channel_xml = '\n'.join(
+        f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />'
+        for i, name in enumerate(channel_names)
+    )
+    
+    return f'''<?xml version="1.0" encoding="UTF-8"?>
 <OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
     <Image ID="Image:0" Name="Registered">
-        <Pixels ID="Pixels:0" Type="{out.dtype.name}"
+        <Pixels ID="Pixels:0" Type="{dtype.name}"
                 SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
                 DimensionOrder="XYCZT"
                 PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
-            {chr(10).join(f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
+{channel_xml}
             <TiffData />
         </Pixels>
     </Image>
 </OME>'''
 
-    tifffile.imwrite(
-        str(output_path),
-        out,
-        metadata={'axes': 'CYX'},
-        description=ome_xml,
-        compression="zlib",
-        bigtiff=True
-    )
 
-    # optional QC
-    if qc_dir:
-        logger.info(f"\nGenerating QC outputs to: {qc_dir}")
-        qc_dir.mkdir(parents=True, exist_ok=True)
-        qc_filename = f"{moving_path.stem}_QC_RGB.tif"
-        qc_output_path = qc_dir / qc_filename
-        try:
-            create_qc_rgb_composite(
-                reference_path=reference_path,
-                registered_path=Path(output_path),
-                output_path=qc_output_path,
-            )
-            logger.info(f"QC composite saved successfully")
-        except Exception as e:
-            logger.warning(f"Failed to generate QC composite: {e}")
-            traceback.print_exc()
+def register_image_pair(
+    reference_path: Path,
+    moving_path: Path,
+    output_path: Path,
+    affine_crop_size: int = 2000,
+    diffeo_crop_size: int = 2000,
+    overlap_percent: float = 10.0,
+    n_features: int = 2000,
+    n_workers: int = 4,
+    opt_tol: float = 1e-5,
+    inv_tol: float = 1e-5,
+    qc_dir: Optional[Path] = None,
+):
+    """
+    Register moving image to reference using affine + diffeomorphic registration.
+    
+    Pipeline:
+    1. CPU Affine Stage: Compute affine transforms on affine_crop_size crops, merge
+    2. GPU Diffeo Stage: Compute diffeomorphic transforms on diffeo_crop_size crops, merge
+    """
+    if not GPU_AVAILABLE:
+        raise RuntimeError(
+            f"GPU registration requires CuPy and cuDIPY.\nImport error: {_gpu_import_error}"
+        )
+    
+    # Open images as memmaps (read-only)
+    logger.info(f"Opening reference: {reference_path}")
+    ref_mem = tifffile.memmap(str(reference_path), mode='r')
+    
+    logger.info(f"Opening moving: {moving_path}")
+    mov_mem = tifffile.memmap(str(moving_path), mode='r')
+    
+    # Normalize shapes to (C, H, W)
+    if ref_mem.ndim == 2:
+        ref_shape = (1, ref_mem.shape[0], ref_mem.shape[1])
+    else:
+        ref_shape = ref_mem.shape
+        
+    if mov_mem.ndim == 2:
+        mov_shape = (1, mov_mem.shape[0], mov_mem.shape[1])
+    else:
+        mov_shape = mov_mem.shape
+    
+    logger.info(f"Reference shape: {ref_shape}, Moving shape: {mov_shape}")
+    
+    # Validate dimensions
+    if ref_shape[1:] != mov_shape[1:]:
+        raise ValueError(f"Spatial dimension mismatch: ref {ref_shape[1:]} != mov {mov_shape[1:]}")
+    
+    if ref_shape[0] != mov_shape[0]:
+        logger.warning(f"Channel count mismatch: ref={ref_shape[0]}, mov={mov_shape[0]}")
+    
+    # Validate overlap
+    if not 0 <= overlap_percent < 100:
+        raise ValueError(f"overlap_percent must be in [0, 100), got {overlap_percent}")
+    
+    # Compute overlap sizes
+    affine_overlap = int(affine_crop_size * overlap_percent / 100.0)
+    diffeo_overlap = int(diffeo_crop_size * overlap_percent / 100.0)
+    
+    logger.info(f"Overlap: {overlap_percent}%")
+    logger.info(f"  Affine: crop_size={affine_crop_size}, overlap={affine_overlap}px")
+    logger.info(f"  Diffeo: crop_size={diffeo_crop_size}, overlap={diffeo_overlap}px")
+    
+    orig_dtype = mov_mem.dtype
+    affine_tmp_dir = None
+    diffeo_tmp_dir = None
+    
+    try:
+        # STAGE 1: CPU Affine
+        affine_mem, affine_tmp_dir, affine_success, affine_total = run_affine_stage(
+            ref_mem, mov_mem, mov_shape, orig_dtype,
+            affine_crop_size, affine_overlap,
+            n_features, n_workers
+        )
+        
+        # STAGE 2: GPU Diffeomorphic
+        diffeo_mem, diffeo_tmp_dir, diffeo_success, diffeo_fallback, diffeo_total = run_diffeo_stage(
+            ref_mem, affine_mem, mov_shape,
+            diffeo_crop_size, diffeo_overlap,
+            opt_tol, inv_tol
+        )
+        
+        # Convert to original dtype
+        logger.info("Converting to output dtype...")
+        if orig_dtype == np.uint16:
+            out = np.clip(diffeo_mem, 0, 65535).astype(np.uint16)
+        elif orig_dtype == np.uint8:
+            out = np.clip(diffeo_mem, 0, 255).astype(np.uint8)
+        else:
+            out = diffeo_mem.astype(orig_dtype)
+        
+        # Ensure 3D shape
+        if out.ndim == 2:
+            out = out[np.newaxis, ...]
+        
+        # Extract channel names
+        channel_names = extract_channel_names(moving_path, out.shape[0])
+        logger.info(f"Channel names: {channel_names}")
+        
+        # Create OME-XML metadata
+        _, height, width = out.shape
+        ome_xml = create_ome_xml(channel_names, out.dtype, width, height)
+        
+        # Save output
+        logger.info(f"Saving registered image: {output_path}")
+        tifffile.imwrite(
+            str(output_path),
+            out,
+            metadata={'axes': 'CYX'},
+            description=ome_xml,
+            compression="zlib",
+            bigtiff=True
+        )
+        
+        # Summary
+        logger.info("=" * 80)
+        logger.info("REGISTRATION SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"Affine stage:  {affine_success}/{affine_total} crops succeeded ({100*affine_success/affine_total:.1f}%)")
+        logger.info(f"Diffeo stage:  {diffeo_success}/{diffeo_total} success, {diffeo_fallback}/{diffeo_total} fallback")
+        logger.info(f"Output saved:  {output_path}")
+        
+        # Generate QC if requested
+        if qc_dir:
+            logger.info(f"Generating QC outputs: {qc_dir}")
+            qc_dir.mkdir(parents=True, exist_ok=True)
+            qc_filename = f"{moving_path.stem}_QC_RGB.tif"
+            qc_output_path = qc_dir / qc_filename
+            
+            try:
+                create_qc_rgb_composite(reference_path, output_path, qc_output_path)
+            except Exception as e:
+                logger.warning(f"Failed to generate QC composite: {e}")
+        
+        logger.info("Registration complete")
 
-    logger.info("Registration complete")
+    finally:
+        # Ensure memmaps are properly closed before cleanup
+        if 'affine_mem' in locals():
+            try:
+                affine_mem.flush()
+            except Exception:
+                pass
+            del affine_mem
+        if 'diffeo_mem' in locals():
+            try:
+                diffeo_mem.flush()
+            except Exception:
+                pass
+            del diffeo_mem
+        gc.collect()
+
+        # Cleanup temp directories
+        if affine_tmp_dir:
+            cleanup_memmaps(affine_tmp_dir)
+        if diffeo_tmp_dir:
+            cleanup_memmaps(diffeo_tmp_dir)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GPU-based image registration with affine + diffeomorphic")
-    parser.add_argument("--reference", type=str, required=True, help="Path to reference image")
-    parser.add_argument("--moving", type=str, required=True, help="Path to moving image to register")
-    parser.add_argument("--output", type=str, required=True, help="Path to save registered image")
-    parser.add_argument("--qc-dir", type=str, default=None, help="Directory to save QC outputs (optional)")
-    parser.add_argument("--crop-size", type=int, default=2000, help="Size of crops for processing")
-    parser.add_argument("--overlap-percent", type=float, default=10.0, help="Overlap between crops as percentage of crop size (default: 10%%, recommended: 10-20%%)")
-    parser.add_argument("--n-features", type=int, default=2000, help="Number of features for affine registration")
-    parser.add_argument("--n-workers", type=int, default=4, help="Number of parallel workers")
-    parser.add_argument("--opt-tol", type=float, default=1e-5, help="Optimization tolerance for diffeomorphic registration (default: 1e-5, recommended: 1e-5 to 1e-7)")
-    parser.add_argument("--inv-tol", type=float, default=1e-5, help="Inverse tolerance for diffeomorphic registration (default: 1e-5)")
-    parser.add_argument("--log-level", type=str, default="INFO", help="Logging level")
+    parser = argparse.ArgumentParser(
+        description="GPU-based image registration with separate affine and diffeomorphic stages"
+    )
+    parser.add_argument("--reference", type=str, required=True, 
+                        help="Path to reference image")
+    parser.add_argument("--moving", type=str, required=True, 
+                        help="Path to moving image to register")
+    parser.add_argument("--output", type=str, required=True, 
+                        help="Path to save registered image")
+    parser.add_argument("--qc-dir", type=str, default=None, 
+                        help="Directory to save QC outputs (optional)")
+    parser.add_argument("--affine-crop-size", type=int, default=2000, 
+                        help="Crop size for affine registration (default: 2000)")
+    parser.add_argument("--diffeo-crop-size", type=int, default=2000, 
+                        help="Crop size for diffeomorphic registration (default: 2000)")
+    parser.add_argument("--overlap-percent", type=float, default=10.0, 
+                        help="Overlap between crops as percentage (default: 10%%)")
+    parser.add_argument("--n-features", type=int, default=2000, 
+                        help="Number of features for affine registration")
+    parser.add_argument("--n-workers", type=int, default=4, 
+                        help="Number of parallel workers for CPU stage")
+    parser.add_argument("--opt-tol", type=float, default=1e-5, 
+                        help="Optimization tolerance for diffeomorphic registration")
+    parser.add_argument("--inv-tol", type=float, default=1e-5, 
+                        help="Inverse tolerance for diffeomorphic registration")
+    parser.add_argument("--log-level", type=str, default="INFO", 
+                        help="Logging level")
+    
+    # Legacy argument for backward compatibility
+    parser.add_argument("--crop-size", type=int, default=None,
+                        help="(Deprecated) Use --affine-crop-size and --diffeo-crop-size instead")
 
     args = parser.parse_args()
 
@@ -778,7 +951,15 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
-    # Print CUDA diagnostics after logging is configured
+    # Handle legacy --crop-size argument
+    affine_crop_size = args.affine_crop_size
+    diffeo_crop_size = args.diffeo_crop_size
+    
+    if args.crop_size is not None:
+        logger.warning("--crop-size is deprecated. Use --affine-crop-size and --diffeo-crop-size instead.")
+        affine_crop_size = args.crop_size
+        diffeo_crop_size = args.crop_size
+
     print_cuda_diagnostics()
 
     try:
@@ -786,7 +967,8 @@ def main():
             reference_path=Path(args.reference),
             moving_path=Path(args.moving),
             output_path=Path(args.output),
-            crop_size=args.crop_size,
+            affine_crop_size=affine_crop_size,
+            diffeo_crop_size=diffeo_crop_size,
             overlap_percent=args.overlap_percent,
             n_features=args.n_features,
             n_workers=args.n_workers,

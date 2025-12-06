@@ -33,7 +33,9 @@ process GPU_REGISTER {
     path "qc/*_QC_RGB.tif"                         , emit: qc, optional: true
 
     script:
-    def crop_size = params.gpu_reg_crop_size ?: 2000
+    // New separate crop sizes for affine and diffeomorphic stages
+    def affine_crop_size = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+    def diffeo_crop_size = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
     def overlap_percent = params.gpu_reg_overlap_percent ?: 10.0
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
@@ -55,6 +57,8 @@ process GPU_REGISTER {
     echo "Allocated memory: ${allocated_mem}"
     echo "Allocated time: ${allocated_time}"
     echo "GPU: nvidia_h200:1"
+    echo "Affine crop size: ${affine_crop_size}"
+    echo "Diffeo crop size: ${diffeo_crop_size}"
     echo "=================================================="
     echo ""
 
@@ -65,7 +69,8 @@ process GPU_REGISTER {
         --moving ${moving} \\
         --output ${moving.simpleName}_registered.ome.tiff \\
         --qc-dir qc \\
-        --crop-size ${crop_size} \\
+        --affine-crop-size ${affine_crop_size} \\
+        --diffeo-crop-size ${diffeo_crop_size} \\
         --overlap-percent ${overlap_percent} \\
         --n-features ${n_features} \\
         --n-workers ${n_workers} \\
