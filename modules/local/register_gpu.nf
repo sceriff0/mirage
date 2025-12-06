@@ -2,6 +2,7 @@ nextflow.enable.dsl = 2
 
 process GPU_REGISTER {
     tag "${moving.simpleName}"
+    label 'gpu'
     container "${params.container.register_gpu}"
 
     // Dynamic resource allocation based on input file size
