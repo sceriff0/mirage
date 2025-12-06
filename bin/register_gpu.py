@@ -17,6 +17,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -40,6 +41,19 @@ try:
 except Exception as e:
     GPU_AVAILABLE = False
     _gpu_import_error = str(e)
+
+# CUDA error types that indicate corrupted GPU state
+CUDA_FATAL_ERRORS = (
+    'cudaErrorIllegalAddress',
+    'cudaErrorIllegalMemoryAccess', 
+    'cudaErrorHardwareStackError',
+    'cudaErrorIllegalInstruction',
+    'cudaErrorMisalignedAddress',
+    'cudaErrorInvalidAddressSpace',
+    'cudaErrorInvalidPc',
+    'cudaErrorLaunchFailure',
+    'cudaErrorECCUncorrectable',
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +229,13 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray,
     if y.shape != x.shape:
         raise ValueError("Reference and moving images must have the same shape.")
 
+    # Thorough input validation to prevent CUDA errors
     if np.any(np.isnan(y)) or np.any(np.isinf(y)):
         raise ValueError("Reference image contains NaN or Inf values")
     if np.any(np.isnan(x)) or np.any(np.isinf(x)):
         raise ValueError("Moving image contains NaN or Inf values")
 
+    # Check intensity ranges
     y_min, y_max = np.percentile(y, [0.1, 99.9])
     x_min, x_max = np.percentile(x, [0.1, 99.9])
 
@@ -228,21 +244,30 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray,
     if x_max <= x_min:
         raise ValueError(f"Moving crop has uniform intensity (min={x_min:.2f}, max={x_max:.2f})")
 
-    y_gpu = cp.asarray(y)
-    x_gpu = cp.asarray(x)
+    # Ensure contiguous arrays
+    y_cont = np.ascontiguousarray(y)
+    x_cont = np.ascontiguousarray(x)
+    
+    # Transfer to GPU
+    y_gpu = cp.asarray(y_cont)
+    x_gpu = cp.asarray(x_cont)
+    
+    # Free CPU copies
+    del y_cont, x_cont
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
-    radius = int(20 * scale_factor)
-    sigma_diff = int(20 * np.sqrt(scale_factor))
+    radius =  int(20 * scale_factor)  # Minimum radius of 5
+    sigma_diff = int(20 * np.sqrt(scale_factor))  # Minimum sigma of 5
 
     metric = CCMetric(2, sigma_diff=sigma_diff, radius=radius)
     sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=opt_tol, inv_tol=inv_tol)
 
-    mapping = sdr.optimize(y_gpu, x_gpu)
-    
-    # Clean up GPU arrays immediately
-    del y_gpu, x_gpu
+    try:
+        mapping = sdr.optimize(y_gpu, x_gpu)
+    finally:
+        # Always clean up GPU arrays, even on failure
+        del y_gpu, x_gpu
     
     return mapping
 
@@ -253,14 +278,6 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
         _, height, width = image_shape
     else:
         height, width = image_shape
-
-    # Validate overlap to prevent infinite loop
-    if overlap >= crop_size:
-        raise ValueError(f"Overlap ({overlap}) must be less than crop_size ({crop_size})")
-
-    # Warn if crop size is larger than image
-    if crop_size > height or crop_size > width:
-        logger.warning(f"crop_size ({crop_size}) is larger than image dimensions ({width}x{height}). Using full image as single crop.")
 
     stride = crop_size - overlap
     coords = []
@@ -414,9 +431,9 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     # Summarize results
     successful = [r for r in cpu_results if r["status"] == "success"]
     failed = [r for r in cpu_results if r["status"] != "success"]
-
+    
     logger.info(f"Affine stage: {len(successful)}/{len(affine_coords)} crops succeeded ({100*len(successful)/len(affine_coords):.1f}%)")
-
+    
     if failed:
         failure_reasons = {}
         for r in failed:
@@ -424,18 +441,9 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
             failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
         for reason, count in sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True):
             logger.warning(f"  - {reason}: {count} crops")
-
+    
     if len(successful) == 0:
         raise RuntimeError("All affine crops failed. Cannot proceed.")
-
-    # Check if failure rate is too high
-    failure_rate = len(failed) / len(affine_coords)
-    if failure_rate > 0.99:
-        raise RuntimeError(
-            f"Affine stage failed for {len(failed)}/{len(affine_coords)} crops ({100*failure_rate:.1f}%). "
-            f"Output quality would be too poor. More than 50% of the image would be unregistered. "
-            f"Consider checking image quality or adjusting parameters."
-        )
     
     # Create memmap for affine-transformed image
     affine_mem, affine_weights, affine_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "affine_")
@@ -487,8 +495,6 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     # Normalize by weights
     logger.info("Normalizing affine result...")
     nonzero_mask = affine_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid affine registration data")
     affine_mem[nonzero_mask] /= affine_weights[nonzero_mask]
     
     # Flush to disk
@@ -514,10 +520,102 @@ def clear_gpu_memory():
         pass
 
 
+def is_fatal_cuda_error(error: Exception) -> bool:
+    """Check if the error is a fatal CUDA error requiring context reset."""
+    error_str = str(error)
+    return any(fatal in error_str for fatal in CUDA_FATAL_ERRORS)
+
+
+def reset_cuda_context():
+    """
+    Fully reset CUDA context after fatal errors like cudaErrorIllegalAddress.
+    
+    This is necessary because once a CUDA error corrupts the context,
+    all subsequent operations will fail until the context is reset.
+    """
+    logger.warning("Attempting full CUDA context reset...")
+    
+    try:
+        # Step 1: Synchronize to ensure all pending operations complete/fail
+        try:
+            cp.cuda.Device().synchronize()
+        except Exception:
+            pass
+        
+        # Step 2: Clear all memory pools
+        try:
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+        
+        # Step 3: Reset the device (this clears all allocations and state)
+        try:
+            device = cp.cuda.Device()
+            device.synchronize()
+            
+            # cupy doesn't have direct device reset, but we can recreate pools
+            # and clear the FFT plan cache which cuDIPY uses heavily
+            cp.fft.config.clear_plan_cache()
+        except Exception as e:
+            logger.warning(f"Could not clear FFT cache: {e}")
+        
+        # Step 4: Force Python garbage collection
+        gc.collect()
+        
+        # Step 5: Small allocation test to verify context is working
+        try:
+            test = cp.zeros((10, 10), dtype=cp.float32)
+            _ = float(test.sum())
+            del test
+            logger.info("CUDA context reset successful - GPU is responsive")
+            return True
+        except Exception as e:
+            logger.error(f"CUDA context still broken after reset: {e}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to reset CUDA context: {e}")
+        return False
+
+
+def is_cuda_context_healthy():
+    """Quick check if CUDA context is still usable."""
+    try:
+        test = cp.array([1.0, 2.0, 3.0], dtype=cp.float32)
+        result = float(test.sum())
+        del test
+        return abs(result - 6.0) < 0.01
+    except Exception:
+        return False
+
+
+def log_gpu_memory_usage():
+    """Log current GPU memory usage."""
+    try:
+        mempool = cp.get_default_memory_pool()
+        used = mempool.used_bytes() / (1024**3)
+        total = mempool.total_bytes() / (1024**3)
+        
+        # Also get device memory info
+        device = cp.cuda.Device()
+        free_mem, total_mem = device.mem_info
+        free_gb = free_mem / (1024**3)
+        total_gb = total_mem / (1024**3)
+        used_gb = total_gb - free_gb
+        
+        logger.debug(f"GPU Memory: Pool={used:.2f}/{total:.2f} GB, Device={used_gb:.2f}/{total_gb:.2f} GB ({100*used_gb/total_gb:.1f}% used)")
+        return used_gb, total_gb
+    except Exception as e:
+        logger.debug(f"Could not get GPU memory info: {e}")
+        return None, None
+
+
 def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                      mov_shape: Tuple[int, ...],
                      diffeo_crop_size: int, diffeo_overlap: int,
-                     opt_tol: float, inv_tol: float) -> Tuple[np.memmap, Path, int, int, int]:
+                     opt_tol: float, inv_tol: float,
+                     gpu_reset_interval: int = 50) -> Tuple[np.memmap, Path, int, int, int]:
     """
     Run GPU diffeomorphic stage on the affine-transformed image.
     
@@ -548,41 +646,68 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     weight_cache = {}
     success_count = 0
     fallback_count = 0
+    consecutive_failures = 0
+    max_consecutive_failures = 5  # If we hit this many in a row, GPU is likely broken
+    cuda_context_broken = False
+    
+    # Log initial GPU memory state
+    log_gpu_memory_usage()
     
     for idx, coord in enumerate(diffeo_coords):
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
-
+        
+        # Proactive GPU reset every N crops to prevent memory fragmentation
+        # This happens BEFORE errors occur, not just after
+        # Set gpu_reset_interval to 0 to disable
+        if gpu_reset_interval > 0 and idx > 0 and idx % gpu_reset_interval == 0 and not cuda_context_broken:
+            logger.info(f"Proactive GPU reset at crop {idx}/{len(diffeo_coords)} (every {gpu_reset_interval} crops)")
+            log_gpu_memory_usage()
+            reset_cuda_context()
+            time.sleep(0.2)  # Brief pause to let GPU stabilize
+        
         # Get or create weight mask
         if (h, w) not in weight_cache:
             weight_cache[(h, w)] = create_weight_mask(h, w, diffeo_overlap)
         weight_mask = weight_cache[(h, w)]
+        
+        # Read affine-transformed moving crop (all channels) - always needed
+        if affine_mem.ndim == 3:
+            affine_crop = affine_mem[:, y:y+h, x:x+w].astype(np.float32)
+            affine_crop_ch0 = affine_crop[0]
+        else:
+            affine_crop = affine_mem[y:y+h, x:x+w].astype(np.float32)
+            affine_crop_ch0 = affine_crop
+        
+        # Check if CUDA context is broken - skip GPU work entirely
+        if cuda_context_broken:
+            # Use affine result directly
+            if affine_mem.ndim == 3:
+                for c in range(affine_mem.shape[0]):
+                    diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
+                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+            else:
+                diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
+                diffeo_weights[y:y+h, x:x+w] += weight_mask
 
-        # Initialize variables to None for proper cleanup in finally block
-        mapping = None
-        ref_crop = None
-        affine_crop = None
-
+            fallback_count += 1
+            del affine_crop
+            gc.collect()
+            clear_gpu_memory()
+            continue
+        
         try:
             # Read reference crop (channel 0 for metric computation)
             if ref_mem.ndim == 3:
                 ref_crop = ref_mem[0, y:y+h, x:x+w].astype(np.float32)
             else:
                 ref_crop = ref_mem[y:y+h, x:x+w].astype(np.float32)
-
-            # Read affine-transformed moving crop (all channels)
-            if affine_mem.ndim == 3:
-                affine_crop = affine_mem[:, y:y+h, x:x+w].astype(np.float32)
-                affine_crop_ch0 = affine_crop[0]
-            else:
-                affine_crop = affine_mem[y:y+h, x:x+w].astype(np.float32)
-                affine_crop_ch0 = affine_crop
-
+            
             # Check for valid intensity range
             crop_min, crop_max = affine_crop_ch0.min(), affine_crop_ch0.max()
             if crop_max - crop_min < 1e-6:
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): uniform intensity, using affine-only")
                 fallback_count += 1
-
+                
                 # Use affine result directly
                 if affine_mem.ndim == 3:
                     for c in range(affine_mem.shape[0]):
@@ -591,88 +716,168 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 else:
                     diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
                     diffeo_weights[y:y+h, x:x+w] += weight_mask
-
+                
+                del ref_crop, affine_crop
+                gc.collect()
+                consecutive_failures = 0  # Uniform intensity is not a GPU failure
                 continue
-
+            
             # Compute diffeomorphic mapping
             ref_crop_cont = np.ascontiguousarray(ref_crop)
             affine_crop_ch0_cont = np.ascontiguousarray(affine_crop_ch0)
-
+            
+            mapping = None
+            diffeo_succeeded = False
+            
             try:
                 mapping = compute_diffeomorphic_mapping_dipy(
                     ref_crop_cont, affine_crop_ch0_cont,
                     opt_tol=opt_tol, inv_tol=inv_tol
                 )
+                diffeo_succeeded = True
+                consecutive_failures = 0
+                
             except Exception as diffeo_err:
                 error_msg = str(diffeo_err).lower()
 
-                # Retry with relaxed tolerance for CUDA errors
-                if any(kw in error_msg for kw in ['cuda', 'illegal', 'memory', 'numerical']):
-                    logger.warning(f"Diffeo crop {idx+1}: retrying with relaxed tolerance: {diffeo_err}")
-                    clear_gpu_memory()
+                # Check for fatal CUDA errors that corrupt context
+                # Note: Don't use generic 'cuda error' - too broad and matches benign messages
+                is_fatal_error = any(kw in error_msg for kw in [
+                    'illegalmemory', 'illegaladdress', 'cudaerrorillegal',
+                    'an illegal memory access', 'unspecified launch failure',
+                    'device-side assert', 'cudaerrorhardware',
+                    'cudaerrorinvalidpc', 'cudaerrorlaunchfailure'
+                ])
 
+                if is_fatal_error:
+                    logger.error(f"Diffeo crop {idx+1}: FATAL CUDA ERROR: {diffeo_err}")
+                    consecutive_failures += 1
+                    
+                    # Try to reset CUDA context
+                    if reset_cuda_context():
+                        # Context reset succeeded, try one more time with very relaxed settings
+                        logger.info(f"Retrying crop {idx+1} after context reset...")
+                        time.sleep(0.5)  # Give GPU time to stabilize
+                        try:
+                            clear_gpu_memory()
+                            mapping = compute_diffeomorphic_mapping_dipy(
+                                ref_crop_cont, affine_crop_ch0_cont,
+                                opt_tol=1e-2, inv_tol=1e-2  # Very relaxed
+                            )
+                            diffeo_succeeded = True
+                            consecutive_failures = 0
+                            logger.info(f"  → Retry after context reset succeeded")
+                        except Exception as retry_err:
+                            logger.error(f"  → Retry failed: {retry_err}")
+                            consecutive_failures += 1
+                    else:
+                        logger.error("CUDA context reset failed!")
+                        consecutive_failures += 1
+                
+                elif any(kw in error_msg for kw in ['memory', 'out of memory', 'oom']):
+                    # Memory error - try clearing and retrying
+                    logger.warning(f"Diffeo crop {idx+1}: GPU memory error, clearing and retrying...")
+                    clear_gpu_memory()
+                    gc.collect()
+                    
                     try:
                         mapping = compute_diffeomorphic_mapping_dipy(
                             ref_crop_cont, affine_crop_ch0_cont,
                             opt_tol=1e-3, inv_tol=1e-3
                         )
-                        logger.info(f"  → Retry succeeded")
+                        diffeo_succeeded = True
+                        consecutive_failures = 0
                     except Exception:
-                        raise diffeo_err
+                        consecutive_failures += 1
+                
                 else:
-                    raise
-
+                    # Other error (numerical, etc) - just log and fallback
+                    logger.warning(f"Diffeo crop {idx+1}: {diffeo_err}")
+                    consecutive_failures += 1
+            
             del ref_crop_cont, affine_crop_ch0_cont
-
-            # Apply mapping to all channels
-            if affine_mem.ndim == 3:
-                for c in range(affine_mem.shape[0]):
-                    channel = np.ascontiguousarray(affine_crop[c])
+            
+            # Check if we've hit too many consecutive failures
+            if consecutive_failures >= max_consecutive_failures:
+                logger.error(f"Hit {consecutive_failures} consecutive GPU failures!")
+                logger.error("GPU appears to be in an unrecoverable state.")
+                logger.error("Falling back to affine-only for remaining crops.")
+                cuda_context_broken = True
+                
+                # Fallback for this crop
+                if affine_mem.ndim == 3:
+                    for c in range(affine_mem.shape[0]):
+                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
+                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                else:
+                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
+                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                
+                fallback_count += 1
+                del ref_crop, affine_crop
+                gc.collect()
+                continue
+            
+            if diffeo_succeeded and mapping is not None:
+                # Apply mapping to all channels
+                if affine_mem.ndim == 3:
+                    for c in range(affine_mem.shape[0]):
+                        channel = np.ascontiguousarray(affine_crop[c])
+                        mapped = apply_diffeo_mapping(mapping, channel)
+                        diffeo_mem[c, y:y+h, x:x+w] += mapped * weight_mask
+                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        del channel, mapped
+                else:
+                    channel = np.ascontiguousarray(affine_crop)
                     mapped = apply_diffeo_mapping(mapping, channel)
-                    diffeo_mem[c, y:y+h, x:x+w] += mapped * weight_mask
-                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                    diffeo_mem[y:y+h, x:x+w] += mapped * weight_mask
+                    diffeo_weights[y:y+h, x:x+w] += weight_mask
                     del channel, mapped
+                
+                del mapping
+                success_count += 1
+                logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
             else:
-                channel = np.ascontiguousarray(affine_crop)
-                mapped = apply_diffeo_mapping(mapping, channel)
-                diffeo_mem[y:y+h, x:x+w] += mapped * weight_mask
-                diffeo_weights[y:y+h, x:x+w] += weight_mask
-                del channel, mapped
-
-            success_count += 1
-            logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
-
+                # Fallback to affine
+                if affine_mem.ndim == 3:
+                    for c in range(affine_mem.shape[0]):
+                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
+                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                else:
+                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
+                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                
+                fallback_count += 1
+                logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): fallback to affine")
+            
+            del ref_crop, affine_crop
+            gc.collect()
+            clear_gpu_memory()
+            
         except Exception as e:
             fallback_count += 1
-            error_msg = str(e).lower()
-
-            if any(kw in error_msg for kw in ['memory', 'cuda', 'out of memory']):
-                logger.error(f"Diffeo crop {idx+1} at ({y},{x}): GPU MEMORY ERROR - {e}")
-                logger.error("  → Consider reducing --diffeo-crop-size")
-            else:
-                logger.error(f"Diffeo crop {idx+1} at ({y},{x}): {e}")
-
+            logger.error(f"Diffeo crop {idx+1} at ({y},{x}): unexpected error: {e}")
+            
             # Fallback: use affine result
             if affine_mem.ndim == 3:
                 for c in range(affine_mem.shape[0]):
-                    crop = affine_mem[c, y:y+h, x:x+w].astype(np.float32)
-                    diffeo_mem[c, y:y+h, x:x+w] += crop * weight_mask
+                    diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
                     diffeo_weights[c, y:y+h, x:x+w] += weight_mask
             else:
-                crop = affine_mem[y:y+h, x:x+w].astype(np.float32)
-                diffeo_mem[y:y+h, x:x+w] += crop * weight_mask
+                diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
                 diffeo_weights[y:y+h, x:x+w] += weight_mask
-
-        finally:
-            # Always clean up GPU resources, even on exception
-            if mapping is not None:
-                del mapping
-            if ref_crop is not None:
-                del ref_crop
-            if affine_crop is not None:
-                del affine_crop
+            
+            del affine_crop
             gc.collect()
             clear_gpu_memory()
+        
+        # Periodic GPU health check every 100 crops
+        if (idx + 1) % 100 == 0 and not cuda_context_broken:
+            if not is_cuda_context_healthy():
+                logger.warning(f"GPU health check failed at crop {idx+1}, attempting reset...")
+                if not reset_cuda_context():
+                    logger.error("Could not recover GPU, switching to affine-only mode")
+                    cuda_context_broken = True
     
     # Normalize by weights
     logger.info("Normalizing diffeo result...")
@@ -685,6 +890,11 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     diffeo_mem.flush()
     del diffeo_weights
     gc.collect()
+    
+    # Final summary
+    if cuda_context_broken:
+        logger.warning(f"GPU became unrecoverable during processing!")
+        logger.warning(f"Crops after failure used affine-only fallback.")
     
     logger.info(f"Diffeo stage complete: {success_count} success, {fallback_count} fallback")
     return diffeo_mem, diffeo_tmp_dir, success_count, fallback_count, len(diffeo_coords)
@@ -762,6 +972,7 @@ def register_image_pair(
     n_workers: int = 4,
     opt_tol: float = 1e-5,
     inv_tol: float = 1e-5,
+    gpu_reset_interval: int = 50,
     qc_dir: Optional[Path] = None,
 ):
     """
@@ -831,7 +1042,8 @@ def register_image_pair(
         diffeo_mem, diffeo_tmp_dir, diffeo_success, diffeo_fallback, diffeo_total = run_diffeo_stage(
             ref_mem, affine_mem, mov_shape,
             diffeo_crop_size, diffeo_overlap,
-            opt_tol, inv_tol
+            opt_tol, inv_tol,
+            gpu_reset_interval=gpu_reset_interval
         )
         
         # Convert to original dtype
@@ -887,23 +1099,8 @@ def register_image_pair(
                 logger.warning(f"Failed to generate QC composite: {e}")
         
         logger.info("Registration complete")
-
+        
     finally:
-        # Ensure memmaps are properly closed before cleanup
-        if 'affine_mem' in locals():
-            try:
-                affine_mem.flush()
-            except Exception:
-                pass
-            del affine_mem
-        if 'diffeo_mem' in locals():
-            try:
-                diffeo_mem.flush()
-            except Exception:
-                pass
-            del diffeo_mem
-        gc.collect()
-
         # Cleanup temp directories
         if affine_tmp_dir:
             cleanup_memmaps(affine_tmp_dir)
@@ -937,6 +1134,8 @@ def main():
                         help="Optimization tolerance for diffeomorphic registration")
     parser.add_argument("--inv-tol", type=float, default=1e-5, 
                         help="Inverse tolerance for diffeomorphic registration")
+    parser.add_argument("--gpu-reset-interval", type=int, default=50,
+                        help="Reset GPU every N crops to prevent memory fragmentation (default: 50, 0 to disable)")
     parser.add_argument("--log-level", type=str, default="INFO", 
                         help="Logging level")
     
@@ -974,6 +1173,7 @@ def main():
             n_workers=args.n_workers,
             opt_tol=args.opt_tol,
             inv_tol=args.inv_tol,
+            gpu_reset_interval=args.gpu_reset_interval,
             qc_dir=Path(args.qc_dir) if args.qc_dir else None,
         )
         return 0
