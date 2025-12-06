@@ -44,6 +44,68 @@ except Exception as e:
 logger = logging.getLogger(__name__)
 
 
+def print_cuda_diagnostics():
+    """Print CUDA driver, runtime, and library version information."""
+    print("=" * 80)
+    print("CUDA DIAGNOSTICS")
+    print("=" * 80)
+
+    if not GPU_AVAILABLE:
+        print(f"✗ GPU libraries not available: {_gpu_import_error}")
+        print("=" * 80)
+        return
+
+    try:
+        # CuPy version
+        print(f"CuPy version: {cp.__version__}")
+
+        # CUDA runtime version (built into CuPy)
+        try:
+            runtime_version = cp.cuda.runtime.runtimeGetVersion()
+            major = runtime_version // 1000
+            minor = (runtime_version % 1000) // 10
+            print(f"CUDA Runtime Version (CuPy): {major}.{minor}")
+        except Exception as e:
+            print(f"Could not get CUDA runtime version: {e}")
+
+        # CUDA driver version
+        try:
+            driver_version = cp.cuda.runtime.driverGetVersion()
+            major = driver_version // 1000
+            minor = (driver_version % 1000) // 10
+            print(f"CUDA Driver Version: {major}.{minor}")
+        except Exception as e:
+            print(f"Could not get CUDA driver version: {e}")
+
+        # GPU device info
+        try:
+            device = cp.cuda.Device(0)
+            props = cp.cuda.runtime.getDeviceProperties(device.id)
+            print(f"GPU Device: {props['name'].decode('utf-8')}")
+            print(f"Compute Capability: {props['major']}.{props['minor']}")
+            print(f"Total Memory: {props['totalGlobalMem'] / 1024**3:.2f} GB")
+        except Exception as e:
+            print(f"Could not get GPU device info: {e}")
+
+        # cuDIPY info
+        try:
+            import cudipy
+            if hasattr(cudipy, '__version__'):
+                print(f"cuDIPY version: {cudipy.__version__}")
+            else:
+                print("cuDIPY version: (version not available)")
+        except Exception as e:
+            print(f"cuDIPY import check: {e}")
+
+    except Exception as e:
+        print(f"Error during diagnostics: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("=" * 80)
+    print("")
+
+
 # ------------------------- small helpers ---------------------------------
 
 def get_channel_names(filename: str) -> List[str]:
@@ -717,6 +779,9 @@ def main():
         level=getattr(logging, args.log_level.upper()),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+
+    # Print CUDA diagnostics at startup
+    print_cuda_diagnostics()
 
     try:
         register_image_pair(
