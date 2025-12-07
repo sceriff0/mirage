@@ -19,7 +19,11 @@ process CPU_REGISTER {
         '12.h'                                 // Large images
     }
 
-    cpus 16
+    cpus {
+        moving.size() < 10.GB  ? 16 :        // Small images
+        moving.size() < 30.GB  ? 32 :        // Medium images
+        64                                   // Large images
+    }
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy', pattern: "*.ome.tiff"
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered_qc", mode: 'copy', pattern: "qc/*"
