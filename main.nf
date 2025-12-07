@@ -118,7 +118,7 @@ workflow {
             }
             .flatten()
 
-        ch_registered = ch_reference.concat(GPU_REGISTER.out.registered)
+        ch_registered = ch_reference.concat( ch_registered )
 
     } else {
         // Classic registration: collect all preprocessed files
