@@ -16,6 +16,7 @@ from datetime import datetime
 import numpy as np
 import tifffile
 import os
+import gc
 
 os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
@@ -116,6 +117,8 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
 
     Keeps all channels from all slides, except DAPI which is only kept from the reference slide.
 
+    Memory-efficient: Uses memory-mapped arrays and writes channels incrementally.
+
     Args:
         input_dir: Directory containing registered slides
         output_path: Output OME-TIFF path
@@ -152,52 +155,96 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         log(f"Will keep DAPI from first slide")
         reference_slide = slide_files[0]
 
-    # Load all channels
-    channels = []
+    # PASS 1: Collect metadata and determine final dimensions
+    log("Pass 1: Scanning slides for metadata...")
+    slide_metadata = []
     channel_names = []
+    height, width, dtype = None, None, None
 
     for slide_file in slide_files:
-        log(f"Loading: {slide_file.name}")
+        log(f"  Scanning: {slide_file.name}")
         is_reference = (slide_file == reference_slide)
 
-        # Read using VALIS slide_io (returns image and channel names)
-        img, names = read_slide(str(slide_file))
+        # Read metadata only (first page shape and dtype)
+        with tifffile.TiffFile(str(slide_file)) as tif:
+            page = tif.pages[0]
+            if height is None:
+                height, width = page.shape[-2:]  # Get H, W from last two dims
+                dtype = page.dtype
+                log(f"  Image dimensions: {height} x {width}, dtype: {dtype}")
+            else:
+                # Verify all slides have same dimensions
+                h, w = page.shape[-2:]
+                if (h, w) != (height, width):
+                    raise ValueError(f"Slide {slide_file.name} has different dimensions: {h}x{w} vs {height}x{width}")
 
-        log(f"  Shape: {img.shape}, channels: {names}")
-        log(f"  Is reference: {is_reference}")
+            # Get number of channels
+            if len(page.shape) == 2:
+                num_channels = 1
+            elif page.axes == 'YX':
+                num_channels = 1
+            elif 'C' in page.axes:
+                c_idx = page.axes.index('C')
+                num_channels = page.shape[c_idx]
+            else:
+                # Assume first dimension is channels if 3D
+                num_channels = page.shape[0] if len(page.shape) == 3 else 1
 
-        # Add each channel
+        # Get channel names from OME or filename
+        names = get_channel_names_from_ome(str(slide_file))
+        if not names or len(names) != num_channels:
+            filename = Path(slide_file).name
+            markers = extract_markers_from_filename(filename)
+            if len(markers) == num_channels:
+                names = markers
+            elif len(markers) < num_channels:
+                names = markers + [f"Channel_{i}" for i in range(len(markers), num_channels)]
+            else:
+                names = markers[:num_channels]
+
+        # Decide which channels to keep
+        channels_to_keep = []
         for i, name in enumerate(names):
-            # Check if this is DAPI channel
             is_dapi = name.upper() == 'DAPI'
-
             if is_dapi:
                 if is_reference:
-                    # Keep DAPI from reference slide
-                    channels.append(img[i])
-                    channel_names.append(name)
-                    log(f"  ✓ Added DAPI (from reference)")
+                    channels_to_keep.append((i, name))
+                    log(f"    Channel {i}: {name} (DAPI from reference) ✓")
                 else:
-                    # Skip DAPI from non-reference slides
-                    log(f"  ⊗ Skipping DAPI (not reference)")
+                    log(f"    Channel {i}: {name} (DAPI, skipped) ⊗")
             else:
-                # Keep all non-DAPI channels
-                channels.append(img[i])
-                channel_names.append(name)
-                log(f"  ✓ Added: {name}")
+                channels_to_keep.append((i, name))
+                log(f"    Channel {i}: {name} ✓")
 
-    # Stack all channels
-    log(f"Stacking {len(channels)} channels...")
-    merged = np.stack(channels, axis=0)  # (C, H, W)
-    log(f"  Final shape: {merged.shape}")
+        slide_metadata.append({
+            'file': slide_file,
+            'channels_to_keep': channels_to_keep,
+            'is_reference': is_reference
+        })
+
+        # Add to global channel list
+        channel_names.extend([name for _, name in channels_to_keep])
+
+    num_output_channels = len(channel_names)
+    log(f"Total output channels: {num_output_channels}")
+    log(f"Output dimensions: {num_output_channels} x {height} x {width}")
+
+    # Calculate memory requirements
+    bytes_per_pixel = np.dtype(dtype).itemsize
+    total_bytes = num_output_channels * height * width * bytes_per_pixel
+    total_gb = total_bytes / (1024**3)
+    log(f"Output size: {total_gb:.2f} GB")
+
+    # PASS 2: Create output file and write channels incrementally
+    log("Pass 2: Writing channels to output file...")
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Create OME-XML metadata
-    num_channels, height, width = merged.shape
     ome_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
     <Image ID="Image:0" Name="Merged">
-        <Pixels ID="Pixels:0" Type="uint16"
-                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
+        <Pixels ID="Pixels:0" Type="{dtype}"
+                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_output_channels}" SizeT="1"
                 DimensionOrder="XYCZT"
                 PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
             {chr(10).join(f'<Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />' for i, name in enumerate(channel_names))}
@@ -206,20 +253,92 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
     </Image>
 </OME>'''
 
-    # Save
-    log("Writing OME-TIFF...")
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    # Write output file channel by channel using memmap for memory-efficient reading
+    # This is truly memory-efficient: only one channel in RAM at a time
+    output_channel_idx = 0
 
-    tifffile.imwrite(
-        output_path,
-        merged,
-        tile=(256, 256),
-        metadata={'axes': 'CYX'},
-        description=ome_xml,
-    )
+    for slide_meta in slide_metadata:
+        slide_file = slide_meta['file']
+        channels_to_keep = slide_meta['channels_to_keep']
 
-    file_size = Path(output_path).stat().st_size / (1024 * 1024)
-    log(f"✓ Saved: {output_path} ({file_size:.1f} MB, {num_channels} channels)")
+        if not channels_to_keep:
+            continue
+
+        log(f"Processing: {slide_file.name}")
+
+        # Memory-map the input file (doesn't load into RAM)
+        with tifffile.TiffFile(str(slide_file)) as tif:
+            # Get memmap of the entire array
+            img_memmap = tif.asarray(out='memmap')
+
+            # Determine shape format
+            if img_memmap.ndim == 2:
+                # Single channel (H, W)
+                is_chw = True
+            elif img_memmap.ndim == 3:
+                # Multi-channel - determine if (C, H, W) or (H, W, C)
+                if img_memmap.shape[0] < img_memmap.shape[2]:
+                    # Already (C, H, W)
+                    is_chw = True
+                else:
+                    # (H, W, C) format - need transpose
+                    is_chw = False
+            else:
+                raise ValueError(f"Unexpected array shape: {img_memmap.shape}")
+
+            # Extract and write each channel
+            for channel_idx, channel_name in channels_to_keep:
+                # Read single channel from memmap (only loads this slice into RAM)
+                if img_memmap.ndim == 2:
+                    # Single channel image
+                    channel_data = np.array(img_memmap)
+                    channel_data = channel_data[np.newaxis, ...]  # (1, H, W)
+                elif is_chw:
+                    # (C, H, W) format - direct slice
+                    channel_data = np.array(img_memmap[channel_idx:channel_idx+1, :, :])
+                else:
+                    # (H, W, C) format - need to extract and transpose
+                    channel_data = np.array(img_memmap[:, :, channel_idx])
+                    channel_data = channel_data[np.newaxis, ...]  # (1, H, W)
+
+                # Write to output
+                if output_channel_idx == 0:
+                    # First channel: create new file with metadata
+                    tifffile.imwrite(
+                        output_path,
+                        channel_data,
+                        tile=(256, 256),
+                        metadata={'axes': 'CYX'},
+                        description=ome_xml,
+                        photometric='minisblack',
+                        compression='lzw',
+                        bigtiff=True
+                    )
+                    log(f"  Channel {output_channel_idx}: {channel_name} (created file)")
+                else:
+                    # Subsequent channels: append to existing file
+                    with tifffile.TiffWriter(output_path, append=True, bigtiff=True) as tif_writer:
+                        tif_writer.write(
+                            channel_data,
+                            tile=(256, 256),
+                            metadata={'axes': 'CYX'},
+                            photometric='minisblack',
+                            compression='lzw'
+                        )
+                    log(f"  Channel {output_channel_idx}: {channel_name}")
+
+                output_channel_idx += 1
+
+                # Clean up channel data immediately
+                del channel_data
+                gc.collect()
+
+            # Clean up memmap
+            del img_memmap
+            gc.collect()
+
+    file_size = Path(output_path).stat().st_size / (1024 * 1024 * 1024)
+    log(f"✓ Saved: {output_path} ({file_size:.2f} GB, {num_output_channels} channels)")
     log(f"✓ Channel list: {', '.join(channel_names)}")
 
 
