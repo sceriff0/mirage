@@ -201,11 +201,11 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray,
 
     crop_size = y.shape[0]
     scale_factor = crop_size / 2000
-    radius = max(5, int(20 * scale_factor))
-    sigma_diff = max(5, int(20 * np.sqrt(scale_factor)))
+    radius = int(20 * scale_factor)
+    sigma_diff = int(20 * np.sqrt(scale_factor))
 
     metric = CCMetric(2, sigma_diff=sigma_diff, radius=radius)
-    sdr = SymmetricDiffeomorphicRegistration(metric, step_length=0.25)
+    sdr = SymmetricDiffeomorphicRegistration(metric, opt_tol=opt_tol, inv_tol=inv_tol)
 
     mapping = sdr.optimize(y_cont, x_cont)
 
