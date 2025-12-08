@@ -52,9 +52,9 @@ def get_channel_names_from_ome(filepath: str) -> list:
 
 def extract_markers_from_filename(filename: str) -> list:
     """Extract marker names from filename like 'B19-10215_DAPI_SMA_panck_corrected'."""
-    # Remove _registered and _corrected suffixes
+    # Remove _registered, _corrected, and _padded suffixes
     name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
-    name = name.replace('_corrected', '')
+    name = name.replace('_corrected', '').replace('_padded', '')
 
     # Split by underscore and filter out sample ID
     parts = name.split('_')

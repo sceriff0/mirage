@@ -53,7 +53,8 @@ def log_progress(message: str) -> None:
 def get_channel_names(filename: str) -> list[str]:
     """Parse channel names from filename."""
     base = os.path.basename(filename)
-    name_part = base.split('_corrected')[0]
+    # Remove all suffixes that might be present
+    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
     parts = name_part.split('_')
     channels = parts[1:]  # Exclude Patient ID
     return channels

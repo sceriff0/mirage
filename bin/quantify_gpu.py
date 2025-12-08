@@ -353,7 +353,7 @@ def run_marker_quantification(
                 # Collect all unique markers from all registered files
                 all_markers = set()
                 for reg_file in registered_files:
-                    name_part = reg_file.stem.replace('_registered', '').replace('_corrected', '')
+                    name_part = reg_file.stem.replace('_registered', '').replace('_corrected', '').replace('_padded', '')
                     parts = name_part.split('_')
                     # Filter out patient ID (has dash and numbers)
                     file_markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]

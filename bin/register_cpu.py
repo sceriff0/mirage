@@ -69,7 +69,8 @@ def print_dipy_diagnostics():
 
 def get_channel_names(filename: str) -> List[str]:
     base = os.path.basename(filename)
-    name_part = base.split('_corrected')[0]
+    # Remove all suffixes that might be present
+    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
     parts = name_part.split('_')
     channels = parts[1:]
     return channels
@@ -664,7 +665,7 @@ def extract_channel_names(moving_path: Path, num_channels: int) -> List[str]:
     # Validate or fallback to filename parsing
     if not channel_names or len(channel_names) != num_channels:
         filename = moving_path.stem
-        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '')
+        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '').replace('_padded', '')
         parts = name_part.split('_')
 
         if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):

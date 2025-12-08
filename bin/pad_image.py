@@ -112,7 +112,7 @@ def pad_single_image(
     # Fallback: extract from filename
     if not channel_names:
         filename = input_path.stem
-        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '')
+        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '').replace('_padded', '')
         parts = name_part.split('_')
         # Skip first part if it looks like a patient/sample ID
         if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
