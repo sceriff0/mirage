@@ -46,8 +46,16 @@ workflow {
     if (params.registration_method != 'valis') {
         // GPU registration workflow:
         // Step 1: Compute max dimensions from all preprocessed images
-        ch_max_dims = PREPROCESS.out.dims
-            .collectFile(name: 'all_dims.txt', newLine: true)
+        // Using collectFile with storeDir ensures this is cached properly
+        ch_dims_file = PREPROCESS.out.dims
+            .collectFile(
+                name: 'all_dims.txt',
+                newLine: true,
+                storeDir: "${params.outdir}/${params.id}/${params.registration_method}/metadata"
+            )
+
+        // Compute max dimensions once and broadcast as value channel
+        ch_max_dims = ch_dims_file
             .map { file ->
                 def lines = file.readLines()
                 def max_h = 0
@@ -61,6 +69,7 @@ workflow {
                 }
                 return tuple(max_h, max_w)
             }
+            .first()  // Convert to value channel for stable caching
 
         // Step 2: Pad each image in parallel
         ch_to_pad = PREPROCESS.out.preprocessed
@@ -69,14 +78,17 @@ workflow {
 
         PAD_IMAGES ( ch_to_pad )
 
-        // Step 3: Create (reference, moving) pairs from padded images
-        ch_pairs = PAD_IMAGES.out.padded
+        // Step 3: Collect padded images and find reference once
+        // This ensures deterministic behavior for resume
+        ch_padded_collected = PAD_IMAGES.out.padded
             .collect()
-            .flatMap { files ->
+            .map { files ->
+                // Sort files by name for deterministic ordering
+                def sorted_files = files.sort { f -> f.name }
+
                 // Find reference image based on params.reg_reference_markers
                 def reference_markers = params.reg_reference_markers
-
-                def reference = files.find { f ->
+                def reference = sorted_files.find { f ->
                     def filename = f.name.toUpperCase()
                     reference_markers.every { marker ->
                         filename.contains(marker.toUpperCase())
@@ -86,11 +98,17 @@ workflow {
                 // Fallback to first file if no match found
                 if (reference == null) {
                     log.warn "No file found with all reference markers ${reference_markers}, using first file"
-                    reference = files[0]
+                    reference = sorted_files[0]
                 }
 
-                // Create pairs: all other files registered to reference
-                def moving_files = files.findAll { f -> f != reference }
+                // Return reference and all files
+                return tuple(reference, sorted_files)
+            }
+
+        // Create (reference, moving) pairs from padded images
+        ch_pairs = ch_padded_collected
+            .flatMap { reference, all_files ->
+                def moving_files = all_files.findAll { f -> f != reference }
                 return moving_files.collect { m -> tuple(reference, m) }
             }
 
@@ -104,19 +122,9 @@ workflow {
             ch_registered = CPU_REGISTER.out.registered
         }
 
-        // Combine reference (unchanged) with registered moving images
-        // Find the reference image again using the same logic
-        ch_reference = PAD_IMAGES.out.padded
-            .collect()
-            .map { files ->
-                def reference_markers = params.reg_reference_markers
-                def reference = files.find { file ->
-                    def filename = file.name.toUpperCase()
-                    reference_markers.every { marker -> filename.contains(marker.toUpperCase()) }
-                }
-                return reference ?: files[0]
-            }
-            .flatten()
+        // Extract reference from collected channel (no need to recompute)
+        ch_reference = ch_padded_collected
+            .map { reference, _all_files -> reference }
 
         ch_registered = ch_reference.concat( ch_registered )
 
