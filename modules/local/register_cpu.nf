@@ -9,19 +9,19 @@ process CPU_REGISTER {
     // Small: <10 GB, Medium: 10-30 GB, Large: >30 GB
     memory {
         moving.size() < 10.GB  ? '64.GB'  :   // Small images
-        moving.size() < 30.GB  ? '128.GB' :   // Medium images
+        moving.size() < 25.GB  ? '128.GB' :   // Medium images
         '256.GB'                               // Large images
     }
 
     time {
         moving.size() < 10.GB  ? '4.h' :      // Small images - CPU is slower
-        moving.size() < 30.GB  ? '8.h' :      // Medium images
-        '12.h'                                 // Large images
+        moving.size() < 25.GB  ? '10.h' :      // Medium images
+        '16.h'                                 // Large images
     }
 
     cpus {
         moving.size() < 10.GB  ? 16 :        // Small images
-        moving.size() < 30.GB  ? 32 :        // Medium images
+        moving.size() < 25.GB  ? 32 :        // Medium images
         64                                   // Large images
     }
 

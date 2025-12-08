@@ -17,6 +17,7 @@ import numpy as np
 import tifffile
 import os
 import gc
+import tempfile
 
 os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
@@ -253,8 +254,15 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
     </Image>
 </OME>'''
 
-    # Write output file channel by channel using memmap for memory-efficient reading
-    # This is truly memory-efficient: only one channel in RAM at a time
+    # Create temporary memmap to accumulate all channels
+    # This is memory-efficient: only one channel loaded at a time
+    log("Creating temporary output buffer...")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="merge_registered_"))
+    output_memmap_path = tmp_dir / "merged.npy"
+
+    output_shape = (num_output_channels, height, width)
+    output_memmap = np.memmap(str(output_memmap_path), dtype=dtype, mode='w+', shape=output_shape)
+
     output_channel_idx = 0
 
     for slide_meta in slide_metadata:
@@ -286,46 +294,22 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             else:
                 raise ValueError(f"Unexpected array shape: {img_memmap.shape}")
 
-            # Extract and write each channel
+            # Extract and write each channel to memmap
             for channel_idx, channel_name in channels_to_keep:
                 # Read single channel from memmap (only loads this slice into RAM)
                 if img_memmap.ndim == 2:
                     # Single channel image
                     channel_data = np.array(img_memmap)
-                    channel_data = channel_data[np.newaxis, ...]  # (1, H, W)
                 elif is_chw:
                     # (C, H, W) format - direct slice
-                    channel_data = np.array(img_memmap[channel_idx:channel_idx+1, :, :])
+                    channel_data = np.array(img_memmap[channel_idx, :, :])
                 else:
                     # (H, W, C) format - need to extract and transpose
                     channel_data = np.array(img_memmap[:, :, channel_idx])
-                    channel_data = channel_data[np.newaxis, ...]  # (1, H, W)
 
-                # Write to output
-                if output_channel_idx == 0:
-                    # First channel: create new file with metadata
-                    tifffile.imwrite(
-                        output_path,
-                        channel_data,
-                        tile=(256, 256),
-                        metadata={'axes': 'CYX'},
-                        description=ome_xml,
-                        photometric='minisblack',
-                        compression='lzw',
-                        bigtiff=True
-                    )
-                    log(f"  Channel {output_channel_idx}: {channel_name} (created file)")
-                else:
-                    # Subsequent channels: append to existing file
-                    with tifffile.TiffWriter(output_path, append=True, bigtiff=True) as tif_writer:
-                        tif_writer.write(
-                            channel_data,
-                            tile=(256, 256),
-                            metadata={'axes': 'CYX'},
-                            photometric='minisblack',
-                            compression='lzw'
-                        )
-                    log(f"  Channel {output_channel_idx}: {channel_name}")
+                # Write to output memmap
+                output_memmap[output_channel_idx, :, :] = channel_data
+                log(f"  Channel {output_channel_idx}: {channel_name}")
 
                 output_channel_idx += 1
 
@@ -333,9 +317,38 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
                 del channel_data
                 gc.collect()
 
-            # Clean up memmap
+            # Clean up input memmap
             del img_memmap
             gc.collect()
+
+    # Flush memmap to disk
+    log("Flushing temporary buffer...")
+    output_memmap.flush()
+
+    # Write final output file from memmap
+    log(f"Writing final output file: {output_path}")
+    tifffile.imwrite(
+        output_path,
+        output_memmap,
+        tile=(256, 256),
+        metadata={'axes': 'CYX'},
+        description=ome_xml,
+        photometric='minisblack',
+        compression='lzw',
+        bigtiff=True
+    )
+
+    # Clean up
+    del output_memmap
+    gc.collect()
+
+    # Remove temporary directory
+    try:
+        import shutil
+        shutil.rmtree(tmp_dir)
+        log(f"Cleaned up temporary files: {tmp_dir}")
+    except Exception as e:
+        log(f"Warning: Could not remove temporary directory {tmp_dir}: {e}")
 
     file_size = Path(output_path).stat().st_size / (1024 * 1024 * 1024)
     log(f"✓ Saved: {output_path} ({file_size:.2f} GB, {num_output_channels} channels)")
