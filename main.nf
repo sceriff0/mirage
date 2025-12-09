@@ -171,7 +171,7 @@ workflow {
         .collect()
         .map { _files ->
             // All files are published under the same parent directory
-            return file("${params.outdir}/${params.id}/")
+            return file("${params.outdir}/${params.id}/${params.registration_method}")
         }
 
     SAVE_RESULTS (
