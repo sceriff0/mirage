@@ -21,16 +21,17 @@ process SAVE_RESULTS {
     script:
     """
     echo "Starting slow transfer of staged results to archive: ${final_archive_dir}"
-    
-    # Use rsync to copy the contents of the staged directory to the final destination.
-    # -a: archive mode (preserves permissions, timestamps, etc.)
+
+    # Create destination directory if it doesn't exist
+    mkdir -p ${final_archive_dir}
+
+    # Use cp to copy the contents of the staged directory to the final destination.
+    # -r: recursive (copy directories)
+    # -p: preserve permissions, timestamps, etc.
     # -v: verbose output
-    # -h: human-readable numbers
-    # --progress: shows transfer progress (useful for long jobs)
-    # --delete: removes files from destination that are not present in source (optional, but good for cleanup)
-    # The trailing slash on \${results_dir}/ copies the *contents* of the directory, not the directory itself.
-    rsync -avh --progress ${results_dir}/ ${final_archive_dir}/
-    
+    # The trailing slash approach doesn't work with cp, so we use wildcard
+    cp -rpv ${results_dir}/* ${final_archive_dir}/
+
     echo "Transfer complete."
     """
 }
