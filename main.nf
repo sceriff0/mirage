@@ -139,32 +139,25 @@ workflow {
 
     // 6. MODULE: Segment the merged WSI
     SEGMENT ( MERGE.out.merged )
-
-    // 7. MODULE: Cell classification using DeepCellTypes
-    CLASSIFY (
-        MERGE.out.merged,
-        SEGMENT.out.cell_mask
-    )
     
-    // 8. MODULE: Quantify marker expression per cell
+    // 7. MODULE: Quantify marker expression per cell
     QUANTIFY (
         MERGE.out.merged,
         SEGMENT.out.cell_mask
     )
 
-    // 9. MODULE: Phenotype cells based on predefined rules
+    // 8. MODULE: Phenotype cells based on predefined rules
     PHENOTYPE (
         QUANTIFY.out.csv,
         SEGMENT.out.cell_mask
     )
 
-    // 10. MODULE: Save all results to final output directory
+    // 9. MODULE: Save all results to final output directory
     // Collect all outputs to ensure all processes complete before saving
     ch_all_outputs = channel.empty()
         .mix(
             MERGE.out.merged,
             SEGMENT.out.cell_mask,
-            CLASSIFY.out.csv,
             QUANTIFY.out.csv,
             PHENOTYPE.out.csv
         )

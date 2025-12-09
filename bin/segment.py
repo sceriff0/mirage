@@ -276,7 +276,7 @@ def run_segmentation(
     model_name: str,
     dapi_channel_index: int = 0,
     use_gpu: bool = True,
-    n_tiles: Tuple[int, int] = (16, 16),
+    n_tiles: Tuple[int, int] = (24, 24),
     expand_distance: int = 10,
     pmin: float = 1.0,
     pmax: float = 99.8
