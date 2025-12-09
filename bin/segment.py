@@ -201,7 +201,7 @@ def load_stardist_model(
 def segment_nuclei(
     normalized_dapi: NDArray,
     model: StarDist2D,
-    n_tiles: Tuple[int, int] = (16, 16),
+    n_tiles: Tuple[int, int] = (24, 24),
     expand_distance: int = 10
 ) -> Tuple[NDArray, NDArray]:
     """

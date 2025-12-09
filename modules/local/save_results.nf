@@ -4,12 +4,15 @@
 process SAVE_RESULTS {
     tag "Final Publishing"
 
+    // Disable container for this process - run natively to access NFS mounts
+    container null
+
     // IMPORTANT: Set generous resources for this I/O-heavy step
     // Adjust time and memory based on the expected size of your 'results' directory
-    time '6h' 
+    time '6h'
     cpus 4
     memory '64 GB'
-    
+
     // Use a queue or partition optimized for data transfer, if available
     // queue 'transfer_partition' 
 
