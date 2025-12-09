@@ -8,9 +8,9 @@ process CPU_REGISTER {
     // CPU version uses more cores and memory than GPU version
     // Small: <10 GB, Medium: 10-30 GB, Large: >30 GB
     memory {
-        moving.size() < 10.GB  ? '64.GB'  :   // Small images
-        moving.size() < 25.GB  ? '128.GB' :   // Medium images
-        '256.GB'                               // Large images
+        moving.size() < 10.GB  ? '100.GB'  :   // Small images
+        moving.size() < 25.GB  ? '200.GB' :   // Medium images
+        '300.GB'                               // Large images
     }
 
     time {
