@@ -41,7 +41,7 @@ def extract_dapi_channel(
     dapi_channel_index: int = 0
 ) -> Tuple[NDArray, dict]:
     """
-    Extract DAPI channel from multichannel OME-TIFF image.
+    Extract DAPI channel from multichannel OME-TIFF image using memory-mapped I/O.
 
     Parameters
     ----------
@@ -64,9 +64,19 @@ def extract_dapi_channel(
     """
     logger.info(f"Loading multichannel image: {multichannel_image_path}")
 
-    # Load multichannel image
+    # Use memory-mapped I/O to avoid loading entire multichannel image
     with tifffile.TiffFile(multichannel_image_path) as tif:
-        image_data = tif.asarray()
+        # Get shape and metadata WITHOUT loading data
+        if len(tif.series[0].shape) == 2:
+            # Single channel
+            image_shape = tif.series[0].shape
+            n_channels = 1
+        else:
+            # Multichannel
+            image_shape = tif.series[0].shape
+            n_channels = image_shape[0] if len(image_shape) == 3 else 1
+
+        image_dtype = tif.series[0].dtype
 
         # Extract OME metadata if available
         metadata = {}
@@ -74,33 +84,37 @@ def extract_dapi_channel(
             metadata['ome'] = tif.ome_metadata
             logger.info(f"  ✓ OME metadata found")
 
-    logger.info(f"  Image shape: {image_data.shape}")
-    logger.info(f"  Image dtype: {image_data.dtype}")
+        logger.info(f"  Image shape: {image_shape}")
+        logger.info(f"  Image dtype: {image_dtype}")
 
-    # Handle different image formats
-    if image_data.ndim == 2:
-        # Single channel image, assume it's DAPI
-        logger.info("  - Single channel image (assuming DAPI)")
-        dapi_image = image_data
-    elif image_data.ndim == 3:
-        # Multichannel image (C, Y, X) format
-        n_channels = image_data.shape[0]
-        logger.info(f"  - Multichannel image with {n_channels} channels")
+        # Memory-map the file (doesn't load into RAM)
+        image_memmap = tif.asarray(out='memmap')
 
-        if dapi_channel_index >= n_channels:
+        # Handle different image formats
+        if image_memmap.ndim == 2:
+            # Single channel image, assume it's DAPI
+            logger.info("  - Single channel image (assuming DAPI)")
+            # Load single channel into RAM
+            dapi_image = np.array(image_memmap, copy=True)
+        elif image_memmap.ndim == 3:
+            # Multichannel image (C, Y, X) format
+            logger.info(f"  - Multichannel image with {n_channels} channels")
+
+            if dapi_channel_index >= n_channels:
+                raise ValueError(
+                    f"DAPI channel index {dapi_channel_index} out of range "
+                    f"for image with {n_channels} channels"
+                )
+
+            # Extract ONLY the DAPI channel into RAM (not all channels)
+            logger.info(f"  - Extracting DAPI channel (index {dapi_channel_index}) - memory efficient")
+            dapi_image = np.array(image_memmap[dapi_channel_index, :, :], copy=True)
+            logger.info(f"  - Extracted DAPI channel (index {dapi_channel_index})")
+        else:
             raise ValueError(
-                f"DAPI channel index {dapi_channel_index} out of range "
-                f"for image with {n_channels} channels"
+                f"Unexpected image dimensions: {image_shape}. "
+                f"Expected 2D (Y, X) or 3D (C, Y, X)"
             )
-
-        # Extract DAPI channel
-        dapi_image = image_data[dapi_channel_index, :, :]
-        logger.info(f"  - Extracted DAPI channel (index {dapi_channel_index})")
-    else:
-        raise ValueError(
-            f"Unexpected image dimensions: {image_data.shape}. "
-            f"Expected 2D (Y, X) or 3D (C, Y, X)"
-        )
 
     logger.info(f"  DAPI channel shape: {dapi_image.shape}")
     logger.info(f"  DAPI dtype: {dapi_image.dtype}")
@@ -134,13 +148,22 @@ def normalize_dapi(
     Notes
     -----
     Uses CSBDeep's normalize function which clips to percentiles
-    and scales to [0, 1] range.
+    and scales to [0, 1] range. Converts to float32 to save memory.
     """
     logger.info("Normalizing DAPI channel...")
     logger.info(f"  Percentiles: [{pmin}, {pmax}]")
 
+    # Convert to float32 if needed (saves memory vs float64)
+    if dapi_image.dtype != np.float32:
+        logger.info(f"  Converting from {dapi_image.dtype} to float32 to save memory")
+        dapi_image = dapi_image.astype(np.float32)
+
     # CSBDeep normalize clips to percentiles and scales to [0, 1]
     normalized = normalize(dapi_image, pmin, pmax, axis=(0, 1))
+
+    # Ensure float32 output
+    if normalized.dtype != np.float32:
+        normalized = normalized.astype(np.float32)
 
     logger.info(f"  Normalized range: [{normalized.min():.4f}, {normalized.max():.4f}]")
 
