@@ -23,7 +23,7 @@ process SEGMENT {
         --model-dir ${params.segmentation_model_dir} \\
         --model-name ${params.segmentation_model} \\
         --dapi-channel 0 \\
-        --n-tiles ${params.seg_n_tiles_y ?: 24} ${params.seg_n_tiles_x ?: 24} \\
+        --n-tiles ${params.seg_n_tiles_y ?: 32} ${params.seg_n_tiles_x ?: 32} \\
         --expand-distance ${params.seg_expand_distance ?: 10} \\
         --pmin ${pmin} \\
         --pmax ${pmax} \\
