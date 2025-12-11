@@ -16,8 +16,7 @@ process QUANTIFY {
     script:
     """
     # Run quantification on this single channel TIFF
-    quantify.py \\
-        --mode cpu \\
+    quantify_gpu.py \\
         --mask_file ${seg_mask} \\
         --indir . \\
         --outdir . \\
