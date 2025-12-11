@@ -31,8 +31,13 @@ process CONVERSION {
     def tiley = params.tiley ?: 256
     """
     # Use vips command-line tool for maximum speed and minimum memory
-    # First, combine merged image with masks
-    vips bandjoin "${merged_image} ${seg_mask} ${phenotype_mask}" combined_temp.tif
+    # Normalize TIFFs to fix metadata issues before joining
+    vips copy ${merged_image} merged_normalized.tif
+    vips copy ${seg_mask} seg_normalized.tif
+    vips copy ${phenotype_mask} pheno_normalized.tif
+
+    # Combine normalized images
+    vips bandjoin "merged_normalized.tif seg_normalized.tif pheno_normalized.tif" combined_temp.tif
 
     # Create pyramid using vips tiffsave with pyramid options
     vips tiffsave combined_temp.tif pyramid.ome.tiff \\
@@ -44,6 +49,6 @@ process CONVERSION {
         --bigtiff
 
     # Clean up
-    rm -f combined_temp.tif
+    rm -f combined_temp.tif merged_normalized.tif seg_normalized.tif pheno_normalized.tif
     """
 }
