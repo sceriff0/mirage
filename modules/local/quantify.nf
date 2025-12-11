@@ -2,7 +2,7 @@ nextflow.enable.dsl = 2
 
 process QUANTIFY {
     tag "${channel_tiff.simpleName}"
-    label 'process_medium'
+    label 'gpu'
     container "${params.container.quantification}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification/by_marker", mode: 'copy'
