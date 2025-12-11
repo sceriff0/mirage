@@ -29,7 +29,7 @@ process SAVE {
     mkdir -p ${final_archive_dir}/${params.id}_${params.registration_method}/
 
     # Use rsync for robust transfer
-    rsync -avh --progress --timeout=300 results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
+    rsync --progress results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
 
     echo "Transfer complete."
     """
