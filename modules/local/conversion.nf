@@ -108,7 +108,7 @@ process CONVERSION {
         n_phenotypes = int(pheno_array.max() + 1)
         print(f"  Creating categorical LUT for {n_phenotypes} phenotypes...")
 
-        # Distinctive colors for categorical display
+        # Distinctive colors for categorical display (RGB)
         base_colors = [
             [0, 0, 0],         # 0: Background (black)
             [255, 0, 0],       # 1: Red
@@ -139,7 +139,23 @@ process CONVERSION {
             random.seed(i)
             colors.append([random.randint(50, 255) for _ in range(3)])
 
-        pheno_lut = np.array(colors[:n_phenotypes], dtype=np.uint8)
+        # For tifffile, colormap must be (3, 256) for uint8 or (3, 65536) for uint16
+        # Create full LUT array
+        if pheno_array.dtype == np.uint8:
+            lut_size = 256
+        elif pheno_array.dtype == np.uint16:
+            lut_size = 65536
+        else:
+            lut_size = 256  # fallback
+
+        # Initialize LUT with zeros
+        pheno_lut = np.zeros((3, lut_size), dtype=np.uint16)
+
+        # Fill in the colors for each phenotype value
+        for i, color in enumerate(colors[:min(n_phenotypes, lut_size)]):
+            pheno_lut[0, i] = color[0] * 256  # R (scale to uint16 range)
+            pheno_lut[1, i] = color[1] * 256  # G
+            pheno_lut[2, i] = color[2] * 256  # B
 
         # Save phenotype with colormap for categorical display
         tifffile.imwrite("pheno_norm.tif", pheno_array,
