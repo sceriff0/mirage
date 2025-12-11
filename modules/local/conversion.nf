@@ -50,7 +50,19 @@ process CONVERSION {
         pheno_array = tifffile.imread("${phenotype_mask}")
         print(f"  Shape: {pheno_array.shape}, dtype: {pheno_array.dtype}")
 
-        # Save normalized versions
+        # Convert int64 to int32 for pyvips compatibility (it doesn't support int64)
+        if pheno_array.dtype == np.int64:
+            print("  Converting phenotype mask from int64 to int32...")
+            pheno_array = pheno_array.astype(np.int32)
+
+        # Convert uint32 to uint16 if values fit, otherwise keep uint32
+        if seg_array.dtype == np.uint32:
+            max_val = seg_array.max()
+            if max_val <= 65535:
+                print(f"  Converting segmentation mask from uint32 to uint16 (max value: {max_val})...")
+                seg_array = seg_array.astype(np.uint16)
+
+        # Save normalized versions with compatible dtypes
         print("Saving normalized TIFFs...")
         tifffile.imwrite("merged_norm.tif", merged_array, bigtiff=True, compression='lzw')
         tifffile.imwrite("seg_norm.tif", seg_array, bigtiff=True, compression='lzw')
