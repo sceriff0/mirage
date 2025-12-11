@@ -43,11 +43,11 @@ workflow PREPROCESSING {
 
     // Pad each image to max dimensions
     ch_to_pad = PREPROCESS.out.preprocessed
-        .combine(MAX_DIM.out.max_dims_tuple)
-        .map { file, max_h, max_w -> tuple(file, max_h, max_w) }
+        .combine(MAX_DIM.out.max_dims_file)
 
     PAD_IMAGES ( ch_to_pad )
 
     emit:
     padded = PAD_IMAGES.out.padded
+    max_dims_file = MAX_DIM.out.max_dims_file
 }

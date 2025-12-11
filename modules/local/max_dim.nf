@@ -11,7 +11,6 @@ process MAX_DIM {
 
     output:
     path "max_dims.txt", emit: max_dims_file
-    tuple val(max_h), val(max_w), emit: max_dims_tuple
 
     script:
     """

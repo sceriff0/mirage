@@ -8,7 +8,7 @@ process PAD_IMAGES {
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/padded", mode: 'copy'
 
     input:
-    tuple path(preprocessed_file), val(max_height), val(max_width)
+    tuple path(preprocessed_file), path(max_dims_file)
 
     output:
     path "${preprocessed_file.simpleName}_padded.ome.tif", emit: padded
@@ -16,11 +16,15 @@ process PAD_IMAGES {
     script:
     def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
     """
+    # Read max dimensions from file
+    MAX_HEIGHT=\$(grep MAX_HEIGHT ${max_dims_file} | awk '{print \$2}')
+    MAX_WIDTH=\$(grep MAX_WIDTH ${max_dims_file} | awk '{print \$2}')
+
     pad_image.py \\
         --input ${preprocessed_file} \\
         --output ${preprocessed_file.simpleName}_padded.ome.tif \\
-        --target-height ${max_height} \\
-        --target-width ${max_width} \\
+        --target-height \${MAX_HEIGHT} \\
+        --target-width \${MAX_WIDTH} \\
         --pad-mode ${pad_mode}
     """
 }
