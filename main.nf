@@ -134,12 +134,23 @@ workflow {
         ch_registered = REGISTER.out.registered_slides
     }
     
-    // 5. MODULE: Merge registered slides into single multi-channel OME-TIFF
+    // 5. MODULE: Segment the reference image only (no merge needed)
+    // Extract reference image from registered channel
+    ch_reference_for_seg = ch_registered
+        .filter { file ->
+            def filename = file.name.toUpperCase()
+            params.reg_reference_markers.every { marker ->
+                filename.contains(marker.toUpperCase())
+            }
+        }
+        .first()  // Take only the reference image
+
+    SEGMENT ( ch_reference_for_seg )
+
+    // 6. MODULE: Merge registered slides into single multi-channel OME-TIFF
+    // (Moved after segmentation - only needed for quantification)
     MERGE ( ch_registered.collect() )
 
-    // 6. MODULE: Segment the merged WSI
-    SEGMENT ( MERGE.out.merged )
-    
     // 7. MODULE: Quantify marker expression per cell
     QUANTIFY (
         MERGE.out.merged,

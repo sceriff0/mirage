@@ -158,7 +158,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     rgb[:, :, 1] = ref_dapi_scaled
     rgb[:, :, 2] = 0
 
-    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression=None, bigtiff=True)
+    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression="jpeg", bigtiff=True)
     logger.info(f"  Saved QC composite: {output_path}")
 
 
