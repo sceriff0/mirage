@@ -30,25 +30,41 @@ process CONVERSION {
     def tilex = params.tilex ?: 256
     def tiley = params.tiley ?: 256
     """
-    # Use vips command-line tool for maximum speed and minimum memory
-    # Normalize TIFFs to fix metadata issues before joining
-    vips copy ${merged_image} merged_normalized.tif
-    vips copy ${seg_mask} seg_normalized.tif
-    vips copy ${phenotype_mask} pheno_normalized.tif
+    #!/usr/bin/env python3
+    import pyvips
+    import sys
 
-    # Combine normalized images
-    vips bandjoin "merged_normalized.tif seg_normalized.tif pheno_normalized.tif" combined_temp.tif
+    try:
+        # Load images with pyvips (handles metadata issues better than CLI)
+        print("Loading merged image...")
+        merged = pyvips.Image.new_from_file("${merged_image}", access='sequential')
 
-    # Create pyramid using vips tiffsave with pyramid options
-    vips tiffsave combined_temp.tif pyramid.ome.tiff \\
-        --compression lzw \\
-        --tile \\
-        --tile-width ${tilex} \\
-        --tile-height ${tiley} \\
-        --pyramid \\
-        --bigtiff
+        print("Loading segmentation mask...")
+        seg = pyvips.Image.new_from_file("${seg_mask}", access='sequential')
 
-    # Clean up
-    rm -f combined_temp.tif merged_normalized.tif seg_normalized.tif pheno_normalized.tif
+        print("Loading phenotype mask...")
+        pheno = pyvips.Image.new_from_file("${phenotype_mask}", access='sequential')
+
+        # Combine images using bandjoin
+        print("Combining images...")
+        combined = merged.bandjoin([seg, pheno])
+
+        # Save as pyramidal TIFF
+        print("Creating pyramidal TIFF...")
+        combined.tiffsave(
+            "pyramid.ome.tiff",
+            compression="lzw",
+            tile=True,
+            tile_width=${tilex},
+            tile_height=${tiley},
+            pyramid=True,
+            bigtiff=True
+        )
+
+        print("✓ Pyramid created successfully")
+
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     """
 }
