@@ -1,7 +1,7 @@
 // publish.nf
 // Defines a process to transfer results to a slow memory partition
 
-process SAVE_RESULTS {
+process SAVE {
     tag "Final Publishing"
 
     // Disable container for this process - run natively to access NFS mounts

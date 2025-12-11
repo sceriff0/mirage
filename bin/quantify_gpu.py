@@ -257,23 +257,26 @@ def extract_features_gpu(
 
 
 def run_marker_quantification(
-    merged_image_path: str,
+    indir: str,
     mask_file: str,
-    output_file: str,
+    outdir: str,
+    output_file: str = None,
     size_cutoff: int = 0,
     mode: str = 'gpu',
     verbose: bool = True
 ) -> pd.DataFrame:
-    """Run marker quantification pipeline.
+    """Run marker quantification pipeline on single-channel TIFFs.
 
     Parameters
     ----------
-    merged_image_path : str
-        Path to merged multi-channel OME-TIFF file.
+    indir : str
+        Directory containing single-channel TIFF files.
     mask_file : str
         Path to segmentation mask (.npy or .tif/.tiff).
-    output_file : str
-        Path for output CSV file.
+    outdir : str
+        Output directory for CSV file.
+    output_file : str, optional
+        Specific output filename. If not provided, will be auto-generated.
     size_cutoff : int, optional
         Minimum cell area.
     mode : str, optional
@@ -286,7 +289,7 @@ def run_marker_quantification(
     DataFrame
         Quantification results.
     """
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
     # Check GPU availability if mode is 'gpu'
     if mode == 'gpu':
@@ -297,86 +300,38 @@ def run_marker_quantification(
     if mode == 'cpu':
         raise NotImplementedError("CPU mode not yet implemented - use GPU mode")
 
-    # Load merged multi-channel image
+    # Find all single-channel TIFF files in input directory
+    from pathlib import Path
+    indir_path = Path(indir)
+    channel_files = sorted(indir_path.glob('*.tif*'))
+
+    if not channel_files:
+        raise ValueError(f"No TIFF files found in {indir}")
+
     if verbose:
-        logger.info(f"Loading merged image: {merged_image_path}")
+        logger.info(f"Found {len(channel_files)} channel file(s) in {indir}")
 
-    multichannel_image, _ = load_image(merged_image_path)
-
-    # Extract channel names from OME metadata
+    # Load all channel images
+    channel_images = []
     channel_names = []
-    try:
-        import tifffile
-        import xml.etree.ElementTree as ET
 
-        with tifffile.TiffFile(merged_image_path) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                # Parse OME-XML for channel names
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                channel_names = [ch.get('Name', '') for ch in channels]
-                # Filter out empty names
-                channel_names = [name for name in channel_names if name]
-
-                if verbose and channel_names:
-                    logger.info(f"Extracted {len(channel_names)} channel names from OME metadata")
-    except Exception as e:
+    for channel_file in channel_files:
         if verbose:
-            logger.warning(f"Could not extract channel names from OME metadata: {e}")
+            logger.info(f"Loading channel: {channel_file.name}")
 
-    # If metadata extraction failed or returned wrong number of channels, try looking at directory
-    if len(channel_names) != multichannel_image.shape[0]:
-        if verbose:
-            logger.info(f"Metadata gave {len(channel_names)} names but image has {multichannel_image.shape[0]} channels")
-            logger.info(f"Attempting to infer channel names from registered files...")
+        channel_image, _ = load_image(str(channel_file))
+        channel_images.append(channel_image.squeeze())
 
-        try:
-            from pathlib import Path
+        # Extract channel name from filename
+        # Format: <prefix>_<marker>.tiff
+        channel_name = channel_file.stem.split('_')[-1]
+        channel_names.append(channel_name)
 
-            # Look for registered files to infer channel composition
-            parent_dir = Path(merged_image_path).parent
-            search_paths = [
-                parent_dir / '..' / 'registered',
-                parent_dir / '..',
-                parent_dir / '..' / 'gpu' / 'registered',
-            ]
-
-            registered_files = []
-            for search_path in search_paths:
-                if search_path.exists():
-                    registered_files = list(search_path.glob('*registered*.tif*'))
-                    if registered_files:
-                        break
-
-            if registered_files:
-                # Collect all unique markers from all registered files
-                all_markers = set()
-                for reg_file in registered_files:
-                    name_part = reg_file.stem.replace('_registered', '').replace('_corrected', '').replace('_padded', '')
-                    parts = name_part.split('_')
-                    # Filter out patient ID (has dash and numbers)
-                    file_markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
-                    all_markers.update(file_markers)
-
-                # Sort alphabetically for consistent ordering
-                sorted_markers = sorted(list(all_markers))
-
-                if len(sorted_markers) == multichannel_image.shape[0]:
-                    channel_names = sorted_markers
-                    if verbose:
-                        logger.info(f"Inferred channel names from registered files: {channel_names}")
-                elif verbose:
-                    logger.warning(f"Found {len(sorted_markers)} unique markers but image has {multichannel_image.shape[0]} channels")
-        except Exception as e:
-            if verbose:
-                logger.warning(f"Could not infer channel names from registered files: {e}")
-
-    # Final fallback to generic names
-    if len(channel_names) != multichannel_image.shape[0]:
-        if verbose:
-            logger.warning(f"Using generic channel names (channel_0, channel_1, ...)")
-        channel_names = [f"channel_{i}" for i in range(multichannel_image.shape[0])]
+    # Stack into multichannel array
+    if len(channel_images) == 1:
+        multichannel_image = channel_images[0][np.newaxis, ...]
+    else:
+        multichannel_image = np.stack(channel_images, axis=0)
 
     if verbose:
         logger.info(f"Image shape: {multichannel_image.shape}")
@@ -391,6 +346,11 @@ def run_marker_quantification(
     else:
         segmentation_mask, _ = load_image(mask_file)
         segmentation_mask = segmentation_mask.squeeze()
+
+    # Determine output file path
+    if output_file is None:
+        from pathlib import Path
+        output_file = os.path.join(outdir, f"{Path(mask_file).stem}_quantification.csv")
 
     # Run quantification
     markers_data = extract_features_gpu(
@@ -410,7 +370,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='GPU-accelerated cell quantification'
+        description='GPU-accelerated cell quantification on single-channel TIFFs'
     )
     parser.add_argument(
         "--mode",
@@ -424,14 +384,19 @@ if __name__ == '__main__':
         help="Path to segmentation mask (.npy or .tif/.tiff)"
     )
     parser.add_argument(
-        "--merged_image",
+        "--indir",
         required=True,
-        help="Path to merged multi-channel OME-TIFF file"
+        help="Directory containing single-channel TIFF files"
+    )
+    parser.add_argument(
+        "--outdir",
+        required=True,
+        help="Output directory for CSV file"
     )
     parser.add_argument(
         "--output_file",
-        required=True,
-        help="Output CSV file path"
+        default=None,
+        help="Output CSV filename (optional, auto-generated if not provided)"
     )
     parser.add_argument(
         "--min_area",
@@ -469,8 +434,9 @@ if __name__ == '__main__':
     # Run quantification
     try:
         run_marker_quantification(
-            merged_image_path=args.merged_image,
+            indir=args.indir,
             mask_file=args.mask_file,
+            outdir=args.outdir,
             output_file=args.output_file,
             size_cutoff=args.min_area,
             mode=args.mode,
