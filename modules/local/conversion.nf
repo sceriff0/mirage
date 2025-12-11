@@ -52,9 +52,9 @@ process CONVERSION {
 
         # Save normalized versions
         print("Saving normalized TIFFs...")
-        tifffile.imwrite("merged_norm.tif", merged_array, compression='lzw')
-        tifffile.imwrite("seg_norm.tif", seg_array, compression='lzw')
-        tifffile.imwrite("pheno_norm.tif", pheno_array, compression='lzw')
+        tifffile.imwrite("merged_norm.tif", merged_array, bigtiff=True, compression='lzw')
+        tifffile.imwrite("seg_norm.tif", seg_array, bigtiff=True, compression='lzw')
+        tifffile.imwrite("pheno_norm.tif", pheno_array, bigtiff=True, compression='lzw')
 
         # Now load with pyvips and create pyramid
         print("Loading normalized images with pyvips...")
