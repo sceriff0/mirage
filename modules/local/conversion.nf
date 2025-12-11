@@ -32,18 +32,35 @@ process CONVERSION {
     """
     #!/usr/bin/env python3
     import pyvips
+    import tifffile
+    import numpy as np
     import sys
 
     try:
-        # Load images with pyvips (handles metadata issues better than CLI)
-        print("Loading merged image...")
-        merged = pyvips.Image.new_from_file("${merged_image}", access='sequential')
+        # Load TIFFs with tifffile first to normalize them
+        print("Loading merged image with tifffile...")
+        merged_array = tifffile.imread("${merged_image}")
+        print(f"  Shape: {merged_array.shape}, dtype: {merged_array.dtype}")
 
-        print("Loading segmentation mask...")
-        seg = pyvips.Image.new_from_file("${seg_mask}", access='sequential')
+        print("Loading segmentation mask with tifffile...")
+        seg_array = tifffile.imread("${seg_mask}")
+        print(f"  Shape: {seg_array.shape}, dtype: {seg_array.dtype}")
 
-        print("Loading phenotype mask...")
-        pheno = pyvips.Image.new_from_file("${phenotype_mask}", access='sequential')
+        print("Loading phenotype mask with tifffile...")
+        pheno_array = tifffile.imread("${phenotype_mask}")
+        print(f"  Shape: {pheno_array.shape}, dtype: {pheno_array.dtype}")
+
+        # Save normalized versions
+        print("Saving normalized TIFFs...")
+        tifffile.imwrite("merged_norm.tif", merged_array, compression='lzw')
+        tifffile.imwrite("seg_norm.tif", seg_array, compression='lzw')
+        tifffile.imwrite("pheno_norm.tif", pheno_array, compression='lzw')
+
+        # Now load with pyvips and create pyramid
+        print("Loading normalized images with pyvips...")
+        merged = pyvips.Image.new_from_file("merged_norm.tif", access='sequential')
+        seg = pyvips.Image.new_from_file("seg_norm.tif", access='sequential')
+        pheno = pyvips.Image.new_from_file("pheno_norm.tif", access='sequential')
 
         # Combine images using bandjoin
         print("Combining images...")
@@ -64,7 +81,9 @@ process CONVERSION {
         print("✓ Pyramid created successfully")
 
     except Exception as e:
+        import traceback
         print(f"ERROR: {e}", file=sys.stderr)
+        traceback.print_exc()
         sys.exit(1)
     """
 }
