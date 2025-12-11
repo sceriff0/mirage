@@ -1,0 +1,44 @@
+# Dockerfile for CREATE_PYRAMID process
+# Provides libvips CLI tools and pyvips for efficient pyramidal TIFF creation
+
+FROM python:3.11-slim
+
+LABEL maintainer="ATEIA Pipeline"
+LABEL description="Container for creating pyramidal OME-TIFF files with libvips"
+
+# Install system dependencies for libvips
+RUN apt-get update && apt-get install -y \
+    # Core libvips library and CLI tools
+    libvips-dev \
+    libvips-tools \
+    # Additional image format support
+    libheif-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libtiff-dev \
+    libwebp-dev \
+    # Build tools (if needed)
+    build-essential \
+    pkg-config \
+    # Utilities
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip install --no-cache-dir \
+    pyvips==2.2.3 \
+    tifffile==2024.8.30 \
+    numpy==1.26.4 \
+    pandas==2.2.2
+
+# Verify installations
+RUN vips --version && \
+    python -c "import pyvips; print(f'pyvips version: {pyvips.__version__}')" && \
+    python -c "import tifffile; print(f'tifffile version: {tifffile.__version__}')"
+
+# Set working directory
+WORKDIR /work
+
+# Default command
+CMD ["/bin/bash"]

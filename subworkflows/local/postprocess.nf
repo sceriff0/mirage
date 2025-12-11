@@ -14,7 +14,7 @@ include { PHENOTYPE        } from '../../modules/local/phenotype'
 
 /*
 ========================================================================================
-    SUBWORKFLOW: QUANTIFICATION
+    SUBWORKFLOW:POSTPROCESSING
 ========================================================================================
     Description:
         Segments reference image, splits multichannel images to single channels,
@@ -32,7 +32,7 @@ include { PHENOTYPE        } from '../../modules/local/phenotype'
 ========================================================================================
 */
 
-workflow QUANTIFICATION {
+workflow POSTPROCESSING {
     take:
     ch_registered       // Channel of registered images
     reference_markers   // List of markers for reference identification
