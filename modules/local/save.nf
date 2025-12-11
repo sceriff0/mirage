@@ -28,8 +28,8 @@ process SAVE {
     # Create destination directory if it doesn't exist
     mkdir -p ${final_archive_dir}/${params.id}_${params.registration_method}/
 
-    # Use rsync for robust transfer
-    rsync -r --progress results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
+    # Use rsync for robust transfer (-L follows symlinks)
+    rsync -rL --progress results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
 
     echo "Transfer complete."
     """
