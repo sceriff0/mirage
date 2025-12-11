@@ -20,6 +20,7 @@ include { SAVE  } from '../../modules/local/save'
 
     Input:
         ch_registered: Channel of registered multichannel images
+        ch_qc: Channel of QC RGB images
         cell_mask: Segmentation mask
         phenotype_mask: Phenotype mask
         merged_csv: Merged quantification CSV
@@ -35,6 +36,7 @@ include { SAVE  } from '../../modules/local/save'
 workflow RESULTS {
     take:
     ch_registered    // Channel of registered images
+    ch_qc            // Channel of QC RGB images
     cell_mask        // Cell segmentation mask
     phenotype_mask   // Phenotype mask
     merged_csv       // Merged quantification CSV
@@ -55,16 +57,12 @@ workflow RESULTS {
     // Collect only the outputs to save
     ch_to_save = channel.empty()
         .mix(
-            ch_registered,          // QC: registered images
+            ch_qc,                  // QC: RGB visualization images
             merged_csv,             // Quantification results
             phenotype_csv,          // Phenotype results
             CONVERSION.out.pyramid  // Pyramidal visualization
         )
         .collect()
-        .map { _files ->
-            // All files are published under the same parent directory
-            return file("${params.outdir}")
-        }
 
     // Save to final archive location
     SAVE (

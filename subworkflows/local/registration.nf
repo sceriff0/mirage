@@ -74,10 +74,12 @@ workflow REGISTRATION {
             // GPU Registration
             GPU_REGISTER ( ch_pairs )
             ch_registered_moving = GPU_REGISTER.out.registered
+            ch_qc = GPU_REGISTER.out.qc
         } else {
             // CPU Registration
             CPU_REGISTER ( ch_pairs )
             ch_registered_moving = CPU_REGISTER.out.registered
+            ch_qc = CPU_REGISTER.out.qc
         }
 
         // Extract reference from collected channel (no need to recompute)
@@ -90,8 +92,10 @@ workflow REGISTRATION {
         // Classic VALIS registration: uses padded files
         REGISTER ( ch_padded.collect() )
         ch_registered = REGISTER.out.registered_slides
+        ch_qc = Channel.empty()
     }
 
     emit:
     registered = ch_registered
+    qc = ch_qc
 }

@@ -18,48 +18,18 @@ process SAVE {
 
     // Define the required input
     input:
-    path results_dir // The 'results' directory containing all staged files
+    path results_files, stageAs: 'results/*' // Individual files to save, staged into results/ dir
     val final_archive_dir // The final destination path (e.g., /hpcnfs/results/)
 
     script:
     """
-    echo "Starting slow transfer of staged results to archive: ${final_archive_dir}"
+    echo "Starting rsync transfer of staged results to archive: ${final_archive_dir}"
 
     # Create destination directory if it doesn't exist
-    mkdir -p ${final_archive_dir}
+    mkdir -p ${final_archive_dir}/${params.id}_${params.registration_method}/
 
-    # Use rsync if available, otherwise fall back to cp
-    # rsync is more robust for large files and network filesystems
-    if command -v rsync &> /dev/null; then
-        echo "Using rsync for robust transfer..."
-        rsync -avh --progress --timeout=300 ${results_dir}/ ${final_archive_dir}/
-    else
-        echo "rsync not found, using cp..."
-        # Copy files with error handling
-        # Process large files separately to isolate I/O errors
-        find ${results_dir} -type f -size +1G -print0 | while IFS= read -r -d '' large_file; do
-            rel_path=\${large_file#${results_dir}/}
-            dest_file="${final_archive_dir}/\${rel_path}"
-            mkdir -p "\$(dirname "\${dest_file}")"
-            echo "Copying large file: \${rel_path}"
-
-            # Use dd for large files with network-friendly block size
-            if ! dd if="\${large_file}" of="\${dest_file}" bs=1M status=progress; then
-                echo "WARNING: Failed to copy \${rel_path}" >&2
-                # Continue with other files
-            fi
-        done
-
-        # Copy remaining smaller files
-        find ${results_dir} -type f -size -1G -print0 | while IFS= read -r -d '' file; do
-            rel_path=\${file#${results_dir}/}
-            dest_file="${final_archive_dir}/\${rel_path}"
-            mkdir -p "\$(dirname "\${dest_file}")"
-            if ! cp -p "\${file}" "\${dest_file}"; then
-                echo "WARNING: Failed to copy \${rel_path}" >&2
-            fi
-        done
-    fi
+    # Use rsync for robust transfer
+    rsync -avh --progress --timeout=300 results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
 
     echo "Transfer complete."
     """

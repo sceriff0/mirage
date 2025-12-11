@@ -47,6 +47,7 @@ workflow {
     // 5. SUBWORKFLOW: Results (Merge, Conversion to Pyramid, Save)
     RESULTS (
         REGISTRATION.out.registered,
+        REGISTRATION.out.qc,
         POSTPROCESSING.out.cell_mask,
         POSTPROCESSING.out.phenotype_mask,
         POSTPROCESSING.out.merged_csv,
