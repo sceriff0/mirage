@@ -37,9 +37,26 @@ process CONVERSION {
     import sys
 
     try:
-        # Load TIFFs with tifffile first to normalize them
+        # Load TIFFs with tifffile first to normalize them and extract metadata
         print("Loading merged image with tifffile...")
-        merged_array = tifffile.imread("${merged_image}")
+        with tifffile.TiffFile("${merged_image}") as tif:
+            merged_array = tif.asarray()
+            # Try to extract channel names from OME-XML metadata
+            channel_names = []
+            try:
+                if tif.ome_metadata:
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(tif.ome_metadata)
+                    # Parse OME-XML namespace
+                    ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
+                    for channel in root.findall('.//ome:Channel', ns):
+                        name = channel.get('Name', channel.get('ID', ''))
+                        if name:
+                            channel_names.append(name)
+                    print(f"  Found {len(channel_names)} channel names: {channel_names}")
+            except Exception as e:
+                print(f"  Could not extract channel names: {e}")
+
         print(f"  Shape: {merged_array.shape}, dtype: {merged_array.dtype}")
 
         print("Loading segmentation mask with tifffile...")
@@ -51,9 +68,29 @@ process CONVERSION {
         print(f"  Shape: {pheno_array.shape}, dtype: {pheno_array.dtype}")
 
         # Convert int64 to int32 for pyvips compatibility (it doesn't support int64)
+        # Also convert to uint8 or uint16 for categorical display
         if pheno_array.dtype == np.int64:
-            print("  Converting phenotype mask from int64 to int32...")
-            pheno_array = pheno_array.astype(np.int32)
+            print("  Converting phenotype mask from int64...")
+            pheno_min = pheno_array.min()
+            pheno_max = pheno_array.max()
+            print(f"    Phenotype range: {pheno_min} to {pheno_max}")
+
+            # Shift negative values to start from 0 for categorical LUT
+            if pheno_min < 0:
+                print(f"    Shifting values by {-pheno_min} to make non-negative")
+                pheno_array = pheno_array - pheno_min
+                pheno_max = pheno_max - pheno_min
+
+            # Convert to smallest compatible unsigned type
+            if pheno_max <= 255:
+                pheno_array = pheno_array.astype(np.uint8)
+                print(f"    Converted to uint8 for categorical display")
+            elif pheno_max <= 65535:
+                pheno_array = pheno_array.astype(np.uint16)
+                print(f"    Converted to uint16 for categorical display")
+            else:
+                pheno_array = pheno_array.astype(np.int32)
+                print(f"    Converted to int32 (too many categories for uint16)")
 
         # Convert uint32 to uint16 if values fit, otherwise keep uint32
         if seg_array.dtype == np.uint32:
@@ -66,7 +103,50 @@ process CONVERSION {
         print("Saving normalized TIFFs...")
         tifffile.imwrite("merged_norm.tif", merged_array, bigtiff=True, compression='lzw')
         tifffile.imwrite("seg_norm.tif", seg_array, bigtiff=True, compression='lzw')
-        tifffile.imwrite("pheno_norm.tif", pheno_array, bigtiff=True, compression='lzw')
+
+        # Create categorical colormap for phenotype mask
+        n_phenotypes = int(pheno_array.max() + 1)
+        print(f"  Creating categorical LUT for {n_phenotypes} phenotypes...")
+
+        # Distinctive colors for categorical display
+        base_colors = [
+            [0, 0, 0],         # 0: Background (black)
+            [255, 0, 0],       # 1: Red
+            [0, 255, 0],       # 2: Green
+            [0, 0, 255],       # 3: Blue
+            [255, 255, 0],     # 4: Yellow
+            [255, 0, 255],     # 5: Magenta
+            [0, 255, 255],     # 6: Cyan
+            [255, 128, 0],     # 7: Orange
+            [128, 0, 255],     # 8: Purple
+            [0, 255, 128],     # 9: Spring green
+            [255, 0, 128],     # 10: Rose
+            [128, 255, 0],     # 11: Lime
+            [0, 128, 255],     # 12: Sky blue
+            [255, 128, 128],   # 13: Light red
+            [128, 255, 128],   # 14: Light green
+            [128, 128, 255],   # 15: Light blue
+            [192, 192, 0],     # 16: Olive
+            [192, 0, 192],     # 17: Dark magenta
+            [0, 192, 192],     # 18: Teal
+            [255, 192, 128],   # 19: Peach
+        ]
+
+        # Extend with random colors if needed
+        import random
+        colors = base_colors.copy()
+        for i in range(len(colors), n_phenotypes):
+            random.seed(i)
+            colors.append([random.randint(50, 255) for _ in range(3)])
+
+        pheno_lut = np.array(colors[:n_phenotypes], dtype=np.uint8)
+
+        # Save phenotype with colormap for categorical display
+        tifffile.imwrite("pheno_norm.tif", pheno_array,
+                        bigtiff=True,
+                        compression='lzw',
+                        photometric='palette',
+                        colormap=pheno_lut)
 
         # Now load with pyvips and create pyramid
         print("Loading normalized images with pyvips...")
@@ -77,6 +157,16 @@ process CONVERSION {
         # Combine images using bandjoin
         print("Combining images...")
         combined = merged.bandjoin([seg, pheno])
+
+        # Add channel names to metadata if available
+        if channel_names:
+            # Add segmentation and phenotype names
+            all_channel_names = channel_names + ['Segmentation', 'Phenotype']
+            print(f"  Setting channel names: {all_channel_names}")
+            # Store as ImageDescription metadata
+            channel_desc = "Channels: " + ", ".join(all_channel_names)
+            combined = combined.copy()
+            combined.set_type(pyvips.GValue.gstr_type, 'image-description', channel_desc)
 
         # Save as pyramidal TIFF
         print("Creating pyramidal TIFF...")
