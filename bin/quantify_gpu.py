@@ -257,7 +257,7 @@ def extract_features_gpu(
 
 
 def run_marker_quantification(
-    indir: str,
+    channel_tiff: str,
     mask_file: str,
     outdir: str,
     output_file: str = None,
@@ -265,12 +265,12 @@ def run_marker_quantification(
     mode: str = 'gpu',
     verbose: bool = True
 ) -> pd.DataFrame:
-    """Run marker quantification pipeline on single-channel TIFFs.
+    """Run marker quantification pipeline on a single-channel TIFF.
 
     Parameters
     ----------
-    indir : str
-        Directory containing single-channel TIFF files.
+    channel_tiff : str
+        Path to single-channel TIFF file.
     mask_file : str
         Path to segmentation mask (.npy or .tif/.tiff).
     outdir : str
@@ -300,38 +300,30 @@ def run_marker_quantification(
     if mode == 'cpu':
         raise NotImplementedError("CPU mode not yet implemented - use GPU mode")
 
-    # Find all single-channel TIFF files in input directory
+    # Load the single channel TIFF file
     from pathlib import Path
-    indir_path = Path(indir)
-    channel_files = sorted(indir_path.glob('*.tif*'))
+    channel_file = Path(channel_tiff)
 
-    if not channel_files:
-        raise ValueError(f"No TIFF files found in {indir}")
+    if not channel_file.exists():
+        raise ValueError(f"Channel TIFF file not found: {channel_tiff}")
 
     if verbose:
-        logger.info(f"Found {len(channel_files)} channel file(s) in {indir}")
+        logger.info(f"Loading channel: {channel_file.name}")
 
-    # Load all channel images
-    channel_images = []
-    channel_names = []
+    # Load channel image
+    channel_image, _ = load_image(str(channel_file))
+    channel_image = channel_image.squeeze()
 
-    for channel_file in channel_files:
-        if verbose:
-            logger.info(f"Loading channel: {channel_file.name}")
+    # Extract channel name from filename
+    # Format: <prefix>_<marker>.tiff
+    channel_name = channel_file.stem.split('_')[-1]
 
-        channel_image, _ = load_image(str(channel_file))
-        channel_images.append(channel_image.squeeze())
+    if verbose:
+        logger.info(f"Channel name: {channel_name}")
 
-        # Extract channel name from filename
-        # Format: <prefix>_<marker>.tiff
-        channel_name = channel_file.stem.split('_')[-1]
-        channel_names.append(channel_name)
-
-    # Stack into multichannel array
-    if len(channel_images) == 1:
-        multichannel_image = channel_images[0][np.newaxis, ...]
-    else:
-        multichannel_image = np.stack(channel_images, axis=0)
+    # Create single-channel array in (C, H, W) format
+    multichannel_image = channel_image[np.newaxis, ...]
+    channel_names = [channel_name]
 
     if verbose:
         logger.info(f"Image shape: {multichannel_image.shape}")
@@ -379,14 +371,14 @@ if __name__ == '__main__':
         help="Processing mode: gpu or cpu"
     )
     parser.add_argument(
+        "--channel_tiff",
+        required=True,
+        help="Path to single-channel TIFF file"
+    )
+    parser.add_argument(
         "--mask_file",
         required=True,
         help="Path to segmentation mask (.npy or .tif/.tiff)"
-    )
-    parser.add_argument(
-        "--indir",
-        required=True,
-        help="Directory containing single-channel TIFF files"
     )
     parser.add_argument(
         "--outdir",
@@ -434,7 +426,7 @@ if __name__ == '__main__':
     # Run quantification
     try:
         run_marker_quantification(
-            indir=args.indir,
+            channel_tiff=args.channel_tiff,
             mask_file=args.mask_file,
             outdir=args.outdir,
             output_file=args.output_file,

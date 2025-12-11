@@ -17,8 +17,8 @@ process QUANTIFY {
     """
     # Run quantification on this single channel TIFF
     quantify_gpu.py \\
+        --channel_tiff ${channel_tiff} \\
         --mask_file ${seg_mask} \\
-        --indir . \\
         --outdir . \\
         --output_file ${channel_tiff.simpleName}_quant.csv \\
         --min_area ${params.quant_min_area}
