@@ -44,15 +44,15 @@ workflow RESULTS {
     savedir          // Archive directory
 
     main:
-    // Merge all registered images into single multichannel OME-TIFF
-    MERGE ( ch_registered.collect() )
-
-    // Create pyramidal OME-TIFF with masks (CONVERSION process)
-    CONVERSION (
-        MERGE.out.merged,
+    // Merge all registered images into single multichannel OME-TIFF with masks
+    MERGE (
+        ch_registered.collect(),
         cell_mask,
         phenotype_mask
     )
+
+    // Create pyramidal OME-TIFF (CONVERSION process)
+    CONVERSION ( MERGE.out.merged )
 
     // Collect only the outputs to save
     ch_to_save = channel.empty()

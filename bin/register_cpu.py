@@ -108,12 +108,14 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
 
     h, w = reg_dapi_scaled.shape
     rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb[:, :, 0] = reg_dapi_scaled
-    rgb[:, :, 1] = ref_dapi_scaled
-    rgb[:, :, 2] = 0
+    rgb[:, :, 2] = reg_dapi_scaled  # Blue channel
+    rgb[:, :, 1] = ref_dapi_scaled  # Green channel
+    rgb[:, :, 0] = 0                 # Red channel
 
-    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression="jpeg", bigtiff=True)
-    logger.info(f"  Saved QC composite: {output_path}")
+    # Change extension to .png and write as PNG
+    png_output_path = output_path.with_suffix('.png')
+    cv2.imwrite(str(png_output_path), rgb)
+    logger.info(f"  Saved QC composite: {png_output_path}")
 
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -833,7 +835,7 @@ def register_image_pair(
         if qc_dir:
             logger.info(f"Generating QC outputs: {qc_dir}")
             qc_dir.mkdir(parents=True, exist_ok=True)
-            qc_filename = f"{moving_path.stem}_QC_RGB.tif"
+            qc_filename = f"{moving_path.stem}_QC_RGB.png"
             qc_output_path = qc_dir / qc_filename
 
             try:

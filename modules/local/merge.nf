@@ -11,13 +11,15 @@ nextflow.enable.dsl = 2
 
 process MERGE {
     tag "merge_registered"
-    label 'process_medium'
+    label 'process_high'
     container "${params.container.merge}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/merged", mode: 'copy'
 
     input:
     path registered_slides
+    path seg_mask
+    path phenotype_mask
 
     output:
     path "merged_all.ome.tiff", emit: merged
@@ -28,6 +30,8 @@ process MERGE {
     merge_registered.py \\
         --input-dir . \\
         --output merged_all.ome.tiff \\
+        --segmentation-mask ${seg_mask} \\
+        --phenotype-mask ${phenotype_mask} \\
         ${ref_markers}
     """
 }
