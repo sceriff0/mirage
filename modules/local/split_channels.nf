@@ -2,7 +2,7 @@ nextflow.enable.dsl = 2
 
 process SPLIT_CHANNELS {
     tag "${registered_image.simpleName}"
-    label 'process_low'
+    label 'process_medium'
     container "${params.container.quantification}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/channels", mode: 'copy'
