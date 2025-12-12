@@ -296,18 +296,42 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
     return coords
 
 
-def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
-    """Create a weight mask with hard cutoff at overlap midpoint (no blending)."""
-    mask = np.ones((h, w), dtype=np.float32)
-    if overlap > 0:
-        # Hard cutoff: set edges to 0 (will be trimmed during merging)
-        # This mimics the "bad" script's hard cutoff behavior
-        half_overlap = overlap // 2
-        mask[:half_overlap, :] = 0
-        mask[-half_overlap:, :] = 0
-        mask[:, :half_overlap] = 0
-        mask[:, -half_overlap:] = 0
-    return mask
+def calculate_bounds(start: int, crop_dim: int, total_dim: int, overlap: int):
+    """
+    Calculate bounds for hard-cutoff crop placement.
+    Copied directly from utils.cropping.reconstruct_image for consistency.
+    """
+    if start == 0:
+        start_idx = start
+        end_idx = start + crop_dim - overlap // 2
+        crop_slice = slice(0, crop_dim - overlap // 2)
+    elif start == total_dim - crop_dim:
+        start_idx = start + overlap // 2
+        end_idx = start + crop_dim
+        crop_slice = slice(overlap // 2, crop_dim)
+    else:
+        start_idx = start + overlap // 2
+        end_idx = start + crop_dim - overlap // 2
+        crop_slice = slice(overlap // 2, crop_dim - overlap // 2)
+    return start_idx, end_idx, crop_slice
+
+
+def place_crop_hardcutoff(target_mem, crop, y: int, x: int, h: int, w: int,
+                          img_height: int, img_width: int, overlap: int):
+    """
+    Trim and place crop using hard cutoff (same as cropping.reconstruct_image).
+    Handles both 2D and 3D crops.
+    """
+    y_start, y_end, y_slice = calculate_bounds(y, h, img_height, overlap)
+    x_start, x_end, x_slice = calculate_bounds(x, w, img_width, overlap)
+
+    if crop.ndim == 3:
+        for c in range(crop.shape[0]):
+            crop_trimmed = crop[c][y_slice, x_slice]
+            target_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
+    else:
+        crop_trimmed = crop[y_slice, x_slice]
+        target_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
 
 def create_memmaps_for_merge(output_shape: Tuple[int, ...], 
@@ -454,58 +478,39 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     affine_mem, affine_weights, affine_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "affine_")
     logger.info(f"Created affine memmap in {affine_tmp_dir}")
     
-    # Apply affine transformations and merge
+    # Apply affine transformations and merge using hard-cutoff (same as cropping script)
     logger.info("Applying affine transformations and merging...")
-    weight_cache = {}
-    
+    img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+
     for res in cpu_results:
         coord = res["coord"]
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
-        
-        # Get or create weight mask
-        if (h, w) not in weight_cache:
-            weight_cache[(h, w)] = create_weight_mask(h, w, affine_overlap)
-        weight_mask = weight_cache[(h, w)]
-        
+
         if res["status"] != "success":
             # For failed crops, use original (identity transform)
-            if mov_mem.ndim == 3:
-                for c in range(mov_mem.shape[0]):
-                    crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
-                    affine_mem[c, y:y+h, x:x+w] += crop * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
-            else:
-                crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
-                affine_mem[y:y+h, x:x+w] += crop * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
+            crop = mov_mem[:, y:y+h, x:x+w].astype(np.float32) if mov_mem.ndim == 3 else mov_mem[y:y+h, x:x+w].astype(np.float32)
+            place_crop_hardcutoff(affine_mem, crop, y, x, h, w, img_height, img_width, affine_overlap)
         else:
-            # Apply affine transformation
+            # Apply affine transformation then place
             matrix = res["matrix"]
             if mov_mem.ndim == 3:
-                for c in range(mov_mem.shape[0]):
-                    crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
-                    transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                    affine_mem[c, y:y+h, x:x+w] += transformed * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
-                    del crop, transformed
+                transformed_crop = np.stack([
+                    apply_affine_cv2(np.ascontiguousarray(mov_mem[c, y:y+h, x:x+w].astype(np.float32)), matrix)
+                    for c in range(mov_mem.shape[0])
+                ])
             else:
-                crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
-                transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                affine_mem[y:y+h, x:x+w] += transformed * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
-                del crop, transformed
-        
+                transformed_crop = apply_affine_cv2(np.ascontiguousarray(mov_mem[y:y+h, x:x+w].astype(np.float32)), matrix)
+
+            place_crop_hardcutoff(affine_mem, transformed_crop, y, x, h, w, img_height, img_width, affine_overlap)
+            del transformed_crop
+
         gc.collect()
-    
-    # Normalize by weights
-    logger.info("Normalizing affine result...")
-    nonzero_mask = affine_weights > 0
-    affine_mem[nonzero_mask] /= affine_weights[nonzero_mask]
-    
+
+    # No normalization needed - we used direct assignment (hard cutoff)
     # Flush to disk
     affine_mem.flush()
-    
-    # Clean up weights memmap
+
+    # Clean up weights memmap (not used with hard cutoff, but still created)
     del affine_weights
     gc.collect()
     
@@ -648,19 +653,19 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     logger.info(f"Created diffeo memmap in {diffeo_tmp_dir}")
     
     # Process crops sequentially (GPU memory constraint)
-    weight_cache = {}
+    img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
     success_count = 0
     fallback_count = 0
     consecutive_failures = 0
     max_consecutive_failures = 5  # If we hit this many in a row, GPU is likely broken
     cuda_context_broken = False
-    
+
     # Log initial GPU memory state
     log_gpu_memory_usage()
-    
+
     for idx, coord in enumerate(diffeo_coords):
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
-        
+
         # Proactive GPU reset every N crops to prevent memory fragmentation
         # This happens BEFORE errors occur, not just after
         # Set gpu_reset_interval to 0 to disable
@@ -669,11 +674,6 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             log_gpu_memory_usage()
             reset_cuda_context()
             time.sleep(0.2)  # Brief pause to let GPU stabilize
-        
-        # Get or create weight mask
-        if (h, w) not in weight_cache:
-            weight_cache[(h, w)] = create_weight_mask(h, w, diffeo_overlap)
-        weight_mask = weight_cache[(h, w)]
         
         # Read affine-transformed moving crop (all channels) - always needed
         if affine_mem.ndim == 3:
@@ -686,13 +686,7 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
         # Check if CUDA context is broken - skip GPU work entirely
         if cuda_context_broken:
             # Use affine result directly
-            if affine_mem.ndim == 3:
-                for c in range(affine_mem.shape[0]):
-                    diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-            else:
-                diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                diffeo_weights[y:y+h, x:x+w] += weight_mask
+            place_crop_hardcutoff(diffeo_mem, affine_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
 
             fallback_count += 1
             del affine_crop
@@ -712,16 +706,10 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             if crop_max - crop_min < 1e-6:
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): uniform intensity, using affine-only")
                 fallback_count += 1
-                
+
                 # Use affine result directly
-                if affine_mem.ndim == 3:
-                    for c in range(affine_mem.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-                else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
-                
+                place_crop_hardcutoff(diffeo_mem, affine_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
+
                 del ref_crop, affine_crop
                 gc.collect()
                 consecutive_failures = 0  # Uniform intensity is not a GPU failure
@@ -810,14 +798,8 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 cuda_context_broken = True
                 
                 # Fallback for this crop
-                if affine_mem.ndim == 3:
-                    for c in range(affine_mem.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-                else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
-                
+                place_crop_hardcutoff(diffeo_mem, affine_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
+
                 fallback_count += 1
                 del ref_crop, affine_crop
                 gc.collect()
@@ -826,32 +808,22 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             if diffeo_succeeded and mapping is not None:
                 # Apply mapping to all channels
                 if affine_mem.ndim == 3:
-                    for c in range(affine_mem.shape[0]):
-                        channel = np.ascontiguousarray(affine_crop[c])
-                        mapped = apply_diffeo_mapping(mapping, channel)
-                        diffeo_mem[c, y:y+h, x:x+w] += mapped * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-                        del channel, mapped
+                    mapped_crop = np.stack([
+                        apply_diffeo_mapping(mapping, np.ascontiguousarray(affine_crop[c]))
+                        for c in range(affine_mem.shape[0])
+                    ])
                 else:
-                    channel = np.ascontiguousarray(affine_crop)
-                    mapped = apply_diffeo_mapping(mapping, channel)
-                    diffeo_mem[y:y+h, x:x+w] += mapped * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
-                    del channel, mapped
-                
-                del mapping
+                    mapped_crop = apply_diffeo_mapping(mapping, np.ascontiguousarray(affine_crop))
+
+                place_crop_hardcutoff(diffeo_mem, mapped_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
+
+                del mapping, mapped_crop
                 success_count += 1
                 logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
             else:
                 # Fallback to affine
-                if affine_mem.ndim == 3:
-                    for c in range(affine_mem.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-                else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
-                
+                place_crop_hardcutoff(diffeo_mem, affine_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
+
                 fallback_count += 1
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): fallback to affine")
             
@@ -864,14 +836,8 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             logger.error(f"Diffeo crop {idx+1} at ({y},{x}): unexpected error: {e}")
             
             # Fallback: use affine result
-            if affine_mem.ndim == 3:
-                for c in range(affine_mem.shape[0]):
-                    diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                    diffeo_weights[c, y:y+h, x:x+w] += weight_mask
-            else:
-                diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                diffeo_weights[y:y+h, x:x+w] += weight_mask
-            
+            place_crop_hardcutoff(diffeo_mem, affine_crop, y, x, h, w, img_height, img_width, diffeo_overlap)
+
             del affine_crop
             gc.collect()
             clear_gpu_memory()
@@ -884,13 +850,7 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                     logger.error("Could not recover GPU, switching to affine-only mode")
                     cuda_context_broken = True
     
-    # Normalize by weights
-    logger.info("Normalizing diffeo result...")
-    nonzero_mask = diffeo_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid diffeomorphic registration data")
-    diffeo_mem[nonzero_mask] /= diffeo_weights[nonzero_mask]
-    
+    # No normalization needed - we used direct assignment (hard cutoff)
     # Flush and cleanup
     diffeo_mem.flush()
     del diffeo_weights

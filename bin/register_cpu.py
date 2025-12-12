@@ -244,18 +244,24 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
     return coords
 
 
-def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
-    """Create a weight mask with hard cutoff at overlap midpoint (no blending)."""
-    mask = np.ones((h, w), dtype=np.float32)
-    if overlap > 0:
-        # Hard cutoff: set edges to 0 (will be trimmed during merging)
-        # This mimics the "bad" script's hard cutoff behavior
-        half_overlap = overlap // 2
-        mask[:half_overlap, :] = 0
-        mask[-half_overlap:, :] = 0
-        mask[:, :half_overlap] = 0
-        mask[:, -half_overlap:] = 0
-    return mask
+def calculate_bounds(start: int, crop_dim: int, total_dim: int, overlap: int):
+    """
+    Calculate bounds for hard-cutoff crop placement.
+    Copied directly from utils.cropping.reconstruct_image for consistency.
+    """
+    if start == 0:
+        start_idx = start
+        end_idx = start + crop_dim - overlap // 2
+        crop_slice = slice(0, crop_dim - overlap // 2)
+    elif start == total_dim - crop_dim:
+        start_idx = start + overlap // 2
+        end_idx = start + crop_dim
+        crop_slice = slice(overlap // 2, crop_dim)
+    else:
+        start_idx = start + overlap // 2
+        end_idx = start + crop_dim - overlap // 2
+        crop_slice = slice(overlap // 2, crop_dim - overlap // 2)
+    return start_idx, end_idx, crop_slice
 
 
 def create_memmaps_for_merge(output_shape: Tuple[int, ...],
@@ -402,30 +408,29 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     affine_mem, affine_weights, affine_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "affine_")
     logger.info(f"Created affine memmap in {affine_tmp_dir}")
 
-    # Apply affine transformations and merge
+    # Apply affine transformations and merge using hard-cutoff (same as cropping script)
     logger.info("Applying affine transformations and merging...")
-    weight_cache = {}
 
     for res in cpu_results:
         coord = res["coord"]
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
-        # Get or create weight mask
-        if (h, w) not in weight_cache:
-            weight_cache[(h, w)] = create_weight_mask(h, w, affine_overlap)
-        weight_mask = weight_cache[(h, w)]
+        # Calculate bounds using same logic as cropping.reconstruct_image
+        img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+        y_start, y_end, y_slice = calculate_bounds(y, h, img_height, affine_overlap)
+        x_start, x_end, x_slice = calculate_bounds(x, w, img_width, affine_overlap)
 
         if res["status"] != "success":
             # For failed crops, use original (identity transform)
             if mov_mem.ndim == 3:
                 for c in range(mov_mem.shape[0]):
                     crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
-                    affine_mem[c, y:y+h, x:x+w] += crop * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = crop[y_slice, x_slice]
+                    affine_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
             else:
                 crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
-                affine_mem[y:y+h, x:x+w] += crop * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
+                crop_trimmed = crop[y_slice, x_slice]
+                affine_mem[y_start:y_end, x_start:x_end] = crop_trimmed
         else:
             # Apply affine transformation
             matrix = res["matrix"]
@@ -433,29 +438,23 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
                 for c in range(mov_mem.shape[0]):
                     crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
                     transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                    affine_mem[c, y:y+h, x:x+w] += transformed * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+                    transformed_trimmed = transformed[y_slice, x_slice]
+                    affine_mem[c, y_start:y_end, x_start:x_end] = transformed_trimmed
                     del crop, transformed
             else:
                 crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
                 transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                affine_mem[y:y+h, x:x+w] += transformed * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
+                transformed_trimmed = transformed[y_slice, x_slice]
+                affine_mem[y_start:y_end, x_start:x_end] = transformed_trimmed
                 del crop, transformed
 
         gc.collect()
 
-    # Normalize by weights
-    logger.info("Normalizing affine result...")
-    nonzero_mask = affine_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid affine registration data")
-    affine_mem[nonzero_mask] /= affine_weights[nonzero_mask]
-
+    # No normalization needed - we used direct assignment (hard cutoff)
     # Flush to disk
     affine_mem.flush()
 
-    # Clean up weights memmap
+    # Clean up weights memmap (not used with hard cutoff, but still created)
     del affine_weights
     gc.collect()
 
@@ -569,7 +568,6 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     logger.info(f"Created diffeo memmap in {diffeo_tmp_dir}")
 
     # Process crops in parallel
-    weight_cache = {}
     success_count = 0
     fallback_count = 0
 
@@ -585,21 +583,21 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             coord = res["coord"]
             y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
-            # Get or create weight mask
-            if (h, w) not in weight_cache:
-                weight_cache[(h, w)] = create_weight_mask(h, w, diffeo_overlap)
-            weight_mask = weight_cache[(h, w)]
+            # Calculate bounds using same logic as cropping.reconstruct_image
+            img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+            y_start, y_end, y_slice = calculate_bounds(y, h, img_height, diffeo_overlap)
+            x_start, x_end, x_slice = calculate_bounds(x, w, img_width, diffeo_overlap)
 
             if res["status"] == "success":
                 # Use registered crop
                 registered_crop = res["registered_crop"]
                 if registered_crop.ndim == 3:
                     for c in range(registered_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += registered_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = registered_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += registered_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = registered_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 success_count += 1
                 logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
@@ -609,11 +607,11 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 affine_crop = res["affine_crop"]
                 if affine_crop.ndim == 3:
                     for c in range(affine_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = affine_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = affine_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 fallback_count += 1
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): uniform intensity, using affine")
@@ -623,21 +621,16 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 affine_crop = res["affine_crop"]
                 if affine_crop.ndim == 3:
                     for c in range(affine_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = affine_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = affine_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 fallback_count += 1
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): fallback to affine")
 
-    # Normalize by weights
-    logger.info("Normalizing diffeo result...")
-    nonzero_mask = diffeo_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid diffeomorphic registration data")
-    diffeo_mem[nonzero_mask] /= diffeo_weights[nonzero_mask]
+    # No normalization needed - we used direct assignment (hard cutoff)
 
     # Flush and cleanup
     diffeo_mem.flush()
