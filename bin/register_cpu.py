@@ -245,19 +245,16 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
 
 
 def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
-    """Create a weight mask for blending overlapping crops using smooth cosine transitions."""
+    """Create a weight mask with hard cutoff at overlap midpoint (no blending)."""
     mask = np.ones((h, w), dtype=np.float32)
     if overlap > 0:
-        # Use raised cosine (Hann window) for smoother blending
-        # This reduces visible seams compared to linear ramp
-        t = np.linspace(0, np.pi, overlap)
-        ramp = (1 - np.cos(t)) / 2  # Smooth S-curve from 0 to 1
-
-        # Apply to all four edges
-        mask[:overlap, :] *= ramp[:, np.newaxis]
-        mask[-overlap:, :] *= ramp[::-1, np.newaxis]
-        mask[:, :overlap] *= ramp[np.newaxis, :]
-        mask[:, -overlap:] *= ramp[::-1][np.newaxis, :]
+        # Hard cutoff: set edges to 0 (will be trimmed during merging)
+        # This mimics the "bad" script's hard cutoff behavior
+        half_overlap = overlap // 2
+        mask[:half_overlap, :] = 0
+        mask[-half_overlap:, :] = 0
+        mask[:, :half_overlap] = 0
+        mask[:, -half_overlap:] = 0
     return mask
 
 
