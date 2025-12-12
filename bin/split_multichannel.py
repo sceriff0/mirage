@@ -136,7 +136,7 @@ def split_multichannel_tiff(input_path, output_dir, is_reference=False, channel_
         output_path = os.path.join(output_dir, f"{clean_name}.tiff")
 
         channel_data = img[i]
-        tifffile.imwrite(output_path, channel_data, compression='zlib')
+        tifffile.imwrite(output_path, channel_data, bigtiff=True, compression='zlib')
 
         saved_paths.append(output_path)
         status = " (DAPI from reference)" if is_dapi else ""
