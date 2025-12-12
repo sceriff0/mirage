@@ -162,7 +162,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     png_output_path = output_path.with_suffix('.png')
     cv2.imwrite(str(png_output_path), rgb)
     logger.info(f"  Saved QC composite: {png_output_path}")
-e
+
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     """Apply affine transformation using OpenCV."""
@@ -297,10 +297,15 @@ def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: i
 
 
 def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
-    """Create a weight mask for blending overlapping crops."""
+    """Create a weight mask for blending overlapping crops using smooth cosine transitions."""
     mask = np.ones((h, w), dtype=np.float32)
     if overlap > 0:
-        ramp = np.linspace(0, 1, overlap)
+        # Use raised cosine (Hann window) for smoother blending
+        # This reduces visible seams compared to linear ramp
+        t = np.linspace(0, np.pi, overlap)
+        ramp = (1 - np.cos(t)) / 2  # Smooth S-curve from 0 to 1
+
+        # Apply to all four edges
         mask[:overlap, :] *= ramp[:, np.newaxis]
         mask[-overlap:, :] *= ramp[::-1, np.newaxis]
         mask[:, :overlap] *= ramp[np.newaxis, :]
