@@ -33,7 +33,7 @@ process CPU_REGISTER {
 
     output:
     path "${moving.simpleName}_registered.ome.tiff", emit: registered
-    path "qc/*_QC_RGB.png"                         , emit: qc, optional: true
+    path "qc/*_QC_RGB.{png,tif}"                   , emit: qc, optional: true
 
     script:
     // New separate crop sizes for affine and diffeomorphic stages

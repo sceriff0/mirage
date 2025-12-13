@@ -33,7 +33,7 @@ process CPU_REGISTER_MULTIRES {
 
     output:
     path "${moving.simpleName}_registered.ome.tiff", emit: registered
-    path "qc/*_QC_RGB.png"                         , emit: qc, optional: true
+    path "qc/*_QC_RGB.{png,tif}"                   , emit: qc, optional: true
 
     script:
     // Coarse affine parameters (rough global alignment)
