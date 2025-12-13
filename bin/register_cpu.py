@@ -84,64 +84,75 @@ def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarr
     return (img * 255).astype(np.uint8)
 
 
-def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
-    """Create QC stack with registered and reference DAPI channels.
-
-    Follows same logic as save_dapi_stack:
-    - Stack registered and reference DAPI channels
-    - Normalize each channel independently (min-max)
-    - Downsample by 0.25 scale factor
-    - Save as ImageJ-compatible TIFF
+def create_qc_rgb_composite(
+    reference_path: Path, 
+    registered_path: Path, 
+    output_path: Path,
+    scale: float = 0.25,
+    percentile_clip: tuple[float, float] = (1, 99)
+) -> None:
+    """Create QC RGB composite with reference (red) and registered (green) DAPI channels.
+    
+    Yellow = good alignment (both channels overlap)
+    Red only = reference only
+    Green only = registered only
     """
     logger.info(f"Creating QC composite: {output_path.name}")
-
+    
     # Load images
     ref_img = tifffile.imread(str(reference_path))
     reg_img = tifffile.imread(str(registered_path))
-
+    
     if ref_img.ndim == 2:
         ref_img = ref_img[np.newaxis, ...]
     if reg_img.ndim == 2:
         reg_img = reg_img[np.newaxis, ...]
-
+    
     # Find DAPI channels
     ref_channels = get_channel_names(reference_path.name)
     reg_channels = get_channel_names(registered_path.name)
-
     ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
     reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
-
-    ref_dapi = ref_img[ref_dapi_idx].astype("uint16")
-    reg_dapi = reg_img[reg_dapi_idx].astype("uint16")
-
-    logger.info(f"  Reference DAPI range: {ref_dapi.min()} - {ref_dapi.max()}")
-    logger.info(f"  Registered DAPI range: {reg_dapi.min()} - {reg_dapi.max()}")
-
-    # Stack channels: [registered, reference]
-    dapi_stack = np.stack((reg_dapi, ref_dapi), axis=0)
-
-    # Normalize each channel independently (same as normalize_image function)
-    min_val = dapi_stack.min(axis=(1, 2), keepdims=True)
-    max_val = dapi_stack.max(axis=(1, 2), keepdims=True)
-    normalized_stack = (dapi_stack - min_val) / (max_val - min_val) * 255
-    normalized_stack = normalized_stack.astype(np.uint8)
-
-    # Downsample by 0.25 scale factor
-    downsampled_stack = np.array([
-        rescale(channel, scale=0.25, anti_aliasing=True)
-        for channel in normalized_stack
-    ])
-
-    # Rescale to uint8 (0-255) after downsampling
-    min_val = downsampled_stack.min(axis=(1, 2), keepdims=True)
-    max_val = downsampled_stack.max(axis=(1, 2), keepdims=True)
-    downsampled_stack = (downsampled_stack - min_val) / (max_val - min_val + 1e-10) * 255
-    downsampled_stack = downsampled_stack.astype(np.uint8)
-
-    # Save as ImageJ-compatible TIFF
+    
+    ref_dapi = ref_img[ref_dapi_idx].astype(np.float32)
+    reg_dapi = reg_img[reg_dapi_idx].astype(np.float32)
+    
+    logger.info(f"  Reference DAPI range: {ref_dapi.min():.1f} - {ref_dapi.max():.1f}")
+    logger.info(f"  Registered DAPI range: {reg_dapi.min():.1f} - {reg_dapi.max():.1f}")
+    
+    def normalize_channel(ch: np.ndarray, pmin: float, pmax: float) -> np.ndarray:
+        """Percentile-based normalization to handle outliers."""
+        low, high = np.percentile(ch, [pmin, pmax])
+        ch_clipped = np.clip(ch, low, high)
+        if high > low:
+            return ((ch_clipped - low) / (high - low) * 255).astype(np.uint8)
+        return np.zeros_like(ch, dtype=np.uint8)
+    
+    # Normalize using percentiles (more robust than min/max)
+    ref_norm = normalize_channel(ref_dapi, *percentile_clip)
+    reg_norm = normalize_channel(reg_dapi, *percentile_clip)
+    
+    # Downsample with preserve_range to maintain 0-255
+    ref_down = rescale(ref_norm, scale=scale, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+    reg_down = rescale(reg_norm, scale=scale, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+    
+    # Create RGB: Red = reference, Green = registered, Blue = zeros
+    rgb_stack = np.stack([
+        ref_down,   # Red channel
+        reg_down,   # Green channel
+        np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
+    ], axis=0)
+    
+    # Save as ImageJ-compatible RGB
     tiff_output_path = output_path.with_suffix('.tif')
-    tifffile.imwrite(str(tiff_output_path), downsampled_stack, imagej=True)
-    logger.info(f"  Saved QC composite: {tiff_output_path}")
+    tifffile.imwrite(
+        str(tiff_output_path),
+        rgb_stack,
+        imagej=True,
+        metadata={'axes': 'CYX', 'mode': 'composite'}
+    )
+    
+    logger.info(f"  Saved QC RGB: {tiff_output_path} | shape: {rgb_stack.shape}")
 
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
