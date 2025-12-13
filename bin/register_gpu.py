@@ -160,19 +160,17 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     ref_dapi = ref_img[ref_dapi_idx].astype("uint16")
     reg_dapi = reg_img[reg_dapi_idx].astype("uint16")
 
+    logger.info(f"  Reference DAPI range: {ref_dapi.min()} - {ref_dapi.max()}")
+    logger.info(f"  Registered DAPI range: {reg_dapi.min()} - {reg_dapi.max()}")
+
     # Stack channels: [registered, reference]
     dapi_stack = np.stack((reg_dapi, ref_dapi), axis=0)
 
-    # Normalize each channel independently (min-max to 0-1)
-    normalized_stack = np.zeros_like(dapi_stack, dtype=np.float32)
-    for i in range(dapi_stack.shape[0]):
-        channel = dapi_stack[i].astype(np.float32)
-        min_val = channel.min()
-        max_val = channel.max()
-        if max_val > min_val:
-            normalized_stack[i] = (channel - min_val) / (max_val - min_val)
-        else:
-            normalized_stack[i] = channel
+    # Normalize each channel independently (same as normalize_image function)
+    min_val = dapi_stack.min(axis=(1, 2), keepdims=True)
+    max_val = dapi_stack.max(axis=(1, 2), keepdims=True)
+    normalized_stack = (dapi_stack - min_val) / (max_val - min_val) * 255
+    normalized_stack = normalized_stack.astype(np.uint8)
 
     # Downsample by 0.25 scale factor
     downsampled_stack = np.array([
@@ -180,7 +178,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
         for channel in normalized_stack
     ])
 
-    # Rescale to uint8 (0-255)
+    # Rescale to uint8 (0-255) after downsampling
     min_val = downsampled_stack.min(axis=(1, 2), keepdims=True)
     max_val = downsampled_stack.max(axis=(1, 2), keepdims=True)
     downsampled_stack = (downsampled_stack - min_val) / (max_val - min_val + 1e-10) * 255
