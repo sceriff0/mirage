@@ -20,8 +20,8 @@ process CPU_REGISTER {
     }
 
     cpus {
-        moving.size() < 10.GB  ? 32 :        // Small images
-        moving.size() < 25.GB  ? 32 :        // Medium images
+        moving.size() < 10.GB  ? 64 :        // Small images
+        moving.size() < 25.GB  ? 64 :        // Medium images
         64                                   // Large images
     }
 
