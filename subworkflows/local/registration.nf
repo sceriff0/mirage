@@ -6,21 +6,22 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { REGISTER      } from '../../modules/local/register'
-include { GPU_REGISTER  } from '../../modules/local/register_gpu'
-include { CPU_REGISTER  } from '../../modules/local/register_cpu'
+include { REGISTER              } from '../../modules/local/register'
+include { GPU_REGISTER          } from '../../modules/local/register_gpu'
+include { CPU_REGISTER          } from '../../modules/local/register_cpu'
+include { CPU_REGISTER_MULTIRES } from '../../modules/local/register_cpu_multires'
 
 /*
 ========================================================================================
     SUBWORKFLOW: REGISTRATION
 ========================================================================================
     Description:
-        Registers padded images using VALIS (classic), GPU, or CPU methods.
+        Registers padded images using VALIS (classic), GPU, CPU, or CPU multi-resolution methods.
         For GPU/CPU methods, finds reference image and creates registration pairs.
 
     Input:
         ch_padded: Channel of padded OME-TIFF images
-        method: Registration method ('valis', 'gpu', or 'cpu')
+        method: Registration method ('valis', 'gpu', 'cpu', or 'cpu_multires')
         reference_markers: List of markers to identify reference image
 
     Output:
@@ -75,8 +76,13 @@ workflow REGISTRATION {
             GPU_REGISTER ( ch_pairs )
             ch_registered_moving = GPU_REGISTER.out.registered
             ch_qc = GPU_REGISTER.out.qc
+        } else if (method == 'cpu_multires') {
+            // CPU Multi-Resolution Registration (coarse-to-fine)
+            CPU_REGISTER_MULTIRES ( ch_pairs )
+            ch_registered_moving = CPU_REGISTER_MULTIRES.out.registered
+            ch_qc = CPU_REGISTER_MULTIRES.out.qc
         } else {
-            // CPU Registration
+            // CPU Registration (standard 2-stage)
             CPU_REGISTER ( ch_pairs )
             ch_registered_moving = CPU_REGISTER.out.registered
             ch_qc = CPU_REGISTER.out.qc
