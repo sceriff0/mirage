@@ -84,66 +84,56 @@ def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarr
     return (img * 255).astype(np.uint8)
 
 
-def create_qc_rgb_composite(
-    reference_path: Path, 
-    registered_path: Path, 
-    output_path: Path,
-    scale: float = 0.25,
-    percentile_clip: tuple[float, float] = (1, 99)
-) -> None:
-    """Create QC RGB composite with reference (red) and registered (green) DAPI channels.
-    
-    Yellow = good alignment (both channels overlap)
-    Red only = reference only
-    Green only = registered only
-    """
+def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
+    """Create QC RGB composite with registered (blue) and reference (green) DAPI channels."""
     logger.info(f"Creating QC composite: {output_path.name}")
-    
+
     # Load images
     ref_img = tifffile.imread(str(reference_path))
     reg_img = tifffile.imread(str(registered_path))
-    
+
     if ref_img.ndim == 2:
         ref_img = ref_img[np.newaxis, ...]
     if reg_img.ndim == 2:
         reg_img = reg_img[np.newaxis, ...]
-    
+
     # Find DAPI channels
     ref_channels = get_channel_names(reference_path.name)
     reg_channels = get_channel_names(registered_path.name)
+
     ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
     reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
-    
-    ref_dapi = ref_img[ref_dapi_idx].astype(np.float32)
-    reg_dapi = reg_img[reg_dapi_idx].astype(np.float32)
-    
-    logger.info(f"  Reference DAPI range: {ref_dapi.min():.1f} - {ref_dapi.max():.1f}")
-    logger.info(f"  Registered DAPI range: {reg_dapi.min():.1f} - {reg_dapi.max():.1f}")
-    
-    def normalize_channel(ch: np.ndarray, pmin: float, pmax: float) -> np.ndarray:
-        """Percentile-based normalization to handle outliers."""
-        low, high = np.percentile(ch, [pmin, pmax])
-        ch_clipped = np.clip(ch, low, high)
-        if high > low:
-            return ((ch_clipped - low) / (high - low) * 255).astype(np.uint8)
-        return np.zeros_like(ch, dtype=np.uint8)
-    
-    # Normalize using percentiles (more robust than min/max)
-    ref_norm = normalize_channel(ref_dapi, *percentile_clip)
-    reg_norm = normalize_channel(reg_dapi, *percentile_clip)
-    
-    # Downsample with preserve_range to maintain 0-255
-    ref_down = rescale(ref_norm, scale=scale, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-    reg_down = rescale(reg_norm, scale=scale, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-    
-    # Create RGB: Red = reference, Green = registered, Blue = zeros
+
+    ref_dapi = ref_img[ref_dapi_idx]
+    reg_dapi = reg_img[reg_dapi_idx]
+
+    # Autoscale using percentile normalization
+    ref_dapi_scaled = autoscale(ref_dapi)
+    reg_dapi_scaled = autoscale(reg_dapi)
+
+    # Downsample by 0.25 scale factor
+    ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+    reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+
+    # Create RGB composite: Blue = registered, Green = reference
+    h, w = reg_down.shape
+    rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb_bgr[:, :, 2] = reg_down  # Blue channel
+    rgb_bgr[:, :, 1] = ref_down  # Green channel
+    rgb_bgr[:, :, 0] = 0         # Red channel
+
+    # Save as PNG (OpenCV uses BGR order)
+    png_output_path = output_path.with_suffix('.png')
+    cv2.imwrite(str(png_output_path), rgb_bgr)
+    logger.info(f"  Saved QC PNG: {png_output_path}")
+
+    # Save as ImageJ-compatible TIFF (CYX order)
     rgb_stack = np.stack([
-        ref_down,   # Red channel
-        reg_down,   # Green channel
-        np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
+        np.zeros_like(ref_down, dtype=np.uint8),  # Red channel
+        ref_down,   # Green channel
+        reg_down    # Blue channel
     ], axis=0)
-    
-    # Save as ImageJ-compatible RGB
+
     tiff_output_path = output_path.with_suffix('.tif')
     tifffile.imwrite(
         str(tiff_output_path),
@@ -151,8 +141,7 @@ def create_qc_rgb_composite(
         imagej=True,
         metadata={'axes': 'CYX', 'mode': 'composite'}
     )
-    
-    logger.info(f"  Saved QC RGB: {tiff_output_path} | shape: {rgb_stack.shape}")
+    logger.info(f"  Saved QC TIFF: {tiff_output_path}")
 
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
