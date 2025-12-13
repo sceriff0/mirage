@@ -28,6 +28,7 @@ import tifffile
 import tempfile
 import gc
 import traceback
+from skimage.transform import rescale
 
 # Keep a stable Cupy cache directory
 os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
@@ -130,8 +131,17 @@ def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarr
 
 
 def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
+    """Create QC stack with registered and reference DAPI channels.
+
+    Follows same logic as save_dapi_stack:
+    - Stack registered and reference DAPI channels
+    - Normalize each channel independently (min-max)
+    - Downsample by 0.25 scale factor
+    - Save as ImageJ-compatible TIFF
+    """
     logger.info(f"Creating QC composite: {output_path.name}")
 
+    # Load images
     ref_img = tifffile.imread(str(reference_path))
     reg_img = tifffile.imread(str(registered_path))
 
@@ -140,28 +150,46 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     if reg_img.ndim == 2:
         reg_img = reg_img[np.newaxis, ...]
 
+    # Find DAPI channels
     ref_channels = get_channel_names(reference_path.name)
     reg_channels = get_channel_names(registered_path.name)
 
     ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
     reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
 
-    ref_dapi = ref_img[ref_dapi_idx]
-    reg_dapi = reg_img[reg_dapi_idx]
+    ref_dapi = ref_img[ref_dapi_idx].astype("uint16")
+    reg_dapi = reg_img[reg_dapi_idx].astype("uint16")
 
-    ref_dapi_scaled = autoscale(ref_dapi)
-    reg_dapi_scaled = autoscale(reg_dapi)
+    # Stack channels: [registered, reference]
+    dapi_stack = np.stack((reg_dapi, ref_dapi), axis=0)
 
-    h, w = reg_dapi_scaled.shape
-    rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb[:, :, 2] = reg_dapi_scaled  # Blue channel
-    rgb[:, :, 1] = ref_dapi_scaled  # Green channel
-    rgb[:, :, 0] = 0                 # Red channel
+    # Normalize each channel independently (min-max to 0-1)
+    normalized_stack = np.zeros_like(dapi_stack, dtype=np.float32)
+    for i in range(dapi_stack.shape[0]):
+        channel = dapi_stack[i].astype(np.float32)
+        min_val = channel.min()
+        max_val = channel.max()
+        if max_val > min_val:
+            normalized_stack[i] = (channel - min_val) / (max_val - min_val)
+        else:
+            normalized_stack[i] = channel
 
-    # Change extension to .png and write as PNG
-    png_output_path = output_path.with_suffix('.png')
-    cv2.imwrite(str(png_output_path), rgb)
-    logger.info(f"  Saved QC composite: {png_output_path}")
+    # Downsample by 0.25 scale factor
+    downsampled_stack = np.array([
+        rescale(channel, scale=0.25, anti_aliasing=True)
+        for channel in normalized_stack
+    ])
+
+    # Rescale to uint8 (0-255)
+    min_val = downsampled_stack.min(axis=(1, 2), keepdims=True)
+    max_val = downsampled_stack.max(axis=(1, 2), keepdims=True)
+    downsampled_stack = (downsampled_stack - min_val) / (max_val - min_val + 1e-10) * 255
+    downsampled_stack = downsampled_stack.astype(np.uint8)
+
+    # Save as ImageJ-compatible TIFF
+    tiff_output_path = output_path.with_suffix('.tif')
+    tifffile.imwrite(str(tiff_output_path), downsampled_stack, imagej=True)
+    logger.info(f"  Saved QC composite: {tiff_output_path}")
 
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
