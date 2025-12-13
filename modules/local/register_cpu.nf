@@ -14,13 +14,13 @@ process CPU_REGISTER {
     }
 
     time {
-        moving.size() < 10.GB  ? '4.h' :      // Small images - CPU is slower
+        moving.size() < 10.GB  ? '8.h' :      // Small images - CPU is slower
         moving.size() < 25.GB  ? '10.h' :      // Medium images
         '16.h'                                 // Large images
     }
 
     cpus {
-        moving.size() < 10.GB  ? 16 :        // Small images
+        moving.size() < 10.GB  ? 32 :        // Small images
         moving.size() < 25.GB  ? 32 :        // Medium images
         64                                   // Large images
     }
