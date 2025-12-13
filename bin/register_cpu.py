@@ -444,7 +444,10 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
         # Calculate bounds using same logic as cropping.reconstruct_image
-        img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+        if len(mov_shape) == 3:
+            img_height, img_width = mov_shape[1], mov_shape[2]
+        else:
+            img_height, img_width = mov_shape[0], mov_shape[1]
         y_start, y_end, y_slice = calculate_bounds(y, h, img_height, affine_overlap)
         x_start, x_end, x_slice = calculate_bounds(x, w, img_width, affine_overlap)
 
@@ -612,7 +615,10 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
             # Calculate bounds using same logic as cropping.reconstruct_image
-            img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+            if len(mov_shape) == 3:
+                img_height, img_width = mov_shape[1], mov_shape[2]
+            else:
+                img_height, img_width = mov_shape[0], mov_shape[1]
             y_start, y_end, y_slice = calculate_bounds(y, h, img_height, diffeo_overlap)
             x_start, x_end, x_slice = calculate_bounds(x, w, img_width, diffeo_overlap)
 

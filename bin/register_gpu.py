@@ -508,7 +508,10 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     
     # Apply affine transformations and merge using hard-cutoff (same as cropping script)
     logger.info("Applying affine transformations and merging...")
-    img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+    if len(mov_shape) == 3:
+        img_height, img_width = mov_shape[1], mov_shape[2]
+    else:
+        img_height, img_width = mov_shape[0], mov_shape[1]
 
     for res in cpu_results:
         coord = res["coord"]
@@ -679,9 +682,12 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     # Create memmap for final result
     diffeo_mem, diffeo_weights, diffeo_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "diffeo_")
     logger.info(f"Created diffeo memmap in {diffeo_tmp_dir}")
-    
+
     # Process crops sequentially (GPU memory constraint)
-    img_height, img_width = mov_shape[1], mov_shape[2] if len(mov_shape) == 3 else mov_shape[0], mov_shape[1]
+    if len(mov_shape) == 3:
+        img_height, img_width = mov_shape[1], mov_shape[2]
+    else:
+        img_height, img_width = mov_shape[0], mov_shape[1]
     success_count = 0
     fallback_count = 0
     consecutive_failures = 0
