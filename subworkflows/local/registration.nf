@@ -10,6 +10,7 @@ include { REGISTER              } from '../../modules/local/register'
 include { GPU_REGISTER          } from '../../modules/local/register_gpu'
 include { CPU_REGISTER          } from '../../modules/local/register_cpu'
 include { CPU_REGISTER_MULTIRES } from '../../modules/local/register_cpu_multires'
+include { CPU_REGISTER_CDM      } from '../../modules/local/register_cpu_cdm'
 
 /*
 ========================================================================================
@@ -21,7 +22,7 @@ include { CPU_REGISTER_MULTIRES } from '../../modules/local/register_cpu_multire
 
     Input:
         ch_padded: Channel of padded OME-TIFF images
-        method: Registration method ('valis', 'gpu', 'cpu', or 'cpu_multires')
+        method: Registration method ('valis', 'gpu', 'cpu', 'cpu_multires', or 'cpu_cdm')
         reference_markers: List of markers to identify reference image
 
     Output:
@@ -77,10 +78,15 @@ workflow REGISTRATION {
             ch_registered_moving = GPU_REGISTER.out.registered
             ch_qc = GPU_REGISTER.out.qc
         } else if (method == 'cpu_multires') {
-            // CPU Multi-Resolution Registration (coarse-to-fine)
+            // CPU Multi-Resolution Registration (coarse → fine affine → diffeo)
             CPU_REGISTER_MULTIRES ( ch_pairs )
             ch_registered_moving = CPU_REGISTER_MULTIRES.out.registered
             ch_qc = CPU_REGISTER_MULTIRES.out.qc
+        } else if (method == 'cpu_cdm') {
+            // CPU CDM Registration (coarse affine → diffeo → micro affine)
+            CPU_REGISTER_CDM ( ch_pairs )
+            ch_registered_moving = CPU_REGISTER_CDM.out.registered
+            ch_qc = CPU_REGISTER_CDM.out.qc
         } else {
             // CPU Registration (standard 2-stage)
             CPU_REGISTER ( ch_pairs )
