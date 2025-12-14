@@ -82,10 +82,10 @@ def get_channel_names(filename: str) -> list[str]:
     return channels
 
 
-def autoscale(img, low_p=1, high_p=99):
-    """Auto brightness/contrast similar to ImageJ's 'Auto'."""
-    lo = np.percentile(img, low_p)
-    hi = np.percentile(img, high_p)
+def autoscale(img):
+    """Normalize image to 0-255 using min-max scaling."""
+    lo = img.min()
+    hi = img.max()
     img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
     return (img * 255).astype(np.uint8)
 
@@ -141,9 +141,9 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         # Create RGB composite: Red = registered, Green = reference
         h, w = reg_down.shape
         rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
-        rgb_bgr[:, :, 2] = reg_down  # Blue channel (will appear red in BGR)
+        rgb_bgr[:, :, 2] = 0         # Blue channel
         rgb_bgr[:, :, 1] = ref_down  # Green channel
-        rgb_bgr[:, :, 0] = 0         # Red channel (will appear blue in BGR)
+        rgb_bgr[:, :, 0] = reg_down  # Red channel
 
         # Save as PNG (OpenCV uses BGR order)
         base_name = os.path.basename(slide_name)

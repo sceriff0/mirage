@@ -85,6 +85,14 @@ def get_channel_names(filename: str) -> List[str]:
     return channels
 
 
+def autoscale(img: np.ndarray) -> np.ndarray:
+    """Normalize image to 0-255 using min-max scaling."""
+    lo = img.min()
+    hi = img.max()
+    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
+    return (img * 255).astype(np.uint8)
+
+
 def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
     """Create QC RGB composite with registered (blue) and reference (green) DAPI channels."""
     logger.info(f"Creating QC composite: {output_path.name}")
@@ -108,7 +116,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     ref_dapi = ref_img[ref_dapi_idx]
     reg_dapi = reg_img[reg_dapi_idx]
 
-    # Autoscale using percentile normalization
+    # Autoscale using min-max normalization
     ref_dapi_scaled = autoscale(ref_dapi)
     reg_dapi_scaled = autoscale(reg_dapi)
 
@@ -116,12 +124,12 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
     reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
 
-    # Create RGB composite: Blue = registered, Green = reference
+    # Create RGB composite: Red = registered, Green = reference
     h, w = reg_down.shape
     rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb_bgr[:, :, 2] = reg_down  # Blue channel
+    rgb_bgr[:, :, 2] = 0         # Blue channel
     rgb_bgr[:, :, 1] = ref_down  # Green channel
-    rgb_bgr[:, :, 0] = 0         # Red channel
+    rgb_bgr[:, :, 0] = reg_down  # Red channel
 
     # Save as PNG (OpenCV uses BGR order)
     png_output_path = output_path.with_suffix('.png')
@@ -130,9 +138,9 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
 
     # Save as ImageJ-compatible TIFF (CYX order)
     rgb_stack = np.stack([
-        np.zeros_like(ref_down, dtype=np.uint8),  # Red channel
-        ref_down,   # Green channel
-        reg_down    # Blue channel
+        reg_down,   # Red channel (registered)
+        ref_down,   # Green channel (reference)
+        np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
     ], axis=0)
 
     tiff_output_path = output_path.with_suffix('.tif')
