@@ -91,13 +91,7 @@ def autoscale(img):
 
 
 def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
-    """Create QC RGB composites with registered (red) and reference (green) DAPI channels.
-
-    Uses double normalization:
-    1. Normalize full-resolution images independently
-    2. Downsample by 0.25 scale factor
-    3. Normalize again after downsampling to ensure full dynamic range
-    """
+    """Create QC RGB composites with registered (red) and reference (green) DAPI channels."""
     from pathlib import Path
     from skimage.transform import rescale
     import cv2
@@ -120,6 +114,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
 
     ref_vips = ref_slide.slide2vips(level=0)
     ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
+    ref_dapi_scaled = autoscale(ref_dapi)
 
     log_progress(f"Processing {len(registrar.slide_dict) - 1} slides for QC...")
 
@@ -135,34 +130,13 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
 
         warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
         reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
+        reg_dapi_scaled = autoscale(reg_dapi)
 
-        # Stack images along channel axis for vectorized normalization
-        dapi_stack = np.stack([reg_dapi, ref_dapi], axis=0)
-        del reg_dapi
+        # Downsample by 0.25 scale factor
+        ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+        reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
 
-        # First normalization: normalize each channel independently at full resolution
-        min_val = dapi_stack.min(axis=(1, 2), keepdims=True)
-        max_val = dapi_stack.max(axis=(1, 2), keepdims=True)
-        dapi_stack = (dapi_stack - min_val) / np.maximum(max_val - min_val, 1e-6) * 255
-        dapi_stack = dapi_stack.astype(np.uint8)
-
-        # Downsample each channel separately
-        downsampled = np.array([
-            rescale(dapi_stack[0], scale=0.25, anti_aliasing=True, preserve_range=True),
-            rescale(dapi_stack[1], scale=0.25, anti_aliasing=True, preserve_range=True)
-        ])
-
-        del dapi_stack
-        gc.collect()
-
-        # Second normalization: normalize again after downsampling
-        min_val = downsampled.min(axis=(1, 2), keepdims=True)
-        max_val = downsampled.max(axis=(1, 2), keepdims=True)
-        downsampled = (downsampled - min_val) / np.maximum(max_val - min_val, 1e-6) * 255
-        downsampled = downsampled.astype(np.uint8)
-
-        reg_down = downsampled[0]
-        ref_down = downsampled[1]
+        del reg_dapi, reg_dapi_scaled
 
         # Create RGB composite: Red = registered, Green = reference
         h, w = reg_down.shape
@@ -193,7 +167,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         )
         log_progress(f"  Saved QC TIFF: {tiff_path.name}")
 
-        del rgb_bgr, rgb_stack, reg_down, ref_down, downsampled
+        del rgb_bgr, rgb_stack, reg_down
         gc.collect()
 
     log_progress("QC generation complete")
