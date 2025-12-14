@@ -507,8 +507,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         log_progress(f"  ✓ Saved: {out_path}")
 
         # Aggressive memory cleanup after each slide
-        import gc
-
         # Close slide reader if possible
         if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
             try:
