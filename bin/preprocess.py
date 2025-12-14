@@ -266,7 +266,9 @@ def preprocess_multichannel_image(
         preprocessed,
         photometric='minisblack',
         metadata=metadata,
-        ome=True
+        ome=True,
+        tile=(256, 256),
+        compression='zlib'
     )
 
     logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")

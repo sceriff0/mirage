@@ -396,7 +396,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         # max_image_dim_px: limits dimensions of images stored in registrar (key for RAM control)
         max_processed_image_dim_px=max_processed_image_dim_px,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
-        #max_image_dim_px=max_image_dim,  # Critical: prevents loading full 60K x 50K images into RAM
+        max_image_dim_px=max_image_dim,  # Critical: prevents loading full 28K x 28K images into RAM
 
         # Feature detection - SuperPoint/SuperGlue
         feature_detector_cls=feature_detectors.SuperPointFD,
@@ -418,10 +418,28 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress("Starting rigid and non-rigid registration...")
     log_progress("This may take 15-45 minutes...")
 
-    _, _, error_df = registrar.register()
-
-    log_progress("✓ Initial registration completed")
-    log_progress(f"\nRegistration errors:\n{error_df}")
+    try:
+        _, _, error_df = registrar.register()
+        log_progress("✓ Initial registration completed")
+        log_progress(f"\nRegistration errors:\n{error_df}")
+    except Exception as e:
+        if "unable to write to memory" in str(e) or "TIFFFillStrip" in str(e):
+            log_progress("\n" + "=" * 70)
+            log_progress("ERROR: pyvips memory allocation failure")
+            log_progress("=" * 70)
+            log_progress("VALIS cannot load the TIFF files into memory.")
+            log_progress("\nPossible causes:")
+            log_progress("  1. Files are too large for available RAM")
+            log_progress("  2. TIFF files may be corrupted or have format issues")
+            log_progress("  3. Files need to be saved with tiling/compression")
+            log_progress("\nSuggested fixes:")
+            log_progress("  1. Increase max_image_dim_px parameter (currently 6000)")
+            log_progress("  2. Re-save TIFF files with compression='zlib' and tile=(256,256)")
+            log_progress("  3. Ensure preprocessing saves tiles with proper TIFF structure")
+            log_progress("=" * 70)
+            raise RuntimeError(f"VALIS registration failed due to memory/TIFF issue: {e}")
+        else:
+            raise
 
     # ========================================================================
     # Micro-registration - Try with error handling
