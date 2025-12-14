@@ -309,36 +309,53 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress(f"Using reference image: {ref_image}")
 
     # ========================================================================
-    # Check input file metadata
+    # Check input file metadata and validate with pyvips
     # ========================================================================
-    log_progress("\nChecking input files metadata...")
+    log_progress("\nValidating input files...")
     input_files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
     log_progress(f"Found {len(input_files)} OME-TIFF files")
 
-    for idx, fpath in enumerate(input_files[:3], 1):  # Check first 3 files
+    valid_files = []
+    for idx, fpath in enumerate(input_files, 1):
         fname = os.path.basename(fpath)
-        log_progress(f"\n[{idx}] Checking: {fname}")
+        log_progress(f"\n[{idx}/{len(input_files)}] Validating: {fname}")
+
         try:
+            # First check with tifffile for basic metadata
             with tifffile.TiffFile(fpath) as tif:
-                img = tif.asarray()
-                log_progress(f"  - Image shape: {img.shape}")
-                log_progress(f"  - Image dtype: {img.dtype}")
+                # Get shape without loading full array
+                if tif.series:
+                    shape = tif.series[0].shape
+                    dtype = tif.series[0].dtype
+                    log_progress(f"  - Shape: {shape}, dtype: {dtype}")
 
                 if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                    log_progress(f"  ✓ Has OME metadata ({len(tif.ome_metadata)} chars)")
-                    if 'PhysicalSizeX' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has PhysicalSizeX")
-                    if 'PhysicalSizeXUnit' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has PhysicalSizeXUnit")
-                    if 'µm' in tif.ome_metadata or 'um' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has micrometer units")
+                    log_progress(f"  ✓ Has OME metadata")
                 else:
-                    log_progress(f"  ⚠ NO OME metadata!")
-        except Exception as e:
-            log_progress(f"  ⚠ Error reading file: {e}")
+                    log_progress(f"  ⚠ NO OME metadata")
 
-    if len(input_files) > 3:
-        log_progress(f"\n... and {len(input_files) - 3} more files")
+            # Now validate with pyvips (this is what VALIS will use)
+            try:
+                vips_img = pyvips.Image.new_from_file(fpath)
+                log_progress(f"  ✓ pyvips can read: {vips_img.width}x{vips_img.height}, {vips_img.bands} bands")
+                valid_files.append(fpath)
+                del vips_img
+            except Exception as pyvips_err:
+                log_progress(f"  ✗ pyvips FAILED: {pyvips_err}")
+                log_progress(f"  ⚠ Skipping this file - VALIS will not be able to process it")
+
+        except Exception as e:
+            log_progress(f"  ✗ Error validating file: {e}")
+            log_progress(f"  ⚠ Skipping this file")
+
+    log_progress(f"\nValidation complete: {len(valid_files)}/{len(input_files)} files can be processed")
+
+    if len(valid_files) == 0:
+        raise RuntimeError("No valid files found! All files failed pyvips validation.")
+
+    if len(valid_files) < len(input_files):
+        log_progress(f"⚠ WARNING: {len(input_files) - len(valid_files)} files will be skipped due to validation errors")
+        log_progress("Consider re-generating these files or checking for corruption")
 
     # ========================================================================
     # Initialize VALIS Registrar with Memory Optimization
