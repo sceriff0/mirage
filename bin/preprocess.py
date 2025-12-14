@@ -268,7 +268,7 @@ def preprocess_multichannel_image(
         metadata=metadata,
         bigtiff=True,
         ome=True,
-        tile=(4096, 4096),
+        tile=(2048, 2048),
         compression='zlib'
     )
 
