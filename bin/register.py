@@ -82,10 +82,16 @@ def get_channel_names(filename: str) -> list[str]:
     return channels
 
 
-def autoscale(img):
-    """Normalize image to 0-255 using min-max scaling."""
-    lo = img.min()
-    hi = img.max()
+def autoscale(img, low_p=1.0, high_p=99.0):
+    """Normalize image to 0-255 using percentile-based scaling (like ImageJ Auto).
+
+    Args:
+        img: Input image array
+        low_p: Lower percentile (default: 1.0)
+        high_p: Upper percentile (default: 99.0)
+    """
+    lo = np.percentile(img, low_p)
+    hi = np.percentile(img, high_p)
     img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
     return (img * 255).astype(np.uint8)
 
@@ -131,22 +137,40 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
         reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
         reg_dapi_scaled = autoscale(reg_dapi)
+        del reg_dapi
+
+        # Save full-resolution QC (compressed)
+        base_name = os.path.basename(slide_name)
+        rgb_stack_full = np.stack([
+            reg_dapi_scaled,   # Red channel (registered)
+            ref_dapi_scaled,   # Green channel (reference)
+            np.zeros_like(ref_dapi_scaled, dtype=np.uint8)  # Blue channel
+        ], axis=0)
+
+        fullres_path = qc_path / f"{base_name}_QC_RGB_fullres.tif"
+        tifffile.imwrite(
+            str(fullres_path),
+            rgb_stack_full,
+            imagej=True,
+            metadata={'axes': 'CYX', 'mode': 'composite'},
+            compression='zlib'
+        )
+        log_progress(f"  Saved full-res QC TIFF: {fullres_path.name}")
+        del rgb_stack_full
 
         # Downsample by 0.25 scale factor
         ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
         reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-
-        del reg_dapi, reg_dapi_scaled
+        del reg_dapi_scaled
 
         # Create RGB composite: Red = registered, Green = reference
         h, w = reg_down.shape
         rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
-        rgb_bgr[:, :, 2] = 0         # Blue channel
+        rgb_bgr[:, :, 0] = 0         # Blue channel
         rgb_bgr[:, :, 1] = ref_down  # Green channel
-        rgb_bgr[:, :, 0] = reg_down  # Red channel
+        rgb_bgr[:, :, 2] = reg_down  # Red channel
 
         # Save as PNG (OpenCV uses BGR order)
-        base_name = os.path.basename(slide_name)
         png_path = qc_path / f"{base_name}_QC_RGB.png"
         cv2.imwrite(str(png_path), rgb_bgr)
         log_progress(f"  Saved QC PNG: {png_path.name}")

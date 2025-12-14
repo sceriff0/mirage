@@ -79,10 +79,16 @@ def get_channel_names(filename: str) -> List[str]:
     return channels
 
 
-def autoscale(img: np.ndarray) -> np.ndarray:
-    """Normalize image to 0-255 using min-max scaling."""
-    lo = img.min()
-    hi = img.max()
+def autoscale(img: np.ndarray, low_p: float = 1.0, high_p: float = 99.0) -> np.ndarray:
+    """Normalize image to 0-255 using percentile-based scaling (like ImageJ Auto).
+
+    Args:
+        img: Input image array
+        low_p: Lower percentile (default: 1.0)
+        high_p: Upper percentile (default: 99.0)
+    """
+    lo = np.percentile(img, low_p)
+    hi = np.percentile(img, high_p)
     img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
     return (img * 255).astype(np.uint8)
 
@@ -113,6 +119,24 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     # Autoscale each channel independently using min-max normalization
     ref_dapi_scaled = autoscale(ref_dapi)
     reg_dapi_scaled = autoscale(reg_dapi)
+
+    # Save full-resolution QC (compressed)
+    rgb_stack_full = np.stack([
+        reg_dapi_scaled,   # Red channel (registered)
+        ref_dapi_scaled,   # Green channel (reference)
+        np.zeros_like(ref_dapi_scaled, dtype=np.uint8)  # Blue channel
+    ], axis=0)
+
+    fullres_output_path = output_path.with_name(output_path.stem + '_fullres.tif')
+    tifffile.imwrite(
+        str(fullres_output_path),
+        rgb_stack_full,
+        imagej=True,
+        metadata={'axes': 'CYX', 'mode': 'composite'},
+        compression='zlib'
+    )
+    logger.info(f"  Saved full-res QC TIFF: {fullres_output_path}")
+    del rgb_stack_full
 
     # Downsample by 0.25 scale factor
     ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)

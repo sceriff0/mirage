@@ -60,8 +60,14 @@ def get_channel_names(filename: str) -> list[str]:
     return channels
 
 
-def autoscale(img, low_p=1, high_p=99):
-    """Auto brightness/contrast similar to ImageJ's 'Auto'."""
+def autoscale(img, low_p=1.0, high_p=99.0):
+    """Normalize image to 0-255 using percentile-based scaling (like ImageJ Auto).
+
+    Args:
+        img: Input image array
+        low_p: Lower percentile (default: 1.0)
+        high_p: Upper percentile (default: 99.0)
+    """
     lo = np.percentile(img, low_p)
     hi = np.percentile(img, high_p)
     img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
@@ -110,10 +116,10 @@ def generate_qc_for_slide(
 
     del reg_dapi_scaled
 
-    # Save
+    # Save (compressed)
     out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
     out_path = os.path.join(qc_dir, out_filename)
-    tifffile.imwrite(out_path, rgb, photometric='rgb')
+    tifffile.imwrite(out_path, rgb, photometric='rgb', compression='zlib')
     log_progress(f"  ✓ QC saved: {out_filename}")
 
     del rgb
