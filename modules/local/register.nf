@@ -28,7 +28,7 @@ process REGISTER {
     # Only copy .ome.tif files to avoid processing non-image files
     for file in ${preproc_files}; do
         if [[ "\$file" == *.ome.tif ]] || [[ "\$file" == *.ome.tiff ]]; then
-            cp "\$file" preprocessed/
+            mv "\$file" preprocessed/
         fi
     done
 
