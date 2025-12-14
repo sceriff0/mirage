@@ -17,11 +17,13 @@ include { CPU_REGISTER_CDM      } from '../../modules/local/register_cpu_cdm'
     SUBWORKFLOW: REGISTRATION
 ========================================================================================
     Description:
-        Registers padded images using VALIS (classic), GPU, CPU, or CPU multi-resolution methods.
-        For GPU/CPU methods, finds reference image and creates registration pairs.
+        Registers images using VALIS (classic), GPU, CPU, or CPU multi-resolution methods.
+        VALIS uses preprocessed (non-padded) images for better compatibility.
+        For GPU/CPU methods, finds reference image and creates registration pairs from padded images.
 
     Input:
-        ch_padded: Channel of padded OME-TIFF images
+        ch_padded: Channel of padded OME-TIFF images (for GPU/CPU methods)
+        ch_preprocessed: Channel of preprocessed OME-TIFF images (for VALIS method)
         method: Registration method ('valis', 'gpu', 'cpu', 'cpu_multires', or 'cpu_cdm')
         reference_markers: List of markers to identify reference image
 
@@ -32,7 +34,8 @@ include { CPU_REGISTER_CDM      } from '../../modules/local/register_cpu_cdm'
 
 workflow REGISTRATION {
     take:
-    ch_padded           // Channel of padded images
+    ch_padded           // Channel of padded images (for GPU/CPU methods)
+    ch_preprocessed     // Channel of preprocessed images (for VALIS method)
     method              // Registration method
     reference_markers   // List of markers for reference identification
 
@@ -101,8 +104,8 @@ workflow REGISTRATION {
         ch_registered = ch_reference.concat( ch_registered_moving )
 
     } else {
-        // Classic VALIS registration: uses padded files
-        REGISTER ( ch_padded.collect() )
+        // Classic VALIS registration: uses preprocessed (non-padded) files
+        REGISTER ( ch_preprocessed.collect() )
         ch_registered = REGISTER.out.registered_slides
         ch_qc = Channel.empty()
     }

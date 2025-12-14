@@ -49,5 +49,6 @@ workflow PREPROCESSING {
 
     emit:
     padded = PAD_IMAGES.out.padded
+    preprocessed = PREPROCESS.out.preprocessed
     max_dims_file = MAX_DIM.out.max_dims_file
 }

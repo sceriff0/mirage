@@ -34,6 +34,7 @@ workflow {
     // 3. SUBWORKFLOW: Registration (VALIS, GPU, or CPU)
     REGISTRATION (
         PREPROCESSING.out.padded,
+        PREPROCESSING.out.preprocessed,
         params.registration_method,
         params.reg_reference_markers
     )
