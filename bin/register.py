@@ -91,121 +91,86 @@ def autoscale(img, low_p=1, high_p=99):
 
 
 def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
-    """
-    Create QC RGB composites equivalently to ImageJ:
-      - ref DAPI  → GREEN
-      - reg DAPI  → RED
-      - optional BLUE = zeros
-    """
-    log_progress(f"Creating QC directory: {qc_dir}")
-    os.makedirs(qc_dir, exist_ok=True)
+    """Create QC RGB composites with registered (red) and reference (green) DAPI channels."""
+    from pathlib import Path
+    from skimage.transform import rescale
+    import cv2
 
-    # Find the full path key for ref_image in slide_dict
-    log_progress(f"\nSearching for reference image in slide_dict...")
-    log_progress(f"  - Looking for: {ref_image}")
-    log_progress(f"  - slide_dict keys: {list(registrar.slide_dict.keys())}")
+    qc_path = Path(qc_dir)
+    qc_path.mkdir(parents=True, exist_ok=True)
+    log_progress(f"Creating QC outputs in: {qc_path}")
 
-    # Remove extension from ref_image for comparison
+    # Find reference slide key (slide_dict keys are slide names without extension)
     ref_image_no_ext = ref_image.replace('.ome.tif', '').replace('.ome.tiff', '')
-    log_progress(f"  - Comparing against: {ref_image_no_ext}")
-
-    ref_slide_key = None
-    for key in registrar.slide_dict.keys():
-        # slide_dict keys are slide names without extension
-        if key == ref_image_no_ext:
-            ref_slide_key = key
-            log_progress(f"  ✓ Match found: {ref_slide_key}")
-            break
+    ref_slide_key = next((k for k in registrar.slide_dict.keys() if k == ref_image_no_ext), None)
 
     if ref_slide_key is None:
-        raise KeyError(f"Reference image '{ref_image}' (as '{ref_image_no_ext}') not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
+        raise KeyError(f"Reference '{ref_image_no_ext}' not found. Available: {list(registrar.slide_dict.keys())}")
 
-    # -------- Get REFERENCE DAPI --------
-    log_progress(f"\nExtracting reference DAPI channel...")
+    # Extract reference DAPI
     ref_slide = registrar.slide_dict[ref_slide_key]
-    ref_basename = os.path.basename(ref_slide_key)
-    log_progress(f"  - Reference slide basename: {ref_basename}")
-
-    ref_channels = get_channel_names(ref_basename)
-    log_progress(f"  - Reference channels: {ref_channels}")
-
-    ref_dapi_idx = next((i for i,ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    log_progress(f"  - Reference DAPI index: {ref_dapi_idx}")
+    ref_channels = get_channel_names(os.path.basename(ref_slide_key))
+    ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
 
     ref_vips = ref_slide.slide2vips(level=0)
-    log_progress(f"  - Reference slide dimensions: {ref_vips.width}x{ref_vips.height}, bands: {ref_vips.bands}")
-
-    # Extract only the DAPI channel to save memory (don't load full numpy array)
     ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
-    log_progress(f"  - Reference DAPI shape: {ref_dapi.shape}, dtype: {ref_dapi.dtype}")
+    ref_dapi_scaled = autoscale(ref_dapi)
 
-    log_progress(f"\nProcessing {len(registrar.slide_dict) - 1} slides for QC...")
+    log_progress(f"Processing {len(registrar.slide_dict) - 1} slides for QC...")
 
-    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
+    for slide_name, slide_obj in registrar.slide_dict.items():
         if slide_name == ref_slide_key:
-            log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Skipping reference: {slide_name}")
             continue
 
-        log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Processing: {slide_name}")
+        log_progress(f"Creating QC for: {slide_name}")
 
-        slide_basename = os.path.basename(slide_name)
-        log_progress(f"  - Basename: {slide_basename}")
+        # Extract registered DAPI
+        slide_channels = get_channel_names(os.path.basename(slide_name))
+        slide_dapi_idx = next((i for i, ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
 
-        slide_channels = get_channel_names(slide_basename)
-        log_progress(f"  - Channels: {slide_channels}")
-
-        slide_dapi_idx = next((i for i,ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
-        log_progress(f"  - DAPI index: {slide_dapi_idx}")
-
-        # Registered (warped) image
-        log_progress(f"  - Warping slide (non_rigid=True, crop={registrar.crop})...")
         warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
-        log_progress(f"  - Warped dimensions: {warped_vips.width}x{warped_vips.height}, bands: {warped_vips.bands}")
-
-        # Extract only the DAPI channel to save memory (don't load full numpy array)
-        log_progress(f"  - Extracting DAPI channel at index {slide_dapi_idx}...")
         reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
-        log_progress(f"  - Registered DAPI shape: {reg_dapi.shape}, dtype: {reg_dapi.dtype}")
-
-        # ----- Auto brightness/contrast -----
-        log_progress(f"  - Applying autoscale...")
-        ref_dapi_scaled = autoscale(ref_dapi)
         reg_dapi_scaled = autoscale(reg_dapi)
-        log_progress(f"  - Scaled shapes: ref={ref_dapi_scaled.shape}, reg={reg_dapi_scaled.shape}")
 
-        # Free memory immediately after use
-        del reg_dapi
+        # Downsample by 0.25 scale factor
+        ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+        reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
 
-        # ----- Merge channels (ImageJ-style RGB) -----
-        # R = registered DAPI
-        # G = reference DAPI
-        # B = zero
-        log_progress(f"  - Creating RGB composite (R=reg, G=ref, B=zeros)...")
+        del reg_dapi, reg_dapi_scaled
 
-        # Create RGB in a memory-efficient way (stack directly to uint8)
-        h, w = reg_dapi_scaled.shape
-        rgb = np.empty((h, w, 3), dtype=np.uint8)
-        rgb[:, :, 0] = reg_dapi_scaled  # Red channel
-        rgb[:, :, 1] = ref_dapi_scaled  # Green channel
-        rgb[:, :, 2] = 0                # Blue channel
+        # Create RGB composite: Red = registered, Green = reference
+        h, w = reg_down.shape
+        rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+        rgb_bgr[:, :, 2] = reg_down  # Blue channel (will appear red in BGR)
+        rgb_bgr[:, :, 1] = ref_down  # Green channel
+        rgb_bgr[:, :, 0] = 0         # Red channel (will appear blue in BGR)
 
-        log_progress(f"  - RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
+        # Save as PNG (OpenCV uses BGR order)
+        base_name = os.path.basename(slide_name)
+        png_path = qc_path / f"{base_name}_QC_RGB.png"
+        cv2.imwrite(str(png_path), rgb_bgr)
+        log_progress(f"  Saved QC PNG: {png_path.name}")
 
-        # Free memory before saving
-        del reg_dapi_scaled
+        # Save as ImageJ-compatible TIFF (CYX order)
+        rgb_stack = np.stack([
+            reg_down,   # Red channel
+            ref_down,   # Green channel
+            np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
+        ], axis=0)
 
-        # Save RGB composite
-        out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
-        out_path = os.path.join(qc_dir, out_filename)
-        log_progress(f"  - Saving to: {out_path}")
-        tifffile.imwrite(out_path, rgb, photometric='rgb', compression='jpeg')
-        log_progress(f"  ✓ Saved")
-        del rgb
+        tiff_path = qc_path / f"{base_name}_QC_RGB.tif"
+        tifffile.imwrite(
+            str(tiff_path),
+            rgb_stack,
+            imagej=True,
+            metadata={'axes': 'CYX', 'mode': 'composite'}
+        )
+        log_progress(f"  Saved QC TIFF: {tiff_path.name}")
 
-        # Force garbage collection after each QC image to free memory
+        del rgb_bgr, rgb_stack, reg_down
         gc.collect()
 
-    log_progress("\n✓ All QC RGB composites saved.")
+    log_progress("QC generation complete")
 
 
 

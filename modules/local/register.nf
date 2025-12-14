@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 process REGISTER {
     tag "register_all"
     label 'process_high'
-    container "${params.container.merge}"
+    container "${params.container.registration}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy'
 
