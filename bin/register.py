@@ -365,7 +365,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # Disable pyvips cache to reduce memory usage
     # Per VALIS docs: "cache can grow quite large, so it may be best to disable it"
     try:
-        import pyvips
         pyvips.cache_set_max(0)
         pyvips.cache_set_max_mem(0)
         log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=0)")
