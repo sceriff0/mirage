@@ -80,6 +80,10 @@ def generate_qc_for_slide(
     Generate QC image for a single slide immediately after registration.
 
     Uses lower resolution (level=1 by default) to save memory.
+    Uses double normalization:
+    1. Normalize using percentiles at extracted resolution
+    2. Downsample by 0.25 scale factor
+    3. Normalize again after downsampling to ensure full dynamic range
     """
     log_progress(f"\n  Generating QC for: {slide_name}")
 
@@ -95,11 +99,34 @@ def generate_qc_for_slide(
     reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
     log_progress(f"  - Registered DAPI shape: {reg_dapi.shape}")
 
-    # Autoscale both
-    ref_dapi_scaled = autoscale(ref_dapi)
-    reg_dapi_scaled = autoscale(reg_dapi)
-
+    # Stack images along channel axis for vectorized normalization
+    dapi_stack = np.stack([reg_dapi, ref_dapi], axis=0)
     del reg_dapi
+
+    # First normalization: normalize each channel independently using percentiles
+    min_val = np.percentile(dapi_stack, 1, axis=(1, 2), keepdims=True)
+    max_val = np.percentile(dapi_stack, 99, axis=(1, 2), keepdims=True)
+    dapi_stack = np.clip((dapi_stack - min_val) / np.maximum(max_val - min_val, 1e-6), 0, 1) * 255
+    dapi_stack = dapi_stack.astype(np.uint8)
+
+    # Downsample each channel separately
+    from skimage.transform import rescale
+    downsampled = np.array([
+        rescale(dapi_stack[0], scale=0.25, anti_aliasing=True, preserve_range=True),
+        rescale(dapi_stack[1], scale=0.25, anti_aliasing=True, preserve_range=True)
+    ])
+
+    del dapi_stack
+    gc.collect()
+
+    # Second normalization: normalize again after downsampling
+    min_val = downsampled.min(axis=(1, 2), keepdims=True)
+    max_val = downsampled.max(axis=(1, 2), keepdims=True)
+    downsampled = (downsampled - min_val) / np.maximum(max_val - min_val, 1e-6) * 255
+    downsampled = downsampled.astype(np.uint8)
+
+    reg_dapi_scaled = downsampled[0]
+    ref_dapi_scaled = downsampled[1]
 
     # Create RGB composite (memory-efficient)
     h, w = reg_dapi_scaled.shape
@@ -108,7 +135,7 @@ def generate_qc_for_slide(
     rgb[:, :, 1] = ref_dapi_scaled  # Green
     rgb[:, :, 2] = 0                # Blue
 
-    del reg_dapi_scaled
+    del reg_dapi_scaled, ref_dapi_scaled
 
     # Save
     out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"

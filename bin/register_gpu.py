@@ -134,11 +134,10 @@ def autoscale(img: np.ndarray) -> np.ndarray:
 def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
     """Create QC stack with registered and reference DAPI channels.
 
-    Follows same logic as save_dapi_stack:
-    - Stack registered and reference DAPI channels
-    - Normalize each channel independently (min-max)
-    - Downsample by 0.25 scale factor
-    - Save as ImageJ-compatible TIFF
+    Uses double normalization:
+    1. Normalize full-resolution images independently
+    2. Downsample by 0.25 scale factor
+    3. Normalize again after downsampling to ensure full dynamic range
     """
     logger.info(f"Creating QC composite: {output_path.name}")
 
@@ -161,13 +160,32 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
     ref_dapi = ref_img[ref_dapi_idx]
     reg_dapi = reg_img[reg_dapi_idx]
 
-    # Autoscale each channel independently using min-max normalization
-    ref_dapi_scaled = autoscale(ref_dapi)
-    reg_dapi_scaled = autoscale(reg_dapi)
+    # Stack images along channel axis for vectorized normalization
+    dapi_stack = np.stack([reg_dapi, ref_dapi], axis=0)
 
-    # Downsample by 0.25 scale factor
-    ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-    reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+    # First normalization: normalize each channel independently at full resolution
+    min_val = dapi_stack.min(axis=(1, 2), keepdims=True)
+    max_val = dapi_stack.max(axis=(1, 2), keepdims=True)
+    dapi_stack = (dapi_stack - min_val) / np.maximum(max_val - min_val, 1e-6) * 255
+    dapi_stack = dapi_stack.astype(np.uint8)
+
+    # Downsample each channel separately
+    downsampled = np.array([
+        rescale(dapi_stack[0], scale=0.25, anti_aliasing=True, preserve_range=True),
+        rescale(dapi_stack[1], scale=0.25, anti_aliasing=True, preserve_range=True)
+    ])
+
+    del dapi_stack
+    gc.collect()
+
+    # Second normalization: normalize again after downsampling
+    min_val = downsampled.min(axis=(1, 2), keepdims=True)
+    max_val = downsampled.max(axis=(1, 2), keepdims=True)
+    downsampled = (downsampled - min_val) / np.maximum(max_val - min_val, 1e-6) * 255
+    downsampled = downsampled.astype(np.uint8)
+
+    reg_down = downsampled[0]
+    ref_down = downsampled[1]
 
     # Create RGB composite: Red = registered, Green = reference
     h, w = reg_down.shape
