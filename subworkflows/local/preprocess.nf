@@ -29,14 +29,19 @@ include { PAD_IMAGES   } from '../../modules/local/pad_images'
 
 workflow PREPROCESSING {
     take:
-    ch_nd2_files  // Channel of ND2 input files
+    ch_input_files  // Channel of input files (ND2 or TIFF)
 
     main:
-    // Convert ND2 to OME-TIFF
-    CONVERT_ND2 ( ch_nd2_files )
+    // Conditionally convert ND2 to OME-TIFF (skip if using TIFF input)
+    if (!params.skip_nd2_conversion) {
+        CONVERT_ND2 ( ch_input_files )
+        ch_for_preprocess = CONVERT_ND2.out.ome_tiff
+    } else {
+        ch_for_preprocess = ch_input_files
+    }
 
-    // Preprocess each converted file (BaSiC correction)
-    PREPROCESS ( CONVERT_ND2.out.ome_tiff )
+    // Preprocess each file (BaSiC correction)
+    PREPROCESS ( ch_for_preprocess )
 
     // Compute max dimensions from all preprocessed images
     MAX_DIM ( PREPROCESS.out.dims.collect() )
