@@ -112,7 +112,7 @@ def read_slide(filepath: str) -> tuple:
     return img, channel_names
 
 
-def merge_slides(input_dir: str, output_path: str, reference_markers: list = None, segmentation_mask: str = None, phenotype_mask: str = None):
+def merge_slides(input_dir: str, output_path: str, reference_markers: list = None, segmentation_mask: str = None):
     """
     Merge all registered slides into a single OME-TIFF.
 
@@ -126,7 +126,6 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         output_path: Output OME-TIFF path
         reference_markers: List of markers that identify the reference slide (e.g., ['DAPI', 'SMA'])
         segmentation_mask: Path to segmentation mask file (optional)
-        phenotype_mask: Path to phenotype mask file (optional)
     """
     if reference_markers is None:
         reference_markers = ['DAPI', 'SMA']  # Default
@@ -235,11 +234,7 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         log(f"Will append segmentation mask: {segmentation_mask}")
         channel_names.append("Segmentation")
         masks_to_add.append(('segmentation', segmentation_mask))
-    if phenotype_mask:
-        log(f"Will append phenotype mask: {phenotype_mask}")
-        channel_names.append("Phenotype")
-        masks_to_add.append(('phenotype', phenotype_mask))
-
+        
     num_output_channels = len(channel_names)
     log(f"Total output channels: {num_output_channels}")
     log(f"Output dimensions: {num_output_channels} x {height} x {width}")
@@ -494,7 +489,6 @@ def main():
         help='Markers that identify reference slide (default: DAPI)'
     )
     parser.add_argument('--segmentation-mask', help='Path to segmentation mask TIFF')
-    parser.add_argument('--phenotype-mask', help='Path to phenotype mask TIFF')
 
     args = parser.parse_args()
 
@@ -504,7 +498,6 @@ def main():
             args.output,
             reference_markers=args.reference_markers,
             segmentation_mask=args.segmentation_mask,
-            phenotype_mask=args.phenotype_mask
         )
         slide_io.kill_jvm()
         log("✓ Complete!")
