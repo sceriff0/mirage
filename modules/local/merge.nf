@@ -19,7 +19,6 @@ process MERGE {
     input:
     path registered_slides
     path seg_mask
-    path phenotype_mask
 
     output:
     path "merged_all.ome.tiff", emit: merged
