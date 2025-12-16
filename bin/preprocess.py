@@ -409,16 +409,19 @@ def main():
 
     channel_names = find_channel_names_from_path(image_path)
 
-    # Handle .ome.tif extension properly
+    # Always save as .ome.tiff since we're writing OME-TIFF format
     if image_basename.endswith('.ome.tif'):
         base = image_basename[:-8]  # Remove .ome.tif
-        ext = '.ome.tif'
     elif image_basename.endswith('.ome.tiff'):
         base = image_basename[:-9]  # Remove .ome.tiff
-        ext = '.ome.tiff'
+    elif image_basename.endswith('.tif'):
+        base = image_basename[:-4]  # Remove .tif
+    elif image_basename.endswith('.tiff'):
+        base = image_basename[:-5]  # Remove .tiff
     else:
-        base, ext = os.path.splitext(image_basename)
+        base = os.path.splitext(image_basename)[0]
 
+    ext = '.ome.tif'  # Always use OME-TIFF extension
     output_filename = f"{base}_corrected{ext}"
     output_path = os.path.join(
         args.output_dir,
