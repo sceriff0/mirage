@@ -106,8 +106,8 @@ workflow REGISTRATION {
     } else {
         // Classic VALIS registration: uses preprocessed (non-padded) files
         REGISTER ( ch_preprocessed.collect() )
-        ch_registered = REGISTER.out.registered_slides
-        ch_qc = Channel.empty()
+        ch_registered = REGISTER.out.registered_slides.flatten()
+        ch_qc = channel.empty()
     }
 
     emit:

@@ -152,6 +152,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
             str(fullres_path),
             rgb_stack_full,
             imagej=True,
+            bigtiff=True,
             metadata={'axes': 'CYX', 'mode': 'composite'},
             compression='zlib'
         )

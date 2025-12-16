@@ -130,6 +130,7 @@ def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_
         str(fullres_output_path),
         rgb_stack_full,
         imagej=True,
+        bigtiff=True,
         metadata={'axes': 'CYX', 'mode': 'composite'},
         compression='zlib'
     )
