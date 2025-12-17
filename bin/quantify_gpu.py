@@ -75,7 +75,8 @@ def gpu_extract_features(
     channel_image: np.ndarray,
     chan_name: str,
     size_cutoff: int = 0,
-    verbose: bool = True
+    verbose: bool = True,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
     """Extract features using GPU-accelerated regionprops.
 
@@ -91,6 +92,8 @@ def gpu_extract_features(
         Minimum cell area in pixels.
     verbose : bool, optional
         Enable verbose logging.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
@@ -116,35 +119,32 @@ def gpu_extract_features(
     if verbose:
         print_memory_usage(f"  After GPU transfer ({chan_name}): ")
 
-    # Filter labels by size
+    # Filter labels by size - use lookup table for efficiency
     labels, counts = cp.unique(mask_gpu, return_counts=True)
-    valid_ids = labels[(labels != 0) & (counts > size_cutoff)]
+    valid_mask = (labels != 0) & (counts > size_cutoff)
+    valid_ids = labels[valid_mask]
 
-    if len(valid_ids) == 0:
+    num_cells = len(valid_ids)
+    if num_cells == 0:
         logger.warning(f"No valid cells for {chan_name}")
         return pd.DataFrame()
 
-    # Create filtered mask
-    mask_filtered = cp.where(cp.isin(mask_gpu, valid_ids), mask_gpu, 0)
+    if verbose:
+        logger.info(f"  Processing {num_cells} cells")
+
+    # Create lookup table for fast filtering (avoids slow cp.isin)
+    max_label = int(mask_gpu.max())
+    lookup = cp.zeros(max_label + 1, dtype=cp.int32)
+    lookup[valid_ids.get()] = valid_ids.get()
+
+    # Create filtered mask using lookup table
+    mask_filtered = lookup[mask_gpu]
 
     if (mask_filtered == 0).all():
         logger.warning(f"Filtered mask is empty for {chan_name}")
         return pd.DataFrame()
 
-    # GPU-accelerated regionprops
-    props = gpu_regionprops_table(
-        mask_filtered,
-        properties=[
-            "label", "centroid", "eccentricity", "perimeter",
-            "convex_area", "area", "axis_major_length", "axis_minor_length"
-        ]
-    )
-
-    # Transfer props to CPU
-    props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in props.items()}
-    props_df = pd.DataFrame(props_cpu).set_index("label", drop=False)
-
-    # Compute mean intensities
+    # Compute mean intensities first (fast operation)
     flat_mask = mask_filtered.ravel()
     flat_image = channel_gpu.ravel()
 
@@ -152,19 +152,74 @@ def gpu_extract_features(
     count_per_label = cp.bincount(flat_mask)
 
     means = cp.where(count_per_label != 0, sum_per_label / count_per_label, 0.0)
-    mean_values = cp.array([means[int(lbl)] if lbl < len(means) else 0 for lbl in valid_ids])
 
-    # Transfer to CPU
+    # Index on GPU, then transfer to CPU (avoid CPU list comprehension)
+    valid_ids_idx = valid_ids.astype(cp.int64)
+    valid_ids_idx = cp.minimum(valid_ids_idx, len(means) - 1)
+    mean_values = means[valid_ids_idx]
+
+    # Transfer intensities to CPU
     mean_values_cpu = mean_values.get()
     valid_ids_cpu = valid_ids.get()
+
+    # Free intermediate arrays
+    del flat_mask, flat_image, sum_per_label, count_per_label, means, mean_values
+
+    # Process regionprops in chunks if needed (regionprops is the bottleneck)
+    if num_cells > chunk_size:
+        if verbose:
+            logger.info(f"  Using chunked processing ({num_cells} cells > {chunk_size} threshold)")
+
+        props_list = []
+        num_chunks = (num_cells + chunk_size - 1) // chunk_size
+
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, num_cells)
+            chunk_labels = valid_ids_cpu[start_idx:end_idx]
+
+            if verbose:
+                logger.info(f"    Chunk {chunk_idx+1}/{num_chunks}: cells {start_idx} to {end_idx}")
+
+            # Create chunk mask
+            chunk_lookup = cp.zeros(max_label + 1, dtype=cp.int32)
+            chunk_lookup[chunk_labels] = chunk_labels
+            chunk_mask = chunk_lookup[mask_gpu]
+
+            # Run regionprops on chunk
+            chunk_props = gpu_regionprops_table(
+                chunk_mask,
+                properties=[
+                    "label", "centroid", "area", "axis_major_length", "axis_minor_length"
+                ]
+            )
+
+            # Transfer to CPU
+            chunk_props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in chunk_props.items()}
+            props_list.append(pd.DataFrame(chunk_props_cpu))
+
+            del chunk_mask, chunk_lookup
+            cp.get_default_memory_pool().free_all_blocks()
+
+        props_df = pd.concat(props_list, ignore_index=True).set_index("label", drop=False)
+    else:
+        # Process all at once
+        props = gpu_regionprops_table(
+            mask_filtered,
+            properties=[
+                "label", "centroid", "area", "axis_major_length", "axis_minor_length"
+            ]
+        )
+
+        props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in props.items()}
+        props_df = pd.DataFrame(props_cpu).set_index("label", drop=False)
 
     intensity_df = pd.DataFrame({chan_name: mean_values_cpu}, index=valid_ids_cpu)
     df = intensity_df.join(props_df)
     df.rename(columns={"centroid-0": "y", "centroid-1": "x"}, inplace=True)
 
     # Free GPU memory
-    del mask_gpu, channel_gpu, mask_filtered, flat_mask, flat_image
-    del sum_per_label, count_per_label, means, mean_values
+    del mask_gpu, channel_gpu, mask_filtered, lookup
     try:
         cp.get_default_memory_pool().free_all_blocks()
     except Exception:
@@ -180,7 +235,8 @@ def extract_features_gpu(
     output_file: Optional[str] = None,
     size_cutoff: int = 0,
     verbose: bool = True,
-    write: bool = False
+    write: bool = False,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
     """Extract features for all channels using GPU.
 
@@ -228,7 +284,8 @@ def extract_features_gpu(
             channel_image,
             chan_name,
             size_cutoff,
-            verbose
+            verbose,
+            chunk_size
         )
 
         if not df.empty:
