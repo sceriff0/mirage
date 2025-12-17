@@ -12,7 +12,6 @@ nextflow.enable.dsl = 2
 process CONVERSION {
     tag "create_pyramid"
     label 'process_high'
-    container "${params.container.conversion}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/pyramid", mode: 'copy'
 
