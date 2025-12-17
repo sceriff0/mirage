@@ -256,6 +256,8 @@ def extract_features_gpu(
         Enable verbose output.
     write : bool, optional
         Write results to file.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
@@ -320,7 +322,8 @@ def run_marker_quantification(
     output_file: str = None,
     size_cutoff: int = 0,
     mode: str = 'gpu',
-    verbose: bool = True
+    verbose: bool = True,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
     """Run marker quantification pipeline on a single-channel TIFF.
 
@@ -340,6 +343,8 @@ def run_marker_quantification(
         Processing mode: 'gpu' or 'cpu'.
     verbose : bool, optional
         Enable verbose logging.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
@@ -410,6 +415,7 @@ def run_marker_quantification(
         size_cutoff=size_cutoff,
         verbose=verbose,
         write=True,
+        chunk_size=chunk_size,
     )
 
     return markers_data
@@ -463,6 +469,12 @@ if __name__ == '__main__':
         action='store_true',
         help="Enable verbose output"
     )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=500000,
+        help="Process regionprops in chunks if cell count exceeds this (for very large datasets)"
+    )
 
     args = parser.parse_args()
 
@@ -489,7 +501,8 @@ if __name__ == '__main__':
             output_file=args.output_file,
             size_cutoff=args.min_area,
             mode=args.mode,
-            verbose=args.verbose
+            verbose=args.verbose,
+            chunk_size=args.chunk_size
         )
         logger.info("Quantification completed successfully")
     except Exception as e:
