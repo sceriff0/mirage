@@ -1,7 +1,6 @@
 process CONVERT_ND2 {
     tag "${nd2_file.simpleName}"
     label 'process_medium'
-    container "${params.container.preprocess}"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/converted", mode: 'copy'
 
