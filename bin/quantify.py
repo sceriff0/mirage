@@ -270,9 +270,12 @@ def run_quantification(
 
     # Load segmentation mask
     logger.info(f"Loading mask: {mask_path}")
-    mask = np.load(mask_path).squeeze()
+    if mask_path.endswith('.npy'):
+        mask = np.load(mask_path).squeeze()
+    else:
+        mask, _ = load_image(mask_path)
+        mask = mask.squeeze()
     logger.info(f"Mask shape: {mask.shape}")
-
     # Load channel image
     logger.info(f"Loading channel: {channel_path}")
     channel_image, _ = load_image(channel_path)
@@ -346,21 +349,25 @@ def run_quantification_gpu(
 
     # Load data
     logger.info(f"Loading mask: {mask_path}")
-    mask = np.load(mask_path).squeeze()
+    if mask_path.endswith('.npy'):
+        segmentation_mask = np.load(mask_path).squeeze()
+    else:
+        segmentation_mask, _ = load_image(mask_path)
+        segmentation_mask = segmentation_mask.squeeze()
     
     logger.info(f"Loading channel: {channel_path}")
     channel_image, _ = load_image(channel_path)
     channel_image = channel_image.squeeze()
 
     # Validate shapes
-    if mask.shape != channel_image.shape:
+    if segmentation_mask.shape != channel_image.shape:
         raise ValueError(
-            f"Shape mismatch: mask {mask.shape} vs channel {channel_image.shape}"
+            f"Shape mismatch: mask {segmentation_mask.shape} vs channel {channel_image.shape}"
         )
 
     # Transfer to GPU
     logger.info("Transferring to GPU...")
-    mask_gpu = cp.asarray(mask)
+    mask_gpu = cp.asarray(segmentation_mask)
     channel_gpu = cp.asarray(channel_image)
 
     # Filter by area
@@ -490,7 +497,7 @@ def main():
         output_path = os.path.join(args.outdir, f"{channel_name}_quant.csv")
 
     # Run quantification
-    if args.mode == 'gpu':
+    if False:
         logger.info('Running GPU quantification')
         try:
             run_quantification_gpu(
