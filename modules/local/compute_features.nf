@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 process COMPUTE_FEATURES {
     tag "${moving.simpleName}"
     label 'process_medium'
-    container "${params.container.register}"
+    container "${params.container.registration}"
 
     // Resource allocation for feature detection
     memory '32.GB'
