@@ -88,6 +88,7 @@ workflow POSTPROCESSING {
     emit:
     phenotype_csv = PHENOTYPE.out.csv
     phenotype_mask = PHENOTYPE.out.mask
+    phenotype_mapping = PHENOTYPE.out.mapping
     merged_csv = MERGE_QUANT_CSVS.out.merged_csv
     cell_mask = SEGMENT.out.cell_mask
     individual_csvs = QUANTIFY.out.individual_csv

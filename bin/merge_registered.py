@@ -112,7 +112,7 @@ def read_slide(filepath: str) -> tuple:
     return img, channel_names
 
 
-def merge_slides(input_dir: str, output_path: str, reference_markers: list = None, segmentation_mask: str = None):
+def merge_slides(input_dir: str, output_path: str, reference_markers: list = None, segmentation_mask: str = None, phenotype_mask: str = None, phenotype_mapping: str = None):
     """
     Merge all registered slides into a single OME-TIFF.
 
@@ -126,6 +126,8 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         output_path: Output OME-TIFF path
         reference_markers: List of markers that identify the reference slide (e.g., ['DAPI', 'SMA'])
         segmentation_mask: Path to segmentation mask file (optional)
+        phenotype_mask: Path to phenotype mask file with different colors per phenotype (optional)
+        phenotype_mapping: Path to JSON file mapping phenotype numbers to names (optional)
     """
     if reference_markers is None:
         reference_markers = ['DAPI', 'SMA']  # Default
@@ -228,13 +230,29 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         # Add to global channel list
         channel_names.extend([name for _, name in channels_to_keep])
 
+    # Load phenotype mapping if provided
+    pheno_label_map = None
+    if phenotype_mapping:
+        log(f"Loading phenotype mapping: {phenotype_mapping}")
+        import json
+        with open(phenotype_mapping, 'r') as f:
+            pheno_label_map = json.load(f)
+        # Convert keys to integers if they're strings
+        pheno_label_map = {int(k): v for k, v in pheno_label_map.items()}
+        log(f"  Loaded {len(pheno_label_map)} phenotype labels: {pheno_label_map}")
+
     # Check if masks should be added
     masks_to_add = []
     if segmentation_mask:
         log(f"Will append segmentation mask: {segmentation_mask}")
         channel_names.append("Segmentation")
-        masks_to_add.append(('segmentation', segmentation_mask))
-        
+        masks_to_add.append(('segmentation', segmentation_mask, None))
+
+    if phenotype_mask:
+        log(f"Will append phenotype mask: {phenotype_mask}")
+        channel_names.append("Phenotype")
+        masks_to_add.append(('phenotype', phenotype_mask, pheno_label_map))
+
     num_output_channels = len(channel_names)
     log(f"Total output channels: {num_output_channels}")
     log(f"Output dimensions: {num_output_channels} x {height} x {width}")
@@ -330,12 +348,13 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             del img_memmap
             gc.collect()
 
-    # Store phenotype colormap for later
+    # Store phenotype colormap and labels for later
     phenotype_lut = None
     phenotype_n_categories = 0
+    phenotype_labels = None
 
     # Append mask channels if provided
-    for mask_type, mask_path in masks_to_add:
+    for mask_type, mask_path, label_map in masks_to_add:
         log(f"Appending {mask_type} mask: {mask_path}")
         mask_data = tifffile.imread(mask_path)
 
@@ -376,6 +395,11 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             # Create categorical colormap for QuPath
             phenotype_n_categories = int(mask_data.max() + 1)
             log(f"  Creating categorical LUT for {phenotype_n_categories} phenotypes...")
+
+            # Store labels if provided
+            if label_map:
+                phenotype_labels = label_map
+                log(f"  Using phenotype labels: {phenotype_labels}")
 
             # Distinctive colors for categorical display (RGB)
             base_colors = [
@@ -447,6 +471,16 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             'LUTs': [None] * (num_output_channels - 1) + [phenotype_lut.T]  # Only apply LUT to phenotype channel
         }
 
+        # Add phenotype labels if available
+        if phenotype_labels:
+            # Create labels array for ImageJ
+            labels_array = [''] * phenotype_n_categories
+            for idx, label in phenotype_labels.items():
+                if idx < phenotype_n_categories:
+                    labels_array[idx] = label
+            imagej_metadata['Labels'] = labels_array
+            log(f"  Added phenotype labels to ImageJ metadata: {labels_array}")
+
     tifffile.imwrite(
         output_path,
         output_memmap,
@@ -489,6 +523,8 @@ def main():
         help='Markers that identify reference slide (default: DAPI)'
     )
     parser.add_argument('--segmentation-mask', help='Path to segmentation mask TIFF')
+    parser.add_argument('--phenotype-mask', help='Path to phenotype mask TIFF')
+    parser.add_argument('--phenotype-mapping', help='Path to phenotype mapping JSON (phenotype number to name)')
 
     args = parser.parse_args()
 
@@ -498,6 +534,8 @@ def main():
             args.output,
             reference_markers=args.reference_markers,
             segmentation_mask=args.segmentation_mask,
+            phenotype_mask=args.phenotype_mask,
+            phenotype_mapping=args.phenotype_mapping,
         )
         slide_io.kill_jvm()
         log("✓ Complete!")

@@ -298,19 +298,22 @@ def run_phenotyping_pipeline(
 
     # Add numeric phenotype labels
     pheno_complete = df_nn['phenotype'].value_counts().index.values
+    phenotype_mapping = {0: "Background"}  # Initialize with background
     for pp, p in enumerate(pheno_complete, start=1):
         sel = df_nn[df_nn['phenotype'] == p].index
         df_nn.loc[sel, 'phenotype_num'] = pp
+        phenotype_mapping[pp] = p
 
     df_nn['phenotype_num'] = df_nn['phenotype_num'].fillna(0).astype(int)
 
     logger.info(f"Phenotype distribution:\n{df_nn['phenotype'].value_counts()}")
+    logger.info(f"Phenotype mapping: {phenotype_mapping}")
 
     # Create phenotype mask
     logger.info("Creating phenotype mask")
     phenotype_mask = labels_to_phenotype(mask, df_nn)
 
-    return df_nn, phenotype_mask
+    return df_nn, phenotype_mask, phenotype_mapping
 
 
 def parse_args():
@@ -399,7 +402,7 @@ def main():
             mask = mask[0] if mask.shape[0] < mask.shape[-1] else mask[..., 0]
 
     # Run phenotyping
-    phenotypes_data, phenotypes_mask = run_phenotyping_pipeline(
+    phenotypes_data, phenotypes_mask, phenotype_mapping = run_phenotyping_pipeline(
         cell_df,
         mask,
         markers=args.markers,
@@ -411,12 +414,18 @@ def main():
     # Save outputs
     output_csv = os.path.join(args.output_dir, 'phenotypes_data.csv')
     output_mask = os.path.join(args.output_dir, 'phenotypes_mask.tiff')
+    output_mapping = os.path.join(args.output_dir, 'phenotype_mapping.json')
 
     logger.info(f"Saving phenotype data: {output_csv}")
     phenotypes_data.to_csv(output_csv, index=False)
 
     logger.info(f"Saving phenotype mask: {output_mask}")
     save_tiff(phenotypes_mask, output_mask)
+
+    logger.info(f"Saving phenotype mapping: {output_mapping}")
+    import json
+    with open(output_mapping, 'w') as f:
+        json.dump(phenotype_mapping, f, indent=2)
 
     logger.info("=" * 80)
     logger.info("Cell Phenotyping Pipeline Completed Successfully")

@@ -50,6 +50,8 @@ workflow {
         REGISTRATION.out.registered,
         REGISTRATION.out.qc,
         POSTPROCESSING.out.cell_mask,
+        POSTPROCESSING.out.phenotype_mask,
+        POSTPROCESSING.out.phenotype_mapping,
         POSTPROCESSING.out.merged_csv,
         POSTPROCESSING.out.phenotype_csv,
         params.savedir

@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""Compute and match features between moving image and reference using VALIS.
+
+This script uses VALIS's feature detection and matching capabilities to:
+1. Detect features in both reference and moving images
+2. Match features between the two images
+3. Save the matched features and metadata for downstream analysis
+
+The script supports SuperPoint, DISK, and DeDoDe feature detectors with
+appropriate matchers (SuperGlue, LightGlue).
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Tuple
+
+import numpy as np
+import pyvips
+import tifffile
+
+# Disable numba caching
+os.environ['NUMBA_DISABLE_JIT'] = '0'
+os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
+os.environ['NUMBA_DISABLE_CACHING'] = '1'
+
+from valis import feature_detectors
+from valis import feature_matcher
+
+
+def log_progress(message: str) -> None:
+    """Print timestamped progress messages."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
+
+
+def load_image_grayscale(image_path: str, max_dim: Optional[int] = None) -> np.ndarray:
+    """Load image and convert to grayscale for feature detection.
+
+    Parameters
+    ----------
+    image_path : str
+        Path to the image file
+    max_dim : int, optional
+        Maximum dimension for downsampling (for memory efficiency)
+
+    Returns
+    -------
+    np.ndarray
+        Grayscale image as numpy array (H, W)
+    """
+    log_progress(f"Loading image: {image_path}")
+
+    # Load with pyvips for memory efficiency
+    vips_img = pyvips.Image.new_from_file(image_path)
+    log_progress(f"  Image size: {vips_img.width}x{vips_img.height}, {vips_img.bands} bands")
+
+    # Downsample if needed
+    if max_dim is not None:
+        current_max = max(vips_img.width, vips_img.height)
+        if current_max > max_dim:
+            scale = max_dim / current_max
+            vips_img = vips_img.resize(scale)
+            log_progress(f"  Downsampled to: {vips_img.width}x{vips_img.height} (scale={scale:.3f})")
+
+    # Convert to grayscale if multi-channel (use first channel or average)
+    if vips_img.bands > 1:
+        # Take first channel (usually DAPI for multiplexed images)
+        vips_img = vips_img.extract_band(0)
+        log_progress(f"  Converted to grayscale (using first channel)")
+
+    # Convert to numpy
+    img_array = vips_img.numpy()
+
+    # Ensure 8-bit for feature detection
+    if img_array.dtype != np.uint8:
+        # Normalize to 0-255 range
+        img_min, img_max = img_array.min(), img_array.max()
+        if img_max > img_min:
+            img_array = ((img_array - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+        else:
+            img_array = np.zeros_like(img_array, dtype=np.uint8)
+        log_progress(f"  Converted to uint8")
+
+    log_progress(f"  Final shape: {img_array.shape}, dtype: {img_array.dtype}")
+    return img_array
+
+
+def get_feature_detector(detector_type: str = "superpoint"):
+    """Get feature detector instance.
+
+    Parameters
+    ----------
+    detector_type : str
+        Type of detector: 'superpoint', 'disk', 'dedode', or 'brisk'
+
+    Returns
+    -------
+    Feature detector instance
+    """
+    detector_type = detector_type.lower()
+
+    if detector_type == "superpoint":
+        log_progress("Initializing SuperPoint feature detector")
+        return feature_detectors.SuperPointFD()
+    elif detector_type == "disk":
+        log_progress("Initializing DISK feature detector")
+        return feature_detectors.DiskFD()
+    elif detector_type == "dedode":
+        log_progress("Initializing DeDoDe feature detector")
+        return feature_detectors.DeDoDeFD()
+    elif detector_type == "brisk":
+        log_progress("Initializing BRISK feature detector")
+        return feature_detectors.BriskFD()
+    else:
+        raise ValueError(f"Unknown detector type: {detector_type}")
+
+
+def get_feature_matcher(detector_type: str = "superpoint"):
+    """Get feature matcher instance compatible with detector.
+
+    Parameters
+    ----------
+    detector_type : str
+        Type of detector (determines matcher)
+
+    Returns
+    -------
+    Feature matcher instance
+    """
+    detector_type = detector_type.lower()
+
+    if detector_type == "superpoint":
+        log_progress("Initializing SuperGlue matcher")
+        return feature_matcher.SuperGlueMatcher()
+    elif detector_type in ["disk", "dedode"]:
+        log_progress("Initializing LightGlue matcher")
+        return feature_matcher.LightGlueMatcher()
+    else:
+        log_progress("Initializing standard Matcher with RANSAC")
+        return feature_matcher.Matcher(filter_method='USAC_MAGSAC')
+
+
+def compute_and_match_features(
+    reference_path: str,
+    moving_path: str,
+    output_dir: str,
+    detector_type: str = "superpoint",
+    max_dim: Optional[int] = 2048,
+    n_features: int = 5000
+) -> Tuple[dict, str]:
+    """Compute and match features between reference and moving images.
+
+    Parameters
+    ----------
+    reference_path : str
+        Path to reference image
+    moving_path : str
+        Path to moving image
+    output_dir : str
+        Directory to save feature matching results
+    detector_type : str
+        Feature detector type
+    max_dim : int, optional
+        Maximum image dimension for feature detection
+    n_features : int
+        Number of features to keep
+
+    Returns
+    -------
+    results_dict : dict
+        Dictionary containing matching statistics
+    output_path : str
+        Path to saved results JSON file
+    """
+    log_progress("=" * 70)
+    log_progress("FEATURE DETECTION AND MATCHING")
+    log_progress("=" * 70)
+
+    # Create output directory
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Load images
+    log_progress("\n[1/4] Loading images...")
+    ref_img = load_image_grayscale(reference_path, max_dim=max_dim)
+    mov_img = load_image_grayscale(moving_path, max_dim=max_dim)
+
+    # Initialize detector and matcher
+    log_progress("\n[2/4] Initializing feature detector and matcher...")
+    detector = get_feature_detector(detector_type)
+    matcher = get_feature_matcher(detector_type)
+
+    # Detect features
+    log_progress("\n[3/4] Detecting features...")
+    log_progress(f"  Reference image: {os.path.basename(reference_path)}")
+    ref_kp, ref_desc = detector.detectAndCompute(ref_img)
+    log_progress(f"    Detected {len(ref_kp)} keypoints")
+
+    log_progress(f"  Moving image: {os.path.basename(moving_path)}")
+    mov_kp, mov_desc = detector.detectAndCompute(mov_img)
+    log_progress(f"    Detected {len(mov_kp)} keypoints")
+
+    # Filter to top features if needed
+    if len(ref_kp) > n_features:
+        ref_kp, ref_desc = feature_detectors.filter_features(ref_kp, ref_desc, n_keep=n_features)
+        log_progress(f"    Filtered reference to {n_features} top features")
+
+    if len(mov_kp) > n_features:
+        mov_kp, mov_desc = feature_detectors.filter_features(mov_kp, mov_desc, n_keep=n_features)
+        log_progress(f"    Filtered moving to {n_features} top features")
+
+    # Match features
+    log_progress("\n[4/4] Matching features...")
+
+    # Match using VALIS matcher
+    if hasattr(matcher, 'match_images'):
+        # SuperGlue or LightGlue matcher
+        match_result = matcher.match_images(
+            ref_img, mov_img,
+            ref_desc, ref_kp,
+            mov_desc, mov_kp
+        )
+
+        # Extract match info from result
+        if isinstance(match_result, tuple) and len(match_result) >= 2:
+            match_info12 = match_result[0]
+            filtered_match_info = match_result[1] if len(match_result) > 1 else match_result[0]
+        else:
+            match_info12 = match_result
+            filtered_match_info = match_result
+    else:
+        # Standard matcher - use match_desc_and_kp
+        match_info12, filtered_match_info, _, _ = feature_matcher.match_desc_and_kp(
+            ref_desc, ref_kp,
+            mov_desc, mov_kp,
+            filter_method='USAC_MAGSAC'
+        )
+
+    # Extract statistics
+    n_matches_raw = match_info12.n_matches if hasattr(match_info12, 'n_matches') else len(match_info12.matched_kp1_xy)
+    n_matches_filtered = filtered_match_info.n_matches if hasattr(filtered_match_info, 'n_matches') else len(filtered_match_info.matched_kp1_xy)
+
+    mean_distance = filtered_match_info.distance if hasattr(filtered_match_info, 'distance') else 0.0
+
+    log_progress(f"  Raw matches: {n_matches_raw}")
+    log_progress(f"  Filtered matches (inliers): {n_matches_filtered}")
+    log_progress(f"  Mean descriptor distance: {mean_distance:.4f}")
+
+    # Prepare results
+    moving_basename = os.path.basename(moving_path)
+    results = {
+        "reference_image": os.path.basename(reference_path),
+        "moving_image": moving_basename,
+        "detector_type": detector_type,
+        "max_dim": max_dim,
+        "n_features_requested": n_features,
+        "n_keypoints_reference": len(ref_kp),
+        "n_keypoints_moving": len(mov_kp),
+        "n_matches_raw": int(n_matches_raw),
+        "n_matches_filtered": int(n_matches_filtered),
+        "mean_descriptor_distance": float(mean_distance),
+        "match_ratio": float(n_matches_filtered) / float(min(len(ref_kp), len(mov_kp))) if min(len(ref_kp), len(mov_kp)) > 0 else 0.0,
+    }
+
+    # Save matched keypoint coordinates for VALIS-style TRE estimation
+    if hasattr(filtered_match_info, 'matched_kp1_xy') and hasattr(filtered_match_info, 'matched_kp2_xy'):
+        results["matched_kp_reference"] = filtered_match_info.matched_kp1_xy.tolist()
+        results["matched_kp_moving"] = filtered_match_info.matched_kp2_xy.tolist()
+
+    # Save results to JSON
+    output_filename = f"{Path(moving_basename).stem}_features.json"
+    output_path = os.path.join(output_dir, output_filename)
+
+    with open(output_path, 'w') as f:
+        json.dump(results, f, indent=2)
+
+    log_progress(f"\n✓ Results saved to: {output_path}")
+    log_progress("=" * 70)
+
+    return results, output_path
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Compute and match features between reference and moving images using VALIS'
+    )
+    parser.add_argument('--reference', required=True, help='Path to reference image')
+    parser.add_argument('--moving', required=True, help='Path to moving image')
+    parser.add_argument('--output-dir', required=True, help='Output directory for results')
+    parser.add_argument('--detector', default='superpoint',
+                       choices=['superpoint', 'disk', 'dedode', 'brisk'],
+                       help='Feature detector type (default: superpoint)')
+    parser.add_argument('--max-dim', type=int, default=2048,
+                       help='Maximum image dimension for feature detection (default: 2048)')
+    parser.add_argument('--n-features', type=int, default=5000,
+                       help='Number of features to keep (default: 5000)')
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Main entry point."""
+    args = parse_args()
+
+    try:
+        results, output_path = compute_and_match_features(
+            args.reference,
+            args.moving,
+            args.output_dir,
+            args.detector,
+            args.max_dim,
+            args.n_features
+        )
+
+        log_progress(f"\nFeature matching complete!")
+        log_progress(f"  Matches: {results['n_matches_filtered']} inliers")
+        log_progress(f"  Match ratio: {results['match_ratio']:.2%}")
+        log_progress(f"  Results: {output_path}")
+
+        return 0
+
+    except Exception as e:
+        log_progress(f"ERROR: Feature matching failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

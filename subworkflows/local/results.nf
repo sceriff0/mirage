@@ -15,38 +15,43 @@ include { SAVE  } from '../../modules/local/save'
     SUBWORKFLOW: RESULTS
 ========================================================================================
     Description:
-        Merges registered images, creates pyramidal OME-TIFF with masks,
-        and saves final results to archive location.
+        Merges registered images with segmentation and phenotype masks,
+        creates pyramidal OME-TIFF, and saves final results to archive location.
 
     Input:
         ch_registered: Channel of registered multichannel images
         ch_qc: Channel of QC RGB images
-        cell_mask: Segmentation mask
-        phenotype_mask: Phenotype mask
+        cell_mask: Cell segmentation mask
+        phenotype_mask: Phenotype mask with different colors for each phenotype
+        phenotype_mapping: Phenotype number to name mapping (JSON)
         merged_csv: Merged quantification CSV
         phenotype_csv: Phenotyped cell data CSV
         savedir: Final archive directory path
 
     Output:
-        merged: Merged multichannel OME-TIFF
+        merged: Merged multichannel OME-TIFF with segmentation and phenotype masks
         pyramid: Pyramidal OME-TIFF with masks
 ========================================================================================
 */
 
 workflow RESULTS {
     take:
-    ch_registered    // Channel of registered images
-    ch_qc            // Channel of QC RGB images
-    cell_mask        // Cell segmentation mask
-    merged_csv       // Merged quantification CSV
-    phenotype_csv    // Phenotype CSV
-    savedir          // Archive directory
+    ch_registered      // Channel of registered images
+    ch_qc              // Channel of QC RGB images
+    cell_mask          // Cell segmentation mask
+    phenotype_mask     // Phenotype mask
+    phenotype_mapping  // Phenotype number to name mapping JSON
+    merged_csv         // Merged quantification CSV
+    phenotype_csv      // Phenotype CSV
+    savedir            // Archive directory
 
     main:
     // Merge all registered images into single multichannel OME-TIFF with masks
     MERGE (
         ch_registered.collect(),
         cell_mask,
+        phenotype_mask,
+        phenotype_mapping
     )
 
     // Create pyramidal OME-TIFF (CONVERSION process)

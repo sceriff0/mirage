@@ -12,6 +12,7 @@ process PHENOTYPE {
     output:
     path "pheno/phenotypes_data.csv", emit: csv
     path "pheno/phenotypes_mask.tiff", emit: mask
+    path "pheno/phenotype_mapping.json", emit: mapping
 
     script:
     def markers_arg = params.pheno_markers ? "--markers ${params.pheno_markers.join(' ')}" : ''
