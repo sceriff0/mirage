@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 process ESTIMATE_REG_ERROR {
     tag "${registered.simpleName}"
     label 'process_medium'
-    container "${params.container.register}"
+    container "${params.container.registration}"
 
     // Resource allocation for error estimation
     memory '32.GB'
