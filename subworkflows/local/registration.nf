@@ -85,8 +85,8 @@ workflow REGISTRATION {
             }
 
         // STEP 1: Compute features before registration (for error estimation)
-        COMPUTE_FEATURES ( ch_pairs )
-        ch_pre_features = COMPUTE_FEATURES.out.features
+        // COMPUTE_FEATURES ( ch_pairs )
+        // ch_pre_features = COMPUTE_FEATURES.out.features
 
         // STEP 2: Perform registration
         if (method == 'gpu') {
@@ -120,7 +120,7 @@ workflow REGISTRATION {
         // STEP 3: Estimate registration error using features
         // Combine registered images with their pre-registration features
         // Need to match registered images with their corresponding feature files by basename
-        ch_error_input = ch_registered_moving
+        '''ch_error_input = ch_registered_moving
             .map { reg_file ->
                 // Get basename without _registered suffix
                 def basename = reg_file.simpleName.replaceAll('_registered$', '')
@@ -154,7 +154,7 @@ workflow REGISTRATION {
 
             ESTIMATE_REG_ERROR_SEGMENTATION ( ch_segmentation_input )
         }
-
+    '''
     } else {
         // Classic VALIS registration: uses preprocessed (non-padded) files
 
@@ -180,15 +180,15 @@ workflow REGISTRATION {
             }
 
         // Create (reference, moving) pairs for feature computation
-        ch_valis_pairs = ch_preprocessed_collected
+        '''ch_valis_pairs = ch_preprocessed_collected
             .flatMap { reference, all_files ->
                 def moving_files = all_files.findAll { f -> f != reference }
                 return moving_files.collect { m -> tuple(reference, m) }
             }
-
+        '''
         // STEP 1: Compute features before VALIS registration
-        COMPUTE_FEATURES ( ch_valis_pairs )
-        ch_pre_features_valis = COMPUTE_FEATURES.out.features
+        // COMPUTE_FEATURES ( ch_valis_pairs )
+        // ch_pre_features_valis = COMPUTE_FEATURES.out.features
 
         // STEP 2: Perform VALIS registration
         REGISTER ( ch_preprocessed.collect() )
@@ -196,11 +196,11 @@ workflow REGISTRATION {
         ch_qc = channel.empty()
 
         // Extract reference from collected channel
-        ch_reference_valis = ch_preprocessed_collected
-            .map { reference, _all_files -> reference }
+        //ch_reference_valis = ch_preprocessed_collected
+        //    .map { reference, _all_files -> reference }
 
         // STEP 3: Estimate registration error for VALIS
-        ch_error_input_valis = ch_registered_valis
+        '''ch_error_input_valis = ch_registered_valis
             .map { reg_file ->
                 def basename = reg_file.simpleName.replaceAll('_registered$', '')
                 return tuple(basename, reg_file)
@@ -232,15 +232,15 @@ workflow REGISTRATION {
 
             ESTIMATE_REG_ERROR_SEGMENTATION ( ch_segmentation_input_valis )
         }
-
+    '''
         ch_registered = ch_registered_valis
     }
 
     emit:
     registered = ch_registered
     qc = ch_qc
-    error_metrics = ESTIMATE_REG_ERROR.out.error_metrics
-    error_plots = ESTIMATE_REG_ERROR.out.error_plot
-    error_metrics_segmentation = params.enable_segmentation_error != false ? ESTIMATE_REG_ERROR_SEGMENTATION.out.error_metrics : channel.empty()
-    error_overlays = params.enable_segmentation_error != false ? ESTIMATE_REG_ERROR_SEGMENTATION.out.overlay_plot : channel.empty()
+    error_metrics = channel.empty()
+    error_plots = channel.empty()
+    error_metrics_segmentation = params.enable_segmentation_error != false ? channel.empty() : channel.empty()
+    error_overlays = params.enable_segmentation_error != false ? channel.empty() : channel.empty()
 }

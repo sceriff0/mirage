@@ -105,7 +105,10 @@ def get_feature_matcher(detector_type: str = "superpoint"):
     elif detector_type in ["disk", "dedode"]:
         return feature_matcher.LightGlueMatcher()
     else:
-        return feature_matcher.Matcher(filter_method='USAC_MAGSAC')
+        return feature_matcher.Matcher(
+            match_filter_method='USAC_MAGSAC',
+            ransac_thresh=7
+        )
 
 
 def compute_target_registration_error(
@@ -245,7 +248,9 @@ def estimate_registration_error(
     with open(pre_features_path, 'r') as f:
         pre_features = json.load(f)
 
-    log_progress(f"  Pre-registration matches: {pre_features['n_matches_filtered']}")
+    # Handle both old and new JSON format
+    n_matches_pre = pre_features.get('n_matches_filtered', pre_features.get('n_matches', 0))
+    log_progress(f"  Pre-registration matches: {n_matches_pre}")
     log_progress(f"  Pre-registration match ratio: {pre_features['match_ratio']:.2%}")
 
     # Load images
@@ -258,42 +263,41 @@ def estimate_registration_error(
     detector = get_feature_detector(detector_type)
     matcher = get_feature_matcher(detector_type)
 
-    # Detect features in registered images
+    # Detect features in registered images using correct VALIS API
     log_progress("\n[4/4] Detecting and matching features after registration...")
     log_progress(f"  Reference image: {os.path.basename(reference_path)}")
-    ref_kp, ref_desc = detector.detectAndCompute(ref_img)
+    ref_kp, ref_desc = detector.detect_and_compute(ref_img, mask=None)
     log_progress(f"    Detected {len(ref_kp)} keypoints")
 
     log_progress(f"  Registered image: {os.path.basename(registered_path)}")
-    reg_kp, reg_desc = detector.detectAndCompute(reg_img)
+    reg_kp, reg_desc = detector.detect_and_compute(reg_img, mask=None)
     log_progress(f"    Detected {len(reg_kp)} keypoints")
 
-    # Filter features
-    if len(ref_kp) > n_features:
-        ref_kp, ref_desc = feature_detectors.filter_features(ref_kp, ref_desc, n_keep=n_features)
+    # Note: detect_and_compute already filters to MAX_FEATURES (20000) internally
+    # Additional filtering is not needed as these are already numpy arrays
 
-    if len(reg_kp) > n_features:
-        reg_kp, reg_desc = feature_detectors.filter_features(reg_kp, reg_desc, n_keep=n_features)
-
-    # Match features
+    # Match features using correct VALIS API
     log_progress("  Matching features...")
 
-    if hasattr(matcher, 'match_images'):
-        match_result = matcher.match_images(
-            ref_img, reg_img,
-            ref_desc, ref_kp,
-            reg_desc, reg_kp
+    # Check if this is SuperGlue or LightGlue matcher (needs images)
+    if isinstance(matcher, feature_matcher.SuperGlueMatcher) or \
+       (hasattr(feature_matcher, 'LightGlueMatcher') and isinstance(matcher, feature_matcher.LightGlueMatcher)):
+        # SuperGlue and LightGlue need the images
+        match_info12, filtered_match_info, match_info21, filtered_match_info21 = matcher.match_images(
+            img1=ref_img,
+            desc1=ref_desc,
+            kp1_xy=ref_kp,
+            img2=reg_img,
+            desc2=reg_desc,
+            kp2_xy=reg_kp
         )
-
-        if isinstance(match_result, tuple) and len(match_result) >= 2:
-            filtered_match_info = match_result[1] if len(match_result) > 1 else match_result[0]
-        else:
-            filtered_match_info = match_result
     else:
-        _, filtered_match_info, _, _ = feature_matcher.match_desc_and_kp(
-            ref_desc, ref_kp,
-            reg_desc, reg_kp,
-            filter_method='USAC_MAGSAC'
+        # Standard Matcher only needs descriptors and keypoints
+        match_info12, filtered_match_info, match_info21, filtered_match_info21 = matcher.match_images(
+            desc1=ref_desc,
+            kp1_xy=ref_kp,
+            desc2=reg_desc,
+            kp2_xy=reg_kp
         )
 
     n_matches_post = filtered_match_info.n_matches if hasattr(filtered_match_info, 'n_matches') else len(filtered_match_info.matched_kp1_xy)
@@ -379,7 +383,7 @@ def estimate_registration_error(
 
         # Pre-registration statistics
         "pre_registration": {
-            "n_matches": pre_features['n_matches_filtered'],
+            "n_matches": pre_features.get('n_matches_filtered', pre_features.get('n_matches', 0)),
             "match_ratio": pre_features['match_ratio'],
             "mean_descriptor_distance": pre_features.get('mean_descriptor_distance', 0.0)
         },
@@ -399,7 +403,7 @@ def estimate_registration_error(
 
         # Improvement metrics
         "improvement": {
-            "match_count_increase": int(n_matches_post) - pre_features['n_matches_filtered'],
+            "match_count_increase": int(n_matches_post) - pre_features.get('n_matches_filtered', pre_features.get('n_matches', 0)),
             "match_ratio_increase": (float(n_matches_post) / float(min(len(ref_kp), len(reg_kp))) if min(len(ref_kp), len(reg_kp)) > 0 else 0.0) - pre_features['match_ratio'],
             "descriptor_distance_decrease": pre_features.get('mean_descriptor_distance', 0.0) - float(mean_distance_post),
             "tre_improvement_pixels": pre_reg_stats.get('mean_error', 0.0) - post_reg_stats.get('mean_error', 0.0) if pre_reg_stats and post_reg_stats else None,
@@ -430,7 +434,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--pre-features', required=True, help='Path to pre-registration features JSON')
     parser.add_argument('--output-dir', required=True, help='Output directory for results')
     parser.add_argument('--detector', default='superpoint',
-                       choices=['superpoint', 'disk', 'dedode', 'brisk'],
+                       choices=['superpoint', 'disk', 'dedode', 'brisk', 'vgg'],
                        help='Feature detector type (default: superpoint)')
     parser.add_argument('--max-dim', type=int, default=2048,
                        help='Maximum image dimension (default: 2048)')

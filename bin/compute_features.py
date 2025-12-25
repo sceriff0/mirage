@@ -99,7 +99,7 @@ def get_feature_detector(detector_type: str = "superpoint"):
 
     Returns
     -------
-    Feature detector instance
+    Feature detector instance (FeatureDD subclass)
     """
     detector_type = detector_type.lower()
 
@@ -115,6 +115,9 @@ def get_feature_detector(detector_type: str = "superpoint"):
     elif detector_type == "brisk":
         log_progress("Initializing BRISK feature detector")
         return feature_detectors.BriskFD()
+    elif detector_type == "vgg":
+        log_progress("Initializing VGG feature detector")
+        return feature_detectors.VggFD()
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
@@ -129,7 +132,7 @@ def get_feature_matcher(detector_type: str = "superpoint"):
 
     Returns
     -------
-    Feature matcher instance
+    Feature matcher instance (Matcher, SuperGlueMatcher, or LightGlueMatcher)
     """
     detector_type = detector_type.lower()
 
@@ -140,8 +143,11 @@ def get_feature_matcher(detector_type: str = "superpoint"):
         log_progress("Initializing LightGlue matcher")
         return feature_matcher.LightGlueMatcher()
     else:
-        log_progress("Initializing standard Matcher with RANSAC")
-        return feature_matcher.Matcher(filter_method='USAC_MAGSAC')
+        log_progress("Initializing standard Matcher with USAC_MAGSAC filter")
+        return feature_matcher.Matcher(
+            match_filter_method='USAC_MAGSAC',
+            ransac_thresh=7
+        )
 
 
 def compute_and_match_features(
@@ -193,60 +199,54 @@ def compute_and_match_features(
     detector = get_feature_detector(detector_type)
     matcher = get_feature_matcher(detector_type)
 
-    # Detect features
+    # Detect features using the correct VALIS API (detect_and_compute with underscores)
+    # Returns: kp_pos_xy (numpy array of shape (N, 2)), desc (numpy array of shape (N, M))
     log_progress("\n[3/4] Detecting features...")
     log_progress(f"  Reference image: {os.path.basename(reference_path)}")
-    ref_kp, ref_desc = detector.detectAndCompute(ref_img)
+    ref_kp, ref_desc = detector.detect_and_compute(ref_img, mask=None)
     log_progress(f"    Detected {len(ref_kp)} keypoints")
 
     log_progress(f"  Moving image: {os.path.basename(moving_path)}")
-    mov_kp, mov_desc = detector.detectAndCompute(mov_img)
+    mov_kp, mov_desc = detector.detect_and_compute(mov_img, mask=None)
     log_progress(f"    Detected {len(mov_kp)} keypoints")
 
-    # Filter to top features if needed
-    if len(ref_kp) > n_features:
-        ref_kp, ref_desc = feature_detectors.filter_features(ref_kp, ref_desc, n_keep=n_features)
-        log_progress(f"    Filtered reference to {n_features} top features")
+    # Note: detect_and_compute already filters to MAX_FEATURES (20000) internally
+    # Additional filtering is not needed as these are already numpy arrays, not cv2.KeyPoint objects
 
-    if len(mov_kp) > n_features:
-        mov_kp, mov_desc = feature_detectors.filter_features(mov_kp, mov_desc, n_keep=n_features)
-        log_progress(f"    Filtered moving to {n_features} top features")
-
-    # Match features
+    # Match features using VALIS match_images API
+    # Standard Matcher.match_images signature: (desc1, kp1_xy, desc2, kp2_xy, additional_filtering_kwargs)
+    # SuperGlueMatcher/LightGlueMatcher signature: (img1, desc1, kp1_xy, img2, desc2, kp2_xy, additional_filtering_kwargs)
     log_progress("\n[4/4] Matching features...")
 
-    # Match using VALIS matcher
-    if hasattr(matcher, 'match_images'):
-        # SuperGlue or LightGlue matcher
-        match_result = matcher.match_images(
-            ref_img, mov_img,
-            ref_desc, ref_kp,
-            mov_desc, mov_kp
+    # Check if this is SuperGlue or LightGlue matcher (needs images)
+    if isinstance(matcher, feature_matcher.SuperGlueMatcher) or \
+       (hasattr(feature_matcher, 'LightGlueMatcher') and isinstance(matcher, feature_matcher.LightGlueMatcher)):
+        # SuperGlue and LightGlue need the images
+        match_info12, filtered_match_info12, match_info21, filtered_match_info21 = matcher.match_images(
+            img1=ref_img,
+            desc1=ref_desc,
+            kp1_xy=ref_kp,
+            img2=mov_img,
+            desc2=mov_desc,
+            kp2_xy=mov_kp
         )
-
-        # Extract match info from result
-        if isinstance(match_result, tuple) and len(match_result) >= 2:
-            match_info12 = match_result[0]
-            filtered_match_info = match_result[1] if len(match_result) > 1 else match_result[0]
-        else:
-            match_info12 = match_result
-            filtered_match_info = match_result
     else:
-        # Standard matcher - use match_desc_and_kp
-        match_info12, filtered_match_info, _, _ = feature_matcher.match_desc_and_kp(
-            ref_desc, ref_kp,
-            mov_desc, mov_kp,
-            filter_method='USAC_MAGSAC'
+        # Standard Matcher only needs descriptors and keypoints
+        match_info12, filtered_match_info12, match_info21, filtered_match_info21 = matcher.match_images(
+            desc1=ref_desc,
+            kp1_xy=ref_kp,
+            desc2=mov_desc,
+            kp2_xy=mov_kp
         )
 
-    # Extract statistics
-    n_matches_raw = match_info12.n_matches if hasattr(match_info12, 'n_matches') else len(match_info12.matched_kp1_xy)
-    n_matches_filtered = filtered_match_info.n_matches if hasattr(filtered_match_info, 'n_matches') else len(filtered_match_info.matched_kp1_xy)
+    # Use the filtered match info (after RANSAC/GMS filtering)
+    match_info = filtered_match_info12
 
-    mean_distance = filtered_match_info.distance if hasattr(filtered_match_info, 'distance') else 0.0
+    # Extract statistics from MatchInfo object
+    n_matches = match_info.n_matches if hasattr(match_info, 'n_matches') else len(match_info.matched_kp1_xy)
+    mean_distance = match_info.distance if hasattr(match_info, 'distance') else 0.0
 
-    log_progress(f"  Raw matches: {n_matches_raw}")
-    log_progress(f"  Filtered matches (inliers): {n_matches_filtered}")
+    log_progress(f"  Matches found: {n_matches}")
     log_progress(f"  Mean descriptor distance: {mean_distance:.4f}")
 
     # Prepare results
@@ -259,16 +259,15 @@ def compute_and_match_features(
         "n_features_requested": n_features,
         "n_keypoints_reference": len(ref_kp),
         "n_keypoints_moving": len(mov_kp),
-        "n_matches_raw": int(n_matches_raw),
-        "n_matches_filtered": int(n_matches_filtered),
+        "n_matches": int(n_matches),
         "mean_descriptor_distance": float(mean_distance),
-        "match_ratio": float(n_matches_filtered) / float(min(len(ref_kp), len(mov_kp))) if min(len(ref_kp), len(mov_kp)) > 0 else 0.0,
+        "match_ratio": float(n_matches) / float(min(len(ref_kp), len(mov_kp))) if min(len(ref_kp), len(mov_kp)) > 0 else 0.0,
     }
 
-    # Save matched keypoint coordinates for VALIS-style TRE estimation
-    if hasattr(filtered_match_info, 'matched_kp1_xy') and hasattr(filtered_match_info, 'matched_kp2_xy'):
-        results["matched_kp_reference"] = filtered_match_info.matched_kp1_xy.tolist()
-        results["matched_kp_moving"] = filtered_match_info.matched_kp2_xy.tolist()
+    # Save matched keypoint coordinates from MatchInfo object
+    if hasattr(match_info, 'matched_kp1_xy') and hasattr(match_info, 'matched_kp2_xy'):
+        results["matched_kp_reference"] = match_info.matched_kp1_xy.tolist()
+        results["matched_kp_moving"] = match_info.matched_kp2_xy.tolist()
 
     # Save results to JSON
     output_filename = f"{Path(moving_basename).stem}_features.json"
@@ -292,7 +291,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--moving', required=True, help='Path to moving image')
     parser.add_argument('--output-dir', required=True, help='Output directory for results')
     parser.add_argument('--detector', default='superpoint',
-                       choices=['superpoint', 'disk', 'dedode', 'brisk'],
+                       choices=['superpoint', 'disk', 'dedode', 'brisk', 'vgg'],
                        help='Feature detector type (default: superpoint)')
     parser.add_argument('--max-dim', type=int, default=2048,
                        help='Maximum image dimension for feature detection (default: 2048)')
@@ -316,7 +315,7 @@ def main() -> int:
         )
 
         log_progress(f"\nFeature matching complete!")
-        log_progress(f"  Matches: {results['n_matches_filtered']} inliers")
+        log_progress(f"  Matches: {results['n_matches']}")
         log_progress(f"  Match ratio: {results['match_ratio']:.2%}")
         log_progress(f"  Results: {output_path}")
 

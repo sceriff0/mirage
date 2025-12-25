@@ -23,14 +23,14 @@ process CONVERSION {
 
     script:
     """
-    bfconvert \\
-        -noflat \\
-        -bigtiff \\
-        -tilex ${params.tilex} \\
-        -tiley ${params.tiley} \\
-        -pyramid-resolutions ${params.pyramid_resolutions} \\
-        -pyramid-scale ${params.pyramid_scale} \\
-        "${merged_image}" \\
+    bfconvert \
+        -noflat \
+        -bigtiff \
+        -tilex ${params.tilex} \
+        -tiley ${params.tiley} \
+        -pyramid-resolutions ${params.pyramid_resolutions} \
+        -pyramid-scale ${params.pyramid_scale} \
+        "${merged_image}" \
         "pyramid.ome.tiff"
     """
 }

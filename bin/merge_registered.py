@@ -481,6 +481,9 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             imagej_metadata['Labels'] = labels_array
             log(f"  Added phenotype labels to ImageJ metadata: {labels_array}")
 
+    # Write OME-TIFF with proper metadata
+    # Important: Use ome=True to ensure proper OME-XML metadata structure
+    # This allows bfconvert to correctly read and preserve metadata when creating pyramids
     tifffile.imwrite(
         output_path,
         output_memmap,
@@ -490,6 +493,7 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         photometric='minisblack',
         compression='lzw',
         bigtiff=True,
+        ome=True,  # Write proper OME-TIFF format
         imagej=True if phenotype_lut is not None else False
     )
 
