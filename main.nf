@@ -22,38 +22,175 @@ workflow {
 
     // Validate input parameters
     if (!params.input) {
-        error "Please provide an input glob pattern with --input"
+        error "Please provide an input glob pattern or checkpoint CSV with --input"
     }
 
-    // 1. Create input channel from glob pattern (ND2 files)
-    ch_input = channel.fromPath(params.input, checkIfExists: true)
+    // Validate step parameter
+    def valid_steps = ['preprocessing', 'registration', 'postprocessing', 'results']
+    if (!valid_steps.contains(params.step)) {
+        error "Invalid step '${params.step}'. Valid steps: ${valid_steps.join(', ')}"
+    }
 
-    // 2. SUBWORKFLOW: Preprocessing (Convert, Preprocess, Max Dimensions, Padding)
-    PREPROCESSING ( ch_input )
+    // ========================================================================
+    // STEP: PREPROCESSING
+    // ========================================================================
+    if (params.step == 'preprocessing') {
+        // Start from beginning: Parse input CSV
+        // CSV format: patient_id,path_to_file,is_reference,channel_1,channel_2,channel_3 (optional)
+        // Note: DAPI can be in any channel position - conversion will place it in channel 0
+        ch_input = channel.fromPath(params.input, checkIfExists: true)
+            .splitCsv(header: true)
+            .map { row ->
+                // Extract channel names (collect all channel_* columns)
+                def channels = []
+                ['channel_1', 'channel_2', 'channel_3'].each { key ->
+                    if (row.containsKey(key) && row[key]) {
+                        channels.add(row[key])
+                    }
+                }
 
-    // 3. SUBWORKFLOW: Registration (VALIS, GPU, or CPU)
-    REGISTRATION (
-        PREPROCESSING.out.padded,
-        PREPROCESSING.out.preprocessed,
-        params.registration_method,
-        params.reg_reference_markers
-    )
+                // Validate DAPI is present (can be in any position - will be moved to channel 0 during conversion)
+                def has_dapi = channels.any { it.toUpperCase() == 'DAPI' }
+                if (!has_dapi) {
+                    error "DAPI channel not found for ${row.patient_id}. Channels: ${channels}"
+                }
 
-    // 4. SUBWORKFLOW: Postprocessing (Segment, Split, Quantify, Merge, Phenotype)
-    POSTPROCESSING (
-        REGISTRATION.out.registered,
-        params.reg_reference_markers
-    )
+                def meta = [
+                    patient_id: row.patient_id,
+                    is_reference: row.is_reference.toBoolean(),
+                    channels: channels  // Keep original order; conversion will place DAPI first
+                ]
 
-    // 5. SUBWORKFLOW: Results (Merge, Conversion to Pyramid, Save)
-    RESULTS (
-        REGISTRATION.out.registered,
-        REGISTRATION.out.qc,
-        POSTPROCESSING.out.cell_mask,
-        POSTPROCESSING.out.phenotype_mask,
-        POSTPROCESSING.out.phenotype_mapping,
-        POSTPROCESSING.out.merged_csv,
-        POSTPROCESSING.out.phenotype_csv,
-        params.savedir
-    )
+                return [meta, file(row.path_to_file)]
+            }
+
+        PREPROCESSING ( ch_input )
+        ch_padded = PREPROCESSING.out.padded
+        ch_preprocessed = PREPROCESSING.out.preprocessed
+
+    } else {
+        // Skip preprocessing - will load from checkpoint later
+        ch_padded = channel.empty()
+        ch_preprocessed = channel.empty()
+    }
+
+    // ========================================================================
+    // STEP: REGISTRATION
+    // ========================================================================
+    if (params.step == 'preprocessing') {
+        // Continue from preprocessing output (already has metadata)
+        ch_for_registration = ch_padded
+
+    } else if (params.step == 'registration') {
+        // Load from preprocessing checkpoint CSV
+        ch_for_registration = channel.fromPath(params.input, checkIfExists: true)
+            .splitCsv(header: true)
+            .map { row ->
+                def channels = row.channels.split('\\|')
+                def meta = [
+                    patient_id: row.patient_id,
+                    is_reference: row.is_reference.toBoolean(),
+                    channels: channels
+                ]
+                return [meta, file(row.padded_image)]
+            }
+
+        // For VALIS method, preprocessed = padded (extract files only)
+        ch_preprocessed = ch_for_registration.map { meta, file -> file }
+    }
+
+    if (params.step in ['preprocessing', 'registration']) {
+        // Pass metadata through to registration
+        REGISTRATION (
+            ch_for_registration,
+            ch_preprocessed,
+            params.registration_method,
+            params.reg_reference_markers
+        )
+        ch_registered = REGISTRATION.out.registered
+
+    } else {
+        // Skip registration - will load from checkpoint later
+        ch_registered = channel.empty()
+    }
+
+    // ========================================================================
+    // STEP: POSTPROCESSING
+    // ========================================================================
+    if (params.step in ['preprocessing', 'registration']) {
+        // Continue from registration output (already has metadata)
+        ch_for_postprocessing = ch_registered
+
+    } else if (params.step == 'postprocessing') {
+        // Load from registration checkpoint CSV with metadata
+        ch_for_postprocessing = channel.fromPath(params.input, checkIfExists: true)
+            .splitCsv(header: true)
+            .map { row ->
+                def channels = row.channels.split('\\|')
+                def meta = [
+                    patient_id: row.patient_id,
+                    is_reference: row.is_reference.toBoolean(),
+                    channels: channels
+                ]
+                return [meta, file(row.registered_image)]
+            }
+    }
+
+    if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
+        POSTPROCESSING (
+            ch_for_postprocessing,
+            params.reg_reference_markers
+        )
+        ch_phenotype_csv = POSTPROCESSING.out.phenotype_csv
+        ch_phenotype_mask = POSTPROCESSING.out.phenotype_mask
+        ch_phenotype_mapping = POSTPROCESSING.out.phenotype_mapping
+        ch_merged_csv = POSTPROCESSING.out.merged_csv
+        ch_cell_mask = POSTPROCESSING.out.cell_mask
+
+    } else {
+        // Skip postprocessing - will load from checkpoint later
+        ch_phenotype_csv = channel.empty()
+        ch_phenotype_mask = channel.empty()
+        ch_phenotype_mapping = channel.empty()
+        ch_merged_csv = channel.empty()
+        ch_cell_mask = channel.empty()
+    }
+
+    // ========================================================================
+    // STEP: RESULTS
+    // ========================================================================
+    if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
+        // Continue from postprocessing output
+        // Use channels from previous step
+        ch_registered_for_results = ch_registered
+        ch_qc_for_results = REGISTRATION.out.qc
+
+    } else if (params.step == 'results') {
+        // Load from postprocessing checkpoint CSV (new format includes patient_id and is_reference)
+        ch_checkpoint = channel.fromPath(params.input, checkIfExists: true)
+            .splitCsv(header: true)
+            .first()
+
+        ch_registered_for_results = channel.empty()
+        ch_qc_for_results = channel.empty()
+        // New CSV format: patient_id,is_reference,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask
+        ch_phenotype_csv = ch_checkpoint.map { row -> file(row.phenotype_csv) }
+        ch_phenotype_mask = ch_checkpoint.map { row -> file(row.phenotype_mask) }
+        ch_phenotype_mapping = ch_checkpoint.map { row -> file(row.phenotype_mapping) }
+        ch_merged_csv = ch_checkpoint.map { row -> file(row.merged_csv) }
+        ch_cell_mask = ch_checkpoint.map { row -> file(row.cell_mask) }
+    }
+
+    if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {
+        RESULTS (
+            ch_registered_for_results,
+            ch_qc_for_results,
+            ch_cell_mask,
+            ch_phenotype_mask,
+            ch_phenotype_mapping,
+            ch_merged_csv,
+            ch_phenotype_csv,
+            params.savedir
+        )
+    }
 }

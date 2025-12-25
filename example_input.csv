@@ -1,0 +1,4 @@
+patient_id,path_to_file,is_reference,channel_1,channel_2,channel_3
+P001,/path/to/images/P001.nd2,true,DAPI,FITC,Texas Red
+P002,/path/to/images/P002.nd2,false,FITC,DAPI,Texas Red
+P003,/path/to/images/P003.nd2,false,Texas Red,FITC,DAPI

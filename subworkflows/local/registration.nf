@@ -6,7 +6,7 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { REGISTER                } from '../../modules/local/register'
+include { REGISTER                          } from '../../modules/local/register'
 include { GPU_REGISTER                      } from '../../modules/local/register_gpu'
 include { CPU_REGISTER                      } from '../../modules/local/register_cpu'
 include { CPU_REGISTER_MULTIRES             } from '../../modules/local/register_cpu_multires'
@@ -14,6 +14,7 @@ include { CPU_REGISTER_CDM                  } from '../../modules/local/register
 include { COMPUTE_FEATURES                  } from '../../modules/local/compute_features'
 include { ESTIMATE_REG_ERROR                } from '../../modules/local/estimate_registration_error'
 include { ESTIMATE_REG_ERROR_SEGMENTATION   } from '../../modules/local/estimate_registration_error_segmentation'
+include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_checkpoint_csv'
 
 /*
 ========================================================================================
@@ -22,19 +23,19 @@ include { ESTIMATE_REG_ERROR_SEGMENTATION   } from '../../modules/local/estimate
     Description:
         Registers images using VALIS (classic), GPU, CPU, or CPU multi-resolution methods.
         VALIS uses preprocessed (non-padded) images for better compatibility.
-        For GPU/CPU methods, finds reference image and creates registration pairs from padded images.
+        For GPU/CPU methods, uses is_reference metadata to identify reference image.
 
         Additionally computes features before registration and estimates registration error
         after registration using VALIS feature detectors and matchers.
 
     Input:
-        ch_padded: Channel of padded OME-TIFF images (for GPU/CPU methods)
+        ch_padded: Channel of [meta, file] tuples for padded images (for GPU/CPU methods)
         ch_preprocessed: Channel of preprocessed OME-TIFF images (for VALIS method)
         method: Registration method ('valis', 'gpu', 'cpu', 'cpu_multires', or 'cpu_cdm')
-        reference_markers: List of markers to identify reference image
+        reference_markers: List of markers to identify reference image (used only for VALIS)
 
     Output:
-        registered: Channel of registered images
+        registered: Channel of [meta, file] tuples for registered images
         qc: Channel of QC outputs (optional)
         error_metrics: Channel of registration error metrics JSON files
         error_plots: Channel of error distribution plots
@@ -43,45 +44,42 @@ include { ESTIMATE_REG_ERROR_SEGMENTATION   } from '../../modules/local/estimate
 
 workflow REGISTRATION {
     take:
-    ch_padded           // Channel of padded images (for GPU/CPU methods)
+    ch_padded           // Channel of [meta, file] tuples (for GPU/CPU methods)
     ch_preprocessed     // Channel of preprocessed images (for VALIS method)
     method              // Registration method
-    reference_markers   // List of markers for reference identification
+    reference_markers   // List of markers for reference identification (VALIS only)
 
     main:
     if (method != 'valis') {
         // GPU/CPU registration workflow:
-        // Collect padded images and find reference once
-        // This ensures deterministic behavior for resume
+        // Use is_reference metadata to identify reference image
+        // Sort by patient_id for deterministic ordering
         ch_padded_collected = ch_padded
-            .collect()
-            .map { files ->
-                // Sort files by name for deterministic ordering
-                def sorted_files = files.sort { f -> f.name }
+            .toList()
+            .map { items ->
+                // Sort by patient_id for deterministic ordering
+                def sorted_items = items.sort { it[0].patient_id }
 
-                // Find reference image based on reference_markers
-                def reference = sorted_files.find { f ->
-                    def filename = f.name.toUpperCase()
-                    reference_markers.every { marker ->
-                        filename.contains(marker.toUpperCase())
-                    }
+                // Find reference image using is_reference metadata
+                def reference_item = sorted_items.find { it[0].is_reference }
+
+                if (reference_item == null) {
+                    log.warn "No image with is_reference=true found, using first image"
+                    reference_item = sorted_items[0]
                 }
 
-                // Fallback to first file if no match found
-                if (reference == null) {
-                    log.warn "No file found with all reference markers ${reference_markers}, using first file"
-                    reference = sorted_files[0]
-                }
-
-                // Return reference and all files
-                return tuple(reference, sorted_files)
+                // Return (reference_item, all_items)
+                return tuple(reference_item, sorted_items)
             }
 
         // Create (reference, moving) pairs from padded images
+        // Extract just the files for registration (modules don't handle metadata yet)
         ch_pairs = ch_padded_collected
-            .flatMap { reference, all_files ->
-                def moving_files = all_files.findAll { f -> f != reference }
-                return moving_files.collect { m -> tuple(reference, m) }
+            .flatMap { reference_item, all_items ->
+                def moving_items = all_items.findAll { !it[0].is_reference }
+                return moving_items.collect { moving_item ->
+                    tuple(reference_item[1], moving_item[1])
+                }
             }
 
         // STEP 1: Compute features before registration (for error estimation)
@@ -92,29 +90,49 @@ workflow REGISTRATION {
         if (method == 'gpu') {
             // GPU Registration
             GPU_REGISTER ( ch_pairs )
-            ch_registered_moving = GPU_REGISTER.out.registered
+            ch_registered_moving_files = GPU_REGISTER.out.registered
             ch_qc = GPU_REGISTER.out.qc
         } else if (method == 'cpu_multires') {
             // CPU Multi-Resolution Registration (coarse → fine affine → diffeo)
             CPU_REGISTER_MULTIRES ( ch_pairs )
-            ch_registered_moving = CPU_REGISTER_MULTIRES.out.registered
+            ch_registered_moving_files = CPU_REGISTER_MULTIRES.out.registered
             ch_qc = CPU_REGISTER_MULTIRES.out.qc
         } else if (method == 'cpu_cdm') {
             // CPU CDM Registration (coarse affine → diffeo → micro affine)
             CPU_REGISTER_CDM ( ch_pairs )
-            ch_registered_moving = CPU_REGISTER_CDM.out.registered
+            ch_registered_moving_files = CPU_REGISTER_CDM.out.registered
             ch_qc = CPU_REGISTER_CDM.out.qc
         } else {
             // CPU Registration (standard 2-stage)
             CPU_REGISTER ( ch_pairs )
-            ch_registered_moving = CPU_REGISTER.out.registered
+            ch_registered_moving_files = CPU_REGISTER.out.registered
             ch_qc = CPU_REGISTER.out.qc
         }
 
-        // Extract reference from collected channel (no need to recompute)
-        ch_reference = ch_padded_collected
-            .map { reference, _all_files -> reference }
+        // Reconstruct metadata for registered files
+        // Match registered files back to their original metadata
+        ch_registered_moving = ch_registered_moving_files
+            .map { file ->
+                // Extract base filename to match with original metadata
+                def basename = file.name.replaceAll('_registered', '').replaceAll('_padded', '')
+                return tuple(basename, file)
+            }
+            .combine(
+                ch_padded.map { meta, file ->
+                    def basename = file.name.replaceAll('_padded', '')
+                    return tuple(basename, meta)
+                },
+                by: 0
+            )
+            .map { _basename, reg_file, meta ->
+                return tuple(meta, reg_file)
+            }
 
+        // Extract reference with metadata
+        ch_reference = ch_padded_collected
+            .map { reference_item, _all_items -> reference_item }
+
+        // Combine reference and registered moving images (all with metadata)
         ch_registered = ch_reference.concat( ch_registered_moving )
 
         // STEP 3: Estimate registration error using features
@@ -236,6 +254,21 @@ workflow REGISTRATION {
         ch_registered = ch_registered_valis
     }
 
+    // Generate checkpoint CSV for restart from registration step
+    // ch_registered now contains [meta, file] tuples with full metadata
+    ch_checkpoint_data = ch_registered
+        .map { meta, file ->
+            def abs_path = file.toAbsolutePath().toString()
+            [meta.patient_id, abs_path, meta.is_reference, meta.channels.join('|')]
+        }
+        .collect()
+
+    WRITE_CHECKPOINT_CSV(
+        'registered',
+        'patient_id,registered_image,is_reference,channels',
+        ch_checkpoint_data
+    )
+
     emit:
     registered = ch_registered
     qc = ch_qc
@@ -243,4 +276,5 @@ workflow REGISTRATION {
     error_plots = channel.empty()
     error_metrics_segmentation = params.enable_segmentation_error != false ? channel.empty() : channel.empty()
     error_overlays = params.enable_segmentation_error != false ? channel.empty() : channel.empty()
+    checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
 }
