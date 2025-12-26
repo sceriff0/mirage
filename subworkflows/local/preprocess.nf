@@ -73,9 +73,22 @@ workflow PREPROCESSING {
 
     // Reconstruct metadata channel by joining with original metadata
     ch_padded_with_meta = ch_for_preprocess
-        .map { meta, file -> [file.name, meta] }
-        .cross(PAD_IMAGES.out.padded.map { file -> [file.name.replaceAll('_padded', ''), file] })
-        .map { name_meta, name_file -> [name_meta[1], name_file[1]] }
+        .map { meta, file ->
+            // Extract basename from original file (before padding)
+            def basename = file.name
+            return tuple(basename, meta)
+        }
+        .combine(
+            PAD_IMAGES.out.padded.map { padded_file ->
+                // Extract basename by removing _padded suffix
+                def basename = padded_file.name.replaceAll('_padded', '')
+                return tuple(basename, padded_file)
+            },
+            by: 0
+        )
+        .map { basename, meta, padded_file ->
+            return tuple(meta, padded_file)
+        }
 
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_padded_with_meta
