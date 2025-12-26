@@ -8,14 +8,16 @@ process REGISTER {
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy'
 
     input:
-    path preproc_files
+    tuple val(reference_filename), path(preproc_files)
 
     output:
     path "registered_slides/*_registered.ome.tiff", emit: registered_slides
     path "registered_qc"                         , emit: qc, optional: true
 
     script:
-    def ref_markers = params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
+    // Use reference filename if provided, otherwise fall back to legacy reference_markers param
+    def ref_arg = reference_filename ? "--reference ${reference_filename}" :
+                  params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
     def max_processed_dim = params.reg_max_processed_dim ?: 1800
     def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 3500
     def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.25
@@ -36,7 +38,7 @@ process REGISTER {
         --input-dir preprocessed \\
         --out registered_slides \\
         --qc-dir registered_qc \\
-        ${ref_markers} \\
+        ${ref_arg} \\
         --max-processed-dim ${max_processed_dim} \\
         --max-non-rigid-dim ${max_non_rigid_dim} \\
         --micro-reg-fraction ${micro_reg_fraction} \\

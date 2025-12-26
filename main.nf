@@ -14,6 +14,24 @@ include { RESULTS        } from './subworkflows/local/results'
 
 /*
 ========================================================================================
+    HELPER FUNCTIONS
+========================================================================================
+*/
+
+// Parse CSV row and create metadata map with channels
+// Used for loading from checkpoint CSVs
+def parseMetadata(row) {
+    def channels = row.channels.split('\\|')
+    return [
+        patient_id: row.patient_id,
+        is_reference: row.is_reference.toBoolean(),
+        channels: channels
+    ]
+}
+
+
+/*
+========================================================================================
     RUN MAIN WORKFLOW
 ========================================================================================
 */
@@ -81,31 +99,47 @@ workflow {
         // Continue from preprocessing output (already has metadata)
         ch_for_registration = ch_padded
 
+        // Reconstruct metadata for preprocessed files by matching basenames with padded
+        // ch_padded has [meta, file] where file is *_padded.ome.tif
+        // preprocessed has files *_corrected.ome.tif
+        // We need to match them by removing suffixes
+        ch_preprocessed_with_meta = ch_padded
+            .map { meta, padded_file ->
+                // Extract basename by removing _padded suffix
+                def basename = padded_file.name.replaceAll('_padded\\.ome\\.tif.*$', '')
+                return tuple(basename, meta)
+            }
+            .combine(
+                PREPROCESSING.out.preprocessed.map { preproc_file ->
+                    // Extract basename by removing _corrected suffix
+                    def basename = preproc_file.name.replaceAll('_corrected\\.ome\\.tif.*$', '')
+                    return tuple(basename, preproc_file)
+                },
+                by: 0
+            )
+            .map { basename, meta, preproc_file ->
+                return tuple(meta, preproc_file)
+            }
+
     } else if (params.step == 'registration') {
         // Load from preprocessing checkpoint CSV
         ch_for_registration = channel.fromPath(params.input, checkIfExists: true)
             .splitCsv(header: true)
-            .map { row ->
-                def channels = row.channels.split('\\|')
-                def meta = [
-                    patient_id: row.patient_id,
-                    is_reference: row.is_reference.toBoolean(),
-                    channels: channels
-                ]
-                return [meta, file(row.padded_image)]
-            }
+            .map { row -> [parseMetadata(row), file(row.padded_image)] }
 
-        // For VALIS method, preprocessed = padded (extract files only)
-        ch_preprocessed = ch_for_registration.map { meta, file -> file }
+        // For VALIS, preprocessed files need to be created from padded
+        // Since we're loading from checkpoint, we don't have the preprocessed files
+        // Use the padded images with metadata for now
+        ch_preprocessed_with_meta = ch_for_registration
     }
 
     if (params.step in ['preprocessing', 'registration']) {
         // Pass metadata through to registration
+        // Both ch_for_registration (padded) and ch_preprocessed_with_meta now have [meta, file] tuples
         REGISTRATION (
             ch_for_registration,
-            ch_preprocessed,
-            params.registration_method,
-            params.reg_reference_markers
+            ch_preprocessed_with_meta,
+            params.registration_method
         )
         ch_registered = REGISTRATION.out.registered
 
@@ -125,22 +159,11 @@ workflow {
         // Load from registration checkpoint CSV with metadata
         ch_for_postprocessing = channel.fromPath(params.input, checkIfExists: true)
             .splitCsv(header: true)
-            .map { row ->
-                def channels = row.channels.split('\\|')
-                def meta = [
-                    patient_id: row.patient_id,
-                    is_reference: row.is_reference.toBoolean(),
-                    channels: channels
-                ]
-                return [meta, file(row.registered_image)]
-            }
+            .map { row -> [parseMetadata(row), file(row.registered_image)] }
     }
 
     if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
-        POSTPROCESSING (
-            ch_for_postprocessing,
-            params.reg_reference_markers
-        )
+        POSTPROCESSING ( ch_for_postprocessing )
         ch_phenotype_csv = POSTPROCESSING.out.phenotype_csv
         ch_phenotype_mask = POSTPROCESSING.out.phenotype_mask
         ch_phenotype_mapping = POSTPROCESSING.out.phenotype_mapping

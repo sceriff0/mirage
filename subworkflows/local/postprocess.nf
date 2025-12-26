@@ -36,7 +36,6 @@ include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv
 workflow POSTPROCESSING {
     take:
     ch_registered       // Channel of [meta, file] tuples
-    reference_markers   // List of markers for reference identification (legacy, not used)
 
     main:
     // Extract reference image using is_reference metadata
@@ -95,11 +94,11 @@ workflow POSTPROCESSING {
             [
                 ref_meta.patient_id,
                 true,  // is_reference
-                pheno_csv.toAbsolutePath().toString(),
-                pheno_mask.toAbsolutePath().toString(),
-                pheno_map.toAbsolutePath().toString(),
-                merged_csv.toAbsolutePath().toString(),
-                cell_mask.toAbsolutePath().toString()
+                pheno_csv.toString(),
+                pheno_mask.toString(),
+                pheno_map.toString(),
+                merged_csv.toString(),
+                cell_mask.toString()
             ]
         }
         .collect()

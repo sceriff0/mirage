@@ -80,7 +80,7 @@ workflow PREPROCESSING {
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_padded_with_meta
         .map { meta, file ->
-            def abs_path = file.toAbsolutePath().toString()
+            def abs_path = file.toString()
             def channels = meta.channels.join('|')
             [meta.patient_id, abs_path, meta.is_reference, channels]
         }

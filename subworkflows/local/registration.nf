@@ -45,9 +45,8 @@ include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_ch
 workflow REGISTRATION {
     take:
     ch_padded           // Channel of [meta, file] tuples (for GPU/CPU methods)
-    ch_preprocessed     // Channel of preprocessed images (for VALIS method)
+    ch_preprocessed     // Channel of [meta, file] tuples (for VALIS method)
     method              // Registration method
-    reference_markers   // List of markers for reference identification (VALIS only)
 
     main:
     if (method != 'valis') {
@@ -175,43 +174,58 @@ workflow REGISTRATION {
     '''
     } else {
         // Classic VALIS registration: uses preprocessed (non-padded) files
+        // Use is_reference metadata to identify reference image (same as GPU/CPU methods)
 
-        // Collect preprocessed images and find reference
-        ch_preprocessed_collected = ch_preprocessed
-            .collect()
-            .map { files ->
-                def sorted_files = files.sort { f -> f.name }
+        // Collect and identify reference using is_reference metadata
+        ch_preprocessed_for_valis = ch_preprocessed
+            .toList()
+            .map { items ->
+                // Sort by patient_id for deterministic ordering
+                def sorted_items = items.sort { it[0].patient_id }
 
-                def reference = sorted_files.find { f ->
-                    def filename = f.name.toUpperCase()
-                    reference_markers.every { marker ->
-                        filename.contains(marker.toUpperCase())
-                    }
+                // Find reference image using is_reference metadata
+                def reference_item = sorted_items.find { it[0].is_reference }
+
+                if (reference_item == null) {
+                    log.warn "No image with is_reference=true found, using first image"
+                    reference_item = sorted_items[0]
                 }
 
-                if (reference == null) {
-                    log.warn "No file found with all reference markers ${reference_markers}, using first file"
-                    reference = sorted_files[0]
-                }
+                // Extract reference filename and all files for REGISTER process
+                def reference_filename = reference_item[1].name
+                def all_files = sorted_items.collect { it[1] }
 
-                return tuple(reference, sorted_files)
+                return tuple(reference_filename, all_files)
             }
 
-        // Create (reference, moving) pairs for feature computation
-        '''ch_valis_pairs = ch_preprocessed_collected
-            .flatMap { reference, all_files ->
-                def moving_files = all_files.findAll { f -> f != reference }
-                return moving_files.collect { m -> tuple(reference, m) }
-            }
-        '''
-        // STEP 1: Compute features before VALIS registration
+        // STEP 1: Compute features before VALIS registration (commented out)
         // COMPUTE_FEATURES ( ch_valis_pairs )
         // ch_pre_features_valis = COMPUTE_FEATURES.out.features
 
         // STEP 2: Perform VALIS registration
-        REGISTER ( ch_preprocessed.collect() )
-        ch_registered_valis = REGISTER.out.registered_slides.flatten()
+        // Pass reference filename explicitly instead of using reference_markers
+        REGISTER ( ch_preprocessed_for_valis )
+        ch_registered_valis_files = REGISTER.out.registered_slides.flatten()
         ch_qc = channel.empty()
+
+        // Reconstruct metadata for VALIS registered files
+        // Match registered files back to their original metadata from ch_preprocessed (which has [meta, file] tuples)
+        ch_registered_valis = ch_registered_valis_files
+            .map { file ->
+                // Extract base filename to match with original metadata
+                def basename = file.name.replaceAll('_corrected_registered', '').replaceAll('.ome.tiff', '')
+                return tuple(basename, file)
+            }
+            .combine(
+                ch_preprocessed.map { meta, file ->
+                    def basename = file.name.replaceAll('_corrected', '').replaceAll('.ome.tiff', '')
+                    return tuple(basename, meta)
+                },
+                by: 0
+            )
+            .map { _basename, reg_file, meta ->
+                return tuple(meta, reg_file)
+            }
 
         // Extract reference from collected channel
         //ch_reference_valis = ch_preprocessed_collected
@@ -258,7 +272,7 @@ workflow REGISTRATION {
     // ch_registered now contains [meta, file] tuples with full metadata
     ch_checkpoint_data = ch_registered
         .map { meta, file ->
-            def abs_path = file.toAbsolutePath().toString()
+            def abs_path = file.toString()
             [meta.patient_id, abs_path, meta.is_reference, meta.channels.join('|')]
         }
         .collect()

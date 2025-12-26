@@ -36,7 +36,7 @@ include { SAVE  } from '../../modules/local/save'
 
 workflow RESULTS {
     take:
-    ch_registered      // Channel of registered images
+    ch_registered      // Channel of [meta, file] tuples or files (depending on step)
     ch_qc              // Channel of QC RGB images
     cell_mask          // Cell segmentation mask
     phenotype_mask     // Phenotype mask
@@ -46,9 +46,19 @@ workflow RESULTS {
     savedir            // Archive directory
 
     main:
+    // Extract files from metadata tuples if present
+    // If ch_registered is empty, this will remain empty
+    // If it contains [meta, file] tuples, extract just files
+    // If it contains just files, pass through unchanged
+    ch_registered_files = ch_registered
+        .map { item ->
+            // Check if item is a tuple (has two elements)
+            return item instanceof List ? item[1] : item
+        }
+
     // Merge all registered images into single multichannel OME-TIFF with masks
     MERGE (
-        ch_registered.collect(),
+        ch_registered_files.collect(),
         cell_mask,
         phenotype_mask,
         phenotype_mapping
