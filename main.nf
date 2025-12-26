@@ -97,11 +97,16 @@ workflow {
     // ========================================================================
     if (params.step == 'preprocessing') {
         // Continue from preprocessing output (already has metadata)
-        ch_for_registration = ch_padded
-        ch_preprocessed_with_meta = ch_preprocessed
+        // Wait for checkpoint CSV to be written before proceeding to registration
+        ch_checkpoint_ready = PREPROCESSING.out.checkpoint_csv
 
-        // Ensure preprocessing checkpoint CSV is consumed
-        PREPROCESSING.out.checkpoint_csv.view { csv -> "Preprocessing checkpoint CSV written: $csv" }
+        ch_for_registration = ch_padded
+            .combine(ch_checkpoint_ready)
+            .map { meta, file, csv -> tuple(meta, file) }
+
+        ch_preprocessed_with_meta = ch_preprocessed
+            .combine(ch_checkpoint_ready)
+            .map { meta, file, csv -> tuple(meta, file) }
 
     } else if (params.step == 'registration') {
         // Load from preprocessing checkpoint CSV
@@ -138,7 +143,12 @@ workflow {
     // ========================================================================
     if (params.step in ['preprocessing', 'registration']) {
         // Continue from registration output (already has metadata)
+        // Wait for registration checkpoint CSV to be written
+        ch_reg_checkpoint_ready = REGISTRATION.out.checkpoint_csv
+
         ch_for_postprocessing = ch_registered
+            .combine(ch_reg_checkpoint_ready)
+            .map { meta, file, csv -> tuple(meta, file) }
 
     } else if (params.step == 'postprocessing') {
         // Load from registration checkpoint CSV with metadata
@@ -155,8 +165,8 @@ workflow {
         ch_merged_csv = POSTPROCESSING.out.merged_csv
         ch_cell_mask = POSTPROCESSING.out.cell_mask
 
-        // Ensure postprocessing checkpoint CSV is consumed
-        POSTPROCESSING.out.checkpoint_csv.view { csv -> "Postprocessing checkpoint CSV written: $csv" }
+        // Force postprocessing checkpoint CSV to complete
+        ch_postproc_checkpoint_ready = POSTPROCESSING.out.checkpoint_csv
 
     } else {
         // Skip postprocessing - will load from checkpoint later
