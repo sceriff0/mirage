@@ -100,6 +100,9 @@ workflow {
         ch_for_registration = ch_padded
         ch_preprocessed_with_meta = ch_preprocessed
 
+        // Ensure preprocessing checkpoint CSV is consumed
+        PREPROCESSING.out.checkpoint_csv.view { csv -> "Preprocessing checkpoint CSV written: $csv" }
+
     } else if (params.step == 'registration') {
         // Load from preprocessing checkpoint CSV
         ch_for_registration = channel.fromPath(params.input, checkIfExists: true)
@@ -121,6 +124,9 @@ workflow {
             params.registration_method
         )
         ch_registered = REGISTRATION.out.registered
+
+        // Ensure registration checkpoint CSV is consumed
+        REGISTRATION.out.checkpoint_csv.view { csv -> "Registration checkpoint CSV written: $csv" }
 
     } else {
         // Skip registration - will load from checkpoint later
@@ -148,6 +154,9 @@ workflow {
         ch_phenotype_mapping = POSTPROCESSING.out.phenotype_mapping
         ch_merged_csv = POSTPROCESSING.out.merged_csv
         ch_cell_mask = POSTPROCESSING.out.cell_mask
+
+        // Ensure postprocessing checkpoint CSV is consumed
+        POSTPROCESSING.out.checkpoint_csv.view { csv -> "Postprocessing checkpoint CSV written: $csv" }
 
     } else {
         // Skip postprocessing - will load from checkpoint later
