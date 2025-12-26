@@ -278,18 +278,12 @@ def convert_to_ome_tiff(
 
     if fmt == 'nd2':
         image_data, metadata = read_nd2(input_path)
-        # For ND2, we may need to reverse channel order first (legacy behavior)
-        # Then apply the mapping
-        c_axis_index = metadata['c_axis_index']
-        # Assume ND2 channels are in reverse order
-        image_data = np.flip(image_data, axis=c_axis_index)
-        # Extract channel names from filename
-        original_channels = input_path.stem.split('_')[1:]
-        original_channels = list(reversed(original_channels))  # After flip
+        # Use channel names from CSV input (as-is, no flipping)
+        original_channels = channel_names
     elif fmt in ['tiff', 'ome_tiff']:
         image_data, metadata = read_tiff(input_path)
-        # For TIFF, assume channels are in order from filename or default
-        original_channels = input_path.stem.split('_')[1:] if '_' in input_path.stem else channel_names
+        # Use channel names from CSV input
+        original_channels = channel_names
     else:
         raise ValueError(f"Unsupported format: {fmt}")
 
