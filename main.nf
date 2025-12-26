@@ -96,27 +96,20 @@ workflow {
     // STEP: REGISTRATION
     // ========================================================================
     if (params.step == 'preprocessing') {
-        // Continue from preprocessing output (already has metadata)
-        // Wait for checkpoint CSV to be written before proceeding to registration
-        ch_checkpoint_ready = PREPROCESSING.out.checkpoint_csv
-
-        ch_for_registration = ch_padded
-            .combine(ch_checkpoint_ready)
-            .map { meta, file, csv -> tuple(meta, file) }
-
-        ch_preprocessed_with_meta = ch_preprocessed
-            .combine(ch_checkpoint_ready)
-            .map { meta, file, csv -> tuple(meta, file) }
-
+        // Use checkpoint CSV from preprocessing - ensures CSV is created and used
+        ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
     } else if (params.step == 'registration') {
-        // Load from preprocessing checkpoint CSV
-        ch_for_registration = channel.fromPath(params.input, checkIfExists: true)
+        // Load from user-provided checkpoint CSV
+        ch_preprocess_csv = channel.fromPath(params.input, checkIfExists: true)
+    }
+
+    // Always parse from CSV for consistency
+    if (params.step in ['preprocessing', 'registration']) {
+        ch_for_registration = ch_preprocess_csv
             .splitCsv(header: true)
             .map { row -> [parseMetadata(row), file(row.padded_image)] }
 
-        // For VALIS, preprocessed files need to be created from padded
-        // Since we're loading from checkpoint, we don't have the preprocessed files
-        // Use the padded images with metadata for now
+        // For VALIS, preprocessed files need to be the same as padded when loading from checkpoint
         ch_preprocessed_with_meta = ch_for_registration
     }
 
@@ -130,9 +123,6 @@ workflow {
         )
         ch_registered = REGISTRATION.out.registered
 
-        // Ensure registration checkpoint CSV is consumed
-        REGISTRATION.out.checkpoint_csv.view { csv -> "Registration checkpoint CSV written: $csv" }
-
     } else {
         // Skip registration - will load from checkpoint later
         ch_registered = channel.empty()
@@ -142,17 +132,16 @@ workflow {
     // STEP: POSTPROCESSING
     // ========================================================================
     if (params.step in ['preprocessing', 'registration']) {
-        // Continue from registration output (already has metadata)
-        // Wait for registration checkpoint CSV to be written
-        ch_reg_checkpoint_ready = REGISTRATION.out.checkpoint_csv
-
-        ch_for_postprocessing = ch_registered
-            .combine(ch_reg_checkpoint_ready)
-            .map { meta, file, csv -> tuple(meta, file) }
-
+        // Use checkpoint CSV from registration - ensures CSV is created and used
+        ch_registration_csv = REGISTRATION.out.checkpoint_csv
     } else if (params.step == 'postprocessing') {
-        // Load from registration checkpoint CSV with metadata
-        ch_for_postprocessing = channel.fromPath(params.input, checkIfExists: true)
+        // Load from user-provided checkpoint CSV
+        ch_registration_csv = channel.fromPath(params.input, checkIfExists: true)
+    }
+
+    // Always parse from CSV for consistency
+    if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
+        ch_for_postprocessing = ch_registration_csv
             .splitCsv(header: true)
             .map { row -> [parseMetadata(row), file(row.registered_image)] }
     }
@@ -164,9 +153,6 @@ workflow {
         ch_phenotype_mapping = POSTPROCESSING.out.phenotype_mapping
         ch_merged_csv = POSTPROCESSING.out.merged_csv
         ch_cell_mask = POSTPROCESSING.out.cell_mask
-
-        // Force postprocessing checkpoint CSV to complete
-        ch_postproc_checkpoint_ready = POSTPROCESSING.out.checkpoint_csv
 
     } else {
         // Skip postprocessing - will load from checkpoint later
@@ -181,25 +167,31 @@ workflow {
     // STEP: RESULTS
     // ========================================================================
     if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
-        // Continue from postprocessing output
-        // Use channels from previous step
-        ch_registered_for_results = ch_registered
-        ch_qc_for_results = REGISTRATION.out.qc
-
+        // Use checkpoint CSV from postprocessing - ensures CSV is created and used
+        ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
     } else if (params.step == 'results') {
-        // Load from postprocessing checkpoint CSV (new format includes patient_id and is_reference)
-        ch_checkpoint = channel.fromPath(params.input, checkIfExists: true)
+        // Load from user-provided checkpoint CSV
+        ch_postprocessing_csv = channel.fromPath(params.input, checkIfExists: true)
+    }
+
+    // Always parse from CSV for results inputs
+    if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {
+        ch_checkpoint = ch_postprocessing_csv
             .splitCsv(header: true)
             .first()
 
-        ch_registered_for_results = channel.empty()
-        ch_qc_for_results = channel.empty()
-        // New CSV format: patient_id,is_reference,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask
-        ch_phenotype_csv = ch_checkpoint.map { row -> file(row.phenotype_csv) }
-        ch_phenotype_mask = ch_checkpoint.map { row -> file(row.phenotype_mask) }
-        ch_phenotype_mapping = ch_checkpoint.map { row -> file(row.phenotype_mapping) }
-        ch_merged_csv = ch_checkpoint.map { row -> file(row.merged_csv) }
-        ch_cell_mask = ch_checkpoint.map { row -> file(row.cell_mask) }
+        // Load outputs from CSV (needed for results step when loading from checkpoint)
+        if (params.step == 'results') {
+            ch_phenotype_csv = ch_checkpoint.map { row -> file(row.phenotype_csv) }
+            ch_phenotype_mask = ch_checkpoint.map { row -> file(row.phenotype_mask) }
+            ch_phenotype_mapping = ch_checkpoint.map { row -> file(row.phenotype_mapping) }
+            ch_merged_csv = ch_checkpoint.map { row -> file(row.merged_csv) }
+            ch_cell_mask = ch_checkpoint.map { row -> file(row.cell_mask) }
+        }
+
+        // Set registered and QC channels appropriately
+        ch_registered_for_results = (params.step == 'results') ? channel.empty() : ch_registered
+        ch_qc_for_results = (params.step == 'results') ? channel.empty() : REGISTRATION.out.qc
     }
 
     if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {
