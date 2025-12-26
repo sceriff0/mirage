@@ -90,6 +90,25 @@ workflow PREPROCESSING {
             return tuple(meta, padded_file)
         }
 
+    // Reconstruct metadata for preprocessed files
+    ch_preprocessed_with_meta = ch_for_preprocess
+        .map { meta, file ->
+            // Extract basename from original file
+            def basename = file.name
+            return tuple(basename, meta)
+        }
+        .combine(
+            PREPROCESS.out.preprocessed.map { preprocessed_file ->
+                // Extract basename by removing _corrected suffix
+                def basename = preprocessed_file.name.replaceAll('_corrected', '')
+                return tuple(basename, preprocessed_file)
+            },
+            by: 0
+        )
+        .map { basename, meta, preprocessed_file ->
+            return tuple(meta, preprocessed_file)
+        }
+
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_padded_with_meta
         .map { meta, file ->
@@ -107,7 +126,7 @@ workflow PREPROCESSING {
 
     emit:
     padded = ch_padded_with_meta
-    preprocessed = PREPROCESS.out.preprocessed
+    preprocessed = ch_preprocessed_with_meta
     max_dims_file = MAX_DIM.out.max_dims_file
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
 }

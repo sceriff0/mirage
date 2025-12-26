@@ -98,28 +98,7 @@ workflow {
     if (params.step == 'preprocessing') {
         // Continue from preprocessing output (already has metadata)
         ch_for_registration = ch_padded
-
-        // Reconstruct metadata for preprocessed files by matching basenames with padded
-        // ch_padded has [meta, file] where file is *_padded.ome.tif
-        // preprocessed has files *_corrected.ome.tif
-        // We need to match them by removing suffixes
-        ch_preprocessed_with_meta = ch_padded
-            .map { meta, padded_file ->
-                // Extract basename by removing _padded suffix
-                def basename = padded_file.name.replaceAll('_padded\\.ome\\.tif.*$', '')
-                return tuple(basename, meta)
-            }
-            .combine(
-                PREPROCESSING.out.preprocessed.map { preproc_file ->
-                    // Extract basename by removing _corrected suffix
-                    def basename = preproc_file.name.replaceAll('_corrected\\.ome\\.tif.*$', '')
-                    return tuple(basename, preproc_file)
-                },
-                by: 0
-            )
-            .map { basename, meta, preproc_file ->
-                return tuple(meta, preproc_file)
-            }
+        ch_preprocessed_with_meta = ch_preprocessed
 
     } else if (params.step == 'registration') {
         // Load from preprocessing checkpoint CSV
