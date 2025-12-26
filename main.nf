@@ -167,31 +167,35 @@ workflow {
     // STEP: RESULTS
     // ========================================================================
     if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
-        // Use checkpoint CSV from postprocessing - ensures CSV is created and used
+        // Use checkpoint CSV from postprocessing - ensures CSV is created
         ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
+
+        // Also keep these for RESULTS (they come from direct outputs, not CSV)
+        ch_registered_for_results = ch_registered
+        ch_qc_for_results = REGISTRATION.out.qc
+
     } else if (params.step == 'results') {
         // Load from user-provided checkpoint CSV
         ch_postprocessing_csv = channel.fromPath(params.input, checkIfExists: true)
+
+        ch_registered_for_results = channel.empty()
+        ch_qc_for_results = channel.empty()
     }
 
-    // Always parse from CSV for results inputs
+    // Parse CSV to force its creation (but only use values when starting from 'results' step)
     if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {
-        ch_checkpoint = ch_postprocessing_csv
+        ch_csv_data = ch_postprocessing_csv
             .splitCsv(header: true)
             .first()
 
-        // Load outputs from CSV (needed for results step when loading from checkpoint)
+        // Only override with CSV values when loading from checkpoint
         if (params.step == 'results') {
-            ch_phenotype_csv = ch_checkpoint.map { row -> file(row.phenotype_csv) }
-            ch_phenotype_mask = ch_checkpoint.map { row -> file(row.phenotype_mask) }
-            ch_phenotype_mapping = ch_checkpoint.map { row -> file(row.phenotype_mapping) }
-            ch_merged_csv = ch_checkpoint.map { row -> file(row.merged_csv) }
-            ch_cell_mask = ch_checkpoint.map { row -> file(row.cell_mask) }
+            ch_phenotype_csv = ch_csv_data.map { row -> file(row.phenotype_csv) }
+            ch_phenotype_mask = ch_csv_data.map { row -> file(row.phenotype_mask) }
+            ch_phenotype_mapping = ch_csv_data.map { row -> file(row.phenotype_mapping) }
+            ch_merged_csv = ch_csv_data.map { row -> file(row.merged_csv) }
+            ch_cell_mask = ch_csv_data.map { row -> file(row.cell_mask) }
         }
-
-        // Set registered and QC channels appropriately
-        ch_registered_for_results = (params.step == 'results') ? channel.empty() : ch_registered
-        ch_qc_for_results = (params.step == 'results') ? channel.empty() : REGISTRATION.out.qc
     }
 
     if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {
