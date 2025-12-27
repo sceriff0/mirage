@@ -11,6 +11,8 @@ include { GPU_REGISTER                      } from '../../modules/local/register
 include { CPU_REGISTER                      } from '../../modules/local/register_cpu'
 include { CPU_REGISTER_MULTIRES             } from '../../modules/local/register_cpu_multires'
 include { CPU_REGISTER_CDM                  } from '../../modules/local/register_cpu_cdm'
+include { MAX_DIM                           } from '../../modules/local/max_dim'
+include { PAD_IMAGES                        } from '../../modules/local/pad_images'
 include { COMPUTE_FEATURES                  } from '../../modules/local/compute_features'
 include { ESTIMATE_REG_ERROR                } from '../../modules/local/estimate_registration_error'
 include { ESTIMATE_REG_ERROR_SEGMENTATION   } from '../../modules/local/estimate_registration_error_segmentation'
@@ -22,17 +24,16 @@ include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_ch
 ========================================================================================
     Description:
         Registers images using VALIS (classic), GPU, CPU, or CPU multi-resolution methods.
-        VALIS uses preprocessed (non-padded) images for better compatibility.
-        For GPU/CPU methods, uses is_reference metadata to identify reference image.
+        - VALIS uses preprocessed (non-padded) images directly
+        - GPU/CPU methods pad images to uniform size first, then register
+        Uses is_reference metadata to identify reference image.
 
         Additionally computes features before registration and estimates registration error
         after registration using VALIS feature detectors and matchers.
 
     Input:
-        ch_padded: Channel of [meta, file] tuples for padded images (for GPU/CPU methods)
-        ch_preprocessed: Channel of preprocessed OME-TIFF images (for VALIS method)
+        ch_preprocessed: Channel of [meta, file] tuples for preprocessed images
         method: Registration method ('valis', 'gpu', 'cpu', 'cpu_multires', or 'cpu_cdm')
-        reference_markers: List of markers to identify reference image (used only for VALIS)
 
     Output:
         registered: Channel of [meta, file] tuples for registered images
@@ -44,18 +45,41 @@ include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_ch
 
 workflow REGISTRATION {
     take:
-    ch_padded           // Channel of [meta, file] tuples (for GPU/CPU methods)
-    ch_preprocessed     // Channel of [meta, file] tuples (for VALIS method)
+    ch_preprocessed     // Channel of [meta, file] tuples for preprocessed images
+    ch_dims             // Channel of dimension files from preprocessing
     method              // Registration method
 
     main:
     if (method != 'valis') {
         // GPU/CPU registration workflow:
+        // First, pad all preprocessed images to uniform size
+
+        // Compute max dimensions from all dimension files
+        // Extract just dimension files (no metadata needed for aggregate operation)
+        ch_dims_files = ch_dims.map { meta, dims_file -> dims_file }
+        MAX_DIM ( ch_dims_files.collect() )
+
+        // Pad each preprocessed image to max dimensions
+        // PAD_IMAGES now accepts [meta, file, max_dims] and preserves metadata
+        ch_to_pad = ch_preprocessed
+            .map { meta, file -> [meta, file] }
+            .combine(MAX_DIM.out.max_dims_file)
+            .map { meta, file, max_dims -> [meta, file, max_dims] }
+
+        PAD_IMAGES ( ch_to_pad )
+
+        // PAD_IMAGES now outputs [meta, file] tuples - no reconstruction needed!
+        ch_padded = PAD_IMAGES.out.padded
+
         // Use is_reference metadata to identify reference image
         // Sort by patient_id for deterministic ordering
         ch_padded_collected = ch_padded
             .toList()
             .map { items ->
+                if (items.isEmpty()) {
+                    error "No preprocessed images found for ${method} registration. Check that preprocessing completed successfully and files exist."
+                }
+
                 // Sort by patient_id for deterministic ordering
                 def sorted_items = items.sort { it[0].patient_id }
 
@@ -67,17 +91,22 @@ workflow REGISTRATION {
                     reference_item = sorted_items[0]
                 }
 
+                // Validate that the reference item has both metadata and file
+                if (reference_item == null || reference_item.size() < 2 || reference_item[1] == null) {
+                    error "Invalid reference item: ${reference_item}. Expected [metadata, file] tuple."
+                }
+
                 // Return (reference_item, all_items)
                 return tuple(reference_item, sorted_items)
             }
 
         // Create (reference, moving) pairs from padded images
-        // Extract just the files for registration (modules don't handle metadata yet)
+        // Preserve metadata for each moving image
         ch_pairs = ch_padded_collected
             .flatMap { reference_item, all_items ->
                 def moving_items = all_items.findAll { !it[0].is_reference }
                 return moving_items.collect { moving_item ->
-                    tuple(reference_item[1], moving_item[1])
+                    tuple(moving_item[0], reference_item[1], moving_item[1])
                 }
             }
 
@@ -108,23 +137,11 @@ workflow REGISTRATION {
             ch_qc = CPU_REGISTER.out.qc
         }
 
-        // Reconstruct metadata for registered files
-        // Match registered files back to their original metadata
+        // Registered files already have metadata attached by the modules
+        // Just flatten and pass through
         ch_registered_moving = ch_registered_moving_files
-            .map { file ->
-                // Extract base filename to match with original metadata
-                def basename = file.name.replaceAll('_registered', '').replaceAll('_padded', '')
-                return tuple(basename, file)
-            }
-            .combine(
-                ch_padded.map { meta, file ->
-                    def basename = file.name.replaceAll('_padded', '')
-                    return tuple(basename, meta)
-                },
-                by: 0
-            )
-            .map { _basename, reg_file, meta ->
-                return tuple(meta, reg_file)
+            .map { meta, file ->
+                return tuple(meta, file)
             }
 
         // Extract reference with metadata
@@ -180,6 +197,10 @@ workflow REGISTRATION {
         ch_preprocessed_for_valis = ch_preprocessed
             .toList()
             .map { items ->
+                if (items.isEmpty()) {
+                    error "No preprocessed images found for VALIS registration. Check that preprocessing completed successfully and files exist."
+                }
+
                 // Sort by patient_id for deterministic ordering
                 def sorted_items = items.sort { it[0].patient_id }
 
@@ -189,6 +210,11 @@ workflow REGISTRATION {
                 if (reference_item == null) {
                     log.warn "No image with is_reference=true found, using first image"
                     reference_item = sorted_items[0]
+                }
+
+                // Validate that the reference item has both metadata and file
+                if (reference_item == null || reference_item.size() < 2 || reference_item[1] == null) {
+                    error "Invalid reference item: ${reference_item}. Expected [metadata, file] tuple."
                 }
 
                 // Extract reference filename and all files for REGISTER process

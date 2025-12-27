@@ -1,20 +1,25 @@
-nextflow.enable.dsl = 2
-
 process PREPROCESS {
-    tag "${ome_tiff.simpleName}"
+    tag "${meta.patient_id}"
     label 'process_medium'
-    container "${params.container.preprocess}"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/preprocessed", mode: 'copy'
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:preprocess' :
+        'docker://bolt3x/attend_image_analysis:preprocess' }"
 
     input:
-    path ome_tiff
+    tuple val(meta), path(ome_tiff)
 
     output:
-    path "${ome_tiff.simpleName}_corrected.ome.tif", emit: preprocessed
-    path "${ome_tiff.simpleName}_dims.txt", emit: dims
+    tuple val(meta), path("*_corrected.ome.tif"), emit: preprocessed
+    tuple val(meta), path("*_dims.txt")         , emit: dims
+    path "versions.yml"                         , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def skip_dapi_flag = params.preproc_skip_dapi ? '--skip_dapi' : ''
     def autotune_flag = params.preproc_autotune ? '--autotune' : ''
     def no_darkfield_flag = params.preproc_no_darkfield ? '--no_darkfield' : ''
@@ -29,6 +34,26 @@ process PREPROCESS {
         --overlap ${overlap} \\
         ${skip_dapi_flag} \\
         ${autotune_flag} \\
-        ${no_darkfield_flag}
+        ${no_darkfield_flag} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        numpy: \$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch ${ome_tiff.simpleName}_corrected.ome.tif
+    touch ${ome_tiff.simpleName}_dims.txt
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        numpy: unknown
+    END_VERSIONS
     """
 }

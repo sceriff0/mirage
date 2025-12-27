@@ -39,61 +39,56 @@ workflow POSTPROCESSING {
 
     main:
     // Extract reference image using is_reference metadata
+    // SEGMENT now accepts [meta, file] tuple
     ch_reference_for_seg = ch_registered
         .filter { meta, file -> meta.is_reference }
-        .map { meta, file -> file }
-        .first()  // Take only the reference image
+        .first()  // Keep [meta, file] tuple
 
     // Segment the reference image only (no merge needed)
     SEGMENT ( ch_reference_for_seg )
 
     // Split multichannel images into single-channel TIFFs
-    // (DAPI only from reference)
-    ch_for_split = ch_registered
-        .map { meta, file ->
-            return tuple(file, meta.is_reference)
-        }
-
-    SPLIT_CHANNELS ( ch_for_split )
+    // SPLIT_CHANNELS now accepts [meta, file] tuple
+    SPLIT_CHANNELS ( ch_registered )
 
     // Quantify using individual channel TIFFs
-    // Combine all single-channel TIFFs with the segmentation mask
+    // SPLIT_CHANNELS now outputs [meta, channels] - combine with cell_mask
+    // SEGMENT now outputs [meta, mask]
     ch_for_quant = SPLIT_CHANNELS.out.channels
-        .flatten()
-        .combine(SEGMENT.out.cell_mask)
+        .transpose()  // Flatten channel list while keeping meta
+        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
 
     QUANTIFY ( ch_for_quant )
 
     // Merge individual quantification CSVs
-    // Collect all individual CSVs and merge them
+    // QUANTIFY now outputs [meta, csv] - extract meta and collect CSVs
+    ch_reference_meta = ch_reference_for_seg.map { meta, file -> meta }
     ch_individual_csvs = QUANTIFY.out.individual_csv
+        .map { meta, csv -> csv }
         .collect()
+        .combine(ch_reference_meta)
+        .map { csvs, meta -> [meta, csvs] }
 
     MERGE_QUANT_CSVS ( ch_individual_csvs )
 
     // Phenotype cells based on predefined rules
-    PHENOTYPE (
-        MERGE_QUANT_CSVS.out.merged_csv,
-        SEGMENT.out.cell_mask
-    )
+    // PHENOTYPE now accepts [meta, csv, mask]
+    ch_for_phenotype = MERGE_QUANT_CSVS.out.merged_csv
+        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
+
+    PHENOTYPE ( ch_for_phenotype )
 
     // Generate checkpoint CSV for restart from postprocessing step
-    // Extract reference metadata for checkpoint (postprocessing works on all images together)
-    ch_reference_meta = ch_registered
-        .filter { meta, file -> meta.is_reference }
-        .map { meta, file -> meta }
-        .first()
-
+    // All modules now output [meta, file] tuples - extract metadata and files
     ch_checkpoint_data = PHENOTYPE.out.csv
-        .combine(PHENOTYPE.out.mask)
-        .combine(PHENOTYPE.out.mapping)
-        .combine(MERGE_QUANT_CSVS.out.merged_csv)
-        .combine(SEGMENT.out.cell_mask)
-        .combine(ch_reference_meta)
-        .map { pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, ref_meta ->
+        .combine(PHENOTYPE.out.mask.map { meta, mask -> mask })
+        .combine(PHENOTYPE.out.mapping.map { meta, mapping -> mapping })
+        .combine(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> csv })
+        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
+        .map { meta, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask ->
             [
-                ref_meta.patient_id,
-                true,  // is_reference
+                meta.patient_id,
+                meta.is_reference,
                 pheno_csv.toString(),
                 pheno_mask.toString(),
                 pheno_map.toString(),

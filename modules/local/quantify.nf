@@ -1,48 +1,92 @@
 nextflow.enable.dsl = 2
 
 process QUANTIFY {
-    tag "${channel_tiff.simpleName}"
+    tag "${meta.patient_id} - ${channel_tiff.simpleName}"
     label 'process_medium'
-    container "${params.container.quantification}"
+
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:quantification_gpu' :
+        'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification/by_marker", mode: 'copy'
 
     input:
-    tuple path(channel_tiff), path(seg_mask)
+    tuple val(meta), path(channel_tiff), path(seg_mask)
 
     output:
-    path "${channel_tiff.simpleName}_quant.csv", emit: individual_csv
+    tuple val(meta), path("${channel_tiff.simpleName}_quant.csv"), emit: individual_csv
+    path "versions.yml"                                           , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
+    echo "Sample: ${meta.patient_id}"
+
     # Run quantification on this single channel TIFF
     quantify.py \\
         --channel_tiff ${channel_tiff} \\
         --mask_file ${seg_mask} \\
         --outdir . \\
         --output_file ${channel_tiff.simpleName}_quant.csv \\
-        --min_area ${params.quant_min_area}
+        --min_area ${params.quant_min_area} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        pandas: \$(python -c "import pandas; print(pandas.__version__)" 2>/dev/null || echo "unknown")
+        scikit-image: \$(python -c "import skimage; print(skimage.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch ${channel_tiff.simpleName}_quant.csv
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        pandas: stub
+        scikit-image: stub
+    END_VERSIONS
     """
 }
 
 process MERGE_QUANT_CSVS {
-    tag "merge_quantification"
+    tag "${meta.patient_id}"
     label 'process_low'
+
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:quantification_gpu' :
+        'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
 
     publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification", mode: 'copy'
 
     input:
-    path individual_csvs
+    tuple val(meta), path(individual_csvs)
 
     output:
-    path "merged_quant.csv", emit: merged_csv
+    tuple val(meta), path("merged_quant.csv"), emit: merged_csv
+    path "versions.yml"                       , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     #!/usr/bin/env python3
     import pandas as pd
     from pathlib import Path
     import sys
+
+    print("Sample: ${meta.patient_id}")
 
     # Load all individual CSVs
     csv_files = sorted(Path('.').glob('*_quant.csv'))
@@ -102,5 +146,23 @@ process MERGE_QUANT_CSVS {
     merged.to_csv('merged_quant.csv', index=False)
     print(f"\\n✓ Merged CSV saved: {len(merged)} cells, {len(merged.columns)} columns")
     print(f"  Final columns: {', '.join(merged.columns)}")
+
+    # Write versions file
+    with open('versions.yml', 'w') as f:
+        f.write('"${task.process}":\\n')
+        f.write(f'    python: {sys.version.split()[0]}\\n')
+        f.write(f'    pandas: {pd.__version__}\\n')
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch merged_quant.csv
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        pandas: stub
+    END_VERSIONS
     """
 }

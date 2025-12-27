@@ -1,18 +1,23 @@
-nextflow.enable.dsl = 2
-
 process MAX_DIM {
     tag "compute_max_dimensions"
-    label 'process_low'
+    label 'process_single'
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/metadata", mode: 'copy'
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:preprocess' :
+        'docker://bolt3x/attend_image_analysis:preprocess' }"
 
     input:
     path dims_files
 
     output:
-    path "max_dims.txt", emit: max_dims_file
+    path "max_dims.txt" , emit: max_dims_file
+    path "versions.yml" , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
     """
     #!/usr/bin/env python3
     import sys
@@ -49,5 +54,18 @@ process MAX_DIM {
         f.write(f"MAX_WIDTH {max_w}\\n")
 
     print(f"\\nMaximum dimensions: {max_h} x {max_w}")
+    """
+
+    stub:
+    """
+    cat > max_dims.txt <<-END
+    MAX_HEIGHT 10000
+    MAX_WIDTH 10000
+    END
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+    END_VERSIONS
     """
 }

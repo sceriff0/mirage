@@ -83,13 +83,13 @@ workflow {
             }
 
         PREPROCESSING ( ch_input )
-        ch_padded = PREPROCESSING.out.padded
         ch_preprocessed = PREPROCESSING.out.preprocessed
+        ch_dims = PREPROCESSING.out.dims
 
     } else {
         // Skip preprocessing - will load from checkpoint later
-        ch_padded = channel.empty()
         ch_preprocessed = channel.empty()
+        ch_dims = channel.empty()
     }
 
     // ========================================================================
@@ -107,18 +107,15 @@ workflow {
     if (params.step in ['preprocessing', 'registration']) {
         ch_for_registration = ch_preprocess_csv
             .splitCsv(header: true)
-            .map { row -> [parseMetadata(row), file(row.padded_image)] }
-
-        // For VALIS, preprocessed files need to be the same as padded when loading from checkpoint
-        ch_preprocessed_with_meta = ch_for_registration
+            .map { row -> [parseMetadata(row), file(row.preprocessed_image)] }
     }
 
     if (params.step in ['preprocessing', 'registration']) {
-        // Pass metadata through to registration
-        // Both ch_for_registration (padded) and ch_preprocessed_with_meta now have [meta, file] tuples
+        // Pass preprocessed images to registration
+        // Registration will handle padding internally for GPU/CPU methods
         REGISTRATION (
             ch_for_registration,
-            ch_preprocessed_with_meta,
+            ch_dims,
             params.registration_method
         )
         ch_registered = REGISTRATION.out.registered

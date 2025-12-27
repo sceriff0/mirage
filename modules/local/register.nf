@@ -1,20 +1,24 @@
-nextflow.enable.dsl = 2
-
 process REGISTER {
     tag "register_all"
     label 'process_high'
-    container "${params.container.registration}"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy'
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://cdgatenbee/valis-wsi:1.0.0' :
+        'docker://cdgatenbee/valis-wsi:1.0.0' }"
 
     input:
     tuple val(reference_filename), path(preproc_files)
 
     output:
     path "registered_slides/*_registered.ome.tiff", emit: registered_slides
-    path "registered_qc"                         , emit: qc, optional: true
+    path "registered_qc"                          , emit: qc, optional: true
+    path "versions.yml"                           , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
     // Use reference filename if provided, otherwise fall back to legacy reference_markers param
     def ref_arg = reference_filename ? "--reference ${reference_filename}" :
                   params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
@@ -42,6 +46,25 @@ process REGISTER {
         --max-processed-dim ${max_processed_dim} \\
         --max-non-rigid-dim ${max_non_rigid_dim} \\
         --micro-reg-fraction ${micro_reg_fraction} \\
-        --num-features ${num_features}
+        --num-features ${num_features} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        valis: \$(python -c "import valis; print(valis.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    mkdir -p registered_slides registered_qc
+    touch registered_slides/sample_registered.ome.tiff
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        valis: unknown
+    END_VERSIONS
     """
 }

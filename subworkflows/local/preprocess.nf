@@ -8,8 +8,6 @@ nextflow.enable.dsl = 2
 
 include { CONVERT_IMAGE         } from '../../modules/local/convert_nd2'
 include { PREPROCESS            } from '../../modules/local/preprocess'
-include { MAX_DIM               } from '../../modules/local/max_dim'
-include { PAD_IMAGES            } from '../../modules/local/pad_images'
 include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
 
 /*
@@ -17,9 +15,11 @@ include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv
     SUBWORKFLOW: PREPROCESSING
 ========================================================================================
     Description:
-        Converts images to standardized OME-TIFF (with DAPI in channel 0),
-        applies BaSiC illumination correction, computes maximum dimensions across
-        all images, and pads images to uniform size.
+        Converts images to standardized OME-TIFF (with DAPI in channel 0) and
+        applies BaSiC illumination correction.
+
+        Note: Padding is now handled in the registration workflow for GPU/CPU methods only.
+        VALIS uses preprocessed images directly without padding.
 
     Input:
         ch_input: Channel of [meta, file] tuples where meta contains:
@@ -28,8 +28,7 @@ include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv
                   - channels: List of channel names (DAPI must be first)
 
     Output:
-        padded: Padded OME-TIFF images with uniform dimensions
-        preprocessed: Preprocessed OME-TIFF images (before padding)
+        preprocessed: Preprocessed OME-TIFF images with [meta, file] tuples
         checkpoint_csv: CSV for restart capability
 ========================================================================================
 */
@@ -58,59 +57,14 @@ workflow PREPROCESSING {
     }
 
     // Preprocess each file (BaSiC correction)
-    // Extract just the file path for PREPROCESS (legacy module)
-    ch_preprocess_input = ch_for_preprocess.map { meta, file -> file }
-    PREPROCESS ( ch_preprocess_input )
+    // PREPROCESS now accepts [meta, file] tuples and preserves metadata
+    PREPROCESS ( ch_for_preprocess )
 
-    // Compute max dimensions from all preprocessed images
-    MAX_DIM ( PREPROCESS.out.dims.collect() )
-
-    // Pad each image to max dimensions
-    ch_to_pad = PREPROCESS.out.preprocessed
-        .combine(MAX_DIM.out.max_dims_file)
-
-    PAD_IMAGES ( ch_to_pad )
-
-    // Reconstruct metadata channel by joining with original metadata
-    ch_padded_with_meta = ch_for_preprocess
-        .map { meta, file ->
-            // Extract basename from original file (before padding)
-            def basename = file.name
-            return tuple(basename, meta)
-        }
-        .combine(
-            PAD_IMAGES.out.padded.map { padded_file ->
-                // Extract basename by removing _padded suffix
-                def basename = padded_file.name.replaceAll('_padded', '')
-                return tuple(basename, padded_file)
-            },
-            by: 0
-        )
-        .map { basename, meta, padded_file ->
-            return tuple(meta, padded_file)
-        }
-
-    // Reconstruct metadata for preprocessed files
-    ch_preprocessed_with_meta = ch_for_preprocess
-        .map { meta, file ->
-            // Extract basename from original file
-            def basename = file.name
-            return tuple(basename, meta)
-        }
-        .combine(
-            PREPROCESS.out.preprocessed.map { preprocessed_file ->
-                // Extract basename by removing _corrected suffix
-                def basename = preprocessed_file.name.replaceAll('_corrected', '')
-                return tuple(basename, preprocessed_file)
-            },
-            by: 0
-        )
-        .map { basename, meta, preprocessed_file ->
-            return tuple(meta, preprocessed_file)
-        }
+    // Preprocessed files already have metadata attached
+    ch_preprocessed_with_meta = PREPROCESS.out.preprocessed
 
     // Generate checkpoint CSV for restart from preprocessing step
-    ch_checkpoint_data = ch_padded_with_meta
+    ch_checkpoint_data = ch_preprocessed_with_meta
         .map { meta, file ->
             def abs_path = file.toString()
             def channels = meta.channels.join('|')
@@ -120,13 +74,12 @@ workflow PREPROCESSING {
 
     WRITE_CHECKPOINT_CSV(
         'preprocessed',
-        'patient_id,padded_image,is_reference,channels',
+        'patient_id,preprocessed_image,is_reference,channels',
         ch_checkpoint_data
     )
 
     emit:
-    padded = ch_padded_with_meta
     preprocessed = ch_preprocessed_with_meta
-    max_dims_file = MAX_DIM.out.max_dims_file
+    dims = PREPROCESS.out.dims
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
 }
