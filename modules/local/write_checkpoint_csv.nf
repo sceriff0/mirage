@@ -24,6 +24,9 @@ nextflow.enable.dsl = 2
 */
 
 process WRITE_CHECKPOINT_CSV {
+    tag "${csv_name}"
+    label 'process_single'
+
     publishDir "${params.outdir}/csv", mode: 'copy', overwrite: true
 
     input:
@@ -33,6 +36,7 @@ process WRITE_CHECKPOINT_CSV {
 
     output:
     path("${csv_name}.csv"), emit: csv
+    path "versions.yml"    , emit: versions
 
     script:
     def content = rows.collect { row -> row.join(',') }.join('\n')
@@ -41,5 +45,20 @@ process WRITE_CHECKPOINT_CSV {
 ${header}
 ${content}
 EOF
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        bash: \$(bash --version | head -n1 | sed 's/GNU bash, version //')
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    touch ${csv_name}.csv
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        bash: stub
+    END_VERSIONS
     """
 }

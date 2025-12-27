@@ -6,6 +6,11 @@ process GPU_REGISTER {
         'docker://bolt3x/attend_image_analysis:debug_diffeo' :
         'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
 
+    // FIX WARNING #2: Add retry strategy for GPU OOM errors
+    // Retry with reduced crop sizes on memory errors
+    errorStrategy { task.exitStatus in [137, 139, 140, 143] ? 'retry' : 'finish' }
+    maxRetries 3
+
     // Dynamic resource allocation based on input file size
     // Small: <10 GB, Medium: 10-30 GB, Large: >30 GB
     memory {
@@ -29,7 +34,13 @@ process GPU_REGISTER {
     }
 
     cpus { check_max( 2 * task.attempt, 'cpus' ) }
-    clusterOptions '--gres=gpu:nvidia_h200:1'
+
+    // FIX EDGE CASE #6: Make GPU type configurable
+    clusterOptions "--gres=gpu:${params.gpu_type}"
+
+    // FIX BUG #6: Move GPU check into script (not beforeScript)
+    // beforeScript runs before SLURM allocates GPU, causing false failures
+    // GPU availability is validated in the main script after allocation
 
     input:
     tuple val(meta), path(reference), path(moving)
@@ -45,9 +56,17 @@ process GPU_REGISTER {
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
-    // New separate crop sizes for affine and diffeomorphic stages
-    def affine_crop_size = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
-    def diffeo_crop_size = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+
+    // FIX WARNING #2: Reduce crop sizes on retry to handle OOM errors
+    // Base crop sizes
+    def base_affine_crop = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+    def base_diffeo_crop = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+
+    // Reduce by 20% per retry attempt
+    def reduction_factor = Math.pow(0.8, task.attempt - 1)
+    def affine_crop_size = (base_affine_crop * reduction_factor) as Integer
+    def diffeo_crop_size = (base_diffeo_crop * reduction_factor) as Integer
+
     def overlap_percent = params.gpu_reg_overlap_percent ?: 10.0
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
@@ -59,9 +78,10 @@ process GPU_REGISTER {
     def resource_tier = file_size_gb < 10 ? "SMALL" : file_size_gb < 30 ? "MEDIUM" : "LARGE"
     def allocated_mem = file_size_gb < 10 ? "128GB" : file_size_gb < 30 ? "256GB" : "388GB"
     def allocated_time = file_size_gb < 10 ? "2h" : file_size_gb < 30 ? "3h" : "6h"
+    def retry_info = task.attempt > 1 ? " (RETRY #${task.attempt}, crops reduced by ${(int)((1-reduction_factor)*100)}%)" : ""
     """
     echo "=================================================="
-    echo "GPU Registration - Dynamic Resource Allocation"
+    echo "GPU Registration - Dynamic Resource Allocation${retry_info}"
     echo "=================================================="
     echo "Sample: ${meta.patient_id}"
     echo "Input file: ${moving.simpleName}"
@@ -70,9 +90,20 @@ process GPU_REGISTER {
     echo "Allocated memory: ${allocated_mem}"
     echo "Allocated time: ${allocated_time}"
     echo "GPU: nvidia_h200:1"
-    echo "Affine crop size: ${affine_crop_size}"
-    echo "Diffeo crop size: ${diffeo_crop_size}"
+    echo "Attempt: ${task.attempt}/${task.maxRetries + 1}"
+    echo "Affine crop size: ${affine_crop_size} (base: ${base_affine_crop})"
+    echo "Diffeo crop size: ${diffeo_crop_size} (base: ${base_diffeo_crop})"
     echo "=================================================="
+    echo ""
+
+    # FIX BUG #6: Validate GPU availability AFTER SLURM allocation
+    echo "Checking GPU availability..."
+    if ! nvidia-smi &>/dev/null; then
+        echo "❌ ERROR: GPU not available but GPU registration requested"
+        echo "💡 Either run on a GPU node or use --registration_method cpu"
+        exit 1
+    fi
+    echo "✅ GPU available: \$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
     echo ""
 
     mkdir -p qc

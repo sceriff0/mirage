@@ -47,6 +47,17 @@ workflow PREPROCESSING {
             .map { meta, ome_file, channels_file ->
                 // Read output channels from file (DAPI will be first)
                 def output_channels = channels_file.text.trim().split(',')
+
+                // FIX EDGE CASE #2: CRITICAL VALIDATION - DAPI must be in channel 0!
+                if (output_channels[0].toUpperCase() != 'DAPI') {
+                    throw new Exception("""
+                    ❌ CRITICAL: DAPI must be in channel 0 after conversion for ${meta.patient_id}!
+                    Got channels: ${output_channels}
+                    DAPI is in position: ${output_channels.findIndexOf { it.toUpperCase() == 'DAPI' }}
+                    💡 This is a bug in the convert_image.py script - it should place DAPI first
+                    """.stripIndent())
+                }
+
                 // Update meta with output channel order
                 def updated_meta = meta.clone()
                 updated_meta.channels = output_channels
@@ -80,6 +91,5 @@ workflow PREPROCESSING {
 
     emit:
     preprocessed = ch_preprocessed_with_meta
-    dims = PREPROCESS.out.dims
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
 }

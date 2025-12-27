@@ -241,7 +241,8 @@ def run_quantification(
     mask_path: str,
     channel_path: str,
     output_path: str,
-    min_area: int = 0
+    min_area: int = 0,
+    channel_name: str = None
 ) -> pd.DataFrame:
     """Run quantification for a single channel.
 
@@ -255,14 +256,18 @@ def run_quantification(
         Path to save output CSV.
     min_area : int, optional
         Minimum cell area filter.
+    channel_name : str, optional
+        Explicit channel name. If not provided, will parse from filename.
 
     Returns
     -------
     DataFrame
         Quantification results.
     """
-    # Extract channel name from filename
-    channel_name = Path(channel_path).stem.split('_')[-1]
+    # Use provided channel name, or extract from filename as fallback
+    if channel_name is None:
+        channel_name = Path(channel_path).stem.split('_')[-1]
+        logger.info(f"Channel name parsed from filename: {channel_name}")
     
     logger.info("=" * 60)
     logger.info(f"Quantifying channel: {channel_name}")
@@ -317,7 +322,8 @@ def run_quantification_gpu(
     mask_path: str,
     channel_path: str,
     output_path: str,
-    min_area: int = 0
+    min_area: int = 0,
+    channel_name: str = None
 ) -> pd.DataFrame:
     """Run GPU-accelerated quantification for a single channel.
 
@@ -331,6 +337,8 @@ def run_quantification_gpu(
         Path to save output CSV.
     min_area : int, optional
         Minimum cell area filter.
+    channel_name : str, optional
+        Explicit channel name. If not provided, will parse from filename.
 
     Returns
     -------
@@ -339,9 +347,11 @@ def run_quantification_gpu(
     """
     import cupy as cp
     from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
-    
-    # Extract channel name from filename
-    channel_name = Path(channel_path).stem.split('_')[-1]
+
+    # Use provided channel name, or extract from filename as fallback
+    if channel_name is None:
+        channel_name = Path(channel_path).stem.split('_')[-1]
+        logger.info(f"Channel name parsed from filename: {channel_name}")
     
     logger.info("=" * 60)
     logger.info(f"Quantifying channel (GPU): {channel_name}")
@@ -439,12 +449,6 @@ def parse_args():
     )
 
     parser.add_argument(
-        '--mode',
-        choices=['cpu', 'gpu'],
-        default='cpu',
-        help='Processing mode'
-    )
-    parser.add_argument(
         '--channel_tiff',
         type=str,
         required=True,
@@ -473,6 +477,12 @@ def parse_args():
         default=0,
         help='Minimum cell area (pixels)'
     )
+    parser.add_argument(
+        '--channel-name',
+        type=str,
+        default=None,
+        help='Explicit channel name (if not provided, will parse from filename)'
+    )
 
     return parser.parse_args()
 
@@ -496,32 +506,16 @@ def main():
         channel_name = Path(args.channel_tiff).stem
         output_path = os.path.join(args.outdir, f"{channel_name}_quant.csv")
 
-    # Run quantification
-    if False:
-        logger.info('Running GPU quantification')
-        try:
-            run_quantification_gpu(
-                mask_path=args.mask_file,
-                channel_path=args.channel_tiff,
-                output_path=output_path,
-                min_area=args.min_area
-            )
-        except ImportError as e:
-            logger.warning(f'GPU unavailable ({e}); falling back to CPU')
-            run_quantification(
-                mask_path=args.mask_file,
-                channel_path=args.channel_tiff,
-                output_path=output_path,
-                min_area=args.min_area
-            )
-    else:
-        logger.info('Running CPU quantification')
-        run_quantification(
-            mask_path=args.mask_file,
-            channel_path=args.channel_tiff,
-            output_path=output_path,
-            min_area=args.min_area
-        )
+    # Run quantification (CPU mode)
+    # Note: GPU mode removed - use GPU container if GPU acceleration needed
+    logger.info('Running CPU quantification')
+    run_quantification(
+        mask_path=args.mask_file,
+        channel_path=args.channel_tiff,
+        output_path=output_path,
+        min_area=args.min_area,
+        channel_name=args.channel_name
+    )
 
     return 0
 

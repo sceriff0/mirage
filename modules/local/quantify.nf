@@ -23,12 +23,16 @@ process QUANTIFY {
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    // Extract channel name from filename (split_multichannel.py creates files like "PANCK.tiff")
+    def channel_name = channel_tiff.simpleName
     """
     echo "Sample: ${meta.patient_id}"
+    echo "Channel: ${channel_name}"
 
     # Run quantification on this single channel TIFF
     quantify.py \\
         --channel_tiff ${channel_tiff} \\
+        --channel-name ${channel_name} \\
         --mask_file ${seg_mask} \\
         --outdir . \\
         --output_file ${channel_tiff.simpleName}_quant.csv \\
@@ -123,7 +127,24 @@ process MERGE_QUANT_CSVS {
                       'convex_area', 'axis_major_length', 'axis_minor_length']
 
     # Merge marker columns from other CSVs
+    # FIX BUG #7: Use left join to preserve all cells from reference
+    # Fill missing values with 0 (cell not detected in that channel)
+    print("\\nValidating CSV compatibility...")
+    reference_cells = set(reference_csv[1]['label'])
+
     for csv_file, df in other_csvs:
+        # Validate cell labels match
+        other_cells = set(df['label'])
+        missing = reference_cells - other_cells
+        extra = other_cells - reference_cells
+
+        if missing:
+            print(f"  ⚠️  {csv_file.name}: Missing {len(missing)} cells from reference")
+            print(f"     These cells will have 0 intensity for this channel")
+        if extra:
+            print(f"  ⚠️  {csv_file.name}: Has {len(extra)} extra cells not in reference")
+            print(f"     Extra cells will be ignored (not in segmentation mask)")
+
         # Get only marker columns (exclude morphology and DAPI if present)
         marker_cols = [col for col in df.columns if col not in morphology_cols and col != 'DAPI']
 
@@ -131,9 +152,25 @@ process MERGE_QUANT_CSVS {
             # Select label + marker columns
             merge_df = df[['label'] + marker_cols]
 
-            # Merge on label
-            merged = merged.merge(merge_df, on='label', how='outer')
+            # FIX BUG #7: Use left join to keep all reference cells
+            # Cells missing from this channel will have NaN, which we fill with 0
+            merged = merged.merge(merge_df, on='label', how='left')
+
+            # Fill NaN with 0 (cell not detected in this channel = no signal)
+            for col in marker_cols:
+                merged[col] = merged[col].fillna(0.0)
+
             print(f"  + Added {len(marker_cols)} markers from {csv_file.name}")
+
+    # Validate no cells were lost (should never happen with left join)
+    cells_lost = len(reference_csv[1]) - len(merged)
+    if cells_lost > 0:
+        print(f"\\n❌ CRITICAL ERROR: Lost {cells_lost} cells during merge!")
+        print(f"  Reference had {len(reference_csv[1])} cells, merged has {len(merged)}")
+        print(f"  This should not happen with left join - investigation needed")
+        sys.exit(1)
+    else:
+        print(f"\\n✓ All {len(merged)} cells from reference preserved")
 
     # Reorder columns: morphology first, then DAPI, then other markers
     morpho_present = [col for col in morphology_cols if col in merged.columns]

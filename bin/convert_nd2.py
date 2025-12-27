@@ -268,10 +268,10 @@ def main():
     # Convert
     ome_tiff_path = convert_nd2_to_ome_tiff(nd2_path, output_dir, args.pixel_size)
 
-    # Verify (optional)
-    if args.verify:
+    # Verify conversion (always runs - critical for data integrity)
+    # To skip verification, use --no-verify flag
+    if not (hasattr(args, 'no_verify') and args.no_verify):
         verify_conversion(nd2_path, ome_tiff_path)
-    verify_conversion(nd2_path, ome_tiff_path) # Mandatory verification for the moment
 
     logger.info("=" * 80)
     logger.info(f"✓ Conversion complete: {ome_tiff_path.name}")

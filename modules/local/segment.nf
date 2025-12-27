@@ -25,8 +25,20 @@ process SEGMENT {
     def use_gpu_flag = params.seg_gpu ? '--use-gpu' : ''
     def pmin = params.seg_pmin ?: 1.0
     def pmax = params.seg_pmax ?: 99.8
+
+    // FIX WARNING #1: Validate DAPI is in channel 0
+    def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
     """
     echo "Sample: ${meta.patient_id}"
+
+    # FIX WARNING #1: Runtime validation that DAPI is in channel 0
+    if [ "${meta.channels ? meta.channels[0].toUpperCase() : 'UNKNOWN'}" != "DAPI" ]; then
+        echo "❌ ERROR: DAPI must be in channel 0 for segmentation!"
+        echo "Found channels: ${meta.channels ? meta.channels.join(', ') : 'Unknown'}"
+        echo "Channel 0: ${meta.channels ? meta.channels[0] : 'Unknown'}"
+        exit 1
+    fi
+    echo "✅ Validated: DAPI is in channel 0"
 
     segment.py \\
         --image ${merged_file} \\
@@ -34,8 +46,8 @@ process SEGMENT {
         --model-dir ${params.segmentation_model_dir} \\
         --model-name ${params.segmentation_model} \\
         --dapi-channel 0 \\
-        --n-tiles ${params.seg_n_tiles_y ?: 16} ${params.seg_n_tiles_x ?: 16} \\
-        --expand-distance ${params.seg_expand_distance ?: 10} \\
+        --n-tiles ${params.seg_n_tiles_y} ${params.seg_n_tiles_x} \\
+        --expand-distance ${params.seg_expand_distance} \\
         --pmin ${pmin} \\
         --pmax ${pmax} \\
         ${use_gpu_flag} \\

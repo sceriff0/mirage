@@ -3,6 +3,7 @@
 
 process SAVE {
     tag "Final Publishing"
+    label 'process_single'
 
     // Disable container for this process - run natively to access NFS mounts
     container null
@@ -14,12 +15,15 @@ process SAVE {
     memory '64 GB'
 
     // Use a queue or partition optimized for data transfer, if available
-    // queue 'transfer_partition' 
+    // queue 'transfer_partition'
 
     // Define the required input
     input:
     path results_files, stageAs: 'results/*' // Individual files to save, staged into results/ dir
     val final_archive_dir // The final destination path (e.g., /hpcnfs/results/)
+
+    output:
+    path "versions.yml", emit: versions
 
     script:
     """
@@ -32,5 +36,20 @@ process SAVE {
     rsync -rL --progress results/ ${final_archive_dir}/${params.id}_${params.registration_method}/
 
     echo "Transfer complete."
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        rsync: \$(rsync --version | head -n1 | sed 's/rsync  version //' | cut -d' ' -f1)
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    echo "STUB: Would transfer to ${final_archive_dir}/${params.id}_${params.registration_method}/"
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        rsync: stub
+    END_VERSIONS
     """
 }

@@ -21,6 +21,7 @@ process ESTIMATE_REG_ERROR_SEGMENTATION {
     output:
     path "${registered.simpleName}_segmentation_error.json", emit: error_metrics
     path "${registered.simpleName}_segmentation_overlay.png", emit: overlay_plot
+    path "versions.yml"                                      , emit: versions
 
     script:
     def max_dim = params.feature_max_dim ?: 2048
@@ -51,5 +52,23 @@ process ESTIMATE_REG_ERROR_SEGMENTATION {
         --max-dim ${max_dim} \\
         --min-nucleus-size ${min_nucleus_size} \\
         --max-nucleus-size ${max_nucleus_size}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        deepcell: \$(python -c "import deepcell; print(deepcell.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    touch ${registered.simpleName}_segmentation_error.json
+    touch ${registered.simpleName}_segmentation_overlay.png
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        deepcell: stub
+    END_VERSIONS
     """
 }

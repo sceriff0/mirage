@@ -17,6 +17,7 @@ process COMPUTE_FEATURES {
 
     output:
     path "${moving.simpleName}_features.json", emit: features
+    path "versions.yml"                       , emit: versions
 
     script:
     def detector = params.feature_detector ?: 'superpoint'
@@ -44,5 +45,22 @@ process COMPUTE_FEATURES {
         --detector ${detector} \\
         --max-dim ${max_dim} \\
         --n-features ${n_features}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        numpy: \$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    touch ${moving.simpleName}_features.json
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        numpy: stub
+    END_VERSIONS
     """
 }

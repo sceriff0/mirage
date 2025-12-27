@@ -24,13 +24,19 @@ process SPLIT_CHANNELS {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def ref_flag = is_reference ? "--is-reference" : ""
+    // FIX BUG #5: Add defensive null check for meta.channels
+    // Pass channel names from metadata if available and valid
+    def channel_args = (meta.channels && meta.channels instanceof List && !meta.channels.isEmpty()) ?
+        "--channels ${meta.channels.join(' ')}" : ""
     """
     echo "Sample: ${meta.patient_id}"
+    echo "Channels: ${(meta.channels && meta.channels instanceof List) ? meta.channels.join(', ') : 'Will read from OME metadata'}"
 
     split_multichannel.py \\
         ${registered_image} \\
         . \\
         ${ref_flag} \\
+        ${channel_args} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

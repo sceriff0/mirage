@@ -38,57 +38,75 @@ workflow POSTPROCESSING {
     ch_registered       // Channel of [meta, file] tuples
 
     main:
-    // Extract reference image using is_reference metadata
-    // SEGMENT now accepts [meta, file] tuple
-    ch_reference_for_seg = ch_registered
+    // ========================================================================
+    // SEGMENTATION - Process reference images only
+    // ========================================================================
+    ch_references = ch_registered
         .filter { meta, file -> meta.is_reference }
-        .first()  // Keep [meta, file] tuple
 
-    // Segment the reference image only (no merge needed)
-    SEGMENT ( ch_reference_for_seg )
+    SEGMENT(ch_references)
 
-    // Split multichannel images into single-channel TIFFs
-    // SPLIT_CHANNELS now accepts [meta, file] tuple
-    SPLIT_CHANNELS ( ch_registered )
+    // ========================================================================
+    // CHANNEL SPLITTING - Split all multichannel images
+    // ========================================================================
+    SPLIT_CHANNELS(
+        ch_registered.map { meta, file -> [meta, file, meta.is_reference] }
+    )
 
-    // Quantify using individual channel TIFFs
-    // SPLIT_CHANNELS now outputs [meta, channels] - combine with cell_mask
-    // SEGMENT now outputs [meta, mask]
+    // ========================================================================
+    // QUANTIFICATION - Join channels with their patient's mask
+    // ========================================================================
     ch_for_quant = SPLIT_CHANNELS.out.channels
-        .transpose()  // Flatten channel list while keeping meta
-        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
+        .transpose()                                                    // [meta, single_tiff]
+        .map { meta, tiff -> [meta.patient_id, meta, tiff] }
+        .join(
+            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
+            by: 0
+        )
+        .map { _patient_id, meta, tiff, mask -> [meta, tiff, mask] }
 
-    QUANTIFY ( ch_for_quant )
+    QUANTIFY(ch_for_quant)
 
-    // Merge individual quantification CSVs
-    // QUANTIFY now outputs [meta, csv] - extract meta and collect CSVs
-    ch_reference_meta = ch_reference_for_seg.map { meta, file -> meta }
-    ch_individual_csvs = QUANTIFY.out.individual_csv
-        .map { meta, csv -> csv }
-        .collect()
-        .combine(ch_reference_meta)
-        .map { csvs, meta -> [meta, csvs] }
+    // ========================================================================
+    // MERGE - Group CSVs by patient_id
+    // ========================================================================
+    ch_grouped_csvs = QUANTIFY.out.individual_csv
+        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .groupTuple(by: 0)
+        .map { patient_id, metas, csvs ->
+            def meta = metas[0].clone()
+            meta.id = patient_id
+            [meta, csvs]
+        }
 
-    MERGE_QUANT_CSVS ( ch_individual_csvs )
+    MERGE_QUANT_CSVS(ch_grouped_csvs)
 
-    // Phenotype cells based on predefined rules
-    // PHENOTYPE now accepts [meta, csv, mask]
+    // ========================================================================
+    // PHENOTYPING - Join merged CSV with patient's mask
+    // ========================================================================
     ch_for_phenotype = MERGE_QUANT_CSVS.out.merged_csv
-        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
+        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .join(
+            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
+            by: 0
+        )
+        .map { _patient_id, meta, csv, mask -> [meta, csv, mask] }
 
-    PHENOTYPE ( ch_for_phenotype )
+    PHENOTYPE(ch_for_phenotype)
 
-    // Generate checkpoint CSV for restart from postprocessing step
-    // All modules now output [meta, file] tuples - extract metadata and files
+    // ========================================================================
+    // CHECKPOINT - Collect all outputs by patient
+    // ========================================================================
     ch_checkpoint_data = PHENOTYPE.out.csv
-        .combine(PHENOTYPE.out.mask.map { meta, mask -> mask })
-        .combine(PHENOTYPE.out.mapping.map { meta, mapping -> mapping })
-        .combine(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> csv })
-        .combine(SEGMENT.out.cell_mask.map { meta, mask -> mask })
-        .map { meta, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask ->
+        .map { meta, csv -> [meta.patient_id, csv] }
+        .join(PHENOTYPE.out.mask.map { meta, mask -> [meta.patient_id, mask] })
+        .join(PHENOTYPE.out.mapping.map { meta, map -> [meta.patient_id, map] })
+        .join(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] })
+        .join(SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] })
+        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask ->
             [
-                meta.patient_id,
-                meta.is_reference,
+                patient_id,
+                true,  // All checkpoint rows are for reference (one per patient)
                 pheno_csv.toString(),
                 pheno_mask.toString(),
                 pheno_map.toString(),

@@ -1,5 +1,5 @@
 process MAX_DIM {
-    tag "compute_max_dimensions"
+    tag "${patient_id}"
     label 'process_single'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
@@ -7,11 +7,11 @@ process MAX_DIM {
         'docker://bolt3x/attend_image_analysis:preprocess' }"
 
     input:
-    path dims_files
+    tuple val(patient_id), path(dims_files)
 
     output:
-    path "max_dims.txt" , emit: max_dims_file
-    path "versions.yml" , emit: versions
+    tuple val(patient_id), path("${patient_id}_max_dims.txt"), emit: max_dims_file
+    path "versions.yml"                                       , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -49,16 +49,21 @@ process MAX_DIM {
             max_w = max(max_w, w)
 
     # Save max dimensions
-    with open('max_dims.txt', 'w') as f:
+    with open('${patient_id}_max_dims.txt', 'w') as f:
         f.write(f"MAX_HEIGHT {max_h}\\n")
         f.write(f"MAX_WIDTH {max_w}\\n")
 
     print(f"\\nMaximum dimensions: {max_h} x {max_w}")
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python3 --version | sed 's/Python //')
+    END_VERSIONS
     """
 
     stub:
     """
-    cat > max_dims.txt <<-END
+    cat > ${patient_id}_max_dims.txt <<-END
     MAX_HEIGHT 10000
     MAX_WIDTH 10000
     END

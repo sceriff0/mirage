@@ -1,5 +1,5 @@
 process REGISTER {
-    tag "register_all"
+    tag "${patient_id}"
     label 'process_high'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
@@ -7,12 +7,12 @@ process REGISTER {
         'docker://cdgatenbee/valis-wsi:1.0.0' }"
 
     input:
-    tuple val(reference_filename), path(preproc_files)
+    tuple val(patient_id), path(reference), path(preproc_files), val(all_metas)
 
     output:
-    path "registered_slides/*_registered.ome.tiff", emit: registered_slides
-    path "registered_qc"                          , emit: qc, optional: true
-    path "versions.yml"                           , emit: versions
+    tuple val(patient_id), path("registered_slides/*_registered.ome.tiff"), val(all_metas), emit: registered
+    path "registered_qc"                                                                   , emit: qc, optional: true
+    path "versions.yml"                                                                    , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -20,12 +20,13 @@ process REGISTER {
     script:
     def args = task.ext.args ?: ''
     // Use reference filename if provided, otherwise fall back to legacy reference_markers param
-    def ref_arg = reference_filename ? "--reference ${reference_filename}" :
+    def ref_arg = reference ? "--reference ${reference.name}" :
                   params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
     def max_processed_dim = params.reg_max_processed_dim ?: 1800
     def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 3500
-    def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.25
+    def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.5
     def num_features = params.reg_num_features ?: 5000
+    def max_image_dim = params.reg_max_image_dim ?: 6000
 
     """
     mkdir -p registered_slides registered_qc preprocessed
@@ -47,6 +48,7 @@ process REGISTER {
         --max-non-rigid-dim ${max_non_rigid_dim} \\
         --micro-reg-fraction ${micro_reg_fraction} \\
         --num-features ${num_features} \\
+        --max-image-dim ${max_image_dim} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

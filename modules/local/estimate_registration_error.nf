@@ -21,6 +21,7 @@ process ESTIMATE_REG_ERROR {
     output:
     path "${registered.simpleName}_registration_error.json", emit: error_metrics
     path "${registered.simpleName}_tre_histogram.png"      , emit: error_plot, optional: true
+    path "versions.yml"                                    , emit: versions
 
     script:
     def detector = params.feature_detector ?: 'superpoint'
@@ -51,5 +52,23 @@ process ESTIMATE_REG_ERROR {
         --detector ${detector} \\
         --max-dim ${max_dim} \\
         --n-features ${n_features}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        numpy: \$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    touch ${registered.simpleName}_registration_error.json
+    touch ${registered.simpleName}_tre_histogram.png
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        numpy: stub
+    END_VERSIONS
     """
 }
