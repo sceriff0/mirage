@@ -4,12 +4,14 @@ nextflow.enable.dsl = 2
 ========================================================================================
     VALIS REGISTRATION ADAPTER
 ========================================================================================
-    Adapter that converts standard [meta, file] format to VALIS batch format and back.
+    Adapter that converts patient-grouped data to VALIS batch format and back.
 
     VALIS requires all images for a patient at once to build optimal transformation graph.
     This adapter handles the batch conversion while maintaining the standard interface.
 
-    Input:  Channel of [meta, file] tuples (standard format)
+    Input:  ch_grouped_meta - Channel of [patient_id, reference_item, all_items]
+            where reference_item = [meta, file] for the reference image
+            and all_items = [[meta1, file1], [meta2, file2], ...] for all images
     Output: Channel of [meta, file] tuples (standard format)
 ========================================================================================
 */
@@ -18,7 +20,6 @@ include { REGISTER } from '../../../modules/local/register'
 
 workflow VALIS_ADAPTER {
     take:
-    ch_images         // Channel of [meta, file]
     ch_grouped_meta   // Channel of [patient_id, reference_item, all_items] from grouping
 
     main:
@@ -30,6 +31,10 @@ workflow VALIS_ADAPTER {
     ch_valis_input = ch_grouped_meta
         .map { patient_id, ref_item, all_items ->
             def ref_file = ref_item[1]
+
+            // CRITICAL: VALIS needs ALL images including reference for batch registration
+            // We pass reference both separately (for --reference flag) AND in all_files
+            // The REGISTER process uses stageAs to avoid filename collision
             def all_files = all_items.collect { item -> item[1] }
             def all_metas = all_items.collect { item -> item[0] }
 

@@ -118,24 +118,24 @@ workflow REGISTRATION {
     // STEP 3: RUN REGISTRATION VIA METHOD-SPECIFIC ADAPTER
     // ========================================================================
     // Each adapter:
-    //   - Takes: ch_images (flat) and ch_grouped (structured)
+    //   - Takes: ch_grouped (patient-grouped structure with references identified)
     //   - Converts to method-specific format
     //   - Runs registration
     //   - Converts output back to [meta, file] standard format
 
     switch(method) {
         case 'valis':
-            VALIS_ADAPTER(ch_images, ch_grouped)
+            VALIS_ADAPTER(ch_grouped)
             ch_registered = VALIS_ADAPTER.out.registered
             break
 
         case 'gpu':
-            GPU_ADAPTER(ch_images, ch_grouped)
+            GPU_ADAPTER(ch_grouped)
             ch_registered = GPU_ADAPTER.out.registered
             break
 
         case 'cpu':
-            CPU_ADAPTER(ch_images, ch_grouped)
+            CPU_ADAPTER(ch_grouped)
             ch_registered = CPU_ADAPTER.out.registered
             break
 

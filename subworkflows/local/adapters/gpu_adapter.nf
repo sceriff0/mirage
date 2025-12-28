@@ -7,11 +7,13 @@ nextflow.enable.dsl = 2
     Adapter for GPU pairwise registration.
 
     GPU registration is already pairwise, so this adapter mainly handles:
-    1. Converting grouped data to pairwise input format
+    1. Converting patient-grouped data to pairwise input format
     2. Adding references back to output
 
-    Input:  Channel of [meta, file] tuples
-    Output: Channel of [meta, file] tuples (including references)
+    Input:  ch_grouped_meta - Channel of [patient_id, reference_item, all_items]
+            where reference_item = [meta, file] for the reference image
+            and all_items = [[meta1, file1], [meta2, file2], ...] for all images
+    Output: Channel of [meta, file] tuples (standard format, including references)
 ========================================================================================
 */
 
@@ -19,7 +21,6 @@ include { GPU_REGISTER } from '../../../modules/local/register_gpu'
 
 workflow GPU_ADAPTER {
     take:
-    ch_images         // Channel of [meta, file]
     ch_grouped_meta   // Channel of [patient_id, reference_item, all_items]
 
     main:

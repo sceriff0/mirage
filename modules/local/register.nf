@@ -7,7 +7,8 @@ process REGISTER {
         'docker://cdgatenbee/valis-wsi:1.0.0' }"
 
     input:
-    tuple val(patient_id), path(reference), path(preproc_files), val(all_metas)
+    // Use stageAs to avoid filename collision when reference is included in preproc_files
+    tuple val(patient_id), path(reference, stageAs: 'ref/*'), path(preproc_files, stageAs: 'input_?/*'), val(all_metas)
 
     output:
     tuple val(patient_id), path("registered_slides/*_registered.ome.tiff"), val(all_metas), emit: registered
@@ -19,8 +20,9 @@ process REGISTER {
 
     script:
     def args = task.ext.args ?: ''
-    // Use reference filename if provided, otherwise fall back to legacy reference_markers param
-    def ref_arg = reference ? "--reference ${reference.name}" :
+    // Extract reference filename from the staged path (ref/filename.tif)
+    def ref_filename = reference ? reference.name.replaceAll(/^ref\//, '') : ''
+    def ref_arg = ref_filename ? "--reference ${ref_filename}" :
                   params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
     def max_processed_dim = params.reg_max_processed_dim ?: 1800
     def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 3500
@@ -31,12 +33,10 @@ process REGISTER {
     """
     mkdir -p registered_slides registered_qc preprocessed
 
-    # Stage all preprocessed files into a directory
-    # Only copy .ome.tif files to avoid processing non-image files
-    for file in ${preproc_files}; do
-        if [[ "\$file" == *.ome.tif ]] || [[ "\$file" == *.ome.tiff ]]; then
-            mv "\$file" preprocessed/
-        fi
+    # Copy all input files (from both ref/ and input_*/ directories) into preprocessed/
+    # This handles the stageAs directories we created to avoid naming collisions
+    find ref input_* -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) 2>/dev/null | while read file; do
+        cp "\$file" preprocessed/
     done
 
     register.py \\
