@@ -1,0 +1,74 @@
+nextflow_process {
+
+    name "Test QUANTIFY process"
+    script "modules/local/quantify.nf"
+    process "QUANTIFY"
+
+    tag "modules"
+    tag "modules_local"
+    tag "quantify"
+
+    test("Should quantify single channel - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA']],
+                    file('tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    file('tests/testdata/sample_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.individual_csv
+            assert process.out.versions
+
+            with(process.out.individual_csv) {
+                assert size() == 1
+                assert get(0).get(0).patient_id == 'P001'
+                assert get(0).get(1).toString().endsWith('_quant.csv')
+            }
+        }
+    }
+
+    test("MERGE_QUANT_CSVS - Should merge multiple channel CSVs - stub") {
+
+        script "modules/local/quantify.nf"
+        process "MERGE_QUANT_CSVS"
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA']],
+                    [
+                        file('tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('tests/testdata/sample_MARKER1.tif', checkIfExists: true),
+                        file('tests/testdata/sample_MARKER2.tif', checkIfExists: true)
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.merged_csv
+            assert process.out.versions
+
+            with(process.out.merged_csv) {
+                assert size() == 1
+                assert get(0).get(0).patient_id == 'P001'
+                assert get(0).get(1).toString().endsWith('merged_quant.csv')
+            }
+        }
+    }
+}

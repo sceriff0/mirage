@@ -14,7 +14,14 @@ import tifffile
 import numpy as np
 import logging
 
-logger = logging.getLogger(__name__)
+# Add parent directory to path to import lib modules
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.logger import get_logger, configure_logging
+
+logger = get_logger(__name__)
 
 
 def get_ome_channel_names(tiff_path):
@@ -179,10 +186,7 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     logger.info("=" * 80)
     logger.info("SPLIT MULTICHANNEL TIFF")

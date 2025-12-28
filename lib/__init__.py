@@ -8,7 +8,7 @@ __version__ = "1.0.0"
 __all__ = [
     "logger",
     "metadata",
-    "image_io",
+    "image_utils",
     "registration_utils",
     "qc",
 ]

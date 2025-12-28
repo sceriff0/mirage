@@ -12,11 +12,17 @@ import argparse
 import logging
 from pathlib import Path
 
+# Add parent directory to path to import lib modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.logger import get_logger, configure_logging
+
 import numpy as np
 import pyvips
 import tifffile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def create_pyramidal_ometiff(
@@ -182,10 +188,7 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 

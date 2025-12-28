@@ -6,7 +6,7 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { CONVERT_IMAGE         } from '../../modules/local/convert_nd2'
+include { CONVERT_IMAGE         } from '../../modules/local/convert_image'
 include { PREPROCESS            } from '../../modules/local/preprocess'
 include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
 
@@ -17,9 +17,6 @@ include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv
     Description:
         Converts images to standardized OME-TIFF (with DAPI in channel 0) and
         applies BaSiC illumination correction.
-
-        Note: Padding is now handled in the registration workflow for GPU/CPU methods only.
-        VALIS uses preprocessed images directly without padding.
 
     Input:
         ch_input: Channel of [meta, file] tuples where meta contains:
@@ -38,57 +35,23 @@ workflow PREPROCESSING {
     ch_input  // Channel of [meta, file] tuples
 
     main:
-    // Conditionally convert to standardized OME-TIFF format
-    if (!params.skip_nd2_conversion) {
-        CONVERT_IMAGE ( ch_input )
+    // Convert to standardized OME-TIFF format
+    CONVERT_IMAGE ( ch_input )
 
-        // Parse output channels from channels.txt file and update metadata
-        ch_for_preprocess = CONVERT_IMAGE.out.ome_tiff
-            .map { meta, ome_file, channels_file ->
-                // Read output channels from file (DAPI will be first)
-                def output_channels = channels_file.text.trim().split(',')
+    // Parse output channels from channels.txt file and update metadata
+    ch_for_preprocess = CONVERT_IMAGE.out.ome_tiff
+        .map { meta, ome_file, channels_file ->
+            // Read output channels from file (DAPI will be first)
+            def output_channels = channels_file.text.trim().split(',')
 
-                // FIX ISSUE #10: CRITICAL VALIDATION - DAPI must be in channel 0!
-                if (output_channels[0].toUpperCase() != 'DAPI') {
-                    throw new Exception("""
-                    ❌ CRITICAL: DAPI must be in channel 0 after conversion for ${meta.patient_id}!
-                    Got channels: ${output_channels}
-                    DAPI is in position: ${output_channels.findIndexOf { it.toUpperCase() == 'DAPI' }}
-                    💡 This is a bug in the convert_image.py script - it should place DAPI first
-                    """.stripIndent())
-                }
-
-                // Update meta with output channel order
-                def updated_meta = meta.clone()
-                updated_meta.channels = output_channels
-                [updated_meta, ome_file]
-            }
-    } else {
-        // FIX ISSUE #10: When skipping conversion, validate DAPI is in channel 0
-        // Users may provide pre-converted OME-TIFF files directly
-        ch_for_preprocess = ch_input
-            .map { meta, file ->
-                // Validate DAPI is first in the channels list
-                if (meta.channels[0].toUpperCase() != 'DAPI') {
-                    throw new Exception("""
-                    ❌ CRITICAL: DAPI must be in channel 0 for ${meta.patient_id}!
-
-                    You are using pre-converted images (skip_nd2_conversion=true).
-                    The channels in your input CSV are: ${meta.channels}
-                    DAPI is in position: ${meta.channels.findIndexOf { it.toUpperCase() == 'DAPI' }}
-
-                    💡 Fix: Update your input CSV so DAPI is listed first in the 'channels' column.
-                       Example: 'DAPI|PANCK|SMA' instead of 'PANCK|DAPI|SMA'
-
-                    💡 Note: The actual OME-TIFF file must also have DAPI in channel 0!
-                    """.stripIndent())
-                }
-                [meta, file]
-            }
-    }
+            // Update meta with output channel order
+            def updated_meta = meta.clone()
+            updated_meta.channels = output_channels
+            [updated_meta, ome_file]
+        }
 
     // Preprocess each file (BaSiC correction)
-    // PREPROCESS now accepts [meta, file] tuples and preserves metadata
+    // PREPROCESS accepts [meta, file] tuples
     PREPROCESS ( ch_for_preprocess )
 
     // Preprocessed files already have metadata attached

@@ -39,9 +39,46 @@ workflow POSTPROCESSING {
 
     main:
     // ========================================================================
+    // VALIDATION - Ensure metadata has required fields
+    // ========================================================================
+    // FIX BUG #3: Add defensive checks for meta.channels before use
+    // Validate metadata early to prevent cryptic downstream errors
+
+    ch_validated = ch_registered
+        .map { meta, file ->
+            // Validate required metadata fields exist and are valid
+            if (!meta.containsKey('channels')) {
+                throw new Exception("""
+                ❌ Missing 'channels' field in metadata for patient ${meta.patient_id}
+                Available fields: ${meta.keySet().join(', ')}
+                💡 This usually means the metadata was not properly constructed from CSV
+                """.stripIndent())
+            }
+
+            if (!(meta.channels instanceof List) || meta.channels.isEmpty()) {
+                throw new Exception("""
+                ❌ Invalid 'channels' field for patient ${meta.patient_id}
+                Type: ${meta.channels?.class}
+                Value: ${meta.channels}
+                💡 channels must be a non-empty List
+                """.stripIndent())
+            }
+
+            if (meta.channels[0]?.toUpperCase() != 'DAPI') {
+                throw new Exception("""
+                ❌ DAPI must be first channel for patient ${meta.patient_id}
+                Current order: ${meta.channels}
+                💡 Check your registration checkpoint CSV has correct channel order
+                """.stripIndent())
+            }
+
+            [meta, file]
+        }
+
+    // ========================================================================
     // SEGMENTATION - Process reference images only
     // ========================================================================
-    ch_references = ch_registered
+    ch_references = ch_validated
         .filter { meta, file -> meta.is_reference }
 
     SEGMENT(ch_references)
@@ -50,7 +87,7 @@ workflow POSTPROCESSING {
     // CHANNEL SPLITTING - Split all multichannel images
     // ========================================================================
     SPLIT_CHANNELS(
-        ch_registered.map { meta, file -> [meta, file, meta.is_reference] }
+        ch_validated.map { meta, file -> [meta, file, meta.is_reference] }
     )
 
     // ========================================================================
@@ -121,13 +158,24 @@ workflow POSTPROCESSING {
     // ========================================================================
     // CHECKPOINT - Collect all outputs by patient
     // ========================================================================
+    // FIX CRITICAL BUG: Include registered images in checkpoint for pyramid regeneration
+    // Group registered images by patient to get all images (reference + moving)
+    ch_registered_grouped = ch_registered
+        .map { meta, file -> [meta.patient_id, file] }
+        .groupTuple(by: 0)
+        .map { patient_id, files ->
+            // Join all file paths with pipe delimiter (consistent with channels format)
+            [patient_id, files.collect { f -> f.toString() }.join('|')]
+        }
+
     ch_checkpoint_data = PHENOTYPE.out.csv
         .map { meta, csv -> [meta.patient_id, csv] }
         .join(PHENOTYPE.out.mask.map { meta, mask -> [meta.patient_id, mask] })
         .join(PHENOTYPE.out.mapping.map { meta, map -> [meta.patient_id, map] })
         .join(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] })
         .join(SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] })
-        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask ->
+        .join(ch_registered_grouped, by: 0)
+        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, registered_images ->
             [
                 patient_id,
                 true,  // All checkpoint rows are for reference (one per patient)
@@ -135,14 +183,15 @@ workflow POSTPROCESSING {
                 pheno_mask.toString(),
                 pheno_map.toString(),
                 merged_csv.toString(),
-                cell_mask.toString()
+                cell_mask.toString(),
+                registered_images  // Pipe-delimited list of registered image paths
             ]
         }
         .collect()
 
     WRITE_CHECKPOINT_CSV(
         'postprocessed',
-        'patient_id,is_reference,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask',
+        'patient_id,is_reference,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,registered_images',
         ch_checkpoint_data
     )
 

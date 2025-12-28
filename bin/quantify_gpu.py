@@ -9,12 +9,19 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
-from _common import load_image, load_pickle, save_pickle
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.logger import get_logger, configure_logging
+from lib.image_utils import load_image
+from lib.io_utils import load_pickle, save_pickle
 
 try:
     import psutil
@@ -32,7 +39,7 @@ except ImportError:
 
 os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -363,7 +370,6 @@ def run_marker_quantification(
         raise NotImplementedError("CPU mode not yet implemented - use GPU mode")
 
     # Load the single channel TIFF file
-    from pathlib import Path
     channel_file = Path(channel_tiff)
 
     if not channel_file.exists():
@@ -486,11 +492,7 @@ if __name__ == '__main__':
         os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
         handlers.append(logging.FileHandler(args.log_file))
 
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=handlers
-    )
+    configure_logging(level=log_level)
 
     # Run quantification
     try:

@@ -21,13 +21,13 @@ from typing import Optional
 import tifffile
 import pyvips
 
-from _common import ensure_dir
-
-# Import from lib modules for DRY principle
+# Add parent directory to path to import lib modules
 import sys
 from pathlib import Path
-# Add parent directory to path to import lib modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import from lib modules for DRY principle
+from lib.image_utils import ensure_dir
 from lib.logger import log_progress
 from lib.metadata import get_channel_names
 from lib.registration_utils import autoscale

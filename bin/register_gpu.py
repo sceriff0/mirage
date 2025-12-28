@@ -25,10 +25,26 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 import tifffile
-import tempfile
 import gc
 import traceback
-from skimage.transform import rescale
+
+# Add parent directory to path to import lib modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import from lib modules for DRY principle
+from lib.logger import get_logger, configure_logging
+from lib.metadata import (
+    create_ome_xml,
+    extract_channel_names_from_ome,
+    extract_channel_names_from_filename
+)
+from lib.registration_utils import (
+    extract_crop_coords,
+    calculate_bounds,
+    create_memmaps_for_merge,
+    cleanup_memmaps
+)
+from lib.qc import create_registration_qc
 
 # Keep a stable Cupy cache directory
 os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
@@ -46,7 +62,7 @@ except Exception as e:
 # CUDA error types that indicate corrupted GPU state
 CUDA_FATAL_ERRORS = (
     'cudaErrorIllegalAddress',
-    'cudaErrorIllegalMemoryAccess', 
+    'cudaErrorIllegalMemoryAccess',
     'cudaErrorHardwareStackError',
     'cudaErrorIllegalInstruction',
     'cudaErrorMisalignedAddress',
@@ -56,7 +72,7 @@ CUDA_FATAL_ERRORS = (
     'cudaErrorECCUncorrectable',
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def print_cuda_diagnostics():
@@ -114,112 +130,10 @@ def print_cuda_diagnostics():
 
 # ------------------------- Helper Functions ---------------------------------
 
-def get_channel_names(filename: str) -> List[str]:
-    base = os.path.basename(filename)
-    # Remove all suffixes that might be present
-    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
-    parts = name_part.split('_')
-    channels = parts[1:]
-    return channels
 
 
-def autoscale(img: np.ndarray, low_p: float = 1.0, high_p: float = 99.0) -> np.ndarray:
-    """Normalize image to 0-255 using percentile-based scaling (like ImageJ Auto).
-
-    Args:
-        img: Input image array
-        low_p: Lower percentile (default: 1.0)
-        high_p: Upper percentile (default: 99.0)
-    """
-    lo = np.percentile(img, low_p)
-    hi = np.percentile(img, high_p)
-    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
-    return (img * 255).astype(np.uint8)
 
 
-def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
-    """Create QC stack with registered and reference DAPI channels.
-
-    Follows same logic as save_dapi_stack:
-    - Stack registered and reference DAPI channels
-    - Normalize each channel independently (min-max)
-    - Downsample by 0.25 scale factor
-    - Save as ImageJ-compatible TIFF
-    """
-    logger.info(f"Creating QC composite: {output_path.name}")
-
-    # Load images
-    ref_img = tifffile.imread(str(reference_path))
-    reg_img = tifffile.imread(str(registered_path))
-
-    if ref_img.ndim == 2:
-        ref_img = ref_img[np.newaxis, ...]
-    if reg_img.ndim == 2:
-        reg_img = reg_img[np.newaxis, ...]
-
-    # Find DAPI channels
-    ref_channels = get_channel_names(reference_path.name)
-    reg_channels = get_channel_names(registered_path.name)
-
-    ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
-
-    ref_dapi = ref_img[ref_dapi_idx]
-    reg_dapi = reg_img[reg_dapi_idx]
-
-    # Autoscale each channel independently using min-max normalization
-    ref_dapi_scaled = autoscale(ref_dapi)
-    reg_dapi_scaled = autoscale(reg_dapi)
-
-    # Save full-resolution QC (compressed)
-    rgb_stack_full = np.stack([
-        reg_dapi_scaled,   # Red channel (registered)
-        ref_dapi_scaled,   # Green channel (reference)
-        np.zeros_like(ref_dapi_scaled, dtype=np.uint8)  # Blue channel
-    ], axis=0)
-
-    fullres_output_path = output_path.with_name(output_path.stem + '_fullres.tif')
-    tifffile.imwrite(
-        str(fullres_output_path),
-        rgb_stack_full,
-        imagej=True,
-        metadata={'axes': 'CYX', 'mode': 'composite'},
-        compression='zlib'
-    )
-    logger.info(f"  Saved full-res QC TIFF: {fullres_output_path}")
-    del rgb_stack_full
-
-    # Downsample by 0.25 scale factor
-    ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-    reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-
-    # Create RGB composite: Red = registered, Green = reference
-    h, w = reg_down.shape
-    rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb_bgr[:, :, 2] = 0         # Blue channel
-    rgb_bgr[:, :, 1] = ref_down  # Green channel
-    rgb_bgr[:, :, 0] = reg_down  # Red channel
-
-    # Save as PNG (OpenCV uses BGR order)
-    png_output_path = output_path.with_suffix('.png')
-    cv2.imwrite(str(png_output_path), rgb_bgr)
-    logger.info(f"  Saved QC PNG: {png_output_path}")
-
-    # Save as ImageJ-compatible TIFF (CYX order)
-    rgb_stack = np.stack([
-        reg_down,   # Red channel (registered)
-        ref_down,   # Green channel (reference)
-        np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
-    ], axis=0)
-
-    tiff_output_path = output_path.with_suffix('.tif')
-    tifffile.imwrite(
-        str(tiff_output_path),
-        rgb_stack,
-        imagej=True,
-        metadata={'axes': 'CYX', 'mode': 'composite'}
-    )
-    logger.info(f"  Saved QC TIFF: {tiff_output_path}")
 
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
@@ -333,45 +247,8 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray,
     return mapping
 
 
-def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: int) -> List[Dict]:
-    """Return list of coordinate dicts (y, x, h, w) for tiling the image."""
-    if len(image_shape) == 3:
-        _, height, width = image_shape
-    else:
-        height, width = image_shape
-
-    stride = crop_size - overlap
-    coords = []
-    for y in range(0, height, stride):
-        for x in range(0, width, stride):
-            y_end = min(y + crop_size, height)
-            x_end = min(x + crop_size, width)
-            y_start = max(0, y_end - crop_size)
-            x_start = max(0, x_end - crop_size)
-            h = y_end - y_start
-            w = x_end - x_start
-            coords.append({"y": y_start, "x": x_start, "h": h, "w": w})
-    return coords
 
 
-def calculate_bounds(start: int, crop_dim: int, total_dim: int, overlap: int):
-    """
-    Calculate bounds for hard-cutoff crop placement.
-    Copied directly from utils.cropping.reconstruct_image for consistency.
-    """
-    if start == 0:
-        start_idx = start
-        end_idx = start + crop_dim - overlap // 2
-        crop_slice = slice(0, crop_dim - overlap // 2)
-    elif start == total_dim - crop_dim:
-        start_idx = start + overlap // 2
-        end_idx = start + crop_dim
-        crop_slice = slice(overlap // 2, crop_dim)
-    else:
-        start_idx = start + overlap // 2
-        end_idx = start + crop_dim - overlap // 2
-        crop_slice = slice(overlap // 2, crop_dim - overlap // 2)
-    return start_idx, end_idx, crop_slice
 
 
 def place_crop_hardcutoff(target_mem, crop, y: int, x: int, h: int, w: int,
@@ -392,31 +269,8 @@ def place_crop_hardcutoff(target_mem, crop, y: int, x: int, h: int, w: int,
         target_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
 
-def create_memmaps_for_merge(output_shape: Tuple[int, ...], 
-                              dtype: np.dtype = np.float32,
-                              prefix: str = "reg_merge_") -> Tuple[np.memmap, np.memmap, Path]:
-    """Create memory-mapped arrays for accumulating merged results."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
-    
-    merged_path = tmp_dir / "merged.npy"
-    weights_path = tmp_dir / "weights.npy"
-    
-    merged = np.memmap(str(merged_path), dtype=dtype, mode="w+", shape=output_shape)
-    weights = np.memmap(str(weights_path), dtype=dtype, mode="w+", shape=output_shape)
-    
-    merged[:] = 0
-    weights[:] = 0
-    
-    return merged, weights, tmp_dir
 
 
-def cleanup_memmaps(tmp_dir: Path):
-    """Clean up temporary memmap files."""
-    import shutil
-    try:
-        shutil.rmtree(tmp_dir)
-    except Exception as e:
-        logger.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
 
 
 # --------------------- CPU Stage: Affine Registration ---------------------
@@ -931,63 +785,8 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
 
 # --------------------- Main Registration Pipeline ---------------------
 
-def extract_channel_names(moving_path: Path, num_channels: int) -> List[str]:
-    """Extract channel names from file metadata or filename."""
-    channel_names = []
-    
-    # Try OME metadata first
-    try:
-        with tifffile.TiffFile(str(moving_path)) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                channel_names = [ch.get('Name') for ch in channels]
-    except Exception as e:
-        logger.debug(f"Could not extract channel names from OME metadata: {e}")
-    
-    # Validate or fallback to filename parsing
-    if not channel_names or len(channel_names) != num_channels:
-        filename = moving_path.stem
-        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '').replace('_padded', '')
-        parts = name_part.split('_')
-        
-        if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
-            markers = parts[1:]
-        else:
-            markers = parts
-        
-        if len(markers) == num_channels:
-            channel_names = markers
-        else:
-            channel_names = [f"channel_{i}" for i in range(num_channels)]
-    
-    return channel_names
 
 
-def create_ome_xml(channel_names: List[str], dtype: np.dtype, 
-                   width: int, height: int) -> str:
-    """Create OME-XML metadata string."""
-    num_channels = len(channel_names)
-    
-    channel_xml = '\n'.join(
-        f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />'
-        for i, name in enumerate(channel_names)
-    )
-    
-    return f'''<?xml version="1.0" encoding="UTF-8"?>
-<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
-    <Image ID="Image:0" Name="Registered">
-        <Pixels ID="Pixels:0" Type="{dtype.name}"
-                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
-                DimensionOrder="XYCZT"
-                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
-{channel_xml}
-            <TiffData />
-        </Pixels>
-    </Image>
-</OME>'''
 
 
 def register_image_pair(
@@ -1088,10 +887,12 @@ def register_image_pair(
         if out.ndim == 2:
             out = out[np.newaxis, ...]
         
-        # Extract channel names
-        channel_names = extract_channel_names(moving_path, out.shape[0])
+        # Extract channel names - try OME first, fallback to filename
+        channel_names = extract_channel_names_from_ome(moving_path)
+        if not channel_names or len(channel_names) != out.shape[0]:
+            channel_names = extract_channel_names_from_filename(moving_path, expected_channels=out.shape[0])
         logger.info(f"Channel names: {channel_names}")
-        
+
         # Create OME-XML metadata
         _, height, width = out.shape
         ome_xml = create_ome_xml(channel_names, out.dtype, width, height)
@@ -1119,11 +920,19 @@ def register_image_pair(
         if qc_dir:
             logger.info(f"Generating QC outputs: {qc_dir}")
             qc_dir.mkdir(parents=True, exist_ok=True)
-            qc_filename = f"{moving_path.stem}_QC_RGB.tif"
+            qc_filename = f"{moving_path.stem}_QC_RGB"
             qc_output_path = qc_dir / qc_filename
-            
+
             try:
-                create_qc_rgb_composite(reference_path, output_path, qc_output_path)
+                create_registration_qc(
+                    reference_path=reference_path,
+                    registered_path=output_path,
+                    output_path=qc_output_path,
+                    scale_factor=0.25,
+                    save_fullres=True,
+                    save_png=True,
+                    save_tiff=True
+                )
             except Exception as e:
                 logger.warning(f"Failed to generate QC composite: {e}")
         
@@ -1174,10 +983,8 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    # Configure logging using lib.logger
+    configure_logging(level=getattr(logging, args.log_level.upper()))
 
     # Handle legacy --crop-size argument
     affine_crop_size = args.affine_crop_size

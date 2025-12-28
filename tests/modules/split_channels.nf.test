@@ -1,0 +1,79 @@
+nextflow_process {
+
+    name "Test SPLIT_CHANNELS process"
+    script "modules/local/split_channels.nf"
+    process "SPLIT_CHANNELS"
+
+    tag "modules"
+    tag "modules_local"
+    tag "split_channels"
+
+    test("Should split multichannel image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.channel_tiffs
+            assert process.out.versions
+
+            with(process.out.channel_tiffs) {
+                assert size() == 1
+                def meta = get(0).get(0)
+                def files = get(0).get(1)
+
+                assert meta.patient_id == 'P001'
+                assert meta.channels == ['DAPI', 'PANCK', 'SMA']
+
+                // In stub mode, should create 3 files
+                assert files instanceof List
+                // Note: stub may create placeholder files
+            }
+        }
+    }
+
+    test("Should handle single-channel image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        channels: ['DAPI']
+                    ],
+                    file('tests/testdata/sample_DAPI.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.channel_tiffs
+
+            with(process.out.channel_tiffs) {
+                assert size() == 1
+                def meta = get(0).get(0)
+                assert meta.patient_id == 'P002'
+                assert meta.channels == ['DAPI']
+            }
+        }
+    }
+}

@@ -8,6 +8,12 @@ following the channel mapping specified in the input CSV.
 import logging
 import argparse
 from pathlib import Path
+
+# Add parent directory to path to import lib modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.logger import get_logger, configure_logging
 from typing import List, Optional, Tuple
 
 import tifffile
@@ -19,9 +25,9 @@ try:
 except ImportError:
     ND2_AVAILABLE = False
 
-from _common import ensure_dir
+from lib.image_utils import ensure_dir
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 PIXEL_SIZE_UM = 0.325
 
@@ -384,10 +390,7 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 

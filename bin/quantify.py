@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -18,7 +19,14 @@ import pandas as pd
 from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
-logger = logging.getLogger(__name__)
+# Add parent directory to path to import lib modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Import from lib for DRY principle
+from lib.logger import get_logger, configure_logging
+from lib.image_utils import ensure_dir, load_image
+
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -27,53 +35,6 @@ __all__ = [
     "quantify_single_channel",
     "run_quantification",
 ]
-
-
-def load_image(path: str) -> Tuple[NDArray, dict]:
-    """Load image from file.
-    
-    Supports .npy, .tif, .tiff, .ome.tif, .ome.tiff formats.
-    
-    Parameters
-    ----------
-    path : str
-        Path to image file.
-        
-    Returns
-    -------
-    image : ndarray
-        Image data.
-    metadata : dict
-        Image metadata (pixel sizes, etc.).
-    """
-    path = str(path)
-    
-    if path.endswith('.npy'):
-        return np.load(path), {}
-    
-    # Use aicsimageio for TIFF files
-    try:
-        from aicsimageio import AICSImage
-        img = AICSImage(path)
-        data = img.get_image_data("YX")
-        
-        metadata = {}
-        try:
-            metadata['pixel_sizes'] = img.physical_pixel_sizes
-        except AttributeError:
-            pass
-            
-        return data, metadata
-        
-    except ImportError:
-        # Fallback to tifffile
-        import tifffile
-        return tifffile.imread(path), {}
-
-
-def ensure_dir(path: str) -> None:
-    """Create directory if it doesn't exist."""
-    os.makedirs(path, exist_ok=True)
 
 
 def compute_morphology(
@@ -85,18 +46,46 @@ def compute_morphology(
     Parameters
     ----------
     mask : ndarray, shape (Y, X)
-        Segmentation mask with cell labels.
-    min_area : int, optional
-        Minimum cell area in pixels.
+        Segmentation mask with cell labels (background=0, cells>=1).
+    min_area : int, default=0
+        Minimum cell area in pixels. Cells smaller than this are excluded.
 
     Returns
     -------
     props_df : DataFrame or None
-        Morphological properties indexed by label.
+        Morphological properties indexed by label with columns:
+        - label: Cell label ID
+        - y, x: Centroid coordinates
+        - area: Cell area in pixels
+        - eccentricity: Shape eccentricity (0=circle, 1=line)
+        - perimeter: Cell perimeter length
+        - convex_area: Area of convex hull
+        - axis_major_length, axis_minor_length: Ellipse fit axes
+        Returns None if no valid cells found.
     mask_filtered : ndarray or None
-        Mask with only valid labels.
+        Binary mask containing only cells meeting area threshold.
+        Returns None if no valid cells found.
     valid_labels : ndarray or None
-        Array of valid label IDs.
+        Array of label IDs for cells that passed filtering.
+        Returns None if no valid cells found.
+
+    Notes
+    -----
+    This function filters cells by area and computes morphological features
+    using scikit-image's regionprops. The filtering removes artifacts and
+    debris that don't meet size criteria.
+
+    Examples
+    --------
+    >>> mask = np.array([[0, 1, 1], [0, 1, 1], [2, 2, 0]])
+    >>> props_df, mask_filt, valid = compute_morphology(mask, min_area=2)
+    >>> print(props_df['area'].values)
+    [4 2]
+
+    See Also
+    --------
+    skimage.measure.regionprops_table : Underlying morphology computation
+    compute_channel_intensity : Intensity measurements per cell
     """
     mask = np.ascontiguousarray(mask.squeeze())
     
@@ -146,18 +135,44 @@ def compute_channel_intensity(
     Parameters
     ----------
     mask_filtered : ndarray, shape (Y, X)
-        Pre-filtered segmentation mask.
+        Pre-filtered segmentation mask with valid cell labels only.
     channel : ndarray, shape (Y, X)
-        Channel image.
+        Channel intensity image (same spatial dimensions as mask).
     valid_labels : ndarray
-        Array of valid label IDs.
+        Array of valid cell label IDs to compute intensities for.
     channel_name : str
-        Name of the channel.
+        Name of the channel/marker for the output Series.
 
     Returns
     -------
-    Series
-        Mean intensities indexed by cell label.
+    pd.Series
+        Mean intensities indexed by cell label, with name=channel_name.
+        Missing or out-of-bounds labels are assigned intensity 0.0.
+
+    Notes
+    -----
+    This function uses np.bincount for efficient vectorized computation
+    of mean intensities. It handles edge cases like missing labels or
+    labels outside the computed range.
+
+    The mean intensity is computed as the sum of pixel intensities
+    divided by the number of pixels for each cell.
+
+    Examples
+    --------
+    >>> mask = np.array([[1, 1, 0], [1, 0, 2], [0, 2, 2]])
+    >>> channel = np.array([[10, 20, 0], [30, 0, 40], [0, 50, 60]])
+    >>> valid_labels = np.array([1, 2])
+    >>> intensities = compute_channel_intensity(mask, channel, valid_labels, "CD3")
+    >>> print(intensities)
+    1    20.0
+    2    50.0
+    Name: CD3, dtype: float64
+
+    See Also
+    --------
+    compute_morphology : Compute morphological properties
+    quantify_single_channel : Complete quantification pipeline
     """
     channel = channel.squeeze()
     
@@ -249,20 +264,61 @@ def run_quantification(
     Parameters
     ----------
     mask_path : str
-        Path to segmentation mask (.npy file).
+        Path to segmentation mask (.npy or .tif file).
     channel_path : str
         Path to channel image file (.tif).
     output_path : str
-        Path to save output CSV.
-    min_area : int, optional
-        Minimum cell area filter.
+        Path to save output CSV file.
+    min_area : int, default=0
+        Minimum cell area filter in pixels. Cells smaller than this
+        are excluded from quantification.
     channel_name : str, optional
-        Explicit channel name. If not provided, will parse from filename.
+        Explicit channel/marker name. If not provided, will be parsed
+        from the channel file basename.
 
     Returns
     -------
-    DataFrame
-        Quantification results.
+    pd.DataFrame
+        Quantification results with columns:
+        - label: Cell ID
+        - y, x: Centroid coordinates
+        - area, eccentricity, perimeter, etc.: Morphology features
+        - {channel_name}: Mean intensity for this channel
+
+    Raises
+    ------
+    FileNotFoundError
+        If mask_path or channel_path does not exist.
+    ValueError
+        If mask and channel have incompatible shapes.
+
+    Notes
+    -----
+    This function orchestrates the complete quantification pipeline:
+    1. Load segmentation mask and channel image
+    2. Validate shapes match
+    3. Compute morphology and filter by area
+    4. Compute mean intensities per cell
+    5. Save results to CSV
+
+    If no valid cells are found, an empty CSV with proper column
+    headers is created.
+
+    Examples
+    --------
+    >>> run_quantification(
+    ...     mask_path="seg/P001_mask.npy",
+    ...     channel_path="channels/P001_CD3.tif",
+    ...     output_path="quant/P001_CD3_quant.csv",
+    ...     min_area=10,
+    ...     channel_name="CD3"
+    ... )
+
+    See Also
+    --------
+    compute_morphology : Morphology computation
+    compute_channel_intensity : Intensity computation
+    quantify_single_channel : Core quantification logic
     """
     # Use provided channel name, or extract from filename as fallback
     if channel_name is None:
@@ -275,21 +331,33 @@ def run_quantification(
 
     # Load segmentation mask
     logger.info(f"Loading mask: {mask_path}")
-    if mask_path.endswith('.npy'):
-        mask = np.load(mask_path).squeeze()
-    else:
-        mask, _ = load_image(mask_path)
-        mask = mask.squeeze()
-    logger.info(f"Mask shape: {mask.shape}")
+    try:
+        if mask_path.endswith('.npy'):
+            mask = np.load(mask_path).squeeze()
+        else:
+            mask, _ = load_image(mask_path)
+            mask = mask.squeeze()
+        logger.info(f"Mask shape: {mask.shape}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Segmentation mask not found: {mask_path}")
+    except Exception as e:
+        raise ValueError(f"Failed to load mask from {mask_path}: {e}") from e
+
     # Load channel image
     logger.info(f"Loading channel: {channel_path}")
-    channel_image, _ = load_image(channel_path)
-    logger.info(f"Channel shape: {channel_image.shape}")
+    try:
+        channel_image, _ = load_image(channel_path)
+        logger.info(f"Channel shape: {channel_image.shape}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Channel image not found: {channel_path}")
+    except Exception as e:
+        raise ValueError(f"Failed to load channel from {channel_path}: {e}") from e
 
     # Validate shapes match
     if mask.shape != channel_image.squeeze().shape:
         raise ValueError(
-            f"Shape mismatch: mask {mask.shape} vs channel {channel_image.shape}"
+            f"Shape mismatch: mask {mask.shape} vs channel {channel_image.squeeze().shape}. "
+            f"Ensure the mask and channel images have the same spatial dimensions."
         )
 
     # Quantify
@@ -489,10 +557,7 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 

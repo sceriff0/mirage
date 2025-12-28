@@ -16,10 +16,10 @@ plugins {
 ========================================================================================
 */
 
-include { PREPROCESSING  } from './subworkflows/local/preprocess'
-include { REGISTRATION   } from './subworkflows/local/registration'
-include { POSTPROCESSING } from './subworkflows/local/postprocess'
-include { RESULTS        } from './subworkflows/local/results'
+include { PREPROCESSING  } from './subworkflows/local/preprocess.nf'
+include { REGISTRATION   } from './subworkflows/local/registration.nf'
+include { POSTPROCESSING } from './subworkflows/local/postprocess.nf'
+include { RESULTS        } from './subworkflows/local/results.nf'
 
 /*
 ========================================================================================
@@ -35,23 +35,127 @@ include { validateParameters; paramsHelp; paramsSummaryLog } from 'plugin/nf-val
 ========================================================================================
 */
 
+// Validate metadata map has required fields and correct types
+// This prevents cryptic downstream errors from malformed metadata
+def validateMeta(meta, required_fields = ['patient_id', 'is_reference', 'channels'], context = 'unknown') {
+    // Check all required fields exist
+    required_fields.each { field ->
+        if (!meta.containsKey(field)) {
+            error """
+            Missing required metadata field '${field}' in ${context}
+            Patient ID: ${meta.patient_id ?: 'unknown'}
+            Available fields: ${meta.keySet().join(', ')}
+            """.stripIndent()
+        }
+    }
+
+    // Validate specific field types and values
+    if (required_fields.contains('patient_id')) {
+        if (!meta.patient_id || meta.patient_id.toString().trim().isEmpty()) {
+            error "Invalid patient_id in ${context}: '${meta.patient_id}'"
+        }
+    }
+
+    if (required_fields.contains('is_reference')) {
+        if (!(meta.is_reference instanceof Boolean)) {
+            error "is_reference must be boolean in ${context}. Got: ${meta.is_reference} (${meta.is_reference.class})"
+        }
+    }
+
+    if (required_fields.contains('channels')) {
+        // Validate channels is a non-empty list
+        if (!(meta.channels instanceof List)) {
+            error """
+            channels must be a List in ${context}
+            Patient: ${meta.patient_id}
+            Got type: ${meta.channels?.class}
+            Got value: ${meta.channels}
+            """.stripIndent()
+        }
+
+        if (meta.channels.isEmpty()) {
+            error """
+            Empty channels list in ${context}
+            Patient: ${meta.patient_id}
+            Hint: Check your input CSV 'channels' column is not empty
+            """.stripIndent()
+        }
+
+        // Validate no empty channel names
+        def empty_channels = meta.channels.findIndexValues { it == null || it.toString().trim().isEmpty() }
+        if (!empty_channels.isEmpty()) {
+            error """
+            Empty channel name(s) found in ${context}
+            Patient: ${meta.patient_id}
+            Channels: ${meta.channels}
+            Empty at indices: ${empty_channels}
+            """.stripIndent()
+        }
+
+        // Validate DAPI is first (critical requirement)
+        if (meta.channels[0]?.toUpperCase() != 'DAPI') {
+            error """
+            DAPI must be the first channel in ${context}
+            Patient: ${meta.patient_id}
+            Current order: ${meta.channels}
+            DAPI position: ${meta.channels.findIndexOf { it?.toUpperCase() == 'DAPI' }}
+
+            Fix: Update your input CSV so DAPI is listed first in the 'channels' column
+            Example: 'DAPI|PANCK|SMA' instead of 'PANCK|DAPI|SMA'
+            """.stripIndent()
+        }
+    }
+
+    return true
+}
+
 // Parse CSV row and create metadata map with channels
 // Used for loading from checkpoint CSVs
 def parseMetadata(row) {
     // Parse pipe-delimited channels from CSV
     def channels = row.channels.split('\\|').collect { ch -> ch.trim() }
 
+    // Validate channels are not empty after trimming
+    if (channels.isEmpty()) {
+        error """
+        Empty channels list after parsing for patient ${row.patient_id}
+        Raw channels value: '${row.channels}'
+        Check your CSV has valid pipe-delimited channel names (e.g., 'DAPI|PANCK|SMA')
+        """.stripIndent()
+    }
+
+    // Check for any empty strings in channels
+    def empty_indices = channels.findIndexValues { it.isEmpty() }
+    if (!empty_indices.isEmpty()) {
+        error """
+        Empty channel name(s) found for patient ${row.patient_id}
+        Channels: ${channels}
+        Empty at positions: ${empty_indices}
+        Raw value: '${row.channels}'
+        Check for double pipes (||) or trailing pipes in your CSV
+        """.stripIndent()
+    }
+
     // Validate DAPI is present (can be in any position - will be moved to channel 0 during conversion)
     def has_dapi = channels.any { ch -> ch.toUpperCase() == 'DAPI' }
     if (!has_dapi) {
-        error "DAPI channel not found for ${row.patient_id}. Channels: ${channels}"
+        error """
+        DAPI channel not found for patient ${row.patient_id}
+        Channels found: ${channels}
+        DAPI is required for segmentation and must be present in your channel list
+        """.stripIndent()
     }
 
-    return [
+    def meta = [
         patient_id: row.patient_id,
         is_reference: row.is_reference.toBoolean(),
         channels: channels  // Keep original order; conversion will place DAPI first
     ]
+
+    // Validate the constructed metadata
+    validateMeta(meta, ['patient_id', 'is_reference', 'channels'], "parseMetadata for ${row.patient_id}")
+
+    return meta
 }
 
 // Validate input CSV has required columns
@@ -91,10 +195,10 @@ def validateParameter(param_name, param_value, valid_values) {
 // Create formatted error message
 def pipelineError(step, patient_id, message, hint = null) {
     def error_msg = """
-    ❌ Pipeline Error in ${step}
-    📍 Patient: ${patient_id}
-    💬 Message: ${message}
-    ${hint ? "💡 Hint: ${hint}" : ""}
+    Pipeline Error in ${step}
+    Patient: ${patient_id}
+    Message: ${message}
+    ${hint ? "Hint: ${hint}" : ""}
     """.stripIndent()
     return error_msg
 }
@@ -111,12 +215,6 @@ workflow {
     // ========================================================================
     // PARAMETER VALIDATION
     // ========================================================================
-
-    // Show help if requested
-    if (params.help) {
-        log.info paramsHelp("nextflow run main.nf --input input.csv --outdir results")
-        exit 0
-    }
 
     // Validate parameters against schema
     validateParameters()
@@ -145,28 +243,29 @@ workflow {
     } else if (params.step == 'postprocessing') {
         validateInputCSV(params.input, ['patient_id', 'registered_image', 'is_reference', 'channels'])
     } else if (params.step == 'results') {
+        // Validate base columns (registered_images is optional for backward compatibility)
         validateInputCSV(params.input, ['patient_id', 'is_reference', 'phenotype_csv', 'phenotype_mask', 'phenotype_mapping', 'merged_csv', 'cell_mask'])
     }
 
     // Parameter compatibility warnings
     if (params.padding && params.registration_method == 'valis') {
-        log.warn "⚠️  Padding enabled but VALIS registration selected. Padding will be applied but may not be optimal for VALIS."
+        log.warn "Padding enabled but VALIS registration selected. Padding will be applied but may not be optimal for VALIS."
     }
 
     if (params.seg_gpu && !params.slurm_partition && workflow.profile != 'local') {
-        log.warn "⚠️  GPU segmentation enabled but no SLURM partition specified. May fail if no GPU available."
+        log.warn "GPU segmentation enabled but no SLURM partition specified. May fail if no GPU available."
     }
 
     // DRY RUN MODE (if enabled)
     if (params.dry_run) {
         log.info """
         ========================================================================
-        🔍 DRY RUN MODE - Validation Only
+        DRY RUN MODE - Validation Only
         ========================================================================
-        ✅ Input file exists: ${params.input}
-        ✅ Step parameter valid: ${params.step}
-        ✅ Registration method valid: ${params.registration_method}
-        ✅ Input CSV format validated
+        Input file exists: ${params.input}
+        Step parameter valid: ${params.step}
+        Registration method valid: ${params.registration_method}
+        Input CSV format validated
 
         All validations passed. Pipeline would execute normally.
         Set --dry_run false to run the pipeline.
@@ -197,7 +296,7 @@ workflow {
         // Skip preprocessing - will load from checkpoint later
         ch_preprocessed = channel.empty()
     }
-
+    
     // ========================================================================
     // STEP: REGISTRATION
     // ========================================================================
@@ -280,32 +379,87 @@ workflow {
         // Load from user-provided checkpoint CSV
         ch_postprocessing_csv = channel.fromPath(params.input, checkIfExists: true)
 
-        ch_registered_for_results = channel.empty()
+        // QC is not regenerated when starting from results step
         ch_qc_for_results = channel.empty()
+        // Note: ch_registered_for_results will be populated from CSV below
     }
 
     // Parse CSV and reconstruct channels when starting from 'results' step
     if (params.step == 'results') {
-        // FIX BUG #4: Use multiMap to avoid multiple channel consumption
-        // Split CSV into multiple output channels in a single operation
+        // FIX ISSUE #4: Refactored channel reconstruction for clarity
+        // Strategy: Use multiMap to split CSV into multiple channels in one pass
+        // This avoids repeated CSV parsing and potential channel consumption issues
+
         ch_from_csv = ch_postprocessing_csv
             .splitCsv(header: true)
             .multiMap { row ->
+                // Create minimal metadata (no channels needed at this stage)
                 def meta = [patient_id: row.patient_id, is_reference: row.is_reference.toBoolean()]
 
+                // Map each CSV column to its own output channel
                 phenotype_csv: [meta, file(row.phenotype_csv)]
                 phenotype_mask: [meta, file(row.phenotype_mask)]
                 phenotype_mapping: [meta, file(row.phenotype_mapping)]
                 merged_csv: [meta, file(row.merged_csv)]
                 cell_mask: [meta, file(row.cell_mask)]
+
+                // Handle registered_images (optional for backward compatibility)
+                registered_patient: [row.patient_id, row.containsKey('registered_images') ? row.registered_images : null]
             }
 
-        // Assign to individual channels
+        // Assign simple outputs
         ch_phenotype_csv = ch_from_csv.phenotype_csv
         ch_phenotype_mask = ch_from_csv.phenotype_mask
         ch_phenotype_mapping = ch_from_csv.phenotype_mapping
         ch_merged_csv = ch_from_csv.merged_csv
         ch_cell_mask = ch_from_csv.cell_mask
+
+        // Reconstruct registered images channel (complex multi-file per patient)
+        // Filter, parse, and flatten in explicit steps for clarity
+        ch_registered_for_results = ch_from_csv.registered_patient
+            .filter { _patient_id, registered_images_str ->
+                // Only process patients that have registered_images column with data
+                registered_images_str != null && !registered_images_str.trim().isEmpty()
+            }
+            .flatMap { patient_id, registered_images_str ->
+                // Parse pipe-delimited paths and create [meta, file] tuples
+                def meta = [patient_id: patient_id, is_reference: false]  // Will be updated per file
+                registered_images_str.split('\\|').collect { path ->
+                    [meta.clone(), file(path.trim())]
+                }
+            }
+
+        // Backward compatibility check: warn if any patients missing registered_images
+        ch_from_csv.registered_patient
+            .map { patient_id, registered_images_str ->
+                [patient_id, registered_images_str != null && !registered_images_str.trim().isEmpty()]
+            }
+            .collect()
+            .subscribe { patient_reg_status ->
+                def patients_with_images = patient_reg_status.findAll { _patient_id, has_images -> has_images }
+                def patients_without = patient_reg_status.findAll { _patient_id, has_images -> !has_images }
+
+                if (!patients_without.isEmpty()) {
+                    log.warn """
+                    ⚠️  WARNING: Old checkpoint CSV format detected!
+
+                    ${patients_without.size()} patient(s) are missing 'registered_images' column:
+                    ${patients_without.collect { entry -> entry[0] }.join(', ')}
+
+                    Pyramid generation will be SKIPPED for these patients.
+
+                    💡 To enable pyramid regeneration:
+                       1. Re-run from 'postprocessing' step to generate new checkpoint CSV
+                       2. OR manually add 'registered_images' column with pipe-delimited paths
+
+                    ℹ️  Only CSVs and masks will be saved to archive (no pyramidal OME-TIFF).
+                    """.stripIndent()
+                }
+
+                if (!patients_with_images.isEmpty()) {
+                    log.info "✅ Found registered_images for ${patients_with_images.size()} patient(s)"
+                }
+            }
     }
 
     if (params.step in ['preprocessing', 'registration', 'postprocessing', 'results']) {

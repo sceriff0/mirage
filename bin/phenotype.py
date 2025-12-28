@@ -10,6 +10,13 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+
+# Add parent directory to path to import lib modules
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from lib.logger import get_logger, configure_logging
 from typing import Tuple
 
 import numpy as np
@@ -18,12 +25,9 @@ import tifffile
 from scipy.stats import zscore
 from numpy.typing import NDArray
 
-from _common import (
-    ensure_dir,
-    save_tiff,
-)
+from lib.image_utils import ensure_dir, save_tiff
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -372,10 +376,7 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 

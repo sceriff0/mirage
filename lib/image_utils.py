@@ -25,15 +25,25 @@ from typing import Optional, Tuple
 import numpy as np
 from numpy.typing import NDArray
 
+import tifffile
+from typing import Any, Dict
+
 try:
     import pyvips
     HAS_PYVIPS = True
 except ImportError:
     HAS_PYVIPS = False
 
+from lib.logger import get_logger
+
+logger = get_logger(__name__)
+
 __all__ = [
     "normalize_image_dimensions",
     "load_image_grayscale",
+    "load_image",
+    "save_tiff",
+    "ensure_dir",
 ]
 
 
@@ -220,3 +230,181 @@ def load_image_grayscale(
             img_array = np.zeros_like(img_array, dtype=np.uint8)
 
     return img_array
+
+
+def ensure_dir(directory: str | Path) -> Path:
+    """Ensure directory exists, creating it if necessary.
+
+    Parameters
+    ----------
+    directory : str or Path
+        Path to directory to create.
+
+    Returns
+    -------
+    Path
+        Path object for the created/existing directory.
+
+    Notes
+    -----
+    Creates parent directories as needed (parents=True) and does not
+    raise an error if directory exists (exist_ok=True).
+
+    Examples
+    --------
+    >>> output_dir = ensure_dir("results/analysis")
+    >>> print(output_dir)
+    PosixPath('results/analysis')
+
+    See Also
+    --------
+    pathlib.Path.mkdir : Underlying method used
+    """
+    dir_path = Path(directory)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    return dir_path
+
+
+def load_image(
+    image_path: str | Path,
+    memmap: bool = False
+) -> Tuple[NDArray, Dict[str, Any]]:
+    """Load image from TIFF file with metadata extraction.
+
+    Parameters
+    ----------
+    image_path : str or Path
+        Path to TIFF image file.
+    memmap : bool, default=False
+        If True, use memory-mapped I/O to avoid loading entire file into RAM.
+
+    Returns
+    -------
+    image : NDArray
+        Image data as numpy array. Shape depends on image dimensionality.
+    metadata : dict
+        Dictionary containing image metadata with keys:
+        - 'shape': tuple - Image shape
+        - 'dtype': np.dtype - Data type
+        - 'ome': str or None - OME-XML metadata if available
+        - 'axes': str or None - Dimension order (e.g., 'CYX')
+
+    Raises
+    ------
+    FileNotFoundError
+        If image_path does not exist.
+    ValueError
+        If file cannot be read as TIFF.
+
+    Notes
+    -----
+    This function handles both standard TIFF and OME-TIFF formats.
+    Memory-mapped mode is recommended for images >1GB.
+
+    Examples
+    --------
+    >>> img, meta = load_image("sample.tif")
+    >>> print(img.shape, img.dtype)
+    (3, 2048, 2048) uint16
+
+    >>> # Memory-mapped for large files
+    >>> img, meta = load_image("large.tif", memmap=True)
+
+    See Also
+    --------
+    lib.metadata.get_ome_metadata : Extract detailed OME metadata
+    save_tiff : Save image to TIFF format
+    """
+    image_path = Path(image_path)
+
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image not found: {image_path}")
+
+    logger.debug(f"Loading image: {image_path.name}")
+
+    try:
+        with tifffile.TiffFile(str(image_path)) as tif:
+            if memmap:
+                image = tif.asarray(out='memmap')
+            else:
+                image = tif.asarray()
+
+            metadata = {
+                'shape': image.shape,
+                'dtype': image.dtype,
+                'ome': None,
+                'axes': None
+            }
+
+            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
+                metadata['ome'] = tif.ome_metadata
+
+            logger.debug(f"  Shape: {metadata['shape']}, dtype: {metadata['dtype']}")
+
+            return image, metadata
+
+    except Exception as e:
+        raise ValueError(f"Failed to load image {image_path}: {e}") from e
+
+
+def save_tiff(
+    image: NDArray,
+    output_path: str | Path,
+    compression: str = 'zlib',
+    bigtiff: bool = True,
+    **kwargs
+) -> Path:
+    """Save image array to TIFF file with compression.
+
+    Parameters
+    ----------
+    image : NDArray
+        Image data to save. Can be 2D, 3D, or 4D.
+    output_path : str or Path
+        Path where TIFF file will be saved.
+    compression : str, default='zlib'
+        Compression algorithm: 'zlib', 'lzw', 'jpeg', or None.
+    bigtiff : bool, default=True
+        Use BigTIFF format for files >4GB.
+    **kwargs : dict
+        Additional arguments passed to tifffile.imwrite.
+        Common options: metadata, photometric, imagej.
+
+    Returns
+    -------
+    Path
+        Path object for the saved file.
+
+    Notes
+    -----
+    Automatically creates parent directories if needed.
+    Uses compression by default to save disk space.
+
+    Examples
+    --------
+    >>> mask = np.zeros((2048, 2048), dtype=np.uint16)
+    >>> save_tiff(mask, "output/mask.tif")
+    PosixPath('output/mask.tif')
+
+    >>> # Custom compression
+    >>> save_tiff(image, "output/results.tif", compression='lzw')
+
+    See Also
+    --------
+    load_image : Load TIFF image
+    lib.metadata.create_ome_xml : Create OME-XML metadata
+    """
+    output_path = Path(output_path)
+    ensure_dir(output_path.parent)
+
+    logger.debug(f"Saving TIFF: {output_path.name} (shape={image.shape}, dtype={image.dtype})")
+
+    tifffile.imwrite(
+        str(output_path),
+        image,
+        compression=compression,
+        bigtiff=bigtiff,
+        **kwargs
+    )
+
+    return output_path

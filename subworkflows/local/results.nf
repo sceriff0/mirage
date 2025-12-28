@@ -81,6 +81,16 @@ workflow RESULTS {
     // All inputs (masks, CSVs) are per-patient and have matching patient_ids
     // Join them together to create input for MERGE process
 
+    // FIX ISSUE #5: Add validation to detect missing patients in joins
+    // Track which patients we expect vs what we get after joins
+
+    // Collect expected patients from registered images
+    ch_expected_patients = ch_grouped_registered
+        .map { meta, files -> meta.patient_id }
+        .collect()
+        .map { it.toSet() }
+
+    // Perform joins
     ch_for_merge = ch_grouped_registered
         .map { meta, files -> [meta.patient_id, meta, files] }
         .join(
@@ -98,6 +108,41 @@ workflow RESULTS {
         .map { patient_id, meta, registered_files, cell_mask, pheno_mask, pheno_mapping ->
             // MERGE expects: tuple val(meta), path(registered_slides), path(seg_mask), path(pheno_mask), path(pheno_mapping)
             [meta, registered_files, cell_mask, pheno_mask, pheno_mapping]
+        }
+
+    // Validate all expected patients made it through the joins
+    ch_for_merge
+        .map { meta, files, cell_mask, pheno_mask, pheno_mapping -> meta.patient_id }
+        .collect()
+        .map { it.toSet() }
+        .combine(ch_expected_patients)
+        .subscribe { processed_patients, expected_patients ->
+            def missing = expected_patients - processed_patients
+
+            if (!missing.isEmpty()) {
+                log.error """
+                ❌ CRITICAL: Some patients were dropped during join operations!
+
+                Expected patients: ${expected_patients.size()}
+                Processed patients: ${processed_patients.size()}
+                Missing patients: ${missing}
+
+                💡 This usually means:
+                   1. SEGMENT failed for these patients (no cell_mask)
+                   2. PHENOTYPE failed for these patients (no phenotype outputs)
+                   3. Mismatched patient_id values between channels
+
+                💡 Check earlier process logs for failures in:
+                   - SEGMENT
+                   - QUANTIFY
+                   - MERGE_QUANT_CSVS
+                   - PHENOTYPE
+
+                ⚠️  Pipeline will continue but these patients will NOT be in final results!
+                """.stripIndent()
+            } else {
+                log.info "✅ All ${expected_patients.size()} patients successfully joined for MERGE"
+            }
         }
 
     // ========================================================================
@@ -121,19 +166,19 @@ workflow RESULTS {
     // Collect all outputs to save to archive location
     // Note: QC, CSVs, and pyramid are per-patient
 
-    // FIX BUG #2: Normalize all channels to plain files before mixing
-    // ch_qc may contain tuples [meta, file] or plain files depending on registration method
-    // Extract files only to ensure consistent channel type
-    // FIX BUG #3: Empty channels are handled correctly by .map() and .mix()
-    // When starting from 'results' step, ch_qc and ch_registered are empty
-    // This is safe - empty channels contribute nothing to the mix
-    ch_qc_files = ch_qc.map { item ->
-        item instanceof List ? item[1] : item
+    // FIX BUG #2: Extract QC files from tuples
+    // GENERATE_REGISTRATION_QC emits: tuple val(meta), path("qc/*_QC_RGB.{png,tif}")
+    // The path() glob returns a LIST of files [png, tif]
+    // We need to flatten this to get individual files
+    ch_qc_files = ch_qc.flatMap { meta, files ->
+        // files is a list containing [png_file, tif_file]
+        // Return the list of files (without meta)
+        files instanceof List ? files : [files]
     }
 
     ch_to_save = channel.empty()
         .mix(
-            ch_qc_files,                                        // QC: RGB files only (may be empty)
+            ch_qc_files,                                        // QC: PNG and TIFF files (may be empty)
             ch_merged_csv.map { meta, csv -> csv },             // Quantification results (per patient)
             ch_phenotype_csv.map { meta, csv -> csv },          // Phenotype results (per patient)
             CONVERSION.out.pyramid.map { meta, pyr -> pyr }     // Pyramidal visualization (per patient)

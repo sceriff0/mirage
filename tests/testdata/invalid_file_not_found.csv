@@ -1,0 +1,2 @@
+patient_id,path_to_file,is_reference,channels
+P001,/nonexistent/path/file.ome.tiff,true,DAPI|PANCK|SMA

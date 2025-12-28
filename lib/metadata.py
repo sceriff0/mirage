@@ -29,6 +29,7 @@ import tifffile
 
 __all__ = [
     "get_channel_names",
+    "get_channel_names_from_image",
     "extract_channel_names_from_ome",
     "extract_channel_names_from_filename",
     "extract_markers_from_filename",

@@ -72,7 +72,7 @@ workflow REGISTRATION {
 
         MAX_DIM(ch_grouped_dims)
 
-        // FIX BUG #4: Use proper join - MAX_DIM now outputs [patient_id, max_dims_file]
+        // MAX_DIM outputs [patient_id, max_dims_file]
         ch_to_pad = ch_preprocessed
             .map { meta, file -> [meta.patient_id, meta, file] }
             .join(MAX_DIM.out.max_dims_file, by: 0)
