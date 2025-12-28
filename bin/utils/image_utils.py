@@ -34,10 +34,6 @@ try:
 except ImportError:
     HAS_PYVIPS = False
 
-from logger import get_logger
-
-logger = get_logger(__name__)
-
 __all__ = [
     "normalize_image_dimensions",
     "load_image_grayscale",
@@ -320,8 +316,6 @@ def load_image(
     if not image_path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    logger.debug(f"Loading image: {image_path.name}")
-
     try:
         with tifffile.TiffFile(str(image_path)) as tif:
             if memmap:
@@ -338,8 +332,6 @@ def load_image(
 
             if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
                 metadata['ome'] = tif.ome_metadata
-
-            logger.debug(f"  Shape: {metadata['shape']}, dtype: {metadata['dtype']}")
 
             return image, metadata
 
@@ -396,8 +388,6 @@ def save_tiff(
     """
     output_path = Path(output_path)
     ensure_dir(output_path.parent)
-
-    logger.debug(f"Saving TIFF: {output_path.name} (shape={image.shape}, dtype={image.dtype})")
 
     tifffile.imwrite(
         str(output_path),
