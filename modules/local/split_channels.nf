@@ -40,12 +40,12 @@ process SPLIT_CHANNELS {
         ${args}
 
     # FIX BUG #1: Create manifest of generated channel files for validation
-    # List all generated TIFF files (excluding work directory artifacts)
-    ls -1 *.tiff | sort > channel_names.txt || echo "No TIFF files generated" > channel_names.txt
+    # List all generated TIFF files (excluding input .ome.tiff files)
+    ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' | sort > channel_names.txt || echo "No TIFF files generated" > channel_names.txt
 
     # Validate expected channel count matches actual output
     EXPECTED_CHANNELS=${meta.channels ? meta.channels.size() : 0}
-    ACTUAL_CHANNELS=\$(ls -1 *.tiff 2>/dev/null | wc -l | tr -d ' ')
+    ACTUAL_CHANNELS=\$(ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' | wc -l | tr -d ' ')
 
     echo "Expected channels: \$EXPECTED_CHANNELS"
     echo "Actual TIFF files: \$ACTUAL_CHANNELS"
@@ -62,8 +62,8 @@ process SPLIT_CHANNELS {
         if [ "\$ACTUAL_CHANNELS" -ne "\$EXPECTED_ADJUSTED" ]; then
             echo "❌ ERROR: Channel count mismatch!"
             echo "   Expected \$EXPECTED_ADJUSTED channels, got \$ACTUAL_CHANNELS TIFF files"
-            echo "   Generated files:"
-            ls -1 *.tiff 2>/dev/null || echo "   (none)"
+            echo "   Generated channel files (excluding input .ome.tiff):"
+            ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' || echo "   (none)"
             exit 1
         fi
     fi
