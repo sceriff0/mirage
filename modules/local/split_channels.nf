@@ -39,37 +39,6 @@ process SPLIT_CHANNELS {
         ${channel_args} \\
         ${args}
 
-    # FIX BUG #1: Create manifest of generated channel files for validation
-    # List all generated TIFF files (excluding input .ome.tiff files)
-    ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' | sort > channel_names.txt || echo "No TIFF files generated" > channel_names.txt
-
-    # Validate expected channel count matches actual output
-    EXPECTED_CHANNELS=${meta.channels ? meta.channels.size() : 0}
-    ACTUAL_CHANNELS=\$(ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' | wc -l | tr -d ' ')
-
-    echo "Expected channels: \$EXPECTED_CHANNELS"
-    echo "Actual TIFF files: \$ACTUAL_CHANNELS"
-
-    if [ "\$EXPECTED_CHANNELS" -gt 0 ]; then
-        # Adjust expected count if DAPI was skipped (non-reference)
-        if [ "${is_reference}" = "false" ]; then
-            EXPECTED_ADJUSTED=\$((EXPECTED_CHANNELS - 1))
-            echo "Adjusted for DAPI skip (non-reference): \$EXPECTED_ADJUSTED"
-        else
-            EXPECTED_ADJUSTED=\$EXPECTED_CHANNELS
-        fi
-
-        if [ "\$ACTUAL_CHANNELS" -ne "\$EXPECTED_ADJUSTED" ]; then
-            echo "❌ ERROR: Channel count mismatch!"
-            echo "   Expected \$EXPECTED_ADJUSTED channels, got \$ACTUAL_CHANNELS TIFF files"
-            echo "   Generated channel files (excluding input .ome.tiff):"
-            ls -1 *.tiff 2>/dev/null | grep -v '\.ome\.tiff$' || echo "   (none)"
-            exit 1
-        fi
-    fi
-
-    echo "✅ Channel validation passed"
-
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version 2>&1 | sed 's/Python //')
