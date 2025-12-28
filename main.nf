@@ -6,10 +6,10 @@ IMPORT SUBWORKFLOWS
 ================================================================================
 */
 
-include { PREPROCESSING  } from './subworkflows/local/preprocess.nf'
-include { REGISTRATION   } from './subworkflows/local/registration.nf'
-include { POSTPROCESSING } from './subworkflows/local/postprocess.nf'
-include { RESULTS        } from './subworkflows/local/results.nf'
+include { PREPROCESSING  } from './subworkflows/local/preprocess'
+include { REGISTRATION   } from './subworkflows/local/registration'
+include { POSTPROCESSING } from './subworkflows/local/postprocess'
+include { RESULTS        } from './subworkflows/local/results'
 
 /*
 ================================================================================
@@ -17,14 +17,14 @@ IMPORT HELPERS
 ================================================================================
 */
 
-include { parseMetadata } from './lib/metadata'
+include { parseMetadata } from './lib/metadata.groovy'
 include {
     validateStep;
     validateRegistrationMethod;
     validateInputCSV;
     requiredColumnsForStep
-} from './lib/validation'
-include { loadCheckpointCsv } from './lib/csv'
+} from './lib/validation.groovy'
+include { loadCheckpointCsv } from './lib/csv.groovy'
 
 
 /*
