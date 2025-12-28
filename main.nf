@@ -13,12 +13,23 @@ include { RESULTS        } from './subworkflows/local/results'
 
 /*
 ================================================================================
-IMPORT HELPERS
+IMPORT and DECLARE HELPERS
 ================================================================================
 */
 
 import static CsvUtils.*
 import static ParamUtils.*
+
+def loadInputChannel(csv_path, image_column) {
+    return Channel
+        .fromPath(csv_path, checkIfExists: true)
+        .splitCsv(header: true)
+        .map { row ->
+            // Use CsvUtils to handle the complex metadata parsing
+            def meta = CsvUtils.parseMetadata(row, "CSV ${csv_path}") 
+            return tuple(meta, file(row[image_column]))
+        }
+}
 
 /*
 ================================================================================
@@ -50,7 +61,7 @@ workflow {
 
     if (params.step == 'preprocessing') {
 
-        ch_input = loadInputCSV(params.input, 'path_to_file')
+        ch_input = loadInputChannel(params.input, 'path_to_file')
         PREPROCESSING(ch_input)
         ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
     }

@@ -1,8 +1,3 @@
-import nextflow.Channel
-import static nextflow.Nextflow.file
-import static nextflow.Nextflow.error
-import static nextflow.Nextflow.tuple
-
 class CsvUtils {
 
     static Map validateMetadata(Map meta, String context = 'unknown') {
@@ -61,18 +56,5 @@ class CsvUtils {
             if (!(it in header))
                 error "CSV missing required column '${it}'"
         }
-    }
-
-    static Channel loadInputCSV(def csv_path, String image_column) {
-
-        Channel
-            .fromPath(csv_path, checkIfExists: true)
-            .splitCsv(header: true)
-            .map { row ->
-                tuple(
-                    parseMetadata(row, "CSV ${csv_path}"),
-                    file(row[image_column])
-                )
-            }
     }
 }
