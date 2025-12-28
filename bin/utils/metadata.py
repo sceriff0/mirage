@@ -5,7 +5,7 @@ metadata for microscopy images, particularly OME-TIFF format.
 
 Examples
 --------
->>> from lib.metadata import get_channel_names, create_ome_xml
+>>> from metadata import get_channel_names, create_ome_xml
 >>> channels = get_channel_names("sample_DAPI_SMA_panCK.tif")
 >>> ['DAPI', 'SMA', 'panCK']
 >>> xml = create_ome_xml(channels, np.uint16, 2048, 2048)

@@ -5,7 +5,7 @@ This module consolidates common functions used across registration scripts
 
 Examples
 --------
->>> from lib.registration_utils import autoscale, extract_crop_coords
+>>> from registration_utils import autoscale, extract_crop_coords
 >>> scaled = autoscale(image, low_p=1.0, high_p=99.0)
 >>> crops = extract_crop_coords(image.shape, crop_size=2000, overlap=200)
 
@@ -463,7 +463,7 @@ def cleanup_memmaps(tmp_dir: Path) -> None:
     create_memmaps_for_merge : Create temporary memmaps
     """
     import shutil
-    from lib.logger import get_logger
+    from logger import get_logger
 
     logger = get_logger(__name__)
 

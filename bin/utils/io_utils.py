@@ -5,7 +5,7 @@ using pickle format, with proper error handling and logging.
 
 Examples
 --------
->>> from lib.io_utils import save_pickle, load_pickle
+>>> from io_utils import save_pickle, load_pickle
 >>> data = {'accuracy': 0.95, 'loss': 0.05}
 >>> save_pickle(data, "results/metrics.pkl")
 >>> loaded_data = load_pickle("results/metrics.pkl")
@@ -22,7 +22,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from lib.logger import get_logger
+from logger import get_logger
 
 __all__ = [
     "load_pickle",
@@ -118,7 +118,7 @@ def save_pickle(
     --------
     load_pickle : Load object from pickle file
     """
-    from lib.image_utils import ensure_dir
+    from image_utils import ensure_dir
 
     output_path = Path(output_path)
     ensure_dir(output_path.parent)

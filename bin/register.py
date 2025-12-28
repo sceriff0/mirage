@@ -21,16 +21,16 @@ from typing import Optional
 import tifffile
 import pyvips
 
-# Add parent directory to path to import lib modules
+# Add utils directory to path
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-# Import from lib modules for DRY principle
-from lib.image_utils import ensure_dir
-from lib.logger import log_progress
-from lib.metadata import get_channel_names
-from lib.registration_utils import autoscale
+# Import from utils modules for DRY principle
+from image_utils import ensure_dir
+from logger import log_progress
+from metadata import get_channel_names
+from registration_utils import autoscale
 
 # Disable numba caching to avoid file system issues in containers
 os.environ['NUMBA_DISABLE_JIT'] = '0'
@@ -63,124 +63,6 @@ def debug_check_slide2vips(registrar):
 
 # log_progress, get_channel_names, and autoscale are now imported from lib modules above
 # These duplicate function definitions have been removed to follow DRY principle
-
-
-def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
-    """Create QC RGB composites with registered (red) and reference (green) DAPI channels."""
-    from pathlib import Path
-    from skimage.transform import rescale
-    import cv2
-
-    qc_path = Path(qc_dir)
-    qc_path.mkdir(parents=True, exist_ok=True)
-    log_progress(f"Creating QC outputs in: {qc_path}")
-
-    # Find reference slide key (slide_dict keys are slide names without extension)
-    ref_image_no_ext = ref_image.replace('.ome.tif', '').replace('.ome.tiff', '')
-    ref_slide_key = next((k for k in registrar.slide_dict.keys() if k == ref_image_no_ext), None)
-
-    if ref_slide_key is None:
-        raise KeyError(f"Reference '{ref_image_no_ext}' not found. Available: {list(registrar.slide_dict.keys())}")
-
-    # Extract reference DAPI
-    ref_slide = registrar.slide_dict[ref_slide_key]
-    ref_channels = get_channel_names(os.path.basename(ref_slide_key))
-    ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-
-    log_progress("Loading reference DAPI channel...")
-    ref_vips = ref_slide.slide2vips(level=0)
-    ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
-    ref_dapi_scaled = autoscale(ref_dapi)
-
-    # ✅ OPTIMIZATION: Pre-compute downsampled reference ONCE (not per slide)
-    # This saves memory and computation time
-    log_progress("Pre-computing downsampled reference (0.25x scale)...")
-    ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-
-    # Free the full-resolution reference DAPI array (no longer needed after downsampling)
-    # Keep only ref_dapi_scaled for full-res QC and ref_down for PNG/TIFF outputs
-    del ref_vips, ref_dapi
-    gc.collect()
-    log_progress(f"✓ Reference DAPI prepared (full-res: {ref_dapi_scaled.shape}, downsampled: {ref_down.shape})")
-
-    log_progress(f"Processing {len(registrar.slide_dict) - 1} slides for QC...")
-
-    for slide_name, slide_obj in registrar.slide_dict.items():
-        if slide_name == ref_slide_key:
-            continue
-
-        log_progress(f"Creating QC for: {slide_name}")
-
-        # Extract registered DAPI
-        slide_channels = get_channel_names(os.path.basename(slide_name))
-        slide_dapi_idx = next((i for i, ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
-
-        warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
-        reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
-        reg_dapi_scaled = autoscale(reg_dapi)
-        del reg_dapi, warped_vips  # ✅ Free warped_vips immediately after extraction
-
-        # Save full-resolution QC (compressed)
-        base_name = os.path.basename(slide_name)
-        rgb_stack_full = np.stack([
-            reg_dapi_scaled,   # Red channel (registered)
-            ref_dapi_scaled,   # Green channel (reference)
-            np.zeros_like(ref_dapi_scaled, dtype=np.uint8)  # Blue channel
-        ], axis=0)
-
-        fullres_path = qc_path / f"{base_name}_QC_RGB_fullres.tif"
-        tifffile.imwrite(
-            str(fullres_path),
-            rgb_stack_full,
-            imagej=True,
-            bigtiff=True,
-            metadata={'axes': 'CYX', 'mode': 'composite'},
-            compression='zlib'
-        )
-        log_progress(f"  Saved full-res QC TIFF: {fullres_path.name}")
-        del rgb_stack_full
-        gc.collect()  # ✅ Force cleanup after large full-res TIFF
-
-        # Downsample registered DAPI only (reference already downsampled)
-        reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-        del reg_dapi_scaled  # ✅ Free full-res registered DAPI
-
-        # Create RGB composite: Red = registered, Green = reference
-        h, w = reg_down.shape
-        rgb_bgr = np.zeros((h, w, 3), dtype=np.uint8)
-        rgb_bgr[:, :, 0] = 0         # Blue channel
-        rgb_bgr[:, :, 1] = ref_down  # Green channel
-        rgb_bgr[:, :, 2] = reg_down  # Red channel
-
-        # Save as PNG (OpenCV uses BGR order)
-        png_path = qc_path / f"{base_name}_QC_RGB.png"
-        cv2.imwrite(str(png_path), rgb_bgr)
-        log_progress(f"  Saved QC PNG: {png_path.name}")
-
-        # Save as ImageJ-compatible TIFF (CYX order)
-        rgb_stack = np.stack([
-            reg_down,   # Red channel
-            ref_down,   # Green channel
-            np.zeros_like(ref_down, dtype=np.uint8)  # Blue channel
-        ], axis=0)
-
-        tiff_path = qc_path / f"{base_name}_QC_RGB.tif"
-        tifffile.imwrite(
-            str(tiff_path),
-            rgb_stack,
-            imagej=True,
-            metadata={'axes': 'CYX', 'mode': 'composite'}
-        )
-        log_progress(f"  Saved QC TIFF: {tiff_path.name}")
-
-        del rgb_bgr, rgb_stack, reg_down
-        gc.collect()
-
-    # ✅ OPTIMIZATION: Clean up reference arrays after all QC processing
-    del ref_dapi_scaled, ref_down
-    gc.collect()
-
-    log_progress("QC generation complete")
 
 
 
@@ -245,7 +127,7 @@ def find_reference_image(directory: str, required_markers: list[str],
         raise ValueError(error_msg)
 
 
-def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
+def valis_registration(input_dir: str, out: str,
                        reference: Optional[str] = None,
                        reference_markers: Optional[list[str]] = None,
                        max_processed_image_dim_px: int = 1800,
@@ -261,8 +143,6 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         Directory containing preprocessed OME-TIFF files
     out : str
         Output merged file path
-    qc_dir : str, optional
-        QC directory for registration outputs
     reference : str, optional
         Filename of reference image (takes precedence over reference_markers)
     reference_markers : list of str, optional
@@ -291,11 +171,9 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         reference_markers = ['DAPI', 'SMA']
 
     ensure_dir(os.path.dirname(out) or '.')
-    if qc_dir:
-        ensure_dir(qc_dir)
 
-    # Use qc_dir as results directory if available, otherwise use output directory
-    results_dir = qc_dir if qc_dir else os.path.dirname(out)
+    # Use output directory as results directory for VALIS internal files
+    results_dir = os.path.dirname(out)
 
     # ========================================================================
     # VALIS Parameters - Use provided values or defaults
@@ -590,18 +468,10 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     gc.collect()
 
-    # Save individual registered slides to QC directory with reference DAPI first
-    if qc_dir:
-        log_progress(f"\n" + "=" * 70)
-        log_progress("QC IMAGE GENERATION")
-        log_progress("=" * 70)
-        log_progress(f"QC directory: {qc_dir}")
-        log_progress(f"Reference image: {ref_image}")
-        save_qc_dapi_rgb(registrar, qc_dir, ref_image)
-
     log_progress("\n" + "=" * 70)
     log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
     log_progress("=" * 70)
+    log_progress("NOTE: QC generation is handled separately by the pipeline")
 
     # Cleanup
     registration.kill_jvm()
@@ -614,7 +484,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='VALIS registration for WSI processing')
     parser.add_argument('--input-dir', required=True, help='Directory containing preprocessed files')
     parser.add_argument('--out', required=True, help='Output merged path')
-    parser.add_argument('--qc-dir', required=False, help='QC directory for registration outputs')
     parser.add_argument('--reference', type=str, default=None,
                        help='Filename of reference image (modern approach, takes precedence over --reference-markers)')
     parser.add_argument('--reference-markers', nargs='+', default=['DAPI', 'SMA'],
@@ -640,7 +509,6 @@ def main() -> int:
         return valis_registration(
             args.input_dir,
             args.out,
-            args.qc_dir,
             args.reference,
             args.reference_markers,
             args.max_processed_dim,

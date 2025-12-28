@@ -47,7 +47,6 @@ process GPU_REGISTER {
 
     output:
     tuple val(meta), path("*_registered.ome.tiff"), emit: registered
-    tuple val(meta), path("qc/*_QC_RGB.{png,tif}") , emit: qc, optional: true
     path "versions.yml"                            , emit: versions
 
     when:
@@ -106,13 +105,10 @@ process GPU_REGISTER {
     echo "✅ GPU available: \$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
     echo ""
 
-    mkdir -p qc
-
     register_gpu.py \\
         --reference ${reference} \\
         --moving ${moving} \\
         --output ${moving.simpleName}_registered.ome.tiff \\
-        --qc-dir qc \\
         --affine-crop-size ${affine_crop_size} \\
         --diffeo-crop-size ${diffeo_crop_size} \\
         --overlap-percent ${overlap_percent} \\
@@ -133,9 +129,7 @@ process GPU_REGISTER {
     stub:
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
-    mkdir -p qc
     touch ${moving.simpleName}_registered.ome.tiff
-    touch qc/${moving.simpleName}_QC_RGB.png
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -28,9 +28,9 @@ os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 # Import from lib modules for DRY principle
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.logger import log_progress
-from lib.image_utils import load_image_grayscale
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import log_progress
+from image_utils import load_image_grayscale
 
 from valis import feature_detectors
 from valis import feature_matcher

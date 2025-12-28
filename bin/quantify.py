@@ -20,11 +20,11 @@ from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
 # Add parent directory to path to import lib modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
 # Import from lib for DRY principle
-from lib.logger import get_logger, configure_logging
-from lib.image_utils import ensure_dir, load_image
+from logger import get_logger, configure_logging
+from image_utils import ensure_dir, load_image
 
 logger = get_logger(__name__)
 

@@ -23,11 +23,11 @@ os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 # Import from lib modules for DRY principle
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from lib.logger import log_progress as log
-from lib.metadata import extract_channel_names_from_ome as get_channel_names_from_ome
-from lib.metadata import extract_markers_from_filename
-from lib.image_utils import normalize_image_dimensions
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import log_progress as log
+from metadata import extract_channel_names_from_ome as get_channel_names_from_ome
+from metadata import extract_markers_from_filename
+from image_utils import normalize_image_dimensions
 
 # Import only slide_io to avoid heavy VALIS dependencies
 import valis.slide_io as slide_io

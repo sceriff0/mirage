@@ -5,7 +5,7 @@ multiple scripts, following DRY principles.
 
 Examples
 --------
->>> from lib.image_utils import normalize_image_dimensions, load_image_grayscale
+>>> from image_utils import normalize_image_dimensions, load_image_grayscale
 >>> img = np.random.rand(100, 100, 3)
 >>> normalized = normalize_image_dimensions(img)
 >>> normalized.shape

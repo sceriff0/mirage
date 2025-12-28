@@ -60,9 +60,12 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+# Add utils directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
 # Import from shared library modules (eliminates code duplication)
-from lib.logger import get_logger, configure_logging
-from lib.qc import create_registration_qc
+from logger import get_logger, configure_logging
+from qc import create_registration_qc
 
 __all__ = ["main"]
 

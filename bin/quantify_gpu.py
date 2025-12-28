@@ -17,11 +17,11 @@ import numpy as np
 import pandas as pd
 
 # Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-from lib.logger import get_logger, configure_logging
-from lib.image_utils import load_image
-from lib.io_utils import load_pickle, save_pickle
+from logger import get_logger, configure_logging
+from image_utils import load_image
+from io_utils import load_pickle, save_pickle
 
 try:
     import psutil

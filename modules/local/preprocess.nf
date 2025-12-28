@@ -2,8 +2,6 @@ process PREPROCESS {
     tag "${meta.patient_id}"
     label 'process_medium'
 
-    publishDir "${params.outdir}/preprocessed", mode: 'copy', overwrite: true
-
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'docker://bolt3x/attend_image_analysis:preprocess' :
         'docker://bolt3x/attend_image_analysis:preprocess' }"

@@ -12,7 +12,6 @@ process REGISTER {
 
     output:
     tuple val(patient_id), path("registered_slides/*_registered.ome.tiff"), val(all_metas), emit: registered
-    path "registered_qc"                                                                   , emit: qc, optional: true
     path "versions.yml"                                                                    , emit: versions
 
     when:
@@ -31,7 +30,7 @@ process REGISTER {
     def max_image_dim = params.reg_max_image_dim ?: 6000
 
     """
-    mkdir -p registered_slides registered_qc preprocessed
+    mkdir -p registered_slides preprocessed
 
     # Copy all input files (from both ref/ and input_*/ directories) into preprocessed/
     # This handles the stageAs directories we created to avoid naming collisions
@@ -42,7 +41,6 @@ process REGISTER {
     register.py \\
         --input-dir preprocessed \\
         --out registered_slides \\
-        --qc-dir registered_qc \\
         ${ref_arg} \\
         --max-processed-dim ${max_processed_dim} \\
         --max-non-rigid-dim ${max_non_rigid_dim} \\
@@ -60,7 +58,7 @@ process REGISTER {
 
     stub:
     """
-    mkdir -p registered_slides registered_qc
+    mkdir -p registered_slides
     touch registered_slides/sample_registered.ome.tiff
 
     cat <<-END_VERSIONS > versions.yml

@@ -28,24 +28,23 @@ import tifffile
 import gc
 import traceback
 
-# Add parent directory to path to import lib modules
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add utils directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-# Import from lib modules for DRY principle
-from lib.logger import get_logger, configure_logging
-from lib.metadata import (
+# Import from utils modules for DRY principle
+from logger import get_logger, configure_logging
+from metadata import (
     get_channel_names,
     create_ome_xml,
     extract_channel_names_from_ome,
     extract_channel_names_from_filename
 )
-from lib.registration_utils import (
+from registration_utils import (
     extract_crop_coords,
     calculate_bounds,
     create_memmaps_for_merge,
     cleanup_memmaps
 )
-from lib.qc import create_registration_qc
 
 # CPU imports with availability check
 try:
@@ -552,7 +551,6 @@ def register_image_pair(
     n_workers: int = 4,
     opt_tol: float = 1e-5,
     inv_tol: float = 1e-5,
-    qc_dir: Optional[Path] = None,
 ):
     """
     Register moving image to reference using affine + diffeomorphic registration (CPU-based).
@@ -667,27 +665,8 @@ def register_image_pair(
         logger.info(f"Diffeo stage:  {diffeo_success}/{diffeo_total} success, {diffeo_fallback}/{diffeo_total} fallback")
         logger.info(f"Output saved:  {output_path}")
 
-        # Generate QC if requested
-        if qc_dir:
-            logger.info(f"Generating QC outputs: {qc_dir}")
-            qc_dir.mkdir(parents=True, exist_ok=True)
-            qc_filename = f"{moving_path.stem}_QC_RGB"
-            qc_output_path = qc_dir / qc_filename
-
-            try:
-                create_registration_qc(
-                    reference_path=reference_path,
-                    registered_path=output_path,
-                    output_path=qc_output_path,
-                    scale_factor=0.25,
-                    save_fullres=True,
-                    save_png=True,
-                    save_tiff=True
-                )
-            except Exception as e:
-                logger.warning(f"Failed to generate QC composite: {e}")
-
         logger.info("Registration complete")
+        logger.info("NOTE: QC generation is handled separately by the pipeline")
 
     finally:
         # Ensure memmaps are properly closed before cleanup
@@ -722,8 +701,6 @@ def main():
                         help="Path to moving image to register")
     parser.add_argument("--output", type=str, required=True,
                         help="Path to save registered image")
-    parser.add_argument("--qc-dir", type=str, default=None,
-                        help="Directory to save QC outputs (optional)")
     parser.add_argument("--affine-crop-size", type=int, default=2000,
                         help="Crop size for affine registration (default: 2000)")
     parser.add_argument("--diffeo-crop-size", type=int, default=2000,
@@ -773,7 +750,6 @@ def main():
             n_workers=args.n_workers,
             opt_tol=args.opt_tol,
             inv_tol=args.inv_tol,
-            qc_dir=Path(args.qc_dir) if args.qc_dir else None,
         )
         return 0
     except Exception as e:

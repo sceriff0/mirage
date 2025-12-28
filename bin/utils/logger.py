@@ -5,7 +5,7 @@ logging configuration across the entire pipeline following Python best practices
 
 Examples
 --------
->>> from lib.logger import get_logger, configure_logging
+>>> from logger import get_logger, configure_logging
 >>> configure_logging(level=logging.DEBUG, log_file="pipeline.log")
 >>> logger = get_logger(__name__)
 >>> logger.info("Processing started")

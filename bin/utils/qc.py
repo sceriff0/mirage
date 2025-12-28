@@ -6,7 +6,7 @@ and reference images.
 
 Examples
 --------
->>> from lib.qc import create_registration_qc
+>>> from qc import create_registration_qc
 >>> create_registration_qc(
 ...     reference_path="ref.tif",
 ...     registered_path="registered.tif",
@@ -30,9 +30,9 @@ import tifffile
 from numpy.typing import NDArray
 from skimage.transform import rescale
 
-from lib.logger import get_logger
-from lib.metadata import get_channel_names
-from lib.registration_utils import autoscale
+from logger import get_logger
+from metadata import get_channel_names
+from registration_utils import autoscale
 
 __all__ = [
     "create_registration_qc",

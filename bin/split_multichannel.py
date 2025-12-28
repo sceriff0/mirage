@@ -17,9 +17,9 @@ import logging
 # Add parent directory to path to import lib modules
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-from lib.logger import get_logger, configure_logging
+from logger import get_logger, configure_logging
 
 logger = get_logger(__name__)
 
