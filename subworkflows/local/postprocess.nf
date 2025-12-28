@@ -59,7 +59,10 @@ workflow POSTPROCESSING {
     // ========================================================================
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
-    ch_for_quant = SPLIT_CHANNELS.out.channels
+    ch_split_output = SPLIT_CHANNELS.out.channels
+        .view { meta, tiffs -> "SPLIT_CHANNELS output: meta.patient_id=${meta.patient_id}, tiffs=${tiffs*.name}" }
+
+    ch_flatmapped = ch_split_output
         .flatMap { meta, tiffs ->
             // Create unique meta map for each channel file
             tiffs.collect { tiff ->
@@ -69,11 +72,19 @@ workflow POSTPROCESSING {
                 [channel_meta, tiff]
             }
         }
+        .view { meta, tiff -> "After flatMap: meta.id=${meta.id}, channel=${meta.channel_name}, tiff=${tiff.name}" }
+
+    ch_for_join = ch_flatmapped
         .map { meta, tiff -> [meta.patient_id, meta, tiff] }
-        .join(
-            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
-            by: 0
-        )
+        .view { patient_id, _meta, _tiff -> "Before join: key=${patient_id}, channel=${_meta.channel_name}" }
+
+    ch_mask = SEGMENT.out.cell_mask
+        .map { meta, mask -> [meta.patient_id, mask] }
+        .view { patient_id, _mask -> "Mask available: key=${patient_id}, mask=${_mask.name}" }
+
+    ch_for_quant = ch_for_join
+        .join(ch_mask, by: 0)
+        .view { patient_id, _meta, _tiff, _mask -> "After join: patient=${patient_id}, channel=${_meta.channel_name}" }
         .map { _patient_id, meta, tiff, mask -> [meta, tiff, mask] }
 
     QUANTIFY(ch_for_quant)
