@@ -18,7 +18,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.logger import get_logger, configure_logging
+from utils.logger import get_logger, configure_logging
 from typing import Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -29,8 +29,8 @@ from numpy.typing import NDArray
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
 
-from lib.image_utils import ensure_dir
-from lib.metadata import get_channel_names
+from utils.image_utils import ensure_dir
+from utils.metadata import get_channel_names
 
 logger = get_logger(__name__)
 
