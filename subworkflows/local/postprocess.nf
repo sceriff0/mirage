@@ -161,29 +161,48 @@ workflow POSTPROCESSING {
     // FIX CRITICAL BUG: Include registered images in checkpoint for pyramid regeneration
     // Group registered images by patient to get all images (reference + moving)
     ch_registered_grouped = ch_registered
-        .map { meta, file -> [meta.patient_id, file] }
+        .map { meta, file ->
+            // Construct the published path for registered images
+            def published_path = "${params.outdir}/${meta.patient_id}/registered/${file.name}"
+            [meta.patient_id, published_path]
+        }
         .groupTuple(by: 0)
         .map { patient_id, files ->
             // Join all file paths with pipe delimiter (consistent with channels format)
-            [patient_id, files.collect { f -> f.toString() }.join('|')]
+            [patient_id, files.join('|')]
         }
 
     ch_checkpoint_data = PHENOTYPE.out.csv
-        .map { meta, csv -> [meta.patient_id, csv] }
-        .join(PHENOTYPE.out.mask.map { meta, mask -> [meta.patient_id, mask] })
-        .join(PHENOTYPE.out.mapping.map { meta, map -> [meta.patient_id, map] })
-        .join(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] })
-        .join(SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] })
+        .map { meta, csv ->
+            def published_path = "${params.outdir}/phenotype/${csv.name}"
+            [meta.patient_id, published_path]
+        }
+        .join(PHENOTYPE.out.mask.map { meta, mask ->
+            def published_path = "${params.outdir}/phenotype/${mask.name}"
+            [meta.patient_id, published_path]
+        })
+        .join(PHENOTYPE.out.mapping.map { meta, map ->
+            def published_path = "${params.outdir}/phenotype/${map.name}"
+            [meta.patient_id, published_path]
+        })
+        .join(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv ->
+            def published_path = "${params.outdir}/merge_quant_csvs/${csv.name}"
+            [meta.patient_id, published_path]
+        })
+        .join(SEGMENT.out.cell_mask.map { meta, mask ->
+            def published_path = "${params.outdir}/segment/${mask.name}"
+            [meta.patient_id, published_path]
+        })
         .join(ch_registered_grouped, by: 0)
         .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, registered_images ->
             [
                 patient_id,
                 true,  // All checkpoint rows are for reference (one per patient)
-                pheno_csv.toString(),
-                pheno_mask.toString(),
-                pheno_map.toString(),
-                merged_csv.toString(),
-                cell_mask.toString(),
+                pheno_csv,
+                pheno_mask,
+                pheno_map,
+                merged_csv,
+                cell_mask,
                 registered_images  // Pipe-delimited list of registered image paths
             ]
         }

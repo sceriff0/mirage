@@ -181,7 +181,10 @@ workflow REGISTRATION {
     // ========================================================================
     ch_checkpoint_data = ch_registered
         .map { meta, file ->
-            [meta.patient_id, file.toString(), meta.is_reference, meta.channels.join('|')]
+            // Construct the path where the file will be published
+            // Must match the publishDir configuration in modules.config
+            def published_path = "${params.outdir}/${meta.patient_id}/registered/${file.name}"
+            [meta.patient_id, published_path, meta.is_reference, meta.channels.join('|')]
         }
         .toList()
         .view { data -> "Checkpoint data: $data" }
