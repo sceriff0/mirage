@@ -17,8 +17,8 @@ IMPORT HELPERS
 ================================================================================
 */
 
-include {validateMetadata, parseMetadata, validateInputCSV, loadInputCSV } from './lib/csv_utils.groovy'
-include { validateStep, validateRegistrationMethod, requiredColumnsForStep } from './lib/param_utils.groovy'
+import static CsvUtils.*
+import static ParamUtils.*
 
 /*
 ================================================================================
