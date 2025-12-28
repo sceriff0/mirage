@@ -1,3 +1,8 @@
+import nextflow.Channel
+import static nextflow.Nextflow.file
+import static nextflow.Nextflow.error
+import static nextflow.Nextflow.tuple
+
 class CsvUtils {
 
     static Map validateMetadata(Map meta, String context = 'unknown') {
