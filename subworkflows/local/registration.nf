@@ -16,6 +16,9 @@ include { VALIS_ADAPTER                     } from './adapters/valis_adapter'
 include { GPU_ADAPTER                       } from './adapters/gpu_adapter'
 include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
 
+include { ESTIMATE_FEATURE_DISTANCES        } from '../../modules/local/estimate_feature_distances'
+include { ESTIMATE_SEGMENTATION_OVERLAP     } from '../../modules/local/estimate_segmentation_overlap'
+
 /*
 ========================================================================================
     SUBWORKFLOW: REGISTRATION
@@ -24,6 +27,8 @@ include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
         - params.padding: true | false (optional padding per patient)
         - params.skip_registration_qc: true | false (skip QC generation)
         - params.qc_scale_factor: float (QC downsampling factor, default 0.25)
+        - params.enable_feature_error: true | false (enable feature-based TRE)
+        - params.enable_segmentation_error: true | false (enable segmentation metrics)
         - method: 'valis' | 'gpu' | 'cpu' (registration method)
 
     Input:
@@ -34,12 +39,19 @@ include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
         registered: Channel of [meta, file] tuples (standard format)
         qc: Channel of QC outputs (PNG and TIFF)
         checkpoint_csv: Checkpoint CSV file
+        error_metrics: Channel of error estimation outputs (optional)
 
     QC Generation:
         - Decoupled from registration methods
         - Uses unified GENERATE_REGISTRATION_QC module
         - Compares registered vs reference DAPI channels
         - Outputs: full-res TIFF + downsampled PNG
+
+    Error Estimation (Optional):
+        - BEFORE registration: COMPUTE_FEATURES extracts matched keypoints
+        - AFTER registration: Two complementary methods:
+          1. Feature-based TRE (fast, sparse measurements)
+          2. Segmentation-based IoU/Dice (dense, biologically meaningful)
 ========================================================================================
 */
 
@@ -177,6 +189,54 @@ workflow REGISTRATION {
     }
 
     // ========================================================================
+    // STEP 3C: ERROR ESTIMATION (Optional)
+    // ========================================================================
+    // For each non-reference image, measure quality by comparing:
+    //   - reference vs moving (pre-registration)
+    //   - reference vs registered (post-registration)
+
+    ch_error_metrics = Channel.empty()
+
+    if (params.enable_feature_error || params.enable_segmentation_error) {
+        // For each non-reference image: [meta, reference, moving, registered]
+        ch_for_error = ch_registered
+            .filter { meta, file -> !meta.is_reference }
+            .map { meta, reg_file -> [meta.patient_id, meta.channels.sort().join('|'), meta, reg_file] }
+            .join(
+                ch_images
+                    .filter { meta, file -> !meta.is_reference }
+                    .map { meta, mov_file -> [meta.patient_id, meta.channels.sort().join('|'), mov_file] },
+                by: [0, 1]
+            )
+            .map { patient_id, channels, meta, reg_file, mov_file -> [patient_id, meta, reg_file, mov_file] }
+            .join(
+                ch_images
+                    .filter { meta, file -> meta.is_reference }
+                    .map { meta, ref_file -> [meta.patient_id, ref_file] },
+                by: 0
+            )
+            .map { patient_id, meta, reg_file, mov_file, ref_file ->
+                tuple(meta, ref_file, mov_file, reg_file)
+            }
+
+        if (params.enable_feature_error) {
+            ESTIMATE_FEATURE_DISTANCES(ch_for_error)
+            ch_error_metrics = ch_error_metrics.mix(ESTIMATE_FEATURE_DISTANCES.out.distance_metrics)
+        }
+
+        if (params.enable_segmentation_error) {
+            // Segmentation only needs reference and registered
+            ch_for_seg = ch_for_error
+                .map { meta, ref_file, moving_file, reg_file ->
+                    tuple(meta, ref_file, reg_file)
+                }
+
+            ESTIMATE_SEGMENTATION_OVERLAP(ch_for_seg)
+            ch_error_metrics = ch_error_metrics.mix(ESTIMATE_SEGMENTATION_OVERLAP.out.overlap_metrics)
+        }
+    }
+
+    // ========================================================================
     // STEP 4: CHECKPOINT
     // ========================================================================
     ch_checkpoint_data = ch_registered
@@ -201,5 +261,4 @@ workflow REGISTRATION {
 
     emit:
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
-    qc = ch_qc
 }

@@ -1,74 +1,79 @@
 nextflow.enable.dsl = 2
 
-process ESTIMATE_REG_ERROR {
-    tag "${registered.simpleName}"
+process ESTIMATE_FEATURE_DISTANCES {
+    tag "${meta.patient_id}_${meta.channels.join('_')}"
     label 'process_medium'
     container "${params.container.registration}"
 
-    // Resource allocation for error estimation
-    memory '32.GB'
-    cpus 4
-    time '1.h'
+    publishDir "${params.outdir}/${meta.patient_id}/${params.registration_method}/feature_distances", mode: 'copy', pattern: "*.{json,png}"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/registration_errors", mode: 'copy', pattern: "*.{json,png}"
-
-    // Note: This process implements VALIS-style TRE measurement
-    // It tracks the same matched keypoints through registration to compute true error
+    // Measures feature distances BEFORE and AFTER registration for a single image
+    // Detects and matches features in (ref vs moving), then (ref vs registered)
+    // Computes pixel-level distances between matched features as TRE metric
+    // Complements segmentation-based overlap metrics with sparse feature-based quality assessment
 
     input:
-    tuple path(reference), path(registered), path(pre_features)
+    tuple val(meta), path(reference), path(moving), path(registered)
 
     output:
-    path "${registered.simpleName}_registration_error.json", emit: error_metrics
-    path "${registered.simpleName}_tre_histogram.png"      , emit: error_plot, optional: true
-    path "versions.yml"                                    , emit: versions
+    tuple val(meta), path("*_feature_distances.json"), emit: distance_metrics
+    tuple val(meta), path("*_distance_histogram.png"), emit: distance_plots
+    path "versions.yml"                               , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
     def detector = params.feature_detector ?: 'superpoint'
     def max_dim = params.feature_max_dim ?: 2048
     def n_features = params.feature_n_features ?: 5000
+    def prefix = meta.channels.join('_')
     """
     echo "=================================================================="
-    echo "Registration Error Estimation (VALIS Method)"
+    echo "Feature Distance Estimation (Before vs After Registration)"
     echo "=================================================================="
-    echo "Reference:                 ${reference.simpleName}"
-    echo "Registered:                ${registered.simpleName}"
-    echo "Pre-registration features: ${pre_features}"
-    echo "Detector:                  ${detector}"
+    echo "Reference:         ${reference.simpleName}"
+    echo "Moving (before):   ${moving.simpleName}"
+    echo "Registered (after): ${registered.simpleName}"
+    echo "Detector:          ${detector}"
+    echo "Max dimension:     ${max_dim}px"
+    echo "Number of features: ${n_features}"
     echo "=================================================================="
     echo ""
-    echo "Method: Tracks same matched keypoints through registration"
-    echo "  1. Load pre-registration matched keypoints"
-    echo "  2. Estimate global transform (ref → registered)"
-    echo "  3. Apply transform to original moving keypoints"
-    echo "  4. Compute TRE as distance from expected positions"
+    echo "Purpose: Measure registration quality via feature-based TRE"
+    echo "         Compares feature distances before and after registration"
     echo ""
 
-    estimate_registration_error.py \\
+    estimate_feature_distances.py \\
         --reference ${reference} \\
+        --moving ${moving} \\
         --registered ${registered} \\
-        --pre-features ${pre_features} \\
-        --output-dir . \\
+        --output-prefix ${prefix} \\
         --detector ${detector} \\
         --max-dim ${max_dim} \\
-        --n-features ${n_features}
+        --n-features ${n_features} \\
+        ${args}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version 2>&1 | sed 's/Python //')
         numpy: \$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+        valis: \$(python -c "import valis; print(valis.__version__)" 2>/dev/null || echo "unknown")
     END_VERSIONS
     """
 
     stub:
+    def prefix = meta.channels.join('_')
     """
-    touch ${registered.simpleName}_registration_error.json
-    touch ${registered.simpleName}_tre_histogram.png
+    touch ${prefix}_feature_distances.json
+    touch ${prefix}_distance_histogram.png
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: stub
         numpy: stub
+        valis: stub
     END_VERSIONS
     """
 }
