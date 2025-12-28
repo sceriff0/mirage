@@ -70,12 +70,16 @@ workflow {
 
     if (params.step in ['preprocessing','registration']) {
 
-        ch_preprocess_csv = params.step == 'registration'
-            ? params.input
+        // When starting from registration, params.input is a string path
+        // When continuing from preprocessing, ch_preprocess_csv is a channel
+        ch_for_registration = params.step == 'registration'
+            ? loadInputChannel(params.input, 'preprocessed_image')
             : ch_preprocess_csv
-
-        ch_for_registration =
-            loadInputChannel(ch_preprocess_csv, 'preprocessed_image')
+                .splitCsv(header: true)
+                .map { row ->
+                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
+                    return tuple(meta, file(row['preprocessed_image']))
+                }
 
         REGISTRATION(
             ch_for_registration,
