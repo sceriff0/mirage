@@ -1,4 +1,4 @@
-def validateMeta(meta, context = 'unknown') {
+def validateMetadata(meta, context = 'unknown') {
 
     if (!meta.patient_id)
         error "Missing patient_id in ${context}"
@@ -38,4 +38,32 @@ def parseMetadata(row, context = 'parseMetadata') {
     ]
 
     return validateMeta(meta, "${context} (${row.patient_id})")
+}
+
+def validateInputCSV(csv, required_cols) {
+
+    def file = new File(csv)
+    if (!file.exists())
+        error "Input CSV not found: ${csv}"
+
+    def header = file.readLines().first()?.split(',')*.trim()
+    if (!header)
+        error "CSV is empty: ${csv}"
+
+    required_cols.each {
+        if (!(it in header))
+            error "CSV missing required column '${it}'"
+    }
+}
+
+def loadInputCSV(csv_path, image_column) {
+
+    channel.fromPath(csv_path, checkIfExists: true)
+        .splitCsv(header: true)
+        .map { row ->
+            [
+                parseMetadata(row, "CSV ${csv_path}"),
+                file(row[image_column])
+            ]
+        }
 }

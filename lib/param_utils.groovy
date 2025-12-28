@@ -23,18 +23,3 @@ def requiredColumnsForStep(step) {
     ][step]
 }
 
-def validateInputCSV(csv, required_cols) {
-
-    def file = new File(csv)
-    if (!file.exists())
-        error "Input CSV not found: ${csv}"
-
-    def header = file.readLines().first()?.split(',')*.trim()
-    if (!header)
-        error "CSV is empty: ${csv}"
-
-    required_cols.each {
-        if (!(it in header))
-            error "CSV missing required column '${it}'"
-    }
-}

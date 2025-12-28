@@ -17,15 +17,8 @@ IMPORT HELPERS
 ================================================================================
 */
 
-include { parseMetadata } from './lib/metadata.groovy'
-include {
-    validateStep;
-    validateRegistrationMethod;
-    validateInputCSV;
-    requiredColumnsForStep
-} from './lib/validation.groovy'
-include { loadCheckpointCsv } from './lib/csv.groovy'
-
+include {validateMetadata, parseMetadata, validateInputCSV, loadInputCSV } from './lib/csv_utils.groovy'
+include { validateStep, validateRegistrationMethod, requiredColumnsForStep } from './lib/param_utils.groovy'
 
 /*
 ================================================================================
@@ -57,12 +50,7 @@ workflow {
 
     if (params.step == 'preprocessing') {
 
-        ch_input = channel.fromPath(params.input)
-            .splitCsv(header: true)
-            .map { row ->
-                [ parseMetadata(row), file(row.path_to_file) ]
-            }
-
+        ch_input = loadInputCSV(params.input, 'path_to_file')
         PREPROCESSING(ch_input)
         ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
     }
