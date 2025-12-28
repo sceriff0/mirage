@@ -25,7 +25,7 @@ try:
 except ImportError:
     ND2_AVAILABLE = False
 
-from lib.image_utils import ensure_dir
+from utils.image_utils import ensure_dir
 
 logger = get_logger(__name__)
 
