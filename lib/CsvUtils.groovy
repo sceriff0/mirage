@@ -13,8 +13,8 @@ class CsvUtils {
 
         if (meta.channels.any { it == null || it.trim().isEmpty() })
             throw new IllegalArgumentException("Empty channel name found for patient ${meta.patient_id}")
-
-        // Updated logic: Check if DAPI exists anywhere, not just at index 0
+        
+        // Check if DAPI exists anywhere, not just at index 0
         if (!meta.channels.any { it.toUpperCase() == 'DAPI' }) {
             throw new IllegalStateException("""
                 DAPI channel missing for patient ${meta.patient_id}

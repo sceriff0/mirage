@@ -75,7 +75,7 @@ workflow {
             : ch_preprocess_csv
 
         ch_for_registration =
-            loadCheckpointCsv(ch_preprocess_csv, 'preprocessed_image')
+            loadInputChannel(ch_preprocess_csv, 'preprocessed_image')
 
         REGISTRATION(
             ch_for_registration,
@@ -119,4 +119,32 @@ workflow {
         params.savedir
     )
     '''
+}
+
+/*
+================================================================================
+COMPLETION HANDLERS
+================================================================================
+*/
+
+workflow.onComplete {
+    if (workflow.success) {
+        log.info "Pipeline completed successfully!"
+
+        // Clean up work directory if requested
+        if (params.cleanup_work) {
+            log.info "Cleaning up work directory: ${workflow.workDir}"
+            def workDir = new File("${workflow.workDir}")
+            if (workDir.exists() && workDir.isDirectory()) {
+                try {
+                    workDir.deleteDir()
+                    log.info "Work directory removed successfully"
+                } catch (Exception e) {
+                    log.warn "Failed to remove work directory: ${e.message}"
+                }
+            }
+        }
+    } else {
+        log.error "Pipeline failed - work directory preserved for debugging"
+    }
 }

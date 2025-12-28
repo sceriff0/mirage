@@ -59,10 +59,10 @@ workflow PREPROCESSING {
 
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_preprocessed_with_meta
-        .map { meta, file ->
-            def abs_path = file.toString()
+        .map { meta, image_file ->
+            def image_path = "${params.outdir}/preprocessed/${image_file.name}"
             def channels = meta.channels.toString()
-            [meta.patient_id, abs_path, meta.is_reference.toString(), channels]
+            [meta.patient_id, image_path, meta.is_reference.toString(), channels]
         }
         .toList()
         .view { data -> "Checkpoint data: $data" }
