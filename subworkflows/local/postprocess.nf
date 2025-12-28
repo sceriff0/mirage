@@ -74,17 +74,17 @@ workflow POSTPROCESSING {
         }
         .view { meta, tiff -> "After flatMap: meta.id=${meta.id}, channel=${meta.channel_name}, tiff=${tiff.name}" }
 
-    ch_for_join = ch_flatmapped
+    ch_for_combine = ch_flatmapped
         .map { meta, tiff -> [meta.patient_id, meta, tiff] }
-        .view { patient_id, _meta, _tiff -> "Before join: key=${patient_id}, channel=${_meta.channel_name}" }
+        .view { patient_id, _meta, _tiff -> "Before combine: key=${patient_id}, channel=${_meta.channel_name}" }
 
     ch_mask = SEGMENT.out.cell_mask
         .map { meta, mask -> [meta.patient_id, mask] }
         .view { patient_id, _mask -> "Mask available: key=${patient_id}, mask=${_mask.name}" }
 
-    ch_for_quant = ch_for_join
-        .join(ch_mask, by: 0)
-        .view { patient_id, _meta, _tiff, _mask -> "After join: patient=${patient_id}, channel=${_meta.channel_name}" }
+    ch_for_quant = ch_for_combine
+        .combine(ch_mask, by: 0)
+        .view { patient_id, _meta, _tiff, _mask -> "After combine: patient=${patient_id}, channel=${_meta.channel_name}" }
         .map { _patient_id, meta, tiff, mask -> [meta, tiff, mask] }
 
     QUANTIFY(ch_for_quant)
