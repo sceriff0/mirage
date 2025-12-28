@@ -1,9 +1,5 @@
 nextflow.enable.dsl = 2
 
-plugins {
-    id 'nf-validation@1.1.3'
-}
-
 /*
 ================================================================================
 IMPORT SUBWORKFLOWS
@@ -30,7 +26,6 @@ include {
 } from './lib/validation'
 include { loadCheckpointCsv } from './lib/csv'
 
-include { validateParameters; paramsSummaryLog } from 'plugin/nf-validation'
 
 /*
 ================================================================================
@@ -41,9 +36,6 @@ WORKFLOW
 workflow {
 
     /* -------------------- PARAMETER VALIDATION -------------------- */
-
-    validateParameters()
-    log.info paramsSummaryLog(workflow)
 
     if (!params.input)
         error "Please provide --input"
