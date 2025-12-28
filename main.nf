@@ -65,7 +65,7 @@ workflow {
         PREPROCESSING(ch_input)
         ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
     }
-    '''
+    
     /* -------------------- REGISTRATION -------------------- */
 
     if (params.step in ['preprocessing','registration']) {
@@ -86,7 +86,7 @@ workflow {
         ch_registered       = REGISTRATION.out.registered
         ch_qc               = REGISTRATION.out.qc
     }
-
+    '''
     /* -------------------- POSTPROCESSING -------------------- */
 
     if (params.step in ['preprocessing','registration','postprocessing']) {

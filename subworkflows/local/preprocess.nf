@@ -61,7 +61,7 @@ workflow PREPROCESSING {
     ch_checkpoint_data = ch_preprocessed_with_meta
         .map { meta, image_file ->
             def image_path = "${params.outdir}/preprocessed/${image_file.name}"
-            def channels = meta.channels.toString()
+            def channels = meta.channels.join('|')
             [meta.patient_id, image_path, meta.is_reference.toString(), channels]
         }
         .toList()

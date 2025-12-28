@@ -20,15 +20,6 @@ include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
 ========================================================================================
     SUBWORKFLOW: REGISTRATION
 ========================================================================================
-    Simplified registration workflow using adapter pattern with decoupled QC.
-
-    Key Design Principles (KISS & DRY):
-    1. Common data preparation (padding, grouping)
-    2. Method-specific adapters handle input/output conversions
-    3. All adapters output standard [meta, file] format
-    4. QC generation is decoupled and method-independent
-    5. No complex branching or reconstruction logic
-
     Configuration:
         - params.padding: true | false (optional padding per patient)
         - params.skip_registration_qc: true | false (skip QC generation)
@@ -106,15 +97,15 @@ workflow REGISTRATION {
             if (!ref) {
                 if (params.allow_auto_reference) {
                     log.warn """
-                    ⚠️  WARNING: No reference marked for patient ${patient_id}
+                    WARNING: No reference marked for patient ${patient_id}
                     Using first image as reference (allow_auto_reference=true)
                     To make this an error, set allow_auto_reference=false
                     """.stripIndent()
                     ref = items[0]
                 } else {
                     throw new Exception("""
-                    ❌ No reference image found for patient ${patient_id}
-                    💡 Fix: Set is_reference=true for one image in your input CSV
+                    No reference image found for patient ${patient_id}
+                    Fix: Set is_reference=true for one image in your input CSV
                     OR set allow_auto_reference=true to use first image automatically
                     """.stripIndent())
                 }
@@ -192,7 +183,8 @@ workflow REGISTRATION {
         .map { meta, file ->
             [meta.patient_id, file.toString(), meta.is_reference, meta.channels.join('|')]
         }
-        .collect()
+        .toList()
+        .view { data -> "Checkpoint data: $data" }
 
     WRITE_CHECKPOINT_CSV(
         'registered',
