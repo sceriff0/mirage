@@ -183,7 +183,11 @@ workflow REGISTRATION {
         .map { meta, file ->
             // Construct the path where the file will be published
             // Must match the publishDir configuration in modules.config
-            def published_path = "${params.outdir}/${meta.patient_id}/registered/${file.name}"
+            // Extract relative path from parent if file is in a subdirectory
+            // (e.g., "registered_slides/file.tiff" vs just "file.tiff")
+            def file_path = file instanceof List ? file[0] : file
+            def relative_path = file_path.parent ? "${file_path.parent.name}/${file_path.name}" : file_path.name
+            def published_path = "${params.outdir}/${meta.patient_id}/registered/${relative_path}"
             [meta.patient_id, published_path, meta.is_reference, meta.channels.join('|')]
         }
         .toList()
@@ -196,7 +200,6 @@ workflow REGISTRATION {
     )
 
     emit:
-    registered = ch_registered
-    qc = ch_qc
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    qc = ch_qc
 }

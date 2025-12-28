@@ -87,7 +87,6 @@ workflow {
         )
 
         ch_registration_csv = REGISTRATION.out.checkpoint_csv
-        ch_registered       = REGISTRATION.out.registered
         ch_qc               = REGISTRATION.out.qc
     }
     '''
