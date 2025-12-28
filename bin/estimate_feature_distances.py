@@ -216,7 +216,7 @@ def process_image_pair(
     reference_img = load_image_grayscale(reference_path, max_dim=max_dim)
 
     log_progress("  Detecting reference features...")
-    ref_kp, ref_desc = detector.detect_and_compute(reference_img, mask=None)
+    ref_kp, ref_desc = detector.detect_and_compute(reference_img)
     log_progress(f"    Detected {len(ref_kp)} keypoints")
 
     # Load moving image (BEFORE registration)
@@ -226,7 +226,7 @@ def process_image_pair(
 
     # Detect features in moving image
     log_progress("  Detecting features in moving image...")
-    mov_kp, mov_desc = detector.detect_and_compute(moving_img, mask=None)
+    mov_kp, mov_desc = detector.detect_and_compute(moving_img)
     log_progress(f"    Detected {len(mov_kp)} keypoints")
 
     # Match BEFORE registration
