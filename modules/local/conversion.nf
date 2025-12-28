@@ -17,7 +17,7 @@ process CONVERSION {
         'docker://bolt3x/attend_image_analysis:preprocess' :
         'docker://bolt3x/attend_image_analysis:preprocess' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/pyramid", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/pyramid", mode: 'copy'
 
     input:
     tuple val(meta), path(merged_image)

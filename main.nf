@@ -9,7 +9,6 @@ IMPORT SUBWORKFLOWS
 include { PREPROCESSING  } from './subworkflows/local/preprocess'
 include { REGISTRATION   } from './subworkflows/local/registration'
 include { POSTPROCESSING } from './subworkflows/local/postprocess'
-include { RESULTS        } from './subworkflows/local/results'
 
 /*
 ================================================================================
@@ -89,39 +88,24 @@ workflow {
         ch_registration_csv = REGISTRATION.out.checkpoint_csv
         ch_qc               = REGISTRATION.out.qc
     }
-    '''
+
     /* -------------------- POSTPROCESSING -------------------- */
 
     if (params.step in ['preprocessing','registration','postprocessing']) {
 
-        ch_registration_csv = params.step == 'postprocessing'
-            ? params.input
+        ch_for_postprocessing = params.step == 'postprocessing'
+            ? loadInputChannel(params.input, 'registered_image')
             : ch_registration_csv
-
-        ch_for_postprocessing =
-            loadCheckpointCsv(ch_registration_csv, 'registered_image')
+                .splitCsv(header: true)
+                .map { row ->
+                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
+                    return tuple(meta, file(row['registered_image']))
+                }
 
         POSTPROCESSING(ch_for_postprocessing)
 
         ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
     }
-    
-    /* -------------------- RESULTS -------------------- */
-
-    if (params.step == 'results')
-        ch_postprocessing_csv = params.input
-
-    RESULTS(
-        ch_registered ?: channel.empty(),
-        ch_qc ?: channel.empty(),
-        POSTPROCESSING.out.cell_mask,
-        POSTPROCESSING.out.phenotype_mask,
-        POSTPROCESSING.out.phenotype_mapping,
-        POSTPROCESSING.out.merged_csv,
-        POSTPROCESSING.out.phenotype_csv,
-        params.savedir
-    )
-    '''
 }
 
 /*
@@ -133,6 +117,40 @@ COMPLETION HANDLERS
 workflow.onComplete {
     if (workflow.success) {
         log.info "Pipeline completed successfully!"
+
+        // Copy results from outdir to savedir
+        if (params.savedir && params.savedir != params.outdir) {
+            log.info "Copying results from ${params.outdir} to ${params.savedir}..."
+
+            def outdir = new File(params.outdir)
+            def savedir = new File(params.savedir)
+
+            // Create savedir if it doesn't exist
+            if (!savedir.exists()) {
+                savedir.mkdirs()
+                log.info "Created save directory: ${params.savedir}"
+            }
+
+            // Copy all contents from outdir to savedir using rsync
+            try {
+                def cmd = ["rsync", "-rL", "--progress", "${params.outdir}/", "${params.savedir}/"]
+                def proc = cmd.execute()
+                proc.waitFor()
+
+                if (proc.exitValue() == 0) {
+                    log.info "Successfully copied results to ${params.savedir}"
+                } else {
+                    log.error "Failed to copy results to ${params.savedir}"
+                    log.error "Error: ${proc.err.text}"
+                }
+            } catch (Exception e) {
+                log.error "Failed to copy results to ${params.savedir}: ${e.message}"
+            }
+        } else if (!params.savedir) {
+            log.info "No savedir specified - results remain in ${params.outdir}"
+        } else {
+            log.info "savedir is the same as outdir - no copy needed"
+        }
 
         // Clean up work directory if requested
         if (params.cleanup_work) {

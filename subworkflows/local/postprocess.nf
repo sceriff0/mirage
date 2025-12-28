@@ -11,6 +11,8 @@ include { SPLIT_CHANNELS        } from '../../modules/local/split_channels'
 include { QUANTIFY              } from '../../modules/local/quantify'
 include { MERGE_QUANT_CSVS      } from '../../modules/local/quantify'
 include { PHENOTYPE             } from '../../modules/local/phenotype'
+include { MERGE                 } from '../../modules/local/merge'
+include { CONVERSION            } from '../../modules/local/conversion'
 include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
 
 /*
@@ -38,47 +40,11 @@ workflow POSTPROCESSING {
     ch_registered       // Channel of [meta, file] tuples
 
     main:
-    // ========================================================================
-    // VALIDATION - Ensure metadata has required fields
-    // ========================================================================
-    // FIX BUG #3: Add defensive checks for meta.channels before use
-    // Validate metadata early to prevent cryptic downstream errors
-
-    ch_validated = ch_registered
-        .map { meta, file ->
-            // Validate required metadata fields exist and are valid
-            if (!meta.containsKey('channels')) {
-                throw new Exception("""
-                ❌ Missing 'channels' field in metadata for patient ${meta.patient_id}
-                Available fields: ${meta.keySet().join(', ')}
-                💡 This usually means the metadata was not properly constructed from CSV
-                """.stripIndent())
-            }
-
-            if (!(meta.channels instanceof List) || meta.channels.isEmpty()) {
-                throw new Exception("""
-                ❌ Invalid 'channels' field for patient ${meta.patient_id}
-                Type: ${meta.channels?.class}
-                Value: ${meta.channels}
-                💡 channels must be a non-empty List
-                """.stripIndent())
-            }
-
-            if (meta.channels[0]?.toUpperCase() != 'DAPI') {
-                throw new Exception("""
-                ❌ DAPI must be first channel for patient ${meta.patient_id}
-                Current order: ${meta.channels}
-                💡 Check your registration checkpoint CSV has correct channel order
-                """.stripIndent())
-            }
-
-            [meta, file]
-        }
 
     // ========================================================================
     // SEGMENTATION - Process reference images only
     // ========================================================================
-    ch_references = ch_validated
+    ch_references = ch_registered
         .filter { meta, file -> meta.is_reference }
 
     SEGMENT(ch_references)
@@ -87,13 +53,12 @@ workflow POSTPROCESSING {
     // CHANNEL SPLITTING - Split all multichannel images
     // ========================================================================
     SPLIT_CHANNELS(
-        ch_validated.map { meta, file -> [meta, file, meta.is_reference] }
+        ch_registered.map { meta, file -> [meta, file, meta.is_reference] }
     )
 
     // ========================================================================
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
-    // FIX ISSUE #11: Validate SPLIT_CHANNELS output cardinality
     ch_for_quant = SPLIT_CHANNELS.out.channels
         .map { meta, tiffs ->
             // Validate we got the expected number of channels
@@ -101,19 +66,19 @@ workflow POSTPROCESSING {
             def actual_channels = tiffs.size()
             if (actual_channels != expected_channels) {
                 throw new Exception("""
-                ❌ CRITICAL: Channel count mismatch for ${meta.patient_id}!
+                Channel count mismatch for ${meta.patient_id}!
 
                 Expected ${expected_channels} channels (from metadata): ${meta.channels}
                 Got ${actual_channels} channel files from SPLIT_CHANNELS
 
-                💡 This indicates SPLIT_CHANNELS may have failed or produced corrupted output.
-                   Check SPLIT_CHANNELS logs for patient ${meta.patient_id}
+                This indicates SPLIT_CHANNELS may have failed or produced corrupted output.
+                Check SPLIT_CHANNELS logs for patient ${meta.patient_id}
                 """.stripIndent())
             }
             // Also validate no empty files
             tiffs.each { tiff ->
                 if (tiff.size() == 0) {
-                    throw new Exception("❌ CRITICAL: Empty channel file detected: ${tiff} for patient ${meta.patient_id}")
+                    throw new Exception("Empty channel file detected: ${tiff} for patient ${meta.patient_id}")
                 }
             }
             return [meta, tiffs]
@@ -156,70 +121,100 @@ workflow POSTPROCESSING {
     PHENOTYPE(ch_for_phenotype)
 
     // ========================================================================
-    // CHECKPOINT - Collect all outputs by patient
+    // MERGE - Combine registered images with masks (per patient)
     // ========================================================================
-    // FIX CRITICAL BUG: Include registered images in checkpoint for pyramid regeneration
-    // Group registered images by patient to get all images (reference + moving)
+    // Group registered images by patient for merging
     ch_registered_grouped = ch_registered
-        .map { meta, file ->
-            // Construct the published path for registered images
-            def published_path = "${params.outdir}/${meta.patient_id}/registered/${file.name}"
-            [meta.patient_id, published_path]
-        }
+        .map { meta, file -> [meta.patient_id, meta, file] }
         .groupTuple(by: 0)
-        .map { patient_id, files ->
-            // Join all file paths with pipe delimiter (consistent with channels format)
-            [patient_id, files.join('|')]
+        .map { patient_id, _metas, files ->
+            // Create patient-level metadata
+            def patient_meta = [
+                patient_id: patient_id,
+                is_reference: false  // Not relevant at patient level
+            ]
+            [patient_meta, files]
         }
 
+    // Join registered images with all masks for MERGE
+    ch_for_merge = ch_registered_grouped
+        .map { meta, files -> [meta.patient_id, meta, files] }
+        .join(
+            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
+            by: 0
+        )
+        .join(
+            PHENOTYPE.out.mask.map { meta, mask -> [meta.patient_id, mask] },
+            by: 0
+        )
+        .join(
+            PHENOTYPE.out.mapping.map { meta, mapping -> [meta.patient_id, mapping] },
+            by: 0
+        )
+        .map { _patient_id, meta, registered_files, cell_mask, pheno_mask, pheno_mapping ->
+            [meta, registered_files, cell_mask, pheno_mask, pheno_mapping]
+        }
+
+    MERGE(ch_for_merge)
+
+    // ========================================================================
+    // CONVERSION - Create pyramidal OME-TIFF (per patient)
+    // ========================================================================
+    CONVERSION(MERGE.out.merged)
+
+    // ========================================================================
+    // CHECKPOINT - Collect all outputs by patient
+    // ========================================================================
     ch_checkpoint_data = PHENOTYPE.out.csv
         .map { meta, csv ->
-            def published_path = "${params.outdir}/phenotype/${csv.name}"
+            def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${csv.name}"
             [meta.patient_id, published_path]
         }
         .join(PHENOTYPE.out.mask.map { meta, mask ->
-            def published_path = "${params.outdir}/phenotype/${mask.name}"
+            def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${mask.name}"
             [meta.patient_id, published_path]
         })
         .join(PHENOTYPE.out.mapping.map { meta, map ->
-            def published_path = "${params.outdir}/phenotype/${map.name}"
+            def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${map.name}"
             [meta.patient_id, published_path]
         })
         .join(MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv ->
-            def published_path = "${params.outdir}/merge_quant_csvs/${csv.name}"
+            def published_path = "${params.outdir}/${meta.patient_id}/quantification/${csv.name}"
             [meta.patient_id, published_path]
         })
         .join(SEGMENT.out.cell_mask.map { meta, mask ->
-            def published_path = "${params.outdir}/segment/${mask.name}"
+            def published_path = "${params.outdir}/${meta.patient_id}/segmentation/${mask.name}"
             [meta.patient_id, published_path]
         })
-        .join(ch_registered_grouped, by: 0)
-        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, registered_images ->
+        .join(MERGE.out.merged.map { meta, merged ->
+            def published_path = "${params.outdir}/${meta.patient_id}/merged/${merged.name}"
+            [meta.patient_id, published_path]
+        })
+        .join(CONVERSION.out.pyramid.map { meta, pyramid ->
+            def published_path = "${params.outdir}/${meta.patient_id}/pyramid/${pyramid.name}"
+            [meta.patient_id, published_path]
+        })
+        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, merged_image, pyramid ->
             [
                 patient_id,
-                true,  // All checkpoint rows are for reference (one per patient)
                 pheno_csv,
                 pheno_mask,
                 pheno_map,
                 merged_csv,
                 cell_mask,
-                registered_images  // Pipe-delimited list of registered image paths
+                merged_image,
+                pyramid
             ]
         }
-        .collect()
+        .toList()
+        .view { data -> "Checkpoint data: $data" }
 
     WRITE_CHECKPOINT_CSV(
         'postprocessed',
-        'patient_id,is_reference,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,registered_images',
+        'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,merged_image,pyramid',
         ch_checkpoint_data
     )
 
     emit:
-    phenotype_csv = PHENOTYPE.out.csv
-    phenotype_mask = PHENOTYPE.out.mask
-    phenotype_mapping = PHENOTYPE.out.mapping
-    merged_csv = MERGE_QUANT_CSVS.out.merged_csv
-    cell_mask = SEGMENT.out.cell_mask
-    individual_csvs = QUANTIFY.out.individual_csv
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
 }

@@ -8,7 +8,7 @@ process QUANTIFY {
         'docker://bolt3x/attend_image_analysis:quantification_gpu' :
         'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification/by_marker", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/quantification/by_marker", mode: 'copy'
 
     input:
     tuple val(meta), path(channel_tiff), path(seg_mask)
@@ -69,7 +69,7 @@ process MERGE_QUANT_CSVS {
         'docker://bolt3x/attend_image_analysis:quantification_gpu' :
         'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/quantification", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/quantification", mode: 'copy'
 
     input:
     tuple val(meta), path(individual_csvs)

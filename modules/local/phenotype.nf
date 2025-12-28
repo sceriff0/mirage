@@ -6,7 +6,7 @@ process PHENOTYPE {
         'docker://bolt3x/attend_image_analysis:quantification_gpu' :
         'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/phenotype", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/phenotype", mode: 'copy'
 
     input:
     tuple val(meta), path(quant_csv), path(seg_mask)

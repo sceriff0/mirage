@@ -19,7 +19,7 @@ process MERGE {
         'docker://bolt3x/attend_image_analysis:merge' :
         'docker://bolt3x/attend_image_analysis:merge' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/merged", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/merged", mode: 'copy'
 
     input:
     tuple val(meta), path(registered_slides), path(seg_mask), path(pheno_mask), path(pheno_mapping)

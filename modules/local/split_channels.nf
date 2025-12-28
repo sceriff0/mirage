@@ -8,7 +8,7 @@ process SPLIT_CHANNELS {
         'docker://bolt3x/attend_image_analysis:preprocess' :
         'docker://bolt3x/attend_image_analysis:preprocess' }"
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/channels", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/channels", mode: 'copy'
 
     input:
     tuple val(meta), path(registered_image), val(is_reference)
