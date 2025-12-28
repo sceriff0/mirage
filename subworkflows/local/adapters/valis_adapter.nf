@@ -52,13 +52,13 @@ workflow VALIS_ADAPTER {
     // ========================================================================
     // VALIS outputs: [patient_id, [registered_files], [metas]]
     // Need to convert to: [meta, file]
+    //
+    // KISS PRINCIPLE: VALIS outputs are sorted by filename, so we sort inputs
+    // the same way to maintain 1:1 correspondence
 
     ch_registered = REGISTER.out.registered
         .flatMap { patient_id, reg_files, metas ->
-            // FIX BUG #8: More robust filename matching using fuzzy matching
-            // Instead of exact string matching, use patient_id and channel presence
-
-            // First, try to match by count (sanity check)
+            // Sanity check: file count must match metadata count
             if (reg_files.size() != metas.size()) {
                 def error_msg = """
                 ❌ VALIS adapter: File count mismatch for patient ${patient_id}
@@ -69,48 +69,51 @@ workflow VALIS_ADAPTER {
                 throw new Exception(error_msg)
             }
 
-            // Create multiple matching strategies for robustness
-            def filename_to_meta = [:]
-
-            metas.each { meta ->
-                // Strategy 1: Expected exact prefix
-                def exact_prefix = "${meta.patient_id}_${meta.channels.join('_')}"
-                filename_to_meta[exact_prefix] = meta
-
-                // Strategy 2: Normalized prefix (handle case variations)
-                def normalized_prefix = exact_prefix.toLowerCase()
-                filename_to_meta[normalized_prefix] = meta
-
-                // Strategy 3: Just channel signature (fallback)
-                def channel_sig = meta.channels.join('_')
-                filename_to_meta[channel_sig] = meta
+            // CRITICAL: preprocess.py may reorder channel names in filenames
+            // Build lookup by marker SET (order-independent)
+            def marker_set_to_meta = metas.collectEntries { meta ->
+                // Create sorted marker signature for matching
+                def marker_key = meta.channels.sort().join('_').toLowerCase()
+                [(marker_key): meta]
             }
 
-            // Match each registered file to its metadata
+            // Match each registered file by marker set
             reg_files.collect { reg_file ->
-                // Strip VALIS-added suffixes progressively
+                // Files pass through: input -> PREPROCESS (_corrected) -> REGISTER (_registered)
+                // Strip suffixes: {patient_id}_{MARKERS}_corrected_registered.ome.tiff -> {patient_id}_{MARKERS}
                 def basename = reg_file.name
-                    .replaceAll(/_(registered|corrected|padded)+/, '')  // Remove suffixes
-                    .replaceAll(/\.ome\.tiff?$/, '')  // Remove .ome.tif[f]
-                    .replaceAll(/\.tiff?$/, '')       // Remove .tif[f]
+                    .replaceAll(/_(corrected_)?registered\.ome\.tiff?$/, '')
 
-                // Try matching strategies in order of preference
-                def matched_meta = filename_to_meta[basename] ?:
-                                   filename_to_meta[basename.toLowerCase()] ?:
-                                   filename_to_meta.find { k, v -> basename.contains(k) }?.value
+                // Split into patient_id and markers
+                def parts = basename.split('_')
+                def file_patient = parts[0]
+                def file_markers = parts.drop(1)  // All parts after patient_id
+
+                // Validate patient ID
+                if (file_patient != patient_id) {
+                    def error_msg = """
+                    ❌ VALIS adapter: Patient ID mismatch
+                    📍 Expected: ${patient_id}
+                    📍 Got: ${file_patient}
+                    📍 File: ${reg_file.name}
+                    """.stripIndent()
+                    throw new Exception(error_msg)
+                }
+
+                // Create marker signature (sorted, lowercase)
+                def file_marker_key = file_markers.sort().join('_').toLowerCase()
+
+                // Lookup metadata by marker set
+                def matched_meta = marker_set_to_meta[file_marker_key]
 
                 if (!matched_meta) {
-                    // Detailed debugging with all attempted strategies
                     def error_msg = """
                     ❌ VALIS adapter: Could not match metadata for file ${reg_file.name}
                     📍 Patient: ${patient_id}
                     📍 Extracted basename: ${basename}
-                    📋 Tried exact match: ${filename_to_meta.keySet().find { it == basename }}
-                    📋 Tried lowercase: ${filename_to_meta.keySet().find { it == basename.toLowerCase() }}
-                    📋 Tried contains: ${filename_to_meta.keySet().find { basename.contains(it) }}
-                    📋 Available keys: ${filename_to_meta.keySet().join(', ')}
-                    💡 This likely means VALIS changed the filename format
-                    💡 Please report this issue with the above debug info
+                    📍 File markers (sorted): ${file_marker_key}
+                    📍 Available marker sets: ${marker_set_to_meta.keySet().join(', ')}
+                    💡 This suggests a mismatch between input metadata and file outputs
                     """.stripIndent()
                     throw new Exception(error_msg)
                 }
