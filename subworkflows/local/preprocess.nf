@@ -64,7 +64,7 @@ workflow PREPROCESSING {
             def channels = meta.channels.toString()
             [meta.patient_id, abs_path, meta.is_reference.toString(), channels]
         }
-        .collect()
+        .toList()
         .view { data -> "Checkpoint data: $data" }
 
     WRITE_CHECKPOINT_CSV(
