@@ -61,10 +61,11 @@ workflow PREPROCESSING {
     ch_checkpoint_data = ch_preprocessed_with_meta
         .map { meta, file ->
             def abs_path = file.toString()
-            def channels = meta.channels.join('|')
-            [meta.patient_id, abs_path, meta.is_reference, channels]
+            def channels = meta.channels.toString()
+            [meta.patient_id, abs_path, meta.is_reference.toString(), channels]
         }
         .collect()
+        .view { data -> "Checkpoint data: $data" }
 
     WRITE_CHECKPOINT_CSV(
         'preprocessed',
