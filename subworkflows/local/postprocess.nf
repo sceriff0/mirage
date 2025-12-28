@@ -60,37 +60,15 @@ workflow POSTPROCESSING {
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
     ch_for_quant = SPLIT_CHANNELS.out.channels
-        .map { meta, tiffs ->
-            // Validate we got the expected number of channels
-            // Account for DAPI being skipped on non-reference images
-            def has_dapi = meta.channels.any { ch -> ch.toUpperCase() == 'DAPI' }
-            def expected_channels = meta.is_reference ?
-                meta.channels.size() :
-                (has_dapi ? meta.channels.size() - 1 : meta.channels.size())
-
-            def actual_channels = tiffs.size()
-            if (actual_channels != expected_channels) {
-                def ref_status = meta.is_reference ? "reference" : "non-reference"
-                def dapi_note = has_dapi && !meta.is_reference ? " (DAPI skipped)" : ""
-                throw new Exception("""
-                Channel count mismatch for ${meta.patient_id} (${ref_status})!
-
-                Expected ${expected_channels} channels${dapi_note}: ${meta.channels}
-                Got ${actual_channels} channel files from SPLIT_CHANNELS
-
-                This indicates SPLIT_CHANNELS may have failed or produced corrupted output.
-                Check SPLIT_CHANNELS logs for patient ${meta.patient_id}
-                """.stripIndent())
+        .flatMap { meta, tiffs ->
+            // Create unique meta map for each channel file
+            tiffs.collect { tiff ->
+                def channel_meta = meta.clone()
+                channel_meta.id = "${meta.patient_id}_${tiff.baseName}"
+                channel_meta.channel_name = tiff.baseName
+                [channel_meta, tiff]
             }
-            // Also validate no empty files
-            tiffs.each { tiff ->
-                if (tiff.size() == 0) {
-                    throw new Exception("Empty channel file detected: ${tiff} for patient ${meta.patient_id}")
-                }
-            }
-            return [meta, tiffs]
         }
-        .transpose()                                                    // [meta, single_tiff]
         .map { meta, tiff -> [meta.patient_id, meta, tiff] }
         .join(
             SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
