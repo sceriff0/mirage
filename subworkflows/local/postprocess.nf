@@ -62,13 +62,20 @@ workflow POSTPROCESSING {
     ch_for_quant = SPLIT_CHANNELS.out.channels
         .map { meta, tiffs ->
             // Validate we got the expected number of channels
-            def expected_channels = meta.channels.size()
+            // Account for DAPI being skipped on non-reference images
+            def has_dapi = meta.channels.any { ch -> ch.toUpperCase() == 'DAPI' }
+            def expected_channels = meta.is_reference ?
+                meta.channels.size() :
+                (has_dapi ? meta.channels.size() - 1 : meta.channels.size())
+
             def actual_channels = tiffs.size()
             if (actual_channels != expected_channels) {
+                def ref_status = meta.is_reference ? "reference" : "non-reference"
+                def dapi_note = has_dapi && !meta.is_reference ? " (DAPI skipped)" : ""
                 throw new Exception("""
-                Channel count mismatch for ${meta.patient_id}!
+                Channel count mismatch for ${meta.patient_id} (${ref_status})!
 
-                Expected ${expected_channels} channels (from metadata): ${meta.channels}
+                Expected ${expected_channels} channels${dapi_note}: ${meta.channels}
                 Got ${actual_channels} channel files from SPLIT_CHANNELS
 
                 This indicates SPLIT_CHANNELS may have failed or produced corrupted output.
