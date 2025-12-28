@@ -14,7 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -27,66 +27,17 @@ os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
+# Import from lib modules for DRY principle
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from lib.logger import log_progress
+from lib.image_utils import load_image_grayscale
+
 from valis import feature_detectors
 from valis import feature_matcher
 
-
-def log_progress(message: str) -> None:
-    """Print timestamped progress messages."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}", flush=True)
-
-
-def load_image_grayscale(image_path: str, max_dim: Optional[int] = None) -> np.ndarray:
-    """Load image and convert to grayscale for feature detection.
-
-    Parameters
-    ----------
-    image_path : str
-        Path to the image file
-    max_dim : int, optional
-        Maximum dimension for downsampling (for memory efficiency)
-
-    Returns
-    -------
-    np.ndarray
-        Grayscale image as numpy array (H, W)
-    """
-    log_progress(f"Loading image: {image_path}")
-
-    # Load with pyvips for memory efficiency
-    vips_img = pyvips.Image.new_from_file(image_path)
-    log_progress(f"  Image size: {vips_img.width}x{vips_img.height}, {vips_img.bands} bands")
-
-    # Downsample if needed
-    if max_dim is not None:
-        current_max = max(vips_img.width, vips_img.height)
-        if current_max > max_dim:
-            scale = max_dim / current_max
-            vips_img = vips_img.resize(scale)
-            log_progress(f"  Downsampled to: {vips_img.width}x{vips_img.height} (scale={scale:.3f})")
-
-    # Convert to grayscale if multi-channel (use first channel or average)
-    if vips_img.bands > 1:
-        # Take first channel (usually DAPI for multiplexed images)
-        vips_img = vips_img.extract_band(0)
-        log_progress(f"  Converted to grayscale (using first channel)")
-
-    # Convert to numpy
-    img_array = vips_img.numpy()
-
-    # Ensure 8-bit for feature detection
-    if img_array.dtype != np.uint8:
-        # Normalize to 0-255 range
-        img_min, img_max = img_array.min(), img_array.max()
-        if img_max > img_min:
-            img_array = ((img_array - img_min) / (img_max - img_min) * 255).astype(np.uint8)
-        else:
-            img_array = np.zeros_like(img_array, dtype=np.uint8)
-        log_progress(f"  Converted to uint8")
-
-    log_progress(f"  Final shape: {img_array.shape}, dtype: {img_array.dtype}")
-    return img_array
+# Function definitions removed - now imported from lib modules:
+# - log_progress() -> imported from lib.logger
+# - load_image_grayscale() -> imported from lib.image_utils
 
 
 def get_feature_detector(detector_type: str = "superpoint"):

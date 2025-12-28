@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["get_logger", "configure_logging"]
+__all__ = ["get_logger", "configure_logging", "log_progress"]
 
 
 # Global state for singleton pattern
@@ -187,3 +187,49 @@ def get_logger(name: str) -> logging.Logger:
         configure_logging()
 
     return logging.getLogger(name)
+
+
+def log_progress(message: str) -> None:
+    """Print timestamped progress messages to stdout with flush.
+
+    This is a simple utility function for scripts that need direct console
+    output with timestamps. For more structured logging, use get_logger().
+
+    Parameters
+    ----------
+    message : str
+        Progress message to print.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    This function prints directly to stdout with flush=True to ensure
+    immediate visibility in log files and console output.
+
+    The timestamp format is 'YYYY-MM-DD HH:MM:SS' for consistency with
+    the main logging configuration.
+
+    This function does NOT use the Python logging framework - it prints
+    directly to stdout. Use this only for simple scripts or when you need
+    guaranteed console output that won't be filtered by log levels.
+
+    Examples
+    --------
+    >>> log_progress("Processing started")
+    [2025-12-28 10:30:45] Processing started
+
+    >>> log_progress("Completed 50% of task")
+    [2025-12-28 10:31:12] Completed 50% of task
+
+    See Also
+    --------
+    get_logger : Get a proper logger instance for structured logging
+    configure_logging : Configure the logging system
+    """
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)

@@ -17,12 +17,20 @@ import os
 import glob
 import gc
 import numpy as np
-from datetime import datetime
 from typing import Optional
 import tifffile
 import pyvips
 
 from _common import ensure_dir
+
+# Import from lib modules for DRY principle
+import sys
+from pathlib import Path
+# Add parent directory to path to import lib modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from lib.logger import log_progress
+from lib.metadata import get_channel_names
+from lib.registration_utils import autoscale
 
 # Disable numba caching to avoid file system issues in containers
 os.environ['NUMBA_DISABLE_JIT'] = '0'
@@ -53,47 +61,8 @@ def debug_check_slide2vips(registrar):
     log_progress("=== END DEBUG ===\n")
 
 
-def log_progress(message: str) -> None:
-    """Print timestamped progress messages."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}", flush=True)
-
-
-def get_channel_names(filename: str) -> list[str]:
-    """Parse channel names from filename.
-
-    Expected format: PatientID_DAPI_Marker1_Marker2_corrected.ome.tif
-
-    Parameters
-    ----------
-    filename : str
-        Base filename (not full path)
-
-    Returns
-    -------
-    list of str
-        Channel names extracted from filename (excludes Patient ID)
-    """
-    base = os.path.basename(filename)
-    # Remove all suffixes that might be present
-    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
-    parts = name_part.split('_')
-    channels = parts[1:]  # Exclude Patient ID
-    return channels
-
-
-def autoscale(img, low_p=1.0, high_p=99.0):
-    """Normalize image to 0-255 using percentile-based scaling (like ImageJ Auto).
-
-    Args:
-        img: Input image array
-        low_p: Lower percentile (default: 1.0)
-        high_p: Upper percentile (default: 99.0)
-    """
-    lo = np.percentile(img, low_p)
-    hi = np.percentile(img, high_p)
-    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
-    return (img * 255).astype(np.uint8)
+# log_progress, get_channel_names, and autoscale are now imported from lib modules above
+# These duplicate function definitions have been removed to follow DRY principle
 
 
 def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
@@ -118,9 +87,21 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
     ref_channels = get_channel_names(os.path.basename(ref_slide_key))
     ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
 
+    log_progress("Loading reference DAPI channel...")
     ref_vips = ref_slide.slide2vips(level=0)
     ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
     ref_dapi_scaled = autoscale(ref_dapi)
+
+    # ✅ OPTIMIZATION: Pre-compute downsampled reference ONCE (not per slide)
+    # This saves memory and computation time
+    log_progress("Pre-computing downsampled reference (0.25x scale)...")
+    ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+
+    # Free the full-resolution reference DAPI array (no longer needed after downsampling)
+    # Keep only ref_dapi_scaled for full-res QC and ref_down for PNG/TIFF outputs
+    del ref_vips, ref_dapi
+    gc.collect()
+    log_progress(f"✓ Reference DAPI prepared (full-res: {ref_dapi_scaled.shape}, downsampled: {ref_down.shape})")
 
     log_progress(f"Processing {len(registrar.slide_dict) - 1} slides for QC...")
 
@@ -137,7 +118,7 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
         reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
         reg_dapi_scaled = autoscale(reg_dapi)
-        del reg_dapi
+        del reg_dapi, warped_vips  # ✅ Free warped_vips immediately after extraction
 
         # Save full-resolution QC (compressed)
         base_name = os.path.basename(slide_name)
@@ -158,11 +139,11 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
         )
         log_progress(f"  Saved full-res QC TIFF: {fullres_path.name}")
         del rgb_stack_full
+        gc.collect()  # ✅ Force cleanup after large full-res TIFF
 
-        # Downsample by 0.25 scale factor
-        ref_down = rescale(ref_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
+        # Downsample registered DAPI only (reference already downsampled)
         reg_down = rescale(reg_dapi_scaled, scale=0.25, anti_aliasing=True, preserve_range=True).astype(np.uint8)
-        del reg_dapi_scaled
+        del reg_dapi_scaled  # ✅ Free full-res registered DAPI
 
         # Create RGB composite: Red = registered, Green = reference
         h, w = reg_down.shape
@@ -194,6 +175,10 @@ def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
 
         del rgb_bgr, rgb_stack, reg_down
         gc.collect()
+
+    # ✅ OPTIMIZATION: Clean up reference arrays after all QC processing
+    del ref_dapi_scaled, ref_down
+    gc.collect()
 
     log_progress("QC generation complete")
 

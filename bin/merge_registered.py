@@ -12,7 +12,6 @@ Uses VALIS slide_io for robust image reading.
 import argparse
 import sys
 from pathlib import Path
-from datetime import datetime
 import numpy as np
 import tifffile
 import os
@@ -23,46 +22,20 @@ os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
+# Import from lib modules for DRY principle
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from lib.logger import log_progress as log
+from lib.metadata import extract_channel_names_from_ome as get_channel_names_from_ome
+from lib.metadata import extract_markers_from_filename
+from lib.image_utils import normalize_image_dimensions
 
 # Import only slide_io to avoid heavy VALIS dependencies
 import valis.slide_io as slide_io
 
-
-def log(msg: str):
-    """Print timestamped message."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}", flush=True)
-
-
-def get_channel_names_from_ome(filepath: str) -> list:
-    """Extract channel names from OME-TIFF metadata. Returns empty list if fails."""
-    try:
-        with tifffile.TiffFile(filepath) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                if channels:
-                    return [ch.get('Name', '') for ch in channels]
-    except:
-        pass
-    return []
-
-
-def extract_markers_from_filename(filename: str) -> list:
-    """Extract marker names from filename like 'B19-10215_DAPI_SMA_panck_corrected'."""
-    # Remove _registered, _corrected, and _padded suffixes
-    name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
-    name = name.replace('_corrected', '').replace('_padded', '')
-
-    # Split by underscore and filter out sample ID
-    parts = name.split('_')
-
-    # Assume first part is sample ID (starts with letter+numbers), rest are markers
-    markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
-
-    return markers if markers else [name]
+# Function definitions removed - now imported from lib modules:
+# - log() -> imported from lib.logger.log_progress
+# - get_channel_names_from_ome() -> imported from lib.metadata
+# - extract_markers_from_filename() -> imported from lib.metadata
 
 
 def is_reference_slide(slide_name: str, reference_markers: list) -> bool:
@@ -77,19 +50,8 @@ def read_slide(filepath: str) -> tuple:
     # Read with tifffile which handles large TIFFs efficiently
     img = tifffile.imread(str(filepath))
 
-    # Ensure (C, H, W) format
-    if img.ndim == 2:
-        # Single channel: (H, W) -> (1, H, W)
-        img = img[np.newaxis, ...]
-    elif img.ndim == 3:
-        # Multi-channel: could be (H, W, C) or (C, H, W)
-        # Detect based on typical image dimensions
-        if img.shape[0] < img.shape[2]:
-            # Already (C, H, W) format
-            pass
-        else:
-            # (H, W, C) format - transpose to (C, H, W)
-            img = np.transpose(img, (2, 0, 1))
+    # Ensure (C, H, W) format using shared utility function
+    img = normalize_image_dimensions(img)
 
     # Try to get channel names from OME metadata first
     channel_names = get_channel_names_from_ome(str(filepath))

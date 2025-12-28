@@ -31,6 +31,7 @@ __all__ = [
     "get_channel_names",
     "extract_channel_names_from_ome",
     "extract_channel_names_from_filename",
+    "extract_markers_from_filename",
     "create_ome_xml",
     "get_ome_metadata",
 ]
@@ -312,6 +313,80 @@ def create_ome_xml(
 </OME>'''
 
     return ome_xml
+
+
+def extract_markers_from_filename(filename: str | Path) -> List[str]:
+    """Extract marker names from filename with more flexible parsing.
+
+    This is an alternative to get_channel_names() that tries to be more
+    flexible about detecting sample IDs vs marker names.
+
+    Parameters
+    ----------
+    filename : str or Path
+        Filename or path to parse.
+
+    Returns
+    -------
+    List[str]
+        List of extracted marker names.
+
+    Notes
+    -----
+    This function removes common suffixes (_registered, _corrected, _padded)
+    and attempts to filter out sample IDs based on patterns like:
+    - Contains both letters and numbers with hyphens (e.g., "B19-10215")
+    - Is recognized as a common sample ID pattern
+
+    The function is more lenient than get_channel_names() which assumes
+    the first underscore-delimited part is always the sample ID.
+
+    Examples
+    --------
+    >>> extract_markers_from_filename("B19-10215_DAPI_SMA_panck_corrected.ome.tif")
+    ['DAPI', 'SMA', 'panck']
+
+    >>> extract_markers_from_filename("Sample_DAPI_CD3.tif")
+    ['DAPI', 'CD3']
+
+    See Also
+    --------
+    get_channel_names : Standard channel name extraction
+    extract_channel_names_from_filename : With validation
+    """
+    # Get basename
+    base = os.path.basename(str(filename))
+
+    # Remove suffixes
+    name = base.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
+    name = name.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '')
+
+    # Remove file extension
+    if '.' in name:
+        name = name.split('.')[0]
+
+    # Split by underscore
+    parts = name.split('_')
+
+    # Try to detect and filter out sample ID
+    # Pattern: contains letters, numbers, and hyphen (e.g., "B19-10215")
+    markers = []
+    for p in parts:
+        if not p:
+            continue
+        # Skip if it looks like a sample ID (has hyphen and alphanumeric)
+        if '-' in p and any(c.isalpha() for c in p) and any(c.isdigit() for c in p):
+            continue
+        # Skip if it's just "Sample" or similar generic prefix
+        if p.lower() in ['sample', 'slide', 'image']:
+            continue
+        markers.append(p)
+
+    # If no markers found, return the whole name
+    if not markers:
+        markers = [name]
+
+    return markers
 
 
 def get_ome_metadata(filepath: str | Path) -> Dict[str, Any]:

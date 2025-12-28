@@ -56,7 +56,31 @@ workflow POSTPROCESSING {
     // ========================================================================
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
+    // FIX ISSUE #11: Validate SPLIT_CHANNELS output cardinality
     ch_for_quant = SPLIT_CHANNELS.out.channels
+        .map { meta, tiffs ->
+            // Validate we got the expected number of channels
+            def expected_channels = meta.channels.size()
+            def actual_channels = tiffs.size()
+            if (actual_channels != expected_channels) {
+                throw new Exception("""
+                ❌ CRITICAL: Channel count mismatch for ${meta.patient_id}!
+
+                Expected ${expected_channels} channels (from metadata): ${meta.channels}
+                Got ${actual_channels} channel files from SPLIT_CHANNELS
+
+                💡 This indicates SPLIT_CHANNELS may have failed or produced corrupted output.
+                   Check SPLIT_CHANNELS logs for patient ${meta.patient_id}
+                """.stripIndent())
+            }
+            // Also validate no empty files
+            tiffs.each { tiff ->
+                if (tiff.size() == 0) {
+                    throw new Exception("❌ CRITICAL: Empty channel file detected: ${tiff} for patient ${meta.patient_id}")
+                }
+            }
+            return [meta, tiffs]
+        }
         .transpose()                                                    // [meta, single_tiff]
         .map { meta, tiff -> [meta.patient_id, meta, tiff] }
         .join(

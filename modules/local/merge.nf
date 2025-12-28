@@ -34,7 +34,10 @@ process MERGE {
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
-    def ref_markers = params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
+    // FIX ISSUE #4: Use DAPI as reference marker (always in channel 0)
+    // This is consistent with our metadata-driven approach where DAPI is always first
+    // The merge script will identify the reference slide by looking for DAPI
+    def ref_markers = "--reference-markers DAPI"
     """
     echo "Sample: ${meta.patient_id}"
 

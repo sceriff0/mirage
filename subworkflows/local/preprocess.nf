@@ -48,7 +48,7 @@ workflow PREPROCESSING {
                 // Read output channels from file (DAPI will be first)
                 def output_channels = channels_file.text.trim().split(',')
 
-                // FIX EDGE CASE #2: CRITICAL VALIDATION - DAPI must be in channel 0!
+                // FIX ISSUE #10: CRITICAL VALIDATION - DAPI must be in channel 0!
                 if (output_channels[0].toUpperCase() != 'DAPI') {
                     throw new Exception("""
                     ❌ CRITICAL: DAPI must be in channel 0 after conversion for ${meta.patient_id}!
@@ -64,7 +64,27 @@ workflow PREPROCESSING {
                 [updated_meta, ome_file]
             }
     } else {
+        // FIX ISSUE #10: When skipping conversion, validate DAPI is in channel 0
+        // Users may provide pre-converted OME-TIFF files directly
         ch_for_preprocess = ch_input
+            .map { meta, file ->
+                // Validate DAPI is first in the channels list
+                if (meta.channels[0].toUpperCase() != 'DAPI') {
+                    throw new Exception("""
+                    ❌ CRITICAL: DAPI must be in channel 0 for ${meta.patient_id}!
+
+                    You are using pre-converted images (skip_nd2_conversion=true).
+                    The channels in your input CSV are: ${meta.channels}
+                    DAPI is in position: ${meta.channels.findIndexOf { it.toUpperCase() == 'DAPI' }}
+
+                    💡 Fix: Update your input CSV so DAPI is listed first in the 'channels' column.
+                       Example: 'DAPI|PANCK|SMA' instead of 'PANCK|DAPI|SMA'
+
+                    💡 Note: The actual OME-TIFF file must also have DAPI in channel 0!
+                    """.stripIndent())
+                }
+                [meta, file]
+            }
     }
 
     // Preprocess each file (BaSiC correction)
