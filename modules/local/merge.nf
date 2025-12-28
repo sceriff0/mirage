@@ -4,8 +4,8 @@ nextflow.enable.dsl = 2
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     MERGE MODULE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    Merges individually registered slides into a single multi-channel OME-TIFF.
-    Keeps all channels from all slides, but for DAPI only retains it from the reference image.
+    Merges single-channel TIFF files (from SPLIT_CHANNELS) into a single multi-channel OME-TIFF.
+    DAPI filtering is already handled by SPLIT_CHANNELS (only from reference image).
     Appends segmentation and phenotype masks as additional channels.
     Phenotype mask includes distinct colors for each phenotype for visualization.
 ----------------------------------------------------------------------------------------
@@ -22,7 +22,7 @@ process MERGE {
     publishDir "${params.outdir}/${meta.patient_id}/merged", mode: 'copy'
 
     input:
-    tuple val(meta), path(registered_slides), path(seg_mask), path(pheno_mask), path(pheno_mapping)
+    tuple val(meta), path(split_channels, stageAs: 'channels/*'), path(seg_mask), path(pheno_mask), path(pheno_mapping)
 
     output:
     tuple val(meta), path("merged_all.ome.tiff"), emit: merged
@@ -34,20 +34,17 @@ process MERGE {
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
-    // FIX ISSUE #4: Use DAPI as reference marker (always in channel 0)
-    // This is consistent with our metadata-driven approach where DAPI is always first
-    // The merge script will identify the reference slide by looking for DAPI
-    def ref_markers = "--reference-markers DAPI"
     """
     echo "Sample: ${meta.patient_id}"
+    echo "Channels directory: channels/"
+    ls -lh channels/
 
-    merge_registered.py \\
-        --input-dir . \\
+    merge_channels.py \\
+        --input-dir channels \\
         --output merged_all.ome.tiff \\
         --segmentation-mask ${seg_mask} \\
         --phenotype-mask ${pheno_mask} \\
         --phenotype-mapping ${pheno_mapping} \\
-        ${ref_markers} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

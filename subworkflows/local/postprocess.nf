@@ -117,24 +117,27 @@ workflow POSTPROCESSING {
     PHENOTYPE(ch_for_phenotype)
 
     // ========================================================================
-    // MERGE - Combine registered images with masks (per patient)
+    // MERGE - Combine split channel TIFFs with masks (per patient)
     // ========================================================================
-    // Group registered images by patient for merging
-    ch_registered_grouped = ch_registered
-        .map { meta, file -> [meta.patient_id, meta, file] }
+    // Group split channel TIFFs by patient for merging
+    // SPLIT_CHANNELS already handles DAPI filtering correctly
+    ch_split_grouped = SPLIT_CHANNELS.out.channels
+        .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
         .groupTuple(by: 0)
-        .map { patient_id, _metas, files ->
+        .map { patient_id, _metas, tiff_lists ->
+            // Flatten all TIFF files from all slides into one list
+            def all_tiffs = tiff_lists.flatten()
             // Create patient-level metadata
             def patient_meta = [
                 patient_id: patient_id,
                 is_reference: false  // Not relevant at patient level
             ]
-            [patient_meta, files]
+            [patient_meta, all_tiffs]
         }
 
-    // Join registered images with all masks for MERGE
-    ch_for_merge = ch_registered_grouped
-        .map { meta, files -> [meta.patient_id, meta, files] }
+    // Join split channels with all masks for MERGE
+    ch_for_merge = ch_split_grouped
+        .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
         .join(
             SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
             by: 0
@@ -147,8 +150,8 @@ workflow POSTPROCESSING {
             PHENOTYPE.out.mapping.map { meta, mapping -> [meta.patient_id, mapping] },
             by: 0
         )
-        .map { _patient_id, meta, registered_files, cell_mask, pheno_mask, pheno_mapping ->
-            [meta, registered_files, cell_mask, pheno_mask, pheno_mapping]
+        .map { _patient_id, meta, split_tiffs, cell_mask, pheno_mask, pheno_mapping ->
+            [meta, split_tiffs, cell_mask, pheno_mask, pheno_mapping]
         }
 
     MERGE(ch_for_merge)
