@@ -34,9 +34,34 @@ process REGISTER {
 
     # Copy all input files (from both ref/ and input_*/ directories) into preprocessed/
     # This handles the stageAs directories we created to avoid naming collisions
-    find ref input_* -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) 2>/dev/null | while read file; do
-        cp "\$file" preprocessed/
+    # Use -L to follow symlinks and cp -L to dereference them
+    echo "=== Copying input files to preprocessed/ ==="
+    for dir in ref input_*; do
+        if [ -d "\$dir" ]; then
+            echo "Processing directory: \$dir"
+            find -L "\$dir" -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | while read file; do
+                echo "  Found file: \$file"
+                cp -L "\$file" preprocessed/
+            done
+        fi
     done
+
+    echo "=== Contents of preprocessed/ ==="
+    ls -lh preprocessed/
+
+    # Verify we have files
+    file_count=\$(find preprocessed -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | wc -l)
+    echo "Total files copied: \$file_count"
+
+    if [ "\$file_count" -eq 0 ]; then
+        echo "ERROR: No .ome.tif files were copied to preprocessed/"
+        echo "Available directories and contents:"
+        ls -lR
+        exit 1
+    fi
+
+    echo "=== Running registration ==="
+    echo "Command: register.py --input-dir preprocessed --out registered_slides ${ref_arg}"
 
     register.py \\
         --input-dir preprocessed \\
@@ -48,6 +73,19 @@ process REGISTER {
         --num-features ${num_features} \\
         --max-image-dim ${max_image_dim} \\
         ${args}
+
+    echo "=== Contents of registered_slides/ ==="
+    ls -lh registered_slides/ || echo "Directory is empty or doesn't exist"
+
+    # Verify outputs were created
+    output_count=\$(find registered_slides -type f -name '*_registered.ome.tiff' 2>/dev/null | wc -l)
+    echo "Total registered files created: \$output_count"
+
+    if [ "\$output_count" -eq 0 ]; then
+        echo "ERROR: No registered output files (*_registered.ome.tiff) were created"
+        echo "Registration may have failed. Check the logs above."
+        exit 1
+    fi
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
