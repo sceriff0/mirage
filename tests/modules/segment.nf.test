@@ -65,9 +65,9 @@ nextflow_process {
         }
 
         then {
-            // In stub mode, validation still runs in script block
-            // This test documents expected behavior
-            assert process.success || process.failed
+            // Validation runs in script block and should fail
+            assert process.failed
+            assert process.exitStatus == 1
         }
     }
 

@@ -1,0 +1,166 @@
+nextflow_workflow {
+
+    name "Test PREPROCESSING subworkflow"
+    script "subworkflows/local/preprocess.nf"
+    workflow "PREPROCESSING"
+
+    tag "subworkflow"
+    tag "preprocessing"
+
+    test("Should run full preprocessing workflow - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_nd2_conversion = true
+                preproc_tile_size = 256
+                preproc_n_iter = 1
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.preprocessed },
+                { assert workflow.out.checkpoint_csv },
+                { assert snapshot(
+                    workflow.out.preprocessed.collect { it[0] },  // metadata only
+                    workflow.out.checkpoint_csv
+                ).match() }
+            )
+        }
+    }
+
+    test("Should handle single patient - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_nd2_conversion = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.preprocessed) {
+                    assert size() == 1
+                    assert collect { it[0].patient_id }.contains('P001')
+                }}
+            )
+        }
+    }
+
+    test("Should handle multi-patient preprocessing - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_nd2_conversion = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')],
+                    [[patient_id: 'P002', is_reference: true, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P002_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.preprocessed) {
+                    assert size() == 3
+                    def patient_ids = collect { it[0].patient_id }
+                    assert patient_ids.count { it == 'P001' } == 2
+                    assert patient_ids.count { it == 'P002' } == 1
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through workflow") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK'], custom: 'value'],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.preprocessed) {
+                    def meta = get(0)[0]
+                    assert meta.patient_id == 'P001'
+                    assert meta.is_reference == true
+                    assert meta.channels == ['DAPI', 'PANCK']
+                }}
+            )
+        }
+    }
+
+    test("Should create valid checkpoint CSV") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "${outputDir}"
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv },
+                { with(workflow.out.checkpoint_csv) {
+                    assert get(0).exists()
+                    assert get(0).name.contains('checkpoint.csv')
+                }}
+            )
+        }
+    }
+}

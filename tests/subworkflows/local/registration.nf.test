@@ -1,0 +1,271 @@
+nextflow_workflow {
+
+    name "Test REGISTRATION subworkflow"
+    script "subworkflows/local/registration.nf"
+    workflow "REGISTRATION"
+
+    tag "subworkflow"
+    tag "registration"
+
+    test("Should run VALIS registration - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+                enable_feature_error = false
+                enable_segmentation_error = false
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv },
+                { assert snapshot(workflow.out.checkpoint_csv).match() }
+            )
+        }
+    }
+
+    test("Should run GPU registration - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+                gpu_register = false  // Disable GPU for testing
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'gpu'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should run CPU registration - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'cpu'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should handle multi-patient registration - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')],
+                    [[patient_id: 'P002', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P002_ref.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.checkpoint_csv) {
+                    assert size() == 1
+                }}
+            )
+        }
+    }
+
+    test("Should fail with invalid registration method") {
+
+        when {
+            params {
+                skip_registration_qc = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                input[1] = 'invalid_method'
+                """
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+
+    test("Should handle padding workflow - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                padding = true
+                skip_registration_qc = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should skip QC when configured - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should handle allow_auto_reference fallback - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                allow_auto_reference = true
+                skip_registration_qc = true
+                padding = false
+            }
+            workflow {
+                """
+                // No is_reference=true - should use first image
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should fail when no reference and allow_auto_reference=false") {
+
+        when {
+            params {
+                allow_auto_reference = false
+                skip_registration_qc = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                input[1] = 'valis'
+                """
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+}
