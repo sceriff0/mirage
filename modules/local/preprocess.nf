@@ -1,6 +1,6 @@
 process PREPROCESS {
     tag "${meta.patient_id}"
-    label 'process_medium'
+    label 'process_high'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'docker://bolt3x/attend_image_analysis:preprocess' :
