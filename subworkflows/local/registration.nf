@@ -76,9 +76,10 @@ workflow REGISTRATION {
         MAX_DIM(ch_grouped_dims)
 
         // MAX_DIM outputs [patient_id, max_dims_file]
+        // Combine each individual image with its patient's max_dims_file
         ch_to_pad = ch_preprocessed
             .map { meta, file -> [meta.patient_id, meta, file] }
-            .join(MAX_DIM.out.max_dims_file, by: 0)
+            .combine(MAX_DIM.out.max_dims_file, by: 0)
             .map { patient_id, meta, file, max_dims -> [meta, file, max_dims] }
 
         PAD_IMAGES(ch_to_pad)
