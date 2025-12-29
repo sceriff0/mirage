@@ -1,42 +1,10 @@
 process CPU_REGISTER {
     tag "${meta.patient_id}"
+    label 'process_high_memory'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'docker://bolt3x/attend_image_analysis:debug_diffeo' :
         'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
-
-    // Dynamic resource allocation based on input file size
-    // CPU version uses more cores and memory than GPU version
-    // Small: <10 GB, Medium: 10-30 GB, Large: >30 GB
-    memory {
-        def size = moving.size()
-        check_max(
-            size < 10.GB  ? 100.GB * task.attempt :   // Small images
-            size < 25.GB  ? 250.GB * task.attempt :   // Medium images
-            400.GB * task.attempt,                    // Large images
-            'memory'
-        )
-    }
-
-    time {
-        def size = moving.size()
-        check_max(
-            size < 10.GB  ? 8.h * task.attempt :      // Small images - CPU is slower
-            size < 25.GB  ? 10.h * task.attempt :     // Medium images
-            24.h * task.attempt,                      // Large images
-            'time'
-        )
-    }
-
-    cpus {
-        def size = moving.size()
-        check_max(
-            size < 10.GB  ? 64 :       // Small images
-            size < 25.GB  ? 64 :       // Medium images
-            64,                        // Large images
-            'cpus'
-        )
-    }
 
     input:
     tuple val(meta), path(reference), path(moving)
