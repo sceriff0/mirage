@@ -24,22 +24,30 @@ process ESTIMATE_SEGMENTATION_OVERLAP {
 
     script:
     def max_dim = params.feature_max_dim ?: 2048
-    def min_nucleus_size = params.min_nucleus_size ?: 100
-    def max_nucleus_size = params.max_nucleus_size ?: 5000
     def prefix = meta.channels.join('_')
+    def pmin = params.seg_pmin ?: 1.0
+    def pmax = params.seg_pmax ?: 99.8
+    def n_tiles_y = params.seg_n_tiles_y ?: 24
+    def n_tiles_x = params.seg_n_tiles_x ?: 24
+    def max_nucleus_distance = params.max_nucleus_distance ?: 50.0
     """
     estimate_segmentation_overlap.py \\
         --reference ${reference} \\
         --registered ${registered} \\
         --output-prefix ${prefix} \\
+        --model-dir ${params.segmentation_model_dir} \\
+        --model-name ${params.segmentation_model} \\
         --max-dim ${max_dim} \\
-        --min-nucleus-size ${min_nucleus_size} \\
-        --max-nucleus-size ${max_nucleus_size}
+        --n-tiles ${n_tiles_y} ${n_tiles_x} \\
+        --pmin ${pmin} \\
+        --pmax ${pmax} \\
+        --max-nucleus-distance ${max_nucleus_distance}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version 2>&1 | sed 's/Python //')
-        deepcell: \$(python -c "import deepcell; print(deepcell.__version__)" 2>/dev/null || echo "unknown")
+        stardist: \$(python -c "import stardist; print(stardist.__version__)" 2>/dev/null || echo "unknown")
+        tensorflow: \$(python -c "import tensorflow; print(tensorflow.__version__)" 2>/dev/null || echo "unknown")
     END_VERSIONS
     """
 
@@ -52,7 +60,8 @@ process ESTIMATE_SEGMENTATION_OVERLAP {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: stub
-        deepcell: stub
+        stardist: stub
+        tensorflow: stub
     END_VERSIONS
     """
 }
