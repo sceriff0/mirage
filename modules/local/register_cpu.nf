@@ -1,7 +1,5 @@
 process CPU_REGISTER {
     tag "${meta.patient_id}"
-    label 'process_high'
-    label 'process_high_memory'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'docker://bolt3x/attend_image_analysis:debug_diffeo' :
@@ -33,9 +31,9 @@ process CPU_REGISTER {
     cpus {
         def size = moving.size()
         check_max(
-            size < 10.GB  ? 64 * task.attempt :       // Small images
-            size < 25.GB  ? 64 * task.attempt :       // Medium images
-            64 * task.attempt,                        // Large images
+            size < 10.GB  ? 64 :       // Small images
+            size < 25.GB  ? 64 :       // Medium images
+            64,                        // Large images
             'cpus'
         )
     }

@@ -271,7 +271,8 @@ def create_ome_xml(
     The dimension order is always 'XYCZT' (width, height, channels, z, time),
     which is the recommended order for most applications.
 
-    Physical size units are in micrometers (µm).
+    Physical size units are in micrometers (specified as "um" to maintain
+    ASCII-only encoding required by TIFF specification).
 
     Examples
     --------
@@ -300,13 +301,14 @@ def create_ome_xml(
     )
 
     # Construct complete OME-XML
+    # Note: Using 'um' instead of 'µm' to ensure ASCII-only string for TIFF spec
     ome_xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
     <Image ID="Image:0" Name="Image">
         <Pixels ID="Pixels:0" Type="{dtype_name}"
                 SizeX="{width}" SizeY="{height}" SizeZ="{size_z}" SizeC="{num_channels}" SizeT="{size_t}"
                 DimensionOrder="XYCZT"
-                PhysicalSizeX="{pixel_size_um}" PhysicalSizeY="{pixel_size_um}" PhysicalSizeXUnit="µm" PhysicalSizeYUnit="µm">
+                PhysicalSizeX="{pixel_size_um}" PhysicalSizeY="{pixel_size_um}" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
 {channel_xml}
             <TiffData />
         </Pixels>
