@@ -134,7 +134,8 @@ def valis_registration(input_dir: str, out: str,
                        max_non_rigid_dim_px: int = 3500,
                        micro_reg_fraction: float = 0.5,
                        num_features: int = 5000,
-                       max_image_dim_px: int = 6000) -> int:
+                       max_image_dim_px: int = 6000,
+                       skip_micro_registration: bool = False) -> int:
     """Perform VALIS registration on preprocessed images.
 
     Parameters
@@ -157,6 +158,8 @@ def valis_registration(input_dir: str, out: str,
         Number of SuperPoint features to detect. Default: 5000
     max_image_dim_px : int, optional
         Maximum image dimension for caching (controls RAM usage). Default: 6000
+    skip_micro_registration : bool, optional
+        Skip the micro-rigid registration step. Default: False
 
     Returns
     -------
@@ -306,30 +309,33 @@ def valis_registration(input_dir: str, out: str,
     # ========================================================================
     # Micro-registration - Try with error handling
     # ========================================================================
-    log_progress("\nAttempting micro-registration...")
-    log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
-    
-    try:
-        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
-        min_max_size = np.min([np.max(d) for d in img_dims])
-        micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
+    if skip_micro_registration:
+        log_progress("\nSkipping micro-registration (--skip-micro-registration flag set)")
+    else:
+        log_progress("\nAttempting micro-registration...")
+        log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
 
-        log_progress(f"Micro-registration size: {micro_reg_size}px")
-        log_progress("Starting micro-registration (may take 30-120 minutes)...")
+        try:
+            img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+            min_max_size = np.min([np.max(d) for d in img_dims])
+            micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
 
-        _, micro_error = registrar.register_micro(
-            max_non_rigid_registration_dim_px=micro_reg_size,
-            reference_img_f=ref_image,
-            align_to_reference=True,
-        )
+            log_progress(f"Micro-registration size: {micro_reg_size}px")
+            log_progress("Starting micro-registration (may take 30-120 minutes)...")
 
-        log_progress("✓ Micro-registration completed")
-        log_progress(f"\nMicro-registration errors:\n{micro_error}")
+            _, micro_error = registrar.register_micro(
+                max_non_rigid_registration_dim_px=micro_reg_size,
+                reference_img_f=ref_image,
+                align_to_reference=True,
+            )
 
-    except Exception as e:
-        log_progress(f"\n⚠ Micro-registration FAILED: {e}")
-        log_progress("Continuing without micro-registration...")
-        log_progress("(This is usually caused by SimpleElastix not being available)")
+            log_progress("✓ Micro-registration completed")
+            log_progress(f"\nMicro-registration errors:\n{micro_error}")
+
+        except Exception as e:
+            log_progress(f"\n⚠ Micro-registration FAILED: {e}")
+            log_progress("Continuing without micro-registration...")
+            log_progress("(This is usually caused by SimpleElastix not being available)")
     
     # ========================================================================
     # Merge and Save
@@ -449,6 +455,8 @@ def parse_args() -> argparse.Namespace:
                        help='Number of SuperPoint features to detect (default: 5000)')
     parser.add_argument('--max-image-dim', type=int, default=6000,
                        help='Maximum image dimension for caching (controls RAM usage, default: 6000)')
+    parser.add_argument('--skip-micro-registration', action='store_true',
+                       help='Skip the micro-rigid registration step (default: False)')
     return parser.parse_args()
 
 
@@ -466,7 +474,8 @@ def main() -> int:
             args.max_non_rigid_dim,
             args.micro_reg_fraction,
             args.num_features,
-            args.max_image_dim
+            args.max_image_dim,
+            args.skip_micro_registration
         )
     except Exception as e:
         log_progress(f"ERROR: Registration failed: {e}")

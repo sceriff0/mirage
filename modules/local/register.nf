@@ -28,6 +28,7 @@ process REGISTER {
     def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.5
     def num_features = params.reg_num_features ?: 5000
     def max_image_dim = params.reg_max_image_dim ?: 6000
+    def skip_micro = params.skip_micro_registration ? '--skip-micro-registration' : ''
 
     """
     mkdir -p registered_slides preprocessed
@@ -72,6 +73,7 @@ process REGISTER {
         --micro-reg-fraction ${micro_reg_fraction} \\
         --num-features ${num_features} \\
         --max-image-dim ${max_image_dim} \\
+        ${skip_micro} \\
         ${args}
 
     echo "=== Contents of registered_slides/ ==="
