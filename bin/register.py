@@ -271,7 +271,7 @@ def valis_registration(input_dir: str, out: str,
         #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
 
         # Micro-rigid registration
-        micro_rigid_registrar_cls=MicroRigidRegistrar,
+        micro_rigid_registrar_cls=None if skip_micro_registration else MicroRigidRegistrar,
 
         # Registration behavior
         create_masks=True,
