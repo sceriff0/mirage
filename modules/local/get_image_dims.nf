@@ -25,6 +25,9 @@ process GET_IMAGE_DIMS {
 from PIL import Image
 import sys
 
+# Disable decompression bomb protection for large microscopy images
+Image.MAX_IMAGE_PIXELS = None
+
 # Open image and get dimensions
 try:
     img = Image.open('${image}')
