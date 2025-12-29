@@ -21,24 +21,25 @@ process GET_IMAGE_DIMS {
     // Generate unique prefix with patient_id and channels
     def prefix = task.ext.prefix ?: "${meta.patient_id}_${meta.channels?.join('_') ?: 'unknown'}"
     """
-    #!/usr/bin/env python3
-    from PIL import Image
-    import sys
+    python3 <<'EOF'
+from PIL import Image
+import sys
 
-    # Open image and get dimensions
-    try:
-        img = Image.open('${image}')
-        width, height = img.size
+# Open image and get dimensions
+try:
+    img = Image.open('${image}')
+    width, height = img.size
 
-        # Write dimensions to file (format: filename height width)
-        with open('${prefix}_dims.txt', 'w') as f:
-            f.write(f"${image.name} {height} {width}\\n")
+    # Write dimensions to file (format: filename height width)
+    with open('${prefix}_dims.txt', 'w') as f:
+        f.write(f"${image.name} {height} {width}\\n")
 
-        print(f"Image dimensions: {height} x {width}")
+    print(f"Image dimensions: {height} x {width}")
 
-    except Exception as e:
-        print(f"ERROR: Failed to read image: {e}", file=sys.stderr)
-        sys.exit(1)
+except Exception as e:
+    print(f"ERROR: Failed to read image: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
