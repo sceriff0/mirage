@@ -244,10 +244,24 @@ workflow REGISTRATION {
         .map { meta, file ->
             // Construct the path where the file will be published
             // Must match the publishDir configuration in modules.config
-            // Extract relative path from parent if file is in a subdirectory
-            // (e.g., "registered_slides/file.tiff" vs just "file.tiff")
+            //
+            // METHOD-AGNOSTIC APPROACH:
+            // Detect if file is in a subdirectory by checking parent directory name length.
+            // Nextflow work dirs are 30-char hex hashes (e.g., e6194a65f430c8860ff1f93c4a556c).
+            // Real subdirectories (e.g., "registered_slides") have different lengths.
+            //
+            // - VALIS: work/.../registered_slides/file.tiff → parent="registered_slides" (17 chars)
+            // - CPU/GPU: work/.../e6194a65f430c8860ff1f93c4a556c/file.tiff → parent=hash (30 chars)
+            // - References: work/.../de93746794b82349b3fde77bf41502/file.tif → parent=hash (30 chars)
+
             def file_path = file instanceof List ? file[0] : file
-            def relative_path = file_path.parent ? "${file_path.parent.name}/${file_path.name}" : file_path.name
+            def filename = file_path.name
+            def parent_name = file_path.parent?.name ?: ''
+
+            // If parent name is NOT a Nextflow work hash (30 hex chars), it's a real subdirectory
+            def is_work_hash = parent_name.length() == 30 && parent_name.matches(/^[0-9a-f]{30}$/)
+            def relative_path = is_work_hash ? filename : "${parent_name}/${filename}"
+
             def published_path = "${params.outdir}/${meta.patient_id}/registered/${relative_path}"
             [meta.patient_id, published_path, meta.is_reference, meta.channels.join('|')]
         }
