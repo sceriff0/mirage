@@ -23,11 +23,13 @@ process REGISTER {
     def ref_filename = reference ? reference.name.replaceAll(/^ref\//, '') : ''
     def ref_arg = ref_filename ? "--reference ${ref_filename}" :
                   params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
-    def max_processed_dim = params.reg_max_processed_dim ?: 1800
-    def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 3500
-    def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.5
+    // Reduced defaults for large 25GB+ OME-TIFF files to prevent memory issues
+    // Lower resolution for initial rigid registration reduces RAM requirements significantly
+    def max_processed_dim = params.reg_max_processed_dim ?: 512
+    def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 2048
+    def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.125
     def num_features = params.reg_num_features ?: 5000
-    def max_image_dim = params.reg_max_image_dim ?: 6000
+    def max_image_dim = params.reg_max_image_dim ?: 4000
     def skip_micro = params.skip_micro_registration ? '--skip-micro-registration' : ''
 
     """

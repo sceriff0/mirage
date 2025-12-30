@@ -130,11 +130,11 @@ def find_reference_image(directory: str, required_markers: list[str],
 def valis_registration(input_dir: str, out: str,
                        reference: Optional[str] = None,
                        reference_markers: Optional[list[str]] = None,
-                       max_processed_image_dim_px: int = 1800,
-                       max_non_rigid_dim_px: int = 3500,
-                       micro_reg_fraction: float = 0.5,
+                       max_processed_image_dim_px: int = 512,
+                       max_non_rigid_dim_px: int = 2048,
+                       micro_reg_fraction: float = 0.125,
                        num_features: int = 5000,
-                       max_image_dim_px: int = 6000,
+                       max_image_dim_px: int = 4000,
                        skip_micro_registration: bool = False) -> int:
     """Perform VALIS registration on preprocessed images.
 
@@ -149,15 +149,15 @@ def valis_registration(input_dir: str, out: str,
     reference_markers : list of str, optional
         Markers to identify reference image (legacy fallback). Default: ['DAPI', 'SMA']
     max_processed_image_dim_px : int, optional
-        Maximum image dimension for rigid registration. Default: 1800
+        Maximum image dimension for rigid registration. Default: 512
     max_non_rigid_dim_px : int, optional
-        Maximum dimension for non-rigid registration. Default: 3500
+        Maximum dimension for non-rigid registration. Default: 2048
     micro_reg_fraction : float, optional
-        Fraction of image size for micro-registration. Default: 0.5
+        Fraction of image size for micro-registration. Default: 0.125
     num_features : int, optional
         Number of SuperPoint features to detect. Default: 5000
     max_image_dim_px : int, optional
-        Maximum image dimension for caching (controls RAM usage). Default: 6000
+        Maximum image dimension for caching (controls RAM usage). Default: 4000
     skip_micro_registration : bool, optional
         Skip the micro-rigid registration step. Default: False
 
@@ -166,8 +166,11 @@ def valis_registration(input_dir: str, out: str,
     int
         Exit code (0 for success)
     """
-    # Initialize JVM for VALIS
-    registration.init_jvm()
+    # Initialize JVM for VALIS with increased heap size for large OME-TIFF files
+    # For 25GB+ OME-TIFF files, we need substantial heap space for BioFormats
+    log_progress("Initializing JVM with increased heap size for large OME-TIFF processing...")
+    registration.init_jvm(mem_gb=32)  # Allocate 32GB heap for BioFormats reader
+    log_progress("✓ JVM initialized with 32GB heap")
 
     # Configuration
     if reference_markers is None:
@@ -373,55 +376,86 @@ def valis_registration(input_dir: str, out: str,
 
     # Warp each slide individually and save
     warped_count = 0
+    failed_slides = []
+
     for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
         log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
 
-        # Get original file path
-        if slide_name not in slide_name_to_path:
-            log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
-            log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+        try:
+            # Get original file path
+            if slide_name not in slide_name_to_path:
+                log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
+                log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+                failed_slides.append((slide_name, "Path not found"))
+                continue
+
+            src_path = slide_name_to_path[slide_name]
+            log_progress(f"  Source: {src_path}")
+
+            # Verify the slide object is valid before warping
+            if slide_obj is None:
+                log_progress(f"  ✗ ERROR: slide_obj is None for '{slide_name}'")
+                failed_slides.append((slide_name, "Slide object is None"))
+                continue
+
+            # Output path for this slide
+            out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
+
+            # Warp and save using official VALIS method with tiled processing
+            # Tile size chosen to balance memory vs I/O overhead
+            # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
+            log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+
+            # Note: tile_wh must be integer (single value), not tuple
+
+            slide_obj.warp_and_save_slide(
+                src_f=src_path,
+                dst_f=out_path,
+                level=0,              # Full resolution
+                non_rigid=True,       # Apply non-rigid transforms
+                crop=True,            # Crop to reference overlap
+                interp_method="bicubic",
+                tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
+            )
+
+            warped_count += 1
+            log_progress(f"  ✓ Saved: {out_path}")
+
+        except Exception as e:
+            log_progress(f"  ✗ ERROR warping {slide_name}: {e}")
+            failed_slides.append((slide_name, str(e)))
             continue
 
-        src_path = slide_name_to_path[slide_name]
-        log_progress(f"  Source: {src_path}")
+        finally:
+            # Aggressive memory cleanup after each slide
+            # Close slide reader if possible
+            if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
+                try:
+                    slide_obj.slide_reader.close()
+                except:
+                    pass
 
-        # Output path for this slide
-        out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
+            # Force garbage collection
+            gc.collect()
 
-        # Warp and save using official VALIS method with tiled processing
-        # Tile size chosen to balance memory vs I/O overhead
-        # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
-        log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+            log_progress(f"  ✓ Memory cleanup completed")
 
-        # Note: tile_wh must be integer (single value), not tuple
+    # Report results
+    log_progress(f"\n{'='*70}")
+    log_progress(f"Warping Summary:")
+    log_progress(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
+    if failed_slides:
+        log_progress(f"  Failed slides: {len(failed_slides)}")
+        for slide_name, error in failed_slides:
+            log_progress(f"    - {slide_name}: {error}")
+    log_progress(f"{'='*70}")
 
-        slide_obj.warp_and_save_slide(
-            src_f=src_path,
-            dst_f=out_path,
-            level=0,              # Full resolution
-            non_rigid=True,       # Apply non-rigid transforms
-            crop=True,            # Crop to reference overlap
-            interp_method="bicubic",
-            tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
-        )
+    if warped_count == 0:
+        raise RuntimeError("All slides failed to warp. Registration cannot proceed.")
+    elif failed_slides:
+        log_progress(f"⚠ WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
-        warped_count += 1
-        log_progress(f"  ✓ Saved: {out_path}")
-
-        # Aggressive memory cleanup after each slide
-        # Close slide reader if possible
-        if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
-            try:
-                slide_obj.slide_reader.close()
-            except:
-                pass
-
-        # Force garbage collection
-        gc.collect()
-
-        log_progress(f"  ✓ Memory cleanup completed")
-
-    log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
+    log_progress(f"✓ {warped_count} slides warped and saved to: {out}")
 
     gc.collect()
 
@@ -445,16 +479,16 @@ def parse_args() -> argparse.Namespace:
                        help='Filename of reference image (modern approach, takes precedence over --reference-markers)')
     parser.add_argument('--reference-markers', nargs='+', default=['DAPI', 'SMA'],
                        help='Markers to identify reference image (legacy fallback, default: DAPI SMA)')
-    parser.add_argument('--max-processed-dim', type=int, default=1800,
-                       help='Maximum image dimension for rigid registration (default: 1800)')
-    parser.add_argument('--max-non-rigid-dim', type=int, default=3500,
-                       help='Maximum dimension for non-rigid registration (default: 3500)')
-    parser.add_argument('--micro-reg-fraction', type=float, default=0.5,
-                       help='Fraction of image size for micro-registration (default: 0.5)')
+    parser.add_argument('--max-processed-dim', type=int, default=512,
+                       help='Maximum image dimension for rigid registration (default: 512)')
+    parser.add_argument('--max-non-rigid-dim', type=int, default=2048,
+                       help='Maximum dimension for non-rigid registration (default: 2048)')
+    parser.add_argument('--micro-reg-fraction', type=float, default=0.125,
+                       help='Fraction of image size for micro-registration (default: 0.125)')
     parser.add_argument('--num-features', type=int, default=5000,
                        help='Number of SuperPoint features to detect (default: 5000)')
-    parser.add_argument('--max-image-dim', type=int, default=6000,
-                       help='Maximum image dimension for caching (controls RAM usage, default: 6000)')
+    parser.add_argument('--max-image-dim', type=int, default=4000,
+                       help='Maximum image dimension for caching (controls RAM usage, default: 4000)')
     parser.add_argument('--skip-micro-registration', action='store_true',
                        help='Skip the micro-rigid registration step (default: False)')
     return parser.parse_args()
