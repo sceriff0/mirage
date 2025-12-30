@@ -73,7 +73,8 @@ workflow VALIS_ADAPTER {
             // Build lookup by marker SET (order-independent)
             def marker_set_to_meta = metas.collectEntries { meta ->
                 // Create sorted marker signature for matching
-                def marker_key = meta.channels.sort().join('_').toLowerCase()
+                // IMPORTANT: Use toSorted() instead of sort() to avoid mutating meta.channels
+                def marker_key = meta.channels.toSorted().join('_').toLowerCase()
                 [(marker_key): meta]
             }
 
@@ -101,7 +102,8 @@ workflow VALIS_ADAPTER {
                 }
 
                 // Create marker signature (sorted, lowercase)
-                def file_marker_key = file_markers.sort().join('_').toLowerCase()
+                // Use toSorted() to avoid mutating the file_markers list
+                def file_marker_key = file_markers.toSorted().join('_').toLowerCase()
 
                 // Lookup metadata by marker set
                 def matched_meta = marker_set_to_meta[file_marker_key]
