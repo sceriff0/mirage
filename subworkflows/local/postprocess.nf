@@ -125,10 +125,15 @@ workflow POSTPROCESSING {
     // Group split channel TIFFs by patient for merging
     // SPLIT_CHANNELS already handles DAPI filtering correctly
     ch_split_grouped = SPLIT_CHANNELS.out.channels
-        .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
+        .map { meta, tiffs ->
+            // Normalize to List before grouping (same fix as flatMap above)
+            def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
+            [meta.patient_id, meta, tiff_list]
+        }
         .groupTuple(by: 0)
         .map { patient_id, _metas, tiff_lists ->
             // Flatten all TIFF files from all slides into one list
+            // Now safe because all elements in tiff_lists are guaranteed to be Lists
             def all_tiffs = tiff_lists.flatten()
             // Create patient-level metadata
             def patient_meta = [
