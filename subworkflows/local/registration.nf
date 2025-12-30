@@ -13,6 +13,7 @@ include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_ch
 include { GENERATE_REGISTRATION_QC          } from '../../modules/local/generate_registration_qc'
 
 include { VALIS_ADAPTER                     } from './adapters/valis_adapter'
+include { VALIS_PAIRS_ADAPTER               } from './adapters/valis_pairs_adapter'
 include { GPU_ADAPTER                       } from './adapters/gpu_adapter'
 include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
 
@@ -29,7 +30,7 @@ include { ESTIMATE_SEGMENTATION_OVERLAP     } from '../../modules/local/estimate
         - params.qc_scale_factor: float (QC downsampling factor, default 0.25)
         - params.enable_feature_error: true | false (enable feature-based TRE)
         - params.enable_segmentation_error: true | false (enable segmentation metrics)
-        - method: 'valis' | 'gpu' | 'cpu' (registration method)
+        - method: 'valis' | 'valis_pairs' | 'gpu' | 'cpu' (registration method)
 
     Input:
         ch_preprocessed: Channel of [meta, file] tuples
@@ -142,6 +143,11 @@ workflow REGISTRATION {
             ch_registered = VALIS_ADAPTER.out.registered
             break
 
+        case 'valis_pairs':
+            VALIS_PAIRS_ADAPTER(ch_grouped)
+            ch_registered = VALIS_PAIRS_ADAPTER.out.registered
+            break
+
         case 'gpu':
             GPU_ADAPTER(ch_grouped)
             ch_registered = GPU_ADAPTER.out.registered
@@ -153,7 +159,7 @@ workflow REGISTRATION {
             break
 
         default:
-            error "Invalid registration method: '${method}'. Supported: valis, gpu, cpu"
+            error "Invalid registration method: '${method}'. Supported: valis, valis_pairs, gpu, cpu"
     }
 
     // ========================================================================

@@ -64,8 +64,11 @@ workflow POSTPROCESSING {
 
     ch_flatmapped = ch_split_output
         .flatMap { meta, tiffs ->
+            // Ensure tiffs is always a list (handle both single file and multiple files)
+            def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
+
             // Create unique meta map for each channel file
-            tiffs.collect { tiff ->
+            tiff_list.collect { tiff ->
                 def channel_meta = meta.clone()
                 channel_meta.id = "${meta.patient_id}_${tiff.baseName}"
                 channel_meta.channel_name = tiff.baseName

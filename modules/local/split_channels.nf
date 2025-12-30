@@ -14,9 +14,9 @@ process SPLIT_CHANNELS {
     tuple val(meta), path(registered_image), val(is_reference)
 
     output:
-    tuple val(meta), path("*.tiff"), emit: channels
-    path "channel_names.txt"        , emit: channel_manifest, optional: true
-    path "versions.yml"             , emit: versions
+    tuple val(meta), path("*.tiff", includeInputs: false), emit: channels
+    path "channel_names.txt"                              , emit: channel_manifest, optional: true
+    path "versions.yml"                                   , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
