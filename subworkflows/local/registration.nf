@@ -179,10 +179,10 @@ workflow REGISTRATION {
     ch_references_for_qc = ch_qc_input.reference
         .map { meta, file -> [meta.patient_id, file] }
 
-    // Join moving images with their patient's reference
+    // Combine moving images with their patient's reference (1 reference to N moving images)
     ch_for_qc = ch_qc_input.moving
         .map { meta, file -> [meta.patient_id, meta, file] }
-        .join(ch_references_for_qc, by: 0)
+        .combine(ch_references_for_qc, by: 0)
         .map { patient_id, meta, registered_file, reference_file ->
             [meta, registered_file, reference_file]
         }
@@ -204,19 +204,19 @@ workflow REGISTRATION {
 
     ch_error_metrics = Channel.empty()
 
-    if (params.enable_feature_error || params.enable_segmentation_error) {
+    if (params.enable_feature_error) {
         // For each non-reference image: [meta, reference, moving, registered]
         ch_for_error = ch_registered
             .filter { meta, file -> !meta.is_reference }
-            .map { meta, reg_file -> [meta.patient_id, meta.channels.sort().join('|'), meta, reg_file] }
+            .map { meta, reg_file -> [meta.patient_id, meta.channels.toSorted().join('|'), meta, reg_file] }
             .join(
                 ch_images
                     .filter { meta, file -> !meta.is_reference }
-                    .map { meta, mov_file -> [meta.patient_id, meta.channels.sort().join('|'), mov_file] },
+                    .map { meta, mov_file -> [meta.patient_id, meta.channels.toSorted().join('|'), mov_file] },
                 by: [0, 1]
             )
             .map { patient_id, channels, meta, reg_file, mov_file -> [patient_id, meta, reg_file, mov_file] }
-            .join(
+            .combine(
                 ch_images
                     .filter { meta, file -> meta.is_reference }
                     .map { meta, ref_file -> [meta.patient_id, ref_file] },
@@ -229,17 +229,6 @@ workflow REGISTRATION {
         if (params.enable_feature_error) {
             ESTIMATE_FEATURE_DISTANCES(ch_for_error)
             ch_error_metrics = ch_error_metrics.mix(ESTIMATE_FEATURE_DISTANCES.out.distance_metrics)
-        }
-
-        if (params.enable_segmentation_error) {
-            // Segmentation only needs reference and registered
-            ch_for_seg = ch_for_error
-                .map { meta, ref_file, moving_file, reg_file ->
-                    tuple(meta, ref_file, reg_file)
-                }
-
-            ESTIMATE_SEGMENTATION_OVERLAP(ch_for_seg)
-            ch_error_metrics = ch_error_metrics.mix(ESTIMATE_SEGMENTATION_OVERLAP.out.overlap_metrics)
         }
     }
 
