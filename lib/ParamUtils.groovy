@@ -8,7 +8,7 @@ class ParamUtils {
     }
 
     static void validateRegistrationMethod(String method) {
-        def valid = ['valis', 'gpu', 'cpu']
+        def valid = ['valis', 'valis_pairs','gpu', 'cpu']
         if (!(method in valid)) {
             throw new IllegalArgumentException("Invalid --registration_method '${method}'. Valid values: ${valid}")
         }
