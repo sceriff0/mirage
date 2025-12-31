@@ -26,10 +26,15 @@ process SEGMENT {
     def pmin = params.seg_pmin ?: 1.0
     def pmax = params.seg_pmax ?: 99.8
 
+    // Double n_tiles on each retry attempt to reduce memory usage
+    def n_tiles_y = (params.seg_n_tiles_y ?: 1) * Math.pow(2, task.attempt - 1) as Integer
+    def n_tiles_x = (params.seg_n_tiles_x ?: 1) * Math.pow(2, task.attempt - 1) as Integer
+
     // FIX WARNING #1: Validate DAPI is in channel 0
     def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
     """
     echo "Sample: ${meta.patient_id}"
+    echo "Attempt: ${task.attempt} - Using n_tiles_y=${n_tiles_y}, n_tiles_x=${n_tiles_x}"
 
     # FIX WARNING #1: Runtime validation that DAPI is in channel 0
     if [ "${meta.channels ? meta.channels[0].toUpperCase() : 'UNKNOWN'}" != "DAPI" ]; then
@@ -46,7 +51,7 @@ process SEGMENT {
         --model-dir ${params.segmentation_model_dir} \\
         --model-name ${params.segmentation_model} \\
         --dapi-channel 0 \\
-        --n-tiles ${params.seg_n_tiles_y} ${params.seg_n_tiles_x} \\
+        --n-tiles ${n_tiles_y} ${n_tiles_x} \\
         --expand-distance ${params.seg_expand_distance} \\
         --pmin ${pmin} \\
         --pmax ${pmax} \\
