@@ -6,7 +6,7 @@ process SEGMENT {
         'docker://bolt3x/attend_image_analysis:segmentation_gpu' :
         'docker://bolt3x/attend_image_analysis:segmentation_gpu' }"
 
-    publishDir "${params.outdir}/${meta.patient_id}/segmentation", mode: 'copy'
+    publishDir "${params.outdir}/${meta.patient_id}/segmentation", mode: 'copy', overwrite: true
 
     input:
     tuple val(meta), path(merged_file)

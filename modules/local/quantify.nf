@@ -14,8 +14,8 @@ process QUANTIFY {
     tuple val(meta), path(channel_tiff), path(seg_mask)
 
     output:
-    tuple val(meta), path("${channel_tiff.simpleName}_quant.csv"), emit: individual_csv
-    path "versions.yml"                                           , emit: versions
+    tuple val(meta), path("${meta.id}_quant.csv"), emit: individual_csv
+    path "versions.yml"                           , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -35,7 +35,7 @@ process QUANTIFY {
         --channel-name ${channel_name} \\
         --mask_file ${seg_mask} \\
         --outdir . \\
-        --output_file ${channel_tiff.simpleName}_quant.csv \\
+        --output_file ${meta.id}_quant.csv \\
         --min_area ${params.quant_min_area} \\
         ${args}
 
@@ -50,7 +50,7 @@ process QUANTIFY {
     stub:
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
-    touch ${channel_tiff.simpleName}_quant.csv
+    touch ${meta.id}_quant.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
