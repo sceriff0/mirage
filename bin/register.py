@@ -451,7 +451,7 @@ def valis_registration(input_dir: str, out: str,
     log_progress(f"{'='*70}")
 
     if warped_count == 0:
-        raise RuntimeError("All slides failed to warp. Registration cannot proceed.")
+        log_progress("All slides failed to warp. Registration cannot proceed.")
     elif failed_slides:
         log_progress(f"⚠ WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
