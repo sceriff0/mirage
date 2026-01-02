@@ -114,6 +114,7 @@ COMPLETION HANDLERS
 */
 
 workflow.onComplete {
+
     if (workflow.success) {
         log.info "Pipeline completed successfully!"
 
@@ -131,16 +132,36 @@ workflow.onComplete {
             }
 
             // Copy all contents from outdir to savedir using rsync
+            // Using -avL to preserve attributes and dereference symlinks
+            // Using --update to skip files that are newer in destination
             try {
-                def cmd = ["rsync", "-rL", "--progress", "${params.outdir}/", "${params.savedir}/"]
+                log.info "Starting rsync (this will take time for large datasets)..."
+                def cmd = ["rsync",
+                          "-avL",           // archive mode + verbose + dereference symlinks
+                          "--update",       // skip files that are newer on receiver
+                          "--info=progress2", // overall progress (better for large transfers)
+                          "${params.outdir}/",
+                          "${params.savedir}/"]
+
                 def proc = cmd.execute()
+
+                // Capture and log output in real-time
+                def reader = new BufferedReader(new InputStreamReader(proc.getInputStream()))
+                def line
+                while ((line = reader.readLine()) != null) {
+                    if (line.contains('%') || line.contains('xfr#')) {
+                        log.info "rsync: ${line}"
+                    }
+                }
+
                 proc.waitFor()
 
                 if (proc.exitValue() == 0) {
                     log.info "Successfully copied results to ${params.savedir}"
                 } else {
                     log.error "Failed to copy results to ${params.savedir}"
-                    log.error "Error: ${proc.err.text}"
+                    def errorText = proc.err.text
+                    if (errorText) log.error "Error: ${errorText}"
                 }
             } catch (Exception e) {
                 log.error "Failed to copy results to ${params.savedir}: ${e.message}"
