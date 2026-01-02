@@ -9,6 +9,7 @@ IMPORT SUBWORKFLOWS
 include { PREPROCESSING  } from './subworkflows/local/preprocess'
 include { REGISTRATION   } from './subworkflows/local/registration'
 include { POSTPROCESSING } from './subworkflows/local/postprocess'
+include { COPY_RESULTS   } from './modules/local/copy_results'
 
 /*
 ================================================================================
@@ -104,6 +105,17 @@ workflow {
         POSTPROCESSING(ch_for_postprocessing)
 
         ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
+
+        /* -------------------- COPY RESULTS TO SAVEDIR -------------------- */
+
+        // Copy results to savedir after postprocessing completes
+        if (params.savedir && params.savedir != params.outdir) {
+            COPY_RESULTS(
+                POSTPROCESSING.out.checkpoint_csv.map { 'ready' },
+                params.outdir,
+                params.savedir
+            )
+        }
     }
 }
 
@@ -117,60 +129,6 @@ workflow.onComplete {
 
     if (workflow.success) {
         log.info "Pipeline completed successfully!"
-
-        // Copy results from outdir to savedir
-        if (params.savedir && params.savedir != params.outdir) {
-            log.info "Copying results from ${params.outdir} to ${params.savedir}..."
-
-            def outdir = new File(params.outdir)
-            def savedir = new File(params.savedir)
-
-            // Create savedir if it doesn't exist
-            if (!savedir.exists()) {
-                savedir.mkdirs()
-                log.info "Created save directory: ${params.savedir}"
-            }
-
-            // Copy all contents from outdir to savedir using rsync
-            // Using -avL to preserve attributes and dereference symlinks
-            // Using --update to skip files that are newer in destination
-            try {
-                log.info "Starting rsync (this will take time for large datasets)..."
-                def cmd = ["rsync",
-                          "-avL",           // archive mode + verbose + dereference symlinks
-                          "--update",       // skip files that are newer on receiver
-                          "--info=progress2", // overall progress (better for large transfers)
-                          "${params.outdir}/",
-                          "${params.savedir}/"]
-
-                def proc = cmd.execute()
-
-                // Capture and log output in real-time
-                def reader = new BufferedReader(new InputStreamReader(proc.getInputStream()))
-                def line
-                while ((line = reader.readLine()) != null) {
-                    if (line.contains('%') || line.contains('xfr#')) {
-                        log.info "rsync: ${line}"
-                    }
-                }
-
-                proc.waitFor()
-
-                if (proc.exitValue() == 0) {
-                    log.info "Successfully copied results to ${params.savedir}"
-                } else {
-                    log.error "Failed to copy results to ${params.savedir}"
-                    def errorText = proc.err.text
-                    if (errorText) log.error "Error: ${errorText}"
-                }
-            } catch (Exception e) {
-                log.error "Failed to copy results to ${params.savedir}: ${e.message}"
-            }
-        } else if (!params.savedir) {
-            log.info "No savedir specified - results remain in ${params.outdir}"
-        } else {
-            log.info "savedir is the same as outdir - no copy needed"
-        }
 
         // Clean up work directory if requested
         if (params.cleanup_work) {
