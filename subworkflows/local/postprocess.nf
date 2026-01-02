@@ -94,9 +94,15 @@ workflow POSTPROCESSING {
 
     // ========================================================================
     // MERGE - Group CSVs by patient_id
+    // Deduplicate by patient_id + marker (take first occurrence if same marker appears multiple times)
     // ========================================================================
     ch_grouped_csvs = QUANTIFY.out.individual_csv
-        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .map { meta, csv ->
+            def marker = meta.channel_name  // Extract marker name
+            [[meta.patient_id, marker], meta, csv]  // Key by [patient_id, marker]
+        }
+        .unique { entry -> entry[0] }  // Keep only first occurrence of each [patient_id, marker] pair
+        .map { key, meta, csv -> [key[0], meta, csv] }  // Restore to [patient_id, meta, csv]
         .groupTuple(by: 0)
         .map { patient_id, metas, csvs ->
             def meta = metas[0].clone()
