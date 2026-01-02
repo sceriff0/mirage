@@ -130,23 +130,25 @@ workflow POSTPROCESSING {
     // ========================================================================
     // Group split channel TIFFs by patient for merging
     // SPLIT_CHANNELS already handles DAPI filtering correctly
+    // Deduplicate by patient_id + marker to avoid duplicate channel names
     ch_split_grouped = SPLIT_CHANNELS.out.channels
-        .map { meta, tiffs ->
-            // Normalize to List before grouping (same fix as flatMap above)
+        .flatMap { meta, tiffs ->
+            // Normalize to List and create entries keyed by [patient_id, marker]
             def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
-            [meta.patient_id, meta, tiff_list]
+            tiff_list.collect { tiff ->
+                [meta.patient_id, tiff.baseName, tiff]
+            }
         }
+        .unique { patient_id, marker, _tiff -> [patient_id, marker] }  // Keep first occurrence of each patient+marker
+        .map { patient_id, _marker, tiff -> [patient_id, tiff] }
         .groupTuple(by: 0)
-        .map { patient_id, _metas, tiff_lists ->
-            // Flatten all TIFF files from all slides into one list
-            // Now safe because all elements in tiff_lists are guaranteed to be Lists
-            def all_tiffs = tiff_lists.flatten()
+        .map { patient_id, tiffs ->
             // Create patient-level metadata
             def patient_meta = [
                 patient_id: patient_id,
                 is_reference: false  // Not relevant at patient level
             ]
-            [patient_meta, all_tiffs]
+            [patient_meta, tiffs]
         }
 
     // Join split channels with all masks for MERGE
