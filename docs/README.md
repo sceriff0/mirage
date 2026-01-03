@@ -26,7 +26,7 @@
 - [Configuration](#️-configuration)
 - [Registration Methods](#-registration-methods)
 - [Segmentation](#-segmentation)
-- [Adding Custom Methods](#-adding-custom-registration-methods)
+- [Adding Custom Registration Methods](#-adding-custom-registration-methods)
 - [TODOs](#-todos)
 
 ---
