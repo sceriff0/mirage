@@ -225,8 +225,8 @@ def valis_registration(input_dir: str, out: str,
     # Per VALIS docs: "cache can grow quite large, so it may be best to disable it"
     try:
         pyvips.cache_set_max(0)
-        pyvips.cache_set_max_mem(0)
-        log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=0)")
+        pyvips.cache_set_max_mem(16 * 1024 * 1024 * 1024) 
+        log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=16)")
     except Exception as e:
         log_progress(f"⚠ Could not disable pyvips cache: {e}")
 
