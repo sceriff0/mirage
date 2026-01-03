@@ -35,16 +35,18 @@ process REGISTER {
     """
     mkdir -p registered_slides preprocessed
 
-    # Copy all input files (from both ref/ and input_*/ directories) into preprocessed/
+    # Create symlinks instead of copying (much faster for large 25GB+ files)
     # This handles the stageAs directories we created to avoid naming collisions
-    # Use -L to follow symlinks and cp -L to dereference them
-    echo "=== Copying input files to preprocessed/ ==="
+    echo "=== Symlinking input files to preprocessed/ ==="
     for dir in ref input_*; do
         if [ -d "\$dir" ]; then
             echo "Processing directory: \$dir"
             find -L "\$dir" -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | while read file; do
-                echo "  Found file: \$file"
-                cp -L "\$file" preprocessed/
+                basename=\$(basename "\$file")
+                # Resolve symlink to actual file path before creating new symlink
+                actual_file=\$(readlink -f "\$file")
+                echo "  Linking: \$actual_file -> preprocessed/\$basename"
+                ln -sf "\$actual_file" "preprocessed/\$basename"
             done
         fi
     done
@@ -52,12 +54,12 @@ process REGISTER {
     echo "=== Contents of preprocessed/ ==="
     ls -lh preprocessed/
 
-    # Verify we have files
-    file_count=\$(find preprocessed -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | wc -l)
-    echo "Total files copied: \$file_count"
+    # Verify we have files/symlinks
+    file_count=\$(find preprocessed \\( -type l -o -type f \\) -name '*.ome.tif*' | wc -l)
+    echo "Total files linked: \$file_count"
 
     if [ "\$file_count" -eq 0 ]; then
-        echo "ERROR: No .ome.tif files were copied to preprocessed/"
+        echo "ERROR: No .ome.tif files were linked to preprocessed/"
         echo "Available directories and contents:"
         ls -lR
         exit 1
