@@ -277,7 +277,6 @@ def preprocess_multichannel_image(
         ome=True,
         tile=(1024, 1024),  # Reduced from 2048 to prevent large tile read errors in VALIS
         compression='zlib',
-        compressionargs={'level': 6}  # Moderate compression for better compatibility
     )
 
     logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")
