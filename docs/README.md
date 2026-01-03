@@ -394,27 +394,18 @@ workflow MY_ADAPTER {
 
     main:
     // Convert to your method's required format
-    ch_pairs = ch_grouped
-        .flatMap { patient_id, ref_item, all_items ->
-            def ref_file = ref_item[1]
-            all_items
-                .findAll { !it[0].is_reference }
-                .collect { moving -> tuple(moving[0], ref_file, moving[1]) }
-        }
+    ch_to_register = ...
 
     // Run your registration
-    MY_REGISTER(ch_pairs)
+    MY_REGISTER(ch_to_register)
 
-    // Publish references (if they don't undergo registration)
-    ch_references = ch_grouped.map { pid, ref, all -> ref }
-    PUBLISH_REFERENCE(ch_references)
+    ch_registered = MY_REGISTER.out.registered
 
-    // Combine outputs
-    ch_all = PUBLISH_REFERENCE.out.published
-        .concat(MY_REGISTER.out.registered)
-
+    // remember to add reference if your registration method only saves the registered image (e.g. when working in pairs)
+    // also if you always save reference, only add it once to final output
+    
     emit:
-    registered = ch_all  // Must be [meta, file] format
+    registered = ch_registered // Must be [meta, file] format
 }
 ```
 
@@ -425,19 +416,18 @@ process MY_REGISTER {
     tag "${meta.patient_id}"
     container "your/container:tag"
 
+    // meta is always present to preserve it
     input:
-    tuple val(meta), path(reference), path(moving)
+    tuple val(meta), ...
 
     output:
-    tuple val(meta), path("*_registered.ome.tiff"), emit: registered
+    tuple val(meta), ...
     path "versions.yml", emit: versions
 
     script:
     """
     my_registration_script.py \
-        --reference ${reference} \
-        --moving ${moving} \
-        --output ${moving.simpleName}_registered.ome.tiff
+        ...
     """
 }
 ```
