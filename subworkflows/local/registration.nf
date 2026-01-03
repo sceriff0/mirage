@@ -18,7 +18,7 @@ include { GPU_ADAPTER                       } from './adapters/gpu_adapter'
 include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
 
 include { ESTIMATE_FEATURE_DISTANCES        } from '../../modules/local/estimate_feature_distances'
-include { ESTIMATE_SEGMENTATION_OVERLAP     } from '../../modules/local/estimate_segmentation_overlap'
+
 
 /*
 ========================================================================================
