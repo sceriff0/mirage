@@ -1,9 +1,4 @@
-<p align="center">
-  <img src="assets/logo.png" alt="ATEIA Logo" width="200"/>
-</p>
-
-<h1 align="center">🔬 ATEIA</h1>
-<h3 align="center">Automated Tissue Expression & Image Analysis Pipeline</h3>
+![alt text](https://github.com/sceriff0/ateia/blob/main/assets/logo.png)
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Nextflow-≥23.04.0-green?style=for-the-badge&logo=nextflow" alt="Nextflow"/></a>
