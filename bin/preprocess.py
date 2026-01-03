@@ -30,7 +30,6 @@ os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
 
 from utils.image_utils import ensure_dir
-from utils.metadata import get_channel_names
 
 logger = get_logger(__name__)
 
@@ -316,7 +315,7 @@ def parse_args():
         '--image',
         type=str,
         required=True,
-        help='Path to the multichannel image file (e.g., <ID>_DAPI_<MARKER1>...ome.tiff)'
+        help='Path to the multichannel image file'
     )
 
     parser.add_argument(
@@ -324,6 +323,14 @@ def parse_args():
         type=str,
         required=True,
         help='Output directory'
+    )
+
+    parser.add_argument(
+        '--channels',
+        type=str,
+        nargs='+',
+        required=True,
+        help='Channel names from metadata'
     )
 
     parser.add_argument(
@@ -374,43 +381,6 @@ def parse_args():
 
     return parser.parse_args()
 
-def find_channel_names_from_path(image_path: str) -> List[str]:
-    """Extract channel names from image path.
-
-    Parameters
-    ----------
-    image_path : str
-        Path to multichannel image file.
-
-    Returns
-    -------
-    List[str]
-        List of channel names extracted from filename.
-
-    Notes
-    -----
-    Uses lib.metadata.get_channel_names() for consistent channel extraction
-    across the pipeline. Assumes naming format: <ID>_<CH1>_<CH2>...<EXT>
-
-    Examples
-    --------
-    >>> find_channel_names_from_path("id1_DAPI_CD3_CD8.ome.tif")
-    ['DAPI', 'CD3', 'CD8']
-
-    See Also
-    --------
-    lib.metadata.get_channel_names : Core channel name extraction function
-    """
-    # Use lib.metadata function for consistency
-    channels = get_channel_names(image_path)
-
-    # Fallback if no channels found
-    if not channels or len(channels) == 0:
-        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
-
-    return channels
-
-
 def main():
     """Main entry point."""
     configure_logging(level=logging.INFO)
@@ -422,7 +392,7 @@ def main():
     image_path = args.image
     image_basename = os.path.basename(image_path)
 
-    channel_names = find_channel_names_from_path(image_path)
+    channel_names = args.channels
 
     # Always save as .ome.tiff since we're writing OME-TIFF format
     if image_basename.endswith('.ome.tif'):

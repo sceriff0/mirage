@@ -23,10 +23,12 @@ process PREPROCESS {
     def autotune_flag = params.preproc_autotune ? '--autotune' : ''
     def no_darkfield_flag = params.preproc_no_darkfield ? '--no_darkfield' : ''
     def overlap = params.preproc_overlap ?: 0
+    def channels = meta.channels.join(' ')
     """
     preprocess.py \\
         --image ${ome_tiff} \\
         --output_dir . \\
+        --channels ${channels} \\
         --fov_size ${params.preproc_tile_size} \\
         --n_workers ${params.preproc_pool_workers} \\
         --n_iter ${params.preproc_n_iter} \\
