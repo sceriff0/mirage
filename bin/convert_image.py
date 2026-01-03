@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Convert microscopy images (ND2, TIFF, etc.) to standardized OME-TIFF format.
+"""Convert microscopy images to standardized OME-TIFF format.
 
-This script handles multiple input formats and places DAPI in channel 0,
-following the channel mapping specified in the input CSV.
+This script uses aicsimageio with BioformatsReader to support universal image formats
+including .nd2, .lif, .ndpi, .tiff, .czi, and many others. It automatically extracts
+physical pixel sizes from the image metadata and places DAPI in channel 0, following
+the channel mapping specified in the input CSV.
 """
 
 import logging
@@ -20,10 +22,11 @@ import tifffile
 import numpy as np
 
 try:
-    import nd2
-    ND2_AVAILABLE = True
+    from aicsimageio import AICSImage
+    from aicsimageio.readers import BioformatsReader
+    AICSIMAGEIO_AVAILABLE = True
 except ImportError:
-    ND2_AVAILABLE = False
+    AICSIMAGEIO_AVAILABLE = False
 
 from utils.image_utils import ensure_dir
 
@@ -32,148 +35,144 @@ logger = get_logger(__name__)
 PIXEL_SIZE_UM = 0.325
 
 
-def detect_format(file_path: Path) -> str:
+def read_image_aics(file_path: Path, scene: int = 0) -> Tuple[np.ndarray, dict]:
     """
-    Detect image format from file extension.
+    Read image file using aicsimageio with BioformatsReader for universal format support.
 
     Parameters
     ----------
     file_path : Path
-        Path to image file
+        Path to image file (supports .nd2, .lif, .ndpi, .tiff, etc.)
+    scene : int
+        Scene/series index to read (default: 0)
 
     Returns
     -------
-    str
-        Format identifier: 'nd2', 'tiff', 'ome_tiff'
+    tuple
+        (image_data, metadata_dict)
 
     Raises
     ------
-    ValueError
-        If format is not supported
+    ImportError
+        If aicsimageio is not available
     """
-    suffix = file_path.suffix.lower()
+    if not AICSIMAGEIO_AVAILABLE:
+        raise ImportError(
+            "This script requires 'aicsimageio' and bioformats support. "
+            "Install with: pip install aicsimageio bioformats_jar"
+        )
 
-    if suffix == '.nd2':
-        if not ND2_AVAILABLE:
-            raise ImportError("ND2 support requires 'nd2' package")
-        return 'nd2'
-    elif suffix in ['.tif', '.tiff']:
-        # Check if it's already OME-TIFF
-        try:
-            with tifffile.TiffFile(file_path) as tif:
-                if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                    return 'ome_tiff'
-        except Exception:
-            pass
-        return 'tiff'
-    else:
-        raise ValueError(f"Unsupported file format: {suffix}")
+    logger.info(f"Reading image with aicsimageio: {file_path.name}")
 
+    # Read image with BioformatsReader for maximum compatibility
+    img = AICSImage(file_path, reader=BioformatsReader)
 
-def read_nd2(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """
-    Read ND2 file and extract metadata.
+    # Get physical pixel sizes
+    pixel_sizes = img.physical_pixel_sizes  # (Z, Y, X) in microns
+    logger.info(f"Physical pixel sizes (Z, Y, X): {pixel_sizes}")
 
-    Parameters
-    ----------
-    file_path : Path
-        Path to ND2 file
+    # Get dimension information
+    dims = img.dims
+    order = img.dims.order  # e.g., "TCZYX"
+    shape = img.shape  # Tuple in TCZYX order
+    scenes = img.scenes  # Available scenes/series
 
-    Returns
-    -------
-    tuple
-        (image_data, metadata_dict)
-    """
-    with nd2.ND2File(file_path) as f:
-        image_data = f.asarray()
-        sizes = f.sizes
+    logger.info(f"Dimension order: {order}")
+    logger.info(f"Shape: {shape}")
+    logger.info(f"Available scenes: {scenes} (using scene {scene})")
 
-        # Find channel axis
-        axis_keys = list(sizes.keys())
-        if 'c' in sizes:
-            c_key = 'c'
-        elif 'C' in sizes:
-            c_key = 'C'
-        else:
-            raise ValueError(f"No channel dimension found in ND2. Axes: {sizes}")
+    # Set the scene to read
+    if len(scenes) > 0:
+        img.set_scene(scenes[scene])
+        logger.info(f"Selected scene: {scenes[scene]}")
 
-        c_axis_index = axis_keys.index(c_key)
-        num_channels = sizes[c_key]
-        axes_string = "".join(axis_keys).upper()
+    # Determine the appropriate dimension string for extraction
+    # We want to get data in a format with C (channels) dimension
+    # Handle different cases based on what dimensions exist
 
-        metadata = {
-            'axes': axes_string,
-            'c_axis_index': c_axis_index,
-            'num_channels': num_channels
-        }
+    has_t = 'T' in order and shape[order.index('T')] > 1
+    has_z = 'Z' in order and shape[order.index('Z')] > 1
+    has_c = 'C' in order and shape[order.index('C')] > 1
 
-        return image_data, metadata
-
-
-def read_tiff(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """
-    Read TIFF file and extract metadata.
-
-    Parameters
-    ----------
-    file_path : Path
-        Path to TIFF file
-
-    Returns
-    -------
-    tuple
-        (image_data, metadata_dict)
-    """
-    with tifffile.TiffFile(file_path) as tif:
-        image_data = tif.asarray()
-
-        # Try to extract axes from OME metadata or assume standard order
-        axes = None
-        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-            # Try to parse from OME metadata
-            import xml.etree.ElementTree as ET
-            try:
-                root = ET.fromstring(tif.ome_metadata)
-                pixels = root.find('.//{http://www.openmicroscopy.org/Schemas/OME/2016-06}Pixels')
-                if pixels is not None:
-                    axes = pixels.get('DimensionOrder', 'CYX')
-            except Exception:
-                pass
-
-        # Default assumptions based on shape
-        if axes is None:
-            ndim = image_data.ndim
-            if ndim == 2:
-                axes = 'YX'
-                c_axis_index = None
-                num_channels = 1
-            elif ndim == 3:
-                # Assume CYX or YXC
-                if image_data.shape[0] < image_data.shape[2]:
-                    axes = 'CYX'
-                    c_axis_index = 0
-                    num_channels = image_data.shape[0]
-                else:
-                    axes = 'YXC'
-                    c_axis_index = 2
-                    num_channels = image_data.shape[2]
-            elif ndim == 4:
-                axes = 'ZCYX'
-                c_axis_index = 1
-                num_channels = image_data.shape[1]
+    # Build dimension string for extraction
+    if has_c:
+        # Multi-channel image
+        if has_z:
+            if has_t:
+                extract_dims = "TCZYX"
+                target_order = "TCZYX"
             else:
-                raise ValueError(f"Cannot infer axes for {ndim}D image")
+                extract_dims = "CZYX"
+                target_order = "CZYX"
         else:
-            c_axis_index = axes.upper().index('C') if 'C' in axes.upper() else None
-            num_channels = image_data.shape[c_axis_index] if c_axis_index is not None else 1
+            # No Z or single Z
+            if has_t:
+                extract_dims = "TCYX"
+                target_order = "TCYX"
+            else:
+                extract_dims = "CYX"
+                target_order = "CYX"
+    else:
+        # Single channel or RGB image (NDPI case)
+        # For NDPI files, they appear as RGB but each channel is identical
+        # We just need the YX plane
+        if has_z:
+            extract_dims = "ZYX"
+            target_order = "ZYX"
+        else:
+            extract_dims = "YX"
+            target_order = "YX"
 
-        metadata = {
-            'axes': axes.upper(),
-            'c_axis_index': c_axis_index,
-            'num_channels': num_channels
-        }
+    logger.info(f"Extracting dimensions: {extract_dims}")
 
-        return image_data, metadata
+    # Get the image data
+    image_data = img.get_image_data(extract_dims)
+
+    logger.info(f"Extracted image shape: {image_data.shape}")
+
+    # Determine channel axis index and number of channels
+    if 'C' in target_order:
+        c_axis_index = target_order.index('C')
+        num_channels = image_data.shape[c_axis_index]
+    else:
+        # Single channel image
+        c_axis_index = None
+        num_channels = 1
+        # Add channel dimension at position 0 for consistency
+        image_data = np.expand_dims(image_data, axis=0)
+        target_order = 'C' + target_order
+        c_axis_index = 0
+        logger.info(f"Added channel dimension. New shape: {image_data.shape}, order: {target_order}")
+
+    # Extract physical pixel size (use Y dimension, typically same as X)
+    physical_pixel_size = pixel_sizes.Y if pixel_sizes.Y is not None else PIXEL_SIZE_UM
+
+    # Try to extract channel names from metadata if available (informational only)
+    # CSV channel names are always used as the authoritative source
+    channel_names_from_file = None
+    try:
+        if hasattr(img, 'channel_names') and img.channel_names:
+            channel_names_from_file = img.channel_names
+    except Exception:
+        pass  # Channel names from file are optional/informational
+
+    metadata = {
+        'axes': target_order,
+        'c_axis_index': c_axis_index,
+        'num_channels': num_channels,
+        'physical_pixel_size': physical_pixel_size,
+        'original_order': order,
+        'original_shape': shape,
+        'scenes': scenes,
+        'channel_names_from_file': channel_names_from_file
+    }
+
+    logger.info(f"Final axes order: {target_order}")
+    logger.info(f"Channel axis index: {c_axis_index}")
+    logger.info(f"Number of channels: {num_channels}")
+    logger.info(f"Physical pixel size: {physical_pixel_size} µm")
+
+    return image_data, metadata
 
 
 def rearrange_channels(
@@ -232,10 +231,13 @@ def convert_to_ome_tiff(
     """
     Convert image to standardized OME-TIFF format with DAPI in channel 0.
 
+    Uses aicsimageio with BioformatsReader for universal format support.
+    Automatically extracts physical pixel sizes from image metadata.
+
     Parameters
     ----------
     input_path : Path
-        Path to input image file
+        Path to input image file (supports .nd2, .lif, .ndpi, .tiff, .czi, etc.)
     output_dir : Path
         Output directory
     patient_id : str
@@ -243,7 +245,7 @@ def convert_to_ome_tiff(
     channel_names : List[str]
         Channel names as specified in input (any order)
     pixel_size_um : float
-        Pixel size in micrometers
+        Default pixel size in micrometers (used if not found in image metadata)
 
     Returns
     -------
@@ -278,20 +280,11 @@ def convert_to_ome_tiff(
     logger.info(f"Input channels (as specified): {channel_names}")
     logger.info(f"Output channels (DAPI first): {output_channels}")
 
-    # Detect format and read image
-    fmt = detect_format(input_path)
-    logger.info(f"Detected format: {fmt}")
+    # Read image using aicsimageio (supports all formats)
+    image_data, metadata = read_image_aics(input_path)
 
-    if fmt == 'nd2':
-        image_data, metadata = read_nd2(input_path)
-        # Use channel names from CSV input (as-is, no flipping)
-        original_channels = channel_names
-    elif fmt in ['tiff', 'ome_tiff']:
-        image_data, metadata = read_tiff(input_path)
-        # Use channel names from CSV input
-        original_channels = channel_names
-    else:
-        raise ValueError(f"Unsupported format: {fmt}")
+    # Use channel names from CSV input (as-is, no flipping)
+    original_channels = channel_names
 
     # Validate channel count
     if metadata['num_channels'] != len(channel_names):
@@ -299,6 +292,18 @@ def convert_to_ome_tiff(
             f"Channel count mismatch: image has {metadata['num_channels']}, "
             f"specified {len(channel_names)}"
         )
+
+    # Log channel names from file metadata if available (for reference only)
+    # CSV channel names are always used as the authoritative source
+    if metadata.get('channel_names_from_file'):
+        file_channels = metadata['channel_names_from_file']
+        logger.info(f"Channel names from file metadata (for reference): {file_channels}")
+        logger.info(f"Using CSV channel names as authoritative: {channel_names}")
+
+    # Use physical pixel size from image metadata if available, otherwise use provided value
+    actual_pixel_size = metadata.get('physical_pixel_size', pixel_size_um)
+    if actual_pixel_size != pixel_size_um:
+        logger.info(f"Using pixel size from image metadata: {actual_pixel_size} µm (overriding {pixel_size_um} µm)")
 
     # Rearrange channels to output order (DAPI first)
     if metadata['c_axis_index'] is not None and original_channels != output_channels:
@@ -313,9 +318,9 @@ def convert_to_ome_tiff(
     ome_metadata = {
         'axes': metadata['axes'],
         'Channel': {'Name': output_channels},
-        'PhysicalSizeX': pixel_size_um,
+        'PhysicalSizeX': actual_pixel_size,
         'PhysicalSizeXUnit': 'µm',
-        'PhysicalSizeY': pixel_size_um,
+        'PhysicalSizeY': actual_pixel_size,
         'PhysicalSizeYUnit': 'µm'
     }
 
@@ -350,7 +355,7 @@ def convert_to_ome_tiff(
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Convert microscopy images to standardized OME-TIFF',
+        description='Convert microscopy images to standardized OME-TIFF using aicsimageio',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -358,7 +363,7 @@ def parse_args():
         '--input_file',
         type=str,
         required=True,
-        help='Path to input image file (ND2, TIFF, etc.)'
+        help='Path to input image file (supports .nd2, .lif, .ndpi, .tiff, .czi, etc.)'
     )
     parser.add_argument(
         '--output_dir',

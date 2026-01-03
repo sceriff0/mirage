@@ -3,9 +3,9 @@ process CONVERT_IMAGE {
     label 'process_medium'
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:preprocess' :
-        'docker://bolt3x/attend_image_analysis:preprocess' }"
-        
+        'docker://bolt3x/attend_image_analysis:convert_to_tiff' :
+        'docker://bolt3x/attend_image_analysis:convert_to_tiff' }"
+
     input:
     tuple val(meta), path(image_file)
 
