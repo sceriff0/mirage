@@ -26,9 +26,9 @@ process SEGMENT {
     def pmin = params.seg_pmin ?: 1.0
     def pmax = params.seg_pmax ?: 99.8
 
-    // Double n_tiles on each retry attempt to reduce memory usage
-    def n_tiles_y = (params.seg_n_tiles_y ?: 1) * Math.pow(2, task.attempt - 1) as Integer
-    def n_tiles_x = (params.seg_n_tiles_x ?: 1) * Math.pow(2, task.attempt - 1) as Integer
+    // Quadruple n_tiles on each retry attempt to reduce memory usage
+    def n_tiles_y = (params.seg_n_tiles_y ?: 1) * Math.pow(4, task.attempt - 1) as Integer
+    def n_tiles_x = (params.seg_n_tiles_x ?: 1) * Math.pow(4, task.attempt - 1) as Integer
 
     // FIX WARNING #1: Validate DAPI is in channel 0
     def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
