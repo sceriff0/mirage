@@ -244,15 +244,6 @@ params {
 
 ATEIA provides four registration methods, each with distinct trade-offs:
 
-### Method Comparison
-
-| Method | Speed | Accuracy | GPU Required | Best For |
-|--------|-------|----------|--------------|----------|
-| `valis` | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ❌ | Multi-stain panels, complex deformations |
-| `valis_pairs` | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ❌ | 2-3 stains per patient |
-| `gpu` | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ✅ | Large images, fast turnaround |
-| `cpu` | ⭐⭐ | ⭐⭐⭐⭐ | ❌ | No GPU access, batch processing |
-
 ### 1. VALIS (Recommended)
 
 **Virtual Alignment of pathoLogy Image Series**
@@ -289,9 +280,8 @@ nextflow run main.nf \
 ```
 
 **Pros:**
-- 5-10x faster than CPU
+- Faster than CPU
 - Handles very large images via crop-based processing
-- Automatic retry with reduced crop sizes on OOM
 
 **Cons:**
 - Requires NVIDIA GPU with CUDA
@@ -309,10 +299,11 @@ nextflow run main.nf --registration_method cpu
 - No GPU required
 - Same algorithm as GPU method
 - Good for batch processing on CPU clusters
-
+- Handles very large images via crop-based processing
+  
 **Cons:**
-- 5-10x slower than GPU
-- Higher memory usage for large images
+- Slower than GPU
+- May have tile boundary artifacts (mitigated by overlap)
 
 ### 4. VALIS Pairs
 
@@ -324,11 +315,10 @@ nextflow run main.nf --registration_method valis_pairs
 
 **Pros:**
 - Lower memory than batch VALIS
-- Good for 2-3 stains per patient
-- Retains VALIS quality
+- Retains most of VALIS quality
 
 **Cons:**
-- No multi-image optimization graph
+- No multi-image optimization 
 
 ---
 
@@ -364,27 +354,6 @@ my_custom_stardist/
 ## 🔧 Adding Custom Registration Methods
 
 The pipeline uses an **adapter pattern** for registration methods. Each method implements a common interface while handling method-specific logic internally.
-
-### Architecture Overview
-
-```
-registration.nf                    adapters/
-┌────────────────────┐            ┌─────────────────────┐
-│                    │            │                     │
-│  1. Group by       │            │  valis_adapter.nf   │───▶ REGISTER
-│     patient        │            │                     │
-│                    │            ├─────────────────────┤
-│  2. Identify       │───────────▶│  gpu_adapter.nf     │───▶ GPU_REGISTER
-│     references     │            │                     │
-│                    │            ├─────────────────────┤
-│  3. Route to       │            │  cpu_adapter.nf     │───▶ CPU_REGISTER
-│     adapter        │            │                     │
-│                    │            └─────────────────────┘
-│  4. Collect        │◀───────────────────────────────────────┘
-│     outputs        │            Standard output:
-│                    │            [meta, registered_file]
-└────────────────────┘
-```
 
 ### Data Flow in `registration.nf`
 
@@ -437,7 +406,7 @@ workflow MY_ADAPTER {
     // Run your registration
     MY_REGISTER(ch_pairs)
 
-    // Publish references (they don't undergo registration)
+    // Publish references (if they don't undergo registration)
     ch_references = ch_grouped.map { pid, ref, all -> ref }
     PUBLISH_REFERENCE(ch_references)
 
@@ -500,10 +469,10 @@ def validateRegistrationMethod(method) {
 ### Adapter Interface Contract
 
 Every adapter **must**:
-- ✅ Accept `ch_grouped`: `[patient_id, [ref_meta, ref_file], [[meta, file], ...]]`
-- ✅ Emit `registered`: `[[meta, file], [meta, file], ...]`
-- ✅ Include reference images in output (unchanged)
-- ✅ Preserve `meta` fields (especially `patient_id`, `is_reference`, `channels`)
+- Accept `ch_grouped`: `[patient_id, [ref_meta, ref_file], [[meta, file], ...]]`
+- Emit `registered`: `[[meta, file], [meta, file], ...]`
+- Include reference images in previous output (unchanged)
+- Preserve `meta` fields (`patient_id`, `is_reference`, `channels`)
 
 ---
 
@@ -530,11 +499,8 @@ Every adapter **must**:
 If you use ATEIA in your research, please cite:
 
 ```bibtex
-@software{ateia2024,
-  author = {ATEIA Team},
-  title = {ATEIA: Automated Tissue Expression & Image Analysis Pipeline},
-  year = {2024},
-  url = {https://github.com/your-org/ateia}
+@software{ateia2026,
+  author = {DIMA}
 }
 ```
 
@@ -542,7 +508,7 @@ If you use ATEIA in your research, please cite:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the 
 
 ---
 
@@ -551,7 +517,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) before submitting a Pull Request.
 
 ---
-
-<p align="center">
-  Made with ❤️ by the ATEIA Team
-</p>
