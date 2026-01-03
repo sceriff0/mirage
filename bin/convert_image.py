@@ -13,18 +13,6 @@ from pathlib import Path
 import os
 import tempfile
 
-# Set cache directories BEFORE importing aicsimageio/scyjava/bioformats
-# This is critical for HPC environments where home directory may be read-only
-# These must be set before any Java/scyjava initialization
-_cache_dir = os.environ.get('TMPDIR', tempfile.gettempdir())
-_bioformats_cache = os.path.join(_cache_dir, 'bioformats_cache')
-os.makedirs(_bioformats_cache, exist_ok=True)
-
-# Set all cache-related environment variables
-os.environ.setdefault('XDG_CACHE_HOME', _bioformats_cache)
-os.environ.setdefault('CJDK_CACHE_DIR', _bioformats_cache)
-os.environ.setdefault('SCYJAVA_CACHE_DIR', _bioformats_cache)
-
 # Add parent directory to path to import lib modules
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
