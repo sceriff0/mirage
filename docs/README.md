@@ -143,7 +143,7 @@ P002,/data/P002_panel1.nd2,true,DAPI|CD3|CD8|CD4
 P002,/data/P002_panel2.nd2,false,DAPI|PANCK|SMA|VIMENTIN
 ```
 
-> **Note:** Each patient should have exactly one `is_reference=true` image. DAPI must always be the first channel.
+> **Note:** Each patient should have exactly one `is_reference=true` image. DAPI will be moved to the first channel.
 
 ### 2. Run with Defaults
 
@@ -195,7 +195,6 @@ nextflow run main.nf \
     --input results/csv/preprocessed.csv \
     --step registration \
     --outdir ./results \
-    -resume
 ```
 
 ---
