@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.png" alt="ATEIA Logo" width="200"/>
+  <img src="assets/logo.png" alt="ATEIA Logo" width="200"/>
 </p>
 
 <h1 align="center">🔬 ATEIA</h1>
