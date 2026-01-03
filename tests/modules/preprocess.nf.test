@@ -1,0 +1,109 @@
+nextflow_process {
+
+    name "Test PREPROCESS process"
+    script "modules/local/preprocess.nf"
+    process "PREPROCESS"
+
+    tag "modules"
+    tag "modules_local"
+    tag "preprocess"
+
+    test("Should run BaSiC correction on OME-TIFF - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.preprocessed },
+                { assert process.out.versions },
+                { assert snapshot(process.out).match() }
+            )
+        }
+    }
+
+    test("Should apply BaSiC correction - real") {
+
+        when {
+            params {
+                preproc_tile_size = 256
+                preproc_n_iter = 1
+                preproc_no_darkfield = true
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.preprocessed },
+                { assert process.out.preprocessed.get(0).get(0).patient_id == 'P001' },
+                { assert process.out.preprocessed.get(0).get(1).exists() },
+                { assert snapshot(
+                    process.out.preprocessed.get(0).get(0),  // metadata
+                    process.out.versions
+                ).match() }
+            )
+        }
+    }
+
+    test("Should preserve metadata through preprocessing") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'test_value'
+                    ],
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.preprocessed) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).is_reference == false
+                    assert get(0).get(0).channels == ['DAPI', 'PANCK']
+                }},
+                { assert snapshot(process.out.preprocessed.get(0).get(0)).match() }
+            )
+        }
+    }
+}

@@ -13,6 +13,12 @@ import os
 import argparse
 import logging
 from pathlib import Path
+
+# Add parent directory to path to import lib modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from utils.logger import get_logger, configure_logging
 from typing import Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -23,9 +29,10 @@ from numpy.typing import NDArray
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
 
-from _common import ensure_dir
+from utils.image_utils import ensure_dir
+from utils.metadata import get_channel_names
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 __all__ = [
     "split_image_into_fovs",
@@ -266,7 +273,11 @@ def preprocess_multichannel_image(
         preprocessed,
         photometric='minisblack',
         metadata=metadata,
-        ome=True
+        bigtiff=True,
+        ome=True,
+        tile=(512, 512),  # Reduced from 2048 to prevent large tile read errors in VALIS
+        compression='zlib',
+        compressionargs={'level': 6}  # Moderate compression for better compatibility
     )
 
     logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")
@@ -365,37 +376,45 @@ def parse_args():
     return parser.parse_args()
 
 def find_channel_names_from_path(image_path: str) -> List[str]:
+    """Extract channel names from image path.
+
+    Parameters
+    ----------
+    image_path : str
+        Path to multichannel image file.
+
+    Returns
+    -------
+    List[str]
+        List of channel names extracted from filename.
+
+    Notes
+    -----
+    Uses lib.metadata.get_channel_names() for consistent channel extraction
+    across the pipeline. Assumes naming format: <ID>_<CH1>_<CH2>...<EXT>
+
+    Examples
+    --------
+    >>> find_channel_names_from_path("id1_DAPI_CD3_CD8.ome.tif")
+    ['DAPI', 'CD3', 'CD8']
+
+    See Also
+    --------
+    lib.metadata.get_channel_names : Core channel name extraction function
     """
-    Extracts channel names from a multichannel image path assuming the format:
-    <ID>_<CHANNEL1>_<CHANNEL2>...<EXT>
-    e.g., 'id1_DAPI_Marker1_Marker2.ome.tif' -> ['DAPI', 'Marker1', 'Marker2']
-    """
-    p = Path(image_path)
-    base_name = p.stem
+    # Use lib.metadata function for consistency
+    channels = get_channel_names(image_path)
 
-    # Remove .ome extension if present
-    if base_name.endswith('.ome'):
-        base_name = base_name[:-4]
-
-    parts = base_name.split('_')
-
-    if len(parts) < 2:
+    # Fallback if no channels found
+    if not channels or len(channels) == 0:
         return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
 
-    channel_names = parts[1:]
-
-    if not channel_names:
-        return ["DAPI", "Channel_1", "Channel_2", "Channel_3", "Channel_4"]
-
-    return channel_names
+    return channels
 
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 
@@ -406,16 +425,19 @@ def main():
 
     channel_names = find_channel_names_from_path(image_path)
 
-    # Handle .ome.tif extension properly
+    # Always save as .ome.tiff since we're writing OME-TIFF format
     if image_basename.endswith('.ome.tif'):
         base = image_basename[:-8]  # Remove .ome.tif
-        ext = '.ome.tif'
     elif image_basename.endswith('.ome.tiff'):
         base = image_basename[:-9]  # Remove .ome.tiff
-        ext = '.ome.tiff'
+    elif image_basename.endswith('.tif'):
+        base = image_basename[:-4]  # Remove .tif
+    elif image_basename.endswith('.tiff'):
+        base = image_basename[:-5]  # Remove .tiff
     else:
-        base, ext = os.path.splitext(image_basename)
+        base = os.path.splitext(image_basename)[0]
 
+    ext = '.ome.tif'  # Always use OME-TIFF extension
     output_filename = f"{base}_corrected{ext}"
     output_path = os.path.join(
         args.output_dir,

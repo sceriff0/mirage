@@ -1,26 +1,56 @@
-nextflow.enable.dsl = 2
-
 process PAD_IMAGES {
-    tag "${preprocessed_file.simpleName}"
-    label 'process_high'
-    container "${params.container.preprocess}"
+    tag "${meta.patient_id}"
+    label 'process_medium'
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/padded", mode: 'copy'
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:preprocess' :
+        'docker://bolt3x/attend_image_analysis:preprocess' }"
 
     input:
-    tuple path(preprocessed_file), val(max_height), val(max_width)
+    tuple val(meta), path(preprocessed_file), path(max_dims_file)
 
     output:
-    path "${preprocessed_file.simpleName}_padded.ome.tif", emit: padded
+    tuple val(meta), path("*_padded.ome.tif"), emit: padded
+    path "versions.yml"                       , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
     """
+    # Read max dimensions from file
+    MAX_HEIGHT=\$(grep MAX_HEIGHT ${max_dims_file} | awk '{print \$2}')
+    MAX_WIDTH=\$(grep MAX_WIDTH ${max_dims_file} | awk '{print \$2}')
+
+    echo "Padding ${meta.patient_id} to \${MAX_HEIGHT}x\${MAX_WIDTH} with mode: ${pad_mode}"
+
     pad_image.py \\
         --input ${preprocessed_file} \\
         --output ${preprocessed_file.simpleName}_padded.ome.tif \\
-        --target-height ${max_height} \\
-        --target-width ${max_width} \\
-        --pad-mode ${pad_mode}
+        --target-height \${MAX_HEIGHT} \\
+        --target-width \${MAX_WIDTH} \\
+        --pad-mode ${pad_mode} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        numpy: \$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch ${preprocessed_file.simpleName}_padded.ome.tif
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        numpy: stub
+    END_VERSIONS
     """
 }

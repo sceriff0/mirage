@@ -12,7 +12,6 @@ Uses VALIS slide_io for robust image reading.
 import argparse
 import sys
 from pathlib import Path
-from datetime import datetime
 import numpy as np
 import tifffile
 import os
@@ -23,46 +22,20 @@ os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = '/tmp/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
+# Import from lib modules for DRY principle
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import log_progress as log
+from metadata import extract_channel_names_from_ome as get_channel_names_from_ome
+from metadata import extract_markers_from_filename
+from image_utils import normalize_image_dimensions
 
 # Import only slide_io to avoid heavy VALIS dependencies
 import valis.slide_io as slide_io
 
-
-def log(msg: str):
-    """Print timestamped message."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}", flush=True)
-
-
-def get_channel_names_from_ome(filepath: str) -> list:
-    """Extract channel names from OME-TIFF metadata. Returns empty list if fails."""
-    try:
-        with tifffile.TiffFile(filepath) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                if channels:
-                    return [ch.get('Name', '') for ch in channels]
-    except:
-        pass
-    return []
-
-
-def extract_markers_from_filename(filename: str) -> list:
-    """Extract marker names from filename like 'B19-10215_DAPI_SMA_panck_corrected'."""
-    # Remove _registered, _corrected, and _padded suffixes
-    name = filename.replace('_registered.ome.tif', '').replace('_registered.ome.tiff', '')
-    name = name.replace('_corrected', '').replace('_padded', '')
-
-    # Split by underscore and filter out sample ID
-    parts = name.split('_')
-
-    # Assume first part is sample ID (starts with letter+numbers), rest are markers
-    markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
-
-    return markers if markers else [name]
+# Function definitions removed - now imported from lib modules:
+# - log() -> imported from lib.logger.log_progress
+# - get_channel_names_from_ome() -> imported from lib.metadata
+# - extract_markers_from_filename() -> imported from lib.metadata
 
 
 def is_reference_slide(slide_name: str, reference_markers: list) -> bool:
@@ -77,19 +50,8 @@ def read_slide(filepath: str) -> tuple:
     # Read with tifffile which handles large TIFFs efficiently
     img = tifffile.imread(str(filepath))
 
-    # Ensure (C, H, W) format
-    if img.ndim == 2:
-        # Single channel: (H, W) -> (1, H, W)
-        img = img[np.newaxis, ...]
-    elif img.ndim == 3:
-        # Multi-channel: could be (H, W, C) or (C, H, W)
-        # Detect based on typical image dimensions
-        if img.shape[0] < img.shape[2]:
-            # Already (C, H, W) format
-            pass
-        else:
-            # (H, W, C) format - transpose to (C, H, W)
-            img = np.transpose(img, (2, 0, 1))
+    # Ensure (C, H, W) format using shared utility function
+    img = normalize_image_dimensions(img)
 
     # Try to get channel names from OME metadata first
     channel_names = get_channel_names_from_ome(str(filepath))
@@ -112,11 +74,12 @@ def read_slide(filepath: str) -> tuple:
     return img, channel_names
 
 
-def merge_slides(input_dir: str, output_path: str, reference_markers: list = None):
+def merge_slides(input_dir: str, output_path: str, reference_markers: list = None, segmentation_mask: str = None, phenotype_mask: str = None, phenotype_mapping: str = None):
     """
     Merge all registered slides into a single OME-TIFF.
 
     Keeps all channels from all slides, except DAPI which is only kept from the reference slide.
+    Optionally appends segmentation and phenotype masks as additional channels.
 
     Memory-efficient: Uses memory-mapped arrays and writes channels incrementally.
 
@@ -124,6 +87,9 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         input_dir: Directory containing registered slides
         output_path: Output OME-TIFF path
         reference_markers: List of markers that identify the reference slide (e.g., ['DAPI', 'SMA'])
+        segmentation_mask: Path to segmentation mask file (optional)
+        phenotype_mask: Path to phenotype mask file with different colors per phenotype (optional)
+        phenotype_mapping: Path to JSON file mapping phenotype numbers to names (optional)
     """
     if reference_markers is None:
         reference_markers = ['DAPI', 'SMA']  # Default
@@ -226,6 +192,29 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
         # Add to global channel list
         channel_names.extend([name for _, name in channels_to_keep])
 
+    # Load phenotype mapping if provided
+    pheno_label_map = None
+    if phenotype_mapping:
+        log(f"Loading phenotype mapping: {phenotype_mapping}")
+        import json
+        with open(phenotype_mapping, 'r') as f:
+            pheno_label_map = json.load(f)
+        # Convert keys to integers if they're strings
+        pheno_label_map = {int(k): v for k, v in pheno_label_map.items()}
+        log(f"  Loaded {len(pheno_label_map)} phenotype labels: {pheno_label_map}")
+
+    # Check if masks should be added
+    masks_to_add = []
+    if segmentation_mask:
+        log(f"Will append segmentation mask: {segmentation_mask}")
+        channel_names.append("Segmentation")
+        masks_to_add.append(('segmentation', segmentation_mask, None))
+
+    if phenotype_mask:
+        log(f"Will append phenotype mask: {phenotype_mask}")
+        channel_names.append("Phenotype")
+        masks_to_add.append(('phenotype', phenotype_mask, pheno_label_map))
+
     num_output_channels = len(channel_names)
     log(f"Total output channels: {num_output_channels}")
     log(f"Output dimensions: {num_output_channels} x {height} x {width}")
@@ -321,21 +310,153 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
             del img_memmap
             gc.collect()
 
+    # Store phenotype colormap and labels for later
+    phenotype_lut = None
+    phenotype_n_categories = 0
+    phenotype_labels = None
+
+    # Append mask channels if provided
+    for mask_type, mask_path, label_map in masks_to_add:
+        log(f"Appending {mask_type} mask: {mask_path}")
+        mask_data = tifffile.imread(mask_path)
+
+        # Ensure 2D
+        if mask_data.ndim > 2:
+            mask_data = mask_data.squeeze()
+
+        # Verify dimensions match
+        if mask_data.shape != (height, width):
+            raise ValueError(f"{mask_type} mask shape {mask_data.shape} doesn't match image shape ({height}, {width})")
+
+        # Convert phenotype mask to categorical format
+        if mask_type == 'phenotype':
+            log(f"  Converting phenotype mask to categorical format...")
+            # Convert int64 to int32 or smaller for compatibility
+            if mask_data.dtype == np.int64:
+                pheno_min = mask_data.min()
+                pheno_max = mask_data.max()
+                log(f"    Phenotype range: {pheno_min} to {pheno_max}")
+
+                # Shift negative values to start from 0 for categorical LUT
+                if pheno_min < 0:
+                    log(f"    Shifting values by {-pheno_min} to make non-negative")
+                    mask_data = mask_data - pheno_min
+                    pheno_max = pheno_max - pheno_min
+
+                # Convert to smallest compatible unsigned type
+                if pheno_max <= 255:
+                    mask_data = mask_data.astype(np.uint8)
+                    log(f"    Converted to uint8 for categorical display")
+                elif pheno_max <= 65535:
+                    mask_data = mask_data.astype(np.uint16)
+                    log(f"    Converted to uint16 for categorical display")
+                else:
+                    mask_data = mask_data.astype(np.int32)
+                    log(f"    Converted to int32 (too many categories for uint16)")
+
+            # Create categorical colormap for QuPath
+            phenotype_n_categories = int(mask_data.max() + 1)
+            log(f"  Creating categorical LUT for {phenotype_n_categories} phenotypes...")
+
+            # Store labels if provided
+            if label_map:
+                phenotype_labels = label_map
+                log(f"  Using phenotype labels: {phenotype_labels}")
+
+            # Distinctive colors for categorical display (RGB)
+            base_colors = [
+                [0, 0, 0],         # 0: Background (black)
+                [255, 0, 0],       # 1: Red
+                [0, 255, 0],       # 2: Green
+                [0, 0, 255],       # 3: Blue
+                [255, 255, 0],     # 4: Yellow
+                [255, 0, 255],     # 5: Magenta
+                [0, 255, 255],     # 6: Cyan
+                [255, 128, 0],     # 7: Orange
+                [128, 0, 255],     # 8: Purple
+                [0, 255, 128],     # 9: Spring green
+                [255, 0, 128],     # 10: Rose
+                [128, 255, 0],     # 11: Lime
+                [0, 128, 255],     # 12: Sky blue
+                [255, 128, 128],   # 13: Light red
+                [128, 255, 128],   # 14: Light green
+                [128, 128, 255],   # 15: Light blue
+                [192, 192, 0],     # 16: Olive
+                [192, 0, 192],     # 17: Dark magenta
+                [0, 192, 192],     # 18: Teal
+                [255, 192, 128],   # 19: Peach
+            ]
+
+            # Extend with random colors if needed
+            import random
+            colors = base_colors.copy()
+            for i in range(len(colors), phenotype_n_categories):
+                random.seed(i)
+                colors.append([random.randint(50, 255) for _ in range(3)])
+
+            # Create LUT for tifffile
+            if mask_data.dtype == np.uint8:
+                lut_size = 256
+            elif mask_data.dtype == np.uint16:
+                lut_size = 65536
+            else:
+                lut_size = 256
+
+            phenotype_lut = np.zeros((3, lut_size), dtype=np.uint16)
+            for i, color in enumerate(colors[:min(phenotype_n_categories, lut_size)]):
+                phenotype_lut[0, i] = color[0] * 256  # R (scale to uint16 range)
+                phenotype_lut[1, i] = color[1] * 256  # G
+                phenotype_lut[2, i] = color[2] * 256  # B
+
+        # Write to output memmap
+        output_memmap[output_channel_idx, :, :] = mask_data
+        log(f"  Channel {output_channel_idx}: {mask_type.capitalize()}")
+        output_channel_idx += 1
+
+        # Clean up
+        del mask_data
+        gc.collect()
+
     # Flush memmap to disk
     log("Flushing temporary buffer...")
     output_memmap.flush()
 
     # Write final output file from memmap
     log(f"Writing final output file: {output_path}")
+
+    # Prepare ImageJ metadata with colormap if phenotype mask is present
+    imagej_metadata = None
+    if phenotype_lut is not None:
+        log(f"Adding ImageJ metadata with {phenotype_n_categories} phenotype colors for QuPath...")
+        imagej_metadata = {
+            'axes': 'CYX',
+            'LUTs': [None] * (num_output_channels - 1) + [phenotype_lut.T]  # Only apply LUT to phenotype channel
+        }
+
+        # Add phenotype labels if available
+        if phenotype_labels:
+            # Create labels array for ImageJ
+            labels_array = [''] * phenotype_n_categories
+            for idx, label in phenotype_labels.items():
+                if idx < phenotype_n_categories:
+                    labels_array[idx] = label
+            imagej_metadata['Labels'] = labels_array
+            log(f"  Added phenotype labels to ImageJ metadata: {labels_array}")
+
+    # Write OME-TIFF with proper metadata
+    # Important: Use ome=True to ensure proper OME-XML metadata structure
+    # This allows bfconvert to correctly read and preserve metadata when creating pyramids
     tifffile.imwrite(
         output_path,
         output_memmap,
         tile=(256, 256),
-        metadata={'axes': 'CYX'},
+        metadata={'axes': 'CYX'} if imagej_metadata is None else imagej_metadata,
         description=ome_xml,
         photometric='minisblack',
         compression='lzw',
-        bigtiff=True
+        bigtiff=True,
+        ome=True,  # Write proper OME-TIFF format
+        imagej=True if phenotype_lut is not None else False
     )
 
     # Clean up
@@ -367,11 +488,21 @@ def main():
         default=['DAPI'],
         help='Markers that identify reference slide (default: DAPI)'
     )
+    parser.add_argument('--segmentation-mask', help='Path to segmentation mask TIFF')
+    parser.add_argument('--phenotype-mask', help='Path to phenotype mask TIFF')
+    parser.add_argument('--phenotype-mapping', help='Path to phenotype mapping JSON (phenotype number to name)')
 
     args = parser.parse_args()
 
     try:
-        merge_slides(args.input_dir, args.output, reference_markers=args.reference_markers)
+        merge_slides(
+            args.input_dir,
+            args.output,
+            reference_markers=args.reference_markers,
+            segmentation_mask=args.segmentation_mask,
+            phenotype_mask=args.phenotype_mask,
+            phenotype_mapping=args.phenotype_mapping,
+        )
         slide_io.kill_jvm()
         log("✓ Complete!")
     except Exception as e:

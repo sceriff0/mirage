@@ -10,10 +10,16 @@ import logging
 import sys
 from pathlib import Path
 
+# Add parent directory to path to import lib modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
+from logger import get_logger, configure_logging
+
 import numpy as np
 import tifffile
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def pad_image_to_shape(
@@ -238,10 +244,7 @@ def main():
     args = parser.parse_args()
 
     # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
+    configure_logging(level=logging.INFO)
 
     try:
         input_path = Path(args.input)

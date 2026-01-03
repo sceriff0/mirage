@@ -1,0 +1,2 @@
+patient_id,registered_image,is_reference,channels
+P001,/Users/valer/Downloads/ateia/tests/testdata/P001_ref.ome.tiff,true,DAPI|PANCK|SMA

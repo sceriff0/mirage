@@ -1,174 +1,149 @@
 nextflow.enable.dsl = 2
 
 /*
-========================================================================================
-    IMPORT MODULES
-========================================================================================
+================================================================================
+IMPORT SUBWORKFLOWS
+================================================================================
 */
 
-include { CONVERT_ND2  } from './modules/local/convert_nd2'
-include { PREPROCESS   } from './modules/local/preprocess'
-include { PAD_IMAGES   } from './modules/local/pad_images'
-include { REGISTER     } from './modules/local/register'
-include { GPU_REGISTER } from './modules/local/register_gpu'
-include { CPU_REGISTER } from './modules/local/register_cpu'
-include { MERGE        } from './modules/local/merge'
-include { SEGMENT      } from './modules/local/segment'
-include { CLASSIFY     } from './modules/local/classify'
-include { QUANTIFY     } from './modules/local/quantify'
-include { PHENOTYPE    } from './modules/local/phenotype'
-include { SAVE_RESULTS } from './modules/local/save_results'
-
+include { PREPROCESSING  } from './subworkflows/local/preprocess'
+include { REGISTRATION   } from './subworkflows/local/registration'
+include { POSTPROCESSING } from './subworkflows/local/postprocess'
+include { COPY_RESULTS   } from './modules/local/copy_results'
 
 /*
-========================================================================================
-    RUN MAIN WORKFLOW
-========================================================================================
+================================================================================
+IMPORT and DECLARE HELPERS
+================================================================================
+*/
+
+import static CsvUtils.*
+import static ParamUtils.*
+
+def loadInputChannel(csv_path, image_column) {
+    return Channel
+        .fromPath(csv_path, checkIfExists: true)
+        .splitCsv(header: true)
+        .map { row ->
+            // Use CsvUtils to handle the complex metadata parsing
+            def meta = CsvUtils.parseMetadata(row, "CSV ${csv_path}") 
+            return tuple(meta, file(row[image_column]))
+        }
+}
+
+/*
+================================================================================
+WORKFLOW
+================================================================================
 */
 
 workflow {
 
-    // Validate input parameters
-    if (!params.input) {
-        error "Please provide an input glob pattern with --input"
-    }
+    /* -------------------- PARAMETER VALIDATION -------------------- */
 
-    // 1. Create input channel from glob pattern (ND2 files)
-    ch_input = channel.fromPath(params.input, checkIfExists: true)
+    if (!params.input)
+        error "Please provide --input"
 
-    // 2. MODULE: Convert ND2 to OME-TIFF
-    CONVERT_ND2 ( ch_input )
+    validateStep(params.step)
+    validateRegistrationMethod(params.registration_method)
 
-    // 3. MODULE: Preprocess each converted file
-    PREPROCESS ( CONVERT_ND2.out.ome_tiff )
-
-    // 4. MODULE: Register using either classic or GPU method
-    if (params.registration_method != 'valis') {
-        // GPU registration workflow:
-        // Step 1: Compute max dimensions from all preprocessed images
-        // Using collectFile with storeDir ensures this is cached properly
-        ch_dims_file = PREPROCESS.out.dims
-            .collectFile(
-                name: 'all_dims.txt',
-                newLine: true,
-                storeDir: "${params.outdir}/${params.id}/${params.registration_method}/metadata"
-            )
-
-        // Compute max dimensions once and broadcast as value channel
-        ch_max_dims = ch_dims_file
-            .map { file ->
-                def lines = file.readLines()
-                def max_h = 0
-                def max_w = 0
-                lines.each { line ->
-                    def parts = line.split()
-                    def h = parts[1].toInteger()
-                    def w = parts[2].toInteger()
-                    max_h = Math.max(max_h, h)
-                    max_w = Math.max(max_w, w)
-                }
-                return tuple(max_h, max_w)
-            }
-            .first()  // Convert to value channel for stable caching
-
-        // Step 2: Pad each image in parallel
-        ch_to_pad = PREPROCESS.out.preprocessed
-            .combine(ch_max_dims)
-            .map { file, max_h, max_w -> tuple(file, max_h, max_w) }
-
-        PAD_IMAGES ( ch_to_pad )
-
-        // Step 3: Collect padded images and find reference once
-        // This ensures deterministic behavior for resume
-        ch_padded_collected = PAD_IMAGES.out.padded
-            .collect()
-            .map { files ->
-                // Sort files by name for deterministic ordering
-                def sorted_files = files.sort { f -> f.name }
-
-                // Find reference image based on params.reg_reference_markers
-                def reference_markers = params.reg_reference_markers
-                def reference = sorted_files.find { f ->
-                    def filename = f.name.toUpperCase()
-                    reference_markers.every { marker ->
-                        filename.contains(marker.toUpperCase())
-                    }
-                }
-
-                // Fallback to first file if no match found
-                if (reference == null) {
-                    log.warn "No file found with all reference markers ${reference_markers}, using first file"
-                    reference = sorted_files[0]
-                }
-
-                // Return reference and all files
-                return tuple(reference, sorted_files)
-            }
-
-        // Create (reference, moving) pairs from padded images
-        ch_pairs = ch_padded_collected
-            .flatMap { reference, all_files ->
-                def moving_files = all_files.findAll { f -> f != reference }
-                return moving_files.collect { m -> tuple(reference, m) }
-            }
-
-        if (params.registration_method == 'gpu') {
-            // Step 4a: GPU Registration
-            GPU_REGISTER ( ch_pairs )
-            ch_registered = GPU_REGISTER.out.registered
-        } else {
-            // Step 4b: CPU Registration
-            CPU_REGISTER ( ch_pairs )
-            ch_registered = CPU_REGISTER.out.registered
-        }
-
-        // Extract reference from collected channel (no need to recompute)
-        ch_reference = ch_padded_collected
-            .map { reference, _all_files -> reference }
-
-        ch_registered = ch_reference.concat( ch_registered )
-
-    } else {
-        // Classic registration: collect all preprocessed files
-        REGISTER ( PREPROCESS.out.preprocessed.collect() )
-        ch_registered = REGISTER.out.registered_slides
-    }
-    
-    // 5. MODULE: Merge registered slides into single multi-channel OME-TIFF
-    MERGE ( ch_registered.collect() )
-
-    // 6. MODULE: Segment the merged WSI
-    SEGMENT ( MERGE.out.merged )
-    
-    // 7. MODULE: Quantify marker expression per cell
-    QUANTIFY (
-        MERGE.out.merged,
-        SEGMENT.out.cell_mask
+    validateInputCSV(
+        params.input,
+        requiredColumnsForStep(params.step)
     )
 
-    // 8. MODULE: Phenotype cells based on predefined rules
-    PHENOTYPE (
-        QUANTIFY.out.csv,
-        SEGMENT.out.cell_mask
-    )
+    if (params.dry_run) {
+        log.info "DRY RUN: all validations passed"
+        return
+    }
 
-    // 9. MODULE: Save all results to final output directory
-    // Collect all outputs to ensure all processes complete before saving
-    ch_all_outputs = channel.empty()
-        .mix(
-            MERGE.out.merged,
-            SEGMENT.out.cell_mask,
-            QUANTIFY.out.csv,
-            PHENOTYPE.out.csv
+    /* -------------------- PREPROCESSING -------------------- */
+
+    if (params.step == 'preprocessing') {
+
+        ch_input = loadInputChannel(params.input, 'path_to_file')
+        PREPROCESSING(ch_input)
+        ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
+    }
+    
+    /* -------------------- REGISTRATION -------------------- */
+
+    if (params.step in ['preprocessing','registration']) {
+
+        // When starting from registration, params.input is a string path
+        // When continuing from preprocessing, ch_preprocess_csv is a channel
+        ch_for_registration = params.step == 'registration'
+            ? loadInputChannel(params.input, 'preprocessed_image')
+            : ch_preprocess_csv
+                .splitCsv(header: true)
+                .map { row ->
+                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
+                    return tuple(meta, file(row['preprocessed_image']))
+                }
+
+        REGISTRATION(
+            ch_for_registration,
+            params.registration_method
         )
-        .collect()
-        .map { _files ->
-            // All files are published under the same parent directory
-            return file("${params.outdir}")
-        }
 
-    SAVE_RESULTS (
-        ch_all_outputs,
-        params.savedir
-    )
+        ch_registration_csv = REGISTRATION.out.checkpoint_csv
+    }
+
+    /* -------------------- POSTPROCESSING -------------------- */
+
+    if (params.step in ['preprocessing','registration','postprocessing']) {
+
+        ch_for_postprocessing = params.step == 'postprocessing'
+            ? loadInputChannel(params.input, 'registered_image')
+            : ch_registration_csv
+                .splitCsv(header: true)
+                .map { row ->
+                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
+                    return tuple(meta, file(row['registered_image']))
+                }
+
+        POSTPROCESSING(ch_for_postprocessing)
+
+        ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
+
+        /* -------------------- COPY RESULTS TO SAVEDIR -------------------- */
+
+        // Copy results to savedir after postprocessing completes
+        if (params.savedir && params.savedir != params.outdir) {
+            COPY_RESULTS(
+                POSTPROCESSING.out.checkpoint_csv.map { 'ready' },
+                params.outdir,
+                params.savedir
+            )
+        }
+    }
+}
+
+/*
+================================================================================
+COMPLETION HANDLERS
+================================================================================
+*/
+
+workflow.onComplete {
+
+    if (workflow.success) {
+        log.info "Pipeline completed successfully!"
+
+        // Clean up work directory if requested
+        if (params.cleanup_work) {
+            log.info "Cleaning up work directory: ${workflow.workDir}"
+            def workDir = new File("${workflow.workDir}")
+            if (workDir.exists() && workDir.isDirectory()) {
+                try {
+                    workDir.deleteDir()
+                    log.info "Work directory removed successfully"
+                } catch (Exception e) {
+                    log.warn "Failed to remove work directory: ${e.message}"
+                }
+            }
+        }
+    } else {
+        log.error "Pipeline failed - work directory preserved for debugging"
+    }
 }

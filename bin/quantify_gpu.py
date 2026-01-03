@@ -9,12 +9,19 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
-from _common import load_image, load_pickle, save_pickle
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
+from logger import get_logger, configure_logging
+from image_utils import load_image
+from io_utils import load_pickle, save_pickle
 
 try:
     import psutil
@@ -32,7 +39,7 @@ except ImportError:
 
 os.environ.setdefault("CUPY_CACHE_DIR", "/tmp/.cupy")
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -75,7 +82,8 @@ def gpu_extract_features(
     channel_image: np.ndarray,
     chan_name: str,
     size_cutoff: int = 0,
-    verbose: bool = True
+    verbose: bool = True,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
     """Extract features using GPU-accelerated regionprops.
 
@@ -91,6 +99,8 @@ def gpu_extract_features(
         Minimum cell area in pixels.
     verbose : bool, optional
         Enable verbose logging.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
@@ -116,35 +126,32 @@ def gpu_extract_features(
     if verbose:
         print_memory_usage(f"  After GPU transfer ({chan_name}): ")
 
-    # Filter labels by size
+    # Filter labels by size - use lookup table for efficiency
     labels, counts = cp.unique(mask_gpu, return_counts=True)
-    valid_ids = labels[(labels != 0) & (counts > size_cutoff)]
+    valid_mask = (labels != 0) & (counts > size_cutoff)
+    valid_ids = labels[valid_mask]
 
-    if len(valid_ids) == 0:
+    num_cells = len(valid_ids)
+    if num_cells == 0:
         logger.warning(f"No valid cells for {chan_name}")
         return pd.DataFrame()
 
-    # Create filtered mask
-    mask_filtered = cp.where(cp.isin(mask_gpu, valid_ids), mask_gpu, 0)
+    if verbose:
+        logger.info(f"  Processing {num_cells} cells")
+
+    # Create lookup table for fast filtering (avoids slow cp.isin)
+    max_label = int(mask_gpu.max())
+    lookup = cp.zeros(max_label + 1, dtype=cp.int32)
+    lookup[valid_ids.get()] = valid_ids.get()
+
+    # Create filtered mask using lookup table
+    mask_filtered = lookup[mask_gpu]
 
     if (mask_filtered == 0).all():
         logger.warning(f"Filtered mask is empty for {chan_name}")
         return pd.DataFrame()
 
-    # GPU-accelerated regionprops
-    props = gpu_regionprops_table(
-        mask_filtered,
-        properties=[
-            "label", "centroid", "eccentricity", "perimeter",
-            "convex_area", "area", "axis_major_length", "axis_minor_length"
-        ]
-    )
-
-    # Transfer props to CPU
-    props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in props.items()}
-    props_df = pd.DataFrame(props_cpu).set_index("label", drop=False)
-
-    # Compute mean intensities
+    # Compute mean intensities first (fast operation)
     flat_mask = mask_filtered.ravel()
     flat_image = channel_gpu.ravel()
 
@@ -152,19 +159,74 @@ def gpu_extract_features(
     count_per_label = cp.bincount(flat_mask)
 
     means = cp.where(count_per_label != 0, sum_per_label / count_per_label, 0.0)
-    mean_values = cp.array([means[int(lbl)] if lbl < len(means) else 0 for lbl in valid_ids])
 
-    # Transfer to CPU
+    # Index on GPU, then transfer to CPU (avoid CPU list comprehension)
+    valid_ids_idx = valid_ids.astype(cp.int64)
+    valid_ids_idx = cp.minimum(valid_ids_idx, len(means) - 1)
+    mean_values = means[valid_ids_idx]
+
+    # Transfer intensities to CPU
     mean_values_cpu = mean_values.get()
     valid_ids_cpu = valid_ids.get()
+
+    # Free intermediate arrays
+    del flat_mask, flat_image, sum_per_label, count_per_label, means, mean_values
+
+    # Process regionprops in chunks if needed (regionprops is the bottleneck)
+    if num_cells > chunk_size:
+        if verbose:
+            logger.info(f"  Using chunked processing ({num_cells} cells > {chunk_size} threshold)")
+
+        props_list = []
+        num_chunks = (num_cells + chunk_size - 1) // chunk_size
+
+        for chunk_idx in range(num_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min((chunk_idx + 1) * chunk_size, num_cells)
+            chunk_labels = valid_ids_cpu[start_idx:end_idx]
+
+            if verbose:
+                logger.info(f"    Chunk {chunk_idx+1}/{num_chunks}: cells {start_idx} to {end_idx}")
+
+            # Create chunk mask
+            chunk_lookup = cp.zeros(max_label + 1, dtype=cp.int32)
+            chunk_lookup[chunk_labels] = chunk_labels
+            chunk_mask = chunk_lookup[mask_gpu]
+
+            # Run regionprops on chunk
+            chunk_props = gpu_regionprops_table(
+                chunk_mask,
+                properties=[
+                    "label", "centroid", "area", "axis_major_length", "axis_minor_length"
+                ]
+            )
+
+            # Transfer to CPU
+            chunk_props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in chunk_props.items()}
+            props_list.append(pd.DataFrame(chunk_props_cpu))
+
+            del chunk_mask, chunk_lookup
+            cp.get_default_memory_pool().free_all_blocks()
+
+        props_df = pd.concat(props_list, ignore_index=True).set_index("label", drop=False)
+    else:
+        # Process all at once
+        props = gpu_regionprops_table(
+            mask_filtered,
+            properties=[
+                "label", "centroid", "area", "axis_major_length", "axis_minor_length"
+            ]
+        )
+
+        props_cpu = {k: (v.get() if hasattr(v, 'get') else v) for k, v in props.items()}
+        props_df = pd.DataFrame(props_cpu).set_index("label", drop=False)
 
     intensity_df = pd.DataFrame({chan_name: mean_values_cpu}, index=valid_ids_cpu)
     df = intensity_df.join(props_df)
     df.rename(columns={"centroid-0": "y", "centroid-1": "x"}, inplace=True)
 
     # Free GPU memory
-    del mask_gpu, channel_gpu, mask_filtered, flat_mask, flat_image
-    del sum_per_label, count_per_label, means, mean_values
+    del mask_gpu, channel_gpu, mask_filtered, lookup
     try:
         cp.get_default_memory_pool().free_all_blocks()
     except Exception:
@@ -180,7 +242,8 @@ def extract_features_gpu(
     output_file: Optional[str] = None,
     size_cutoff: int = 0,
     verbose: bool = True,
-    write: bool = False
+    write: bool = False,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
     """Extract features for all channels using GPU.
 
@@ -200,6 +263,8 @@ def extract_features_gpu(
         Enable verbose output.
     write : bool, optional
         Write results to file.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
@@ -228,7 +293,8 @@ def extract_features_gpu(
             channel_image,
             chan_name,
             size_cutoff,
-            verbose
+            verbose,
+            chunk_size
         )
 
         if not df.empty:
@@ -257,36 +323,42 @@ def extract_features_gpu(
 
 
 def run_marker_quantification(
-    merged_image_path: str,
+    channel_tiff: str,
     mask_file: str,
-    output_file: str,
+    outdir: str,
+    output_file: str = None,
     size_cutoff: int = 0,
     mode: str = 'gpu',
-    verbose: bool = True
+    verbose: bool = True,
+    chunk_size: int = 500000
 ) -> pd.DataFrame:
-    """Run marker quantification pipeline.
+    """Run marker quantification pipeline on a single-channel TIFF.
 
     Parameters
     ----------
-    merged_image_path : str
-        Path to merged multi-channel OME-TIFF file.
+    channel_tiff : str
+        Path to single-channel TIFF file.
     mask_file : str
         Path to segmentation mask (.npy or .tif/.tiff).
-    output_file : str
-        Path for output CSV file.
+    outdir : str
+        Output directory for CSV file.
+    output_file : str, optional
+        Specific output filename. If not provided, will be auto-generated.
     size_cutoff : int, optional
         Minimum cell area.
     mode : str, optional
         Processing mode: 'gpu' or 'cpu'.
     verbose : bool, optional
         Enable verbose logging.
+    chunk_size : int, optional
+        Process regionprops in chunks if cell count exceeds this. Default: 500000.
 
     Returns
     -------
     DataFrame
         Quantification results.
     """
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    os.makedirs(outdir, exist_ok=True)
 
     # Check GPU availability if mode is 'gpu'
     if mode == 'gpu':
@@ -297,86 +369,29 @@ def run_marker_quantification(
     if mode == 'cpu':
         raise NotImplementedError("CPU mode not yet implemented - use GPU mode")
 
-    # Load merged multi-channel image
+    # Load the single channel TIFF file
+    channel_file = Path(channel_tiff)
+
+    if not channel_file.exists():
+        raise ValueError(f"Channel TIFF file not found: {channel_tiff}")
+
     if verbose:
-        logger.info(f"Loading merged image: {merged_image_path}")
+        logger.info(f"Loading channel: {channel_file.name}")
 
-    multichannel_image, _ = load_image(merged_image_path)
+    # Load channel image
+    channel_image, _ = load_image(str(channel_file))
+    channel_image = channel_image.squeeze()
 
-    # Extract channel names from OME metadata
-    channel_names = []
-    try:
-        import tifffile
-        import xml.etree.ElementTree as ET
+    # Extract channel name from filename
+    # Format: <prefix>_<marker>.tiff
+    channel_name = channel_file.stem.split('_')[-1]
 
-        with tifffile.TiffFile(merged_image_path) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                # Parse OME-XML for channel names
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                channel_names = [ch.get('Name', '') for ch in channels]
-                # Filter out empty names
-                channel_names = [name for name in channel_names if name]
+    if verbose:
+        logger.info(f"Channel name: {channel_name}")
 
-                if verbose and channel_names:
-                    logger.info(f"Extracted {len(channel_names)} channel names from OME metadata")
-    except Exception as e:
-        if verbose:
-            logger.warning(f"Could not extract channel names from OME metadata: {e}")
-
-    # If metadata extraction failed or returned wrong number of channels, try looking at directory
-    if len(channel_names) != multichannel_image.shape[0]:
-        if verbose:
-            logger.info(f"Metadata gave {len(channel_names)} names but image has {multichannel_image.shape[0]} channels")
-            logger.info(f"Attempting to infer channel names from registered files...")
-
-        try:
-            from pathlib import Path
-
-            # Look for registered files to infer channel composition
-            parent_dir = Path(merged_image_path).parent
-            search_paths = [
-                parent_dir / '..' / 'registered',
-                parent_dir / '..',
-                parent_dir / '..' / 'gpu' / 'registered',
-            ]
-
-            registered_files = []
-            for search_path in search_paths:
-                if search_path.exists():
-                    registered_files = list(search_path.glob('*registered*.tif*'))
-                    if registered_files:
-                        break
-
-            if registered_files:
-                # Collect all unique markers from all registered files
-                all_markers = set()
-                for reg_file in registered_files:
-                    name_part = reg_file.stem.replace('_registered', '').replace('_corrected', '').replace('_padded', '')
-                    parts = name_part.split('_')
-                    # Filter out patient ID (has dash and numbers)
-                    file_markers = [p for p in parts if not (len(p) > 0 and p[0].isalpha() and any(c.isdigit() for c in p) and '-' in p)]
-                    all_markers.update(file_markers)
-
-                # Sort alphabetically for consistent ordering
-                sorted_markers = sorted(list(all_markers))
-
-                if len(sorted_markers) == multichannel_image.shape[0]:
-                    channel_names = sorted_markers
-                    if verbose:
-                        logger.info(f"Inferred channel names from registered files: {channel_names}")
-                elif verbose:
-                    logger.warning(f"Found {len(sorted_markers)} unique markers but image has {multichannel_image.shape[0]} channels")
-        except Exception as e:
-            if verbose:
-                logger.warning(f"Could not infer channel names from registered files: {e}")
-
-    # Final fallback to generic names
-    if len(channel_names) != multichannel_image.shape[0]:
-        if verbose:
-            logger.warning(f"Using generic channel names (channel_0, channel_1, ...)")
-        channel_names = [f"channel_{i}" for i in range(multichannel_image.shape[0])]
+    # Create single-channel array in (C, H, W) format
+    multichannel_image = channel_image[np.newaxis, ...]
+    channel_names = [channel_name]
 
     if verbose:
         logger.info(f"Image shape: {multichannel_image.shape}")
@@ -392,6 +407,11 @@ def run_marker_quantification(
         segmentation_mask, _ = load_image(mask_file)
         segmentation_mask = segmentation_mask.squeeze()
 
+    # Determine output file path
+    if output_file is None:
+        from pathlib import Path
+        output_file = os.path.join(outdir, f"{Path(mask_file).stem}_quantification.csv")
+
     # Run quantification
     markers_data = extract_features_gpu(
         multichannel_image=multichannel_image,
@@ -401,6 +421,7 @@ def run_marker_quantification(
         size_cutoff=size_cutoff,
         verbose=verbose,
         write=True,
+        chunk_size=chunk_size,
     )
 
     return markers_data
@@ -410,7 +431,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(
-        description='GPU-accelerated cell quantification'
+        description='GPU-accelerated cell quantification on single-channel TIFFs'
     )
     parser.add_argument(
         "--mode",
@@ -419,19 +440,24 @@ if __name__ == '__main__':
         help="Processing mode: gpu or cpu"
     )
     parser.add_argument(
+        "--channel_tiff",
+        required=True,
+        help="Path to single-channel TIFF file"
+    )
+    parser.add_argument(
         "--mask_file",
         required=True,
         help="Path to segmentation mask (.npy or .tif/.tiff)"
     )
     parser.add_argument(
-        "--merged_image",
+        "--outdir",
         required=True,
-        help="Path to merged multi-channel OME-TIFF file"
+        help="Output directory for CSV file"
     )
     parser.add_argument(
         "--output_file",
-        required=True,
-        help="Output CSV file path"
+        default=None,
+        help="Output CSV filename (optional, auto-generated if not provided)"
     )
     parser.add_argument(
         "--min_area",
@@ -449,6 +475,12 @@ if __name__ == '__main__':
         action='store_true',
         help="Enable verbose output"
     )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=500000,
+        help="Process regionprops in chunks if cell count exceeds this (for very large datasets)"
+    )
 
     args = parser.parse_args()
 
@@ -460,21 +492,19 @@ if __name__ == '__main__':
         os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
         handlers.append(logging.FileHandler(args.log_file))
 
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=handlers
-    )
+    configure_logging(level=log_level)
 
     # Run quantification
     try:
         run_marker_quantification(
-            merged_image_path=args.merged_image,
+            channel_tiff=args.channel_tiff,
             mask_file=args.mask_file,
+            outdir=args.outdir,
             output_file=args.output_file,
             size_cutoff=args.min_area,
             mode=args.mode,
-            verbose=args.verbose
+            verbose=args.verbose,
+            chunk_size=args.chunk_size
         )
         logger.info("Quantification completed successfully")
     except Exception as e:

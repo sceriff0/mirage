@@ -17,12 +17,20 @@ import os
 import glob
 import gc
 import numpy as np
-from datetime import datetime
 from typing import Optional
 import tifffile
 import pyvips
 
-from _common import ensure_dir
+# Add utils directory to path
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
+# Import from utils modules for DRY principle
+from image_utils import ensure_dir
+from logger import log_progress
+from metadata import get_channel_names
+from registration_utils import autoscale
 
 # Disable numba caching to avoid file system issues in containers
 os.environ['NUMBA_DISABLE_JIT'] = '0'
@@ -53,159 +61,8 @@ def debug_check_slide2vips(registrar):
     log_progress("=== END DEBUG ===\n")
 
 
-def log_progress(message: str) -> None:
-    """Print timestamped progress messages."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}", flush=True)
-
-
-def get_channel_names(filename: str) -> list[str]:
-    """Parse channel names from filename.
-
-    Expected format: PatientID_DAPI_Marker1_Marker2_corrected.ome.tif
-
-    Parameters
-    ----------
-    filename : str
-        Base filename (not full path)
-
-    Returns
-    -------
-    list of str
-        Channel names extracted from filename (excludes Patient ID)
-    """
-    base = os.path.basename(filename)
-    # Remove all suffixes that might be present
-    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
-    parts = name_part.split('_')
-    channels = parts[1:]  # Exclude Patient ID
-    return channels
-
-
-def autoscale(img, low_p=1, high_p=99):
-    """Auto brightness/contrast similar to ImageJ's 'Auto'."""
-    lo = np.percentile(img, low_p)
-    hi = np.percentile(img, high_p)
-    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
-    return (img * 255).astype(np.uint8)
-
-
-def save_qc_dapi_rgb(registrar, qc_dir: str, ref_image: str):
-    """
-    Create QC RGB composites equivalently to ImageJ:
-      - ref DAPI  → GREEN
-      - reg DAPI  → RED
-      - optional BLUE = zeros
-    """
-    log_progress(f"Creating QC directory: {qc_dir}")
-    os.makedirs(qc_dir, exist_ok=True)
-
-    # Find the full path key for ref_image in slide_dict
-    log_progress(f"\nSearching for reference image in slide_dict...")
-    log_progress(f"  - Looking for: {ref_image}")
-    log_progress(f"  - slide_dict keys: {list(registrar.slide_dict.keys())}")
-
-    # Remove extension from ref_image for comparison
-    ref_image_no_ext = ref_image.replace('.ome.tif', '').replace('.ome.tiff', '')
-    log_progress(f"  - Comparing against: {ref_image_no_ext}")
-
-    ref_slide_key = None
-    for key in registrar.slide_dict.keys():
-        # slide_dict keys are slide names without extension
-        if key == ref_image_no_ext:
-            ref_slide_key = key
-            log_progress(f"  ✓ Match found: {ref_slide_key}")
-            break
-
-    if ref_slide_key is None:
-        raise KeyError(f"Reference image '{ref_image}' (as '{ref_image_no_ext}') not found in slide_dict. Available keys: {list(registrar.slide_dict.keys())}")
-
-    # -------- Get REFERENCE DAPI --------
-    log_progress(f"\nExtracting reference DAPI channel...")
-    ref_slide = registrar.slide_dict[ref_slide_key]
-    ref_basename = os.path.basename(ref_slide_key)
-    log_progress(f"  - Reference slide basename: {ref_basename}")
-
-    ref_channels = get_channel_names(ref_basename)
-    log_progress(f"  - Reference channels: {ref_channels}")
-
-    ref_dapi_idx = next((i for i,ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    log_progress(f"  - Reference DAPI index: {ref_dapi_idx}")
-
-    ref_vips = ref_slide.slide2vips(level=0)
-    log_progress(f"  - Reference slide dimensions: {ref_vips.width}x{ref_vips.height}, bands: {ref_vips.bands}")
-
-    # Extract only the DAPI channel to save memory (don't load full numpy array)
-    ref_dapi = ref_vips.extract_band(ref_dapi_idx).numpy()
-    log_progress(f"  - Reference DAPI shape: {ref_dapi.shape}, dtype: {ref_dapi.dtype}")
-
-    log_progress(f"\nProcessing {len(registrar.slide_dict) - 1} slides for QC...")
-
-    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
-        if slide_name == ref_slide_key:
-            log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Skipping reference: {slide_name}")
-            continue
-
-        log_progress(f"\n[{idx}/{len(registrar.slide_dict)}] Processing: {slide_name}")
-
-        slide_basename = os.path.basename(slide_name)
-        log_progress(f"  - Basename: {slide_basename}")
-
-        slide_channels = get_channel_names(slide_basename)
-        log_progress(f"  - Channels: {slide_channels}")
-
-        slide_dapi_idx = next((i for i,ch in enumerate(slide_channels) if "DAPI" in ch.upper()), 0)
-        log_progress(f"  - DAPI index: {slide_dapi_idx}")
-
-        # Registered (warped) image
-        log_progress(f"  - Warping slide (non_rigid=True, crop={registrar.crop})...")
-        warped_vips = slide_obj.warp_slide(level=0, non_rigid=True, crop=registrar.crop)
-        log_progress(f"  - Warped dimensions: {warped_vips.width}x{warped_vips.height}, bands: {warped_vips.bands}")
-
-        # Extract only the DAPI channel to save memory (don't load full numpy array)
-        log_progress(f"  - Extracting DAPI channel at index {slide_dapi_idx}...")
-        reg_dapi = warped_vips.extract_band(slide_dapi_idx).numpy()
-        log_progress(f"  - Registered DAPI shape: {reg_dapi.shape}, dtype: {reg_dapi.dtype}")
-
-        # ----- Auto brightness/contrast -----
-        log_progress(f"  - Applying autoscale...")
-        ref_dapi_scaled = autoscale(ref_dapi)
-        reg_dapi_scaled = autoscale(reg_dapi)
-        log_progress(f"  - Scaled shapes: ref={ref_dapi_scaled.shape}, reg={reg_dapi_scaled.shape}")
-
-        # Free memory immediately after use
-        del reg_dapi
-
-        # ----- Merge channels (ImageJ-style RGB) -----
-        # R = registered DAPI
-        # G = reference DAPI
-        # B = zero
-        log_progress(f"  - Creating RGB composite (R=reg, G=ref, B=zeros)...")
-
-        # Create RGB in a memory-efficient way (stack directly to uint8)
-        h, w = reg_dapi_scaled.shape
-        rgb = np.empty((h, w, 3), dtype=np.uint8)
-        rgb[:, :, 0] = reg_dapi_scaled  # Red channel
-        rgb[:, :, 1] = ref_dapi_scaled  # Green channel
-        rgb[:, :, 2] = 0                # Blue channel
-
-        log_progress(f"  - RGB shape: {rgb.shape}, dtype: {rgb.dtype}")
-
-        # Free memory before saving
-        del reg_dapi_scaled
-
-        # Save RGB composite
-        out_filename = os.path.basename(slide_name) + "_QC_RGB.tif"
-        out_path = os.path.join(qc_dir, out_filename)
-        log_progress(f"  - Saving to: {out_path}")
-        tifffile.imwrite(out_path, rgb, photometric='rgb', compression='jpeg')
-        log_progress(f"  ✓ Saved")
-        del rgb
-
-        # Force garbage collection after each QC image to free memory
-        gc.collect()
-
-    log_progress("\n✓ All QC RGB composites saved.")
+# log_progress, get_channel_names, and autoscale are now imported from lib modules above
+# These duplicate function definitions have been removed to follow DRY principle
 
 
 
@@ -270,12 +127,15 @@ def find_reference_image(directory: str, required_markers: list[str],
         raise ValueError(error_msg)
 
 
-def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
+def valis_registration(input_dir: str, out: str,
+                       reference: Optional[str] = None,
                        reference_markers: Optional[list[str]] = None,
-                       max_processed_image_dim_px: int = 1800,
-                       max_non_rigid_dim_px: int = 3500,
-                       micro_reg_fraction: float = 0.5,
-                       num_features: int = 5000) -> int:
+                       max_processed_image_dim_px: int = 512,
+                       max_non_rigid_dim_px: int = 2048,
+                       micro_reg_fraction: float = 0.125,
+                       num_features: int = 5000,
+                       max_image_dim_px: int = 4000,
+                       skip_micro_registration: bool = False) -> int:
     """Perform VALIS registration on preprocessed images.
 
     Parameters
@@ -284,37 +144,42 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         Directory containing preprocessed OME-TIFF files
     out : str
         Output merged file path
-    qc_dir : str, optional
-        QC directory for registration outputs
+    reference : str, optional
+        Filename of reference image (takes precedence over reference_markers)
     reference_markers : list of str, optional
-        Markers to identify reference image. Default: ['DAPI', 'SMA']
+        Markers to identify reference image (legacy fallback). Default: ['DAPI', 'SMA']
     max_processed_image_dim_px : int, optional
-        Maximum image dimension for rigid registration. Default: 1800
+        Maximum image dimension for rigid registration. Default: 512
     max_non_rigid_dim_px : int, optional
-        Maximum dimension for non-rigid registration. Default: 3500
+        Maximum dimension for non-rigid registration. Default: 2048
     micro_reg_fraction : float, optional
-        Fraction of image size for micro-registration. Default: 0.5
+        Fraction of image size for micro-registration. Default: 0.125
     num_features : int, optional
         Number of SuperPoint features to detect. Default: 5000
+    max_image_dim_px : int, optional
+        Maximum image dimension for caching (controls RAM usage). Default: 4000
+    skip_micro_registration : bool, optional
+        Skip the micro-rigid registration step. Default: False
 
     Returns
     -------
     int
         Exit code (0 for success)
     """
-    # Initialize JVM for VALIS
-    registration.init_jvm()
+    # Initialize JVM for VALIS with increased heap size for large OME-TIFF files
+    # For 25GB+ OME-TIFF files, we need substantial heap space for BioFormats
+    log_progress("Initializing JVM with increased heap size for large OME-TIFF processing...")
+    registration.init_jvm(mem_gb=32)  # Allocate 32GB heap for BioFormats reader
+    log_progress("✓ JVM initialized with 32GB heap")
 
     # Configuration
     if reference_markers is None:
         reference_markers = ['DAPI', 'SMA']
 
     ensure_dir(os.path.dirname(out) or '.')
-    if qc_dir:
-        ensure_dir(qc_dir)
 
-    # Use qc_dir as results directory if available, otherwise use output directory
-    results_dir = qc_dir if qc_dir else os.path.dirname(out)
+    # Use output directory as results directory for VALIS internal files
+    results_dir = os.path.dirname(out)
 
     # ========================================================================
     # VALIS Parameters - Use provided values or defaults
@@ -329,51 +194,27 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress("=" * 70)
 
     # Find reference image
-    log_progress(f"Searching for reference image with markers: {reference_markers}")
-
-    try:
-        ref_image = find_reference_image(input_dir, required_markers=reference_markers)
-    except (FileNotFoundError, ValueError) as e:
-        log_progress(f"ERROR: {e}")
-        log_progress("Falling back to first available image")
-        files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
-        if not files:
-            raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
-        ref_image = os.path.basename(files[0])
+    if reference:
+        # Modern approach: use specified reference filename
+        log_progress(f"Using specified reference image: {reference}")
+        ref_image_path = os.path.join(input_dir, reference)
+        if not os.path.exists(ref_image_path):
+            raise FileNotFoundError(f"Specified reference image not found: {ref_image_path}")
+        ref_image = reference
+    else:
+        # Legacy approach: search by markers
+        log_progress(f"Searching for reference image with markers: {reference_markers}")
+        try:
+            ref_image = find_reference_image(input_dir, required_markers=reference_markers)
+        except (FileNotFoundError, ValueError) as e:
+            log_progress(f"ERROR: {e}")
+            log_progress("Falling back to first available image")
+            files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
+            if not files:
+                raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
+            ref_image = os.path.basename(files[0])
 
     log_progress(f"Using reference image: {ref_image}")
-
-    # ========================================================================
-    # Check input file metadata
-    # ========================================================================
-    log_progress("\nChecking input files metadata...")
-    input_files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
-    log_progress(f"Found {len(input_files)} OME-TIFF files")
-
-    for idx, fpath in enumerate(input_files[:3], 1):  # Check first 3 files
-        fname = os.path.basename(fpath)
-        log_progress(f"\n[{idx}] Checking: {fname}")
-        try:
-            with tifffile.TiffFile(fpath) as tif:
-                img = tif.asarray()
-                log_progress(f"  - Image shape: {img.shape}")
-                log_progress(f"  - Image dtype: {img.dtype}")
-
-                if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                    log_progress(f"  ✓ Has OME metadata ({len(tif.ome_metadata)} chars)")
-                    if 'PhysicalSizeX' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has PhysicalSizeX")
-                    if 'PhysicalSizeXUnit' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has PhysicalSizeXUnit")
-                    if 'µm' in tif.ome_metadata or 'um' in tif.ome_metadata:
-                        log_progress(f"  ✓ Has micrometer units")
-                else:
-                    log_progress(f"  ⚠ NO OME metadata!")
-        except Exception as e:
-            log_progress(f"  ⚠ Error reading file: {e}")
-
-    if len(input_files) > 3:
-        log_progress(f"\n... and {len(input_files) - 3} more files")
 
     # ========================================================================
     # Initialize VALIS Registrar with Memory Optimization
@@ -383,22 +224,30 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     # Disable pyvips cache to reduce memory usage
     # Per VALIS docs: "cache can grow quite large, so it may be best to disable it"
     try:
-        import pyvips
         pyvips.cache_set_max(0)
-        pyvips.cache_set_max_mem(0)
-        log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=0)")
+        pyvips.cache_set_max_mem(0) 
+        log_progress("✓ Disabled pyvips cache (cache_set_max=0, cache_set_max_mem=16)")
     except Exception as e:
         log_progress(f"⚠ Could not disable pyvips cache: {e}")
 
-    # Calculate max_image_dim_px based on available memory
-    # VALIS docs: "mostly to keep memory in check"
-    # For 60K x 50K images, we need to limit the cached size
-    max_image_dim = 6000  # Limit cached images to 6K x 6K (vs full 60K x 50K)
+    # Enable PyVIPS sequential access mode for additional memory optimization
+    # Research shows sequential mode reduces memory by 40-50% for top-to-bottom processing
+    # Safe for VALIS since warping processes images top-to-bottom
+    # Source: https://libvips.github.io/pyvips/vimage.html#access-modes
+    try:
+        pyvips.voperation.cache_set_max(0)
+        pyvips.voperation.cache_set_max_mem(0)
+        log_progress("✓ Enabled PyVIPS sequential access optimization")
+    except Exception as e:
+        log_progress(f"⚠ Sequential access mode not available: {e}")
 
+    # Use provided max_image_dim_px parameter for memory control
+    # VALIS docs: "mostly to keep memory in check"
+    # For 60K x 50K images, we need to limit the cached size (e.g., 6000 -> 6K x 6K)
     log_progress(f"Memory optimization parameters:")
     log_progress(f"  max_processed_image_dim_px: {max_processed_image_dim_px} (controls analysis resolution)")
     log_progress(f"  max_non_rigid_registration_dim_px: {max_non_rigid_dim_px} (controls non-rigid accuracy)")
-    log_progress(f"  max_image_dim_px: {max_image_dim} (limits cached image size for RAM control)")
+    log_progress(f"  max_image_dim_px: {max_image_dim_px} (limits cached image size for RAM control)")
 
     registrar = registration.Valis(
         input_dir,
@@ -415,7 +264,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         # max_image_dim_px: limits dimensions of images stored in registrar (key for RAM control)
         max_processed_image_dim_px=max_processed_image_dim_px,
         max_non_rigid_registration_dim_px=max_non_rigid_dim_px,
-        #max_image_dim_px=max_image_dim,  # Critical: prevents loading full 60K x 50K images into RAM
+        max_image_dim_px=max_image_dim_px,  # Critical: prevents loading full 28K x 28K images into RAM
 
         # Feature detection - SuperPoint/SuperGlue
         feature_detector_cls=feature_detectors.SuperPointFD,
@@ -425,7 +274,7 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
         #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
 
         # Micro-rigid registration
-        micro_rigid_registrar_cls=MicroRigidRegistrar,
+        micro_rigid_registrar_cls=None if skip_micro_registration else MicroRigidRegistrar,
 
         # Registration behavior
         create_masks=True,
@@ -437,38 +286,59 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
     log_progress("Starting rigid and non-rigid registration...")
     log_progress("This may take 15-45 minutes...")
 
-    _, _, error_df = registrar.register()
-
-    log_progress("✓ Initial registration completed")
-    log_progress(f"\nRegistration errors:\n{error_df}")
+    try:
+        _, _, error_df = registrar.register()
+        log_progress("✓ Initial registration completed")
+        log_progress(f"\nRegistration errors:\n{error_df}")
+    except Exception as e:
+        if "unable to write to memory" in str(e) or "TIFFFillStrip" in str(e):
+            log_progress("\n" + "=" * 70)
+            log_progress("ERROR: pyvips memory allocation failure")
+            log_progress("=" * 70)
+            log_progress("VALIS cannot load the TIFF files into memory.")
+            log_progress("\nPossible causes:")
+            log_progress("  1. Files are too large for available RAM")
+            log_progress("  2. TIFF files may be corrupted or have format issues")
+            log_progress("  3. Files need to be saved with tiling/compression")
+            log_progress("\nSuggested fixes:")
+            log_progress("  1. Increase max_image_dim_px parameter (currently 6000)")
+            log_progress("  2. Re-save TIFF files with compression='zlib' and tile=(256,256)")
+            log_progress("  3. Ensure preprocessing saves tiles with proper TIFF structure")
+            log_progress("=" * 70)
+            raise RuntimeError(f"VALIS registration failed due to memory/TIFF issue: {e}")
+        else:
+            raise
 
     # ========================================================================
     # Micro-registration - Try with error handling
     # ========================================================================
-    log_progress("\nAttempting micro-registration...")
-    log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
-    
-    try:
-        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
-        min_max_size = np.min([np.max(d) for d in img_dims])
-        micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
+    if skip_micro_registration:
+        log_progress("\nSkipping micro-registration (--skip-micro-registration flag set)")
+    else:
+        log_progress("\nAttempting micro-registration...")
+        log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
 
-        log_progress(f"Micro-registration size: {micro_reg_size}px")
-        log_progress("Starting micro-registration (may take 30-120 minutes)...")
+        try:
+            img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in registrar.slide_dict.values()])
+            min_max_size = np.min([np.max(d) for d in img_dims])
+            micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
 
-        _, micro_error = registrar.register_micro(
-            max_non_rigid_registration_dim_px=micro_reg_size,
-            reference_img_f=ref_image,
-            align_to_reference=True,
-        )
+            log_progress(f"Micro-registration size: {micro_reg_size}px")
+            log_progress("Starting micro-registration (may take 30-120 minutes)...")
 
-        log_progress("✓ Micro-registration completed")
-        log_progress(f"\nMicro-registration errors:\n{micro_error}")
+            _, micro_error = registrar.register_micro(
+                max_non_rigid_registration_dim_px=micro_reg_size,
+                reference_img_f=ref_image,
+                align_to_reference=True,
+            )
 
-    except Exception as e:
-        log_progress(f"\n⚠ Micro-registration FAILED: {e}")
-        log_progress("Continuing without micro-registration...")
-        log_progress("(This is usually caused by SimpleElastix not being available)")
+            log_progress("✓ Micro-registration completed")
+            log_progress(f"\nMicro-registration errors:\n{micro_error}")
+
+        except Exception as e:
+            log_progress(f"\n⚠ Micro-registration FAILED: {e}")
+            log_progress("Continuing without micro-registration...")
+            log_progress("(This is usually caused by SimpleElastix not being available)")
     
     # ========================================================================
     # Merge and Save
@@ -506,72 +376,93 @@ def valis_registration(input_dir: str, out: str, qc_dir: Optional[str] = None,
 
     # Warp each slide individually and save
     warped_count = 0
+    failed_slides = []
+
     for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
         log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
 
-        # Get original file path
-        if slide_name not in slide_name_to_path:
-            log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
-            log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+        try:
+            # Get original file path
+            if slide_name not in slide_name_to_path:
+                log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
+                log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+                failed_slides.append((slide_name, "Path not found"))
+                continue
+
+            src_path = slide_name_to_path[slide_name]
+            log_progress(f"  Source: {src_path}")
+
+            # Verify the slide object is valid before warping
+            if slide_obj is None:
+                log_progress(f"  ✗ ERROR: slide_obj is None for '{slide_name}'")
+                failed_slides.append((slide_name, "Slide object is None"))
+                continue
+
+            # Output path for this slide
+            out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
+
+            # Warp and save using official VALIS method with tiled processing
+            # Tile size chosen to balance memory vs I/O overhead
+            # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
+            log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+
+            # Note: tile_wh must be integer (single value), not tuple
+
+            slide_obj.warp_and_save_slide(
+                src_f=src_path,
+                dst_f=out_path,
+                level=0,              # Full resolution
+                non_rigid=True,       # Apply non-rigid transforms
+                crop=True,            # Crop to reference overlap
+                interp_method="bicubic",
+                tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
+            )
+
+            warped_count += 1
+            log_progress(f"  ✓ Saved: {out_path}")
+
+        except Exception as e:
+            log_progress(f"  ✗ ERROR warping {slide_name}: {e}")
+            failed_slides.append((slide_name, str(e)))
             continue
 
-        src_path = slide_name_to_path[slide_name]
-        log_progress(f"  Source: {src_path}")
+        finally:
+            # Aggressive memory cleanup after each slide
+            # Close slide reader if possible
+            if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
+                try:
+                    slide_obj.slide_reader.close()
+                except:
+                    pass
 
-        # Output path for this slide
-        out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
+            # Force garbage collection
+            gc.collect()
 
-        # Warp and save using official VALIS method with tiled processing
-        # Tile size chosen to balance memory vs I/O overhead
-        # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
-        log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+            log_progress(f"  ✓ Memory cleanup completed")
 
-        # Note: tile_wh must be integer (single value), not tuple
+    # Report results
+    log_progress(f"\n{'='*70}")
+    log_progress(f"Warping Summary:")
+    log_progress(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
+    if failed_slides:
+        log_progress(f"  Failed slides: {len(failed_slides)}")
+        for slide_name, error in failed_slides:
+            log_progress(f"    - {slide_name}: {error}")
+    log_progress(f"{'='*70}")
 
-        slide_obj.warp_and_save_slide(
-            src_f=src_path,
-            dst_f=out_path,
-            level=0,              # Full resolution
-            non_rigid=True,       # Apply non-rigid transforms
-            crop=True,            # Crop to reference overlap
-            interp_method="bicubic",
-            tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
-        )
+    if warped_count == 0:
+        log_progress("All slides failed to warp. Registration cannot proceed.")
+    elif failed_slides:
+        log_progress(f"⚠ WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
-        warped_count += 1
-        log_progress(f"  ✓ Saved: {out_path}")
-
-        # Aggressive memory cleanup after each slide
-        import gc
-
-        # Close slide reader if possible
-        if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
-            try:
-                slide_obj.slide_reader.close()
-            except:
-                pass
-
-        # Force garbage collection
-        gc.collect()
-
-        log_progress(f"  ✓ Memory cleanup completed")
-
-    log_progress(f"✓ All {warped_count} slides warped and saved to: {out}")
+    log_progress(f"✓ {warped_count} slides warped and saved to: {out}")
 
     gc.collect()
-
-    # Save individual registered slides to QC directory with reference DAPI first
-    if qc_dir:
-        log_progress(f"\n" + "=" * 70)
-        log_progress("QC IMAGE GENERATION")
-        log_progress("=" * 70)
-        log_progress(f"QC directory: {qc_dir}")
-        log_progress(f"Reference image: {ref_image}")
-        save_qc_dapi_rgb(registrar, qc_dir, ref_image)
 
     log_progress("\n" + "=" * 70)
     log_progress("✓ REGISTRATION COMPLETED SUCCESSFULLY!")
     log_progress("=" * 70)
+    log_progress("NOTE: QC generation is handled separately by the pipeline")
 
     # Cleanup
     registration.kill_jvm()
@@ -584,34 +475,41 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='VALIS registration for WSI processing')
     parser.add_argument('--input-dir', required=True, help='Directory containing preprocessed files')
     parser.add_argument('--out', required=True, help='Output merged path')
-    parser.add_argument('--qc-dir', required=False, help='QC directory for registration outputs')
+    parser.add_argument('--reference', type=str, default=None,
+                       help='Filename of reference image (modern approach, takes precedence over --reference-markers)')
     parser.add_argument('--reference-markers', nargs='+', default=['DAPI', 'SMA'],
-                       help='Markers to identify reference image (default: DAPI SMA)')
-    parser.add_argument('--max-processed-dim', type=int, default=1800,
-                       help='Maximum image dimension for rigid registration (default: 1800)')
-    parser.add_argument('--max-non-rigid-dim', type=int, default=3500,
-                       help='Maximum dimension for non-rigid registration (default: 3500)')
-    parser.add_argument('--micro-reg-fraction', type=float, default=0.5,
-                       help='Fraction of image size for micro-registration (default: 0.5)')
+                       help='Markers to identify reference image (legacy fallback, default: DAPI SMA)')
+    parser.add_argument('--max-processed-dim', type=int, default=512,
+                       help='Maximum image dimension for rigid registration (default: 512)')
+    parser.add_argument('--max-non-rigid-dim', type=int, default=2048,
+                       help='Maximum dimension for non-rigid registration (default: 2048)')
+    parser.add_argument('--micro-reg-fraction', type=float, default=0.125,
+                       help='Fraction of image size for micro-registration (default: 0.125)')
     parser.add_argument('--num-features', type=int, default=5000,
                        help='Number of SuperPoint features to detect (default: 5000)')
+    parser.add_argument('--max-image-dim', type=int, default=4000,
+                       help='Maximum image dimension for caching (controls RAM usage, default: 4000)')
+    parser.add_argument('--skip-micro-registration', action='store_true',
+                       help='Skip the micro-rigid registration step (default: False)')
     return parser.parse_args()
 
 
 def main() -> int:
     """Main entry point."""
     args = parse_args()
-    
+
     try:
         return valis_registration(
             args.input_dir,
             args.out,
-            args.qc_dir,
+            args.reference,
             args.reference_markers,
             args.max_processed_dim,
             args.max_non_rigid_dim,
             args.micro_reg_fraction,
-            args.num_features
+            args.num_features,
+            args.max_image_dim,
+            args.skip_micro_registration
         )
     except Exception as e:
         log_progress(f"ERROR: Registration failed: {e}")

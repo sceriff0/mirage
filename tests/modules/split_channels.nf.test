@@ -1,0 +1,94 @@
+nextflow_process {
+
+    name "Test SPLIT_CHANNELS process"
+    script "modules/local/split_channels.nf"
+    process "SPLIT_CHANNELS"
+
+    tag "modules"
+    tag "modules_local"
+    tag "split_channels"
+
+    test("Should split multichannel image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA'],
+                        is_reference: true
+                    ],
+                    file('tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    true  // is_reference flag
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.channels
+            assert process.out.versions
+
+            with(process.out.channels) {
+                assert size() == 1
+                def meta = get(0).get(0)
+                def files = get(0).get(1)
+
+                assert meta.patient_id == 'P001'
+                assert meta.channels == ['DAPI', 'PANCK', 'SMA']
+
+                // In stub mode, should create 3 files (one per channel)
+                assert files instanceof List
+                assert files.size() == 3
+
+                // Verify channel names in output files
+                def fileNames = files*.name.sort()
+                assert fileNames == ['DAPI.tiff', 'PANCK.tiff', 'SMA.tiff']
+            }
+        }
+    }
+
+    test("Should handle single-channel image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        channels: ['DAPI'],
+                        is_reference: true
+                    ],
+                    file('tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    true  // is_reference flag
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.channels
+
+            with(process.out.channels) {
+                assert size() == 1
+                def meta = get(0).get(0)
+                def files = get(0).get(1)
+
+                assert meta.patient_id == 'P002'
+                assert meta.channels == ['DAPI']
+
+                // Single channel should still produce a list with 1 file
+                assert files instanceof List
+                assert files.size() == 1
+                assert files[0].name == 'DAPI.tiff'
+            }
+        }
+    }
+}

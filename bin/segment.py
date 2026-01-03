@@ -14,6 +14,12 @@ import argparse
 import logging
 import time
 from pathlib import Path
+
+# Add parent directory to path to import lib modules
+import sys
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
+from logger import get_logger, configure_logging
 from typing import Tuple
 
 import numpy as np
@@ -23,9 +29,9 @@ from skimage import segmentation
 from stardist.models import StarDist2D
 from numpy.typing import NDArray
 
-from _common import ensure_dir
+from image_utils import ensure_dir
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 __all__ = [
     "extract_dapi_channel",
@@ -471,10 +477,7 @@ def parse_args():
 
 def main():
     """Main entry point."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 

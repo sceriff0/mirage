@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Cell quantification using CPU or GPU.
+"""Cell quantification for single-channel processing.
 
-This module provides cell quantification by computing marker intensities
-and morphological properties from segmentation masks. Supports both CPU
-(via scikit-image) and GPU (via quantify_gpu module) processing.
+Designed for Nextflow pipelines where each channel is processed separately
+and results are merged afterward. Supports both CPU and GPU processing.
 """
 
 from __future__ import annotations
@@ -11,71 +10,102 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
-from typing import List
+from typing import Tuple, Optional
 
 import numpy as np
 import pandas as pd
 from skimage.measure import regionprops_table
 from numpy.typing import NDArray
 
-from _common import (
-    ensure_dir,
-    load_image,
-)
+# Add parent directory to path to import lib modules
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-logger = logging.getLogger(__name__)
+# Import from lib for DRY principle
+from logger import get_logger, configure_logging
+from image_utils import ensure_dir, load_image
+
+logger = get_logger(__name__)
 
 
 __all__ = [
-    "compute_cell_intensities",
-    "quantify_multichannel",
+    "compute_morphology",
+    "compute_channel_intensity",
+    "quantify_single_channel",
     "run_quantification",
 ]
 
 
-def compute_cell_intensities(
+def compute_morphology(
     mask: NDArray,
-    channel: NDArray,
-    channel_name: str,
     min_area: int = 0
-) -> pd.DataFrame:
-    """Compute mean intensity per cell for a single channel.
+) -> Tuple[Optional[pd.DataFrame], Optional[NDArray], Optional[NDArray]]:
+    """Compute morphological properties for all cells.
 
     Parameters
     ----------
     mask : ndarray, shape (Y, X)
-        Segmentation mask with cell labels.
-    channel : ndarray, shape (Y, X)
-        Channel image.
-    channel_name : str
-        Name of the channel.
-    min_area : int, optional
-        Minimum cell area in pixels.
+        Segmentation mask with cell labels (background=0, cells>=1).
+    min_area : int, default=0
+        Minimum cell area in pixels. Cells smaller than this are excluded.
 
     Returns
     -------
-    DataFrame
-        Cell measurements with columns: label, channel_name, area, x, y, etc.
-    """
-    logger.info(f"Computing intensities for {channel_name}")
+    props_df : DataFrame or None
+        Morphological properties indexed by label with columns:
+        - label: Cell label ID
+        - y, x: Centroid coordinates
+        - area: Cell area in pixels
+        - eccentricity: Shape eccentricity (0=circle, 1=line)
+        - perimeter: Cell perimeter length
+        - convex_area: Area of convex hull
+        - axis_major_length, axis_minor_length: Ellipse fit axes
+        Returns None if no valid cells found.
+    mask_filtered : ndarray or None
+        Binary mask containing only cells meeting area threshold.
+        Returns None if no valid cells found.
+    valid_labels : ndarray or None
+        Array of label IDs for cells that passed filtering.
+        Returns None if no valid cells found.
 
+    Notes
+    -----
+    This function filters cells by area and computes morphological features
+    using scikit-image's regionprops. The filtering removes artifacts and
+    debris that don't meet size criteria.
+
+    Examples
+    --------
+    >>> mask = np.array([[0, 1, 1], [0, 1, 1], [2, 2, 0]])
+    >>> props_df, mask_filt, valid = compute_morphology(mask, min_area=2)
+    >>> print(props_df['area'].values)
+    [4 2]
+
+    See Also
+    --------
+    skimage.measure.regionprops_table : Underlying morphology computation
+    compute_channel_intensity : Intensity measurements per cell
+    """
+    mask = np.ascontiguousarray(mask.squeeze())
+    
     # Filter cells by area
     labels, counts = np.unique(mask, return_counts=True)
     valid_labels = labels[(labels != 0) & (counts > min_area)]
 
     if len(valid_labels) == 0:
-        logger.warning(f"No valid cells found for {channel_name}")
-        return pd.DataFrame()
+        logger.warning("No valid cells found after area filtering")
+        return None, None, None
 
     # Create filtered mask
     mask_filtered = np.where(np.isin(mask, valid_labels), mask, 0)
 
     if np.all(mask_filtered == 0):
-        logger.warning(f"Filtered mask is empty for {channel_name}")
-        return pd.DataFrame()
+        logger.warning("Filtered mask is empty")
+        return None, None, None
 
     # Compute morphological properties
+    logger.info("Computing morphological properties...")
     props = regionprops_table(
         mask_filtered,
         properties=[
@@ -84,144 +114,397 @@ def compute_cell_intensities(
             'convex_area', 'axis_major_length', 'axis_minor_length'
         ]
     )
-    props_df = pd.DataFrame(props).set_index('label', drop=False)
-
-    # Compute mean intensities using bincount (efficient)
-    flat_mask = mask_filtered.ravel()
-    flat_channel = channel.ravel()
-
-    sum_per_label = np.bincount(flat_mask, weights=flat_channel)
-    count_per_label = np.bincount(flat_mask)
-
-    with np.errstate(divide='ignore', invalid='ignore'):
-        mean_intensities = np.true_divide(sum_per_label, count_per_label)
-        mean_intensities[np.isnan(mean_intensities)] = 0
-
-    # Extract intensities for valid labels
-    intensities = np.array([
-        mean_intensities[label] if label < len(mean_intensities) else 0
-        for label in valid_labels
-    ])
-
-    # Create intensity dataframe
-    intensity_df = pd.DataFrame(
-        {channel_name: intensities},
-        index=valid_labels
-    )
-
-    # Join with morphological properties
-    result_df = intensity_df.join(props_df)
-    result_df.rename(
+    props_df = pd.DataFrame(props).set_index('label')
+    props_df.rename(
         columns={'centroid-0': 'y', 'centroid-1': 'x'},
         inplace=True
     )
 
-    logger.info(f"Cells quantified: {len(result_df)}")
-    return result_df
+    logger.info(f"Found {len(props_df)} valid cells")
+    return props_df, mask_filtered, valid_labels
 
 
-def quantify_multichannel(
+def compute_channel_intensity(
+    mask_filtered: NDArray,
+    channel: NDArray,
+    valid_labels: NDArray,
+    channel_name: str
+) -> pd.Series:
+    """Compute mean intensity per cell for a single channel.
+
+    Parameters
+    ----------
+    mask_filtered : ndarray, shape (Y, X)
+        Pre-filtered segmentation mask with valid cell labels only.
+    channel : ndarray, shape (Y, X)
+        Channel intensity image (same spatial dimensions as mask).
+    valid_labels : ndarray
+        Array of valid cell label IDs to compute intensities for.
+    channel_name : str
+        Name of the channel/marker for the output Series.
+
+    Returns
+    -------
+    pd.Series
+        Mean intensities indexed by cell label, with name=channel_name.
+        Missing or out-of-bounds labels are assigned intensity 0.0.
+
+    Notes
+    -----
+    This function uses np.bincount for efficient vectorized computation
+    of mean intensities. It handles edge cases like missing labels or
+    labels outside the computed range.
+
+    The mean intensity is computed as the sum of pixel intensities
+    divided by the number of pixels for each cell.
+
+    Examples
+    --------
+    >>> mask = np.array([[1, 1, 0], [1, 0, 2], [0, 2, 2]])
+    >>> channel = np.array([[10, 20, 0], [30, 0, 40], [0, 50, 60]])
+    >>> valid_labels = np.array([1, 2])
+    >>> intensities = compute_channel_intensity(mask, channel, valid_labels, "CD3")
+    >>> print(intensities)
+    1    20.0
+    2    50.0
+    Name: CD3, dtype: float64
+
+    See Also
+    --------
+    compute_morphology : Compute morphological properties
+    quantify_single_channel : Complete quantification pipeline
+    """
+    channel = channel.squeeze()
+    
+    # Efficient bincount-based mean computation
+    flat_mask = mask_filtered.ravel()
+    flat_channel = channel.ravel().astype(np.float64)
+
+    sum_per_label = np.bincount(flat_mask, weights=flat_channel)
+    count_per_label = np.bincount(flat_mask)
+
+    # Compute means with safe division
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mean_intensities = np.divide(sum_per_label, count_per_label)
+        mean_intensities = np.nan_to_num(mean_intensities, nan=0.0)
+
+    # Vectorized extraction
+    max_label = len(mean_intensities) - 1
+    safe_labels = np.clip(valid_labels, 0, max_label)
+    intensities = mean_intensities[safe_labels]
+    
+    # Handle any labels that were out of bounds
+    out_of_bounds = valid_labels > max_label
+    if np.any(out_of_bounds):
+        intensities[out_of_bounds] = 0.0
+
+    return pd.Series(intensities, index=valid_labels, name=channel_name)
+
+
+def quantify_single_channel(
     mask: NDArray,
-    channel_paths: List[str],
+    channel_image: NDArray,
+    channel_name: str,
     min_area: int = 0
 ) -> pd.DataFrame:
-    """Quantify all channels for all cells.
+    """Quantify a single channel.
 
     Parameters
     ----------
     mask : ndarray, shape (Y, X)
         Segmentation mask.
-    channel_paths : list of str
-        Paths to channel image files.
+    channel_image : ndarray, shape (Y, X)
+        Channel intensity image.
+    channel_name : str
+        Name of the channel/marker.
     min_area : int, optional
         Minimum cell area filter.
 
     Returns
     -------
     DataFrame
-        Combined measurements for all channels.
+        Morphological properties + channel intensity for all cells.
     """
-    logger.info(f"Quantifying {len(channel_paths)} channels")
+    # Compute morphology
+    props_df, mask_filtered, valid_labels = compute_morphology(mask, min_area)
 
-    all_channel_dfs = []
-
-    for idx, channel_path in enumerate(channel_paths):
-        channel_name = Path(channel_path).stem.split('_')[-1]
-        logger.info(f"[{idx + 1}/{len(channel_paths)}] {channel_name}")
-
-        # Load channel
-        channel_image, _ = load_image(channel_path)
-
-        # Compute intensities
-        channel_df = compute_cell_intensities(
-            mask,
-            channel_image,
-            channel_name,
-            min_area=min_area
-        )
-
-        if not channel_df.empty:
-            all_channel_dfs.append(channel_df)
-
-    # Combine all channels
-    if all_channel_dfs:
-        result_df = pd.concat(all_channel_dfs, axis=1)
-        result_df = result_df.loc[:, ~result_df.columns.duplicated()]
-        logger.info(f"Total cells: {len(result_df)}")
-        return result_df
-    else:
-        logger.warning("No valid data found")
+    if props_df is None:
         return pd.DataFrame()
+
+    # Compute intensity for this channel
+    intensity_series = compute_channel_intensity(
+        mask_filtered, channel_image, valid_labels, channel_name
+    )
+    
+    # Add intensity to morphology dataframe
+    result_df = props_df.copy()
+    result_df[channel_name] = intensity_series
+
+    # Reset index to make 'label' a column
+    result_df = result_df.reset_index()
+    
+    # Reorder: label first, then morphology, then intensity
+    morpho_cols = ['label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
+                   'convex_area', 'axis_major_length', 'axis_minor_length']
+    cols_order = morpho_cols + [channel_name]
+    result_df = result_df[cols_order]
+
+    return result_df
 
 
 def run_quantification(
     mask_path: str,
-    channel_paths: List[str],
+    channel_path: str,
     output_path: str,
-    min_area: int = 0
+    min_area: int = 0,
+    channel_name: str = None
 ) -> pd.DataFrame:
-    """Run complete quantification pipeline.
+    """Run quantification for a single channel.
+
+    Parameters
+    ----------
+    mask_path : str
+        Path to segmentation mask (.npy or .tif file).
+    channel_path : str
+        Path to channel image file (.tif).
+    output_path : str
+        Path to save output CSV file.
+    min_area : int, default=0
+        Minimum cell area filter in pixels. Cells smaller than this
+        are excluded from quantification.
+    channel_name : str, optional
+        Explicit channel/marker name. If not provided, will be parsed
+        from the channel file basename.
+
+    Returns
+    -------
+    pd.DataFrame
+        Quantification results with columns:
+        - label: Cell ID
+        - y, x: Centroid coordinates
+        - area, eccentricity, perimeter, etc.: Morphology features
+        - {channel_name}: Mean intensity for this channel
+
+    Raises
+    ------
+    FileNotFoundError
+        If mask_path or channel_path does not exist.
+    ValueError
+        If mask and channel have incompatible shapes.
+
+    Notes
+    -----
+    This function orchestrates the complete quantification pipeline:
+    1. Load segmentation mask and channel image
+    2. Validate shapes match
+    3. Compute morphology and filter by area
+    4. Compute mean intensities per cell
+    5. Save results to CSV
+
+    If no valid cells are found, an empty CSV with proper column
+    headers is created.
+
+    Examples
+    --------
+    >>> run_quantification(
+    ...     mask_path="seg/P001_mask.npy",
+    ...     channel_path="channels/P001_CD3.tif",
+    ...     output_path="quant/P001_CD3_quant.csv",
+    ...     min_area=10,
+    ...     channel_name="CD3"
+    ... )
+
+    See Also
+    --------
+    compute_morphology : Morphology computation
+    compute_channel_intensity : Intensity computation
+    quantify_single_channel : Core quantification logic
+    """
+    # Use provided channel name, or extract from filename as fallback
+    if channel_name is None:
+        channel_name = Path(channel_path).stem.split('_')[-1]
+        logger.info(f"Channel name parsed from filename: {channel_name}")
+    
+    logger.info("=" * 60)
+    logger.info(f"Quantifying channel: {channel_name}")
+    logger.info("=" * 60)
+
+    # Load segmentation mask
+    logger.info(f"Loading mask: {mask_path}")
+    try:
+        if mask_path.endswith('.npy'):
+            mask = np.load(mask_path).squeeze()
+        else:
+            mask, _ = load_image(mask_path)
+            mask = mask.squeeze()
+        logger.info(f"Mask shape: {mask.shape}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Segmentation mask not found: {mask_path}")
+    except Exception as e:
+        raise ValueError(f"Failed to load mask from {mask_path}: {e}") from e
+
+    # Load channel image
+    logger.info(f"Loading channel: {channel_path}")
+    try:
+        channel_image, _ = load_image(channel_path)
+        logger.info(f"Channel shape: {channel_image.shape}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Channel image not found: {channel_path}")
+    except Exception as e:
+        raise ValueError(f"Failed to load channel from {channel_path}: {e}") from e
+
+    # Validate shapes match
+    if mask.shape != channel_image.squeeze().shape:
+        raise ValueError(
+            f"Shape mismatch: mask {mask.shape} vs channel {channel_image.squeeze().shape}. "
+            f"Ensure the mask and channel images have the same spatial dimensions."
+        )
+
+    # Quantify
+    result_df = quantify_single_channel(
+        mask, channel_image, channel_name, min_area=min_area
+    )
+
+    # Save
+    if not result_df.empty:
+        logger.info(f"Saving: {output_path}")
+        result_df.to_csv(output_path, index=False)
+        logger.info(f"Cells: {len(result_df)}, Columns: {list(result_df.columns)}")
+    else:
+        logger.warning("No results to save")
+        # Create empty CSV with expected columns
+        empty_df = pd.DataFrame(columns=[
+            'label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
+            'convex_area', 'axis_major_length', 'axis_minor_length', channel_name
+        ])
+        empty_df.to_csv(output_path, index=False)
+
+    logger.info("=" * 60)
+    logger.info("Complete")
+    logger.info("=" * 60)
+
+    return result_df
+
+
+def run_quantification_gpu(
+    mask_path: str,
+    channel_path: str,
+    output_path: str,
+    min_area: int = 0,
+    channel_name: str = None
+) -> pd.DataFrame:
+    """Run GPU-accelerated quantification for a single channel.
 
     Parameters
     ----------
     mask_path : str
         Path to segmentation mask (.npy file).
-    channel_paths : list of str
-        Paths to channel image files.
+    channel_path : str
+        Path to channel image file (.tif).
     output_path : str
         Path to save output CSV.
     min_area : int, optional
         Minimum cell area filter.
+    channel_name : str, optional
+        Explicit channel name. If not provided, will parse from filename.
 
     Returns
     -------
     DataFrame
         Quantification results.
     """
-    logger.info("=" * 80)
-    logger.info("Starting Quantification Pipeline (CPU)")
-    logger.info("=" * 80)
+    import cupy as cp
+    from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 
-    # Load segmentation mask
-    logger.info(f"Loading segmentation mask: {mask_path}")
-    mask = np.load(mask_path)
-    logger.info(f"Mask shape: {mask.shape}")
-    logger.info(f"Unique labels: {len(np.unique(mask)) - 1}")
+    # Use provided channel name, or extract from filename as fallback
+    if channel_name is None:
+        channel_name = Path(channel_path).stem.split('_')[-1]
+        logger.info(f"Channel name parsed from filename: {channel_name}")
+    
+    logger.info("=" * 60)
+    logger.info(f"Quantifying channel (GPU): {channel_name}")
+    logger.info("=" * 60)
 
-    # Quantify
-    result_df = quantify_multichannel(mask, channel_paths, min_area=min_area)
+    # Load data
+    logger.info(f"Loading mask: {mask_path}")
+    if mask_path.endswith('.npy'):
+        segmentation_mask = np.load(mask_path).squeeze()
+    else:
+        segmentation_mask, _ = load_image(mask_path)
+        segmentation_mask = segmentation_mask.squeeze()
+    
+    logger.info(f"Loading channel: {channel_path}")
+    channel_image, _ = load_image(channel_path)
+    channel_image = channel_image.squeeze()
+
+    # Validate shapes
+    if segmentation_mask.shape != channel_image.shape:
+        raise ValueError(
+            f"Shape mismatch: mask {segmentation_mask.shape} vs channel {channel_image.shape}"
+        )
+
+    # Transfer to GPU
+    logger.info("Transferring to GPU...")
+    mask_gpu = cp.asarray(segmentation_mask)
+    channel_gpu = cp.asarray(channel_image)
+
+    # Filter by area
+    labels, counts = cp.unique(mask_gpu, return_counts=True)
+    valid_labels = labels[(labels != 0) & (counts > min_area)]
+
+    if len(valid_labels) == 0:
+        logger.warning("No valid cells found")
+        empty_df = pd.DataFrame(columns=[
+            'label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
+            'convex_area', 'axis_major_length', 'axis_minor_length', channel_name
+        ])
+        empty_df.to_csv(output_path, index=False)
+        return empty_df
+
+    # Filter mask
+    mask_filtered = cp.where(cp.isin(mask_gpu, valid_labels), mask_gpu, 0)
+
+    # Compute morphology on GPU
+    logger.info("Computing morphology (GPU)...")
+    props = gpu_regionprops_table(
+        mask_filtered,
+        properties=[
+            'label', 'centroid', 'area', 'eccentricity', 'perimeter',
+            'convex_area', 'axis_major_length', 'axis_minor_length'
+        ]
+    )
+    props_cpu = {k: (v.get() if isinstance(v, cp.ndarray) else v) for k, v in props.items()}
+    props_df = pd.DataFrame(props_cpu)
+    props_df.rename(columns={'centroid-0': 'y', 'centroid-1': 'x'}, inplace=True)
+
+    # Compute intensity
+    logger.info("Computing intensity (GPU)...")
+    flat_mask = mask_filtered.ravel()
+    flat_channel = channel_gpu.ravel().astype(cp.float64)
+
+    sum_per_label = cp.bincount(flat_mask, weights=flat_channel)
+    count_per_label = cp.bincount(flat_mask)
+
+    means = cp.where(count_per_label != 0, sum_per_label / count_per_label, 0.0)
+    intensities = means[valid_labels]
+
+    # Create result dataframe
+    props_df[channel_name] = intensities.get()
+
+    # Reorder columns
+    morpho_cols = ['label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
+                   'convex_area', 'axis_major_length', 'axis_minor_length']
+    cols_order = morpho_cols + [channel_name]
+    result_df = props_df[cols_order]
 
     # Save
-    if not result_df.empty:
-        logger.info(f"Saving results: {output_path}")
-        result_df.to_csv(output_path, index=False)
-        logger.info(f"Rows: {len(result_df)}, Columns: {len(result_df.columns)}")
-    else:
-        logger.warning("No results to save")
+    logger.info(f"Saving: {output_path}")
+    result_df.to_csv(output_path, index=False)
+    logger.info(f"Cells: {len(result_df)}")
 
-    logger.info("=" * 80)
-    logger.info("Quantification Complete")
-    logger.info("=" * 80)
+    # Cleanup GPU memory
+    del mask_gpu, channel_gpu, mask_filtered, flat_mask, flat_channel
+    cp.get_default_memory_pool().free_all_blocks()
 
     return result_df
 
@@ -229,17 +512,16 @@ def run_quantification(
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description='Cell quantification (CPU/GPU modes)',
+        description='Single-channel cell quantification (Nextflow compatible)',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
     parser.add_argument(
-        '--mode',
-        choices=['cpu', 'gpu'],
-        default='cpu',
-        help='Processing mode'
+        '--channel_tiff',
+        type=str,
+        required=True,
+        help='Path to single channel TIFF image'
     )
-    # Removed --patient_id: not needed for this script or pipeline.
     parser.add_argument(
         '--mask_file',
         type=str,
@@ -247,21 +529,15 @@ def parse_args():
         help='Path to segmentation mask (.npy)'
     )
     parser.add_argument(
-        '--indir',
-        type=str,
-        required=True,
-        help='Directory containing channel images'
-    )
-    parser.add_argument(
         '--outdir',
         type=str,
-        required=True,
+        default='.',
         help='Output directory'
     )
     parser.add_argument(
         '--output_file',
         type=str,
-        help='Exact output file path for CSV'
+        help='Output CSV filename (default: {channel}_quant.csv)'
     )
     parser.add_argument(
         '--min_area',
@@ -269,68 +545,42 @@ def parse_args():
         default=0,
         help='Minimum cell area (pixels)'
     )
+    parser.add_argument(
+        '--channel-name',
+        type=str,
+        default=None,
+        help='Explicit channel name (if not provided, will parse from filename)'
+    )
 
     return parser.parse_args()
 
 
 def main():
-    """Main entry point dispatching to CPU or GPU processing."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    """Main entry point."""
+    configure_logging(level=logging.INFO)
 
     args = parse_args()
 
+    # Ensure output directory exists
     ensure_dir(args.outdir)
 
-    # Get channel files
-    channel_files = [
-        os.path.join(args.indir, f)
-        for f in os.listdir(args.indir)
-        if f.lower().endswith(('.tif', '.tiff', '.ome.tif', '.ome.tiff'))
-    ]
-
-    if not channel_files:
-        raise ValueError(f"No channel files found in {args.indir}")
-
-    logger.info(f"Found {len(channel_files)} channel files")
-
-    # Resolve output path
+    # Determine output path
     if args.output_file:
-        output_path = args.output_file
+        output_path = os.path.join(args.outdir, args.output_file)
     else:
-        output_path = os.path.join(args.outdir, f"{Path(args.mask_file).stem}_quantification.csv")
+        channel_name = Path(args.channel_tiff).stem
+        output_path = os.path.join(args.outdir, f"{channel_name}_quant.csv")
 
-    # Run quantification
-    if args.mode == 'cpu':
-        logger.info('Running CPU quantification')
-        run_quantification(
-            mask_path=args.mask_file,
-            channel_paths=channel_files,
-            output_path=output_path,
-            min_area=args.min_area
-        )
-
-    else:  # gpu mode
-        logger.info('Running GPU quantification')
-        try:
-            from bin import quantify_gpu
-        except ImportError:
-            logger.warning('GPU module unavailable; falling back to CPU')
-            run_quantification(
-                mask_path=args.mask_file,
-                channel_paths=channel_files,
-                output_path=output_path,
-                min_area=args.min_area
-            )
-        else:
-            quantify_gpu.run_marker_quantification(
-                indir=args.indir,
-                mask_file=args.mask_file,
-                outdir=args.outdir,
-                size_cutoff=args.min_area,
-            )
+    # Run quantification (CPU mode)
+    # Note: GPU mode removed - use GPU container if GPU acceleration needed
+    logger.info('Running CPU quantification')
+    run_quantification(
+        mask_path=args.mask_file,
+        channel_path=args.channel_tiff,
+        output_path=output_path,
+        min_area=args.min_area,
+        channel_name=args.channel_name
+    )
 
     return 0
 

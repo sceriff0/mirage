@@ -1,41 +1,71 @@
-nextflow.enable.dsl = 2
-
 process GPU_REGISTER {
-    tag "${moving.simpleName}"
+    tag "${meta.patient_id}"
     label 'gpu'
-    container "${params.container.register_gpu}"
+
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:debug_diffeo' :
+        'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
+
+    // FIX WARNING #2: Add retry strategy for GPU OOM errors
+    // Retry with reduced crop sizes on memory errors
+    errorStrategy { task.exitStatus in [137, 139, 140, 143] ? 'retry' : 'finish' }
+    maxRetries 3
 
     // Dynamic resource allocation based on input file size
     // Small: <10 GB, Medium: 10-30 GB, Large: >30 GB
     memory {
-        moving.size() < 10.GB  ? '128.GB' :   // Small images
-        moving.size() < 30.GB  ? '256.GB' :   // Medium images
-        '388.GB'                               // Large images
+        def size = moving.size()
+        check_max(
+            size < 10.GB ? 128.GB * task.attempt :   // Small images
+            size < 30.GB ? 256.GB * task.attempt :   // Medium images
+            388.GB * task.attempt,                   // Large images
+            'memory'
+        )
     }
 
     time {
-        moving.size() < 10.GB  ? '2.h' :      // Small images
-        moving.size() < 30.GB  ? '3.h' :      // Medium images
-        '6.h'                                  // Large images
+        def size = moving.size()
+        check_max(
+            size < 10.GB ? 2.h * task.attempt :      // Small images
+            size < 30.GB ? 3.h * task.attempt :      // Medium images
+            6.h * task.attempt,                      // Large images
+            'time'
+        )
     }
 
-    cpus 2
-    clusterOptions '--gres=gpu:nvidia_h200:1'
+    cpus { check_max( 2 * task.attempt, 'cpus' ) }
 
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered", mode: 'copy', pattern: "*.ome.tiff"
-    publishDir "${params.outdir}/${params.id}/${params.registration_method}/registered_qc", mode: 'copy', pattern: "qc/*"
+    // FIX EDGE CASE #6: Make GPU type configurable
+    clusterOptions "--gres=gpu:${params.gpu_type}"
+
+    // FIX BUG #6: Move GPU check into script (not beforeScript)
+    // beforeScript runs before SLURM allocates GPU, causing false failures
+    // GPU availability is validated in the main script after allocation
 
     input:
-    tuple path(reference), path(moving)
+    tuple val(meta), path(reference), path(moving)
 
     output:
-    path "${moving.simpleName}_registered.ome.tiff", emit: registered
-    path "qc/*_QC_RGB.tif"                         , emit: qc, optional: true
+    tuple val(meta), path("*_registered.ome.tiff"), emit: registered
+    path "versions.yml"                            , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
-    // New separate crop sizes for affine and diffeomorphic stages
-    def affine_crop_size = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
-    def diffeo_crop_size = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+
+    // FIX WARNING #2: Reduce crop sizes on retry to handle OOM errors
+    // Base crop sizes
+    def base_affine_crop = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+    def base_diffeo_crop = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+
+    // Reduce by 20% per retry attempt
+    def reduction_factor = Math.pow(0.8, task.attempt - 1)
+    def affine_crop_size = (base_affine_crop * reduction_factor) as Integer
+    def diffeo_crop_size = (base_diffeo_crop * reduction_factor) as Integer
+
     def overlap_percent = params.gpu_reg_overlap_percent ?: 10.0
     def n_features = params.gpu_reg_n_features ?: 2000
     def n_workers = params.gpu_reg_n_workers ?: 4
@@ -46,35 +76,66 @@ process GPU_REGISTER {
     def file_size_gb = moving.size() / 1024 / 1024 / 1024
     def resource_tier = file_size_gb < 10 ? "SMALL" : file_size_gb < 30 ? "MEDIUM" : "LARGE"
     def allocated_mem = file_size_gb < 10 ? "128GB" : file_size_gb < 30 ? "256GB" : "388GB"
-    def allocated_time = file_size_gb < 10 ? "2h" : file_size_gb < 30 ? "3h" : "4h"
+    def allocated_time = file_size_gb < 10 ? "2h" : file_size_gb < 30 ? "3h" : "6h"
+    def retry_info = task.attempt > 1 ? " (RETRY #${task.attempt}, crops reduced by ${(int)((1-reduction_factor)*100)}%)" : ""
     """
     echo "=================================================="
-    echo "GPU Registration - Dynamic Resource Allocation"
+    echo "GPU Registration - Dynamic Resource Allocation${retry_info}"
     echo "=================================================="
+    echo "Sample: ${meta.patient_id}"
     echo "Input file: ${moving.simpleName}"
     echo "File size: ${file_size_gb} GB"
     echo "Resource tier: ${resource_tier}"
     echo "Allocated memory: ${allocated_mem}"
     echo "Allocated time: ${allocated_time}"
     echo "GPU: nvidia_h200:1"
-    echo "Affine crop size: ${affine_crop_size}"
-    echo "Diffeo crop size: ${diffeo_crop_size}"
+    echo "Attempt: ${task.attempt}/${task.maxRetries + 1}"
+    echo "Affine crop size: ${affine_crop_size} (base: ${base_affine_crop})"
+    echo "Diffeo crop size: ${diffeo_crop_size} (base: ${base_diffeo_crop})"
     echo "=================================================="
     echo ""
 
-    mkdir -p qc
+    # FIX BUG #6: Validate GPU availability AFTER SLURM allocation
+    echo "Checking GPU availability..."
+    if ! nvidia-smi &>/dev/null; then
+        echo "❌ ERROR: GPU not available but GPU registration requested"
+        echo "💡 Either run on a GPU node or use --registration_method cpu"
+        exit 1
+    fi
+    echo "✅ GPU available: \$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+    echo ""
 
     register_gpu.py \\
         --reference ${reference} \\
         --moving ${moving} \\
         --output ${moving.simpleName}_registered.ome.tiff \\
-        --qc-dir qc \\
         --affine-crop-size ${affine_crop_size} \\
         --diffeo-crop-size ${diffeo_crop_size} \\
         --overlap-percent ${overlap_percent} \\
         --n-features ${n_features} \\
         --n-workers ${n_workers} \\
         --opt-tol ${opt_tol} \\
-        --inv-tol ${inv_tol}
+        --inv-tol ${inv_tol} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python --version 2>&1 | sed 's/Python //')
+        cupy: \$(python -c "import cupy; print(cupy.__version__)" 2>/dev/null || echo "unknown")
+        torch: \$(python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "unknown")
+    END_VERSIONS
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch ${moving.simpleName}_registered.ome.tiff
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        cupy: stub
+        torch: stub
+    END_VERSIONS
     """
 }

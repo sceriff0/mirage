@@ -1,0 +1,278 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "$id": "https://raw.githubusercontent.com/your-org/ateia/main/nextflow_schema.json",
+    "title": "ATEIA WSI Processing Pipeline Parameters",
+    "description": "Whole Slide Image (WSI) processing pipeline for preprocessing, registration, segmentation, quantification, and phenotyping",
+    "type": "object",
+    "definitions": {
+        "input_output_options": {
+            "title": "Input/Output Options",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "Define where the pipeline should find input data and save output data.",
+            "required": ["input", "outdir"],
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Path to input CSV or glob pattern for image files",
+                    "help_text": "Provide either a CSV file with patient metadata or a glob pattern (e.g., 'data/*.nd2')"
+                },
+                "outdir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "The output directory where the results will be saved",
+                    "default": "./results"
+                },
+                "savedir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "Final archive directory for long-term storage",
+                    "default": "./results/final"
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Sample/experiment identifier"
+                }
+            }
+        },
+        "pipeline_control_options": {
+            "title": "Pipeline Control Options",
+            "type": "object",
+            "fa_icon": "fas fa-cogs",
+            "description": "Control pipeline execution and restart behavior",
+            "properties": {
+                "step": {
+                    "type": "string",
+                    "default": "preprocessing",
+                    "enum": ["preprocessing", "registration", "postprocessing", "results"],
+                    "description": "Pipeline entry point for checkpoint-based restart",
+                    "help_text": "Set to 'registration' to skip preprocessing, 'postprocessing' to skip registration, etc."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Validate inputs without executing pipeline"
+                },
+                "allow_auto_reference": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Auto-select first image as reference if none specified"
+                }
+            }
+        },
+        "preprocessing_options": {
+            "title": "Preprocessing Options",
+            "type": "object",
+            "fa_icon": "fas fa-image",
+            "description": "BaSiC illumination correction parameters",
+            "properties": {
+                "skip_nd2_conversion": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip ND2 to OME-TIFF conversion"
+                },
+                "preproc_tile_size": {
+                    "type": "integer",
+                    "default": 1950,
+                    "minimum": 512,
+                    "maximum": 4096,
+                    "description": "FOV tile size for BaSiC correction"
+                },
+                "preproc_n_iter": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Number of BaSiC optimization iterations"
+                },
+                "preproc_overlap": {
+                    "type": "integer",
+                    "default": 0,
+                    "minimum": 0,
+                    "description": "Overlap between FOV tiles (pixels)"
+                }
+            }
+        },
+        "registration_options": {
+            "title": "Registration Options",
+            "type": "object",
+            "fa_icon": "fas fa-crosshairs",
+            "description": "Image registration method and parameters",
+            "required": ["registration_method"],
+            "properties": {
+                "registration_method": {
+                    "type": "string",
+                    "default": "gpu",
+                    "enum": ["valis", "gpu", "cpu"],
+                    "description": "Registration method to use",
+                    "help_text": "VALIS: batch registration with SuperPoint features. GPU: pairwise affine+diffeomorphic. CPU: multi-threaded pairwise"
+                },
+                "padding": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Pad images to uniform dimensions per patient"
+                },
+                "skip_registration_qc": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Skip QC visualization generation"
+                },
+                "qc_scale_factor": {
+                    "type": "number",
+                    "default": 0.25,
+                    "minimum": 0.1,
+                    "maximum": 1.0,
+                    "description": "Downsampling factor for QC images"
+                },
+                "gpu_reg_affine_crop_size": {
+                    "type": "integer",
+                    "default": 10000,
+                    "minimum": 1000,
+                    "description": "Crop size for GPU affine registration"
+                },
+                "gpu_reg_diffeo_crop_size": {
+                    "type": "integer",
+                    "default": 2000,
+                    "minimum": 500,
+                    "description": "Crop size for GPU diffeomorphic registration"
+                },
+                "cpu_reg_affine_crop_size": {
+                    "type": "integer",
+                    "default": 10000,
+                    "minimum": 1000,
+                    "description": "Crop size for CPU affine registration"
+                }
+            }
+        },
+        "segmentation_options": {
+            "title": "Segmentation Options",
+            "type": "object",
+            "fa_icon": "fas fa-divide",
+            "description": "Cell segmentation parameters",
+            "properties": {
+                "seg_gpu": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use GPU for segmentation"
+                },
+                "seg_model": {
+                    "type": "string",
+                    "default": "cellpose",
+                    "description": "Segmentation model to use"
+                },
+                "segmentation_model_dir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "Directory containing segmentation models"
+                },
+                "seg_n_tiles_y": {
+                    "type": "integer",
+                    "default": 24,
+                    "minimum": 1,
+                    "description": "Number of tiles in Y direction"
+                },
+                "seg_n_tiles_x": {
+                    "type": "integer",
+                    "default": 24,
+                    "minimum": 1,
+                    "description": "Number of tiles in X direction"
+                }
+            }
+        },
+        "quantification_phenotyping_options": {
+            "title": "Quantification & Phenotyping Options",
+            "type": "object",
+            "fa_icon": "fas fa-chart-bar",
+            "description": "Cell quantification and phenotyping parameters",
+            "properties": {
+                "classification_method": {
+                    "type": "string",
+                    "default": "classic",
+                    "enum": ["classic", "quantify"],
+                    "description": "Classification method",
+                    "help_text": "classic: DeepCell-types. quantify: intensity-based phenotyping"
+                },
+                "quant_gpu": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use GPU for quantification"
+                },
+                "quant_min_area": {
+                    "type": "integer",
+                    "default": 10,
+                    "minimum": 1,
+                    "description": "Minimum cell area in pixels"
+                },
+                "pixel_size": {
+                    "type": "number",
+                    "default": 0.325,
+                    "minimum": 0.01,
+                    "description": "Pixel size in microns"
+                }
+            }
+        },
+        "slurm_options": {
+            "title": "SLURM Configuration",
+            "type": "object",
+            "fa_icon": "fas fa-server",
+            "description": "SLURM cluster configuration",
+            "properties": {
+                "slurm_partition": {
+                    "type": "string",
+                    "description": "SLURM partition/queue name"
+                },
+                "slurm_account": {
+                    "type": "string",
+                    "description": "SLURM account for billing"
+                },
+                "slurm_qos": {
+                    "type": "string",
+                    "description": "SLURM quality of service"
+                },
+                "gpu_type": {
+                    "type": "string",
+                    "default": "nvidia_h200:1",
+                    "description": "GPU type specification"
+                }
+            }
+        },
+        "resource_limits": {
+            "title": "Resource Limits",
+            "type": "object",
+            "fa_icon": "fas fa-memory",
+            "description": "Maximum resource allocation",
+            "properties": {
+                "max_memory": {
+                    "type": "string",
+                    "default": "512.GB",
+                    "pattern": "^\\d+(\\.\\d+)?\\.?\\s*(K|M|G|T)?B?$",
+                    "description": "Maximum memory allocation"
+                },
+                "max_cpus": {
+                    "type": "integer",
+                    "default": 16,
+                    "minimum": 1,
+                    "description": "Maximum CPUs per job"
+                },
+                "max_time": {
+                    "type": "string",
+                    "default": "240.h",
+                    "pattern": "^\\d+(\\.\\d+)?\\.?\\s*(ms|s|m|h|d)?$",
+                    "description": "Maximum job runtime"
+                }
+            }
+        }
+    },
+    "allOf": [
+        {"$ref": "#/definitions/input_output_options"},
+        {"$ref": "#/definitions/pipeline_control_options"},
+        {"$ref": "#/definitions/preprocessing_options"},
+        {"$ref": "#/definitions/registration_options"},
+        {"$ref": "#/definitions/segmentation_options"},
+        {"$ref": "#/definitions/quantification_phenotyping_options"},
+        {"$ref": "#/definitions/slurm_options"},
+        {"$ref": "#/definitions/resource_limits"}
+    ]
+}

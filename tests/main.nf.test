@@ -1,0 +1,385 @@
+nextflow_pipeline {
+
+    name "Test full ATEIA pipeline"
+    script "main.nf"
+
+    tag "pipeline"
+    tag "pipeline_ateia"
+
+    //==========================================================================
+    // TEST PROFILE TESTS - Quick validation
+    //==========================================================================
+
+    test("Should run with test profile") {
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert snapshot(
+                path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv"),
+                workflow.trace.succeeded().size()
+            ).match()
+        }
+
+        config "./conf/test.config"
+    }
+
+    test("Should run with test profile - stub mode") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert path("$outputDir").exists()
+            assert workflow.trace.succeeded().size() > 0
+        }
+
+        config "./conf/test.config"
+    }
+
+    //==========================================================================
+    // PREPROCESSING STEP TESTS
+    //==========================================================================
+
+    test("Should run preprocessing step - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/test_input.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+                gpu_register = false
+
+                preproc_tile_size = 256
+                preproc_n_iter = 1
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir").exists() },
+                { assert snapshot(workflow.trace.succeeded().size()).match() }
+            )
+        }
+    }
+
+    test("Should run preprocessing with multi-patient data") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_preprocessing.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+                gpu_register = false
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir/checkpoint_csvs").exists() }
+            )
+        }
+    }
+
+    //==========================================================================
+    // REGISTRATION STEP TESTS
+    //==========================================================================
+
+    test("Should run registration from checkpoint") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                gpu_register = false
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert path("$outputDir").exists() }
+            )
+        }
+    }
+
+    test("Should run registration with VALIS method - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "valis"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run registration with GPU method - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "gpu"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                gpu_register = false  // Disable GPU for CI
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run registration with CPU method - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "cpu"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run registration with padding - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                padding = true
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    //==========================================================================
+    // POSTPROCESSING STEP TESTS
+    //==========================================================================
+
+    test("Should run postprocessing from checkpoint - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_postprocessing.csv"
+                outdir = "$outputDir"
+                step = "postprocessing"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    //==========================================================================
+    // VALIDATION TESTS - Input validation
+    //==========================================================================
+
+    test("Should fail with invalid step") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/test_input.csv"
+                outdir = "$outputDir"
+                step = "invalid_step_name"
+            }
+        }
+
+        then {
+            assert workflow.failed
+            assert workflow.errorMessage != null
+        }
+    }
+
+    test("Should fail with invalid registration method") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "invalid_method"
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+
+    test("Should reject missing DAPI channel") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_no_dapi.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+
+    test("Should reject no reference when allow_auto_reference=false") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_no_ref.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+                allow_auto_reference = false
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+
+    test("Should accept no reference when allow_auto_reference=true") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_no_ref.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+                allow_auto_reference = true
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should reject missing checkpoint columns") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_checkpoint_missing_col.csv"
+                outdir = "$outputDir"
+                step = "registration"
+            }
+        }
+
+        then {
+            assert workflow.failed
+        }
+    }
+
+    //==========================================================================
+    // DRY RUN TEST
+    //==========================================================================
+
+    test("Should run in dry run mode") {
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/test_input.csv"
+                outdir = "$outputDir"
+                step = "preprocessing"
+                dry_run = true
+            }
+        }
+
+        then {
+            assert workflow.success
+            // Dry run should complete without running processes
+        }
+    }
+}

@@ -1,0 +1,167 @@
+nextflow_process {
+
+    name "Test WRITE_CHECKPOINT_CSV process"
+    script "modules/local/write_checkpoint_csv.nf"
+    process "WRITE_CHECKPOINT_CSV"
+
+    tag "modules"
+    tag "modules_local"
+    tag "write_checkpoint_csv"
+
+    test("Should create preprocessing checkpoint CSV - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = 'preprocessed'
+                input[1] = 'patient_id,preprocessed_image,is_reference,channels'
+                input[2] = [
+                    ['P001', '/path/to/P001_ref.ome.tiff', 'true', 'DAPI|PANCK|SMA'],
+                    ['P001', '/path/to/P001_mov1.ome.tiff', 'false', 'DAPI|PANCK|SMA']
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.csv },
+                { assert snapshot(process.out).match() }
+            )
+        }
+    }
+
+    test("Should create registration checkpoint CSV - real") {
+
+        when {
+            params {
+                outdir = "${outputDir}"
+            }
+            process {
+                """
+                input[0] = 'registered'
+                input[1] = 'patient_id,registered_image,is_reference,channels'
+                input[2] = [
+                    ['P001', '${outputDir}/P001/registered/P001_ref.ome.tiff', 'true', 'DAPI|PANCK'],
+                    ['P001', '${outputDir}/P001/registered/P001_mov1.ome.tiff', 'false', 'DAPI|PANCK']
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.csv },
+                { with(process.out.csv) {
+                    assert size() == 1
+                    def csv_file = get(0)
+                    assert csv_file.exists()
+                    assert csv_file.name == 'registered_checkpoint.csv'
+
+                    // Validate CSV structure
+                    def lines = csv_file.readLines()
+                    assert lines.size() == 3  // header + 2 data rows
+
+                    def header = lines[0].split(',')
+                    assert header == ['patient_id', 'registered_image', 'is_reference', 'channels']
+
+                    // Validate first data row
+                    def row1 = lines[1].split(',')
+                    assert row1[0] == 'P001'
+                    assert row1[2] == 'true'
+                    assert row1[3] == 'DAPI|PANCK'
+                }},
+                { assert snapshot(process.out.csv.get(0).text).match() }
+            )
+        }
+    }
+
+    test("Should create postprocessing checkpoint CSV with all columns") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = 'postprocessed'
+                input[1] = 'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,merged_image,pyramid'
+                input[2] = [
+                    [
+                        'P001',
+                        '/path/P001_phenotype.csv',
+                        '/path/P001_phenotype.tif',
+                        '/path/P001_mapping.json',
+                        '/path/P001_quant.csv',
+                        '/path/P001_mask.tif',
+                        '/path/P001_merged.ome.tif',
+                        '/path/P001_pyramid.ome.tif'
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.csv },
+                { assert snapshot(process.out.csv).match() }
+            )
+        }
+    }
+
+    test("Should handle single patient") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = 'preprocessed'
+                input[1] = 'patient_id,preprocessed_image,is_reference,channels'
+                input[2] = [
+                    ['P001', '/path/to/P001_ref.ome.tiff', 'true', 'DAPI']
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.csv }
+            )
+        }
+    }
+
+    test("Should handle multiple patients") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = 'preprocessed'
+                input[1] = 'patient_id,preprocessed_image,is_reference,channels'
+                input[2] = [
+                    ['P001', '/path/P001_ref.ome.tiff', 'true', 'DAPI|PANCK'],
+                    ['P001', '/path/P001_mov1.ome.tiff', 'false', 'DAPI|PANCK'],
+                    ['P002', '/path/P002_ref.ome.tiff', 'true', 'DAPI|PANCK'],
+                    ['P003', '/path/P003_ref.ome.tiff', 'true', 'DAPI|PANCK|SMA']
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.csv }
+            )
+        }
+    }
+}

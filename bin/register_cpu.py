@@ -25,9 +25,26 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 import tifffile
-import tempfile
 import gc
 import traceback
+
+# Add utils directory to path
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+
+# Import from utils modules for DRY principle
+from logger import get_logger, configure_logging
+from metadata import (
+    get_channel_names,
+    create_ome_xml,
+    extract_channel_names_from_ome,
+    extract_channel_names_from_filename
+)
+from registration_utils import (
+    extract_crop_coords,
+    calculate_bounds,
+    create_memmaps_for_merge,
+    cleanup_memmaps
+)
 
 # CPU imports with availability check
 try:
@@ -38,7 +55,7 @@ except Exception as e:
     DIPY_AVAILABLE = False
     _dipy_import_error = str(e)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def print_dipy_diagnostics():
@@ -66,55 +83,6 @@ def print_dipy_diagnostics():
 
 
 # ------------------------- Helper Functions ---------------------------------
-
-def get_channel_names(filename: str) -> List[str]:
-    base = os.path.basename(filename)
-    # Remove all suffixes that might be present
-    name_part = base.replace('_corrected', '').replace('_padded', '').replace('_preprocessed', '').replace('_registered', '').split('.')[0]
-    parts = name_part.split('_')
-    channels = parts[1:]
-    return channels
-
-
-def autoscale(img: np.ndarray, low_p: float = 1, high_p: float = 99) -> np.ndarray:
-    lo = np.percentile(img, low_p)
-    hi = np.percentile(img, high_p)
-    img = np.clip((img - lo) / max(hi - lo, 1e-6), 0, 1)
-    return (img * 255).astype(np.uint8)
-
-
-def create_qc_rgb_composite(reference_path: Path, registered_path: Path, output_path: Path) -> None:
-    logger.info(f"Creating QC composite: {output_path.name}")
-
-    ref_img = tifffile.imread(str(reference_path))
-    reg_img = tifffile.imread(str(registered_path))
-
-    if ref_img.ndim == 2:
-        ref_img = ref_img[np.newaxis, ...]
-    if reg_img.ndim == 2:
-        reg_img = reg_img[np.newaxis, ...]
-
-    ref_channels = get_channel_names(reference_path.name)
-    reg_channels = get_channel_names(registered_path.name)
-
-    ref_dapi_idx = next((i for i, ch in enumerate(ref_channels) if "DAPI" in ch.upper()), 0)
-    reg_dapi_idx = next((i for i, ch in enumerate(reg_channels) if "DAPI" in ch.upper()), 0)
-
-    ref_dapi = ref_img[ref_dapi_idx]
-    reg_dapi = reg_img[reg_dapi_idx]
-
-    ref_dapi_scaled = autoscale(ref_dapi)
-    reg_dapi_scaled = autoscale(reg_dapi)
-
-    h, w = reg_dapi_scaled.shape
-    rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    rgb[:, :, 0] = reg_dapi_scaled
-    rgb[:, :, 1] = ref_dapi_scaled
-    rgb[:, :, 2] = 0
-
-    tifffile.imwrite(str(output_path), rgb, photometric='rgb', compression=None, bigtiff=True)
-    logger.info(f"  Saved QC composite: {output_path}")
-
 
 def apply_affine_cv2(x: np.ndarray, matrix: np.ndarray) -> np.ndarray:
     """Apply affine transformation using OpenCV."""
@@ -211,74 +179,6 @@ def compute_diffeomorphic_mapping_dipy(y: np.ndarray, x: np.ndarray,
     mapping = sdr.optimize(y_cont, x_cont)
 
     return mapping
-
-
-def extract_crop_coords(image_shape: Tuple[int, ...], crop_size: int, overlap: int) -> List[Dict]:
-    """Return list of coordinate dicts (y, x, h, w) for tiling the image."""
-    if len(image_shape) == 3:
-        _, height, width = image_shape
-    else:
-        height, width = image_shape
-
-    # Validate overlap to prevent infinite loop
-    if overlap >= crop_size:
-        raise ValueError(f"Overlap ({overlap}) must be less than crop_size ({crop_size})")
-
-    # Warn if crop size is larger than image
-    if crop_size > height or crop_size > width:
-        logger.warning(f"crop_size ({crop_size}) is larger than image dimensions ({width}x{height}). Using full image as single crop.")
-
-    stride = crop_size - overlap
-    coords = []
-    for y in range(0, height, stride):
-        for x in range(0, width, stride):
-            y_end = min(y + crop_size, height)
-            x_end = min(x + crop_size, width)
-            y_start = max(0, y_end - crop_size)
-            x_start = max(0, x_end - crop_size)
-            h = y_end - y_start
-            w = x_end - x_start
-            coords.append({"y": y_start, "x": x_start, "h": h, "w": w})
-    return coords
-
-
-def create_weight_mask(h: int, w: int, overlap: int) -> np.ndarray:
-    """Create a weight mask for blending overlapping crops."""
-    mask = np.ones((h, w), dtype=np.float32)
-    if overlap > 0:
-        ramp = np.linspace(0, 1, overlap)
-        mask[:overlap, :] *= ramp[:, np.newaxis]
-        mask[-overlap:, :] *= ramp[::-1, np.newaxis]
-        mask[:, :overlap] *= ramp[np.newaxis, :]
-        mask[:, -overlap:] *= ramp[::-1][np.newaxis, :]
-    return mask
-
-
-def create_memmaps_for_merge(output_shape: Tuple[int, ...],
-                              dtype: np.dtype = np.float32,
-                              prefix: str = "reg_merge_") -> Tuple[np.memmap, np.memmap, Path]:
-    """Create memory-mapped arrays for accumulating merged results."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
-
-    merged_path = tmp_dir / "merged.npy"
-    weights_path = tmp_dir / "weights.npy"
-
-    merged = np.memmap(str(merged_path), dtype=dtype, mode="w+", shape=output_shape)
-    weights = np.memmap(str(weights_path), dtype=dtype, mode="w+", shape=output_shape)
-
-    merged[:] = 0
-    weights[:] = 0
-
-    return merged, weights, tmp_dir
-
-
-def cleanup_memmaps(tmp_dir: Path):
-    """Clean up temporary memmap files."""
-    import shutil
-    try:
-        shutil.rmtree(tmp_dir)
-    except Exception as e:
-        logger.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
 
 
 # --------------------- CPU Stage: Affine Registration ---------------------
@@ -398,30 +298,32 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
     affine_mem, affine_weights, affine_tmp_dir = create_memmaps_for_merge(mov_shape, np.float32, "affine_")
     logger.info(f"Created affine memmap in {affine_tmp_dir}")
 
-    # Apply affine transformations and merge
+    # Apply affine transformations and merge using hard-cutoff (same as cropping script)
     logger.info("Applying affine transformations and merging...")
-    weight_cache = {}
 
     for res in cpu_results:
         coord = res["coord"]
         y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
-        # Get or create weight mask
-        if (h, w) not in weight_cache:
-            weight_cache[(h, w)] = create_weight_mask(h, w, affine_overlap)
-        weight_mask = weight_cache[(h, w)]
+        # Calculate bounds using same logic as cropping.reconstruct_image
+        if len(mov_shape) == 3:
+            img_height, img_width = mov_shape[1], mov_shape[2]
+        else:
+            img_height, img_width = mov_shape[0], mov_shape[1]
+        y_start, y_end, y_slice = calculate_bounds(y, h, img_height, affine_overlap)
+        x_start, x_end, x_slice = calculate_bounds(x, w, img_width, affine_overlap)
 
         if res["status"] != "success":
             # For failed crops, use original (identity transform)
             if mov_mem.ndim == 3:
                 for c in range(mov_mem.shape[0]):
                     crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
-                    affine_mem[c, y:y+h, x:x+w] += crop * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = crop[y_slice, x_slice]
+                    affine_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
             else:
                 crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
-                affine_mem[y:y+h, x:x+w] += crop * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
+                crop_trimmed = crop[y_slice, x_slice]
+                affine_mem[y_start:y_end, x_start:x_end] = crop_trimmed
         else:
             # Apply affine transformation
             matrix = res["matrix"]
@@ -429,29 +331,23 @@ def run_affine_stage(ref_mem: np.ndarray, mov_mem: np.ndarray,
                 for c in range(mov_mem.shape[0]):
                     crop = mov_mem[c, y:y+h, x:x+w].astype(np.float32)
                     transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                    affine_mem[c, y:y+h, x:x+w] += transformed * weight_mask
-                    affine_weights[c, y:y+h, x:x+w] += weight_mask
+                    transformed_trimmed = transformed[y_slice, x_slice]
+                    affine_mem[c, y_start:y_end, x_start:x_end] = transformed_trimmed
                     del crop, transformed
             else:
                 crop = mov_mem[y:y+h, x:x+w].astype(np.float32)
                 transformed = apply_affine_cv2(np.ascontiguousarray(crop), matrix)
-                affine_mem[y:y+h, x:x+w] += transformed * weight_mask
-                affine_weights[y:y+h, x:x+w] += weight_mask
+                transformed_trimmed = transformed[y_slice, x_slice]
+                affine_mem[y_start:y_end, x_start:x_end] = transformed_trimmed
                 del crop, transformed
 
         gc.collect()
 
-    # Normalize by weights
-    logger.info("Normalizing affine result...")
-    nonzero_mask = affine_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid affine registration data")
-    affine_mem[nonzero_mask] /= affine_weights[nonzero_mask]
-
+    # No normalization needed - we used direct assignment (hard cutoff)
     # Flush to disk
     affine_mem.flush()
 
-    # Clean up weights memmap
+    # Clean up weights memmap (not used with hard cutoff, but still created)
     del affine_weights
     gc.collect()
 
@@ -565,7 +461,6 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
     logger.info(f"Created diffeo memmap in {diffeo_tmp_dir}")
 
     # Process crops in parallel
-    weight_cache = {}
     success_count = 0
     fallback_count = 0
 
@@ -581,21 +476,24 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
             coord = res["coord"]
             y, x, h, w = coord["y"], coord["x"], coord["h"], coord["w"]
 
-            # Get or create weight mask
-            if (h, w) not in weight_cache:
-                weight_cache[(h, w)] = create_weight_mask(h, w, diffeo_overlap)
-            weight_mask = weight_cache[(h, w)]
+            # Calculate bounds using same logic as cropping.reconstruct_image
+            if len(mov_shape) == 3:
+                img_height, img_width = mov_shape[1], mov_shape[2]
+            else:
+                img_height, img_width = mov_shape[0], mov_shape[1]
+            y_start, y_end, y_slice = calculate_bounds(y, h, img_height, diffeo_overlap)
+            x_start, x_end, x_slice = calculate_bounds(x, w, img_width, diffeo_overlap)
 
             if res["status"] == "success":
                 # Use registered crop
                 registered_crop = res["registered_crop"]
                 if registered_crop.ndim == 3:
                     for c in range(registered_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += registered_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = registered_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += registered_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = registered_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 success_count += 1
                 logger.info(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): ✓")
@@ -605,11 +503,11 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 affine_crop = res["affine_crop"]
                 if affine_crop.ndim == 3:
                     for c in range(affine_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = affine_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = affine_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 fallback_count += 1
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): uniform intensity, using affine")
@@ -619,21 +517,16 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
                 affine_crop = res["affine_crop"]
                 if affine_crop.ndim == 3:
                     for c in range(affine_crop.shape[0]):
-                        diffeo_mem[c, y:y+h, x:x+w] += affine_crop[c] * weight_mask
-                        diffeo_weights[c, y:y+h, x:x+w] += weight_mask
+                        crop_trimmed = affine_crop[c][y_slice, x_slice]
+                        diffeo_mem[c, y_start:y_end, x_start:x_end] = crop_trimmed
                 else:
-                    diffeo_mem[y:y+h, x:x+w] += affine_crop * weight_mask
-                    diffeo_weights[y:y+h, x:x+w] += weight_mask
+                    crop_trimmed = affine_crop[y_slice, x_slice]
+                    diffeo_mem[y_start:y_end, x_start:x_end] = crop_trimmed
 
                 fallback_count += 1
                 logger.warning(f"Diffeo crop {idx+1}/{len(diffeo_coords)} at ({y},{x}): fallback to affine")
 
-    # Normalize by weights
-    logger.info("Normalizing diffeo result...")
-    nonzero_mask = diffeo_weights > 0
-    if not np.any(nonzero_mask):
-        raise RuntimeError("All regions have zero weight - no valid diffeomorphic registration data")
-    diffeo_mem[nonzero_mask] /= diffeo_weights[nonzero_mask]
+    # No normalization needed - we used direct assignment (hard cutoff)
 
     # Flush and cleanup
     diffeo_mem.flush()
@@ -645,64 +538,6 @@ def run_diffeo_stage(ref_mem: np.ndarray, affine_mem: np.memmap,
 
 
 # --------------------- Main Registration Pipeline ---------------------
-
-def extract_channel_names(moving_path: Path, num_channels: int) -> List[str]:
-    """Extract channel names from file metadata or filename."""
-    channel_names = []
-
-    # Try OME metadata first
-    try:
-        with tifffile.TiffFile(str(moving_path)) as tif:
-            if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-                import xml.etree.ElementTree as ET
-                root = ET.fromstring(tif.ome_metadata)
-                ns = {'ome': 'http://www.openmicroscopy.org/Schemas/OME/2016-06'}
-                channels = root.findall('.//ome:Channel', ns)
-                channel_names = [ch.get('Name') for ch in channels]
-    except Exception as e:
-        logger.debug(f"Could not extract channel names from OME metadata: {e}")
-
-    # Validate or fallback to filename parsing
-    if not channel_names or len(channel_names) != num_channels:
-        filename = moving_path.stem
-        name_part = filename.replace('_corrected', '').replace('_preprocessed', '').replace('_registered', '').replace('_padded', '')
-        parts = name_part.split('_')
-
-        if len(parts) > 1 and '-' in parts[0] and any(c.isdigit() for c in parts[0]):
-            markers = parts[1:]
-        else:
-            markers = parts
-
-        if len(markers) == num_channels:
-            channel_names = markers
-        else:
-            channel_names = [f"channel_{i}" for i in range(num_channels)]
-
-    return channel_names
-
-
-def create_ome_xml(channel_names: List[str], dtype: np.dtype,
-                   width: int, height: int) -> str:
-    """Create OME-XML metadata string."""
-    num_channels = len(channel_names)
-
-    channel_xml = '\n'.join(
-        f'            <Channel ID="Channel:0:{i}" Name="{name}" SamplesPerPixel="1" />'
-        for i, name in enumerate(channel_names)
-    )
-
-    return f'''<?xml version="1.0" encoding="UTF-8"?>
-<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
-    <Image ID="Image:0" Name="Registered">
-        <Pixels ID="Pixels:0" Type="{dtype.name}"
-                SizeX="{width}" SizeY="{height}" SizeZ="1" SizeC="{num_channels}" SizeT="1"
-                DimensionOrder="XYCZT"
-                PhysicalSizeX="0.325" PhysicalSizeY="0.325" PhysicalSizeXUnit="um" PhysicalSizeYUnit="um">
-{channel_xml}
-            <TiffData />
-        </Pixels>
-    </Image>
-</OME>'''
 
 
 def register_image_pair(
@@ -716,7 +551,6 @@ def register_image_pair(
     n_workers: int = 4,
     opt_tol: float = 1e-5,
     inv_tol: float = 1e-5,
-    qc_dir: Optional[Path] = None,
 ):
     """
     Register moving image to reference using affine + diffeomorphic registration (CPU-based).
@@ -802,8 +636,10 @@ def register_image_pair(
         if out.ndim == 2:
             out = out[np.newaxis, ...]
 
-        # Extract channel names
-        channel_names = extract_channel_names(moving_path, out.shape[0])
+        # Extract channel names - try OME first, fallback to filename
+        channel_names = extract_channel_names_from_ome(moving_path)
+        if not channel_names or len(channel_names) != out.shape[0]:
+            channel_names = extract_channel_names_from_filename(moving_path, expected_channels=out.shape[0])
         logger.info(f"Channel names: {channel_names}")
 
         # Create OME-XML metadata
@@ -829,19 +665,8 @@ def register_image_pair(
         logger.info(f"Diffeo stage:  {diffeo_success}/{diffeo_total} success, {diffeo_fallback}/{diffeo_total} fallback")
         logger.info(f"Output saved:  {output_path}")
 
-        # Generate QC if requested
-        if qc_dir:
-            logger.info(f"Generating QC outputs: {qc_dir}")
-            qc_dir.mkdir(parents=True, exist_ok=True)
-            qc_filename = f"{moving_path.stem}_QC_RGB.tif"
-            qc_output_path = qc_dir / qc_filename
-
-            try:
-                create_qc_rgb_composite(reference_path, output_path, qc_output_path)
-            except Exception as e:
-                logger.warning(f"Failed to generate QC composite: {e}")
-
         logger.info("Registration complete")
+        logger.info("NOTE: QC generation is handled separately by the pipeline")
 
     finally:
         # Ensure memmaps are properly closed before cleanup
@@ -876,8 +701,6 @@ def main():
                         help="Path to moving image to register")
     parser.add_argument("--output", type=str, required=True,
                         help="Path to save registered image")
-    parser.add_argument("--qc-dir", type=str, default=None,
-                        help="Directory to save QC outputs (optional)")
     parser.add_argument("--affine-crop-size", type=int, default=2000,
                         help="Crop size for affine registration (default: 2000)")
     parser.add_argument("--diffeo-crop-size", type=int, default=2000,
@@ -901,10 +724,8 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    # Configure logging using lib.logger
+    configure_logging(level=getattr(logging, args.log_level.upper()))
 
     # Handle legacy --crop-size argument
     affine_crop_size = args.affine_crop_size
@@ -929,7 +750,6 @@ def main():
             n_workers=args.n_workers,
             opt_tol=args.opt_tol,
             inv_tol=args.inv_tol,
-            qc_dir=Path(args.qc_dir) if args.qc_dir else None,
         )
         return 0
     except Exception as e:
