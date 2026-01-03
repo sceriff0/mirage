@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Convert microscopy images to standardized OME-TIFF format using Bio-Formats.
-
-Supports .nd2, .lif, .ndpi, .tiff, .czi, and all Bio-Formats supported formats.
-"""
+"""Convert microscopy images to OME-TIFF using bfio (Bio-Formats wrapper)."""
 
 import logging
 import argparse
-import os
 from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
 import tifffile
-import jpype
-import jpype.imports
+from bfio import BioReader
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,161 +19,44 @@ logger = logging.getLogger(__name__)
 PIXEL_SIZE_UM = 0.325
 
 
-def start_jvm():
-    """Start JVM with Bio-Formats JAR."""
-    if jpype.isJVMStarted():
-        return
-
-    jar_path = os.environ.get('BIOFORMATS_JAR', '/opt/bioformats/bioformats_package.jar')
-
-    if not Path(jar_path).exists():
-        raise FileNotFoundError(
-            f"Bio-Formats JAR not found at {jar_path}. "
-            "Set BIOFORMATS_JAR environment variable to the correct path."
-        )
-
-    logger.info(f"Starting JVM with Bio-Formats: {jar_path}")
-    jpype.startJVM(classpath=[jar_path])
-
-
-def read_image_bioformats(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """
-    Read image file using Bio-Formats.
-
-    Parameters
-    ----------
-    file_path : Path
-        Path to image file (supports .nd2, .lif, .ndpi, .tiff, .czi, etc.)
-
-    Returns
-    -------
-    tuple
-        (image_data in CYX or CZYX order, metadata_dict)
-    """
-    start_jvm()
-
-    from loci.formats import ImageReader, MetadataTools
-    from loci.common import services, DebugTools
-    from ome.units import UNITS
-
-    # Suppress Bio-Formats debug output
-    DebugTools.setRootLevel("ERROR")
-
+def read_image(file_path: Path) -> Tuple[np.ndarray, dict]:
+    """Read image using bfio."""
     logger.info(f"Reading image: {file_path.name}")
 
-    reader = ImageReader()
-    meta = MetadataTools.createOMEXMLMetadata()
-    reader.setMetadataStore(meta)
-    reader.setId(str(file_path))
-
-    try:
+    with BioReader(file_path) as reader:
         # Get dimensions
-        size_x = reader.getSizeX()
-        size_y = reader.getSizeY()
-        size_z = reader.getSizeZ()
-        size_c = reader.getSizeC()
-        size_t = reader.getSizeT()
-        pixel_type = reader.getPixelType()
-        is_little_endian = reader.isLittleEndian()
+        logger.info(f"Dimensions: X={reader.X}, Y={reader.Y}, Z={reader.Z}, C={reader.C}, T={reader.T}")
 
-        logger.info(f"Dimensions: X={size_x}, Y={size_y}, Z={size_z}, C={size_c}, T={size_t}")
+        # Get pixel size
+        pixel_size = reader.ps_x[0] if reader.ps_x else PIXEL_SIZE_UM
+        logger.info(f"Pixel size: {pixel_size} µm")
 
-        # Get pixel size from metadata
-        pixel_size = PIXEL_SIZE_UM
-        try:
-            phys_x = meta.getPixelsPhysicalSizeX(0)
-            if phys_x is not None:
-                pixel_size = float(phys_x.value(UNITS.MICROMETER))
-                logger.info(f"Pixel size from metadata: {pixel_size} µm")
-        except Exception as e:
-            logger.warning(f"Could not read pixel size: {e}")
+        # Read all data
+        image_data = reader[:, :, :, :, :]  # XYZCT order from bfio
 
-        # Get channel names from metadata
-        channel_names_from_file = []
-        try:
-            for c in range(size_c):
-                name = meta.getChannelName(0, c)
-                if name:
-                    channel_names_from_file.append(str(name))
-        except Exception:
-            pass
+        # bfio returns XYZCT, convert to CZYX for OME-TIFF
+        # From (X, Y, Z, C, T) to (C, Z, Y, X) - drop T, transpose
+        image_data = np.squeeze(image_data)  # Remove T if singleton
 
-        if channel_names_from_file:
-            logger.info(f"Channel names from file: {channel_names_from_file}")
-
-        # Map Bio-Formats pixel type to numpy dtype
-        dtype_map = {
-            0: np.int8,    # INT8
-            1: np.uint8,   # UINT8
-            2: np.int16,   # INT16
-            3: np.uint16,  # UINT16
-            4: np.int32,   # INT32
-            5: np.uint32,  # UINT32
-            6: np.float32, # FLOAT
-            7: np.float64, # DOUBLE
-        }
-        dtype = dtype_map.get(pixel_type, np.uint16)
-
-        # Read all planes
-        if size_z > 1:
-            # 3D: CZYX
-            image_data = np.zeros((size_c, size_z, size_y, size_x), dtype=dtype)
+        if reader.Z > 1:
+            # 3D: rearrange to CZYX
+            image_data = np.transpose(image_data, (3, 2, 1, 0))  # XYZC -> CZYX
             axes = 'CZYX'
-            for c in range(size_c):
-                for z in range(size_z):
-                    idx = reader.getIndex(z, c, 0)
-                    plane = reader.openBytes(idx)
-                    plane = np.frombuffer(plane, dtype=dtype).reshape(size_y, size_x)
-                    image_data[c, z] = plane
         else:
-            # 2D: CYX
-            image_data = np.zeros((size_c, size_y, size_x), dtype=dtype)
+            # 2D: rearrange to CYX
+            image_data = np.squeeze(image_data, axis=2)  # Remove Z
+            image_data = np.transpose(image_data, (2, 1, 0))  # XYC -> CYX
             axes = 'CYX'
-            for c in range(size_c):
-                idx = reader.getIndex(0, c, 0)
-                plane = reader.openBytes(idx)
-                plane = np.frombuffer(plane, dtype=dtype).reshape(size_y, size_x)
-                image_data[c] = plane
 
-        logger.info(f"Loaded image shape: {image_data.shape}, axes: {axes}")
+        logger.info(f"Output shape: {image_data.shape}, axes: {axes}")
 
         metadata = {
             'axes': axes,
-            'num_channels': size_c,
+            'num_channels': reader.C,
             'physical_pixel_size': pixel_size,
-            'channel_names_from_file': channel_names_from_file or None,
         }
 
-        return image_data, metadata
-
-    finally:
-        reader.close()
-
-
-def rearrange_channels(
-    image_data: np.ndarray,
-    axes: str,
-    channel_mapping: List[str],
-    target_channels: List[str]
-) -> np.ndarray:
-    """Rearrange channels to target order (DAPI first)."""
-    if 'C' not in axes:
-        return image_data
-
-    c_axis = axes.index('C')
-
-    indices = []
-    for target_ch in target_channels:
-        try:
-            idx = channel_mapping.index(target_ch)
-            indices.append(idx)
-        except ValueError:
-            raise ValueError(f"Channel '{target_ch}' not found in: {channel_mapping}")
-
-    reordered = np.take(image_data, indices, axis=c_axis)
-    logger.info(f"Rearranged channels: {channel_mapping} -> {target_channels}")
-
-    return reordered
+    return image_data, metadata
 
 
 def convert_to_ome_tiff(
@@ -211,12 +89,11 @@ def convert_to_ome_tiff(
     output_filename = output_dir / f"{patient_id}_{channels_str}.ome.tif"
 
     logger.info(f"Converting: {input_path.name}")
-    logger.info(f"Patient ID: {patient_id}")
     logger.info(f"Input channels: {channel_names}")
     logger.info(f"Output channels: {output_channels}")
 
     # Read image
-    image_data, metadata = read_image_bioformats(input_path)
+    image_data, metadata = read_image(input_path)
 
     # Validate channel count
     if metadata['num_channels'] != len(channel_names):
@@ -225,19 +102,18 @@ def convert_to_ome_tiff(
             f"specified {len(channel_names)}"
         )
 
-    # Use pixel size from metadata if available
     actual_pixel_size = metadata.get('physical_pixel_size', pixel_size_um)
 
-    # Rearrange channels
+    # Rearrange channels if needed
     if channel_names != output_channels:
-        image_data = rearrange_channels(
-            image_data,
-            metadata['axes'],
-            channel_names,
-            output_channels
-        )
+        c_axis = metadata['axes'].index('C')
+        indices = [channel_names.index(ch) for ch in output_channels]
+        image_data = np.take(image_data, indices, axis=c_axis)
+        logger.info(f"Rearranged channels: {channel_names} -> {output_channels}")
 
-    # Prepare OME metadata
+    # Save as OME-TIFF
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     ome_metadata = {
         'axes': metadata['axes'],
         'Channel': {'Name': output_channels},
@@ -247,12 +123,8 @@ def convert_to_ome_tiff(
         'PhysicalSizeYUnit': 'µm'
     }
 
-    logger.info(f"Writing OME-TIFF: {output_filename.name}")
-    logger.info(f"  Shape: {image_data.shape}")
-    logger.info(f"  Pixel size: {actual_pixel_size} µm")
+    logger.info(f"Writing: {output_filename.name}")
 
-    # Save
-    output_dir.mkdir(parents=True, exist_ok=True)
     tifffile.imwrite(
         output_filename,
         image_data,
@@ -262,53 +134,31 @@ def convert_to_ome_tiff(
         bigtiff=True
     )
 
-    logger.info(f"Saved: {output_filename.name}")
+    logger.info(f"Done: {output_filename.name}")
 
     return output_filename, output_channels
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Convert microscopy images to OME-TIFF using Bio-Formats'
-    )
-    parser.add_argument('--input_file', type=str, required=True)
-    parser.add_argument('--output_dir', type=str, required=True)
-    parser.add_argument('--patient_id', type=str, required=True)
-    parser.add_argument('--channels', type=str, required=True,
-                        help='Comma-separated channel names (must include DAPI)')
-    parser.add_argument('--pixel_size', type=float, default=PIXEL_SIZE_UM)
-    return parser.parse_args()
-
-
 def main():
-    args = parse_args()
-
-    input_path = Path(args.input_file)
-    output_dir = Path(args.output_dir)
-    channel_names = [ch.strip() for ch in args.channels.split(',')]
-
-    logger.info("=" * 60)
-    logger.info(f"Input: {input_path.name}")
-    logger.info(f"Channels: {channel_names}")
-    logger.info("=" * 60)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input_file', required=True)
+    parser.add_argument('--output_dir', required=True)
+    parser.add_argument('--patient_id', required=True)
+    parser.add_argument('--channels', required=True)
+    parser.add_argument('--pixel_size', type=float, default=PIXEL_SIZE_UM)
+    args = parser.parse_args()
 
     output_path, output_channels = convert_to_ome_tiff(
-        input_path,
-        output_dir,
+        Path(args.input_file),
+        Path(args.output_dir),
         args.patient_id,
-        channel_names,
+        [ch.strip() for ch in args.channels.split(',')],
         args.pixel_size
     )
 
-    logger.info("=" * 60)
-    logger.info(f"✓ Output: {output_path.name}")
-    logger.info(f"✓ Channel order: {output_channels}")
-    logger.info("=" * 60)
-
     # Write channels file for Nextflow
-    channels_file = output_dir / f"{args.patient_id}_channels.txt"
-    with open(channels_file, 'w') as f:
-        f.write(','.join(output_channels))
+    channels_file = Path(args.output_dir) / f"{args.patient_id}_channels.txt"
+    channels_file.write_text(','.join(output_channels))
 
     return 0
 
