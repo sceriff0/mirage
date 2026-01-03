@@ -279,7 +279,14 @@ def segment_nuclei(
 
     logger.info(f"  ✓ Nuclei detection complete")
 
+    # Free normalized DAPI to reduce memory pressure before expansion
+    logger.info(f"  Freeing normalized DAPI from memory...")
+    del normalized_dapi
+    import gc
+    gc.collect()
+
     # Expand nuclei labels to create whole-cell masks
+    logger.info(f"  Expanding nuclei labels to create cell masks...")
     cell_labels = segmentation.expand_labels(
         nuclei_labels,
         distance=expand_distance
