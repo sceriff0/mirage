@@ -1,4 +1,4 @@
-![alt text](https://github.com/sceriff0/ateia/blob/main/assets/logo.png)
+<img src="https://github.com/sceriff0/ateia/blob/main/assets/logo.png" alt="alt text" width="200">
 
 <p align="center">
   <a href="#"><img src="https://img.shields.io/badge/Nextflow-≥23.04.0-green?style=for-the-badge&logo=nextflow" alt="Nextflow"/></a>
