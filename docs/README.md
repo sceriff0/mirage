@@ -20,7 +20,6 @@
 
 ## 📋 Table of Contents
 
-- [Introduction](#-introduction)
 - [Pipeline Overview](#-pipeline-overview)
 - [Installation](#-installation)
 - [Quick Start](#-quick-start)
@@ -29,37 +28,6 @@
 - [Segmentation](#-segmentation)
 - [Adding Custom Methods](#-adding-custom-registration-methods)
 - [TODOs](#-todos)
-
----
-
-## 🧬 Introduction
-
-**ATEIA** (Automated Tissue Expression & Image Analysis) is a comprehensive Nextflow pipeline designed for processing multiplexed immunofluorescence whole slide images (WSIs). It provides an end-to-end solution from raw microscopy data to quantified, phenotyped single-cell data ready for downstream analysis.
-
-### Key Features
-
-| Feature | Description |
-|---------|-------------|
-| 🔄 **Multi-modal Registration** | Align multiple staining panels using VALIS, GPU-accelerated diffeomorphic, or CPU-based methods |
-| 🎯 **Deep Learning Segmentation** | StarDist-based nuclear detection with configurable models |
-| 📊 **Cell Quantification** | Per-cell marker intensity extraction across all channels |
-| 🏷️ **Automated Phenotyping** | Rule-based cell type classification with customizable marker panels |
-| 🏔️ **Pyramidal Output** | Generate pyramidal OME-TIFFs for efficient visualization in QuPath/OMERO |
-| ♻️ **Checkpoint/Restart** | Resume from any pipeline step without recomputation |
-| ⚡ **GPU Acceleration** | Optional CUDA support for registration and segmentation |
-
-### Why ATEIA?
-
-Traditional multiplex imaging workflows require manual alignment, which is:
-- ❌ Time-consuming and error-prone
-- ❌ Not reproducible across experiments
-- ❌ Impossible to scale to large cohorts
-
-ATEIA solves these challenges with:
-- ✅ Automated, parameter-free registration
-- ✅ Containerized, reproducible workflows
-- ✅ HPC-ready with SLURM integration
-- ✅ Modular architecture for easy extension
 
 ---
 
