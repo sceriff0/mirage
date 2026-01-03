@@ -35,55 +35,55 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              ATEIA PIPELINE                                      │
+│                              ATEIA PIPELINE                                     │
 ├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                  │
-│   📥 INPUT                    🔧 PREPROCESSING                                   │
+│                                                                                 │
+│   📥 INPUT                    🔧 PREPROCESSING                                 │
 │   ┌──────────┐               ┌──────────────────┐                               │
 │   │ND2/TIFF  │──────────────▶│ Convert to       │                               │
 │   │ Images   │               │ OME-TIFF         │                               │
 │   │ + CSV    │               │ (DAPI → Ch0)     │                               │
 │   └──────────┘               └────────┬─────────┘                               │
-│                                       │                                          │
-│                                       ▼                                          │
+│                                       │                                         │
+│                                       ▼                                         │
 │                              ┌──────────────────┐                               │
 │                              │ BaSiC Shading    │                               │
 │                              │ Correction       │                               │
 │                              └────────┬─────────┘                               │
-│                                       │                                          │
-│   🎯 REGISTRATION                     ▼                                          │
+│                                       │                                         │
+│   🎯 REGISTRATION                     ▼                                         │
 │   ┌───────────────────────────────────────────────────────────────┐             │
-│   │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐       │             │
-│   │  │ VALIS   │   │ VALIS   │   │  GPU    │   │  CPU    │       │             │
-│   │  │ (Batch) │   │ (Pairs) │   │ cuDIPY  │   │  DIPY   │       │             │
-│   │  └────┬────┘   └────┬────┘   └────┬────┘   └────┬────┘       │             │
+│   │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐       │              │
+│   │  │ VALIS   │   │ VALIS   │   │  GPU    │   │  CPU    │       │              │
+│   │  │ (Batch) │   │ (Pairs) │   │ cuDIPY  │   │  DIPY   │       │              │
+│   │  └────┬────┘   └────┬────┘   └────┬────┘   └────┬────┘       │              │
 │   │       └─────────────┴─────────────┴─────────────┘             │             │
 │   └───────────────────────────────┬───────────────────────────────┘             │
-│                                   │                                              │
-│   📊 POSTPROCESSING               ▼                                              │
-│   ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐             │
-│   │  StarDist    │◀───│  Registered      │───▶│  Split Channels  │             │
-│   │  Segmentation│    │  Images          │    │  Per Marker      │             │
-│   └──────┬───────┘    └──────────────────┘    └────────┬─────────┘             │
-│          │                                              │                        │
-│          ▼                                              ▼                        │
-│   ┌──────────────┐                            ┌──────────────────┐             │
-│   │  Cell Masks  │────────────────────────────│  Quantification  │             │
-│   │  (Nuclei +   │                            │  (Per-cell       │             │
-│   │   Expanded)  │                            │   intensities)   │             │
-│   └──────────────┘                            └────────┬─────────┘             │
+│                                   │                                             │
+│   📊 POSTPROCESSING               ▼                                             │
+│   ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐              │
+│   │  StarDist    │◀───│  Registered      │───▶│  Split Channels  │              │
+│   │  Segmentation│    │  Images          │    │  Per Marker      │              │
+│   └──────┬───────┘    └──────────────────┘    └────────┬─────────┘              │
+│          │                                              │                       │
+│          ▼                                              ▼                       │
+│   ┌──────────────┐                            ┌──────────────────┐              │
+│   │  Cell Masks  │────────────────────────────│  Quantification  │              │
+│   │  (Nuclei +   │                            │  (Per-cell       │              │
+│   │   Expanded)  │                            │   intensities)   │              │ 
+│   └──────────────┘                            └────────┬─────────┘              │
 │                                                        │                        │
 │                                                        ▼                        │
-│   ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐             │
-│   │  Pyramidal   │◀───│  Merge All       │◀───│  Phenotyping     │             │
-│   │  OME-TIFF    │    │  Channels+Masks  │    │  (Cell Types)    │             │
-│   └──────────────┘    └──────────────────┘    └──────────────────┘             │
-│                                                                                  │
-│   📤 OUTPUTS                                                                     │
-│   • Registered multichannel images    • Cell segmentation masks                  │
-│   • Quantification CSVs               • Phenotype assignments                    │
+│   ┌──────────────┐    ┌──────────────────┐    ┌──────────────────┐              │
+│   │  Pyramidal   │◀───│  Merge All       │◀───│  Phenotyping     │              │
+│   │  OME-TIFF    │    │  Channels+Masks  │    │  (Cell Types)    │              │
+│   └──────────────┘    └──────────────────┘    └──────────────────┘              │
+│                                                                                 │
+│   📤 OUTPUTS                                                                    │
+│   • Registered multichannel images    • Cell segmentation masks                 │
+│   • Quantification CSVs               • Phenotype assignments                   │
 │   • QC overlays                       • Pyramidal OME-TIFF for visualization    │
-│                                                                                  │
+│                                                                                 │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
