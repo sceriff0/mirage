@@ -87,7 +87,7 @@ P002,/data/P002_panel1.nd2,true,DAPI|CD3|CD8|CD4
 P002,/data/P002_panel2.nd2,false,DAPI|PANCK|SMA|VIMENTIN
 ```
 
-> **Note:** Each patient should have exactly one `is_reference=true` image. DAPI will be moved to the first channel.
+> **Note:** Each patient should have exactly one `is_reference=true` image. DAPI will always be moved to the first channel during preprocessing.
 
 ### 2. Run with Defaults
 
@@ -109,8 +109,8 @@ Create a submission script (`submit.sh`):
 #SBATCH --error=ateia_%j.err
 #SBATCH --time=48:00:00
 #SBATCH --partition=normal
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
 
 # Load required modules (adjust for your cluster)
 module load singularity/3.8.0
@@ -122,7 +122,6 @@ nextflow run main.nf \
     --outdir /scratch/results \
     --registration_method gpu \
     -profile slurm \
-    -resume
 ```
 
 Submit:
