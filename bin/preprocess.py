@@ -275,7 +275,7 @@ def preprocess_multichannel_image(
         metadata=metadata,
         bigtiff=True,
         ome=True,
-        tile=(512, 512),  # Reduced from 2048 to prevent large tile read errors in VALIS
+        tile=(1024, 1024),  # Reduced from 2048 to prevent large tile read errors in VALIS
         compression='zlib',
         compressionargs={'level': 6}  # Moderate compression for better compatibility
     )
