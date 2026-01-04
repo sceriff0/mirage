@@ -73,16 +73,26 @@ def extract_dapi_channel(
     # Use memory-mapped I/O to avoid loading entire multichannel image
     with tifffile.TiffFile(multichannel_image_path) as tif:
         # Get shape and metadata WITHOUT loading data
-        if len(tif.series[0].shape) == 2:
+        # Use series if available (OME-TIFF), otherwise fall back to pages
+        if tif.series:
+            source = tif.series[0]
+        else:
+            # Non-OME TIFF or corrupted OME metadata - fall back to pages
+            logger.warning("No OME series found, falling back to raw pages")
+            if not tif.pages:
+                raise ValueError(f"TIFF file appears corrupted: {multichannel_image_path}")
+            source = tif.pages[0]
+
+        if len(source.shape) == 2:
             # Single channel
-            image_shape = tif.series[0].shape
+            image_shape = source.shape
             n_channels = 1
         else:
             # Multichannel
-            image_shape = tif.series[0].shape
+            image_shape = source.shape
             n_channels = image_shape[0] if len(image_shape) == 3 else 1
 
-        image_dtype = tif.series[0].dtype
+        image_dtype = source.dtype
 
         # Extract OME metadata if available
         metadata = {}

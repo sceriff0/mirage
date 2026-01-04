@@ -57,8 +57,18 @@ def load_dapi_channel(image_path: str, max_dim: Optional[int] = None) -> np.ndar
     log_progress(f"Loading DAPI channel: {Path(image_path).name}")
 
     with tifffile.TiffFile(image_path) as tif:
-        image_shape = tif.series[0].shape
-        image_dtype = tif.series[0].dtype
+        # Use series if available (OME-TIFF), otherwise fall back to pages
+        if tif.series:
+            source = tif.series[0]
+        else:
+            # Non-OME TIFF or corrupted OME metadata - fall back to pages
+            log_progress("  Warning: No OME series found, falling back to raw pages")
+            if not tif.pages:
+                raise ValueError(f"TIFF file appears corrupted: {image_path}")
+            source = tif.pages[0]
+
+        image_shape = source.shape
+        image_dtype = source.dtype
 
         log_progress(f"  Image shape: {image_shape}")
         log_progress(f"  Image dtype: {image_dtype}")

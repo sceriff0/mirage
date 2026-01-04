@@ -169,8 +169,8 @@ def valis_registration(input_dir: str, out: str,
     # Initialize JVM for VALIS with increased heap size for large OME-TIFF files
     # For 25GB+ OME-TIFF files, we need substantial heap space for BioFormats
     log_progress("Initializing JVM with increased heap size for large OME-TIFF processing...")
-    registration.init_jvm(mem_gb=32)  # Allocate 32GB heap for BioFormats reader
-    log_progress("✓ JVM initialized with 32GB heap")
+    registration.init_jvm(mem_gb=16)  # Allocate 16GB heap for BioFormats reader
+    log_progress("✓ JVM initialized with 16GB heap")
 
     # Configuration
     if reference_markers is None:
@@ -415,7 +415,8 @@ def valis_registration(input_dir: str, out: str,
                 non_rigid=True,       # Apply non-rigid transforms
                 crop=True,            # Crop to reference overlap
                 interp_method="bicubic",
-                tile_wh=1024,         # Process in 2K tiles to reduce RAM (must be int, not tuple)
+                tile_wh=512,
+                pyramid=False         # Process in 2K tiles to reduce RAM (must be int, not tuple)
             )
 
             warped_count += 1
