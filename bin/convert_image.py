@@ -3,12 +3,10 @@
 
 Supports:
 - ND2 (Nikon) via bioio-nd2
-- CZI (Zeiss) via bioio-czi  
+- CZI (Zeiss) via bioio-czi
 - LIF (Leica) via bioio-lif
 - TIFF/OME-TIFF via bioio-tifffile/bioio-ome-tiff
-- NDPI/NDPIS (Hamamatsu) via bioio-bioformats
-
-REQUIRES JAVA for NDPI/NDPIS support.
+- NDPI/NDPIS (Hamamatsu) via tifffile
 """
 
 import logging
@@ -29,23 +27,23 @@ PIXEL_SIZE_UM = 0.325
 
 # Format detection
 BIOIO_NATIVE_FORMATS = {'.nd2', '.czi', '.lif', '.tif', '.tiff'}
-BIOFORMATS_FORMATS = {'.ndpi', '.ndpis', '.svs', '.mrxs', '.scn', '.vms', '.vmu', '.bif'}
+TIFFFILE_FORMATS = {'.ndpi', '.ndpis'}  # Hamamatsu formats readable by tifffile
 
 
 def get_file_format(file_path: Path) -> str:
     """Determine file format and appropriate reader."""
     name_lower = file_path.name.lower()
     suffix = file_path.suffix.lower()
-    
+
     if name_lower.endswith('.ome.tif') or name_lower.endswith('.ome.tiff'):
         return 'bioio'
-    
-    if suffix in BIOFORMATS_FORMATS:
-        return 'bioformats'
-    
+
+    if suffix in TIFFFILE_FORMATS:
+        return 'tifffile'
+
     if suffix in BIOIO_NATIVE_FORMATS:
         return 'bioio'
-    
+
     return 'bioio'
 
 
@@ -83,40 +81,122 @@ def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
     return image_data, metadata
 
 
-def read_image_bioformats(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """Read image using Bio-Formats (NDPI, NDPIS, SVS, etc.)."""
-    from bioio import BioImage
-    import bioio_bioformats
-    
-    logger.info(f"Reading with Bio-Formats: {file_path.name}")
-    
-    img = BioImage(file_path, reader=bioio_bioformats.Reader)
-    
-    logger.info(f"Dimensions: {img.dims}")
-    logger.info(f"Shape: {img.shape}")
-    logger.info(f"Dimension order: {img.dims.order}")
-    logger.info(f"Scenes available: {img.scenes}")
-    
-    ps = img.physical_pixel_sizes
-    pixel_size_x = ps.X if ps.X is not None else PIXEL_SIZE_UM
-    pixel_size_y = ps.Y if ps.Y is not None else PIXEL_SIZE_UM
-    pixel_size_z = ps.Z
-    
-    logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}, Z: {pixel_size_z}")
-    logger.info(f"Channel names from file: {img.channel_names}")
-    
-    # Bio-Formats returns TCZYX order
-    image_data = img.data
-    
+def parse_ndpis(ndpis_path: Path) -> List[Path]:
+    """Parse .ndpis manifest file to get list of NDPI files.
+
+    NDPIS format:
+    [NanoZoomer Digital Pathology Image Set]
+    NoImages=4
+    Image0=2025-10-22 10.53.32-CY5.ndpi
+    Image1=2025-10-22 10.53.32-TRITC.ndpi
+    ...
+    """
+    ndpi_files = []
+
+    with open(ndpis_path, 'r') as f:
+        lines = f.readlines()
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith('Image') and '=' in line:
+            filename = line.split('=', 1)[1].strip()
+            ndpi_path = ndpis_path.parent / filename
+            ndpi_files.append(ndpi_path)
+
+    logger.info(f"Parsed NDPIS: {len(ndpi_files)} images")
+    return ndpi_files
+
+
+def read_single_ndpi(file_path: Path) -> Tuple[np.ndarray, float, float]:
+    """Read a single NDPI file using tifffile, return image and pixel sizes."""
+    with tifffile.TiffFile(file_path) as tif:
+        series = tif.series[0]
+        image_data = series.asarray()
+
+        logger.info(f"  {file_path.name}: shape={image_data.shape}, axes={series.axes}")
+
+        # Extract pixel size from TIFF tags
+        pixel_size_x = PIXEL_SIZE_UM
+        pixel_size_y = PIXEL_SIZE_UM
+
+        page = tif.pages[0]
+        if page.tags.get('XResolution') and page.tags.get('YResolution'):
+            x_res = page.tags['XResolution'].value
+            y_res = page.tags['YResolution'].value
+            res_unit = page.tags.get('ResolutionUnit')
+
+            if x_res and y_res:
+                x_res_val = x_res[0] / x_res[1] if isinstance(x_res, tuple) else x_res
+                y_res_val = y_res[0] / y_res[1] if isinstance(y_res, tuple) else y_res
+
+                if res_unit and res_unit.value == 3:  # centimeters
+                    pixel_size_x = 10000.0 / x_res_val
+                    pixel_size_y = 10000.0 / y_res_val
+                elif res_unit and res_unit.value == 2:  # inches
+                    pixel_size_x = 25400.0 / x_res_val
+                    pixel_size_y = 25400.0 / y_res_val
+
+        # Convert to grayscale if RGB (NDPI fluorescence channels are often stored as RGB)
+        if image_data.ndim == 3 and image_data.shape[-1] == 3:
+            image_data = image_data[..., 0]
+        elif image_data.ndim == 3 and image_data.shape[-1] == 4:
+            image_data = image_data[..., 0]
+
+        return image_data, pixel_size_x, pixel_size_y
+
+
+def read_image_tifffile(file_path: Path) -> Tuple[np.ndarray, dict]:
+    """Read NDPI/NDPIS image using tifffile."""
+    logger.info(f"Reading with tifffile: {file_path.name}")
+
+    suffix = file_path.suffix.lower()
+
+    if suffix == '.ndpis':
+        # NDPIS is a manifest file pointing to multiple NDPI files
+        ndpi_files = parse_ndpis(file_path)
+
+        if not ndpi_files:
+            raise ValueError(f"No NDPI files found in NDPIS manifest: {file_path}")
+
+        # Read all NDPI files and stack them
+        channel_images = []
+        pixel_size_x = PIXEL_SIZE_UM
+        pixel_size_y = PIXEL_SIZE_UM
+
+        for ndpi_path in ndpi_files:
+            if not ndpi_path.exists():
+                raise FileNotFoundError(f"NDPI file not found: {ndpi_path}")
+            img, px_x, px_y = read_single_ndpi(ndpi_path)
+            channel_images.append(img)
+            pixel_size_x = px_x
+            pixel_size_y = px_y
+
+        # Stack channels: each image becomes a channel (CYX)
+        image_data = np.stack(channel_images, axis=0)
+
+    else:
+        # Single NDPI file
+        image_data, pixel_size_x, pixel_size_y = read_single_ndpi(file_path)
+
+        # Add channel dimension
+        if image_data.ndim == 2:
+            image_data = image_data[np.newaxis, ...]
+
+    num_channels = image_data.shape[0]
+    axes = 'CYX'
+
+    logger.info(f"Final shape: {image_data.shape}, axes: {axes}")
+    logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}")
+
     metadata = {
-        'num_channels': img.dims.C,
+        'num_channels': num_channels,
         'physical_pixel_size_x': pixel_size_x,
         'physical_pixel_size_y': pixel_size_y,
-        'physical_pixel_size_z': pixel_size_z,
-        'channel_names_from_file': img.channel_names,
-        'original_dims': img.dims.order,
+        'physical_pixel_size_z': None,
+        'channel_names_from_file': None,  # Channel names must come from args
+        'original_dims': axes,
     }
-    
+
     return image_data, metadata
 
 
@@ -124,9 +204,9 @@ def read_image(file_path: Path) -> Tuple[np.ndarray, dict]:
     """Read image using appropriate reader."""
     format_type = get_file_format(file_path)
     logger.info(f"Detected format type: {format_type}")
-    
-    if format_type == 'bioformats':
-        return read_image_bioformats(file_path)
+
+    if format_type == 'tifffile':
+        return read_image_tifffile(file_path)
     else:
         return read_image_bioio(file_path)
 
