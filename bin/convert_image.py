@@ -142,8 +142,20 @@ def read_single_ndpi(file_path: Path) -> Tuple[np.ndarray, float, float]:
 
         # Convert to grayscale if RGB (NDPI fluorescence channels are often stored as RGB)
         if image_data.ndim == 3 and image_data.shape[-1] == 3:
+            # Check if R, G, B channels are identical
+            if np.array_equal(image_data[..., 0], image_data[..., 1]) and \
+               np.array_equal(image_data[..., 1], image_data[..., 2]):
+                logger.info(f"    RGB channels identical, taking first channel")
+            else:
+                logger.warning(f"    RGB channels differ! Taking first channel anyway")
             image_data = image_data[..., 0]
         elif image_data.ndim == 3 and image_data.shape[-1] == 4:
+            # RGBA - check RGB channels
+            if np.array_equal(image_data[..., 0], image_data[..., 1]) and \
+               np.array_equal(image_data[..., 1], image_data[..., 2]):
+                logger.info(f"    RGBA channels identical, taking first channel")
+            else:
+                logger.warning(f"    RGBA channels differ! Taking first channel anyway")
             image_data = image_data[..., 0]
 
         return image_data, pixel_size_x, pixel_size_y
