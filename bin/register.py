@@ -415,8 +415,7 @@ def valis_registration(input_dir: str, out: str,
                 non_rigid=True,       # Apply non-rigid transforms
                 crop=True,            # Crop to reference overlap
                 interp_method="bicubic",
-                tile_wh=512,
-                pyramid=False         # Process in 2K tiles to reduce RAM (must be int, not tuple)
+                tile_wh=1024,      # Process in 2K tiles to reduce RAM (must be int, not tuple)
             )
 
             warped_count += 1
