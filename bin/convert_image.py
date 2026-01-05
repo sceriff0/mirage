@@ -93,6 +93,10 @@ def parse_ndpis(ndpis_path: Path) -> List[Path]:
     """
     ndpi_files = []
 
+    # Resolve symlinks to get the real directory where NDPI files are located
+    real_ndpis_path = ndpis_path.resolve()
+    ndpi_parent = real_ndpis_path.parent
+
     with open(ndpis_path, 'r') as f:
         lines = f.readlines()
 
@@ -100,10 +104,10 @@ def parse_ndpis(ndpis_path: Path) -> List[Path]:
         line = line.strip()
         if line.startswith('Image') and '=' in line:
             filename = line.split('=', 1)[1].strip()
-            ndpi_path = ndpis_path.parent / filename
+            ndpi_path = ndpi_parent / filename
             ndpi_files.append(ndpi_path)
 
-    logger.info(f"Parsed NDPIS: {len(ndpi_files)} images")
+    logger.info(f"Parsed NDPIS: {len(ndpi_files)} images (from {ndpi_parent})")
     return ndpi_files
 
 
