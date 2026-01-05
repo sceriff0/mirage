@@ -6,15 +6,15 @@ Supports:
 - CZI (Zeiss) via bioio-czi  
 - LIF (Leica) via bioio-lif
 - TIFF/OME-TIFF via bioio-tifffile/bioio-ome-tiff
-- NDPI (Hamamatsu) via OpenSlide (RGB only)
+- NDPI/NDPIS (Hamamatsu) via bioio-bioformats
 
-NO JAVA REQUIRED.
+REQUIRES JAVA for NDPI/NDPIS support.
 """
 
 import logging
 import argparse
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 import tifffile
@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 PIXEL_SIZE_UM = 0.325
 
 # Format detection
-BIOIO_FORMATS = {'.nd2', '.czi', '.lif', '.tif', '.tiff'}
-OPENSLIDE_FORMATS = {'.ndpi', '.svs', '.mrxs', '.scn', '.vms', '.vmu', '.bif'}
+BIOIO_NATIVE_FORMATS = {'.nd2', '.czi', '.lif', '.tif', '.tiff'}
+BIOFORMATS_FORMATS = {'.ndpi', '.ndpis', '.svs', '.mrxs', '.scn', '.vms', '.vmu', '.bif'}
 
 
 def get_file_format(file_path: Path) -> str:
@@ -40,10 +40,10 @@ def get_file_format(file_path: Path) -> str:
     if name_lower.endswith('.ome.tif') or name_lower.endswith('.ome.tiff'):
         return 'bioio'
     
-    if suffix in OPENSLIDE_FORMATS:
-        return 'openslide'
+    if suffix in BIOFORMATS_FORMATS:
+        return 'bioformats'
     
-    if suffix in BIOIO_FORMATS:
+    if suffix in BIOIO_NATIVE_FORMATS:
         return 'bioio'
     
     return 'bioio'
@@ -83,59 +83,41 @@ def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
     return image_data, metadata
 
 
-def read_image_openslide(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """Read image using OpenSlide (NDPI, SVS, etc.)."""
-    import openslide
+def read_image_bioformats(file_path: Path) -> Tuple[np.ndarray, dict]:
+    """Read image using Bio-Formats (NDPI, NDPIS, SVS, etc.)."""
+    from bioio import BioImage
+    import bioio_bioformats
     
-    logger.info(f"Reading with OpenSlide: {file_path.name}")
-    logger.warning("OpenSlide reads as RGB. For multichannel fluorescence NDPI, use Bio-Formats.")
+    logger.info(f"Reading with Bio-Formats: {file_path.name}")
     
-    slide = openslide.OpenSlide(str(file_path))
-    width, height = slide.dimensions
+    img = BioImage(file_path, reader=bioio_bioformats.Reader)
     
-    logger.info(f"Dimensions: {width} x {height}")
+    logger.info(f"Dimensions: {img.dims}")
+    logger.info(f"Shape: {img.shape}")
+    logger.info(f"Dimension order: {img.dims.order}")
+    logger.info(f"Scenes available: {img.scenes}")
     
-    pixel_size_x = PIXEL_SIZE_UM
-    pixel_size_y = PIXEL_SIZE_UM
+    ps = img.physical_pixel_sizes
+    pixel_size_x = ps.X if ps.X is not None else PIXEL_SIZE_UM
+    pixel_size_y = ps.Y if ps.Y is not None else PIXEL_SIZE_UM
+    pixel_size_z = ps.Z
     
-    props = dict(slide.properties)
-    if 'openslide.mpp-x' in props:
-        pixel_size_x = float(props['openslide.mpp-x'])
-    if 'openslide.mpp-y' in props:
-        pixel_size_y = float(props['openslide.mpp-y'])
+    logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}, Z: {pixel_size_z}")
+    logger.info(f"Channel names from file: {img.channel_names}")
     
-    logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}")
-    
-    max_pixels = 50000 * 50000
-    if width * height > max_pixels:
-        raise MemoryError(f"Image too large: {width}x{height}")
-    
-    logger.info("Reading full slide into memory...")
-    pil_image = slide.read_region((0, 0), 0, (width, height))
-    image_array = np.array(pil_image)
-    
-    if image_array.ndim == 3 and image_array.shape[2] == 4:
-        image_array = image_array[:, :, :3]
-    
-    if image_array.ndim == 3:
-        image_array = np.transpose(image_array, (2, 0, 1))
-    
-    num_channels = image_array.shape[0] if image_array.ndim == 3 else 1
-    
-    logger.info(f"Loaded array shape: {image_array.shape} (CYX)")
-    
-    slide.close()
+    # Bio-Formats returns TCZYX order
+    image_data = img.data
     
     metadata = {
-        'num_channels': num_channels,
+        'num_channels': img.dims.C,
         'physical_pixel_size_x': pixel_size_x,
         'physical_pixel_size_y': pixel_size_y,
-        'physical_pixel_size_z': None,
-        'channel_names_from_file': None,
-        'original_dims': 'CYX',
+        'physical_pixel_size_z': pixel_size_z,
+        'channel_names_from_file': img.channel_names,
+        'original_dims': img.dims.order,
     }
     
-    return image_array, metadata
+    return image_data, metadata
 
 
 def read_image(file_path: Path) -> Tuple[np.ndarray, dict]:
@@ -143,8 +125,8 @@ def read_image(file_path: Path) -> Tuple[np.ndarray, dict]:
     format_type = get_file_format(file_path)
     logger.info(f"Detected format type: {format_type}")
     
-    if format_type == 'openslide':
-        return read_image_openslide(file_path)
+    if format_type == 'bioformats':
+        return read_image_bioformats(file_path)
     else:
         return read_image_bioio(file_path)
 
@@ -153,15 +135,34 @@ def convert_to_ome_tiff(
     input_path: Path,
     output_dir: Path,
     patient_id: str,
-    channel_names: List[str],
+    channel_names: Optional[List[str]] = None,
     pixel_size_um: float = PIXEL_SIZE_UM
 ) -> Tuple[Path, List[str]]:
     """Convert image to OME-TIFF with DAPI in channel 0."""
     
+    # Read image first to get metadata
+    image_data, metadata = read_image(input_path)
+    original_dims = metadata.get('original_dims', 'TCZYX')
+    
+    # Use channel names from file if not specified
+    if channel_names is None:
+        channel_names = metadata.get('channel_names_from_file')
+        if channel_names is None:
+            raise ValueError("No channel names provided and none found in file metadata")
+        logger.info(f"Using channel names from file: {channel_names}")
+    
+    # Validate channel count
+    num_channels_in_image = metadata['num_channels']
+    if num_channels_in_image != len(channel_names):
+        raise ValueError(
+            f"Channel count mismatch: image has {num_channels_in_image}, "
+            f"specified {len(channel_names)}: {channel_names}"
+        )
+    
     # Find DAPI
     dapi_index = None
     for i, ch in enumerate(channel_names):
-        if ch.upper() == 'DAPI':
+        if 'DAPI' in ch.upper():
             dapi_index = i
             break
     
@@ -183,18 +184,6 @@ def convert_to_ome_tiff(
     logger.info(f"Converting: {input_path.name}")
     logger.info(f"Input channels: {channel_names}")
     logger.info(f"Output channels: {output_channels}")
-    
-    # Read image
-    image_data, metadata = read_image(input_path)
-    original_dims = metadata.get('original_dims', 'TCZYX')
-    
-    # Validate channel count
-    num_channels_in_image = metadata['num_channels']
-    if num_channels_in_image != len(channel_names):
-        raise ValueError(
-            f"Channel count mismatch: image has {num_channels_in_image}, "
-            f"specified {len(channel_names)}: {channel_names}"
-        )
     
     px_x = metadata.get('physical_pixel_size_x', pixel_size_um)
     px_y = metadata.get('physical_pixel_size_y', pixel_size_um)
@@ -274,25 +263,30 @@ def main():
     parser.add_argument('--input_file', type=str, required=True)
     parser.add_argument('--output_dir', type=str, required=True)
     parser.add_argument('--patient_id', type=str, required=True)
-    parser.add_argument('--channels', type=str, required=True,
-                        help='Comma-separated channel names (must include DAPI)')
+    parser.add_argument('--channels', type=str, default=None,
+                        help='Comma-separated channel names (optional, will read from file if not specified)')
     parser.add_argument('--pixel_size', type=float, default=PIXEL_SIZE_UM)
     
     args = parser.parse_args()
     
     input_path = Path(args.input_file)
     output_dir = Path(args.output_dir)
-    channel_names = [ch.strip() for ch in args.channels.split(',')]
+    channel_names = None
+    if args.channels:
+        channel_names = [ch.strip() for ch in args.channels.split(',')]
     
     if not input_path.exists():
         logger.error(f"Input file not found: {input_path}")
         return 1
     
     logger.info("=" * 70)
-    logger.info("Image Converter (NO JAVA)")
+    logger.info("Image Converter (Bio-Formats enabled)")
     logger.info("=" * 70)
     logger.info(f"Input: {input_path}")
-    logger.info(f"Channels: {channel_names}")
+    if channel_names:
+        logger.info(f"Channels (override): {channel_names}")
+    else:
+        logger.info("Channels: will read from file metadata")
     logger.info("=" * 70)
     
     try:
