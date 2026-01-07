@@ -24,6 +24,7 @@ from typing import Tuple
 
 import numpy as np
 import tifffile
+import fastmorph
 from csbdeep.utils import normalize
 from skimage import segmentation
 from stardist.models import StarDist2D
@@ -297,9 +298,11 @@ def segment_nuclei(
 
     # Expand nuclei labels to create whole-cell masks
     logger.info(f"  Expanding nuclei labels to create cell masks...")
-    cell_labels = segmentation.expand_labels(
+    cell_labels = fastmorph.spherical_dilate(
         nuclei_labels,
-        distance=expand_distance
+        radius=expand_distance,
+        parallel=16,  # Use multiple threads
+        anisotropy=(1.0, 1.0)  # For 2D
     )
 
     elapsed = time.time() - start_time
