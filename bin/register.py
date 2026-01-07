@@ -267,8 +267,8 @@ def valis_registration(input_dir: str, out: str,
         max_image_dim_px=max_image_dim_px,  # Critical: prevents loading full 28K x 28K images into RAM
 
         # Feature detection - SuperPoint/SuperGlue
-        feature_detector_cls=feature_detectors.SuperPointFD,
-        matcher=feature_matcher.SuperGlueMatcher(),
+        #feature_detector_cls=feature_detectors.SuperPointFD,
+        #matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration
         #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
