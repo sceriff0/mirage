@@ -110,9 +110,11 @@ workflow {
 
         // Copy results to savedir after postprocessing completes
         if (params.savedir && params.savedir != params.outdir) {
+            // Construct absolute source path from workflow launch directory
+            def source_path = params.outdir.startsWith('/') ? params.outdir : "${workflow.launchDir}/${params.outdir}"
             COPY_RESULTS(
                 POSTPROCESSING.out.checkpoint_csv.map { 'ready' },
-                params.outdir,
+                source_path,
                 params.savedir
             )
         }
