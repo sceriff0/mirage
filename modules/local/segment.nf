@@ -3,8 +3,8 @@ process SEGMENT {
     label "${params.seg_gpu ? 'gpu' : 'process_high'}"
 
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:segmentation_gpu' :
-        'docker://bolt3x/attend_image_analysis:segmentation_gpu' }"
+        'docker://bolt3x/attend_image_analysis:fastmorph' :
+        'docker://bolt3x/attend_image_analysis:fastmorph' }"
 
     publishDir "${params.outdir}/${meta.patient_id}/segmentation", mode: 'copy', overwrite: true
 
