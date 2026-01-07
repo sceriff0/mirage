@@ -2,6 +2,10 @@ process COPY_RESULTS {
     tag "Copying to savedir"
     label 'process_single'
 
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:copy' :
+        'docker://bolt3x/attend_image_analysis:copy' }"
+
     input:
     val(results_ready)  // Trigger value to ensure this runs after pipeline completion
     val(source_dir)
