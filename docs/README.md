@@ -1,5 +1,5 @@
 <div align="center">
-<img src="https://github.com/sceriff0/ateia/blob/main/assets/logo2.png" alt="alt text" width="600" height="400">
+<img src="https://github.com/sceriff0/ateia/blob/main/assets/logo.png?raw=true" alt="alt text" width="600" height="600">
 </div>
 
 <p align="center">
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <b>A scalable, production-ready Nextflow pipeline for multi-modal whole slide image registration, segmentation, quantification, and phenotyping.</b>
+  <b>A Nextflow pipeline for whole slide image preprocessing, registration, segmentation and quantification</b>
 </p>
 
 ---
