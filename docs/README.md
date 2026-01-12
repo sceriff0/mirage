@@ -1,5 +1,5 @@
 <div align="center">
-<img src="https://github.com/sceriff0/ateia/blob/main/assets/logo.png" alt="alt text" width="600" height="400">
+<img src="https://github.com/sceriff0/ateia/blob/main/assets/logo.png" alt="alt text" width="400" height="200">
 </div>
 
 <p align="center">
