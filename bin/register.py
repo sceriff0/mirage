@@ -363,10 +363,46 @@ def valis_registration(input_dir: str, out: str,
     # Create output directory
     ensure_dir(out)
 
-    # Log slide information
+    # Log slide information and fix missing src_f paths (symlink handling)
     log_progress(f"Slides to warp:")
-    for idx, slide_name in enumerate(registrar.slide_dict.keys(), 1):
-        log_progress(f"  [{idx}] {slide_name}")
+    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
+        src_f = getattr(slide_obj, 'src_f', None)
+
+        # Fix missing src_f by reconstructing from slide name and input directory
+        if src_f is None or src_f == 'None':
+            # Try to find the original file - slide_name should match filename without extension
+            possible_paths = [
+                os.path.join(input_dir, f"{slide_name}.ome.tif"),
+                os.path.join(input_dir, f"{slide_name}.ome.tiff"),
+                os.path.join(input_dir, slide_name) if '.' in slide_name else None,
+            ]
+            for path in possible_paths:
+                if path and os.path.exists(path):
+                    # Resolve symlink to get the actual file path
+                    resolved_path = os.path.realpath(path)
+                    slide_obj.src_f = resolved_path
+                    log_progress(f"  [{idx}] {slide_name} - ✓ Fixed src_f: {resolved_path} (was None)")
+                    break
+            else:
+                log_progress(f"  [{idx}] {slide_name} - ❌ ERROR: Could not find source file")
+        elif not os.path.exists(src_f):
+            # src_f exists but file doesn't - try resolving symlink
+            original_name = os.path.basename(src_f)
+            input_path = os.path.join(input_dir, original_name)
+            if os.path.exists(input_path):
+                resolved_path = os.path.realpath(input_path)
+                slide_obj.src_f = resolved_path
+                log_progress(f"  [{idx}] {slide_name} - ✓ Resolved symlink: {resolved_path}")
+            else:
+                log_progress(f"  [{idx}] {slide_name} - ⚠ WARNING: source file missing: {src_f}")
+        else:
+            # Resolve symlinks to avoid issues
+            if os.path.islink(src_f):
+                resolved_path = os.path.realpath(src_f)
+                slide_obj.src_f = resolved_path
+                log_progress(f"  [{idx}] {slide_name} - ✓ Resolved symlink: {resolved_path}")
+            else:
+                log_progress(f"  [{idx}] {slide_name} - ✓ src_f: {src_f}")
     log_progress("")
 
     # Warp and save all slides using the official VALIS batch method
