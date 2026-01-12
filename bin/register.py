@@ -16,6 +16,7 @@ import argparse
 import os
 import glob
 import gc
+import shutil
 import numpy as np
 from typing import Optional
 import tifffile
@@ -267,8 +268,8 @@ def valis_registration(input_dir: str, out: str,
         max_image_dim_px=max_image_dim_px,  # Critical: prevents loading full 28K x 28K images into RAM
 
         # Feature detection - SuperPoint/SuperGlue
-        #feature_detector_cls=feature_detectors.SuperPointFD,
-        #matcher=feature_matcher.SuperGlueMatcher(),
+        feature_detector_cls=feature_detectors.SuperPointFD,
+        matcher=feature_matcher.SuperGlueMatcher(),
 
         # Non-rigid registration
         #non_rigid_registrar_cls=non_rigid_registrars.SimpleElastixWarper,
@@ -354,108 +355,79 @@ def valis_registration(input_dir: str, out: str,
     log_progress(f"  - Original image list: {registrar.original_img_list}")
     log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
-    log_progress(f"\nWarping slides individually to: {out}")
+    log_progress(f"\nWarping all slides to: {out}")
     log_progress(f"  - Output directory: {out}")
-    log_progress(f"  - Strategy: Individual warp_and_save_slide() for low RAM")
+    log_progress(f"  - Strategy: registrar.warp_and_save_slides() (batch processing)")
     log_progress("")
 
     # Create output directory
     ensure_dir(out)
 
-    # Build mapping from slide name to original file path
-    slide_name_to_path = {}
-    for f in registrar.original_img_list:
-        basename = os.path.basename(f)
-        slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
-        slide_name_to_path[slide_name] = f
-
-    log_progress(f"\nSlide name to path mapping:")
-    for name, path in slide_name_to_path.items():
-        log_progress(f"  '{name}' -> '{path}'")
+    # Log slide information
+    log_progress(f"Slides to warp:")
+    for idx, slide_name in enumerate(registrar.slide_dict.keys(), 1):
+        log_progress(f"  [{idx}] {slide_name}")
     log_progress("")
 
-    # Warp each slide individually and save
-    warped_count = 0
-    failed_slides = []
+    # Warp and save all slides using the official VALIS batch method
+    # This is more efficient than individual warp_and_save_slide() calls
+    # Parameters:
+    #   - dst_dir: Output directory for registered slides
+    #   - non_rigid: Apply non-rigid transforms (True)
+    #   - crop: Crop to reference overlap ("reference")
+    #   - interp_method: Bicubic interpolation for quality
+    #   - tile_wh: Tile size for memory-efficient processing
+    log_progress("Applying transforms (rigid + non-rigid + micro) with batch processing...")
+    log_progress("This may take significant time for large images...")
 
-    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
-        log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
+    try:
+        registrar.warp_and_save_slides(
+            dst_dir=out,
+            non_rigid=True,         # Apply non-rigid transforms
+            crop="reference",       # Crop to reference overlap
+            interp_method="bicubic",       # Process in 1K tiles to reduce RAM
+        )
+        log_progress(f"✓ Batch warping completed successfully")
 
-        try:
-            # Get original file path
-            if slide_name not in slide_name_to_path:
-                log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
-                log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
-                failed_slides.append((slide_name, "Path not found"))
-                continue
+    except Exception as e:
+        log_progress(f"✗ ERROR during batch warping: {e}")
+        import traceback
+        traceback.print_exc()
+        raise RuntimeError(f"VALIS warp_and_save_slides failed: {e}")
 
-            src_path = slide_name_to_path[slide_name]
-            log_progress(f"  Source: {src_path}")
+    # Rename output files to match expected naming convention
+    # VALIS outputs: {slide_name}.ome.tiff
+    # Pipeline expects: {slide_name}_registered.ome.tiff
+    log_progress("\nRenaming output files to match pipeline convention...")
+    renamed_count = 0
+    for slide_name in registrar.slide_dict.keys():
+        # VALIS default output naming
+        valis_output = os.path.join(out, f"{slide_name}.ome.tiff")
+        expected_output = os.path.join(out, f"{slide_name}_registered.ome.tiff")
 
-            # Verify the slide object is valid before warping
-            if slide_obj is None:
-                log_progress(f"  ✗ ERROR: slide_obj is None for '{slide_name}'")
-                failed_slides.append((slide_name, "Slide object is None"))
-                continue
-
-            # Output path for this slide
-            out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
-
-            # Warp and save using official VALIS method with tiled processing
-            # Tile size chosen to balance memory vs I/O overhead
-            # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
-            log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
-
-            # Note: tile_wh must be integer (single value), not tuple
-
-            slide_obj.warp_and_save_slide(
-                src_f=src_path,
-                dst_f=out_path,
-                level=0,              # Full resolution
-                non_rigid=True,       # Apply non-rigid transforms
-                crop=True,            # Crop to reference overlap
-                interp_method="bicubic",
-                tile_wh=1024,      # Process in 2K tiles to reduce RAM (must be int, not tuple)
-            )
-
-            warped_count += 1
-            log_progress(f"  ✓ Saved: {out_path}")
-
-        except Exception as e:
-            log_progress(f"  ✗ ERROR warping {slide_name}: {e}")
-            failed_slides.append((slide_name, str(e)))
-            continue
-
-        finally:
-            # Aggressive memory cleanup after each slide
-            # Close slide reader if possible
-            if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
-                try:
-                    slide_obj.slide_reader.close()
-                except:
-                    pass
-
-            # Force garbage collection
-            gc.collect()
-
-            log_progress(f"  ✓ Memory cleanup completed")
+        if os.path.exists(valis_output):
+            shutil.move(valis_output, expected_output)
+            log_progress(f"  Renamed: {slide_name}.ome.tiff -> {slide_name}_registered.ome.tiff")
+            renamed_count += 1
+        elif os.path.exists(expected_output):
+            log_progress(f"  Already exists: {slide_name}_registered.ome.tiff")
+            renamed_count += 1
+        else:
+            log_progress(f"  ⚠ WARNING: Output not found for {slide_name}")
 
     # Report results
     log_progress(f"\n{'='*70}")
     log_progress(f"Warping Summary:")
-    log_progress(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
-    if failed_slides:
-        log_progress(f"  Failed slides: {len(failed_slides)}")
-        for slide_name, error in failed_slides:
-            log_progress(f"    - {slide_name}: {error}")
+    log_progress(f"  Successfully warped: {renamed_count}/{len(registrar.slide_dict)}")
     log_progress(f"{'='*70}")
 
-    if warped_count == 0:
-        log_progress("All slides failed to warp. Registration cannot proceed.")
-    elif failed_slides:
-        log_progress(f"⚠ WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
+    if renamed_count == 0:
+        log_progress("ERROR: No slides were warped successfully.")
+        raise RuntimeError("All slides failed to warp. Registration cannot proceed.")
+    elif renamed_count < len(registrar.slide_dict):
+        log_progress(f"⚠ WARNING: Only {renamed_count}/{len(registrar.slide_dict)} slides were warped")
 
-    log_progress(f"✓ {warped_count} slides warped and saved to: {out}")
+    log_progress(f"✓ {renamed_count} slides warped and saved to: {out}")
 
     gc.collect()
 
