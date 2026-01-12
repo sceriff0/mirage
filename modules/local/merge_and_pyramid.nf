@@ -1,0 +1,93 @@
+nextflow.enable.dsl = 2
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    MERGE AND PYRAMID MODULE
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Merges single-channel TIFFs into a pyramidal OME-TIFF with proper metadata
+    for QuPath visualization. This replaces the previous two-step approach of
+    merge_channels.py followed by bfconvert.
+
+    Features:
+    - Generates pyramidal OME-TIFF directly (no bfconvert needed)
+    - Preserves channel names, colors, and pixel sizes in OME-XML
+    - Supports segmentation and phenotype mask overlays
+    - Memory-efficient processing for large images
+    - Full QuPath compatibility
+----------------------------------------------------------------------------------------
+*/
+
+process MERGE_AND_PYRAMID {
+    tag "${meta.patient_id}"
+    label 'process_high'
+
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'docker://bolt3x/attend_image_analysis:merge' :
+        'docker://bolt3x/attend_image_analysis:merge' }"
+
+    // Publish both the pyramid and colormap files
+    publishDir "${params.outdir}/${meta.patient_id}/pyramid", mode: 'copy'
+
+    input:
+    tuple val(meta), path(split_channels, stageAs: 'channels/*'), path(seg_mask), path(pheno_mask), path(pheno_mapping)
+
+    output:
+    tuple val(meta), path("pyramid.ome.tiff"), emit: pyramid
+    path "*.phenotype_colors.json", optional: true, emit: colormap
+    path "versions.yml", emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
+
+    script:
+    def args = task.ext.args ?: ''
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+
+    // Get pixel size from params (use pixel_size which is already defined in config)
+    def pixel_size_x = params.pixel_size ?: 0.325
+    def pixel_size_y = params.pixel_size ?: 0.325
+    def pyramid_resolutions = params.pyramid_resolutions ?: 5
+    def pyramid_scale = params.pyramid_scale ?: 2
+    def tile_size = params.tilex ?: 256
+    def compression = params.compression ?: 'lzw'
+
+    """
+    echo "Sample: ${meta.patient_id}"
+    echo "Input directory: channels/"
+    ls -lh channels/
+
+    merge_channels_pyramid.py \\
+        --input-dir channels \\
+        --output pyramid.ome.tiff \\
+        --physical-size-x ${pixel_size_x} \\
+        --physical-size-y ${pixel_size_y} \\
+        --pyramid-resolutions ${pyramid_resolutions} \\
+        --pyramid-scale ${pyramid_scale} \\
+        --tile-size ${tile_size} \\
+        --compression ${compression} \\
+        --segmentation-mask ${seg_mask} \\
+        --phenotype-mask ${pheno_mask} \\
+        --phenotype-mapping ${pheno_mapping} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: \$(python3 --version | sed 's/Python //')
+        tifffile: \$(python3 -c "import tifffile; print(tifffile.__version__)")
+        numpy: \$(python3 -c "import numpy; print(numpy.__version__)")
+    END_VERSIONS
+    """
+
+    stub:
+    def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    """
+    touch pyramid.ome.tiff
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        python: stub
+        tifffile: stub
+        numpy: stub
+    END_VERSIONS
+    """
+}

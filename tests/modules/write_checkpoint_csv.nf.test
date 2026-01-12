@@ -88,7 +88,7 @@ nextflow_process {
             process {
                 """
                 input[0] = 'postprocessed'
-                input[1] = 'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,merged_image,pyramid'
+                input[1] = 'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,pyramid'
                 input[2] = [
                     [
                         'P001',
@@ -97,7 +97,6 @@ nextflow_process {
                         '/path/P001_mapping.json',
                         '/path/P001_quant.csv',
                         '/path/P001_mask.tif',
-                        '/path/P001_merged.ome.tif',
                         '/path/P001_pyramid.ome.tif'
                     ]
                 ]

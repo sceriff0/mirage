@@ -11,8 +11,7 @@ include { SPLIT_CHANNELS        } from '../../modules/local/split_channels'
 include { QUANTIFY              } from '../../modules/local/quantify'
 include { MERGE_QUANT_CSVS      } from '../../modules/local/quantify'
 include { PHENOTYPE             } from '../../modules/local/phenotype'
-include { MERGE                 } from '../../modules/local/merge'
-include { CONVERSION            } from '../../modules/local/conversion'
+include { MERGE_AND_PYRAMID     } from '../../modules/local/merge_and_pyramid'
 include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
 
 /*
@@ -170,12 +169,10 @@ workflow POSTPROCESSING {
             [meta, split_tiffs, cell_mask, pheno_mask, pheno_mapping]
         }
 
-    MERGE(ch_for_merge)
-
-    // ========================================================================
-    // CONVERSION - Create pyramidal OME-TIFF (per patient)
-    // ========================================================================
-    CONVERSION(MERGE.out.merged)
+    // MERGE_AND_PYRAMID combines merge + pyramid generation in one step
+    // This preserves OME-XML metadata (channel names, colors, pixel sizes)
+    // and generates QuPath-compatible pyramidal OME-TIFF directly
+    MERGE_AND_PYRAMID(ch_for_merge)
 
     // ========================================================================
     // CHECKPOINT - Collect all outputs by patient
@@ -201,15 +198,11 @@ workflow POSTPROCESSING {
             def published_path = "${params.outdir}/${meta.patient_id}/segmentation/${mask.name}"
             [meta.patient_id, published_path]
         })
-        .join(MERGE.out.merged.map { meta, merged ->
-            def published_path = "${params.outdir}/${meta.patient_id}/merged/${merged.name}"
-            [meta.patient_id, published_path]
-        })
-        .join(CONVERSION.out.pyramid.map { meta, pyramid ->
+        .join(MERGE_AND_PYRAMID.out.pyramid.map { meta, pyramid ->
             def published_path = "${params.outdir}/${meta.patient_id}/pyramid/${pyramid.name}"
             [meta.patient_id, published_path]
         })
-        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, merged_image, pyramid ->
+        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, pyramid ->
             [
                 patient_id,
                 pheno_csv,
@@ -217,8 +210,7 @@ workflow POSTPROCESSING {
                 pheno_map,
                 merged_csv,
                 cell_mask,
-                merged_image,
-                pyramid
+                pyramid  // Now pyramid is the merged+pyramidal file
             ]
         }
         .toList()
@@ -226,7 +218,7 @@ workflow POSTPROCESSING {
 
     WRITE_CHECKPOINT_CSV(
         'postprocessed',
-        'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,merged_image,pyramid',
+        'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,pyramid',
         ch_checkpoint_data
     )
 
