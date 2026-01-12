@@ -35,18 +35,18 @@ process REGISTER {
     """
     mkdir -p registered_slides preprocessed
 
-    # Create symlinks instead of copying (much faster for large 25GB+ files)
-    # This handles the stageAs directories we created to avoid naming collisions
-    echo "=== Symlinking input files to preprocessed/ ==="
+    # Move files to preprocessed/ to avoid VALIS symlink path resolution issues
+    # VALIS loses track of src_f when working with symlinks
+    echo "=== Moving input files to preprocessed/ ==="
     for dir in ref input_*; do
         if [ -d "\$dir" ]; then
             echo "Processing directory: \$dir"
             find -L "\$dir" -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | while read file; do
                 basename=\$(basename "\$file")
-                # Resolve symlink to actual file path before creating new symlink
+                # Resolve symlink first, then move the actual file
                 actual_file=\$(readlink -f "\$file")
-                echo "  Linking: \$actual_file -> preprocessed/\$basename"
-                ln -sf "\$actual_file" "preprocessed/\$basename"
+                echo "  Moving: \$actual_file -> preprocessed/\$basename"
+                mv "\$actual_file" "preprocessed/\$basename"
             done
         fi
     done
@@ -54,12 +54,12 @@ process REGISTER {
     echo "=== Contents of preprocessed/ ==="
     ls -lh preprocessed/
 
-    # Verify we have files/symlinks
-    file_count=\$(find preprocessed \\( -type l -o -type f \\) -name '*.ome.tif*' | wc -l)
-    echo "Total files linked: \$file_count"
+    # Verify we have actual files (not symlinks)
+    file_count=\$(find preprocessed -type f -name '*.ome.tif*' | wc -l)
+    echo "Total files moved: \$file_count"
 
     if [ "\$file_count" -eq 0 ]; then
-        echo "ERROR: No .ome.tif files were linked to preprocessed/"
+        echo "ERROR: No .ome.tif files were moved to preprocessed/"
         echo "Available directories and contents:"
         ls -lR
         exit 1
