@@ -149,7 +149,7 @@ def apply_basic_correction(
         image, fov_size, overlap=0
     )
 
-    basic = BaSiC(get_darkfield=get_darkfield)
+    basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
 
     if autotune:
             logger.info(f"  ✓ Autotuning BaSiC parameters for {n_iter} iterations")
@@ -157,7 +157,7 @@ def apply_basic_correction(
                 fov_stack,
                 n_iter=n_iter
             )
-            
+
     corrected_fovs = basic.fit_transform(fov_stack)
 
     reconstructed = reconstruct_image_from_fovs(
