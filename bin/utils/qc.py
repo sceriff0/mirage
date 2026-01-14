@@ -334,7 +334,8 @@ def create_registration_qc(
         tifffile.imwrite(
             str(tiff_output_path),
             rgb_cyx,
-            imagej=True,
+            ome=True,
+            bigtiff=True,
             metadata={'axes': 'CYX', 'mode': 'composite'}
         )
         logger.info(f"  Saved QC TIFF: {tiff_output_path}")
