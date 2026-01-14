@@ -149,7 +149,6 @@ def apply_basic_correction(
         image, fov_size, overlap=0
     )
 
-    get_darkfield = False # Disable darkfield estimation for speed; can be enabled if needed
     basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
 
     if autotune:
