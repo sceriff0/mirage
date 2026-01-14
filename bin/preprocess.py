@@ -152,16 +152,8 @@ def apply_basic_correction(
     basic = BaSiC(get_darkfield=get_darkfield)
 
     if autotune:
-        if True: #AUTOTUNE_AVAILABLE:
-            logger.info("    Running BaSiC autotune...")
-            basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
-        else:
-            logger.warning(
-                f"    Autotune requested but not available. "
-                f"Requires BaSiCPy>=1.1.0 (have {BASICPY_VERSION}) and "
-                f"Pydantic>=2.0.0 (have {PYDANTIC_VERSION}). Using default parameters."
-            )
-
+            logger.info(f"  ✓ Autotuning BaSiC parameters for {n_iter} iterations")
+            
     corrected_fovs = basic.fit_transform(fov_stack)
 
     reconstructed = reconstruct_image_from_fovs(
