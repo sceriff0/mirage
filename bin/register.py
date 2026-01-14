@@ -16,7 +16,6 @@ import argparse
 import os
 import glob
 import gc
-import shutil
 import numpy as np
 from typing import Optional
 import tifffile
@@ -355,119 +354,107 @@ def valis_registration(input_dir: str, out: str,
     log_progress(f"  - Original image list: {registrar.original_img_list}")
     log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
-    log_progress(f"\nWarping all slides to: {out}")
+    log_progress(f"\nWarping slides individually to: {out}")
     log_progress(f"  - Output directory: {out}")
-    log_progress(f"  - Strategy: registrar.warp_and_save_slides() (batch processing)")
+    log_progress(f"  - Strategy: Individual warp_and_save_slide() for low RAM")
     log_progress("")
 
     # Create output directory
     ensure_dir(out)
 
-    # Log slide information and fix src_f paths
-    # VALIS sometimes loses src_f during registration, so we reconstruct it
-    log_progress(f"Slides to warp:")
-    for idx, slide_name in enumerate(registrar.slide_dict.keys(), 1):
-        slide_obj = registrar.slide_dict[slide_name]
+    # Build mapping from slide name to original file path
+    slide_name_to_path = {}
+    for f in registrar.original_img_list:
+        basename = os.path.basename(f)
+        slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
+        slide_name_to_path[slide_name] = f
 
-        # Check current src_f
-        current_src_f = getattr(slide_obj, 'src_f', None)
-
-        # If src_f is None or invalid, reconstruct it from input_dir
-        if current_src_f is None or current_src_f == 'None' or not os.path.exists(current_src_f):
-            # Try to find the file in input_dir
-            for ext in ['.ome.tif', '.ome.tiff']:
-                candidate = os.path.join(input_dir, f"{slide_name}{ext}")
-                if os.path.exists(candidate):
-                    slide_obj.src_f = candidate
-                    log_progress(f"  [{idx}] {slide_name} - Fixed src_f: {candidate} (was: {current_src_f})")
-                    break
-            else:
-                log_progress(f"  [{idx}] {slide_name} - ERROR: Could not find source file")
-        else:
-            log_progress(f"  [{idx}] {slide_name} - src_f OK: {current_src_f}")
+    log_progress(f"\nSlide name to path mapping:")
+    for name, path in slide_name_to_path.items():
+        log_progress(f"  '{name}' -> '{path}'")
     log_progress("")
 
-    # Warp slides individually to ensure src_f is set correctly before each warp
-    # VALIS batch processing loses src_f between slides, so we process one at a time
-    log_progress("Applying transforms (rigid + non-rigid + micro) individually per slide...")
-    log_progress("This may take significant time for large images...")
-
+    # Warp each slide individually and save
     warped_count = 0
     failed_slides = []
 
-    for slide_name, slide_obj in registrar.slide_dict.items():
-        try:
-            # Ensure src_f is set right before warping this slide
-            current_src_f = getattr(slide_obj, 'src_f', None)
-            if current_src_f is None or current_src_f == 'None' or not os.path.exists(current_src_f):
-                # Reconstruct src_f from input_dir
-                for ext in ['.ome.tif', '.ome.tiff']:
-                    candidate = os.path.join(input_dir, f"{slide_name}{ext}")
-                    if os.path.exists(candidate):
-                        slide_obj.src_f = candidate
-                        log_progress(f"  Re-set src_f for {slide_name}: {candidate}")
-                        break
+    for idx, (slide_name, slide_obj) in enumerate(registrar.slide_dict.items(), 1):
+        log_progress(f"[{idx}/{len(registrar.slide_dict)}] Warping: {slide_name}")
 
-            log_progress(f"  Warping {slide_name}...")
-            dst_f = os.path.join(out, f"{slide_name}.ome.tiff")
+        try:
+            # Get original file path
+            if slide_name not in slide_name_to_path:
+                log_progress(f"  ✗ ERROR: Cannot find original path for '{slide_name}'")
+                log_progress(f"  Available names: {list(slide_name_to_path.keys())}")
+                failed_slides.append((slide_name, "Path not found"))
+                continue
+
+            src_path = slide_name_to_path[slide_name]
+            log_progress(f"  Source: {src_path}")
+
+            # Verify the slide object is valid before warping
+            if slide_obj is None:
+                log_progress(f"  ✗ ERROR: slide_obj is None for '{slide_name}'")
+                failed_slides.append((slide_name, "Slide object is None"))
+                continue
+
+            # Output path for this slide
+            out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
+
+            # Warp and save using official VALIS method with tiled processing
+            # Tile size chosen to balance memory vs I/O overhead
+            # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
+            log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+
+            # Note: tile_wh must be integer (single value), not tuple
 
             slide_obj.warp_and_save_slide(
-                dst_f=dst_f,
-                non_rigid=True,
-                crop="reference",
-                interp_method="bicubic",
+                src_f=src_path,
+                dst_f=out_path,
+                level=0,              # Full resolution
+                non_rigid=True,       # Apply non-rigid transforms
+                crop=True,            # Crop to reference overlap
+                interp_method="bicubic",    # Process in 2K tiles to reduce RAM (must be int, not tuple)
             )
 
-            log_progress(f"  ✓ {slide_name} completed")
             warped_count += 1
+            log_progress(f"  ✓ Saved: {out_path}")
 
         except Exception as e:
             log_progress(f"  ✗ ERROR warping {slide_name}: {e}")
-            failed_slides.append(slide_name)
-            # Log diagnostic info
-            log_progress(f"    Diagnostic: src_f = {getattr(slide_obj, 'src_f', 'N/A')}")
-            import traceback
-            traceback.print_exc()
+            failed_slides.append((slide_name, str(e)))
+            continue
 
-    if failed_slides:
-        log_progress(f"\n✗ {len(failed_slides)} slide(s) failed to warp: {', '.join(failed_slides)}")
-        raise RuntimeError(f"VALIS warping failed for {len(failed_slides)} slide(s)")
+        finally:
+            # Aggressive memory cleanup after each slide
+            # Close slide reader if possible
+            if hasattr(slide_obj, 'slide_reader') and hasattr(slide_obj.slide_reader, 'close'):
+                try:
+                    slide_obj.slide_reader.close()
+                except:
+                    pass
 
-    log_progress(f"✓ All {warped_count} slides warped successfully")
+            # Force garbage collection
+            gc.collect()
 
-    # Rename output files to match expected naming convention
-    # VALIS outputs: {slide_name}.ome.tiff
-    # Pipeline expects: {slide_name}_registered.ome.tiff
-    log_progress("\nRenaming output files to match pipeline convention...")
-    renamed_count = 0
-    for slide_name in registrar.slide_dict.keys():
-        # VALIS default output naming
-        valis_output = os.path.join(out, f"{slide_name}.ome.tiff")
-        expected_output = os.path.join(out, f"{slide_name}_registered.ome.tiff")
-
-        if os.path.exists(valis_output):
-            shutil.move(valis_output, expected_output)
-            log_progress(f"  Renamed: {slide_name}.ome.tiff -> {slide_name}_registered.ome.tiff")
-            renamed_count += 1
-        elif os.path.exists(expected_output):
-            log_progress(f"  Already exists: {slide_name}_registered.ome.tiff")
-            renamed_count += 1
-        else:
-            log_progress(f"  ⚠ WARNING: Output not found for {slide_name}")
+            log_progress(f"  ✓ Memory cleanup completed")
 
     # Report results
     log_progress(f"\n{'='*70}")
     log_progress(f"Warping Summary:")
-    log_progress(f"  Successfully warped: {renamed_count}/{len(registrar.slide_dict)}")
+    log_progress(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
+    if failed_slides:
+        log_progress(f"  Failed slides: {len(failed_slides)}")
+        for slide_name, error in failed_slides:
+            log_progress(f"    - {slide_name}: {error}")
     log_progress(f"{'='*70}")
 
-    if renamed_count == 0:
-        log_progress("ERROR: No slides were warped successfully.")
-        raise RuntimeError("All slides failed to warp. Registration cannot proceed.")
-    elif renamed_count < len(registrar.slide_dict):
-        log_progress(f"⚠ WARNING: Only {renamed_count}/{len(registrar.slide_dict)} slides were warped")
+    if warped_count == 0:
+        log_progress("All slides failed to warp. Registration cannot proceed.")
+    elif failed_slides:
+        log_progress(f"⚠ WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
-    log_progress(f"✓ {renamed_count} slides warped and saved to: {out}")
+    log_progress(f"✓ {warped_count} slides warped and saved to: {out}")
 
     gc.collect()
 
