@@ -37,19 +37,17 @@ process REGISTER {
 
     # Copy files (dereferencing symlinks) to preprocessed/ to avoid VALIS symlink path resolution issues
     # VALIS loses track of src_f when working with symlinks
-    # Using cp -L to dereference symlinks and copy actual file content
+    # Using parallel copy to speed up large file transfers
     echo "=== Copying input files to preprocessed/ ==="
-    for dir in ref input_*; do
-        if [ -d "\$dir" ]; then
-            echo "Processing directory: \$dir"
-            # Use find with -L to follow symlinks, -type f finds regular files (after following links)
-            find -L "\$dir" -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) 2>/dev/null | while read -r file; do
-                basename=\$(basename "\$file")
-                echo "  Copying: \$file -> preprocessed/\$basename"
-                cp -L "\$file" "preprocessed/\$basename"
-            done
-        fi
-    done
+
+    # Collect all ome.tif files from ref and input_* directories
+    find -L ref input_* -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) 2>/dev/null > /tmp/files_to_copy.txt || true
+
+    echo "Files to copy:"
+    cat /tmp/files_to_copy.txt
+
+    # Use xargs with multiple parallel processes for faster copying
+    cat /tmp/files_to_copy.txt | xargs -P ${task.cpus} -I {} sh -c 'cp -L "{}" "preprocessed/\$(basename "{}")" && echo "Copied: {}"'
 
     echo "=== Contents of preprocessed/ ==="
     ls -lh preprocessed/
