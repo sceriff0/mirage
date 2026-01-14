@@ -133,7 +133,7 @@ def apply_basic_correction(
     corrected_fovs = basic.fit_transform(fov_stack)
 
     reconstructed = reconstruct_image_from_fovs(
-        corrected_fovs,
+        fov_stack,#corrected_fovs,
         positions,
         image.shape
     )
