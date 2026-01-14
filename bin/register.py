@@ -406,8 +406,6 @@ def valis_registration(input_dir: str, out: str,
             # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
             log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
 
-            # Note: tile_wh must be integer (single value), not tuple
-
             slide_obj.warp_and_save_slide(
                 src_f=src_path,
                 dst_f=out_path,

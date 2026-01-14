@@ -449,7 +449,6 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
     tifffile.imwrite(
         output_path,
         output_memmap,
-        tile=(256, 256),
         metadata={'axes': 'CYX'} if imagej_metadata is None else imagej_metadata,
         description=ome_xml,
         photometric='minisblack',

@@ -570,7 +570,6 @@ def merge_channels(
         tifffile.imwrite(
             output_path,
             output_memmap,
-            tile=(256, 256),
             description=ome_xml,
             photometric='minisblack',
             compression='lzw',
