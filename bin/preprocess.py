@@ -153,6 +153,10 @@ def apply_basic_correction(
 
     if autotune:
             logger.info(f"  ✓ Autotuning BaSiC parameters for {n_iter} iterations")
+            basic.autotune(
+                fov_stack,
+                n_iter=n_iter
+            )
             
     corrected_fovs = basic.fit_transform(fov_stack)
 
