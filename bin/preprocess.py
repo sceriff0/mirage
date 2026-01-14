@@ -178,13 +178,13 @@ def _process_single_channel_from_stack(
         verbose=False
     )
 
-    if not should_correct:
+    '''if not should_correct:
         logger.info(f"  ✗ Skipping BaSiC: {metrics['reasoning']}")
         logger.info(f"    Metrics: vignetting={metrics['vignetting_drop']*100:.1f}%, "
                    f"tile_CV={metrics['tile_mean_cv']:.3f}, "
                    f"sparsity={metrics['signal_sparsity']*100:.1f}%")
         return channel_index, channel_image, False
-
+    '''
     logger.info(f"  ✓ Applying BaSiC correction: {metrics.get('reasoning', 'N/A')}")
     corrected, _ = apply_basic_correction(
         channel_image,
