@@ -164,7 +164,7 @@ def build_ome_xml(
     phenotype_colormap: Optional[Dict[int, Tuple[str, Tuple[int, int, int]]]] = None,
     physical_size_x: float = 0.325,
     physical_size_y: float = 0.325,
-    physical_size_unit: str = "µm"
+    physical_size_unit: str = "um"
 ) -> str:
     """
     Build complete OME-XML with proper channel metadata and phenotype annotations.
