@@ -152,7 +152,7 @@ def apply_basic_correction(
     basic = BaSiC(get_darkfield=get_darkfield)
 
     if autotune:
-        if AUTOTUNE_AVAILABLE:
+        if True: #AUTOTUNE_AVAILABLE:
             logger.info("    Running BaSiC autotune...")
             basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
         else:
