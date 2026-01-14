@@ -27,11 +27,35 @@ import tifffile
 from numpy.typing import NDArray
 
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
+
+# Check BaSiCPy and Pydantic versions for compatibility
+import basicpy
+import pydantic
+from packaging import version
+
+BASICPY_VERSION = getattr(basicpy, '__version__', 'unknown')
+PYDANTIC_VERSION = getattr(pydantic, '__version__', 'unknown')
+AUTOTUNE_AVAILABLE = False
+
+# autotune requires BaSiCPy >= 1.1.0 and Pydantic v2
+if BASICPY_VERSION != 'unknown' and PYDANTIC_VERSION != 'unknown':
+    try:
+        basicpy_ok = version.parse(BASICPY_VERSION) >= version.parse("1.1.0")
+        pydantic_ok = version.parse(PYDANTIC_VERSION) >= version.parse("2.0.0")
+        AUTOTUNE_AVAILABLE = basicpy_ok and pydantic_ok
+    except Exception:
+        pass
+
 from basicpy import BaSiC  # type: ignore
 
 from utils.image_utils import ensure_dir
 
 logger = get_logger(__name__)
+
+# Log version info at import time
+logger.info(f"BaSiCPy version: {BASICPY_VERSION}")
+logger.info(f"Pydantic version: {PYDANTIC_VERSION}")
+logger.info(f"Autotune available: {AUTOTUNE_AVAILABLE}")
 
 __all__ = [
     "split_image_into_fovs",
@@ -125,10 +149,18 @@ def apply_basic_correction(
         image, fov_size, overlap=0
     )
 
-    basic = BaSiC(get_darkfield=True)
+    basic = BaSiC(get_darkfield=get_darkfield)
 
     if autotune:
-        basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
+        if AUTOTUNE_AVAILABLE:
+            logger.info("    Running BaSiC autotune...")
+            basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
+        else:
+            logger.warning(
+                f"    Autotune requested but not available. "
+                f"Requires BaSiCPy>=1.1.0 (have {BASICPY_VERSION}) and "
+                f"Pydantic>=2.0.0 (have {PYDANTIC_VERSION}). Using default parameters."
+            )
 
     corrected_fovs = basic.fit_transform(fov_stack)
 
