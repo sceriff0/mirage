@@ -35,18 +35,19 @@ process REGISTER {
     """
     mkdir -p registered_slides preprocessed
 
-    # Move files to preprocessed/ to avoid VALIS symlink path resolution issues
+    # Copy files (dereferencing symlinks) to preprocessed/ to avoid VALIS symlink path resolution issues
     # VALIS loses track of src_f when working with symlinks
-    echo "=== Moving input files to preprocessed/ ==="
+    # Using cp -L to dereference symlinks and copy actual file content
+    echo "=== Copying input files to preprocessed/ ==="
     for dir in ref input_*; do
         if [ -d "\$dir" ]; then
             echo "Processing directory: \$dir"
-            find -L "\$dir" -type f \\( -name '*.ome.tif' -o -name '*.ome.tiff' \\) | while read file; do
-                basename=\$(basename "\$file")
-                # Resolve symlink first, then move the actual file
-                actual_file=\$(readlink -f "\$file")
-                echo "  Moving: \$actual_file -> preprocessed/\$basename"
-                mv "\$actual_file" "preprocessed/\$basename"
+            for file in "\$dir"/*.ome.tif "\$dir"/*.ome.tiff; do
+                if [ -e "\$file" ] || [ -L "\$file" ]; then
+                    basename=\$(basename "\$file")
+                    echo "  Copying: \$file -> preprocessed/\$basename"
+                    cp -L "\$file" "preprocessed/\$basename"
+                fi
             done
         fi
     done
@@ -56,10 +57,10 @@ process REGISTER {
 
     # Verify we have actual files (not symlinks)
     file_count=\$(find preprocessed -type f -name '*.ome.tif*' | wc -l)
-    echo "Total files moved: \$file_count"
+    echo "Total files copied: \$file_count"
 
     if [ "\$file_count" -eq 0 ]; then
-        echo "ERROR: No .ome.tif files were moved to preprocessed/"
+        echo "ERROR: No .ome.tif files were copied to preprocessed/"
         echo "Available directories and contents:"
         ls -lR
         exit 1
