@@ -42,12 +42,11 @@ process REGISTER {
     for dir in ref input_*; do
         if [ -d "\$dir" ]; then
             echo "Processing directory: \$dir"
-            for file in "\$dir"/*.ome.tif "\$dir"/*.ome.tiff; do
-                if [ -e "\$file" ] || [ -L "\$file" ]; then
-                    basename=\$(basename "\$file")
-                    echo "  Copying: \$file -> preprocessed/\$basename"
-                    cp -L "\$file" "preprocessed/\$basename"
-                fi
+            # Use find with -L to follow symlinks, -type f finds regular files (after following links)
+            find -L "\$dir" -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) 2>/dev/null | while read -r file; do
+                basename=\$(basename "\$file")
+                echo "  Copying: \$file -> preprocessed/\$basename"
+                cp -L "\$file" "preprocessed/\$basename"
             done
         fi
     done
