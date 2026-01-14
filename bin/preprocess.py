@@ -171,21 +171,8 @@ def _process_single_channel_from_stack(
         logger.info(f"  ⊘ Skipping BaSiC correction for DAPI (user setting)")
         return channel_index, channel_image, False
 
-    # Automatically detect if channel needs correction
-    should_correct, metrics = should_apply_basic_correction(
-        channel_image,
-        channel_name=channel_name,
-        verbose=False
-    )
 
-    '''if not should_correct:
-        logger.info(f"  ✗ Skipping BaSiC: {metrics['reasoning']}")
-        logger.info(f"    Metrics: vignetting={metrics['vignetting_drop']*100:.1f}%, "
-                   f"tile_CV={metrics['tile_mean_cv']:.3f}, "
-                   f"sparsity={metrics['signal_sparsity']*100:.1f}%")
-        return channel_index, channel_image, False
-    '''
-    logger.info(f"  ✓ Applying BaSiC correction: {metrics.get('reasoning', 'N/A')}")
+    logger.info(f"  ✓ Applying BaSiC correction")
     corrected, _ = apply_basic_correction(
         channel_image,
         fov_size=fov_size,
