@@ -28,6 +28,7 @@ from numpy.typing import NDArray
 
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
+from detect_illumination_bias import should_apply_basic_correction
 
 from utils.image_utils import ensure_dir
 
@@ -149,15 +150,42 @@ def _process_single_channel_from_stack(
     skip_dapi: bool,
     autotune: bool,
     n_iter: int,
-    basic_kwargs: dict
-) -> Tuple[int, NDArray]:
-    """Worker function to process a single channel slice from a stack."""
+    basic_kwargs: dict,
+    auto_detect: bool = True
+) -> Tuple[int, NDArray, bool]:
+    """Worker function to process a single channel slice from a stack.
+
+    Returns
+    -------
+    channel_index : int
+        Channel index
+    processed_image : NDArray
+        Corrected or original image
+    was_corrected : bool
+        Whether BaSiC was applied
+    """
     logger.info(f"Processing channel #{channel_index} ({channel_name})")
 
+    # Automatic detection of whether to apply BaSiC
     if skip_dapi and 'DAPI' in channel_name.upper():
-        logger.info(f"  Skipping BaSiC correction for DAPI")
-        return channel_index, channel_image
+        logger.info(f"  ⊘ Skipping BaSiC correction for DAPI (user setting)")
+        return channel_index, channel_image, False
 
+    # Automatically detect if channel needs correction
+    should_correct, metrics = should_apply_basic_correction(
+        channel_image,
+        channel_name=channel_name,
+        verbose=False
+    )
+
+    if not should_correct:
+        logger.info(f"  ✗ Skipping BaSiC: {metrics['reasoning']}")
+        logger.info(f"    Metrics: vignetting={metrics['vignetting_drop']*100:.1f}%, "
+                   f"tile_CV={metrics['tile_mean_cv']:.3f}, "
+                   f"sparsity={metrics['signal_sparsity']*100:.1f}%")
+        return channel_index, channel_image, False
+
+    logger.info(f"  ✓ Applying BaSiC correction: {metrics.get('reasoning', 'N/A')}")
     corrected, _ = apply_basic_correction(
         channel_image,
         fov_size=fov_size,
@@ -165,7 +193,7 @@ def _process_single_channel_from_stack(
         n_iter=n_iter,
         #**basic_kwargs
     )
-    return channel_index, corrected
+    return channel_index, corrected, True
 
 
 def preprocess_multichannel_image(
@@ -218,6 +246,7 @@ def preprocess_multichannel_image(
         channel_names = channel_names[:n_channels] + [f"Channel_{i}" for i in range(len(channel_names), n_channels)]
 
     results = {}
+    correction_applied = {}
 
     with ThreadPoolExecutor(max_workers=n_workers) as executor:
         futures = []
@@ -236,12 +265,20 @@ def preprocess_multichannel_image(
             futures.append(future)
 
         for future in as_completed(futures):
-            channel_index, result_array = future.result()
+            channel_index, result_array, was_corrected = future.result()
             results[channel_index] = result_array
+            correction_applied[channel_index] = was_corrected
 
     preprocessed_channels = [
         results[i] for i in range(n_channels)
     ]
+
+    # Log summary
+    n_corrected = sum(correction_applied.values())
+    n_skipped = n_channels - n_corrected
+    logger.info(f"\nBaSiC Correction Summary:")
+    logger.info(f"  ✓ Corrected: {n_corrected}/{n_channels} channels")
+    logger.info(f"  ✗ Skipped: {n_skipped}/{n_channels} channels")
 
     preprocessed = np.stack(preprocessed_channels, axis=0)
 
