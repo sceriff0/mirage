@@ -7,7 +7,7 @@ This version loads a single multichannel image, processes channels in parallel,
 and saves the result back to a single TIFF file.
 """
 
-from __future__ import annotations
+#from __future__ import annotations
 
 import os
 import argparse
@@ -126,7 +126,7 @@ def apply_basic_correction(
         image, fov_size, overlap=0
     )
 
-    basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
+    basic = BaSiC(get_darkfield=True)
 
     if autotune:
         basic.autotune(fov_stack, early_stop=True, n_iter=n_iter)
