@@ -7,7 +7,7 @@ This version loads a single multichannel image, processes channels in parallel,
 and saves the result back to a single TIFF file.
 """
 
-#from __future__ import annotations
+from __future__ import annotations
 
 import os
 import argparse
