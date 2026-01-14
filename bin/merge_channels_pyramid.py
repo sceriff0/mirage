@@ -3,19 +3,19 @@
 Merge single-channel TIFF files into a single multi-channel PYRAMIDAL OME-TIFF.
 
 This script takes a directory of single-channel TIFF files (output from SPLIT_CHANNELS)
-and merges them into a single multi-channel pyramidal OME-TIFF. DAPI filtering is already 
+and merges them into a single multi-channel pyramidal OME-TIFF. DAPI filtering is already
 handled by the split_multichannel.py script, so this just combines all channels.
 
 Optionally appends segmentation and phenotype masks as additional channels.
+Phenotype masks are stored as single-channel integer label images with embedded
+colormap metadata for visualization in QuPath and other OME-TIFF viewers.
 
 FEATURES:
 - Generates pyramidal OME-TIFF directly (no need for bfconvert)
 - Proper OME-XML with channel names, colors, and pixel sizes
-- Embedded colormap for phenotype visualization
+- Embedded colormap for phenotype label visualization
 - QuPath compatible output
 - Memory-efficient processing for large images
-
-FIXED VERSION: Proper OME-XML with embedded colormap for QuPath compatibility.
 """
 
 import argparse
@@ -260,36 +260,6 @@ def build_ome_xml(
     return ome_xml
 
 
-def create_phenotype_rgb_overlay(
-    phenotype_mask: np.ndarray,
-    colormap: Dict[int, Tuple[str, Tuple[int, int, int]]]
-) -> np.ndarray:
-    """
-    Convert phenotype label mask to RGB overlay image.
-
-    This creates a 3-channel RGB image where each phenotype label
-    is colored according to the colormap. This ensures colors survive
-    any format conversion.
-
-    Args:
-        phenotype_mask: 2D array of phenotype labels (uint8/uint16)
-        colormap: Dict mapping label index to (name, (r, g, b))
-
-    Returns:
-        3D array of shape (3, H, W) with RGB values (uint8)
-    """
-    height, width = phenotype_mask.shape
-    rgb = np.zeros((3, height, width), dtype=np.uint8)
-
-    for idx, (_, color) in colormap.items():
-        mask = phenotype_mask == idx
-        rgb[0][mask] = color[0]  # R
-        rgb[1][mask] = color[1]  # G
-        rgb[2][mask] = color[2]  # B
-
-    return rgb
-
-
 def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
     """
     Downsample a 2D image by a given factor using area averaging.
@@ -475,7 +445,6 @@ def merge_channels(
     segmentation_mask: str = None,
     phenotype_mask: str = None,
     phenotype_mapping: str = None,
-    add_phenotype_rgb: bool = True,
     physical_size_x: float = 0.325,
     physical_size_y: float = 0.325,
     pyramid_resolutions: int = 5,
@@ -495,9 +464,8 @@ def merge_channels(
         input_dir: Directory containing single-channel TIFF files
         output_path: Output OME-TIFF path
         segmentation_mask: Path to segmentation mask file (optional)
-        phenotype_mask: Path to phenotype mask file with different colors per phenotype (optional)
+        phenotype_mask: Path to phenotype mask with integer labels (optional)
         phenotype_mapping: Path to JSON file mapping phenotype numbers to names (optional)
-        add_phenotype_rgb: If True, add RGB overlay channels for phenotype visualization
         physical_size_x: Pixel size in X (micrometers)
         physical_size_y: Pixel size in Y (micrometers)
         pyramid_resolutions: Number of pyramid levels to generate
@@ -590,12 +558,6 @@ def merge_channels(
         # Use a neutral color for the label channel itself
         channel_colors.append((200, 200, 200))
         masks_info.append(('phenotype', phenotype_mask))
-
-        # If adding RGB overlay
-        if add_phenotype_rgb:
-            log(f"Will add phenotype RGB overlay channels for visualization")
-            channel_names.extend(["Phenotype_R", "Phenotype_G", "Phenotype_B"])
-            channel_colors.extend([(255, 0, 0), (0, 255, 0), (0, 0, 255)])
 
     num_output_channels = len(channel_names)
     log("-" * 50)
@@ -709,21 +671,8 @@ def merge_channels(
             del mask_data
             gc.collect()
 
-        # Generate and write phenotype RGB overlay if requested
-        if add_phenotype_rgb and phenotype_data is not None and phenotype_colormap is not None:
-            log(f"  Generating phenotype RGB overlay...")
-            rgb_overlay = create_phenotype_rgb_overlay(phenotype_data, phenotype_colormap)
-
-            for i, color_name in enumerate(["R", "G", "B"]):
-                log(f"  Writing channel {output_channel_idx}: Phenotype_{color_name}")
-                # Convert to output dtype (scale if necessary)
-                if dtype == np.uint16:
-                    output_memmap[output_channel_idx, :, :] = rgb_overlay[i].astype(np.uint16) * 257
-                else:
-                    output_memmap[output_channel_idx, :, :] = rgb_overlay[i]
-                output_channel_idx += 1
-
-            del rgb_overlay
+        # Clean up phenotype data if it exists
+        if phenotype_data is not None:
             del phenotype_data
             gc.collect()
 
@@ -794,7 +743,6 @@ def merge_channels(
     log(f"  Pixel size: {physical_size_x} x {physical_size_y} µm")
     if phenotype_colormap:
         log(f"  Phenotype categories: {len(phenotype_colormap)}")
-        log(f"  Phenotype RGB overlay: {'Yes' if add_phenotype_rgb else 'No'}")
     log("=" * 70)
 
     # Also save a standalone colormap JSON for QuPath import
@@ -844,10 +792,8 @@ Examples:
                         help='Path to segmentation mask TIFF')
     parser.add_argument('--phenotype-mask', 
                         help='Path to phenotype mask TIFF')
-    parser.add_argument('--phenotype-mapping', 
+    parser.add_argument('--phenotype-mapping',
                         help='Path to phenotype mapping JSON (phenotype number to name)')
-    parser.add_argument('--no-phenotype-rgb', action='store_true',
-                        help='Do not add RGB overlay channels for phenotype (default: add them)')
     parser.add_argument('--physical-size-x', type=float, default=0.325,
                         help='Pixel size in X (micrometers, default: 0.325)')
     parser.add_argument('--physical-size-y', type=float, default=0.325,
@@ -876,7 +822,6 @@ Examples:
             segmentation_mask=args.segmentation_mask,
             phenotype_mask=args.phenotype_mask,
             phenotype_mapping=args.phenotype_mapping,
-            add_phenotype_rgb=not args.no_phenotype_rgb,
             physical_size_x=args.physical_size_x,
             physical_size_y=args.physical_size_y,
             pyramid_resolutions=args.pyramid_resolutions,
