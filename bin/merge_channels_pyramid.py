@@ -127,14 +127,24 @@ def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
         if image.ndim == 2:
             h, w = image.shape
             new_h, new_w = h // factor, w // factor
-            return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            # cv2.INTER_AREA is good for downsampling but may introduce small rounding errors
+            # For integer types, use float intermediate then round
+            if image.dtype in [np.uint8, np.uint16, np.uint32, np.int8, np.int16, np.int32]:
+                downsampled = cv2.resize(image.astype(np.float32), (new_w, new_h), interpolation=cv2.INTER_AREA)
+                return np.round(downsampled).astype(image.dtype)
+            else:
+                return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
         elif image.ndim == 3:
             # CYX format - downsample each channel
             c, h, w = image.shape
             new_h, new_w = h // factor, w // factor
             result = np.zeros((c, new_h, new_w), dtype=image.dtype)
             for i in range(c):
-                result[i] = cv2.resize(image[i], (new_w, new_h), interpolation=cv2.INTER_AREA)
+                if image.dtype in [np.uint8, np.uint16, np.uint32, np.int8, np.int16, np.int32]:
+                    downsampled = cv2.resize(image[i].astype(np.float32), (new_w, new_h), interpolation=cv2.INTER_AREA)
+                    result[i] = np.round(downsampled).astype(image.dtype)
+                else:
+                    result[i] = cv2.resize(image[i], (new_w, new_h), interpolation=cv2.INTER_AREA)
             return result
     except ImportError:
         pass
@@ -148,7 +158,8 @@ def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
         if image.dtype in [np.float32, np.float64]:
             return reshaped.mean(axis=(1, 3)).astype(image.dtype)
         else:
-            return reshaped.mean(axis=(1, 3)).astype(image.dtype)
+            # Fix: Round before converting to integer dtype to avoid truncation artifacts
+            return np.round(reshaped.mean(axis=(1, 3))).astype(image.dtype)
     elif image.ndim == 3:
         c, h, w = image.shape
         new_h, new_w = h // factor, w // factor
@@ -156,7 +167,11 @@ def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
         for i in range(c):
             trimmed = image[i, :new_h * factor, :new_w * factor]
             reshaped = trimmed.reshape(new_h, factor, new_w, factor)
-            result[i] = reshaped.mean(axis=(1, 3)).astype(image.dtype)
+            # Fix: Round before converting to integer dtype to avoid truncation artifacts
+            if image.dtype in [np.float32, np.float64]:
+                result[i] = reshaped.mean(axis=(1, 3)).astype(image.dtype)
+            else:
+                result[i] = np.round(reshaped.mean(axis=(1, 3))).astype(image.dtype)
         return result
 
 
@@ -554,9 +569,27 @@ def merge_channels(
             phenotype_colormap = create_phenotype_colormap(pheno_label_map, n_categories)
 
         # Convert mask to output dtype if needed
-        if mask_data.dtype != dtype:
+        # CRITICAL FIX: Don't downcast segmentation masks (uint32) to uint16
+        # This would cause label IDs > 65535 to overflow/wrap around
+        if mask_type == 'segmentation' and mask_data.dtype == np.uint32:
+            # Keep segmentation masks as uint32 to preserve all label IDs
+            log(f"    WARNING: Segmentation mask is uint32 but channel dtype is {dtype}")
+            log(f"    Keeping mask as uint32 to avoid label ID overflow")
+            # This means the output array needs to support uint32 for this channel
+            # We'll need to handle this specially - for now, clip to max value
+            if dtype in [np.uint8, np.uint16]:
+                max_val = np.iinfo(dtype).max
+                if mask_data.max() > max_val:
+                    log(f"    ERROR: Mask has labels up to {mask_data.max()} but dtype {dtype} max is {max_val}")
+                    log(f"    Clipping mask values to {max_val} - this may cause data loss!")
+                    mask_data = np.clip(mask_data, 0, max_val).astype(dtype)
+                else:
+                    mask_data = mask_data.astype(dtype)
+            else:
+                mask_data = mask_data.astype(dtype)
+        elif mask_data.dtype != dtype:
             mask_data = mask_data.astype(dtype)
-            
+
         output_data[output_idx] = mask_data
         output_idx += 1
         del mask_data

@@ -99,7 +99,8 @@ def autoscale(
     img_normalized = np.clip((img - lo) / range_val, 0, 1)
 
     # Scale to [0, 255] and convert to uint8
-    return (img_normalized * 255).astype(np.uint8)
+    # Fix: Round before converting to uint8 to avoid truncation artifacts
+    return np.round(img_normalized * 255).astype(np.uint8)
 
 
 def extract_crop_coords(

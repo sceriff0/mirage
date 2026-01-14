@@ -79,7 +79,8 @@ def autoscale_for_display(
         img_max = img.max()
         range_val = max(img_max - img_min, 1e-6)
         normalized = (img - img_min) / range_val
-        return (normalized * 255).astype(np.uint8)
+        # Fix: Round before converting to uint8 to avoid truncation artifacts
+        return np.round(normalized * 255).astype(np.uint8)
     elif method == "percentile":
         return autoscale(img, low_p=1.0, high_p=99.0)
     else:
@@ -140,18 +141,19 @@ def create_dapi_overlay(
 
     # Downsample if requested
     if scale_factor != 1.0:
-        ref_down = rescale(
+        # Fix: Round before converting to uint8 to avoid truncation artifacts
+        ref_down = np.round(rescale(
             ref_scaled,
             scale=scale_factor,
             anti_aliasing=True,
             preserve_range=True
-        ).astype(np.uint8)
-        reg_down = rescale(
+        )).astype(np.uint8)
+        reg_down = np.round(rescale(
             reg_scaled,
             scale=scale_factor,
             anti_aliasing=True,
             preserve_range=True
-        ).astype(np.uint8)
+        )).astype(np.uint8)
     else:
         ref_down = ref_scaled
         reg_down = reg_scaled
