@@ -47,14 +47,10 @@ process REGISTER {
     cat /tmp/files_to_copy.txt
 
     # Use xargs with multiple parallel processes for faster copying
-    # Skip files that already exist (handles case where reference is also in input files)
+    # Use cp -n (no-clobber) to skip files that already exist (handles case where reference is also in input files)
     cat /tmp/files_to_copy.txt | xargs -P ${task.cpus} -I {} sh -c '
         dest="preprocessed/\$(basename "{}")"
-        if [ -f "\$dest" ]; then
-            echo "Skipped (already exists): {}"
-        else
-            cp -L "{}" "\$dest" && echo "Copied: {}"
-        fi
+        cp -Ln "{}" "\$dest" 2>/dev/null && echo "Copied: {}" || echo "Skipped (already exists): {}"
     '
 
     echo "=== Contents of preprocessed/ ==="
