@@ -28,7 +28,6 @@ from numpy.typing import NDArray
 
 os.environ["JAX_PLATFORM_NAME"] = "cpu"  # Force CPU for JAX
 from basicpy import BaSiC  # type: ignore
-from detect_illumination_bias import should_apply_basic_correction
 
 from utils.image_utils import ensure_dir
 
