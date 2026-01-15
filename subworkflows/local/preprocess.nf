@@ -6,9 +6,10 @@ nextflow.enable.dsl = 2
 ========================================================================================
 */
 
-include { CONVERT_IMAGE         } from '../../modules/local/convert_image'
-include { PREPROCESS            } from '../../modules/local/preprocess'
-include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
+include { CONVERT_IMAGE           } from '../../modules/local/convert_image'
+include { PREPROCESS              } from '../../modules/local/preprocess'
+include { GENERATE_PREPROCESS_QC  } from '../../modules/local/generate_preprocess_qc'
+include { WRITE_CHECKPOINT_CSV    } from '../../modules/local/write_checkpoint_csv'
 
 /*
 ========================================================================================
@@ -56,6 +57,9 @@ workflow PREPROCESSING {
 
     // Preprocessed files already have metadata attached
     ch_preprocessed_with_meta = PREPROCESS.out.preprocessed
+
+    // Generate QC images (PNG per channel) for visual inspection
+    GENERATE_PREPROCESS_QC ( ch_preprocessed_with_meta )
 
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_preprocessed_with_meta
