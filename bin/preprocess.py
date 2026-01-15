@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import argparse
 import logging
+import math
 from pathlib import Path
 
 # Add parent directory to path to import lib modules
@@ -65,52 +66,83 @@ __all__ = [
 ]
 
 
-def split_image_into_fovs(
-    image: NDArray,
+def count_fovs(
+    image_shape: Tuple[int, int],
     fov_size: Tuple[int, int],
     overlap: int = 0
+) -> Tuple[int, int]:
+    """Calculate how many FOVs are needed to cover an image with given FOV size and overlap."""
+    height, width = image_shape[:2]
+    fov_h, fov_w = fov_size
+
+    if overlap >= fov_h or overlap >= fov_w:
+        raise ValueError("Overlap cannot be >= FOV size")
+
+    step_y = fov_h - overlap
+    step_x = fov_w - overlap
+
+    n_fovs_y = math.ceil((height - fov_h) / step_y) + 1 if height > fov_h else 1
+    n_fovs_x = math.ceil((width - fov_w) / step_x) + 1 if width > fov_w else 1
+
+    return n_fovs_y, n_fovs_x
+
+
+def split_image_into_fovs(
+    image: NDArray,
+    n_fovs_x: int,
+    n_fovs_y: int
 ) -> Tuple[NDArray, List[Tuple[int, int, int, int]], Tuple[int, int]]:
     """
-    Split image (H, W) into field-of-view (FOV) tiles for BaSiC processing.
+    Split image (H, W) into FOV tiles with adaptive sizing to handle remainders.
+
+    The image is divided into n_fovs_y * n_fovs_x tiles. Remainder pixels are
+    distributed across tiles (some tiles get +1 pixel) to exactly cover the image
+    without padding.
     """
     if image.ndim != 2:
         raise ValueError(f"Image must be 2D, got shape {image.shape}")
 
-    image_h, image_w = image.shape
-    fov_h, fov_w = fov_size
+    if n_fovs_x <= 0 or n_fovs_y <= 0:
+        raise ValueError("Number of FOVs must be positive")
 
-    if overlap >= min(fov_h, fov_w):
-        raise ValueError(f"Overlap ({overlap}) must be < FOV size {fov_size}")
+    height, width = image.shape
 
-    stride_h = fov_h - overlap
-    stride_w = fov_w - overlap
+    # Calculate base FOV sizes and remainders
+    base_w = width // n_fovs_x
+    base_h = height // n_fovs_y
+    remainder_x = width % n_fovs_x
+    remainder_y = height % n_fovs_y
 
-    n_fovs_h = int(np.ceil((image_h - overlap) / stride_h))
-    n_fovs_w = int(np.ceil((image_w - overlap) / stride_w))
+    # Calculate actual FOV sizes (some FOVs get +1 pixel to handle remainders)
+    fov_widths = [base_w + (1 if j < remainder_x else 0) for j in range(n_fovs_x)]
+    fov_heights = [base_h + (1 if i < remainder_y else 0) for i in range(n_fovs_y)]
 
-    n_fovs = n_fovs_h * n_fovs_w
+    max_w = max(fov_widths)
+    max_h = max(fov_heights)
 
-    fov_stack = np.zeros((n_fovs, fov_h, fov_w), dtype=image.dtype)
+    # Create FOV stack with padding to max dimensions
+    n_fovs = n_fovs_y * n_fovs_x
+    fov_stack = np.zeros((n_fovs, max_h, max_w), dtype=image.dtype)
+
+    # Extract FOVs and store position info
     positions = []
+    y_start = 0
     idx = 0
 
-    for i in range(n_fovs_h):
-        row_start = i * stride_h
-        row_end = min(row_start + fov_h, image_h)
-        actual_h = row_end - row_start
+    for i in range(n_fovs_y):
+        x_start = 0
+        for j in range(n_fovs_x):
+            h = fov_heights[i]
+            w = fov_widths[j]
 
-        for j in range(n_fovs_w):
-            col_start = j * stride_w
-            col_end = min(col_start + fov_w, image_w)
-            actual_w = col_end - col_start
+            fov_stack[idx, :h, :w] = image[y_start:y_start + h, x_start:x_start + w]
 
-            fov_stack[idx, :actual_h, :actual_w] = \
-                image[row_start:row_end, col_start:col_end]
-
-            positions.append((row_start, col_start, actual_h, actual_w))
+            positions.append((y_start, x_start, h, w))
+            x_start += w
             idx += 1
+        y_start += fov_heights[i]
 
-    return fov_stack, positions, (fov_h, fov_w)
+    return fov_stack, positions, (max_h, max_w)
 
 
 def reconstruct_image_from_fovs(
@@ -145,9 +177,8 @@ def apply_basic_correction(
     if image.ndim != 2:
         raise ValueError(f"apply_basic_correction requires a 2D image, got shape {image.shape}")
 
-    fov_stack, positions, _ = split_image_into_fovs(
-        image, fov_size, overlap=0
-    )
+    n_fovs_y, n_fovs_x = count_fovs(image.shape, fov_size)
+    fov_stack, positions, _ = split_image_into_fovs(image, n_fovs_x, n_fovs_y)
 
     basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
 
