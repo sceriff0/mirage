@@ -59,7 +59,7 @@ workflow PREPROCESSING {
     ch_preprocessed_with_meta = PREPROCESS.out.preprocessed
 
     // Generate QC images (PNG per channel) for visual inspection
-    GENERATE_PREPROCESS_QC ( ch_preprocessed_with_meta )
+    // GENERATE_PREPROCESS_QC ( ch_preprocessed_with_meta )
 
     // Generate checkpoint CSV for restart from preprocessing step
     ch_checkpoint_data = ch_preprocessed_with_meta
