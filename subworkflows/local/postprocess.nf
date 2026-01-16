@@ -24,11 +24,10 @@ include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv
 
     Input:
         ch_registered: Channel of [meta, file] tuples for registered images
-        reference_markers: List of markers to identify reference image (not used, uses is_reference metadata)
 
     Output:
         phenotype_csv: Phenotyped cell data CSV
-        phenotype_mask: Phenotype mask image
+        phenotype_geojson: QuPath-compatible GeoJSON with cell detections
         merged_csv: Merged quantification CSV
         cell_mask: Cell segmentation mask
 ========================================================================================
@@ -112,20 +111,12 @@ workflow POSTPROCESSING {
     MERGE_QUANT_CSVS(ch_grouped_csvs)
 
     // ========================================================================
-    // PHENOTYPING - Join merged CSV with patient's mask
+    // PHENOTYPING - Run on merged CSV (no longer needs segmentation mask)
     // ========================================================================
-    ch_for_phenotype = MERGE_QUANT_CSVS.out.merged_csv
-        .map { meta, csv -> [meta.patient_id, meta, csv] }
-        .join(
-            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
-            by: 0
-        )
-        .map { _patient_id, meta, csv, mask -> [meta, csv, mask] }
-
-    PHENOTYPE(ch_for_phenotype)
+    PHENOTYPE(MERGE_QUANT_CSVS.out.merged_csv)
 
     // ========================================================================
-    // MERGE - Combine split channel TIFFs with masks (per patient)
+    // MERGE - Combine split channel TIFFs with segmentation mask (per patient)
     // ========================================================================
     // Group split channel TIFFs by patient for merging
     // SPLIT_CHANNELS already handles DAPI filtering correctly
@@ -150,23 +141,15 @@ workflow POSTPROCESSING {
             [patient_meta, tiffs]
         }
 
-    // Join split channels with all masks for MERGE
+    // Join split channels with segmentation mask for MERGE
     ch_for_merge = ch_split_grouped
         .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
         .join(
             SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] },
             by: 0
         )
-        .join(
-            PHENOTYPE.out.mask.map { meta, mask -> [meta.patient_id, mask] },
-            by: 0
-        )
-        .join(
-            PHENOTYPE.out.mapping.map { meta, mapping -> [meta.patient_id, mapping] },
-            by: 0
-        )
-        .map { _patient_id, meta, split_tiffs, cell_mask, pheno_mask, pheno_mapping ->
-            [meta, split_tiffs, cell_mask, pheno_mask, pheno_mapping]
+        .map { _patient_id, meta, split_tiffs, cell_mask ->
+            [meta, split_tiffs, cell_mask]
         }
 
     // MERGE_AND_PYRAMID combines merge + pyramid generation in one step
@@ -182,8 +165,8 @@ workflow POSTPROCESSING {
             def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${csv.name}"
             [meta.patient_id, published_path]
         }
-        .join(PHENOTYPE.out.mask.map { meta, mask ->
-            def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${mask.name}"
+        .join(PHENOTYPE.out.geojson.map { meta, geojson ->
+            def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${geojson.name}"
             [meta.patient_id, published_path]
         })
         .join(PHENOTYPE.out.mapping.map { meta, map ->
@@ -202,15 +185,15 @@ workflow POSTPROCESSING {
             def published_path = "${params.outdir}/${meta.patient_id}/pyramid/${pyramid.name}"
             [meta.patient_id, published_path]
         })
-        .map { patient_id, pheno_csv, pheno_mask, pheno_map, merged_csv, cell_mask, pyramid ->
+        .map { patient_id, pheno_csv, pheno_geojson, pheno_map, merged_csv, cell_mask, pyramid ->
             [
                 patient_id,
                 pheno_csv,
-                pheno_mask,
+                pheno_geojson,
                 pheno_map,
                 merged_csv,
                 cell_mask,
-                pyramid  // Now pyramid is the merged+pyramidal file
+                pyramid
             ]
         }
         .toList()
@@ -218,7 +201,7 @@ workflow POSTPROCESSING {
 
     WRITE_CHECKPOINT_CSV(
         'postprocessed',
-        'patient_id,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask,pyramid',
+        'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid',
         ch_checkpoint_data
     )
 

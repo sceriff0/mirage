@@ -29,11 +29,10 @@ process MERGE_AND_PYRAMID {
     publishDir "${params.outdir}/${meta.patient_id}/pyramid", mode: 'copy'
 
     input:
-    tuple val(meta), path(split_channels, stageAs: 'channels/*'), path(seg_mask), path(pheno_mask), path(pheno_mapping)
+    tuple val(meta), path(split_channels, stageAs: 'channels/*'), path(seg_mask)
 
     output:
     tuple val(meta), path("pyramid.ome.tiff"), emit: pyramid
-    path "*.phenotype_colors.json", optional: true, emit: colormap
     path "versions.yml", emit: versions
 
     when:
@@ -66,8 +65,6 @@ process MERGE_AND_PYRAMID {
         --tile-size ${tile_size} \\
         --compression ${compression} \\
         --segmentation-mask ${seg_mask} \\
-        --phenotype-mask ${pheno_mask} \\
-        --phenotype-mapping ${pheno_mapping} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

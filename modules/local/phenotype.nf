@@ -9,13 +9,14 @@ process PHENOTYPE {
     publishDir "${params.outdir}/${meta.patient_id}/phenotype", mode: 'copy'
 
     input:
-    tuple val(meta), path(quant_csv), path(seg_mask)
+    tuple val(meta), path(quant_csv)
 
     output:
-    tuple val(meta), path("pheno/phenotypes_data.csv")   , emit: csv
-    tuple val(meta), path("pheno/phenotypes_mask.tiff")  , emit: mask
-    tuple val(meta), path("pheno/phenotype_mapping.json"), emit: mapping
-    path "versions.yml"                                   , emit: versions
+    tuple val(meta), path("pheno/phenotypes_data.csv")            , emit: csv
+    tuple val(meta), path("pheno/phenotypes.geojson")             , emit: geojson
+    tuple val(meta), path("pheno/phenotypes.classifications.json"), emit: classifications
+    tuple val(meta), path("pheno/phenotypes_mapping.json")        , emit: mapping
+    path "versions.yml"                                            , emit: versions
 
     when:
     task.ext.when == null || task.ext.when
@@ -25,14 +26,15 @@ process PHENOTYPE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def markers_arg = params.pheno_markers ? "--markers ${params.pheno_markers.join(' ')}" : ''
     def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
+    def pixel_size = params.pixel_size ?: 0.325
     """
     echo "Sample: ${meta.patient_id}"
 
     mkdir -p pheno
     phenotype.py \\
         --cell_data ${quant_csv} \\
-        --segmentation_mask ${seg_mask} \\
         -o pheno \\
+        --pixel_size ${pixel_size} \\
         ${markers_arg} \\
         ${cutoffs_arg} \\
         --quality_percentile ${params.pheno_quality_percentile} \\
@@ -52,8 +54,9 @@ process PHENOTYPE {
     """
     mkdir -p pheno
     touch pheno/phenotypes_data.csv
-    touch pheno/phenotypes_mask.tiff
-    touch pheno/phenotype_mapping.json
+    touch pheno/phenotypes.geojson
+    touch pheno/phenotypes.classifications.json
+    touch pheno/phenotypes_mapping.json
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
