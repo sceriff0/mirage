@@ -53,12 +53,19 @@ process COPY_RESULTS {
         echo "Status:      SUCCESS" >> rsync.log
         echo "" >> rsync.log
         echo "Results successfully copied to ${destination_dir}" >> rsync.log
+        
+        # Delete source after successful copy
+        echo "" >> rsync.log
+        echo "Deleting source directory: ${source_dir}" >> rsync.log
+        rm -rf ${source_dir}
+        echo "Source deleted successfully" >> rsync.log
     else
         echo "Status:      FAILED" >> rsync.log
         echo "" >> rsync.log
         echo "ERROR: Rsync failed with exit code \$EXIT_CODE" >> rsync.log
         echo "Check rsync_detailed.log for details" >> rsync.log
         exit \$EXIT_CODE
+
     fi
 
     # Append detailed log for debugging
