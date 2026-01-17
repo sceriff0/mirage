@@ -1,0 +1,172 @@
+nextflow_process {
+
+    name "Test CONVERT_IMAGE process"
+    script "modules/local/convert_image.nf"
+    process "CONVERT_IMAGE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "convert_image"
+
+    test("Should convert to OME-TIFF - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.ome_tiff },
+                { assert process.out.versions },
+                { with(process.out.ome_tiff) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                }}
+            )
+        }
+    }
+
+    test("Should create channels.txt file - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.ome_tiff) {
+                    // Check that channels.txt is emitted (third element in tuple)
+                    assert get(0).get(2).toString().endsWith('_channels.txt')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve channel names from metadata - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: false,
+                        channels: ['DAPI', 'GFP', 'RFP']
+                    ],
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.ome_tiff) {
+                    assert get(0).get(0).channels == ['DAPI', 'GFP', 'RFP']
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with tifffile/aicsimageio - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

@@ -1,0 +1,48 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              50,
+              30
+            ],
+            [
+              55,
+              30
+            ],
+            [
+              55,
+              35
+            ],
+            [
+              50,
+              35
+            ],
+            [
+              50,
+              30
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "objectType": "cell",
+        "classification": {
+          "name": "PANCK+",
+          "colorRGB": 65280
+        },
+        "measurements": [
+          {
+            "name": "DAPI",
+            "value": 8500
+          }
+        ]
+      }
+    }
+  ]
+}

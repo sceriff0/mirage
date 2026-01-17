@@ -1,0 +1,172 @@
+nextflow_process {
+
+    name "Test GENERATE_PREPROCESS_QC process"
+    script "modules/local/generate_preprocess_qc.nf"
+    process "GENERATE_PREPROCESS_QC"
+
+    tag "modules"
+    tag "modules_local"
+    tag "generate_preprocess_qc"
+
+    test("Should generate preprocessing QC images - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                preprocess_qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.qc },
+                { assert process.out.versions }
+            )
+        }
+    }
+
+    test("Should create PNG for each channel - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                preprocess_qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.qc) {
+                    assert size() == 1
+                    // Should create PNGs
+                    assert get(0).get(1).any { it.toString().endsWith('.png') }
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                preprocess_qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'preserved'
+                    ],
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.qc) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'PANCK']
+                    assert get(0).get(0).custom_field == 'preserved'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                preprocess_qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                preprocess_qc_scale_factor = 0.25
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

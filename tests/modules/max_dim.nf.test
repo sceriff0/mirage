@@ -1,0 +1,138 @@
+nextflow_process {
+
+    name "Test MAX_DIM process"
+    script "modules/local/max_dim.nf"
+    process "MAX_DIM"
+
+    tag "modules"
+    tag "modules_local"
+    tag "max_dim"
+
+    test("Should compute maximum dimensions - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/sample_dims.txt', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.max_dims_file },
+                { assert process.out.versions },
+                { with(process.out.max_dims_file) {
+                    assert size() == 1
+                    assert get(0).get(0) == 'P001'
+                    assert get(0).get(1).toString().endsWith('_max_dims.txt')
+                }}
+            )
+        }
+    }
+
+    test("Should handle multiple dim files - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    [
+                        file('$projectDir/tests/testdata/sample_dims.txt', checkIfExists: true)
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.max_dims_file }
+            )
+        }
+    }
+
+    test("Should preserve patient ID - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P002',
+                    file('$projectDir/tests/testdata/sample_dims.txt', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.max_dims_file) {
+                    assert get(0).get(0) == 'P002'
+                    assert get(0).get(1).toString().contains('P002')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/sample_dims.txt', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/sample_dims.txt', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

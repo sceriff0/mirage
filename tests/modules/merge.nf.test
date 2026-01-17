@@ -1,0 +1,169 @@
+nextflow_process {
+
+    name "Test MERGE process"
+    script "modules/local/merge.nf"
+    process "MERGE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "merge"
+
+    test("Should merge channels into single file - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_phenotype_mapping.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.merged },
+                { assert process.out.versions },
+                { with(process.out.merged) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    assert get(0).get(1).toString().endsWith('merged_all.ome.tiff')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'test'
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_phenotype_mapping.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.merged) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).custom_field == 'test'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_phenotype_mapping.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_phenotype_mapping.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

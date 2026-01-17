@@ -1,0 +1,176 @@
+nextflow_process {
+
+    name "Test REGISTER process"
+    script "modules/local/register.nf"
+    process "REGISTER"
+
+    tag "modules"
+    tag "modules_local"
+    tag "register"
+
+    test("Should run VALIS batch registration - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                        file('$projectDir/tests/testdata/P001_mov2.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.registered },
+                { assert process.out.versions },
+                { with(process.out.registered) {
+                    assert size() == 1
+                    assert get(0).get(0) == 'P001'
+                }},
+                { with(process.out.versions) {
+                    assert size() == 1
+                    assert get(0).toString().endsWith('versions.yml')
+                }}
+            )
+        }
+    }
+
+    test("Should handle single moving image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.registered },
+                { assert process.out.versions }
+            )
+        }
+    }
+
+    test("Should preserve patient ID through registration - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P002',
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P002', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P002', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.registered) {
+                    assert get(0).get(0) == 'P002'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with process info - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

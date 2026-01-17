@@ -1,0 +1,182 @@
+nextflow_process {
+
+    name "Test GENERATE_REGISTRATION_QC process"
+    script "modules/local/generate_registration_qc.nf"
+    process "GENERATE_REGISTRATION_QC"
+
+    tag "modules"
+    tag "modules_local"
+    tag "generate_registration_qc"
+
+    test("Should generate QC images - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.qc },
+                { assert process.out.qc_fullres },
+                { assert process.out.versions }
+            )
+        }
+    }
+
+    test("Should create both preview and fullres outputs - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.qc) {
+                    assert size() == 1
+                    // Should create PNG or TIF preview
+                    assert get(0).get(1).toString().contains('_QC_RGB')
+                }},
+                { with(process.out.qc_fullres) {
+                    assert size() == 1
+                    // Should create fullres TIF
+                    assert get(0).get(1).toString().contains('_QC_RGB_fullres.tif')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'test'
+                    ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.qc) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).custom_field == 'test'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                qc_scale_factor = 0.25
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                qc_scale_factor = 0.25
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

@@ -1,0 +1,116 @@
+nextflow_process {
+
+    name "Test COMPUTE_FEATURES process"
+    script "modules/local/compute_features.nf"
+    process "COMPUTE_FEATURES"
+
+    tag "modules"
+    tag "modules_local"
+    tag "compute_features"
+
+    test("Should compute features - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                id = 'P001'
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.features },
+                { assert process.out.versions },
+                { with(process.out.features) {
+                    assert size() == 1
+                    assert get(0).toString().endsWith('_features.json')
+                }}
+            )
+        }
+    }
+
+    test("Should output JSON file - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                id = 'P001'
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov2.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.features) {
+                    // Output should contain moving image name
+                    assert get(0).toString().contains('P001_mov2')
+                    assert get(0).toString().endsWith('_features.json')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                id = 'P001'
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+}

@@ -1,0 +1,231 @@
+nextflow_workflow {
+
+    name "Test POSTPROCESSING subworkflow"
+    script "subworkflows/local/postprocess.nf"
+    workflow "POSTPROCESSING"
+
+    tag "subworkflow"
+    tag "postprocessing"
+
+    test("Should run full postprocessing - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should segment reference images only - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov2.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should handle single patient - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should handle multi-patient data - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')],
+                    [[patient_id: 'P002', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P002_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+
+    test("Should create checkpoint CSV - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.checkpoint_csv) {
+                    assert size() == 1
+                }}
+            )
+        }
+    }
+
+    test("Should handle two-channel images - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                quant_gpu = false
+                pixel_size = 0.325
+                pheno_quality_percentile = 0.05
+                pheno_noise_percentile = 0.95
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv }
+            )
+        }
+    }
+}

@@ -1,0 +1,15 @@
+{
+  "pre_registration": {
+    "mean_distance": 15.3,
+    "median_distance": 12.8,
+    "std_distance": 5.2,
+    "n_matches": 45
+  },
+  "post_registration": {
+    "mean_distance": 2.1,
+    "median_distance": 1.8,
+    "std_distance": 0.9,
+    "n_matches": 45
+  },
+  "improvement": 86.3
+}

@@ -1,0 +1,222 @@
+nextflow_process {
+
+    name "Test MERGE_AND_PYRAMID process"
+    script "modules/local/merge_and_pyramid.nf"
+    process "MERGE_AND_PYRAMID"
+
+    tag "modules"
+    tag "modules_local"
+    tag "merge_and_pyramid"
+
+    test("Should create pyramidal OME-TIFF - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.pyramid },
+                { assert process.out.versions },
+                { with(process.out.pyramid) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    assert get(0).get(1).toString().endsWith('pyramid.ome.tiff')
+                }}
+            )
+        }
+    }
+
+    test("Should handle multi-channel input - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.pyramid }
+            )
+        }
+    }
+
+    test("Should preserve metadata through process - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'preserved'
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.pyramid) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'PANCK']
+                    assert get(0).get(0).custom_field == 'preserved'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with tifffile/numpy - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 3
+                pyramid_scale = 2
+                tilex = 256
+                compression = 'lzw'
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

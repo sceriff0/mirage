@@ -1,0 +1,210 @@
+nextflow_process {
+
+    name "Test ESTIMATE_FEATURE_DISTANCES process"
+    script "modules/local/estimate_feature_distances.nf"
+    process "ESTIMATE_FEATURE_DISTANCES"
+
+    tag "modules"
+    tag "modules_local"
+    tag "estimate_feature_distances"
+
+    test("Should estimate feature distances - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)  // Using as registered
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.distance_metrics },
+                { assert process.out.distance_plots },
+                { assert process.out.versions }
+            )
+        }
+    }
+
+    test("Should output metrics JSON and histogram PNG - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.distance_metrics) {
+                    assert size() == 1
+                    assert get(0).get(1).toString().endsWith('_feature_distances.json')
+                }},
+                { with(process.out.distance_plots) {
+                    assert size() == 1
+                    assert get(0).get(1).toString().endsWith('_distance_histogram.png')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK'],
+                        custom_field: 'test'
+                    ],
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.distance_metrics) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).custom_field == 'test'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                registration_method = 'valis'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            params {
+                container = [registration: 'docker://bolt3x/attend_image_analysis:debug_diffeo']
+                feature_detector = 'superpoint'
+                feature_max_dim = 2048
+                feature_n_features = 5000
+                outdir = "$outputDir"
+                registration_method = 'valis'
+            }
+            process {
+                """
+                // Set ext.when to false
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped but not fail
+            assert process.success
+        }
+    }
+}

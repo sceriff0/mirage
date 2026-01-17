@@ -227,7 +227,166 @@ print("  - invalid_no_dapi.csv")
 print("  - invalid_checkpoint_missing_col.csv")
 print("  - invalid_checkpoint_bad_ref.csv")
 print("  - invalid_file_not_found.csv")
+# =============================================================================
+# 6. Generate additional test fixtures for module tests
+# =============================================================================
+print("\n6. Creating additional test fixtures for module tests...")
+
+# 6a. Merged quantification CSV for phenotype tests
+import json
+
+with open(OUT_DIR / 'sample_merged_quant.csv', 'w') as f:
+    f.write('label,centroid_x,centroid_y,area,perimeter,eccentricity,major_axis,minor_axis,solidity,DAPI,PANCK,SMA\n')
+    np.random.seed(42)
+    for i in range(1, 21):
+        cx = np.random.uniform(10, 118)
+        cy = np.random.uniform(10, 118)
+        area = np.random.randint(150, 350)
+        perimeter = np.random.uniform(45, 75)
+        eccentricity = np.random.uniform(0.3, 0.6)
+        major = np.random.uniform(12, 25)
+        minor = np.random.uniform(8, 18)
+        solidity = np.random.uniform(0.85, 0.98)
+        dapi = np.random.randint(6000, 12000)
+        panck = np.random.randint(1500, 8000)
+        sma = np.random.randint(1000, 5000)
+        f.write(f'{i},{cx:.1f},{cy:.1f},{area},{perimeter:.1f},{eccentricity:.2f},{major:.1f},{minor:.1f},{solidity:.2f},{dapi},{panck},{sma}\n')
+print(f"  Created sample_merged_quant.csv (20 cells)")
+
+# 6b. Max dimensions file for padding tests
+with open(OUT_DIR / 'sample_max_dims.txt', 'w') as f:
+    f.write('MAX_HEIGHT 256\n')
+    f.write('MAX_WIDTH 256\n')
+print(f"  Created sample_max_dims.txt")
+
+# 6c. Individual dimensions file
+with open(OUT_DIR / 'sample_dims.txt', 'w') as f:
+    f.write('P001_ref.ome.tiff 128 128\n')
+    f.write('P001_mov1.ome.tiff 128 128\n')
+print(f"  Created sample_dims.txt")
+
+# 6d. Sample features JSON
+features = {
+    "keypoints": [
+        {"x": 25.5, "y": 30.2, "descriptor": [0.1] * 256},
+        {"x": 50.1, "y": 45.8, "descriptor": [0.2] * 256},
+        {"x": 80.3, "y": 70.5, "descriptor": [0.3] * 256},
+        {"x": 100.0, "y": 95.2, "descriptor": [0.15] * 256},
+        {"x": 60.5, "y": 110.8, "descriptor": [0.25] * 256}
+    ],
+    "detector": "superpoint",
+    "n_features": 5
+}
+with open(OUT_DIR / 'sample_features.json', 'w') as f:
+    json.dump(features, f, indent=2)
+print(f"  Created sample_features.json (5 keypoints)")
+
+# 6e. Phenotype mapping JSON
+phenotype_mapping = {
+    "phenotypes": {
+        "0": "Unassigned",
+        "1": "PANCK+",
+        "2": "SMA+",
+        "3": "PANCK+SMA+"
+    },
+    "colors": {
+        "0": "#808080",
+        "1": "#00FF00",
+        "2": "#FF0000",
+        "3": "#FFFF00"
+    }
+}
+with open(OUT_DIR / 'sample_phenotype_mapping.json', 'w') as f:
+    json.dump(phenotype_mapping, f, indent=2)
+print(f"  Created sample_phenotype_mapping.json")
+
+# 6f. Sample GeoJSON for phenotype output
+geojson = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[50, 30], [55, 30], [55, 35], [50, 35], [50, 30]]]
+            },
+            "properties": {
+                "objectType": "cell",
+                "classification": {"name": "PANCK+", "colorRGB": 65280},
+                "measurements": [{"name": "DAPI", "value": 8500}]
+            }
+        }
+    ]
+}
+with open(OUT_DIR / 'sample_phenotypes.geojson', 'w') as f:
+    json.dump(geojson, f, indent=2)
+print(f"  Created sample_phenotypes.geojson")
+
+# 6g. Feature distance metrics JSON
+metrics = {
+    "pre_registration": {
+        "mean_distance": 15.3,
+        "median_distance": 12.8,
+        "std_distance": 5.2,
+        "n_matches": 45
+    },
+    "post_registration": {
+        "mean_distance": 2.1,
+        "median_distance": 1.8,
+        "std_distance": 0.9,
+        "n_matches": 45
+    },
+    "improvement": 86.3
+}
+with open(OUT_DIR / 'sample_feature_metrics.json', 'w') as f:
+    json.dump(metrics, f, indent=2)
+print(f"  Created sample_feature_metrics.json")
+
+# 6h. Single channel TIF images (already exist but ensure proper format)
+for ch_name in ['DAPI', 'PANCK', 'SMA']:
+    img = np.random.randint(100, 10000, size=(128, 128), dtype=np.uint16)
+    tifffile.imwrite(OUT_DIR / f'sample_{ch_name}.tif', img, photometric='minisblack')
+print(f"  Created single-channel sample TIFs")
+
+# 6i. Channels text file
+with open(OUT_DIR / 'sample_channels.txt', 'w') as f:
+    f.write('DAPI\n')
+    f.write('PANCK\n')
+    f.write('SMA\n')
+print(f"  Created sample_channels.txt")
+
+print("\n" + "="*70)
+print("Test data generation complete!")
+print("="*70)
+print(f"\nGenerated files in {OUT_DIR}:")
+print("\nValid data:")
+print("  - P001_ref.ome.tiff, P001_mov1.ome.tiff, P001_mov2.ome.tiff")
+print("  - P002_ref.ome.tiff")
+print("  - P001_cell_mask.npy, P002_cell_mask.npy")
+print("  - valid_preprocessing.csv")
+print("  - valid_checkpoint_registration.csv")
+print("  - valid_checkpoint_postprocessing.csv")
+print("  - test_input.csv")
+print("\nInvalid data (for validation testing):")
+print("  - invalid_multi_ref.csv")
+print("  - invalid_no_ref.csv")
+print("  - invalid_dapi_position.csv")
+print("  - invalid_no_dapi.csv")
+print("  - invalid_checkpoint_missing_col.csv")
+print("  - invalid_checkpoint_bad_ref.csv")
+print("  - invalid_file_not_found.csv")
+print("\nModule test fixtures:")
+print("  - sample_merged_quant.csv")
+print("  - sample_max_dims.txt")
+print("  - sample_dims.txt")
+print("  - sample_features.json")
+print("  - sample_phenotype_mapping.json")
+print("  - sample_phenotypes.geojson")
+print("  - sample_feature_metrics.json")
+print("  - sample_DAPI.tif, sample_PANCK.tif, sample_SMA.tif")
+print("  - sample_channels.txt")
 print("\nThese files can be used to test:")
 print("  1. Full pipeline execution with -profile test")
 print("  2. Individual process testing with nf-test")
 print("  3. Input validation and error handling")
+print("  4. Module-level unit tests")

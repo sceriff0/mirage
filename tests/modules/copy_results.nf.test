@@ -1,0 +1,98 @@
+nextflow_process {
+
+    name "Test COPY_RESULTS process"
+    script "modules/local/copy_results.nf"
+    process "COPY_RESULTS"
+
+    tag "modules"
+    tag "modules_local"
+    tag "copy_results"
+
+    test("Should copy results to output - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = true  // results_ready trigger
+                input[1] = "$projectDir/tests/testdata"  // source_dir
+                input[2] = "$outputDir/copied_results"    // destination_dir
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.log },
+                { with(process.out.log) {
+                    assert size() == 1
+                    assert get(0).toString().endsWith('rsync.log')
+                }}
+            )
+        }
+    }
+
+    test("Should log source and destination - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = true  // results_ready trigger
+                input[1] = "/source/path"
+                input[2] = "/dest/path"
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.log }
+            )
+        }
+    }
+
+    test("Should skip when destination is null") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = true
+                input[1] = "$projectDir/tests/testdata"
+                input[2] = null  // No destination
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped (when condition)
+            assert process.success
+        }
+    }
+
+    test("Should skip when destination equals source") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = true
+                input[1] = "$projectDir/tests/testdata"
+                input[2] = "$projectDir/tests/testdata"  // Same as source
+                """
+            }
+        }
+
+        then {
+            // Process should be skipped (when condition)
+            assert process.success
+        }
+    }
+}
