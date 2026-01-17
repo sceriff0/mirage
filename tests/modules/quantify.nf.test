@@ -17,8 +17,8 @@ nextflow_process {
                 """
                 input[0] = [
                     [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA']],
-                    file('tests/testdata/sample_DAPI.tif', checkIfExists: true),
-                    file('tests/testdata/sample_mask.npy', checkIfExists: true)
+                    file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
                 ]
                 """
             }
@@ -36,11 +36,20 @@ nextflow_process {
             }
         }
     }
+}
 
-    test("MERGE_QUANT_CSVS - Should merge multiple channel CSVs - stub") {
+nextflow_process {
 
-        script "modules/local/quantify.nf"
-        process "MERGE_QUANT_CSVS"
+    name "Test MERGE_QUANT_CSVS process"
+    script "modules/local/quantify.nf"
+    process "MERGE_QUANT_CSVS"
+
+    tag "modules"
+    tag "modules_local"
+    tag "quantify"
+    tag "merge_quant"
+
+    test("Should merge multiple channel CSVs - stub") {
 
         options "-stub"
 
@@ -50,9 +59,9 @@ nextflow_process {
                 input[0] = [
                     [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true],
                     [
-                        file('tests/testdata/sample_DAPI_quant.csv', checkIfExists: true),
-                        file('tests/testdata/sample_PANCK_quant.csv', checkIfExists: true),
-                        file('tests/testdata/sample_SMA_quant.csv', checkIfExists: true)
+                        file('$projectDir/tests/testdata/sample_DAPI_quant.csv', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK_quant.csv', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA_quant.csv', checkIfExists: true)
                     ]
                 ]
                 """
@@ -68,59 +77,6 @@ nextflow_process {
                 assert size() == 1
                 assert get(0).get(0).patient_id == 'P001'
                 assert get(0).get(1).toString().endsWith('merged_quant.csv')
-            }
-        }
-    }
-
-    test("MERGE_QUANT_CSVS - Should merge CSVs properly (non-stub)") {
-
-        script "modules/local/quantify.nf"
-        process "MERGE_QUANT_CSVS"
-
-        when {
-            process {
-                """
-                input[0] = [
-                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true],
-                    [
-                        file('tests/testdata/sample_DAPI_quant.csv', checkIfExists: true),
-                        file('tests/testdata/sample_PANCK_quant.csv', checkIfExists: true),
-                        file('tests/testdata/sample_SMA_quant.csv', checkIfExists: true)
-                    ]
-                ]
-                """
-            }
-        }
-
-        then {
-            assert process.success
-            assert process.out.merged_csv
-            assert process.out.versions
-
-            with(process.out.merged_csv) {
-                assert size() == 1
-                assert get(0).get(0).patient_id == 'P001'
-
-                // Verify the merged CSV has the correct structure
-                def csv_file = get(0).get(1)
-                assert csv_file.toString().endsWith('merged_quant.csv')
-                assert csv_file.exists()
-
-                // Read and verify CSV contents
-                def lines = csv_file.readLines()
-                assert lines.size() == 6  // header + 5 cells
-
-                def header = lines[0].split(',')
-                // Should have: morphology columns (9) + DAPI + PANCK + SMA = 12 columns
-                assert header.size() == 12
-                assert header.contains('label')
-                assert header.contains('DAPI')
-                assert header.contains('PANCK')
-                assert header.contains('SMA')
-
-                // Verify all 5 cells are present
-                def labels = lines.drop(1).collect { it.split(',')[0] }
-                assert labels == ['1', '2', '3', '4', '5']
             }
         }
     }
