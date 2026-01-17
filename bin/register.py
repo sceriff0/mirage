@@ -354,6 +354,32 @@ def valis_registration(input_dir: str, out: str,
     log_progress(f"  - Original image list: {registrar.original_img_list}")
     log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
+    # Check if non-rigid registration succeeded by examining displacement fields
+    # VALIS sets bk_dxdy and fwd_dxdy on Slide objects after successful non-rigid registration
+    # If these are None, non-rigid registration failed (common with multi-modal IF images)
+    non_rigid_available = False
+    for slide_name, slide_obj in registrar.slide_dict.items():
+        # Check for displacement fields - VALIS stores these as numpy arrays or pyvips Images
+        has_bk = hasattr(slide_obj, 'bk_dxdy') and slide_obj.bk_dxdy is not None
+        has_fwd = hasattr(slide_obj, 'fwd_dxdy') and slide_obj.fwd_dxdy is not None
+        # Also check if displacements are stored as files (for large images)
+        has_stored = hasattr(slide_obj, 'stored_dxdy') and slide_obj.stored_dxdy
+
+        if has_bk or has_fwd or has_stored:
+            non_rigid_available = True
+            log_progress(f"  ✓ Non-rigid displacement fields found for: {slide_name}")
+            break
+
+    if non_rigid_available:
+        log_progress("  ✓ Non-rigid registration succeeded - will apply full transforms")
+        use_non_rigid = True
+    else:
+        log_progress("  ⚠ No non-rigid displacement fields found in any slide")
+        log_progress("  ⚠ This commonly occurs with multi-modal immunofluorescence images")
+        log_progress("    when feature matching between panels finds too few correspondences")
+        log_progress("  → Falling back to RIGID-ONLY transforms (affine registration)")
+        use_non_rigid = False
+
     log_progress(f"\nWarping slides individually to: {out}")
     log_progress(f"  - Output directory: {out}")
     log_progress(f"  - Strategy: Individual warp_and_save_slide() for low RAM")
@@ -404,15 +430,16 @@ def valis_registration(input_dir: str, out: str,
             # Warp and save using official VALIS method with tiled processing
             # Tile size chosen to balance memory vs I/O overhead
             # For 60K x 50K images, 2048x2048 tiles = ~900 tiles per image
-            log_progress(f"  Applying transforms (rigid + non-rigid + micro) with tiled processing...")
+            transform_type = "rigid + non-rigid" if use_non_rigid else "rigid-only"
+            log_progress(f"  Applying {transform_type} transforms with tiled processing...")
 
             slide_obj.warp_and_save_slide(
                 src_f=src_path,
                 dst_f=out_path,
                 level=0,              # Full resolution
-                non_rigid=True,       # Apply non-rigid transforms
+                non_rigid=use_non_rigid,  # Apply non-rigid if available, else rigid-only
                 crop=True,            # Crop to reference overlap
-                interp_method="bicubic",    # Process in 2K tiles to reduce RAM (must be int, not tuple)
+                interp_method="bicubic",
             )
 
             warped_count += 1
