@@ -29,15 +29,18 @@ os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 # Import from lib modules for DRY principle
 sys.path.insert(0, str(Path(__file__).parent / 'utils'))
-from logger import log_progress
+from logger import get_logger
 from image_utils import load_image_grayscale
+
+# Module-level logger
+logger = get_logger(__name__)
 
 from valis import feature_detectors
 from valis import feature_matcher
 
-# Function definitions removed - now imported from lib modules:
-# - log_progress() -> imported from lib.logger
-# - load_image_grayscale() -> imported from lib.image_utils
+# Function definitions removed - now imported from utils modules:
+# - get_logger() -> imported from utils.logger
+# - load_image_grayscale() -> imported from utils.image_utils
 
 
 def get_feature_detector(detector_type: str = "superpoint"):
@@ -55,19 +58,19 @@ def get_feature_detector(detector_type: str = "superpoint"):
     detector_type = detector_type.lower()
 
     if detector_type == "superpoint":
-        log_progress("Initializing SuperPoint feature detector")
+        logger.info("Initializing SuperPoint feature detector")
         return feature_detectors.SuperPointFD()
     elif detector_type == "disk":
-        log_progress("Initializing DISK feature detector")
+        logger.info("Initializing DISK feature detector")
         return feature_detectors.DiskFD()
     elif detector_type == "dedode":
-        log_progress("Initializing DeDoDe feature detector")
+        logger.info("Initializing DeDoDe feature detector")
         return feature_detectors.DeDoDeFD()
     elif detector_type == "brisk":
-        log_progress("Initializing BRISK feature detector")
+        logger.info("Initializing BRISK feature detector")
         return feature_detectors.BriskFD()
     elif detector_type == "vgg":
-        log_progress("Initializing VGG feature detector")
+        logger.info("Initializing VGG feature detector")
         return feature_detectors.VggFD()
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
@@ -88,13 +91,13 @@ def get_feature_matcher(detector_type: str = "superpoint"):
     detector_type = detector_type.lower()
 
     if detector_type == "superpoint":
-        log_progress("Initializing SuperGlue matcher")
+        logger.info("Initializing SuperGlue matcher")
         return feature_matcher.SuperGlueMatcher()
     elif detector_type in ["disk", "dedode"]:
-        log_progress("Initializing LightGlue matcher")
+        logger.info("Initializing LightGlue matcher")
         return feature_matcher.LightGlueMatcher()
     else:
-        log_progress("Initializing standard Matcher with USAC_MAGSAC filter")
+        logger.info("Initializing standard Matcher with USAC_MAGSAC filter")
         return feature_matcher.Matcher(
             match_filter_method='USAC_MAGSAC',
             ransac_thresh=7
@@ -133,33 +136,33 @@ def compute_and_match_features(
     output_path : str
         Path to saved results JSON file
     """
-    log_progress("=" * 70)
-    log_progress("FEATURE DETECTION AND MATCHING")
-    log_progress("=" * 70)
+    logger.info("=" * 70)
+    logger.info("FEATURE DETECTION AND MATCHING")
+    logger.info("=" * 70)
 
     # Create output directory
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     # Load images
-    log_progress("\n[1/4] Loading images...")
+    logger.info("\n[1/4] Loading images...")
     ref_img = load_image_grayscale(reference_path, max_dim=max_dim)
     mov_img = load_image_grayscale(moving_path, max_dim=max_dim)
 
     # Initialize detector and matcher
-    log_progress("\n[2/4] Initializing feature detector and matcher...")
+    logger.info("\n[2/4] Initializing feature detector and matcher...")
     detector = get_feature_detector(detector_type)
     matcher = get_feature_matcher(detector_type)
 
     # Detect features using the correct VALIS API (detect_and_compute with underscores)
     # Returns: kp_pos_xy (numpy array of shape (N, 2)), desc (numpy array of shape (N, M))
-    log_progress("\n[3/4] Detecting features...")
-    log_progress(f"  Reference image: {os.path.basename(reference_path)}")
+    logger.info("\n[3/4] Detecting features...")
+    logger.info(f"  Reference image: {os.path.basename(reference_path)}")
     ref_kp, ref_desc = detector.detect_and_compute(ref_img, mask=None)
-    log_progress(f"    Detected {len(ref_kp)} keypoints")
+    logger.info(f"    Detected {len(ref_kp)} keypoints")
 
-    log_progress(f"  Moving image: {os.path.basename(moving_path)}")
+    logger.info(f"  Moving image: {os.path.basename(moving_path)}")
     mov_kp, mov_desc = detector.detect_and_compute(mov_img, mask=None)
-    log_progress(f"    Detected {len(mov_kp)} keypoints")
+    logger.info(f"    Detected {len(mov_kp)} keypoints")
 
     # Note: detect_and_compute already filters to MAX_FEATURES (20000) internally
     # Additional filtering is not needed as these are already numpy arrays, not cv2.KeyPoint objects
@@ -167,7 +170,7 @@ def compute_and_match_features(
     # Match features using VALIS match_images API
     # Standard Matcher.match_images signature: (desc1, kp1_xy, desc2, kp2_xy, additional_filtering_kwargs)
     # SuperGlueMatcher/LightGlueMatcher signature: (img1, desc1, kp1_xy, img2, desc2, kp2_xy, additional_filtering_kwargs)
-    log_progress("\n[4/4] Matching features...")
+    logger.info("\n[4/4] Matching features...")
 
     # Check if this is SuperGlue or LightGlue matcher (needs images)
     if isinstance(matcher, feature_matcher.SuperGlueMatcher) or \
@@ -197,8 +200,8 @@ def compute_and_match_features(
     n_matches = match_info.n_matches if hasattr(match_info, 'n_matches') else len(match_info.matched_kp1_xy)
     mean_distance = match_info.distance if hasattr(match_info, 'distance') else 0.0
 
-    log_progress(f"  Matches found: {n_matches}")
-    log_progress(f"  Mean descriptor distance: {mean_distance:.4f}")
+    logger.info(f"  Matches found: {n_matches}")
+    logger.info(f"  Mean descriptor distance: {mean_distance:.4f}")
 
     # Prepare results
     moving_basename = os.path.basename(moving_path)
@@ -227,8 +230,8 @@ def compute_and_match_features(
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
 
-    log_progress(f"\n✓ Results saved to: {output_path}")
-    log_progress("=" * 70)
+    logger.info(f"\n[OK] Results saved to: {output_path}")
+    logger.info("=" * 70)
 
     return results, output_path
 
@@ -265,15 +268,15 @@ def main() -> int:
             args.n_features
         )
 
-        log_progress(f"\nFeature matching complete!")
-        log_progress(f"  Matches: {results['n_matches']}")
-        log_progress(f"  Match ratio: {results['match_ratio']:.2%}")
-        log_progress(f"  Results: {output_path}")
+        logger.info(f"\nFeature matching complete!")
+        logger.info(f"  Matches: {results['n_matches']}")
+        logger.info(f"  Match ratio: {results['match_ratio']:.2%}")
+        logger.info(f"  Results: {output_path}")
 
         return 0
 
     except Exception as e:
-        log_progress(f"ERROR: Feature matching failed: {e}")
+        logger.error(f"[FAIL] Feature matching failed: {e}")
         import traceback
         traceback.print_exc()
         return 1

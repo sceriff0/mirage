@@ -1,10 +1,18 @@
+/*
+ * GPU_REGISTER - GPU-accelerated diffeomorphic registration
+ *
+ * Performs pairwise image registration using GPU-accelerated diffeomorphic
+ * transformation. Includes dynamic resource allocation based on input file size
+ * and automatic retry with reduced crop sizes on OOM errors.
+ *
+ * Input: Reference image and moving image to register
+ * Output: Registered OME-TIFF aligned to reference coordinate space
+ */
 process GPU_REGISTER {
     tag "${meta.patient_id}"
     label 'gpu'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' :
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
+    container 'docker://bolt3x/attend_image_analysis:debug_diffeo'
 
     // FIX WARNING #2: Add retry strategy for GPU OOM errors
     // Retry with reduced crop sizes on memory errors

@@ -87,25 +87,26 @@ def compute_morphology(
     skimage.measure.regionprops_table : Underlying morphology computation
     compute_channel_intensity : Intensity measurements per cell
     """
+    logger.debug(f"Computing morphology: mask shape={mask.shape}, min_area={min_area}")
     mask = np.ascontiguousarray(mask.squeeze())
-    
+
     # Filter cells by area
     labels, counts = np.unique(mask, return_counts=True)
     valid_labels = labels[(labels != 0) & (counts > min_area)]
 
     if len(valid_labels) == 0:
-        logger.warning("No valid cells found after area filtering")
+        logger.warning("[WARN] No valid cells found after area filtering")
         return None, None, None
 
     # Create filtered mask
     mask_filtered = np.where(np.isin(mask, valid_labels), mask, 0)
 
     if np.all(mask_filtered == 0):
-        logger.warning("Filtered mask is empty")
+        logger.warning("[WARN] Filtered mask is empty")
         return None, None, None
 
     # Compute morphological properties
-    logger.info("Computing morphological properties...")
+    logger.debug("Computing morphological properties...")
     props = regionprops_table(
         mask_filtered,
         properties=[
@@ -120,7 +121,7 @@ def compute_morphology(
         inplace=True
     )
 
-    logger.info(f"Found {len(props_df)} valid cells")
+    logger.debug(f"Found {len(props_df)} valid cells")
     return props_df, mask_filtered, valid_labels
 
 
@@ -337,24 +338,31 @@ def run_quantification(
         else:
             mask, _ = load_image(mask_path)
             mask = mask.squeeze()
-        logger.info(f"Mask shape: {mask.shape}")
+        logger.debug(f"  Mask shape: {mask.shape}")
     except FileNotFoundError:
+        logger.error(f"[FAIL] Segmentation mask not found: {mask_path}")
         raise FileNotFoundError(f"Segmentation mask not found: {mask_path}")
     except Exception as e:
+        logger.error(f"[FAIL] Failed to load mask from {mask_path}: {e}")
         raise ValueError(f"Failed to load mask from {mask_path}: {e}") from e
 
     # Load channel image
     logger.info(f"Loading channel: {channel_path}")
     try:
         channel_image, _ = load_image(channel_path)
-        logger.info(f"Channel shape: {channel_image.shape}")
+        logger.debug(f"  Channel shape: {channel_image.shape}")
     except FileNotFoundError:
+        logger.error(f"[FAIL] Channel image not found: {channel_path}")
         raise FileNotFoundError(f"Channel image not found: {channel_path}")
     except Exception as e:
+        logger.error(f"[FAIL] Failed to load channel from {channel_path}: {e}")
         raise ValueError(f"Failed to load channel from {channel_path}: {e}") from e
 
     # Validate shapes match
     if mask.shape != channel_image.squeeze().shape:
+        logger.error(
+            f"[FAIL] Shape mismatch: mask {mask.shape} vs channel {channel_image.squeeze().shape}"
+        )
         raise ValueError(
             f"Shape mismatch: mask {mask.shape} vs channel {channel_image.squeeze().shape}. "
             f"Ensure the mask and channel images have the same spatial dimensions."
@@ -367,11 +375,10 @@ def run_quantification(
 
     # Save
     if not result_df.empty:
-        logger.info(f"Saving: {output_path}")
         result_df.to_csv(output_path, index=False)
-        logger.info(f"Cells: {len(result_df)}, Columns: {list(result_df.columns)}")
+        logger.info(f"[OK] Saved {len(result_df)} cells to {output_path}")
     else:
-        logger.warning("No results to save")
+        logger.warning("[WARN] No results to save")
         # Create empty CSV with expected columns
         empty_df = pd.DataFrame(columns=[
             'label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
@@ -379,9 +386,7 @@ def run_quantification(
         ])
         empty_df.to_csv(output_path, index=False)
 
-    logger.info("=" * 60)
-    logger.info("Complete")
-    logger.info("=" * 60)
+    logger.info("Quantification complete")
 
     return result_df
 

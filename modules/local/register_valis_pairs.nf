@@ -1,10 +1,17 @@
+/*
+ * REGISTER_VALIS_PAIRS - VALIS pairwise registration
+ *
+ * Performs pairwise registration of a single moving image to a reference
+ * using VALIS. Used when processing images individually rather than as a batch.
+ *
+ * Input: Reference image and moving image paths
+ * Output: Registered moving image aligned to reference coordinate space
+ */
 process REGISTER_VALIS_PAIRS {
     tag "${meta.patient_id}"
     label 'process_high'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://cdgatenbee/valis-wsi:1.0.0' :
-        'docker://cdgatenbee/valis-wsi:1.0.0' }"
+    container 'docker://cdgatenbee/valis-wsi:1.0.0'
 
     input:
     tuple val(meta), path(reference), path(moving)

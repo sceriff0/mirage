@@ -1,10 +1,17 @@
+/*
+ * REGISTER - VALIS whole-slide registration
+ *
+ * Performs multi-modal image registration using VALIS with SuperPoint/SuperGlue
+ * feature detection. Supports rigid, non-rigid, and micro-registration stages.
+ *
+ * Input: Reference image path, preprocessed images, and metadata
+ * Output: Registered OME-TIFF files aligned to reference coordinate space
+ */
 process REGISTER {
     tag "${patient_id}"
     label 'process_high'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://cdgatenbee/valis-wsi:1.0.0' :
-        'docker://cdgatenbee/valis-wsi:1.0.0' }"
+    container 'docker://cdgatenbee/valis-wsi:1.0.0'
 
     input:
     // Use stageAs to avoid filename collision when reference is included in preproc_files

@@ -47,8 +47,11 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
 # Local utilities
 from image_utils import ensure_dir
-from logger import log_progress
+from logger import get_logger
 from metadata import get_channel_names
+
+# Module-level logger
+logger = get_logger(__name__)
 from progress import PhaseReporter, ProgressTracker
 from registration_errors import (
     ErrorSeverity,
@@ -75,13 +78,13 @@ from valis import feature_matcher
 from valis import preprocessing
 
 # Non-rigid registrars - OpticalFlowWarper is default, NonRigidTileRegistrar for large images
-from valis_lib.non_rigid_registrars import OpticalFlowWarper, NonRigidTileRegistrar
+from valis.non_rigid_registrars import OpticalFlowWarper, NonRigidTileRegistrar
 
 # Affine optimizer for post-registration refinement
-from valis_lib.affine_optimizer import AffineOptimizerMattesMI
+from valis.affine_optimizer import AffineOptimizerMattesMI
 
 # VALIS exception hierarchy
-from valis_lib.exceptions import (
+from valis.exceptions import (
     ValisError,
     SlideReadError,
     RegistrationError,
@@ -119,10 +122,10 @@ def estimate_jvm_memory(input_dir: str, default_gb: int = 16) -> int:
         # Rule of thumb: JVM needs ~2x the largest file size for processing
         # Minimum 8GB, maximum 32GB
         recommended = max(8, min(32, int(total_size_gb * 2 + 4)))
-        log_progress(f"Input files total: {total_size_gb:.1f} GB, recommending {recommended} GB JVM heap")
+        logger.info(f"Input files total: {total_size_gb:.1f} GB, recommending {recommended} GB JVM heap")
         return recommended
     except Exception as e:
-        log_progress(f"Could not estimate JVM memory: {e}, using default {default_gb} GB")
+        logger.info(f"Could not estimate JVM memory: {e}, using default {default_gb} GB")
         return default_gb
 
 
@@ -153,20 +156,20 @@ def validate_input_slides(input_dir: str) -> Tuple[List[str], List[str]]:
             # Quick validation using tifffile
             with tifffile.TiffFile(fpath) as tif:
                 if len(tif.pages) == 0:
-                    log_progress(f"  WARNING: {f} has no pages, skipping")
+                    logger.warning(f"  [WARN] {f} has no pages, skipping")
                     invalid_slides.append((fpath, "No pages"))
                     continue
 
                 # Check if image is essentially empty
                 page = tif.pages[0]
                 if page.shape[0] < 10 or page.shape[1] < 10:
-                    log_progress(f"  WARNING: {f} is too small ({page.shape}), skipping")
+                    logger.warning(f"  [WARN] {f} is too small ({page.shape}), skipping")
                     invalid_slides.append((fpath, f"Too small: {page.shape}"))
                     continue
 
             valid_slides.append(fpath)
         except Exception as e:
-            log_progress(f"  WARNING: Cannot read {f}: {e}")
+            logger.warning(f"  [WARN] Cannot read {f}: {e}")
             invalid_slides.append((fpath, str(e)))
 
     return valid_slides, invalid_slides
@@ -262,7 +265,7 @@ def find_reference_image(
         if any(f.lower().endswith(ext) for ext in valid_extensions)
     ]
     
-    log_progress(f"Found {len(image_files)} image files in {directory}")
+    logger.info(f"Found {len(image_files)} image files in {directory}")
     
     matching_files = []
     for filename in image_files:
@@ -278,7 +281,7 @@ def find_reference_image(
         raise FileNotFoundError(error_msg)
     
     elif len(matching_files) == 1:
-        log_progress(f"✓ Found reference image: {matching_files[0]}")
+        logger.info(f"[OK] Found reference image: {matching_files[0]}")
         return matching_files[0]
     
     else:
@@ -361,17 +364,17 @@ def valis_registration(
     reporter.enter_phase("init")
 
     # Validate input slides early
-    log_progress("Validating input slides...")
+    logger.info("Validating input slides...")
     valid_slides, invalid_slides = validate_input_slides(input_dir)
     if not valid_slides:
         raise FileNotFoundError(f"No valid slides found in {input_dir}")
-    log_progress(f"  Valid: {len(valid_slides)}, Invalid: {len(invalid_slides)}")
+    logger.info(f"  Valid: {len(valid_slides)}, Invalid: {len(invalid_slides)}")
 
     # Initialize JVM with adaptive memory sizing
     jvm_mem_gb = estimate_jvm_memory(input_dir, default_gb=16)
-    log_progress(f"Initializing JVM with {jvm_mem_gb}GB heap...")
+    logger.info(f"Initializing JVM with {jvm_mem_gb}GB heap...")
     registration.init_jvm(mem_gb=jvm_mem_gb)
-    log_progress(f"JVM initialized with {jvm_mem_gb}GB heap")
+    logger.info(f"JVM initialized with {jvm_mem_gb}GB heap")
 
     # Configuration
     if reference_markers is None:
@@ -385,48 +388,48 @@ def valis_registration(
     # ========================================================================
     # VALIS Parameters - Use provided values or defaults
     # ========================================================================
-    log_progress("=" * 70)
-    log_progress("VALIS Registration Configuration")
-    log_progress("=" * 70)
-    log_progress(f"Rigid resolution: {max_processed_image_dim_px}px")
-    log_progress(f"Non-rigid resolution: {max_non_rigid_dim_px}px")
-    log_progress(f"Micro-registration fraction: {micro_reg_fraction}")
-    log_progress(f"Feature detector: SuperPoint with {num_features} features")
-    log_progress("=" * 70)
+    logger.info("=" * 70)
+    logger.info("VALIS Registration Configuration")
+    logger.info("=" * 70)
+    logger.info(f"Rigid resolution: {max_processed_image_dim_px}px")
+    logger.info(f"Non-rigid resolution: {max_non_rigid_dim_px}px")
+    logger.info(f"Micro-registration fraction: {micro_reg_fraction}")
+    logger.info(f"Feature detector: SuperPoint with {num_features} features")
+    logger.info("=" * 70)
 
     # Find reference image
     if reference:
         # Modern approach: use specified reference filename
-        log_progress(f"Using specified reference image: {reference}")
+        logger.info(f"Using specified reference image: {reference}")
         ref_image_path = os.path.join(input_dir, reference)
         if not os.path.exists(ref_image_path):
             raise FileNotFoundError(f"Specified reference image not found: {ref_image_path}")
         ref_image = reference
     else:
         # Legacy approach: search by markers
-        log_progress(f"Searching for reference image with markers: {reference_markers}")
+        logger.info(f"Searching for reference image with markers: {reference_markers}")
         try:
             ref_image = find_reference_image(input_dir, required_markers=reference_markers)
         except (FileNotFoundError, ValueError) as e:
-            log_progress(f"ERROR: {e}")
-            log_progress("Falling back to first available image")
+            logger.error(f"[FAIL] {e}")
+            logger.info("Falling back to first available image")
             files = sorted(glob.glob(os.path.join(input_dir, '*.ome.tif')))
             if not files:
                 raise FileNotFoundError(f"No .ome.tif files in {input_dir}")
             ref_image = os.path.basename(files[0])
 
-    log_progress(f"Using reference image: {ref_image}")
+    logger.info(f"Using reference image: {ref_image}")
 
     # ========================================================================
     # Initialize VALIS Registrar with Memory Optimization
     # ========================================================================
-    log_progress("\nInitializing VALIS registration...")
+    logger.info("\nInitializing VALIS registration...")
     # Note: pyvips cache is already disabled at module level in valis_lib/registration.py
 
-    log_progress(f"Memory optimization parameters:")
-    log_progress(f"  max_processed_image_dim_px: {max_processed_image_dim_px} (controls analysis resolution)")
-    log_progress(f"  max_non_rigid_registration_dim_px: {max_non_rigid_dim_px} (controls non-rigid accuracy)")
-    log_progress(f"  max_image_dim_px: {max_image_dim_px} (limits cached image size for RAM control)")
+    logger.info(f"Memory optimization parameters:")
+    logger.info(f"  max_processed_image_dim_px: {max_processed_image_dim_px} (controls analysis resolution)")
+    logger.info(f"  max_non_rigid_registration_dim_px: {max_non_rigid_dim_px} (controls non-rigid accuracy)")
+    logger.info(f"  max_image_dim_px: {max_image_dim_px} (limits cached image size for RAM control)")
 
     # ========================================================================
     # Configure Non-Rigid Registration Strategy
@@ -435,10 +438,10 @@ def valis_registration(
     # but better performance for large images. Each tile is registered independently and
     # displacement fields are stitched together.
     if use_tiled_registration:
-        log_progress(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_size={tile_size}px)")
+        logger.info(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_size={tile_size}px)")
         non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer=100)
     else:
-        log_progress(f"  Non-rigid registrar: OpticalFlowWarper (default)")
+        logger.info(f"  Non-rigid registrar: OpticalFlowWarper (default)")
         non_rigid_registrar = OpticalFlowWarper()
 
     # ========================================================================
@@ -448,10 +451,10 @@ def valis_registration(
     # for multi-modal registration (e.g., brightfield + fluorescence).
     # It refines the initial rigid transforms for better accuracy.
     if use_affine_optimizer:
-        log_progress(f"  Affine optimizer: AffineOptimizerMattesMI (Mattes MI)")
+        logger.info(f"  Affine optimizer: AffineOptimizerMattesMI (Mattes MI)")
         affine_optimizer = AffineOptimizerMattesMI
     else:
-        log_progress(f"  Affine optimizer: None (using initial transforms only)")
+        logger.info(f"  Affine optimizer: None (using initial transforms only)")
         affine_optimizer = None
 
     # ========================================================================
@@ -460,16 +463,16 @@ def valis_registration(
     # ColorfulStandardizer: Best for brightfield/IHC images - normalizes staining
     # ChannelGetter: Best for fluorescence - extracts specific channel with adaptive equalization
     if image_type == "brightfield":
-        log_progress(f"  Image preprocessing: ColorfulStandardizer (brightfield/IHC)")
+        logger.info(f"  Image preprocessing: ColorfulStandardizer (brightfield/IHC)")
         processing_cls = preprocessing.ColorfulStandardizer
         processing_kwargs = {}
     elif image_type == "fluorescence":
-        log_progress(f"  Image preprocessing: ChannelGetter (fluorescence)")
+        logger.info(f"  Image preprocessing: ChannelGetter (fluorescence)")
         processing_cls = preprocessing.ChannelGetter
         processing_kwargs = {"channel": "dapi", "adaptive_eq": True}
     else:
         # Auto: let VALIS detect and use defaults
-        log_progress(f"  Image preprocessing: Auto-detect")
+        logger.info(f"  Image preprocessing: Auto-detect")
         processing_cls = None
         processing_kwargs = None
 
@@ -514,42 +517,42 @@ def valis_registration(
     # Perform Registration
     # ========================================================================
     reporter.enter_phase("rigid")
-    log_progress("Starting rigid and non-rigid registration...")
-    log_progress("This may take 15-45 minutes...")
+    logger.info("Starting rigid and non-rigid registration...")
+    logger.info("This may take 15-45 minutes...")
 
     try:
         _, _, error_df = registrar.register()
-        log_progress("Initial registration completed")
-        log_progress(f"\nRegistration errors:\n{error_df}")
+        logger.info("Initial registration completed")
+        logger.info(f"\nRegistration errors:\n{error_df}")
     except ValisMemoryError as e:
-        log_progress(f"\nERROR: Memory exhausted during registration: {e}")
+        logger.error(f"\n[FAIL] Memory exhausted during registration: {e}")
         raise
     except FeatureDetectionError as e:
-        log_progress(f"\nERROR: Feature detection failed: {e}")
-        log_progress("Consider adjusting num_features or max_processed_dim parameters")
+        logger.error(f"\n[FAIL] Feature detection failed: {e}")
+        logger.info("Consider adjusting num_features or max_processed_dim parameters")
         raise
     except RegistrationError as e:
-        log_progress(f"\nERROR: Registration algorithm failed: {e}")
+        logger.error(f"\n[FAIL] Registration algorithm failed: {e}")
         raise
     except ValisError as e:
-        log_progress(f"\nERROR: VALIS error: {e}")
+        logger.error(f"\n[FAIL] VALIS error: {e}")
         raise
     except Exception as e:
         error_msg = str(e).lower()
         if "unable to write to memory" in error_msg or "tifffillstrip" in error_msg:
-            log_progress("\n" + "=" * 70)
-            log_progress("ERROR: pyvips memory allocation failure")
-            log_progress("=" * 70)
-            log_progress("VALIS cannot load the TIFF files into memory.")
-            log_progress("\nPossible causes:")
-            log_progress("  1. Files are too large for available RAM")
-            log_progress("  2. TIFF files may be corrupted or have format issues")
-            log_progress("  3. Files need to be saved with tiling/compression")
-            log_progress("\nSuggested fixes:")
-            log_progress(f"  1. Increase max_image_dim_px parameter (currently {max_image_dim_px})")
-            log_progress("  2. Re-save TIFF files with compression='zlib' and tile=(256,256)")
-            log_progress("  3. Ensure preprocessing saves tiles with proper TIFF structure")
-            log_progress("=" * 70)
+            logger.info("\n" + "=" * 70)
+            logger.error("[FAIL] pyvips memory allocation failure")
+            logger.info("=" * 70)
+            logger.info("VALIS cannot load the TIFF files into memory.")
+            logger.info("\nPossible causes:")
+            logger.info("  1. Files are too large for available RAM")
+            logger.info("  2. TIFF files may be corrupted or have format issues")
+            logger.info("  3. Files need to be saved with tiling/compression")
+            logger.info("\nSuggested fixes:")
+            logger.info(f"  1. Increase max_image_dim_px parameter (currently {max_image_dim_px})")
+            logger.info("  2. Re-save TIFF files with compression='zlib' and tile=(256,256)")
+            logger.info("  3. Ensure preprocessing saves tiles with proper TIFF structure")
+            logger.info("=" * 70)
             raise wrap_exception(
                 e, ValisMemoryError,
                 "VALIS registration failed due to memory/TIFF issue",
@@ -561,19 +564,19 @@ def valis_registration(
     # Micro-registration - Try with error handling
     # ========================================================================
     if skip_micro_registration:
-        log_progress("\nSkipping micro-registration (--skip-micro-registration flag set)")
+        logger.info("\nSkipping micro-registration (--skip-micro-registration flag set)")
     else:
         reporter.enter_phase("micro")
-        log_progress("Attempting micro-registration...")
-        log_progress("NOTE: This may fail if SimpleElastix is not properly installed")
+        logger.info("Attempting micro-registration...")
+        logger.info("NOTE: This may fail if SimpleElastix is not properly installed")
 
         try:
             img_dims = np.array([s.slide_dimensions_wh[0] for s in registrar.slide_dict.values()])
             min_max_size = np.min([np.max(d) for d in img_dims])
             micro_reg_size = int(np.floor(min_max_size * micro_reg_fraction))
 
-            log_progress(f"Micro-registration size: {micro_reg_size}px")
-            log_progress("Starting micro-registration (may take 30-120 minutes)...")
+            logger.info(f"Micro-registration size: {micro_reg_size}px")
+            logger.info("Starting micro-registration (may take 30-120 minutes)...")
 
             _, micro_error = registrar.register_micro(
                 max_non_rigid_registration_dim_px=micro_reg_size,
@@ -581,24 +584,24 @@ def valis_registration(
                 align_to_reference=True,
             )
 
-            log_progress("Micro-registration completed")
-            log_progress(f"\nMicro-registration errors:\n{micro_error}")
+            logger.info("Micro-registration completed")
+            logger.info(f"\nMicro-registration errors:\n{micro_error}")
 
         except Exception as e:
-            log_progress(f"\nMicro-registration FAILED: {e}")
-            log_progress("Continuing without micro-registration...")
-            log_progress("(This is usually caused by SimpleElastix not being available)")
+            logger.warning(f"\n[WARN] Micro-registration failed: {e}")
+            logger.info("Continuing without micro-registration...")
+            logger.info("(This is usually caused by SimpleElastix not being available)")
     
     # ========================================================================
     # Warp and Save Phase
     # ========================================================================
     reporter.enter_phase("warp")
-    log_progress("Preparing to warp slides...")
+    logger.info("Preparing to warp slides...")
 
     # Log registrar state
-    log_progress(f"\nRegistrar state:")
-    log_progress(f"  - Number of slides: {len(registrar.slide_dict)}")
-    log_progress(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
+    logger.info(f"\nRegistrar state:")
+    logger.info(f"  - Number of slides: {len(registrar.slide_dict)}")
+    logger.info(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
 
     # Check if non-rigid registration succeeded by examining displacement fields
     non_rigid_available = False
@@ -609,15 +612,15 @@ def valis_registration(
 
         if has_bk or has_fwd or has_stored:
             non_rigid_available = True
-            log_progress(f"  Non-rigid displacement fields found for: {slide_name}")
+            logger.info(f"  Non-rigid displacement fields found for: {slide_name}")
             break
 
     if non_rigid_available:
-        log_progress("  Non-rigid registration succeeded - will apply full transforms")
+        logger.info("  Non-rigid registration succeeded - will apply full transforms")
         use_non_rigid = True
     else:
-        log_progress("  No non-rigid displacement fields found")
-        log_progress("  Falling back to RIGID-ONLY transforms (affine registration)")
+        logger.info("  No non-rigid displacement fields found")
+        logger.info("  Falling back to RIGID-ONLY transforms (affine registration)")
         use_non_rigid = False
 
     # Create output directory
@@ -630,12 +633,12 @@ def valis_registration(
         slide_name = basename.replace('.ome.tif', '').replace('.ome.tiff', '')
         slide_name_to_path[slide_name] = f
 
-    log_progress(f"\nWarping {len(registrar.slide_dict)} slides to: {out}")
+    logger.info(f"\nWarping {len(registrar.slide_dict)} slides to: {out}")
     if parallel_warping:
-        log_progress(f"  Mode: Parallel (ThreadPoolExecutor, {n_workers} workers)")
+        logger.info(f"  Mode: Parallel (ThreadPoolExecutor, {n_workers} workers)")
     else:
-        log_progress(f"  Mode: Sequential")
-    log_progress(f"  Transform: {'rigid + non-rigid' if use_non_rigid else 'rigid-only'}")
+        logger.info(f"  Mode: Sequential")
+    logger.info(f"  Transform: {'rigid + non-rigid' if use_non_rigid else 'rigid-only'}")
 
     # Initialize progress tracker
     tracker = ProgressTracker(
@@ -683,13 +686,13 @@ def valis_registration(
         for slide_name, slide_obj in registrar.slide_dict.items():
             # Validate slide
             if slide_name not in slide_name_to_path:
-                log_progress(f"  ERROR: Cannot find path for '{slide_name}'")
+                logger.error(f"  [FAIL] Cannot find path for '{slide_name}'")
                 failed_slides.append((slide_name, "Path not found"))
                 tracker.step_complete(slide_name, "FAILED: Path not found")
                 continue
 
             if slide_obj is None:
-                log_progress(f"  ERROR: slide_obj is None for '{slide_name}'")
+                logger.error(f"  [FAIL] slide_obj is None for '{slide_name}'")
                 failed_slides.append((slide_name, "Slide object is None"))
                 tracker.step_complete(slide_name, "FAILED: Slide object is None")
                 continue
@@ -720,11 +723,11 @@ def valis_registration(
                     retry_ctx.succeeded()
                     break
                 except (WarpingError, ValisMemoryError, OSError) as e:
-                    log_progress(f"  Attempt {attempt} failed: {e}")
+                    logger.info(f"  Attempt {attempt} failed: {e}")
                     retry_ctx.failed(e)
                 except Exception as e:
                     # Non-retryable error
-                    log_progress(f"  ERROR warping {slide_name}: {e}")
+                    logger.info(f"  ERROR warping {slide_name}: {e}")
                     failed_slides.append((slide_name, str(e)))
                     break
 
@@ -746,21 +749,21 @@ def valis_registration(
     tracker.finish(success=warped_count > 0)
 
     # Report results
-    log_progress(f"\n{'='*70}")
-    log_progress(f"Warping Summary:")
-    log_progress(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
+    logger.info(f"\n{'='*70}")
+    logger.info(f"Warping Summary:")
+    logger.info(f"  Successfully warped: {warped_count}/{len(registrar.slide_dict)}")
     if failed_slides:
-        log_progress(f"  Failed slides: {len(failed_slides)}")
+        logger.info(f"  Failed slides: {len(failed_slides)}")
         for slide_name, error in failed_slides:
-            log_progress(f"    - {slide_name}: {error}")
-    log_progress(f"{'='*70}")
+            logger.info(f"    - {slide_name}: {error}")
+    logger.info(f"{'='*70}")
 
     if warped_count == 0:
-        log_progress("All slides failed to warp. Registration cannot proceed.")
+        logger.info("All slides failed to warp. Registration cannot proceed.")
     elif failed_slides:
-        log_progress(f"WARNING: {len(failed_slides)} slides failed, but {warped_count} succeeded")
+        logger.warning(f"[WARN] {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
-    log_progress(f"{warped_count} slides warped and saved to: {out}")
+    logger.info(f"{warped_count} slides warped and saved to: {out}")
 
     # ========================================================================
     # Cleanup Phase
@@ -770,9 +773,9 @@ def valis_registration(
     registration.kill_jvm()
     reporter.finish()
 
-    log_progress("\n" + "=" * 70)
-    log_progress("REGISTRATION COMPLETED SUCCESSFULLY!")
-    log_progress("=" * 70)
+    logger.info("\n" + "=" * 70)
+    logger.info("REGISTRATION COMPLETED SUCCESSFULLY!")
+    logger.info("=" * 70)
 
     return 0
 
@@ -855,10 +858,10 @@ def main() -> int:
             image_type=args.image_type,
         )
     except ValisError as e:
-        log_progress(f"ERROR: VALIS registration failed: {e}")
+        logger.error(f"[FAIL] VALIS registration failed: {e}")
         return 1
     except Exception as e:
-        log_progress(f"ERROR: Registration failed: {e}")
+        logger.error(f"[FAIL] Registration failed: {e}")
         import traceback
         traceback.print_exc()
         return 1

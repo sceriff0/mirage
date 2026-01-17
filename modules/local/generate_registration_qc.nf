@@ -2,9 +2,7 @@ process GENERATE_REGISTRATION_QC {
     tag "${meta.patient_id}"
     label 'process_high'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' :
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
+    container 'docker://bolt3x/attend_image_analysis:debug_diffeo'
 
     input:
     tuple val(meta), path(registered), path(reference)

@@ -183,11 +183,11 @@ def apply_basic_correction(
     basic = BaSiC(get_darkfield=get_darkfield, smoothness_flatfield=1)
 
     if autotune:
-            logger.info(f"  ✓ Autotuning BaSiC parameters for {n_iter} iterations")
-            basic.autotune(
-                fov_stack,
-                n_iter=n_iter
-            )
+        logger.info(f"  [OK] Autotuning BaSiC parameters for {n_iter} iterations")
+        basic.autotune(
+            fov_stack,
+            n_iter=n_iter
+        )
 
     corrected_fovs = basic.fit_transform(fov_stack)
 
@@ -222,15 +222,14 @@ def _process_single_channel_from_stack(
     was_corrected : bool
         Whether BaSiC was applied
     """
-    logger.info(f"Processing channel #{channel_index} ({channel_name})")
+    logger.debug(f"Processing channel #{channel_index} ({channel_name})")
 
     # Automatic detection of whether to apply BaSiC
     if skip_dapi and 'DAPI' in channel_name.upper():
-        logger.info(f"  ⊘ Skipping BaSiC correction for DAPI (user setting)")
+        logger.debug(f"  [SKIP] BaSiC correction for DAPI (user setting)")
         return channel_index, channel_image, False
 
-
-    logger.info(f"  ✓ Applying BaSiC correction")
+    logger.debug(f"  [OK] Applying BaSiC correction")
     corrected, _ = apply_basic_correction(
         channel_image,
         fov_size=fov_size,
@@ -246,7 +245,7 @@ def preprocess_multichannel_image(
     channel_names: List[str],
     output_path: str,
     fov_size: Tuple[int, int] = (1950, 1950),
-   skip_dapi : bool = True,
+    skip_dapi: bool = True,
     autotune: bool = False,
     n_iter: int = 3,
     n_workers: int = 4,
@@ -258,30 +257,26 @@ def preprocess_multichannel_image(
     logger.info(f"Loading multichannel image from {image_path}")
 
     # Read and log input file metadata
-    logger.info("Reading input file metadata...")
     with tifffile.TiffFile(image_path) as tif:
-        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-            logger.info(f"  ✓ Input has OME metadata (length: {len(tif.ome_metadata)} chars)")
-            if 'PhysicalSizeX' in tif.ome_metadata:
-                logger.info(f"  ✓ Input has PhysicalSizeX metadata")
-            if 'PhysicalSizeXUnit' in tif.ome_metadata:
-                logger.info(f"  ✓ Input has PhysicalSizeXUnit metadata")
+        has_ome = hasattr(tif, 'ome_metadata') and tif.ome_metadata
+        has_physical_size = has_ome and 'PhysicalSizeX' in tif.ome_metadata
+        if has_ome:
+            logger.debug(f"  Input metadata: OME=True, PhysicalSize={has_physical_size}")
         else:
-            logger.warning(f"  ⚠ Input file has no OME metadata")
+            logger.warning("  [WARN] Input file has no OME metadata")
 
         if tif.pages and len(tif.pages) > 0:
             first_page = tif.pages[0]
-            logger.info(f"  - First page shape: {first_page.shape}")
-            logger.info(f"  - First page dtype: {first_page.dtype}")
+            logger.debug(f"  First page: shape={first_page.shape}, dtype={first_page.dtype}")
 
     multichannel_stack = tifffile.imread(image_path)
     logger.info(f"Loaded image shape: {multichannel_stack.shape}")
 
     if multichannel_stack.ndim == 2:
-        logger.info("  - Converting 2D to 3D (adding channel dimension)")
+        logger.debug("  Converting 2D to 3D (adding channel dimension)")
         multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
     elif multichannel_stack.ndim == 3 and multichannel_stack.shape[2] == len(channel_names):
-        logger.info("  - Transposing from (Y, X, C) to (C, Y, X)")
+        logger.debug("  Transposing from (Y, X, C) to (C, Y, X)")
         multichannel_stack = np.transpose(multichannel_stack, (2, 0, 1))
 
     n_channels, H, W = multichannel_stack.shape
@@ -321,15 +316,12 @@ def preprocess_multichannel_image(
     # Log summary
     n_corrected = sum(correction_applied.values())
     n_skipped = n_channels - n_corrected
-    logger.info(f"\nBaSiC Correction Summary:")
-    logger.info(f"  ✓ Corrected: {n_corrected}/{n_channels} channels")
-    logger.info(f"  ✗ Skipped: {n_skipped}/{n_channels} channels")
+    logger.info(f"BaSiC Correction Summary: corrected={n_corrected}/{n_channels}, skipped={n_skipped}/{n_channels}")
 
     preprocessed = np.stack(preprocessed_channels, axis=0)
 
     logger.info(f"Saving corrected image to {output_path}")
-    logger.info(f"Final stack shape: {preprocessed.shape} (expecting C, Y, X)")
-    logger.info(f"Channel names to save: {channel_names[:preprocessed.shape[0]]}")
+    logger.debug(f"  Final stack shape: {preprocessed.shape}, channels: {channel_names[:preprocessed.shape[0]]}")
 
     # Save as OME-TIFF with proper metadata
     # VALIS expects OME-TIFF with proper channel dimension and physical size metadata
@@ -343,11 +335,7 @@ def preprocess_multichannel_image(
         'PhysicalSizeYUnit': 'µm'
     }
 
-    logger.info("Writing OME-TIFF with metadata:")
-    logger.info(f"  - Axes: {metadata['axes']}")
-    logger.info(f"  - Channels: {metadata['Channel']['Name']}")
-    logger.info(f"  - PhysicalSizeX: {metadata['PhysicalSizeX']} {metadata['PhysicalSizeXUnit']}")
-    logger.info(f"  - PhysicalSizeY: {metadata['PhysicalSizeY']} {metadata['PhysicalSizeYUnit']}")
+    logger.debug(f"  OME metadata: axes={metadata['axes']}, pixel_size=0.325µm")
 
     tifffile.imwrite(
         output_path,
@@ -359,28 +347,19 @@ def preprocess_multichannel_image(
         compression='zlib',
     )
 
-    logger.info(f"Saved OME-TIFF with {preprocessed.shape[0]} channels")
+    logger.info(f"[OK] Saved OME-TIFF with {preprocessed.shape[0]} channels")
 
     # Verify the saved file
-    logger.info("Verifying saved file...")
     with tifffile.TiffFile(output_path) as tif:
-        if hasattr(tif, 'ome_metadata') and tif.ome_metadata:
-            logger.info(f"  ✓ OME-XML metadata present (length: {len(tif.ome_metadata)} chars)")
-            if 'PhysicalSizeX' in tif.ome_metadata:
-                logger.info(f"  ✓ PhysicalSizeX found in metadata")
-            if 'PhysicalSizeXUnit' in tif.ome_metadata or 'µm' in tif.ome_metadata:
-                logger.info(f"  ✓ Physical size units found in metadata")
-            else:
-                logger.warning(f"  ⚠ Physical size units may not be in metadata")
-        else:
-            logger.warning(f"  ⚠ No OME metadata in saved file!")
+        has_ome = hasattr(tif, 'ome_metadata') and tif.ome_metadata
+        if not has_ome:
+            logger.warning("[WARN] No OME metadata in saved file")
 
     verify_img = tifffile.imread(output_path)
-    logger.info(f"  - Reloaded image shape: {verify_img.shape}")
     if verify_img.ndim == 3:
-        logger.info(f"  ✓ File saved correctly with {verify_img.shape[0]} channels")
+        logger.debug(f"  Verification: shape={verify_img.shape}")
     else:
-        logger.warning(f"  ⚠ File may not have correct dimensions: {verify_img.shape}")
+        logger.warning(f"[WARN] File may not have correct dimensions: {verify_img.shape}")
 
     return preprocessed
 
@@ -518,7 +497,6 @@ def main():
     logger.info(f"Preprocessing completed successfully. Output: {output_path}")
 
     # Write dimensions to file for downstream processes
-    import tifffile
     img = tifffile.imread(output_path)
     shape = img.shape if img.ndim == 3 else (1, img.shape[0], img.shape[1])
     dims_filename = f"{base}_dims.txt"

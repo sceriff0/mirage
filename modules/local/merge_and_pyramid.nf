@@ -21,9 +21,7 @@ process MERGE_AND_PYRAMID {
     tag "${meta.patient_id}"
     label 'process_high'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:merge' :
-        'docker://bolt3x/attend_image_analysis:merge' }"
+    container 'docker://bolt3x/attend_image_analysis:merge'
 
     // Publish both the pyramid and colormap files
     publishDir "${params.outdir}/${meta.patient_id}/pyramid", mode: 'copy'

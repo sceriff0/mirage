@@ -1,5 +1,14 @@
 nextflow.enable.dsl = 2
 
+/*
+ * COMPUTE_FEATURES - Feature detection and matching for registration QC
+ *
+ * Detects features in reference and moving images using SuperPoint/DISK/DeDoDe
+ * detectors and matches them for downstream registration error estimation.
+ *
+ * Input: Tuple of reference and moving image paths
+ * Output: JSON file with matched feature coordinates and statistics
+ */
 process COMPUTE_FEATURES {
     tag "${moving.simpleName}"
     label 'process_medium'
@@ -18,6 +27,9 @@ process COMPUTE_FEATURES {
     output:
     path "${moving.simpleName}_features.json", emit: features
     path "versions.yml"                       , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
     def detector = params.feature_detector ?: 'superpoint'

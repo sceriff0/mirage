@@ -1,12 +1,19 @@
 nextflow.enable.dsl = 2
 
+/*
+ * QUANTIFY - Marker intensity quantification
+ *
+ * Measures per-cell marker intensities from single-channel TIFFs using
+ * segmentation masks. Computes morphological features and intensity statistics.
+ *
+ * Input: Single-channel TIFF and segmentation mask
+ * Output: Per-channel quantification CSV with cell measurements
+ */
 process QUANTIFY {
     tag "${meta.patient_id} - ${channel_tiff.simpleName}"
     label 'process_medium'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' :
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
+    container 'docker://bolt3x/attend_image_analysis:quantification_gpu'
 
     publishDir "${params.outdir}/${meta.patient_id}/quantification/by_marker", mode: 'copy'
 
@@ -65,9 +72,7 @@ process MERGE_QUANT_CSVS {
     tag "${meta.patient_id}"
     label 'process_low'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' :
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
+    container 'docker://bolt3x/attend_image_analysis:quantification_gpu'
 
     publishDir "${params.outdir}/${meta.patient_id}/quantification", mode: 'copy'
 

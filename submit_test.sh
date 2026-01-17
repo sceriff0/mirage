@@ -55,6 +55,10 @@ if [ ! -d "tests/testdata" ] || [ ! -f "tests/testdata/P001_ref.ome.tiff" ]; the
 fi
 
 # Run nf-test suite
+# Options:
+#   - Run all tests: nf-test test --profile $PROFILE
+#   - Run only module tests: nf-test test tests/modules/ --profile $PROFILE
+#   - Run specific test: nf-test test tests/modules/preprocess.nf.test --profile $PROFILE
 echo "Running nf-test with profile: $PROFILE"
 nf-test test --profile $PROFILE
 

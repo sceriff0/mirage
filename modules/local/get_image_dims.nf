@@ -3,9 +3,7 @@ process GET_IMAGE_DIMS {
     tag "${meta.patient_id}"
     label 'process_single'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:preprocess' :
-        'docker://bolt3x/attend_image_analysis:preprocess' }"
+    container 'docker://bolt3x/attend_image_analysis:preprocess'
 
     input:
     tuple val(meta), path(image)

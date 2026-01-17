@@ -1,12 +1,19 @@
 nextflow.enable.dsl = 2
 
+/*
+ * SPLIT_CHANNELS - Split multi-channel TIFF into individual channels
+ *
+ * Extracts individual channel images from multi-channel OME-TIFFs for
+ * per-channel processing. Handles DAPI extraction from reference image only.
+ *
+ * Input: Registered multi-channel OME-TIFF and reference flag
+ * Output: Individual single-channel TIFF files per marker
+ */
 process SPLIT_CHANNELS {
     tag "${meta.patient_id}"
     label 'process_medium'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:preprocess' :
-        'docker://bolt3x/attend_image_analysis:preprocess' }"
+    container 'docker://bolt3x/attend_image_analysis:preprocess'
 
     publishDir "${params.outdir}/${meta.patient_id}/channels", mode: 'copy'
 

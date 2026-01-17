@@ -38,6 +38,9 @@ process WRITE_CHECKPOINT_CSV {
     path("${csv_name}.csv"), emit: csv
     path "versions.yml"    , emit: versions
 
+    when:
+    task.ext.when == null || task.ext.when
+
     script:
     def content = rows.collect { row -> row.join(',') }.join('\n')
     """
@@ -53,8 +56,12 @@ EOF
     """
 
     stub:
+    def content = rows.collect { row -> row.join(',') }.join('\n')
     """
-    touch ${csv_name}.csv
+    cat > ${csv_name}.csv <<'EOF'
+${header}
+${content}
+EOF
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -1,6 +1,12 @@
-// publish.nf
-// Defines a process to transfer results to a slow memory partition
-
+/*
+ * SAVE - Copy results to archive storage
+ *
+ * Transfers pipeline results to a final archive location using rsync.
+ * Designed for I/O-heavy transfers to slow storage partitions (e.g., NFS).
+ *
+ * Input: Results files to archive and destination path
+ * Output: versions.yml only (files are copied to archive)
+ */
 process SAVE {
     tag "Final Publishing"
     label 'process_single'
@@ -24,6 +30,9 @@ process SAVE {
 
     output:
     path "versions.yml", emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
     """

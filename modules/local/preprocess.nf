@@ -1,10 +1,17 @@
+/*
+ * PREPROCESS - BaSiC illumination correction
+ *
+ * Applies BaSiC illumination correction with FOV tiling for flat-field and
+ * dark-field estimation. Corrects shading artifacts in multi-channel images.
+ *
+ * Input: Raw OME-TIFF image with channel metadata
+ * Output: Illumination-corrected OME-TIFF
+ */
 process PREPROCESS {
     tag "${meta.patient_id}"
     label 'process_high'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:preprocess' :
-        'docker://bolt3x/attend_image_analysis:preprocess' }"
+    container 'docker://bolt3x/attend_image_analysis:preprocess'
 
     input:
     tuple val(meta), path(ome_tiff)

@@ -1,5 +1,14 @@
 nextflow.enable.dsl = 2
 
+/*
+ * GET_PREPROCESS_DIR - Get preprocessed directory path
+ *
+ * Utility process that returns the path to the preprocessed output directory.
+ * Used to signal completion of preprocessing and provide path for downstream steps.
+ *
+ * Input: Completion signal from preprocessing tasks
+ * Output: Path to preprocessed directory
+ */
 process GET_PREPROCESS_DIR {
     tag "get_preprocess_dir"
     label 'process_single'
@@ -10,6 +19,9 @@ process GET_PREPROCESS_DIR {
     output:
     path "${params.outdir}/${params.id}/${params.registration_method}/preprocessed", emit: preprocess_dir
     path "versions.yml"                                                             , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
 
     script:
     """

@@ -1,10 +1,18 @@
+/*
+ * CPU_REGISTER - CPU multi-threaded diffeomorphic registration
+ *
+ * Performs pairwise image registration using multi-threaded CPU computation.
+ * Alternative to GPU registration for environments without GPU access.
+ * Uses dynamic resource allocation based on input file size.
+ *
+ * Input: Reference image and moving image to register
+ * Output: Registered OME-TIFF aligned to reference coordinate space
+ */
 process CPU_REGISTER {
     tag "${meta.patient_id}"
     label 'process_high_memory'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' :
-        'docker://bolt3x/attend_image_analysis:debug_diffeo' }"
+    container 'docker://bolt3x/attend_image_analysis:debug_diffeo'
 
     input:
     tuple val(meta), path(reference), path(moving)

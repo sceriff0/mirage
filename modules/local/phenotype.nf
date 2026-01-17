@@ -1,10 +1,17 @@
+/*
+ * PHENOTYPE - Cell phenotype classification
+ *
+ * Classifies cells into phenotypes based on marker expression using z-score
+ * thresholding. Generates QuPath-compatible GeoJSON and classification outputs.
+ *
+ * Input: Merged quantification CSV with per-cell marker intensities
+ * Output: Phenotype data CSV, GeoJSON annotations, and classification mappings
+ */
 process PHENOTYPE {
     tag "${meta.patient_id}"
     label 'process_medium'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' :
-        'docker://bolt3x/attend_image_analysis:quantification_gpu' }"
+    container 'docker://bolt3x/attend_image_analysis:quantification_gpu'
 
     publishDir "${params.outdir}/${meta.patient_id}/phenotype", mode: 'copy'
 

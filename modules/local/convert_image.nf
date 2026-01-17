@@ -2,9 +2,7 @@ process CONVERT_IMAGE {
     tag "${meta.patient_id}"
     label 'process_medium'
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:convert_bioformats_2' :
-        'docker://bolt3x/attend_image_analysis:convert_bioformats_2' }"
+    container 'docker://bolt3x/attend_image_analysis:convert_bioformats_2'
 
     input:
     tuple val(meta), path(image_file)

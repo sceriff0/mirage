@@ -1,10 +1,17 @@
+/*
+ * SEGMENT - StarDist cell segmentation
+ *
+ * Performs nuclei and whole-cell segmentation using StarDist deep learning model.
+ * Supports GPU acceleration and adaptive tiling for memory-constrained environments.
+ *
+ * Input: Merged multi-channel OME-TIFF with DAPI in channel 0
+ * Output: Nuclei mask and cell mask as separate TIFF files
+ */
 process SEGMENT {
     tag "${meta.patient_id}"
     label "${params.seg_gpu ? 'gpu' : 'process_high'}"
 
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'docker://bolt3x/attend_image_analysis:segmentation_gpu' :
-        'docker://bolt3x/attend_image_analysis:segmentation_gpu' }"
+    container 'docker://bolt3x/attend_image_analysis:segmentation_gpu'
 
     publishDir "${params.outdir}/${meta.patient_id}/segmentation", mode: 'copy', overwrite: true
 

@@ -21,12 +21,24 @@ The singleton pattern ensures that:
 
 from __future__ import annotations
 
+import functools
 import logging
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Generator, Optional, TypeVar
 
-__all__ = ["get_logger", "configure_logging", "log_progress"]
+__all__ = [
+    "get_logger",
+    "configure_logging",
+    "log_progress",
+    "log_timing",
+    "timed",
+]
+
+# Type variable for preserving function signatures in decorators
+F = TypeVar("F", bound=Callable)
 
 
 # Global state for singleton pattern
@@ -233,3 +245,91 @@ def log_progress(message: str) -> None:
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}", flush=True)
+
+
+@contextmanager
+def log_timing(
+    operation: str,
+    logger: Optional[logging.Logger] = None
+) -> Generator[None, None, None]:
+    """Context manager for timing operations with logging.
+
+    Logs the start of an operation and its completion time. Useful for
+    measuring and logging the duration of long-running operations.
+
+    Parameters
+    ----------
+    operation : str
+        Description of the operation being timed.
+    logger : logging.Logger, optional
+        Logger to use. If None, creates one for this module.
+
+    Yields
+    ------
+    None
+
+    Examples
+    --------
+    Basic usage:
+
+    >>> with log_timing("Image registration"):
+    ...     perform_registration()
+    Starting: Image registration
+    Completed: Image registration (45.23s)
+
+    With custom logger:
+
+    >>> logger = get_logger(__name__)
+    >>> with log_timing("Loading data", logger=logger):
+    ...     data = load_data()
+    """
+    _logger = logger or logging.getLogger(__name__)
+    start = time.perf_counter()
+    _logger.info(f"Starting: {operation}")
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        _logger.info(f"Completed: {operation} ({elapsed:.2f}s)")
+
+
+def timed(func: F) -> F:
+    """Decorator for timing function execution.
+
+    Logs the execution time of the decorated function at DEBUG level.
+    Useful for performance monitoring without cluttering INFO logs.
+
+    Parameters
+    ----------
+    func : callable
+        Function to decorate.
+
+    Returns
+    -------
+    callable
+        Wrapped function that logs its execution time.
+
+    Notes
+    -----
+    The timing is logged at DEBUG level to avoid noise in normal output.
+    Enable DEBUG logging to see timing information.
+
+    Examples
+    --------
+    >>> @timed
+    ... def process_image(path):
+    ...     # processing logic
+    ...     return result
+    >>> result = process_image("image.tif")
+    # At DEBUG level: "process_image completed in 2.34s"
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter() - start
+        logging.getLogger(func.__module__).debug(
+            f"{func.__name__} completed in {elapsed:.2f}s"
+        )
+        return result
+    return wrapper  # type: ignore[return-value]
