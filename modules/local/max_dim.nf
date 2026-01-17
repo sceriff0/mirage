@@ -62,10 +62,8 @@ EOF
 
     stub:
     """
-    cat > ${patient_id}_max_dims.txt <<-END
-    MAX_HEIGHT 10000
-    MAX_WIDTH 10000
-    END
+    echo "MAX_HEIGHT 10000" > ${patient_id}_max_dims.txt
+    echo "MAX_WIDTH 10000" >> ${patient_id}_max_dims.txt
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

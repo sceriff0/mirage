@@ -47,13 +47,35 @@ workflow {
     validateStep(params.step)
     validateRegistrationMethod(params.registration_method)
 
-    validateInputCSV(
-        params.input,
-        requiredColumnsForStep(params.step)
-    )
+    // copy_results step doesn't need input CSV validation
+    if (params.step != 'copy_results') {
+        validateInputCSV(
+            params.input,
+            requiredColumnsForStep(params.step)
+        )
+    }
 
     if (params.dry_run) {
         log.info "DRY RUN: all validations passed"
+        return
+    }
+
+    /* -------------------- COPY RESULTS ONLY -------------------- */
+
+    if (params.step == 'copy_results') {
+        if (!params.savedir) {
+            error "Please provide --savedir for copy_results step"
+        }
+        if (params.savedir == params.outdir) {
+            error "savedir and outdir cannot be the same for copy_results step"
+        }
+
+        def source_path = params.outdir.startsWith('/') ? params.outdir : "${workflow.launchDir}/${params.outdir}"
+        COPY_RESULTS(
+            Channel.of('ready'),
+            source_path,
+            params.savedir
+        )
         return
     }
 

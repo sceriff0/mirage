@@ -52,9 +52,7 @@ EOF
     stub:
     def prefix = task.ext.prefix ?: "${meta.patient_id}_${meta.channels?.join('_') ?: 'unknown'}"
     """
-    cat > ${prefix}_dims.txt <<-END
-    ${image.name} 5000 5000
-    END
+    echo "${image.name} 5000 5000" > ${prefix}_dims.txt
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

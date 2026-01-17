@@ -83,17 +83,6 @@ from valis.non_rigid_registrars import OpticalFlowWarper, NonRigidTileRegistrar
 # Affine optimizer for post-registration refinement
 from valis.affine_optimizer import AffineOptimizerMattesMI
 
-# VALIS exception hierarchy
-from valis.exceptions import (
-    ValisError,
-    SlideReadError,
-    RegistrationError,
-    FeatureDetectionError,
-    WarpingError,
-    ResourceError,
-    MemoryError as ValisMemoryError,
-    wrap_exception,
-)
 
 
 
@@ -524,18 +513,8 @@ def valis_registration(
         _, _, error_df = registrar.register()
         logger.info("Initial registration completed")
         logger.info(f"\nRegistration errors:\n{error_df}")
-    except ValisMemoryError as e:
+    except MemoryError as e:
         logger.error(f"\n[FAIL] Memory exhausted during registration: {e}")
-        raise
-    except FeatureDetectionError as e:
-        logger.error(f"\n[FAIL] Feature detection failed: {e}")
-        logger.info("Consider adjusting num_features or max_processed_dim parameters")
-        raise
-    except RegistrationError as e:
-        logger.error(f"\n[FAIL] Registration algorithm failed: {e}")
-        raise
-    except ValisError as e:
-        logger.error(f"\n[FAIL] VALIS error: {e}")
         raise
     except Exception as e:
         error_msg = str(e).lower()
@@ -553,12 +532,11 @@ def valis_registration(
             logger.info("  2. Re-save TIFF files with compression='zlib' and tile=(256,256)")
             logger.info("  3. Ensure preprocessing saves tiles with proper TIFF structure")
             logger.info("=" * 70)
-            raise wrap_exception(
-                e, ValisMemoryError,
-                "VALIS registration failed due to memory/TIFF issue",
-                suggestion="Increase max_image_dim_px or re-save TIFFs with compression"
-            )
-        raise wrap_exception(e, RegistrationError, f"Registration failed: {e}")
+            raise RuntimeError(
+                f"VALIS registration failed due to memory/TIFF issue: {e}"
+            ) from e
+        logger.error(f"\n[FAIL] Registration failed: {e}")
+        raise
 
     # ========================================================================
     # Micro-registration - Try with error handling
@@ -722,7 +700,7 @@ def valis_registration(
                     warped_count += 1
                     retry_ctx.succeeded()
                     break
-                except (WarpingError, ValisMemoryError, OSError) as e:
+                except (MemoryError, OSError) as e:
                     logger.info(f"  Attempt {attempt} failed: {e}")
                     retry_ctx.failed(e)
                 except Exception as e:
@@ -857,9 +835,6 @@ def main() -> int:
             use_affine_optimizer=not args.no_affine_optimizer,
             image_type=args.image_type,
         )
-    except ValisError as e:
-        logger.error(f"[FAIL] VALIS registration failed: {e}")
-        return 1
     except Exception as e:
         logger.error(f"[FAIL] Registration failed: {e}")
         import traceback

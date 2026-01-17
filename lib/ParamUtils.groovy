@@ -1,7 +1,7 @@
 class ParamUtils {
 
     static void validateStep(String step) {
-        def valid = ['preprocessing', 'registration', 'postprocessing', 'results']
+        def valid = ['preprocessing', 'registration', 'postprocessing', 'results', 'copy_results']
         if (!(step in valid)) {
             throw new IllegalArgumentException("Invalid --step '${step}'. Valid values: ${valid}")
         }
@@ -20,16 +20,17 @@ class ParamUtils {
             registration  : ['patient_id','preprocessed_image','is_reference','channels'],
             postprocessing: ['patient_id','registered_image','is_reference','channels'],
             results       : [
-                'patient_id','is_reference',
-                'phenotype_csv','phenotype_mask',
-                'phenotype_mapping','merged_csv','cell_mask'
-            ]
+                'patient_id',
+                'phenotype_csv','phenotype_geojson',
+                'phenotype_mapping','merged_csv','cell_mask','pyramid'
+            ],
+            copy_results  : []  // No CSV required - just copies outdir to savedir
         ]
-        
+
         if (!requirements.containsKey(step)) {
             throw new IllegalArgumentException("No column requirements defined for step: ${step}")
         }
-        
+
         return requirements[step]
     }
 }

@@ -110,14 +110,21 @@ process REGISTER {
     """
 
     stub:
+    // Generate output files matching input count with proper naming pattern
+    // VALIS adapter expects: {patient_id}_{markers}_corrected_registered.ome.tiff
+    def output_files = all_metas.collect { meta ->
+        def markers = meta.channels.join('_')
+        "${patient_id}_${markers}_corrected_registered.ome.tiff"
+    }
+    def touch_commands = output_files.collect { "touch registered_slides/${it}" }.join('\n    ')
     """
     mkdir -p registered_slides
-    touch registered_slides/sample_registered.ome.tiff
+    ${touch_commands}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version 2>&1 | sed 's/Python //')
-        valis: unknown
+        python: stub
+        valis: stub
     END_VERSIONS
     """
 }

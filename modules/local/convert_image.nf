@@ -38,15 +38,16 @@ process CONVERT_IMAGE {
 
     stub:
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
+    def channels = meta.channels.join(',')
     """
     touch ${prefix}.ome.tif
-    touch ${prefix}_channels.txt
+    echo "${channels}" > ${prefix}_channels.txt
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version 2>&1 | sed 's/Python //')
-        tifffile: unknown
-        aicsimageio: unknown
+        python: stub
+        tifffile: stub
+        aicsimageio: stub
     END_VERSIONS
     """
 }
