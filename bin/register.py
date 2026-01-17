@@ -794,13 +794,13 @@ def parse_args() -> argparse.Namespace:
     # Performance options
     parser.add_argument('--parallel-warping', action='store_true',
                         help='Enable parallel slide warping using ThreadPoolExecutor')
-    parser.add_argument('--n-workers', type=int, default=2,
+    parser.add_argument('--n-workers', type=int, default=4,
                         help='Number of parallel workers for warping')
 
     # Advanced registration options
     parser.add_argument('--use-tiled-registration', action='store_true',
                         help='Use NonRigidTileRegistrar for large images (parallel tile processing)')
-    parser.add_argument('--tile-size', type=int, default=512,
+    parser.add_argument('--tile-size', type=int, default=2048,
                         help='Tile size for tiled registration')
     parser.add_argument('--no-affine-optimizer', action='store_true',
                         help='Disable AffineOptimizerMattesMI (mutual information refinement)')

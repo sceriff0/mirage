@@ -38,6 +38,12 @@ process REGISTER {
     def num_features = params.reg_num_features ?: 5000
     def max_image_dim = params.reg_max_image_dim ?: 4000
     def skip_micro = params.skip_micro_registration ? '--skip-micro-registration' : ''
+    // Performance options
+    def parallel_warping = params.reg_parallel_warping ? '--parallel-warping' : ''
+    def n_workers = params.reg_n_workers ?: 4
+    // Advanced registration options
+    def use_tiled = params.reg_use_tiled_registration ? '--use-tiled-registration' : ''
+    def tile_size = params.reg_tile_size ?: 2048
 
     """
     mkdir -p registered_slides preprocessed
@@ -87,6 +93,10 @@ process REGISTER {
         --num-features ${num_features} \\
         --max-image-dim ${max_image_dim} \\
         ${skip_micro} \\
+        ${parallel_warping} \\
+        --n-workers ${n_workers} \\
+        ${use_tiled} \\
+        --tile-size ${tile_size} \\
         ${args}
 
     echo "=== Contents of registered_slides/ ==="
