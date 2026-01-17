@@ -16,8 +16,8 @@ process GET_IMAGE_DIMS {
     task.ext.when == null || task.ext.when
 
     script:
-    // Generate unique prefix with patient_id and channels
-    def prefix = task.ext.prefix ?: "${meta.patient_id}_${meta.channels?.join('_') ?: 'unknown'}"
+    // Generate unique prefix using image filename to avoid collisions when multiple images have same channels
+    def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
     python3 <<'EOF'
 from PIL import Image
@@ -50,7 +50,8 @@ EOF
     """
 
     stub:
-    def prefix = task.ext.prefix ?: "${meta.patient_id}_${meta.channels?.join('_') ?: 'unknown'}"
+    // Generate unique prefix using image filename to avoid collisions when multiple images have same channels
+    def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
     echo "${image.name} 5000 5000" > ${prefix}_dims.txt
 
