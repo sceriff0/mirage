@@ -1,2 +1,2 @@
 patient_id,preprocessed_image,is_reference
-P001,/Users/valer/Downloads/ateia/tests/testdata/P001_ref.ome.tiff,true
+P001,tests/testdata/P001_ref.ome.tiff,true

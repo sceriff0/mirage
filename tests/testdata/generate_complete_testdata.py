@@ -125,26 +125,30 @@ create_segmentation_mask(OUT_DIR / 'P002_cell_mask.npy', n_cells=15)
 # =============================================================================
 print("\n3. Creating valid input CSVs...")
 
+# Use relative path placeholder that will be replaced at runtime
+# The paths should be relative to the project directory
+TESTDATA_REL = "tests/testdata"
+
 # 3a. Valid input for preprocessing step (ND2 conversion disabled)
 with open(OUT_DIR / 'valid_preprocessing.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
-    f.write(f'P002,{OUT_DIR}/P002_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P002,{TESTDATA_REL}/P002_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
 print(f"  Created valid_preprocessing.csv")
 
 # 3b. Valid checkpoint CSV for registration step
 with open(OUT_DIR / 'valid_checkpoint_registration.csv', 'w') as f:
     f.write('patient_id,preprocessed_image,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
 print(f"  Created valid_checkpoint_registration.csv")
 
 # 3c. Valid checkpoint CSV for postprocessing step
 with open(OUT_DIR / 'valid_checkpoint_postprocessing.csv', 'w') as f:
     f.write('patient_id,registered_image,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
 print(f"  Created valid_checkpoint_postprocessing.csv")
 
 # =============================================================================
@@ -155,40 +159,40 @@ print("\n4. Creating invalid input CSVs for validation tests...")
 # 4a. Multiple references per patient
 with open(OUT_DIR / 'invalid_multi_ref.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov1.ome.tiff,true,DAPI|PANCK|SMA\n')  # SECOND REF!
-    f.write(f'P001,{OUT_DIR}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov1.ome.tiff,true,DAPI|PANCK|SMA\n')  # SECOND REF!
+    f.write(f'P001,{TESTDATA_REL}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
 print(f"  Created invalid_multi_ref.csv (multiple references)")
 
 # 4b. No reference per patient
 with open(OUT_DIR / 'invalid_no_ref.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
 print(f"  Created invalid_no_ref.csv (no reference)")
 
 # 4c. DAPI not in channel 0 (when skip_nd2_conversion=true)
 with open(OUT_DIR / 'invalid_dapi_position.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,PANCK|DAPI|SMA\n')  # DAPI NOT FIRST
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,PANCK|DAPI|SMA\n')  # DAPI NOT FIRST
 print(f"  Created invalid_dapi_position.csv (DAPI not in position 0)")
 
 # 4d. Missing DAPI channel
 with open(OUT_DIR / 'invalid_no_dapi.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,PANCK|SMA\n')  # NO DAPI
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,PANCK|SMA\n')  # NO DAPI
 print(f"  Created invalid_no_dapi.csv (missing DAPI)")
 
 # 4e. Invalid checkpoint - missing required column
 with open(OUT_DIR / 'invalid_checkpoint_missing_col.csv', 'w') as f:
     f.write('patient_id,preprocessed_image,is_reference\n')  # Missing 'channels'
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true\n')
 print(f"  Created invalid_checkpoint_missing_col.csv (missing column)")
 
 # 4f. Invalid checkpoint - malformed is_reference
 with open(OUT_DIR / 'invalid_checkpoint_bad_ref.csv', 'w') as f:
     f.write('patient_id,preprocessed_image,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,yes,DAPI|PANCK|SMA\n')  # 'yes' not 'true'
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,yes,DAPI|PANCK|SMA\n')  # 'yes' not 'true'
 print(f"  Created invalid_checkpoint_bad_ref.csv (invalid is_reference)")
 
 # 4g. File does not exist
@@ -203,8 +207,8 @@ print(f"  Created invalid_file_not_found.csv (file not found)")
 print("\n5. Creating test.config input CSV...")
 with open(OUT_DIR / 'test_input.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
-    f.write(f'P001,{OUT_DIR}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
-    f.write(f'P001,{OUT_DIR}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n')
+    f.write(f'P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|PANCK|SMA\n')
 print(f"  Created test_input.csv for test profile")
 
 print("\n" + "="*70)
