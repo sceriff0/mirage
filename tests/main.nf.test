@@ -161,6 +161,7 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
+                gpu_register = false
                 skip_registration_qc = true
             }
         }

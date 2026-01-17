@@ -4,7 +4,7 @@ import tifffile
 import tempfile
 from pathlib import Path
 
-from scripts.quantify import compute_cell_intensities, quantify_multichannel
+from quantify import compute_cell_intensities, quantify_multichannel
 
 
 def test_compute_cell_intensities_simple():
@@ -44,7 +44,7 @@ def test_quantify_multichannel_reads_tmp_files(tmp_path):
 import numpy as np
 import pandas as pd
 
-from scripts.quantify import compute_cell_intensities, quantify_multichannel
+from quantify import compute_cell_intensities, quantify_multichannel
 
 
 def test_compute_cell_intensities_basic():

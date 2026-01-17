@@ -1,6 +1,6 @@
 import numpy as np
 
-from scripts.segment import remap_labels, normalize_image
+from segment import remap_labels, normalize_image
 
 
 def test_remap_labels_consecutive():

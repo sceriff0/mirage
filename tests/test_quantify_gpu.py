@@ -1,7 +1,7 @@
 import numpy as np
 import tifffile
 
-from scripts.quantify_gpu import import_images, extract_features_gpu
+from quantify_gpu import import_images, extract_features_gpu
 
 
 def test_import_images_tifffile(tmp_path):

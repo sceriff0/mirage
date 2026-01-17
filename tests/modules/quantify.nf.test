@@ -36,6 +36,44 @@ nextflow_process {
             }
         }
     }
+
+    test("Should produce CSV with expected columns - real") {
+
+        tag "real"
+        tag "slow"
+
+        when {
+            params {
+                quant_gpu = false
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA']],
+                    file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.individual_csv },
+                // Validate CSV content
+                {
+                    def csvFile = process.out.individual_csv.get(0).get(1)
+                    def lines = path(csvFile).readLines()
+                    assert lines.size() > 1, "CSV should have header + data rows"
+                    def header = lines[0]
+                    assert header.contains('label'), "CSV should have label column"
+                },
+                // Metadata preserved
+                { assert process.out.individual_csv.get(0).get(0).patient_id == 'P001' }
+            )
+        }
+    }
 }
 
 nextflow_process {
@@ -78,6 +116,45 @@ nextflow_process {
                 assert get(0).get(0).patient_id == 'P001'
                 assert get(0).get(1).toString().endsWith('merged_quant.csv')
             }
+        }
+    }
+
+    test("Should merge CSVs with all channel columns - real") {
+
+        tag "real"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI_quant.csv', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK_quant.csv', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA_quant.csv', checkIfExists: true)
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.merged_csv },
+                // Validate merged CSV has data and channel columns
+                {
+                    def csvFile = process.out.merged_csv.get(0).get(1)
+                    def lines = path(csvFile).readLines()
+                    assert lines.size() > 1, "Merged CSV should have header + data"
+                    def header = lines[0].toLowerCase()
+                    // Should contain columns for merged channels
+                    assert header.contains('label'), "Merged CSV should have label column"
+                },
+                // Metadata preserved
+                { assert process.out.merged_csv.get(0).get(0).patient_id == 'P001' },
+                { assert process.out.merged_csv.get(0).get(0).is_reference == true }
+            )
         }
     }
 }

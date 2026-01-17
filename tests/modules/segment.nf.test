@@ -97,4 +97,45 @@ nextflow_process {
             assert process.success
         }
     }
+
+    test("Should produce valid cell masks with cells - real") {
+
+        tag "real"
+        tag "slow"
+
+        when {
+            params {
+                seg_model = "2D_versatile_fluo"
+                seg_gpu = false
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.nuclei_mask },
+                { assert process.out.cell_mask },
+                // Validate files are not empty (have actual size > 100 bytes)
+                { assert process.out.nuclei_mask.get(0).get(1).size() > 100 },
+                { assert process.out.cell_mask.get(0).get(1).size() > 100 },
+                // Metadata preserved
+                { assert process.out.nuclei_mask.get(0).get(0).patient_id == 'P001' },
+                { assert process.out.cell_mask.get(0).get(0).patient_id == 'P001' },
+                // Correct file naming
+                { assert process.out.nuclei_mask.get(0).get(1).toString().endsWith('_nuclei_mask.tif') },
+                { assert process.out.cell_mask.get(0).get(1).toString().endsWith('_cell_mask.tif') }
+            )
+        }
+    }
 }

@@ -1,6 +1,6 @@
 import numpy as np
 
-from scripts.preprocess import split_image_into_fovs, reconstruct_image_from_fovs, preprocess_multichannel_image
+from preprocess import split_image_into_fovs, reconstruct_image_from_fovs, preprocess_multichannel_image
 
 
 def test_split_and_reconstruct():
@@ -23,7 +23,7 @@ def test_preprocess_multichannel_monkeypatch(tmp_path, monkeypatch):
     def fake_apply(img, **kwargs):
         return img, None
 
-    monkeypatch.setattr('scripts.preprocess.apply_basic_correction', fake_apply)
+    monkeypatch.setattr('preprocess.apply_basic_correction', fake_apply)
 
     # Monkeypatch save_h5 to a no-op
     monkeypatch.setattr('utils.io.save_h5', lambda arr, p: None)

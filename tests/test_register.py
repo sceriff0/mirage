@@ -1,6 +1,6 @@
 import os
 
-from scripts.register import merge_first_file
+from register import merge_first_file
 
 
 def test_merge_first_file(tmp_path):
