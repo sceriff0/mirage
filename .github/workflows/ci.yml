@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [ main, dev ]
+    branches: [ main, dev, valis ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 env:
   NFTEST_VERSION: '0.9.0'
