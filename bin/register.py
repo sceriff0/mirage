@@ -80,8 +80,9 @@ from valis import preprocessing
 # Non-rigid registrars - OpticalFlowWarper is default, NonRigidTileRegistrar for large images
 from valis.non_rigid_registrars import OpticalFlowWarper, NonRigidTileRegistrar
 
-# Affine optimizer for post-registration refinement
-from valis.affine_optimizer import AffineOptimizerMattesMI
+# Note: AffineOptimizerMattesMI removed - requires SimpleITK with Elastix bindings
+# which is not available in this environment. Registration still works via
+# SuperPoint/SuperGlue feature matching without the affine optimizer refinement.
 
 
 
@@ -296,7 +297,6 @@ def valis_registration(
     n_workers: int = 2,
     use_tiled_registration: bool = False,
     tile_size: int = 512,
-    use_affine_optimizer: bool = True,
     image_type: str = "auto",
 ) -> int:
     """Perform VALIS registration on preprocessed images.
@@ -332,9 +332,6 @@ def valis_registration(
         which improves performance without sacrificing accuracy. Default: False
     tile_size : int, optional
         Tile size for tiled registration. Default: 512
-    use_affine_optimizer : bool, optional
-        Use AffineOptimizerMattesMI to refine rigid transforms using mutual information.
-        Improves accuracy for multi-modal registration. Default: True
     image_type : str, optional
         Image type for preprocessing: "brightfield", "fluorescence", or "auto".
         "auto" attempts to detect based on image characteristics. Default: "auto"
@@ -434,17 +431,12 @@ def valis_registration(
         non_rigid_registrar = OpticalFlowWarper()
 
     # ========================================================================
-    # Configure Affine Optimizer for Multi-Modal Registration
+    # Affine Optimizer - Disabled (requires SimpleITK with Elastix bindings)
     # ========================================================================
-    # AffineOptimizerMattesMI uses Mattes Mutual Information which is excellent
-    # for multi-modal registration (e.g., brightfield + fluorescence).
-    # It refines the initial rigid transforms for better accuracy.
-    if use_affine_optimizer:
-        logger.info(f"  Affine optimizer: AffineOptimizerMattesMI (Mattes MI)")
-        affine_optimizer = AffineOptimizerMattesMI
-    else:
-        logger.info(f"  Affine optimizer: None (using initial transforms only)")
-        affine_optimizer = None
+    # Note: AffineOptimizerMattesMI is not used because it requires SimpleITK
+    # with Elastix bindings (SimpleElastix) which is not available.
+    # Registration still works well via SuperPoint/SuperGlue feature matching.
+    logger.info(f"  Affine optimizer: None (feature-based alignment only)")
 
     # ========================================================================
     # Configure Image Preprocessing Based on Image Type
@@ -484,8 +476,8 @@ def valis_registration(
         # Non-rigid registration - handles local deformations after rigid alignment
         "non_rigid_registrar_cls": type(non_rigid_registrar),
 
-        # Affine optimizer - refines rigid transforms using mutual information
-        "affine_optimizer_cls": affine_optimizer,
+        # Affine optimizer - disabled (requires SimpleITK with Elastix)
+        "affine_optimizer_cls": None,
 
         # Micro-rigid registration - high-resolution local alignment
         "micro_rigid_registrar_cls": None if skip_micro_registration else MicroRigidRegistrar,
@@ -537,6 +529,31 @@ def valis_registration(
             ) from e
         logger.error(f"\n[FAIL] Registration failed: {e}")
         raise
+
+    # ========================================================================
+    # Validate Registration Results
+    # ========================================================================
+    # Check that all slides have valid transformation matrices (M)
+    # If registration failed silently, M will be None and warping will fail
+    slides_without_M = []
+    for name, slide_obj in registrar.slide_dict.items():
+        if slide_obj.M is None:
+            slides_without_M.append(name)
+        elif not isinstance(slide_obj.M, np.ndarray):
+            slides_without_M.append(name)
+            logger.warning(f"  Slide {name} has invalid M type: {type(slide_obj.M)}")
+
+    if slides_without_M:
+        logger.error(f"\n[FAIL] Registration incomplete - {len(slides_without_M)} slides have no transformation matrix:")
+        for name in slides_without_M:
+            logger.error(f"    - {name}")
+        raise RuntimeError(
+            f"Registration failed: {len(slides_without_M)} slides have no transformation matrix (M is None). "
+            "This usually indicates the feature matching or rigid registration failed. "
+            "Check that input images have sufficient overlap and features."
+        )
+
+    logger.info(f"  All {len(registrar.slide_dict)} slides have valid transformation matrices")
 
     # ========================================================================
     # Micro-registration - Try with error handling
@@ -639,6 +656,9 @@ def valis_registration(
                 if slide_obj is None:
                     failed_slides.append((slide_name, "Slide object is None"))
                     continue
+                if slide_obj.M is None:
+                    failed_slides.append((slide_name, "No transformation matrix (M is None)"))
+                    continue
 
                 src_path = slide_name_to_path[slide_name]
                 out_path = os.path.join(out, f"{slide_name}_registered.ome.tiff")
@@ -673,6 +693,12 @@ def valis_registration(
                 logger.error(f"  [FAIL] slide_obj is None for '{slide_name}'")
                 failed_slides.append((slide_name, "Slide object is None"))
                 tracker.step_complete(slide_name, "FAILED: Slide object is None")
+                continue
+
+            if slide_obj.M is None:
+                logger.error(f"  [FAIL] slide '{slide_name}' has no transformation matrix (M is None)")
+                failed_slides.append((slide_name, "No transformation matrix (M is None)"))
+                tracker.step_complete(slide_name, "FAILED: No M matrix")
                 continue
 
             src_path = slide_name_to_path[slide_name]
@@ -802,8 +828,6 @@ def parse_args() -> argparse.Namespace:
                         help='Use NonRigidTileRegistrar for large images (parallel tile processing)')
     parser.add_argument('--tile-size', type=int, default=2048,
                         help='Tile size for tiled registration')
-    parser.add_argument('--no-affine-optimizer', action='store_true',
-                        help='Disable AffineOptimizerMattesMI (mutual information refinement)')
     parser.add_argument('--image-type', type=str, default='auto',
                         choices=['auto', 'brightfield', 'fluorescence'],
                         help='Image type for preprocessing optimization')
@@ -829,10 +853,9 @@ def main() -> int:
             skip_micro_registration=args.skip_micro_registration,
             parallel_warping=args.parallel_warping,
             n_workers=args.n_workers,
-            # New advanced options
+            # Advanced options
             use_tiled_registration=args.use_tiled_registration,
             tile_size=args.tile_size,
-            use_affine_optimizer=not args.no_affine_optimizer,
             image_type=args.image_type,
         )
     except Exception as e:
