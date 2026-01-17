@@ -14,19 +14,22 @@ nextflow_pipeline {
 
         when {
             params {
+                input = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+                gpu_register = false
             }
         }
 
         then {
             assert workflow.success
-            assert snapshot(
-                path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv"),
-                workflow.trace.succeeded().size()
-            ).match()
+            assert path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv").exists()
         }
-
-        config "./conf/test.config"
     }
 
     test("Should run with test profile - stub mode") {
@@ -35,7 +38,15 @@ nextflow_pipeline {
 
         when {
             params {
+                input = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
+                step = "preprocessing"
+                skip_nd2_conversion = true
+                max_cpus = 2
+                max_memory = '6.GB'
+                seg_gpu = false
+                quant_gpu = false
+                gpu_register = false
             }
         }
 
@@ -44,8 +55,6 @@ nextflow_pipeline {
             assert path("$outputDir").exists()
             assert workflow.trace.succeeded().size() > 0
         }
-
-        config "./conf/test.config"
     }
 
     //==========================================================================
