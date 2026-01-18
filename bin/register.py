@@ -593,7 +593,7 @@ def valis_registration(
     reporter.enter_phase("warp")
     logger.info("Preparing to warp slides...")
 
-    # Log registrar state
+    # Log registrewar state
     logger.info(f"\nRegistrar state:")
     logger.info(f"  - Number of slides: {len(registrar.slide_dict)}")
     logger.info(f"  - Slide dict keys: {list(registrar.slide_dict.keys())}")
@@ -620,6 +620,36 @@ def valis_registration(
 
     # Create output directory
     ensure_dir(out)
+
+    # ========================================================================
+    # Check JVM Status Before Warping
+    # ========================================================================
+    # VALIS may have killed JVM during registration (e.g., in error handlers)
+    # Once killed, JVM cannot be restarted in the same Python process
+    try:
+        import jpype
+        if not jpype.isJVMStarted():
+            logger.error("\n" + "=" * 70)
+            logger.error("[FAIL] JVM is not running!")
+            logger.error("=" * 70)
+            logger.error("The Java Virtual Machine was killed during registration.")
+            logger.error("This prevents warping slides because BioFormats requires JVM.")
+            logger.error("\nThis typically happens when VALIS encounters an internal error")
+            logger.error("during registration and calls kill_jvm() in its exception handler.")
+            logger.error("\nThe transformation matrices WERE computed successfully, but")
+            logger.error("we cannot warp the slides without JVM for BioFormats I/O.")
+            logger.error("\nSuggested workarounds:")
+            logger.error("  1. Try --skip-micro-registration flag (micro-reg may be killing JVM)")
+            logger.error("  2. Reduce --max-image-dim to lower memory usage")
+            logger.error("  3. Check logs above for specific errors that triggered JVM kill")
+            logger.error("=" * 70)
+            raise RuntimeError(
+                "JVM was killed during registration. Warping cannot proceed. "
+                "Try --skip-micro-registration or check for errors above."
+            )
+        logger.info("  JVM is running - proceeding with warping")
+    except ImportError:
+        logger.warning("  Cannot check JVM status (jpype not available)")
 
     # Build mapping from slide name to original file path
     slide_name_to_path: Dict[str, str] = {}
@@ -763,7 +793,20 @@ def valis_registration(
     logger.info(f"{'='*70}")
 
     if warped_count == 0:
-        logger.info("All slides failed to warp. Registration cannot proceed.")
+        logger.error("All slides failed to warp. Registration cannot proceed.")
+        # Cleanup before exit
+        reporter.enter_phase("cleanup")
+        gc.collect()
+        try:
+            registration.kill_jvm()
+        except Exception:
+            pass  # JVM may already be dead
+        reporter.finish()
+
+        logger.error("\n" + "=" * 70)
+        logger.error("REGISTRATION FAILED - No slides were warped")
+        logger.error("=" * 70)
+        return 1
     elif failed_slides:
         logger.warning(f"[WARN] {len(failed_slides)} slides failed, but {warped_count} succeeded")
 
@@ -774,11 +817,15 @@ def valis_registration(
     # ========================================================================
     reporter.enter_phase("cleanup")
     gc.collect()
-    registration.kill_jvm()
+    try:
+        registration.kill_jvm()
+    except Exception:
+        pass  # JVM may already be dead
     reporter.finish()
 
     logger.info("\n" + "=" * 70)
     logger.info("REGISTRATION COMPLETED SUCCESSFULLY!")
+    logger.info(f"  {warped_count}/{len(registrar.slide_dict)} slides warped")
     logger.info("=" * 70)
 
     return 0

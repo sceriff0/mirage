@@ -37,7 +37,11 @@ process REGISTER {
     def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.125
     def num_features = params.reg_num_features ?: 5000
     def max_image_dim = params.reg_max_image_dim ?: 4000
-    def skip_micro = params.skip_micro_registration ? '--skip-micro-registration' : ''
+    // Smart retry: skip micro-registration after multiple failures
+    // - Exit 1 (general failure): would benefit from skipping on attempt 2
+    // - Exit 137 (OOM): give it 2 attempts before skipping micro-reg
+    // Strategy: skip micro-registration on attempt 3+ (allows 2 attempts with micro-reg)
+    def skip_micro = (task.attempt > 2 || params.skip_micro_registration) ? '--skip-micro-registration' : ''
     // Performance options
     def parallel_warping = params.reg_parallel_warping ? '--parallel-warping' : ''
     def n_workers = params.reg_n_workers ?: 4
@@ -47,6 +51,20 @@ process REGISTER {
 
     """
     mkdir -p registered_slides preprocessed
+
+    echo "========================================================================"
+    echo "VALIS Registration - Attempt ${task.attempt}"
+    echo "========================================================================"
+    echo "Settings:"
+    echo "  - max_processed_dim: ${max_processed_dim}"
+    echo "  - max_non_rigid_dim: ${max_non_rigid_dim}"
+    echo "  - max_image_dim: ${max_image_dim}"
+    echo "  - skip_micro_registration: ${skip_micro ? 'YES' : 'NO'}"
+    if [ ${task.attempt} -gt 2 ]; then
+        echo ""
+        echo "  ⚠️  RETRY MODE (attempt 3+): Micro-registration disabled to reduce memory usage"
+    fi
+    echo "========================================================================"
 
     # Copy files (dereferencing symlinks) to preprocessed/ to avoid VALIS symlink path resolution issues
     # VALIS loses track of src_f when working with symlinks

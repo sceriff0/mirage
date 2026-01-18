@@ -1,0 +1,243 @@
+nextflow_process {
+
+    name "Test DIFFEO_TILE process"
+    script "modules/local/diffeo_tile.nf"
+    process "DIFFEO_TILE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "diffeo_tile"
+    tag "cpu_tiled"
+
+    test("Should process single diffeo tile - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Create a minimal tile plan JSON for the test
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": [
+                        {"tile_id": "diffeo_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 128, "x_start": 0, "x_end": 128}
+                    ]
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    'diffeo_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.tile },
+                { assert process.out.tile_meta },
+                { assert process.out.versions },
+                { with(process.out.tile) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    // Output should be a .npy file named after tile_id
+                    assert get(0).get(1).toString().endsWith('diffeo_0_0.npy')
+                }},
+                { with(process.out.tile_meta) {
+                    assert size() == 1
+                    // Metadata JSON should be created
+                    assert get(0).get(1).toString().endsWith('diffeo_0_0_meta.json')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through diffeo tile processing - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": [
+                        {"tile_id": "diffeo_2_2", "row": 2, "col": 2, "y_start": 256, "y_end": 384, "x_start": 256, "x_end": 384}
+                    ]
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        id: 'P002_mov2',
+                        is_reference: false,
+                        channels: ['DAPI', 'CD45'],
+                        batch_id: 'batch_001'
+                    ],
+                    'diffeo_2_2',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.tile) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'CD45']
+                    assert get(0).get(0).batch_id == 'batch_001'
+                }}
+            )
+        }
+    }
+
+    test("Should use correct tag for tracking - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": [
+                        {"tile_id": "diffeo_5_7", "row": 5, "col": 7, "y_start": 0, "y_end": 128, "x_start": 0, "x_end": 128}
+                    ]
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P003',
+                        id: 'P003_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    'diffeo_5_7',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.tile) {
+                    // Output file should match the tile_id
+                    assert get(0).get(1).toString().contains('diffeo_5_7')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with dipy and numpy - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": [
+                        {"tile_id": "diffeo_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 128, "x_start": 0, "x_end": 128}
+                    ]
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    'diffeo_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                task.ext.when = false
+
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '{}'
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    'diffeo_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

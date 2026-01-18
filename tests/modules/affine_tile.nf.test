@@ -1,0 +1,243 @@
+nextflow_process {
+
+    name "Test AFFINE_TILE process"
+    script "modules/local/affine_tile.nf"
+    process "AFFINE_TILE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "affine_tile"
+    tag "cpu_tiled"
+
+    test("Should process single affine tile - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Create a minimal tile plan JSON for the test
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [
+                        {"tile_id": "affine_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 256, "x_start": 0, "x_end": 256}
+                    ],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    'affine_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.tile },
+                { assert process.out.tile_meta },
+                { assert process.out.versions },
+                { with(process.out.tile) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    // Output should be a .npy file named after tile_id
+                    assert get(0).get(1).toString().endsWith('affine_0_0.npy')
+                }},
+                { with(process.out.tile_meta) {
+                    assert size() == 1
+                    // Metadata JSON should be created
+                    assert get(0).get(1).toString().endsWith('affine_0_0_meta.json')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through affine tile processing - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [
+                        {"tile_id": "affine_1_1", "row": 1, "col": 1, "y_start": 256, "y_end": 512, "x_start": 256, "x_end": 512}
+                    ],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        id: 'P002_mov2',
+                        is_reference: false,
+                        channels: ['DAPI', 'CD8'],
+                        sample_type: 'tumor'
+                    ],
+                    'affine_1_1',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.tile) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'CD8']
+                    assert get(0).get(0).sample_type == 'tumor'
+                }}
+            )
+        }
+    }
+
+    test("Should use correct tag for tracking - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [
+                        {"tile_id": "affine_2_3", "row": 2, "col": 3, "y_start": 0, "y_end": 256, "x_start": 0, "x_end": 256}
+                    ],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P003',
+                        id: 'P003_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    'affine_2_3',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.tile) {
+                    // Output file should match the tile_id
+                    assert get(0).get(1).toString().contains('affine_2_3')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with opencv and numpy - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [
+                        {"tile_id": "affine_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 256, "x_start": 0, "x_end": 256}
+                    ],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    'affine_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                task.ext.when = false
+
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '{}'
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    'affine_0_0',
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

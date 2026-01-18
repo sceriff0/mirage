@@ -1,0 +1,245 @@
+nextflow_process {
+
+    name "Test STITCH_DIFFEO process"
+    script "modules/local/stitch_diffeo.nf"
+    process "STITCH_DIFFEO"
+
+    tag "modules"
+    tag "modules_local"
+    tag "stitch_diffeo"
+    tag "cpu_tiled"
+
+    test("Should stitch diffeo tiles into final registered image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Create a minimal tile plan JSON
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "diffeo_crop_size": 128,
+                    "overlap_percent": 40.0,
+                    "affine_tiles": [],
+                    "diffeo_tiles": [
+                        {"tile_id": "diffeo_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 128, "x_start": 0, "x_end": 128},
+                        {"tile_id": "diffeo_0_1", "row": 0, "col": 1, "y_start": 0, "y_end": 128, "x_start": 77, "x_end": 205}
+                    ]
+                }
+                '''
+
+                // Create fake tiles directory
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.registered },
+                { assert process.out.versions },
+                { with(process.out.registered) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    // Output should be a final OME-TIFF file
+                    assert get(0).get(1).toString().endsWith('_registered.ome.tiff')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through final stitching - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        id: 'P002_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'CD3', 'CD8'],
+                        experiment_id: 'EXP_001'
+                    ],
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.registered) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'CD3', 'CD8']
+                    assert get(0).get(0).experiment_id == 'EXP_001'
+                }}
+            )
+        }
+    }
+
+    test("Should use moving image basename as output prefix - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.registered) {
+                    // Output filename should be based on moving image name
+                    assert get(0).get(1).toString().contains('P001_mov1')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with tifffile and numpy - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                task.ext.when = false
+
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '{}'
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

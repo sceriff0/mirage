@@ -1,0 +1,241 @@
+nextflow_workflow {
+
+    name "Test CPU_TILED_ADAPTER workflow"
+    script "subworkflows/local/adapters/cpu_tiled_adapter.nf"
+    workflow "CPU_TILED_ADAPTER"
+
+    tag "subworkflows"
+    tag "subworkflows_local"
+    tag "cpu_tiled_adapter"
+    tag "cpu_tiled"
+
+    test("Should register images using tiled approach - stub") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                // Create grouped meta channel input: [patient_id, reference_item, all_items]
+                // where reference_item = [meta, file] and all_items = [[meta1, file1], [meta2, file2], ...]
+
+                def refMeta = [
+                    patient_id: 'P001',
+                    id: 'P001_ref',
+                    is_reference: true,
+                    channels: ['DAPI', 'PANCK', 'SMA']
+                ]
+                def movMeta = [
+                    patient_id: 'P001',
+                    id: 'P001_mov1',
+                    is_reference: false,
+                    channels: ['DAPI', 'PANCK', 'SMA']
+                ]
+
+                def refFile = file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                def movFile = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+
+                input[0] = Channel.of([
+                    'P001',                           // patient_id
+                    [refMeta, refFile],               // reference_item
+                    [[refMeta, refFile], [movMeta, movFile]]  // all_items
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.registered },
+                { with(workflow.out.registered) {
+                    // Should have both reference (published) and registered moving
+                    assert size() == 2
+                }}
+            )
+        }
+    }
+
+    test("Should handle multiple moving images per patient - stub") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                def refMeta = [
+                    patient_id: 'P001',
+                    id: 'P001_ref',
+                    is_reference: true,
+                    channels: ['DAPI', 'PANCK']
+                ]
+                def mov1Meta = [
+                    patient_id: 'P001',
+                    id: 'P001_mov1',
+                    is_reference: false,
+                    channels: ['DAPI', 'PANCK']
+                ]
+                def mov2Meta = [
+                    patient_id: 'P001',
+                    id: 'P001_mov2',
+                    is_reference: false,
+                    channels: ['DAPI', 'PANCK']
+                ]
+
+                def refFile = file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                def mov1File = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                def mov2File = file('$projectDir/tests/testdata/P001_mov2.ome.tiff', checkIfExists: true)
+
+                input[0] = Channel.of([
+                    'P001',
+                    [refMeta, refFile],
+                    [[refMeta, refFile], [mov1Meta, mov1File], [mov2Meta, mov2File]]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.registered },
+                { with(workflow.out.registered) {
+                    // Should have reference + 2 registered moving images
+                    assert size() == 3
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through workflow - stub") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                def refMeta = [
+                    patient_id: 'P002',
+                    id: 'P002_ref',
+                    is_reference: true,
+                    channels: ['DAPI', 'CD3'],
+                    custom_field: 'test_value'
+                ]
+                def movMeta = [
+                    patient_id: 'P002',
+                    id: 'P002_mov1',
+                    is_reference: false,
+                    channels: ['DAPI', 'CD3'],
+                    custom_field: 'test_value'
+                ]
+
+                def refFile = file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                def movFile = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+
+                input[0] = Channel.of([
+                    'P002',
+                    [refMeta, refFile],
+                    [[refMeta, refFile], [movMeta, movFile]]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.registered) {
+                    // All outputs should have metadata preserved
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(1).get(0).patient_id == 'P002'
+                }}
+            )
+        }
+    }
+
+    test("Should publish reference image unchanged - stub") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                def refMeta = [
+                    patient_id: 'P001',
+                    id: 'P001_ref',
+                    is_reference: true,
+                    channels: ['DAPI']
+                ]
+                def movMeta = [
+                    patient_id: 'P001',
+                    id: 'P001_mov1',
+                    is_reference: false,
+                    channels: ['DAPI']
+                ]
+
+                def refFile = file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                def movFile = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+
+                input[0] = Channel.of([
+                    'P001',
+                    [refMeta, refFile],
+                    [[refMeta, refFile], [movMeta, movFile]]
+                ])
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.registered) {
+                    // Find the reference in outputs
+                    def refOutput = collect().find { it[0].is_reference }
+                    assert refOutput != null
+                    assert refOutput[0].id == 'P001_ref'
+                }}
+            )
+        }
+    }
+
+    test("Should handle multiple patients in parallel - stub") {
+
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                def p1RefMeta = [patient_id: 'P001', id: 'P001_ref', is_reference: true, channels: ['DAPI']]
+                def p1MovMeta = [patient_id: 'P001', id: 'P001_mov1', is_reference: false, channels: ['DAPI']]
+
+                def p2RefMeta = [patient_id: 'P002', id: 'P002_ref', is_reference: true, channels: ['DAPI']]
+                def p2MovMeta = [patient_id: 'P002', id: 'P002_mov1', is_reference: false, channels: ['DAPI']]
+
+                def p1RefFile = file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                def p1MovFile = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                def p2RefFile = file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true)
+                def p2MovFile = file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+
+                input[0] = Channel.of(
+                    ['P001', [p1RefMeta, p1RefFile], [[p1RefMeta, p1RefFile], [p1MovMeta, p1MovFile]]],
+                    ['P002', [p2RefMeta, p2RefFile], [[p2RefMeta, p2RefFile], [p2MovMeta, p2MovFile]]]
+                )
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { with(workflow.out.registered) {
+                    // Should have 4 outputs total: 2 patients × (1 ref + 1 mov)
+                    assert size() == 4
+                    // Check both patients are represented
+                    def patients = collect()*.get(0)*.patient_id.unique()
+                    assert patients.contains('P001')
+                    assert patients.contains('P002')
+                }}
+            )
+        }
+    }
+}

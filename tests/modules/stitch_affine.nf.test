@@ -1,0 +1,240 @@
+nextflow_process {
+
+    name "Test STITCH_AFFINE process"
+    script "modules/local/stitch_affine.nf"
+    process "STITCH_AFFINE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "stitch_affine"
+    tag "cpu_tiled"
+
+    test("Should stitch affine tiles into intermediate image - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                // Create a minimal tile plan JSON
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_crop_size": 256,
+                    "overlap_percent": 40.0,
+                    "affine_tiles": [
+                        {"tile_id": "affine_0_0", "row": 0, "col": 0, "y_start": 0, "y_end": 256, "x_start": 0, "x_end": 256},
+                        {"tile_id": "affine_0_1", "row": 0, "col": 1, "y_start": 0, "y_end": 256, "x_start": 154, "x_end": 410}
+                    ],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                // Create fake tile files in a tiles subdirectory
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    tilePlanFile,
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.affine },
+                { assert process.out.versions },
+                { with(process.out.affine) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    // Output should be an intermediate TIFF file
+                    assert get(0).get(1).toString().endsWith('_affine.tiff')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through stitching - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        id: 'P002_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'CD3'],
+                        tissue_type: 'lymph_node'
+                    ],
+                    tilePlanFile,
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.affine) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'CD3']
+                    assert get(0).get(0).tissue_type == 'lymph_node'
+                }}
+            )
+        }
+    }
+
+    test("Should use patient_id as output prefix - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'TEST_PATIENT_123',
+                        id: 'TEST_PATIENT_123_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.affine) {
+                    // Output filename should contain patient_id
+                    assert get(0).get(1).toString().contains('TEST_PATIENT_123')
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with tifffile and numpy - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '''
+                {
+                    "version": "1.0",
+                    "image_shape": [3, 512, 512],
+                    "dtype": "float32",
+                    "affine_tiles": [],
+                    "diffeo_tiles": []
+                }
+                '''
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                task.ext.when = false
+
+                def tilePlanFile = file('tile_plan.json')
+                tilePlanFile.text = '{}'
+
+                def tilesDir = file('tiles')
+                tilesDir.mkdir()
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI']
+                    ],
+                    tilePlanFile,
+                    tilesDir
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

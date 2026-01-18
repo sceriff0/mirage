@@ -1,0 +1,142 @@
+nextflow_process {
+
+    name "Test COMPUTE_TILE_PLAN process"
+    script "modules/local/compute_tile_plan.nf"
+    process "COMPUTE_TILE_PLAN"
+
+    tag "modules"
+    tag "modules_local"
+    tag "compute_tile_plan"
+    tag "cpu_tiled"
+
+    test("Should generate tile plan - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.plan },
+                { assert process.out.versions },
+                { with(process.out.plan) {
+                    assert size() == 1
+                    assert get(0).get(0).patient_id == 'P001'
+                    // JSON file should be created
+                    assert get(0).get(1).toString().endsWith('tile_plan.json')
+                    // Reference and moving paths should be passed through
+                    assert get(0).get(2).toString().endsWith('.ome.tiff')
+                    assert get(0).get(3).toString().endsWith('.ome.tiff')
+                }}
+            )
+        }
+    }
+
+    test("Should preserve metadata through tile plan computation - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P002',
+                        id: 'P002_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'CD3'],
+                        custom_field: 'test_value'
+                    ],
+                    file('$projectDir/tests/testdata/P002_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { with(process.out.plan) {
+                    assert get(0).get(0).patient_id == 'P002'
+                    assert get(0).get(0).channels == ['DAPI', 'CD3']
+                    assert get(0).get(0).custom_field == 'test_value'
+                }}
+            )
+        }
+    }
+
+    test("Should emit versions.yml with python and tifffile - stub") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert process.success },
+                { assert process.out.versions },
+                { assert snapshot(process.out.versions).match() }
+            )
+        }
+    }
+
+    test("Should skip when ext.when is false") {
+
+        options "-stub"
+
+        when {
+            process {
+                """
+                task.ext.when = false
+
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        id: 'P001_mov1',
+                        is_reference: false,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}
