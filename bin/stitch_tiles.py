@@ -236,12 +236,11 @@ def stitch_tiles(
             bigtiff=True
         )
     else:
-        # Intermediate affine output - simple TIFF
+        # Intermediate affine output - simple TIFF (uncompressed for memmap compatibility)
         tifffile.imwrite(
             str(output_path),
             output_data,
             metadata={'axes': 'CYX'},
-            compression="zlib",
             bigtiff=True
         )
 
