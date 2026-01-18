@@ -16,6 +16,7 @@ include { VALIS_ADAPTER                     } from './adapters/valis_adapter'
 include { VALIS_PAIRS_ADAPTER               } from './adapters/valis_pairs_adapter'
 include { GPU_ADAPTER                       } from './adapters/gpu_adapter'
 include { CPU_ADAPTER                       } from './adapters/cpu_adapter'
+include { CPU_TILED_ADAPTER                 } from './adapters/cpu_tiled_adapter'
 
 include { ESTIMATE_FEATURE_DISTANCES        } from '../../modules/local/estimate_feature_distances'
 
@@ -158,8 +159,13 @@ workflow REGISTRATION {
             ch_registered = CPU_ADAPTER.out.registered
             break
 
+        case 'cpu_tiled':
+            CPU_TILED_ADAPTER(ch_grouped)
+            ch_registered = CPU_TILED_ADAPTER.out.registered
+            break
+
         default:
-            error "Invalid registration method: '${method}'. Supported: valis, valis_pairs, gpu, cpu"
+            error "Invalid registration method: '${method}'. Supported: valis, valis_pairs, gpu, cpu, cpu_tiled"
     }
 
     // ========================================================================
