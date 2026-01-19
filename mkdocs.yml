@@ -1,0 +1,24 @@
+site_name: My Nextflow Pipeline
+site_description: Documentation for my awesome Nextflow pipeline
+site_author: Your Name
+
+repo_url: https://github.com/username/my-nextflow-pipeline
+repo_name: username/my-nextflow-pipeline
+
+theme:
+  name: material
+  palette:
+    primary: teal
+    accent: cyan
+  features:
+    - navigation.tabs
+    - search.highlight
+
+nav:
+  - Home: index.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
