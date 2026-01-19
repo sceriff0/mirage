@@ -11,9 +11,3 @@ mkdocs:
 python:
   install:
     - requirements: docs/requirements.txt
-```
-
-Then create `docs/requirements.txt`:
-```
-mkdocs>=1.5
-mkdocs-material>=9.0
