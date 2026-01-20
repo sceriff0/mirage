@@ -41,7 +41,7 @@ process REGISTER {
     // - Exit 1 (general failure): would benefit from skipping on attempt 2
     // - Exit 137 (OOM): give it 2 attempts before skipping micro-reg
     // Strategy: skip micro-registration on attempt 3+ (allows 2 attempts with micro-reg)
-    def skip_micro = (task.attempt > 2 || params.skip_micro_registration) ? '--skip-micro-registration' : ''
+    def skip_micro = (task.attempt > 1 || params.skip_micro_registration) ? '--skip-micro-registration' : ''
     // Performance options
     def parallel_warping = params.reg_parallel_warping ? '--parallel-warping' : ''
     def n_workers = params.reg_n_workers ?: 4
