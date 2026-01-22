@@ -438,25 +438,6 @@ def valis_registration(
     # Registration still works well via SuperPoint/SuperGlue feature matching.
     logger.info(f"  Affine optimizer: None (feature-based alignment only)")
 
-    # ========================================================================
-    # Configure Image Preprocessing Based on Image Type
-    # ========================================================================
-    # ColorfulStandardizer: Best for brightfield/IHC images - normalizes staining
-    # ChannelGetter: Best for fluorescence - extracts specific channel with adaptive equalization
-    if image_type == "brightfield":
-        logger.info(f"  Image preprocessing: ColorfulStandardizer (brightfield/IHC)")
-        processing_cls = preprocessing.ColorfulStandardizer
-        processing_kwargs = {}
-    elif image_type == "fluorescence":
-        logger.info(f"  Image preprocessing: ChannelGetter (fluorescence)")
-        processing_cls = preprocessing.ChannelGetter
-        processing_kwargs = {"channel": "dapi", "adaptive_eq": True}
-    else:
-        # Auto: let VALIS detect and use defaults
-        logger.info(f"  Image preprocessing: Auto-detect")
-        processing_cls = None
-        processing_kwargs = None
-
     # Build registrar kwargs
     registrar_kwargs = {
         # Reference image
@@ -485,12 +466,6 @@ def valis_registration(
         # Registration behavior
         "create_masks": True,
     }
-
-    # Add image preprocessing if specified
-    if processing_cls is not None:
-        registrar_kwargs["img_processing_cls"] = processing_cls
-    if processing_kwargs is not None:
-        registrar_kwargs["img_processing_kwargs"] = processing_kwargs
 
     registrar = registration.Valis(input_dir, results_dir, **registrar_kwargs)
 
@@ -875,7 +850,7 @@ def parse_args() -> argparse.Namespace:
                         help='Use NonRigidTileRegistrar for large images (parallel tile processing)')
     parser.add_argument('--tile-size', type=int, default=2048,
                         help='Tile size for tiled registration')
-    parser.add_argument('--image-type', type=str, default='auto',
+    parser.add_argument('--image-type', type=str, default='fluorescence',
                         choices=['auto', 'brightfield', 'fluorescence'],
                         help='Image type for preprocessing optimization')
 
