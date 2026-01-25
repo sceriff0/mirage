@@ -345,6 +345,7 @@ def preprocess_multichannel_image(
         bigtiff=True,
         ome=True,
         compression='zlib',
+        tile=(512, 512)
     )
 
     logger.info(f"[OK] Saved OME-TIFF with {preprocessed.shape[0]} channels")
