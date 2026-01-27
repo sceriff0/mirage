@@ -425,7 +425,7 @@ def valis_registration(
     # displacement fields are stitched together.
     if use_tiled_registration:
         logger.info(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_size={tile_size}px)")
-        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer= 200)
+        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer=200)
     else:
         logger.info(f"  Non-rigid registrar: OpticalFlowWarper (default)")
         non_rigid_registrar = OpticalFlowWarper()
