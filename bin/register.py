@@ -110,8 +110,8 @@ def estimate_jvm_memory(input_dir: str, default_gb: int = 16) -> int:
                 total_size_gb += os.path.getsize(fpath) / (1024 ** 3)
 
         # Rule of thumb: JVM needs ~2x the largest file size for processing
-        # Minimum 8GB, maximum 32GB
-        recommended = max(8, min(32, int(total_size_gb * 2 + 4)))
+        # Minimum 8GB, maximum 64GB
+        recommended = max(8, min(64, int(total_size_gb * 2 + 4)))
         logger.info(f"Input files total: {total_size_gb:.1f} GB, recommending {recommended} GB JVM heap")
         return recommended
     except Exception as e:
