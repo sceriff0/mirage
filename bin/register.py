@@ -425,7 +425,7 @@ def valis_registration(
     # displacement fields are stitched together.
     if use_tiled_registration:
         logger.info(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_size={tile_size}px)")
-        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer=100)
+        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer= 200)
     else:
         logger.info(f"  Non-rigid registrar: OpticalFlowWarper (default)")
         non_rigid_registrar = OpticalFlowWarper()
@@ -552,6 +552,7 @@ def valis_registration(
                 max_non_rigid_registration_dim_px=micro_reg_size,
                 reference_img_f=ref_image,
                 align_to_reference=True,
+                tile_wh=2048,
             )
 
             logger.info("Micro-registration completed")
