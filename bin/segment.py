@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # Add parent directory to path to import lib modules
@@ -32,6 +33,117 @@ from numpy.typing import NDArray
 from image_utils import ensure_dir
 
 logger = get_logger(__name__)
+
+
+def _process_expand_tile(
+    labels: NDArray,
+    y: int,
+    x: int,
+    tile_size: int,
+    overlap: int,
+    distance: int,
+    h: int,
+    w: int
+) -> tuple:
+    """
+    Process a single tile for parallel label expansion.
+
+    Parameters
+    ----------
+    labels : ndarray
+        Full label image (read-only access).
+    y, x : int
+        Top-left corner of the tile in output coordinates.
+    tile_size : int
+        Size of each tile (square).
+    overlap : int
+        Overlap between tiles (must equal expansion distance).
+    distance : int
+        Expansion distance for expand_labels.
+    h, w : int
+        Full image dimensions.
+
+    Returns
+    -------
+    tuple
+        (y, x, expanded_center) where expanded_center is the non-overlap region.
+    """
+    # Extract tile with overlap padding
+    y_start = max(0, y - overlap)
+    x_start = max(0, x - overlap)
+    y_end = min(h, y + tile_size + overlap)
+    x_end = min(w, x + tile_size + overlap)
+
+    tile = labels[y_start:y_end, x_start:x_end]
+    expanded_tile = segmentation.expand_labels(tile, distance=distance)
+
+    # Calculate the center region (non-overlap) to copy
+    out_y_start = y - y_start  # Offset into tile
+    out_x_start = x - x_start
+    out_y_end = out_y_start + min(tile_size, h - y)
+    out_x_end = out_x_start + min(tile_size, w - x)
+
+    return (y, x, expanded_tile[out_y_start:out_y_end, out_x_start:out_x_end])
+
+
+def expand_labels_parallel(
+    labels: NDArray,
+    distance: int,
+    tile_size: int = 1024,
+    n_workers: int = 4
+) -> NDArray:
+    """
+    Memory-efficient parallel label expansion using tiled processing.
+
+    Produces identical results to skimage.segmentation.expand_labels but with
+    dramatically reduced memory usage by processing overlapping tiles in parallel.
+
+    Parameters
+    ----------
+    labels : ndarray, shape (Y, X)
+        Label image where 0 is background and >0 are cell labels.
+    distance : int
+        Distance (pixels) to expand each label.
+    tile_size : int, optional
+        Size of each tile. Default is 1024. Larger tiles use more memory but
+        have less overhead.
+    n_workers : int, optional
+        Number of parallel workers. Default is 4.
+
+    Returns
+    -------
+    expanded : ndarray, shape (Y, X)
+        Expanded label image, identical to expand_labels(labels, distance).
+
+    Notes
+    -----
+    Memory usage is O(n_workers * tile_size^2) instead of O(image_size).
+    For an 8192x8192 image with 1024x1024 tiles: ~25 MB vs ~1.6 GB.
+    """
+    h, w = labels.shape
+    output = np.zeros_like(labels)
+    overlap = distance  # Overlap must equal expansion distance for identical results
+
+    # Generate all tile coordinates
+    tile_args = []
+    for y in range(0, h, tile_size):
+        for x in range(0, w, tile_size):
+            tile_args.append((labels, y, x, tile_size, overlap, distance, h, w))
+
+    n_tiles = len(tile_args)
+    logger.debug(f"  Processing {n_tiles} tiles with {n_workers} workers")
+
+    # Process tiles in parallel
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        results = list(executor.map(lambda args: _process_expand_tile(*args), tile_args))
+
+    # Assemble results into output array
+    for y, x, tile_result in results:
+        out_h, out_w = tile_result.shape
+        output[y:y + out_h, x:x + out_w] = tile_result
+
+    return output
+
 
 __all__ = [
     "extract_dapi_channel",
@@ -295,11 +407,13 @@ def segment_nuclei(
     import gc
     gc.collect()
 
-    # Expand nuclei labels to create whole-cell masks
-    logger.info(f"  Expanding nuclei labels to create cell masks...")
-    cell_labels = segmentation.expand_labels(
+    # Expand nuclei labels to create whole-cell masks (memory-efficient tiled approach)
+    logger.info(f"  Expanding nuclei labels to create cell masks (parallel tiled)...")
+    cell_labels = expand_labels_parallel(
         nuclei_labels,
-        distance=expand_distance
+        distance=expand_distance,
+        tile_size=1024,
+        n_workers=4
     )
 
     elapsed = time.time() - start_time

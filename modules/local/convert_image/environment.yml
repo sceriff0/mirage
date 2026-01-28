@@ -1,0 +1,16 @@
+name: bioio_bioformats
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - tifffile
+  - scyjava  # Provides Java/Maven for Bio-Formats
+  - pip
+  - pip:
+    - bioio
+    - bioio-bioformats
+    - bioio-tifffile
+    - bioio-ome-tiff

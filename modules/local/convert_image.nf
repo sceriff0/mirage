@@ -2,7 +2,8 @@ process CONVERT_IMAGE {
     tag "${meta.patient_id}"
     label 'process_medium'
 
-    container 'docker://bolt3x/attend_image_analysis:convert_bioformats_2'
+    conda "${moduleDir}/convert_image/environment.yml"
+    container null // Use conda environment
 
     input:
     tuple val(meta), path(image_file)
@@ -20,6 +21,9 @@ process CONVERT_IMAGE {
     def pixel_size = params.pixel_size ?: '0.325'
     def channels = meta.channels.join(',')
     """
+    # Set JAVA_HOME for bioio-bioformats (scyjava)
+    export JAVA_HOME=\$CONDA_PREFIX
+
     convert_image.py \\
         --input_file ${image_file} \\
         --output_dir . \\
@@ -31,8 +35,9 @@ process CONVERT_IMAGE {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: \$(python --version 2>&1 | sed 's/Python //')
+        bioio: \$(python -c "import bioio; print(bioio.__version__)" 2>/dev/null || echo "unknown")
+        bioio_bioformats: \$(python -c "import bioio_bioformats; print(bioio_bioformats.__version__)" 2>/dev/null || echo "not installed")
         tifffile: \$(python -c "import tifffile; print(tifffile.__version__)" 2>/dev/null || echo "unknown")
-        aicsimageio: \$(python -c "import aicsimageio; print(aicsimageio.__version__)" 2>/dev/null || echo "unknown")
     END_VERSIONS
     """
 
@@ -46,8 +51,9 @@ process CONVERT_IMAGE {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         python: stub
+        bioio: stub
+        bioio_bioformats: stub
         tifffile: stub
-        aicsimageio: stub
     END_VERSIONS
     """
 }

@@ -48,36 +48,67 @@ def get_file_format(file_path: Path) -> str:
 
 
 def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
-    """Read image using BioIO (ND2, CZI, LIF, TIFF)."""
+    """Read image using BioIO with Bio-Formats backend if available."""
     from bioio import BioImage
-    
-    logger.info(f"Reading with BioIO: {file_path.name}")
-    
-    img = BioImage(file_path)
-    
+
+    # Try bioformats reader first for maximum format support
+    try:
+        import bioio_bioformats
+        logger.info(f"Reading with BioIO (Bio-Formats): {file_path.name}")
+        img = BioImage(file_path, reader=bioio_bioformats.Reader)
+    except ImportError:
+        logger.info(f"Reading with BioIO (native): {file_path.name}")
+        img = BioImage(file_path)
+
     logger.info(f"Dimensions: {img.dims}")
     logger.info(f"Shape: {img.shape}")
     logger.info(f"Dimension order: {img.dims.order}")
-    
+
     ps = img.physical_pixel_sizes
     pixel_size_x = ps.X if ps.X is not None else PIXEL_SIZE_UM
     pixel_size_y = ps.Y if ps.Y is not None else PIXEL_SIZE_UM
     pixel_size_z = ps.Z
-    
+
     logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}, Z: {pixel_size_z}")
     logger.info(f"Channel names from file: {img.channel_names}")
-    
-    image_data = img.data  # TCZYX order
-    
+
+    image_data = img.data  # TCZYX order (or TCZYXS for some formats)
+    dim_order = img.dims.order
+    num_channels = img.dims.C
+
+    # Handle S (samples) dimension that might contain channel data
+    # This occurs when RGB/multi-channel data is stored as samples rather than channels
+    if 'S' in dim_order and img.dims.C == 1 and hasattr(img.dims, 'S') and img.dims.S > 1:
+        logger.info(f"Detected S dimension with {img.dims.S} samples, treating as channels")
+        num_channels = img.dims.S
+
+        # Find axis positions
+        s_axis = dim_order.index('S')
+        c_axis = dim_order.index('C')
+
+        # Move S axis to C position (swap them)
+        image_data = np.moveaxis(image_data, s_axis, c_axis)
+
+        # After moveaxis, the old C=1 is now at s_axis position - squeeze it out
+        # But we need to recalculate since moveaxis shifts things
+        # Actually, after moveaxis(data, s_axis, c_axis), the singleton C is now where S was
+        new_singleton_axis = s_axis if s_axis < c_axis else s_axis
+        if image_data.shape[new_singleton_axis] == 1:
+            image_data = np.squeeze(image_data, axis=new_singleton_axis)
+
+        # Update dimension order (remove S since we moved it to C)
+        dim_order = dim_order.replace('S', '')
+        logger.info(f"Reordered dimensions: {dim_order}, new shape: {image_data.shape}")
+
     metadata = {
-        'num_channels': img.dims.C,
+        'num_channels': num_channels,
         'physical_pixel_size_x': pixel_size_x,
         'physical_pixel_size_y': pixel_size_y,
         'physical_pixel_size_z': pixel_size_z,
         'channel_names_from_file': img.channel_names,
-        'original_dims': img.dims.order,
+        'original_dims': dim_order,
     }
-    
+
     return image_data, metadata
 
 
