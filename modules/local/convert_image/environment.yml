@@ -6,7 +6,7 @@ channels:
 dependencies:
   - python=3.11
   - numpy
-  - tifffile
+  - tifffile>=2024.1.30
   - scyjava  # Provides Java/Maven for Bio-Formats
   - pip
   - pip:
