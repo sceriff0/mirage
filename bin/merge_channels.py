@@ -36,6 +36,14 @@ except ImportError:
     def log(msg):
         print(f"[INFO] {msg}")
 
+try:
+    from validation import log_image_stats, detect_wrapped_values, validate_image_range
+except ImportError:
+    # Fallback if validation module not available
+    def log_image_stats(data, stage, logger=None): pass
+    def detect_wrapped_values(data, **kwargs): return False, 0, 0.0
+    def validate_image_range(data, stage, **kwargs): return True, data
+
 
 # =============================================================================
 # PHENOTYPE COLOR PALETTE - Distinctive colors for categorical visualization
@@ -443,6 +451,18 @@ def merge_channels(
             # Verify dimensions match
             if channel_data.shape != (height, width):
                 raise ValueError(f"Channel {channel_name} shape {channel_data.shape} doesn't match expected ({height}, {width})")
+
+            # Checkpoint 4: Validate channel data for negative/wrapped values
+            ch_min, ch_max = channel_data.min(), channel_data.max()
+            if ch_min < 0:
+                log(f"    WARNING: Negative values detected in {channel_name}: min={ch_min}")
+                channel_data = np.clip(channel_data, 0, None)
+                log(f"    Clipped to 0. New min={channel_data.min()}")
+            elif dtype == np.uint16:
+                # Check for wrapped values (negatives that became high positives)
+                has_wrapped, wrap_count, wrap_pct = detect_wrapped_values(channel_data)
+                if has_wrapped:
+                    log(f"    WARNING: {wrap_count} potential wrapped negative pixels ({wrap_pct:.4f}%) in {channel_name}")
 
             # Write to output memmap
             output_memmap[output_channel_idx, :, :] = channel_data

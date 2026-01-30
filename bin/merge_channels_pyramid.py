@@ -23,6 +23,16 @@ import colorsys
 from typing import Dict, List, Tuple, Optional
 from xml.sax.saxutils import escape as xml_escape
 
+# Add path for utils
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+try:
+    from validation import log_image_stats, detect_wrapped_values, validate_image_range
+except ImportError:
+    # Fallback if validation module not available
+    def log_image_stats(data, stage, logger=None): pass
+    def detect_wrapped_values(data, **kwargs): return False, 0, 0.0
+    def validate_image_range(data, stage, **kwargs): return True, data
+
 os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = tempfile.gettempdir() + '/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
@@ -543,6 +553,19 @@ def merge_channels(
         channel_data = tifffile.imread(str(channel_file))
         if channel_data.ndim > 2:
             channel_data = channel_data.squeeze()
+
+        # Checkpoint 4: Validate channel data for negative/wrapped values
+        ch_min, ch_max = channel_data.min(), channel_data.max()
+        if ch_min < 0:
+            log(f"    WARNING: Negative values detected in {channel_file.stem}: min={ch_min}")
+            channel_data = np.clip(channel_data, 0, None)
+            log(f"    Clipped to 0. New min={channel_data.min()}")
+        elif dtype == np.uint16:
+            # Check for wrapped values (negatives that became high positives)
+            has_wrapped, wrap_count, wrap_pct = detect_wrapped_values(channel_data)
+            if has_wrapped:
+                log(f"    WARNING: {wrap_count} potential wrapped negative pixels ({wrap_pct:.4f}%) in {channel_file.stem}")
+
         output_data[output_idx] = channel_data
         output_idx += 1
         del channel_data
