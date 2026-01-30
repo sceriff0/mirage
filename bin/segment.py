@@ -237,6 +237,72 @@ def load_stardist_model(
     return model
 
 
+def expand_labels_tiled(
+    label_image: NDArray,
+    distance: int = 1,
+    tile_size: int = 1024
+) -> NDArray:
+    """
+    Tiled wrapper around skimage.segmentation.expand_labels.
+
+    Processes image in overlapping tiles, using only the center region
+    of each tile to avoid boundary artifacts. Produces IDENTICAL results
+    to calling expand_labels on the full image.
+
+    Parameters
+    ----------
+    label_image : ndarray, shape (Y, X)
+        Label image with background=0 and labels>=1.
+    distance : int, optional
+        Distance in pixels to expand labels. Default is 1.
+    tile_size : int, optional
+        Size of tiles for processing. Default is 1024.
+
+    Returns
+    -------
+    ndarray
+        Expanded label image with same shape as input.
+    """
+    h, w = label_image.shape
+    out = label_image.copy()
+
+    # Overlap must be >= distance to ensure correct boundary handling
+    overlap = distance + 1
+    step = tile_size - 2 * overlap
+
+    if step <= 0:
+        # Tile too small for this distance, fall back to full image
+        return segmentation.expand_labels(label_image, distance=distance)
+
+    for y in range(0, h, step):
+        for x in range(0, w, step):
+            # Tile boundaries with overlap
+            y1 = max(0, y - overlap)
+            y2 = min(h, y + tile_size - overlap)
+            x1 = max(0, x - overlap)
+            x2 = min(w, x + tile_size - overlap)
+
+            # Extract tile
+            tile = label_image[y1:y2, x1:x2]
+
+            # Skip empty tiles
+            if not np.any(tile > 0):
+                continue
+
+            # Use original expand_labels on tile
+            tile_expanded = segmentation.expand_labels(tile, distance=distance)
+
+            # Copy center region back (avoid overlap artifacts)
+            cy1 = overlap if y > 0 else 0
+            cy2 = tile_expanded.shape[0] - (overlap if y2 < h else 0)
+            cx1 = overlap if x > 0 else 0
+            cx2 = tile_expanded.shape[1] - (overlap if x2 < w else 0)
+
+            out[y1 + cy1:y1 + cy2, x1 + cx1:x1 + cx2] = tile_expanded[cy1:cy2, cx1:cx2]
+
+    return out
+
+
 def segment_nuclei(
     normalized_dapi: NDArray,
     model: StarDist2D,
@@ -295,9 +361,9 @@ def segment_nuclei(
     import gc
     gc.collect()
 
-    # Expand nuclei labels to create whole-cell masks
+    # Expand nuclei labels to create whole-cell masks (tiled for memory efficiency)
     logger.info(f"  Expanding nuclei labels to create cell masks...")
-    cell_labels = segmentation.expand_labels(
+    cell_labels = expand_labels_tiled(
         nuclei_labels,
         distance=expand_distance
     )

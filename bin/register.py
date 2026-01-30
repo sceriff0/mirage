@@ -231,7 +231,7 @@ def warp_single_slide(
     src_path: str,
     out_path: str,
     use_non_rigid: bool,
-    interp_method: str = "bilinear",
+    interp_method: str = "nearest",
 ) -> WarpResult:
     """Warp a single slide (thread-safe).
 
@@ -920,7 +920,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--image-type', type=str, default='fluorescence',
                         choices=['auto', 'brightfield', 'fluorescence'],
                         help='Image type for preprocessing optimization')
-    parser.add_argument('--interp-method', type=str, default='bilinear',
+    parser.add_argument('--interp-method', type=str, default='nearest',
                         choices=['bilinear', 'bicubic', 'nearest'],
                         help='Interpolation method for warping. bilinear recommended for '
                              'quantification (no negative overshoot), bicubic for visual quality.')
