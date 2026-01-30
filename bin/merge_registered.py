@@ -28,6 +28,7 @@ from logger import log_progress as log
 from metadata import extract_channel_names_from_ome as get_channel_names_from_ome
 from metadata import extract_markers_from_filename
 from image_utils import normalize_image_dimensions
+from validation import log_image_stats, validate_image_range, clip_negative_values
 
 # Import only slide_io to avoid heavy VALIS dependencies
 import valis.slide_io as slide_io
@@ -442,6 +443,32 @@ def merge_slides(input_dir: str, output_path: str, reference_markers: list = Non
                     labels_array[idx] = label
             imagej_metadata['Labels'] = labels_array
             log(f"  Added phenotype labels to ImageJ metadata: {labels_array}")
+
+    # Checkpoint 4: Final validation before save
+    # Log statistics and check for any remaining value issues
+    log(f"[Checkpoint 4] Final validation before save...")
+
+    # Create a simple logger adapter for the validation functions
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    # Check sample of data for issues
+    sample_data = output_memmap[0] if output_memmap.ndim > 2 else output_memmap
+    log_image_stats(sample_data, "final_output_sample", _logger)
+
+    # Validate and optionally fix any remaining issues
+    is_valid, _ = validate_image_range(
+        sample_data,
+        "final_output",
+        expected_dtype=output_memmap.dtype,
+        logger=_logger,
+        fix_issues=False  # Just warn, don't modify at this point
+    )
+
+    if not is_valid:
+        log(f"[Checkpoint 4] WARNING: Value range issues detected in final output")
+    else:
+        log(f"[Checkpoint 4] Value range OK")
 
     # Write OME-TIFF with proper metadata
     # Important: Use ome=True to ensure proper OME-XML metadata structure

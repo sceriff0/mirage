@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from image_utils import ensure_dir
 from logger import get_logger
 from metadata import get_channel_names
+from validation import log_image_stats, detect_wrapped_values
 
 # Module-level logger
 logger = get_logger(__name__)
@@ -173,6 +174,55 @@ class WarpResult:
     success: bool
     output_path: Optional[str] = None
     error: Optional[str] = None
+    has_value_issues: bool = False
+
+
+def validate_registered_image(output_path: str, slide_name: str) -> bool:
+    """Validate registered image for negative/wrapped values (Checkpoint 3).
+
+    Parameters
+    ----------
+    output_path : str
+        Path to the registered image file.
+    slide_name : str
+        Name of the slide for logging.
+
+    Returns
+    -------
+    bool
+        True if values look OK, False if issues detected.
+    """
+    try:
+        with tifffile.TiffFile(output_path) as tif:
+            # Read a sample of the image to check values
+            # Read first page to avoid loading entire large image
+            data = tif.pages[0].asarray()
+
+        log_image_stats(data, f"registered_{slide_name}", logger)
+
+        # Check for wrapped values (potential negatives stored as uint16)
+        if data.dtype == np.uint16:
+            has_wrapped, count, pct = detect_wrapped_values(data, logger=logger)
+            if has_wrapped:
+                logger.warning(
+                    f"[Checkpoint 3] {slide_name}: Detected {count} potentially wrapped "
+                    f"negative values ({pct:.4f}%). This may indicate interpolation artifacts."
+                )
+                return False
+
+        # Check for actual negatives (if signed type)
+        if data.min() < 0:
+            logger.warning(
+                f"[Checkpoint 3] {slide_name}: Detected negative values (min={data.min()}). "
+                f"This may indicate interpolation artifacts."
+            )
+            return False
+
+        return True
+
+    except Exception as e:
+        logger.warning(f"[Checkpoint 3] {slide_name}: Could not validate image: {e}")
+        return True  # Don't fail on validation errors
 
 
 def warp_single_slide(
@@ -211,7 +261,14 @@ def warp_single_slide(
             crop=True,
             interp_method="bicubic",
         )
-        return WarpResult(slide_name, success=True, output_path=out_path)
+        # Checkpoint 3: Validate registered image for negative/wrapped values
+        values_ok = validate_registered_image(out_path, slide_name)
+        return WarpResult(
+            slide_name,
+            success=True,
+            output_path=out_path,
+            has_value_issues=not values_ok
+        )
     except Exception as e:
         return WarpResult(slide_name, success=False, error=str(e))
     finally:
@@ -730,6 +787,10 @@ def valis_registration(
                     )
                     warp_succeeded = True
                     warped_count += 1
+
+                    # Checkpoint 3: Validate registered image
+                    validate_registered_image(out_path, slide_name)
+
                     retry_ctx.succeeded()
                     break
                 except (MemoryError, OSError) as e:

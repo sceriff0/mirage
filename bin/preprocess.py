@@ -50,6 +50,7 @@ if BASICPY_VERSION != 'unknown' and PYDANTIC_VERSION != 'unknown':
 from basicpy import BaSiC  # type: ignore
 
 from utils.image_utils import ensure_dir
+from utils.validation import log_image_stats, clip_negative_values, detect_negative_values
 
 logger = get_logger(__name__)
 
@@ -191,6 +192,17 @@ def apply_basic_correction(
 
     corrected_fovs = basic.fit_transform(fov_stack)
 
+    # Checkpoint 2: Clip negative values from BaSiC darkfield subtraction
+    # BaSiC can produce negative values when darkfield > original pixel value
+    has_neg, neg_count, neg_pct = detect_negative_values(corrected_fovs, logger)
+    if has_neg:
+        logger.warning(
+            f"BaSiC correction produced {neg_count} negative pixels ({neg_pct:.4f}%), "
+            f"min value: {corrected_fovs.min()}"
+        )
+        corrected_fovs = np.clip(corrected_fovs, 0, None)
+        logger.info(f"Clipped negative values to 0. New min: {corrected_fovs.min()}")
+
     reconstructed = reconstruct_image_from_fovs(
         corrected_fovs,
         positions,
@@ -272,6 +284,9 @@ def preprocess_multichannel_image(
     multichannel_stack = tifffile.imread(image_path)
     logger.info(f"Loaded image shape: {multichannel_stack.shape}")
 
+    # Checkpoint 1: Log input image statistics
+    log_image_stats(multichannel_stack, "input", logger)
+
     if multichannel_stack.ndim == 2:
         logger.debug("  Converting 2D to 3D (adding channel dimension)")
         multichannel_stack = np.expand_dims(multichannel_stack, axis=0)
@@ -319,6 +334,9 @@ def preprocess_multichannel_image(
     logger.info(f"BaSiC Correction Summary: corrected={n_corrected}/{n_channels}, skipped={n_skipped}/{n_channels}")
 
     preprocessed = np.stack(preprocessed_channels, axis=0)
+
+    # Log output statistics after all processing
+    log_image_stats(preprocessed, "after_basic_correction", logger)
 
     logger.info(f"Saving corrected image to {output_path}")
     logger.debug(f"  Final stack shape: {preprocessed.shape}, channels: {channel_names[:preprocessed.shape[0]]}")
