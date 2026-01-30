@@ -231,6 +231,7 @@ def warp_single_slide(
     src_path: str,
     out_path: str,
     use_non_rigid: bool,
+    interp_method: str = "bilinear",
 ) -> WarpResult:
     """Warp a single slide (thread-safe).
 
@@ -246,6 +247,9 @@ def warp_single_slide(
         Path for output registered slide
     use_non_rigid : bool
         Whether to apply non-rigid transforms
+    interp_method : str
+        Interpolation method: 'bilinear' (recommended for quantification),
+        'bicubic' (sharper but may cause negative overshoot), or 'nearest'
 
     Returns
     -------
@@ -259,7 +263,7 @@ def warp_single_slide(
             level=0,
             non_rigid=use_non_rigid,
             crop=True,
-            interp_method="bicubic",
+            interp_method=interp_method,
         )
         # Checkpoint 3: Validate registered image for negative/wrapped values
         values_ok = validate_registered_image(out_path, slide_name)
@@ -355,6 +359,7 @@ def valis_registration(
     use_tiled_registration: bool = False,
     tile_size: int = 512,
     image_type: str = "auto",
+    interp_method: str = "bilinear",
 ) -> int:
     """Perform VALIS registration on preprocessed images.
 
@@ -728,7 +733,7 @@ def valis_registration(
 
                 future = executor.submit(
                     warp_single_slide,
-                    slide_name, slide_obj, src_path, out_path, use_non_rigid
+                    slide_name, slide_obj, src_path, out_path, use_non_rigid, interp_method
                 )
                 futures[future] = slide_name
 
@@ -783,7 +788,7 @@ def valis_registration(
                         level=0,
                         non_rigid=use_non_rigid,
                         crop=True,
-                        interp_method="bicubic",
+                        interp_method=interp_method,
                     )
                     warp_succeeded = True
                     warped_count += 1
@@ -915,6 +920,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--image-type', type=str, default='fluorescence',
                         choices=['auto', 'brightfield', 'fluorescence'],
                         help='Image type for preprocessing optimization')
+    parser.add_argument('--interp-method', type=str, default='bilinear',
+                        choices=['bilinear', 'bicubic', 'nearest'],
+                        help='Interpolation method for warping. bilinear recommended for '
+                             'quantification (no negative overshoot), bicubic for visual quality.')
 
     return parser.parse_args()
 
@@ -941,6 +950,7 @@ def main() -> int:
             use_tiled_registration=args.use_tiled_registration,
             tile_size=args.tile_size,
             image_type=args.image_type,
+            interp_method=args.interp_method,
         )
     except Exception as e:
         logger.error(f"[FAIL] Registration failed: {e}")
