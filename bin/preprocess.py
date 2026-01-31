@@ -388,8 +388,6 @@ def preprocess_multichannel_image(
         logger.error(f"[CHECKPOINT 1 FAIL] Saved file has {neg_count} negatives ({neg_pct:.4f}%), min={verify_min}")
     else:
         logger.info(f"[CHECKPOINT 1 OK] No negatives in saved file. min={verify_min:.2f}, max={verify_max:.2f}")
-    else:
-        logger.warning(f"[WARN] File may not have correct dimensions: {verify_img.shape}")
 
     return preprocessed
 
