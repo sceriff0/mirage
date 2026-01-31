@@ -782,6 +782,21 @@ def valis_registration(
             warp_succeeded = False
             for attempt in retry_ctx:
                 try:
+                    # CHECKPOINT 2A: Check input file before VALIS warp
+                    try:
+                        with tifffile.TiffFile(src_path) as tif:
+                            input_data = tif.pages[0].asarray()
+                            input_min = float(input_data.min())
+                            input_max = float(input_data.max())
+                            if input_min < 0:
+                                neg_count = int(np.sum(input_data < 0))
+                                logger.error(f"[CHECKPOINT 2A FAIL] {slide_name} INPUT has {neg_count} negatives, min={input_min}")
+                            else:
+                                logger.info(f"[CHECKPOINT 2A OK] {slide_name} INPUT: min={input_min:.2f}, max={input_max:.2f}")
+                            del input_data
+                    except Exception as e:
+                        logger.warning(f"[CHECKPOINT 2A] Could not verify input: {e}")
+
                     slide_obj.warp_and_save_slide(
                         src_f=src_path,
                         dst_f=out_path,
@@ -795,6 +810,21 @@ def valis_registration(
 
                     # Checkpoint 3: Validate registered image
                     validate_registered_image(out_path, slide_name)
+
+                    # CHECKPOINT 2B: Check output file after VALIS warp
+                    try:
+                        with tifffile.TiffFile(out_path) as tif:
+                            output_data = tif.pages[0].asarray()
+                            output_min = float(output_data.min())
+                            output_max = float(output_data.max())
+                            if output_min < 0:
+                                neg_count = int(np.sum(output_data < 0))
+                                logger.error(f"[CHECKPOINT 2B FAIL] {slide_name} OUTPUT has {neg_count} negatives, min={output_min}")
+                            else:
+                                logger.info(f"[CHECKPOINT 2B OK] {slide_name} OUTPUT: min={output_min:.2f}, max={output_max:.2f}")
+                            del output_data
+                    except Exception as e:
+                        logger.warning(f"[CHECKPOINT 2B] Could not verify output: {e}")
 
                     retry_ctx.succeeded()
                     break

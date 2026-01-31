@@ -78,6 +78,16 @@ def split_multichannel_tiff(input_path, output_dir, is_reference=False, channel_
     img = tifffile.imread(input_path)
     logger.info(f"  Image shape: {img.shape}, dtype: {img.dtype}")
 
+    # CHECKPOINT 3: Check split input for negatives
+    img_min = float(img.min())
+    img_max = float(img.max())
+    if img_min < 0:
+        neg_count = int(np.sum(img < 0))
+        neg_pct = 100 * neg_count / img.size
+        logger.error(f"[CHECKPOINT 3 FAIL] Input has {neg_count} negatives ({neg_pct:.4f}%), min={img_min}")
+    else:
+        logger.info(f"[CHECKPOINT 3 OK] Input clean: min={img_min:.2f}, max={img_max:.2f}")
+
     # Determine array layout and number of channels
     if img.ndim == 2:
         # Single channel image
