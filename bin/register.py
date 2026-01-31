@@ -231,7 +231,7 @@ def warp_single_slide(
     src_path: str,
     out_path: str,
     use_non_rigid: bool,
-    interp_method: str = "nearest",
+    interp_method: str = "bicubic",
 ) -> WarpResult:
     """Warp a single slide (thread-safe).
 
@@ -804,8 +804,29 @@ def valis_registration(
                         non_rigid=use_non_rigid,
                         crop=True,
                         interp_method=interp_method,
+                        compression='deflate',
                     )
                     warp_succeeded = True
+
+                    # FIX: Clip negative values introduced by VALIS warping
+                    try:
+                        warped_data = tifffile.imread(out_path)
+                        warped_min = float(warped_data.min())
+                        if warped_min < 0:
+                            neg_count = int(np.sum(warped_data < 0))
+                            logger.warning(f"VALIS produced {neg_count} negative pixels in {slide_name} (min={warped_min:.2f}), clipping to 0")
+                            warped_data = np.clip(warped_data, 0, None)
+                            tifffile.imwrite(
+                                out_path,
+                                warped_data,
+                                compression='zlib',
+                                bigtiff=True
+                            )
+                            logger.info(f"Re-saved {slide_name} with clipped values")
+                        del warped_data
+                    except Exception as e:
+                        logger.warning(f"Could not clip negatives in {slide_name}: {e}")
+
                     warped_count += 1
 
                     # Checkpoint 3: Validate registered image
@@ -950,7 +971,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--image-type', type=str, default='fluorescence',
                         choices=['auto', 'brightfield', 'fluorescence'],
                         help='Image type for preprocessing optimization')
-    parser.add_argument('--interp-method', type=str, default='nearest',
+    parser.add_argument('--interp-method', type=str, default='bicubic',
                         choices=['bilinear', 'bicubic', 'nearest'],
                         help='Interpolation method for warping. bilinear recommended for '
                              'quantification (no negative overshoot), bicubic for visual quality.')
