@@ -40,6 +40,7 @@ from typing import Dict, List, Optional, Tuple
 
 # Third-party
 import numpy as np
+import pyvips
 import tifffile
 
 # Add utils directory to path before local imports
@@ -804,18 +805,26 @@ def valis_registration(
                         non_rigid=use_non_rigid,
                         crop=True,
                         interp_method=interp_method,
-                        compression='deflate',
                     )
                     warp_succeeded = True
 
                     # FIX: Clip negative values introduced by VALIS warping
                     try:
-                        warped_data = tifffile.imread(out_path)
-                        warped_min = float(warped_data.min())
+                        # Use pyvips to read LZW-compressed file (tifffile needs imagecodecs)
+                        warped_vips = pyvips.Image.new_from_file(out_path)
+                        warped_min = warped_vips.min()
                         if warped_min < 0:
+                            # Convert to numpy for clipping
+                            warped_data = np.ndarray(
+                                buffer=warped_vips.write_to_memory(),
+                                dtype=np.float32,
+                                shape=[warped_vips.height, warped_vips.width] if warped_vips.bands == 1
+                                      else [warped_vips.height, warped_vips.width, warped_vips.bands]
+                            )
                             neg_count = int(np.sum(warped_data < 0))
                             logger.warning(f"VALIS produced {neg_count} negative pixels in {slide_name} (min={warped_min:.2f}), clipping to 0")
                             warped_data = np.clip(warped_data, 0, None)
+                            # Re-save with tifffile (zlib compression, float32 preserved)
                             tifffile.imwrite(
                                 out_path,
                                 warped_data,
@@ -823,7 +832,8 @@ def valis_registration(
                                 bigtiff=True
                             )
                             logger.info(f"Re-saved {slide_name} with clipped values")
-                        del warped_data
+                            del warped_data
+                        del warped_vips
                     except Exception as e:
                         logger.warning(f"Could not clip negatives in {slide_name}: {e}")
 
