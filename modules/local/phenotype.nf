@@ -36,8 +36,8 @@ process PHENOTYPE {
     def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
     def pixel_size = params.pixel_size ?: 0.325
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${quant_csv})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${quant_csv})
     echo "${task.process},${meta.patient_id},${quant_csv.name},\${input_bytes}" > ${meta.patient_id}.PHENOTYPE.size.csv
 
     echo "Sample: ${meta.patient_id}"

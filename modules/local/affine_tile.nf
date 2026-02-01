@@ -31,9 +31,9 @@ process AFFINE_TILE {
     def args = task.ext.args ?: ''
     def n_features = params.cpu_reg_n_features ?: 5000
     """
-    # Log input sizes for tracing (sum of reference + moving)
-    ref_bytes=\$(stat --printf="%s" ${reference})
-    mov_bytes=\$(stat --printf="%s" ${moving})
+    # Log input sizes for tracing (sum of reference + moving, -L follows symlinks)
+    ref_bytes=\$(stat -L --printf="%s" ${reference})
+    mov_bytes=\$(stat -L --printf="%s" ${moving})
     total_bytes=\$((ref_bytes + mov_bytes))
     echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.AFFINE_TILE.size.csv
 

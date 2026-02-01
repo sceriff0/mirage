@@ -21,8 +21,8 @@ process GENERATE_PREPROCESS_QC {
     def scale_factor = params.preprocess_qc_scale_factor ?: 0.25
     def channels = meta.channels.join(' ')
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${preprocessed})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${preprocessed})
     echo "${task.process},${meta.patient_id},${preprocessed.name},\${input_bytes}" > ${meta.patient_id}_${preprocessed.simpleName}.GENERATE_PREPROCESS_QC.size.csv
 
     mkdir -p qc

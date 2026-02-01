@@ -30,8 +30,8 @@ process CONVERSION {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${merged_image})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${merged_image})
     echo "${task.process},${meta.patient_id},${merged_image.name},\${input_bytes}" > ${meta.patient_id}.CONVERSION.size.csv
 
     echo "Sample: ${meta.patient_id}"

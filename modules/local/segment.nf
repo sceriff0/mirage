@@ -41,8 +41,8 @@ process SEGMENT {
     // FIX WARNING #1: Validate DAPI is in channel 0
     def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${merged_file})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${merged_file})
     echo "${task.process},${meta.patient_id},${merged_file.name},\${input_bytes}" > ${meta.patient_id}.SEGMENT.size.csv
 
     echo "Sample: ${meta.patient_id}"

@@ -34,10 +34,10 @@ process MERGE {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
-    # Log input size for tracing (sum of channels/ + masks)
+    # Log input size for tracing (sum of channels/ + masks, -L follows symlinks)
     channels_bytes=\$(du -sb channels/ | cut -f1)
-    seg_bytes=\$(stat --printf="%s" ${seg_mask})
-    pheno_bytes=\$(stat --printf="%s" ${pheno_mask})
+    seg_bytes=\$(stat -L --printf="%s" ${seg_mask})
+    pheno_bytes=\$(stat -L --printf="%s" ${pheno_mask})
     total_bytes=\$((channels_bytes + seg_bytes + pheno_bytes))
     echo "${task.process},${meta.patient_id},channels/+masks,\${total_bytes}" > ${meta.patient_id}.MERGE.size.csv
 

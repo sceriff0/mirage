@@ -37,8 +37,8 @@ process SPLIT_CHANNELS {
     def channel_args = (meta.channels && meta.channels instanceof List && !meta.channels.isEmpty()) ?
         "--channels ${meta.channels.join(' ')}" : ""
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${registered_image})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${registered_image})
     echo "${task.process},${meta.patient_id},${registered_image.name},\${input_bytes}" > ${meta.patient_id}_${registered_image.simpleName}.SPLIT_CHANNELS.size.csv
 
     echo "Sample: ${meta.patient_id}"

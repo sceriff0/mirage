@@ -33,8 +33,8 @@ process PREPROCESS {
     def overlap = params.preproc_overlap ?: 0
     def channels = meta.channels.join(' ')
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${ome_tiff})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${ome_tiff})
     echo "${task.process},${meta.patient_id},${ome_tiff.name},\${input_bytes}" > ${meta.patient_id}_${ome_tiff.simpleName}.PREPROCESS.size.csv
 
     preprocess.py \\

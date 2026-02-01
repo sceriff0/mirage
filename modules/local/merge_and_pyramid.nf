@@ -50,9 +50,9 @@ process MERGE_AND_PYRAMID {
     def compression = params.compression ?: 'lzw'
 
     """
-    # Log input size for tracing (sum of channels/ dir + seg_mask)
+    # Log input size for tracing (sum of channels/ dir + seg_mask, -L follows symlinks)
     channels_bytes=\$(du -sb channels/ | cut -f1)
-    mask_bytes=\$(stat --printf="%s" ${seg_mask})
+    mask_bytes=\$(stat -L --printf="%s" ${seg_mask})
     total_bytes=\$((channels_bytes + mask_bytes))
     echo "${task.process},${meta.patient_id},channels/+${seg_mask.name},\${total_bytes}" > ${meta.patient_id}.MERGE_AND_PYRAMID.size.csv
 

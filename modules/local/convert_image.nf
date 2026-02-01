@@ -21,8 +21,8 @@ process CONVERT_IMAGE {
     def pixel_size = params.pixel_size ?: '0.325'
     def channels = meta.channels.join(',')
     """
-    # Log input size for tracing
-    input_bytes=\$(stat --printf="%s" ${image_file})
+    # Log input size for tracing (-L follows symlinks)
+    input_bytes=\$(stat -L --printf="%s" ${image_file})
     echo "${task.process},${meta.patient_id},${image_file.name},\${input_bytes}" > ${meta.patient_id}_${image_file.simpleName}.CONVERT_IMAGE.size.csv
 
     convert_image.py \\

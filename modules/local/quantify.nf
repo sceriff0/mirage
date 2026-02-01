@@ -34,9 +34,9 @@ process QUANTIFY {
     // Extract channel name from filename (split_multichannel.py creates files like "PANCK.tiff")
     def channel_name = channel_tiff.simpleName
     """
-    # Log input sizes for tracing (sum of channel_tiff + seg_mask)
-    tiff_bytes=\$(stat --printf="%s" ${channel_tiff})
-    mask_bytes=\$(stat --printf="%s" ${seg_mask})
+    # Log input sizes for tracing (sum of channel_tiff + seg_mask, -L follows symlinks)
+    tiff_bytes=\$(stat -L --printf="%s" ${channel_tiff})
+    mask_bytes=\$(stat -L --printf="%s" ${seg_mask})
     total_bytes=\$((tiff_bytes + mask_bytes))
     echo "${task.process},${meta.id},${channel_tiff.name}+${seg_mask.name},\${total_bytes}" > ${meta.id}.QUANTIFY.size.csv
 

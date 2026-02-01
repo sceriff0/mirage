@@ -51,8 +51,8 @@ process REGISTER {
     def tile_size = params.reg_tile_size ?: 2048
 
     """
-    # Log input size for tracing (sum of all input files)
-    total_bytes=\$(find -L ref input_* -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) -exec stat --printf="%s\\n" {} + 2>/dev/null | awk '{sum+=\$1} END {print sum}')
+    # Log input size for tracing (sum of all input files, -L follows symlinks)
+    total_bytes=\$(find -L ref input_* -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) -exec stat -L --printf="%s\\n" {} + 2>/dev/null | awk '{sum+=\$1} END {print sum}')
     echo "${task.process},${patient_id},inputs/,\${total_bytes:-0}" > ${patient_id}.REGISTER.size.csv
 
     mkdir -p registered_slides preprocessed
