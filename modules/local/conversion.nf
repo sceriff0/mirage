@@ -21,6 +21,7 @@ process CONVERSION {
     output:
     tuple val(meta), path("pyramid.ome.tiff"), emit: pyramid
     path "versions.yml"                       , emit: versions
+    path("*.size.csv")                        , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -29,6 +30,10 @@ process CONVERSION {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${merged_image})
+    echo "${task.process},${meta.patient_id},${merged_image.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
 
     bfconvert \\
@@ -52,6 +57,7 @@ process CONVERSION {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch pyramid.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

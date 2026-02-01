@@ -22,6 +22,7 @@ process AFFINE_TILE {
     tuple val(meta), path("${tile_id}.npy")      , emit: tile
     tuple val(meta), path("${tile_id}_meta.json"), emit: tile_meta
     path "versions.yml"                          , emit: versions
+    path("*.size.csv")                           , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -30,6 +31,12 @@ process AFFINE_TILE {
     def args = task.ext.args ?: ''
     def n_features = params.cpu_reg_n_features ?: 5000
     """
+    # Log input sizes for tracing (sum of reference + moving)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    mov_bytes=\$(stat --printf="%s" ${moving})
+    total_bytes=\$((ref_bytes + mov_bytes))
+    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.size.csv
+
     echo "=================================================="
     echo "AFFINE_TILE: ${tile_id}"
     echo "=================================================="
@@ -59,6 +66,7 @@ process AFFINE_TILE {
     """
     echo '{}' > ${tile_id}_meta.json
     python -c "import numpy as np; np.save('${tile_id}.npy', np.zeros((1, 100, 100), dtype=np.float32))"
+    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

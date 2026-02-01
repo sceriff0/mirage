@@ -23,6 +23,7 @@ process STITCH_DIFFEO {
     output:
     tuple val(meta), path("*_registered.ome.tiff"), emit: registered
     path "versions.yml"                           , emit: versions
+    path("*.size.csv")                            , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -31,6 +32,12 @@ process STITCH_DIFFEO {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${moving.simpleName}"
     """
+    # Log input size for tracing (sum of tiles + moving)
+    tiles_bytes=\$(du -sb tiles/ | cut -f1)
+    moving_bytes=\$(stat --printf="%s" ${moving})
+    total_bytes=\$((tiles_bytes + moving_bytes))
+    echo "${task.process},${meta.patient_id},tiles/+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "=================================================="
     echo "STITCH_DIFFEO"
     echo "=================================================="
@@ -64,6 +71,7 @@ process STITCH_DIFFEO {
     def prefix = task.ext.prefix ?: "${moving.simpleName}"
     """
     touch ${prefix}_registered.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

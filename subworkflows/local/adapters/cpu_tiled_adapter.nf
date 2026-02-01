@@ -203,7 +203,15 @@ workflow CPU_TILED_ADAPTER {
 
     ch_all = PUBLISH_REFERENCE_CPU_TILED.out.published.mix(STITCH_DIFFEO.out.registered)
 
+    // Collect size logs from all tiled processes
+    ch_size_logs = Channel.empty()
+        .mix(AFFINE_TILE.out.size_log)
+        .mix(STITCH_AFFINE.out.size_log)
+        .mix(DIFFEO_TILE.out.size_log)
+        .mix(STITCH_DIFFEO.out.size_log)
+
     emit:
     registered = ch_all
+    size_logs = ch_size_logs
     // QC generation is now decoupled - handled by GENERATE_REGISTRATION_QC module
 }

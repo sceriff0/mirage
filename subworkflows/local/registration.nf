@@ -275,6 +275,46 @@ workflow REGISTRATION {
         ch_checkpoint_data
     )
 
+    // Collect size logs from all registration processes
+    ch_size_logs = Channel.empty()
+
+    // Add size logs from padding processes (if padding is enabled)
+    if (params.padding) {
+        ch_size_logs = ch_size_logs
+            .mix(GET_IMAGE_DIMS.out.size_log)
+            .mix(PAD_IMAGES.out.size_log)
+    }
+
+    // Add size logs from the active registration adapter
+    switch(method) {
+        case 'valis':
+            ch_size_logs = ch_size_logs.mix(VALIS_ADAPTER.out.size_logs)
+            break
+        case 'valis_pairs':
+            ch_size_logs = ch_size_logs.mix(VALIS_PAIRS_ADAPTER.out.size_logs)
+            break
+        case 'gpu':
+            ch_size_logs = ch_size_logs.mix(GPU_ADAPTER.out.size_logs)
+            break
+        case 'cpu':
+            ch_size_logs = ch_size_logs.mix(CPU_ADAPTER.out.size_logs)
+            break
+        case 'cpu_tiled':
+            ch_size_logs = ch_size_logs.mix(CPU_TILED_ADAPTER.out.size_logs)
+            break
+    }
+
+    // Add size logs from QC processes (if enabled)
+    if (!params.skip_registration_qc) {
+        ch_size_logs = ch_size_logs.mix(GENERATE_REGISTRATION_QC.out.size_log)
+    }
+
+    // Add size logs from error estimation (if enabled)
+    if (params.enable_feature_error) {
+        ch_size_logs = ch_size_logs.mix(ESTIMATE_FEATURE_DISTANCES.out.size_log)
+    }
+
     emit:
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    size_logs = ch_size_logs
 }

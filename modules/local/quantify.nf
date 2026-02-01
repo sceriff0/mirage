@@ -23,6 +23,7 @@ process QUANTIFY {
     output:
     tuple val(meta), path("${meta.id}_quant.csv"), emit: individual_csv
     path "versions.yml"                           , emit: versions
+    path("*.size.csv")                            , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -33,6 +34,12 @@ process QUANTIFY {
     // Extract channel name from filename (split_multichannel.py creates files like "PANCK.tiff")
     def channel_name = channel_tiff.simpleName
     """
+    # Log input sizes for tracing (sum of channel_tiff + seg_mask)
+    tiff_bytes=\$(stat --printf="%s" ${channel_tiff})
+    mask_bytes=\$(stat --printf="%s" ${seg_mask})
+    total_bytes=\$((tiff_bytes + mask_bytes))
+    echo "${task.process},${meta.id},${channel_tiff.name}+${seg_mask.name},\${total_bytes}" > ${meta.id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
     echo "Channel: ${channel_name}"
 
@@ -58,6 +65,7 @@ process QUANTIFY {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${meta.id}_quant.csv
+    echo "STUB,${meta.id},stub,0" > ${meta.id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -82,6 +90,7 @@ process MERGE_QUANT_CSVS {
     output:
     tuple val(meta), path("merged_quant.csv"), emit: merged_csv
     path "versions.yml"                       , emit: versions
+    path("*.size.csv")                        , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -94,6 +103,13 @@ process MERGE_QUANT_CSVS {
     import pandas as pd
     from pathlib import Path
     import sys
+    import os
+
+    # Log input size for tracing (sum of all CSV files)
+    csv_files = sorted(Path('.').glob('*_quant.csv'))
+    total_bytes = sum(f.stat().st_size for f in csv_files)
+    with open('${meta.patient_id}.size.csv', 'w') as f:
+        f.write(f"${task.process},${meta.patient_id},csvs/,{total_bytes}\\n")
 
     print("Sample: ${meta.patient_id}")
 
@@ -200,6 +216,7 @@ process MERGE_QUANT_CSVS {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch merged_quant.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

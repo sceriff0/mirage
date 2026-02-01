@@ -114,7 +114,11 @@ workflow VALIS_PAIRS_ADAPTER {
 
     ch_all = PUBLISH_REFERENCE_VALIS_PAIRS.out.published.concat(REGISTER_VALIS_PAIRS.out.registered)
 
+    // Collect size logs
+    ch_size_logs = REGISTER_VALIS_PAIRS.out.size_log
+
     emit:
     registered = ch_all
+    size_logs = ch_size_logs
     // QC generation is now decoupled - handled by GENERATE_REGISTRATION_QC module
 }

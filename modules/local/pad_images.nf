@@ -10,6 +10,7 @@ process PAD_IMAGES {
     output:
     tuple val(meta), path("*_padded.ome.tif"), emit: padded
     path "versions.yml"                       , emit: versions
+    path("*.size.csv")                        , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -19,6 +20,10 @@ process PAD_IMAGES {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def pad_mode = params.gpu_reg_pad_mode ?: 'constant'
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${preprocessed_file})
+    echo "${task.process},${meta.patient_id},${preprocessed_file.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     # Read max dimensions from file
     MAX_HEIGHT=\$(grep MAX_HEIGHT ${max_dims_file} | awk '{print \$2}')
     MAX_WIDTH=\$(grep MAX_WIDTH ${max_dims_file} | awk '{print \$2}')
@@ -44,6 +49,7 @@ process PAD_IMAGES {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${preprocessed_file.simpleName}_padded.ome.tif
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

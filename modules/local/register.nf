@@ -20,6 +20,7 @@ process REGISTER {
     output:
     tuple val(patient_id), path("registered_slides/*_registered.ome.tiff"), val(all_metas), emit: registered
     path "versions.yml"                                                                    , emit: versions
+    path("*.size.csv")                                                                     , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -50,6 +51,10 @@ process REGISTER {
     def tile_size = params.reg_tile_size ?: 2048
 
     """
+    # Log input size for tracing (sum of all input files)
+    total_bytes=\$(find -L ref input_* -maxdepth 1 -type f \\( -name "*.ome.tif" -o -name "*.ome.tiff" \\) -exec stat --printf="%s\\n" {} + 2>/dev/null | awk '{sum+=\$1} END {print sum}')
+    echo "${task.process},${patient_id},inputs/,\${total_bytes:-0}" > ${patient_id}.size.csv
+
     mkdir -p registered_slides preprocessed
 
     echo "========================================================================"
@@ -148,6 +153,7 @@ process REGISTER {
     """
     mkdir -p registered_slides
     ${touch_commands}
+    echo "STUB,${patient_id},stub,0" > ${patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

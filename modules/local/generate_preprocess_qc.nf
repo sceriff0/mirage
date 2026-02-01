@@ -10,6 +10,7 @@ process GENERATE_PREPROCESS_QC {
     output:
     tuple val(meta), path("qc/*.png"), emit: qc
     path "versions.yml"              , emit: versions
+    path("*.size.csv")               , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -20,6 +21,10 @@ process GENERATE_PREPROCESS_QC {
     def scale_factor = params.preprocess_qc_scale_factor ?: 0.25
     def channels = meta.channels.join(' ')
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${preprocessed})
+    echo "${task.process},${meta.patient_id},${preprocessed.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     mkdir -p qc
 
     generate_preprocess_qc.py \\
@@ -45,6 +50,7 @@ process GENERATE_PREPROCESS_QC {
     mkdir -p qc
     touch qc/${prefix}_DAPI.png
     touch qc/${prefix}_channel1.png
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

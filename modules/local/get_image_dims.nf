@@ -11,6 +11,7 @@ process GET_IMAGE_DIMS {
     output:
     tuple val(meta), path("*_dims.txt"), emit: dims
     path "versions.yml"                , emit: versions
+    path("*.size.csv")                 , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -19,6 +20,10 @@ process GET_IMAGE_DIMS {
     // Generate unique prefix using image filename to avoid collisions when multiple images have same channels
     def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${image})
+    echo "${task.process},${meta.patient_id},${image.name},\${input_bytes}" > ${meta.patient_id}_${image.simpleName}.size.csv
+
     python3 <<'EOF'
 from PIL import Image
 import sys
@@ -54,6 +59,7 @@ EOF
     def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
     echo "${image.name} 5000 5000" > ${prefix}_dims.txt
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${image.simpleName}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

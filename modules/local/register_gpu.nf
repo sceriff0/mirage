@@ -56,6 +56,7 @@ process GPU_REGISTER {
     output:
     tuple val(meta), path("*_registered.ome.tiff"), emit: registered
     path "versions.yml"                            , emit: versions
+    path("*.size.csv")                             , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -87,6 +88,12 @@ process GPU_REGISTER {
     def allocated_time = file_size_gb < 10 ? "2h" : file_size_gb < 30 ? "3h" : "6h"
     def retry_info = task.attempt > 1 ? " (RETRY #${task.attempt}, crops reduced by ${(int)((1-reduction_factor)*100)}%)" : ""
     """
+    # Log input sizes for tracing (sum of reference + moving)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    mov_bytes=\$(stat --printf="%s" ${moving})
+    total_bytes=\$((ref_bytes + mov_bytes))
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "=================================================="
     echo "GPU Registration - Dynamic Resource Allocation${retry_info}"
     echo "=================================================="
@@ -138,6 +145,7 @@ process GPU_REGISTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

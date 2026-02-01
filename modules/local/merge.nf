@@ -25,6 +25,7 @@ process MERGE {
     output:
     tuple val(meta), path("merged_all.ome.tiff"), emit: merged
     path "versions.yml"                          , emit: versions
+    path("*.size.csv")                           , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -33,6 +34,13 @@ process MERGE {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
+    # Log input size for tracing (sum of channels/ + masks)
+    channels_bytes=\$(du -sb channels/ | cut -f1)
+    seg_bytes=\$(stat --printf="%s" ${seg_mask})
+    pheno_bytes=\$(stat --printf="%s" ${pheno_mask})
+    total_bytes=\$((channels_bytes + seg_bytes + pheno_bytes))
+    echo "${task.process},${meta.patient_id},channels/+masks,\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
     echo "Channels directory: channels/"
     ls -lh channels/
@@ -57,6 +65,7 @@ process MERGE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch merged_all.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

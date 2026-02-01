@@ -32,6 +32,7 @@ process MERGE_AND_PYRAMID {
     output:
     tuple val(meta), path("pyramid.ome.tiff"), emit: pyramid
     path "versions.yml", emit: versions
+    path("*.size.csv") , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -49,6 +50,12 @@ process MERGE_AND_PYRAMID {
     def compression = params.compression ?: 'lzw'
 
     """
+    # Log input size for tracing (sum of channels/ dir + seg_mask)
+    channels_bytes=\$(du -sb channels/ | cut -f1)
+    mask_bytes=\$(stat --printf="%s" ${seg_mask})
+    total_bytes=\$((channels_bytes + mask_bytes))
+    echo "${task.process},${meta.patient_id},channels/+${seg_mask.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
     echo "Input directory: channels/"
     ls -lh channels/
@@ -77,6 +84,7 @@ process MERGE_AND_PYRAMID {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch pyramid.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

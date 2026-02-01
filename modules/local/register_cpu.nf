@@ -20,6 +20,7 @@ process CPU_REGISTER {
     output:
     tuple val(meta), path("*_registered.ome.tiff"), emit: registered
     path "versions.yml"                            , emit: versions
+    path("*.size.csv")                             , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -42,6 +43,12 @@ process CPU_REGISTER {
     def allocated_mem = file_size_gb < 10 ? "100GB" : file_size_gb < 25 ? "250GB" : "400GB"
     def allocated_time = file_size_gb < 10 ? "8h" : file_size_gb < 25 ? "10h" : "24h"
     """
+    # Log input sizes for tracing (sum of reference + moving)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    mov_bytes=\$(stat --printf="%s" ${moving})
+    total_bytes=\$((ref_bytes + mov_bytes))
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "=================================================="
     echo "CPU Registration - Dynamic Resource Allocation"
     echo "=================================================="
@@ -83,6 +90,7 @@ process CPU_REGISTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

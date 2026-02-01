@@ -124,7 +124,11 @@ workflow VALIS_ADAPTER {
             }
         }
 
+    // Collect size logs
+    ch_size_logs = REGISTER.out.size_log
+
     emit:
     registered = ch_registered
+    size_logs = ch_size_logs
     // QC generation is now decoupled - handled by GENERATE_REGISTRATION_QC module
 }

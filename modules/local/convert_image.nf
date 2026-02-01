@@ -10,6 +10,7 @@ process CONVERT_IMAGE {
     output:
     tuple val(meta), path("*.ome.tif"), path("*_channels.txt"), emit: ome_tiff
     path "versions.yml"                                       , emit: versions
+    path("*.size.csv")                                        , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -20,6 +21,10 @@ process CONVERT_IMAGE {
     def pixel_size = params.pixel_size ?: '0.325'
     def channels = meta.channels.join(',')
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${image_file})
+    echo "${task.process},${meta.patient_id},${image_file.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     convert_image.py \\
         --input_file ${image_file} \\
         --output_dir . \\
@@ -42,6 +47,7 @@ process CONVERT_IMAGE {
     """
     touch ${prefix}.ome.tif
     echo "${channels}" > ${prefix}_channels.txt
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

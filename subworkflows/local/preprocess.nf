@@ -77,7 +77,13 @@ workflow PREPROCESSING {
         ch_checkpoint_data
     )
 
+    // Collect size logs from all processes
+    ch_size_logs = channel.empty()
+        .mix(CONVERT_IMAGE.out.size_log)
+        .mix(PREPROCESS.out.size_log)
+
     emit:
     preprocessed = ch_preprocessed_with_meta
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    size_logs = ch_size_logs
 }

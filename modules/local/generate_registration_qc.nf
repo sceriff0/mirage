@@ -11,6 +11,7 @@ process GENERATE_REGISTRATION_QC {
     tuple val(meta), path("qc/*_QC_RGB.{png,tif}"), emit: qc
     tuple val(meta), path("qc/*_QC_RGB_fullres.tif"), emit: qc_fullres
     path "versions.yml"                           , emit: versions
+    path("*.size.csv")                            , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -19,6 +20,12 @@ process GENERATE_REGISTRATION_QC {
     def args = task.ext.args ?: ''
     def scale_factor = params.qc_scale_factor ?: 0.25
     """
+    # Log input sizes for tracing (sum of registered + reference)
+    reg_bytes=\$(stat --printf="%s" ${registered})
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    total_bytes=\$((reg_bytes + ref_bytes))
+    echo "${task.process},${meta.patient_id},${registered.name}+${reference.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     mkdir -p qc
 
     generate_registration_qc.py \\
@@ -41,6 +48,7 @@ process GENERATE_REGISTRATION_QC {
     mkdir -p qc
     touch qc/${registered.simpleName}_QC_RGB.png
     touch qc/${registered.simpleName}_QC_RGB_fullres.tif
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

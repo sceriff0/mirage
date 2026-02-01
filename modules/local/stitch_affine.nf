@@ -21,6 +21,7 @@ process STITCH_AFFINE {
     output:
     tuple val(meta), path("*_affine.tiff"), emit: affine
     path "versions.yml"                   , emit: versions
+    path("*.size.csv")                    , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -29,6 +30,10 @@ process STITCH_AFFINE {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
+    # Log input size for tracing (sum of all tiles)
+    total_bytes=\$(du -sb tiles/ | cut -f1)
+    echo "${task.process},${meta.patient_id},tiles/,\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "=================================================="
     echo "STITCH_AFFINE"
     echo "=================================================="
@@ -60,6 +65,7 @@ process STITCH_AFFINE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${prefix}_affine.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -22,6 +22,7 @@ process SEGMENT {
     tuple val(meta), path("*_nuclei_mask.tif"), emit: nuclei_mask
     tuple val(meta), path("*_cell_mask.tif")  , emit: cell_mask
     path "versions.yml"                        , emit: versions
+    path("*.size.csv")                         , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -40,6 +41,10 @@ process SEGMENT {
     // FIX WARNING #1: Validate DAPI is in channel 0
     def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${merged_file})
+    echo "${task.process},${meta.patient_id},${merged_file.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
     echo "Attempt: ${task.attempt} - Using n_tiles_y=${n_tiles_y}, n_tiles_x=${n_tiles_x}"
 
@@ -78,6 +83,7 @@ process SEGMENT {
     """
     touch ${prefix}_nuclei_mask.tif
     touch ${prefix}_cell_mask.tif
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

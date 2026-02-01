@@ -205,6 +205,16 @@ workflow POSTPROCESSING {
         ch_checkpoint_data
     )
 
+    // Collect size logs from all postprocessing processes
+    ch_size_logs = Channel.empty()
+        .mix(SEGMENT.out.size_log)
+        .mix(SPLIT_CHANNELS.out.size_log)
+        .mix(QUANTIFY.out.size_log)
+        .mix(MERGE_QUANT_CSVS.out.size_log)
+        .mix(PHENOTYPE.out.size_log)
+        .mix(MERGE_AND_PYRAMID.out.size_log)
+
     emit:
     checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    size_logs = ch_size_logs
 }

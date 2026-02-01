@@ -19,6 +19,7 @@ process REGISTER_VALIS_PAIRS {
     output:
     tuple val(meta), path("${moving.simpleName}_registered.ome.tiff"), emit: registered
     path "versions.yml"                                               , emit: versions
+    path("*.size.csv")                                                , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -35,6 +36,12 @@ process REGISTER_VALIS_PAIRS {
     def skip_micro = params.skip_micro_registration ? '--skip-micro-registration' : ''
 
     """
+    # Log input sizes for tracing (sum of reference + moving)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    mov_bytes=\$(stat --printf="%s" ${moving})
+    total_bytes=\$((ref_bytes + mov_bytes))
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     mkdir -p registered_slides preprocessed
 
     echo "=== VALIS Pairwise Registration ==="
@@ -116,6 +123,7 @@ process REGISTER_VALIS_PAIRS {
     stub:
     """
     touch ${moving.simpleName}_registered.ome.tiff
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

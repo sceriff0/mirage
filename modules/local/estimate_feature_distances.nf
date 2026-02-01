@@ -19,6 +19,7 @@ process ESTIMATE_FEATURE_DISTANCES {
     tuple val(meta), path("*_feature_distances.json"), emit: distance_metrics
     tuple val(meta), path("*_distance_histogram.png"), emit: distance_plots
     path "versions.yml"                               , emit: versions
+    path("*.size.csv")                                , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -30,6 +31,13 @@ process ESTIMATE_FEATURE_DISTANCES {
     def n_features = params.feature_n_features ?: 5000
     def prefix = meta.channels.join('_')
     """
+    # Log input sizes for tracing (sum of reference + moving + registered)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    mov_bytes=\$(stat --printf="%s" ${moving})
+    reg_bytes=\$(stat --printf="%s" ${registered})
+    total_bytes=\$((ref_bytes + mov_bytes + reg_bytes))
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name}+${registered.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+
     echo "=================================================================="
     echo "Feature Distance Estimation (Before vs After Registration)"
     echo "=================================================================="
@@ -68,6 +76,7 @@ process ESTIMATE_FEATURE_DISTANCES {
     """
     touch ${prefix}_feature_distances.json
     touch ${prefix}_distance_histogram.png
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

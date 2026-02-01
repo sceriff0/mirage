@@ -22,6 +22,7 @@ process DIFFEO_TILE {
     tuple val(meta), path("${tile_id}.npy")      , emit: tile
     tuple val(meta), path("${tile_id}_meta.json"), emit: tile_meta
     path "versions.yml"                          , emit: versions
+    path("*.size.csv")                           , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -31,6 +32,12 @@ process DIFFEO_TILE {
     def opt_tol = params.cpu_reg_opt_tol ?: 1e-5
     def inv_tol = params.cpu_reg_inv_tol ?: 1e-5
     """
+    # Log input sizes for tracing (sum of reference + affine)
+    ref_bytes=\$(stat --printf="%s" ${reference})
+    aff_bytes=\$(stat --printf="%s" ${affine_image})
+    total_bytes=\$((ref_bytes + aff_bytes))
+    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${affine_image.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.size.csv
+
     echo "=================================================="
     echo "DIFFEO_TILE: ${tile_id}"
     echo "=================================================="
@@ -62,6 +69,7 @@ process DIFFEO_TILE {
     """
     echo '{}' > ${tile_id}_meta.json
     python -c "import numpy as np; np.save('${tile_id}.npy', np.zeros((1, 100, 100), dtype=np.float32))"
+    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

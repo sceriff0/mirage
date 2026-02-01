@@ -104,7 +104,11 @@ workflow CPU_ADAPTER {
 
     ch_all = PUBLISH_REFERENCE_CPU.out.published.concat(CPU_REGISTER.out.registered)
 
+    // Collect size logs
+    ch_size_logs = CPU_REGISTER.out.size_log
+
     emit:
     registered = ch_all
+    size_logs = ch_size_logs
     // QC generation is now decoupled - handled by GENERATE_REGISTRATION_QC module
 }

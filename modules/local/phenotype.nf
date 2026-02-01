@@ -24,6 +24,7 @@ process PHENOTYPE {
     tuple val(meta), path("pheno/phenotypes.classifications.json"), emit: classifications
     tuple val(meta), path("pheno/phenotypes_mapping.json")        , emit: mapping
     path "versions.yml"                                            , emit: versions
+    path("*.size.csv")                                             , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -35,6 +36,10 @@ process PHENOTYPE {
     def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
     def pixel_size = params.pixel_size ?: 0.325
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${quant_csv})
+    echo "${task.process},${meta.patient_id},${quant_csv.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
 
     mkdir -p pheno
@@ -64,6 +69,7 @@ process PHENOTYPE {
     touch pheno/phenotypes.geojson
     touch pheno/phenotypes.classifications.json
     touch pheno/phenotypes_mapping.json
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

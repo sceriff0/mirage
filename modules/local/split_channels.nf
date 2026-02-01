@@ -24,6 +24,7 @@ process SPLIT_CHANNELS {
     tuple val(meta), path("*.tiff", includeInputs: false), emit: channels
     path "channel_names.txt"                              , emit: channel_manifest, optional: true
     path "versions.yml"                                   , emit: versions
+    path("*.size.csv")                                    , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -36,6 +37,10 @@ process SPLIT_CHANNELS {
     def channel_args = (meta.channels && meta.channels instanceof List && !meta.channels.isEmpty()) ?
         "--channels ${meta.channels.join(' ')}" : ""
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${registered_image})
+    echo "${task.process},${meta.patient_id},${registered_image.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     echo "Sample: ${meta.patient_id}"
     echo "Channels: ${(meta.channels && meta.channels instanceof List) ? meta.channels.join(', ') : 'Will read from OME metadata'}"
 
@@ -63,6 +68,7 @@ process SPLIT_CHANNELS {
         'touch Marker1.tiff'}
 
     ls -1 *.tiff | sort > channel_names.txt
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

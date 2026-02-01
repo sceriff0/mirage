@@ -19,6 +19,7 @@ process PREPROCESS {
     output:
     tuple val(meta), path("*_corrected.ome.tif"), emit: preprocessed
     path "versions.yml"                         , emit: versions
+    path("*.size.csv")                          , emit: size_log
 
     when:
     task.ext.when == null || task.ext.when
@@ -32,6 +33,10 @@ process PREPROCESS {
     def overlap = params.preproc_overlap ?: 0
     def channels = meta.channels.join(' ')
     """
+    # Log input size for tracing
+    input_bytes=\$(stat --printf="%s" ${ome_tiff})
+    echo "${task.process},${meta.patient_id},${ome_tiff.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+
     preprocess.py \\
         --image ${ome_tiff} \\
         --output_dir . \\
@@ -57,6 +62,7 @@ process PREPROCESS {
     """
     touch ${ome_tiff.simpleName}_corrected.ome.tif
     touch ${ome_tiff.simpleName}_dims.txt
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
