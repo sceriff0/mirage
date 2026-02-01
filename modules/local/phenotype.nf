@@ -38,7 +38,7 @@ process PHENOTYPE {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${quant_csv})
-    echo "${task.process},${meta.patient_id},${quant_csv.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${quant_csv.name},\${input_bytes}" > ${meta.patient_id}.PHENOTYPE.size.csv
 
     echo "Sample: ${meta.patient_id}"
 
@@ -69,7 +69,7 @@ process PHENOTYPE {
     touch pheno/phenotypes.geojson
     touch pheno/phenotypes.classifications.json
     touch pheno/phenotypes_mapping.json
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.PHENOTYPE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

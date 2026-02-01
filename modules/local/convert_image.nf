@@ -23,7 +23,7 @@ process CONVERT_IMAGE {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${image_file})
-    echo "${task.process},${meta.patient_id},${image_file.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${image_file.name},\${input_bytes}" > ${meta.patient_id}.CONVERT_IMAGE.size.csv
 
     convert_image.py \\
         --input_file ${image_file} \\
@@ -47,7 +47,7 @@ process CONVERT_IMAGE {
     """
     touch ${prefix}.ome.tif
     echo "${channels}" > ${prefix}_channels.txt
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.CONVERT_IMAGE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

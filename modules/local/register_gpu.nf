@@ -92,7 +92,7 @@ process GPU_REGISTER {
     ref_bytes=\$(stat --printf="%s" ${reference})
     mov_bytes=\$(stat --printf="%s" ${moving})
     total_bytes=\$((ref_bytes + mov_bytes))
-    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.GPU_REGISTER.size.csv
 
     echo "=================================================="
     echo "GPU Registration - Dynamic Resource Allocation${retry_info}"
@@ -145,7 +145,7 @@ process GPU_REGISTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.GPU_REGISTER.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

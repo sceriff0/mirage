@@ -36,7 +36,7 @@ process STITCH_DIFFEO {
     tiles_bytes=\$(du -sb tiles/ | cut -f1)
     moving_bytes=\$(stat --printf="%s" ${moving})
     total_bytes=\$((tiles_bytes + moving_bytes))
-    echo "${task.process},${meta.patient_id},tiles/+${moving.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},tiles/+${moving.name},\${total_bytes}" > ${meta.patient_id}.STITCH_DIFFEO.size.csv
 
     echo "=================================================="
     echo "STITCH_DIFFEO"
@@ -71,7 +71,7 @@ process STITCH_DIFFEO {
     def prefix = task.ext.prefix ?: "${moving.simpleName}"
     """
     touch ${prefix}_registered.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.STITCH_DIFFEO.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

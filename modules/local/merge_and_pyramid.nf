@@ -54,7 +54,7 @@ process MERGE_AND_PYRAMID {
     channels_bytes=\$(du -sb channels/ | cut -f1)
     mask_bytes=\$(stat --printf="%s" ${seg_mask})
     total_bytes=\$((channels_bytes + mask_bytes))
-    echo "${task.process},${meta.patient_id},channels/+${seg_mask.name},\${total_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},channels/+${seg_mask.name},\${total_bytes}" > ${meta.patient_id}.MERGE_AND_PYRAMID.size.csv
 
     echo "Sample: ${meta.patient_id}"
     echo "Input directory: channels/"
@@ -84,7 +84,7 @@ process MERGE_AND_PYRAMID {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch pyramid.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.MERGE_AND_PYRAMID.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -39,7 +39,7 @@ process MERGE {
     seg_bytes=\$(stat --printf="%s" ${seg_mask})
     pheno_bytes=\$(stat --printf="%s" ${pheno_mask})
     total_bytes=\$((channels_bytes + seg_bytes + pheno_bytes))
-    echo "${task.process},${meta.patient_id},channels/+masks,\${total_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},channels/+masks,\${total_bytes}" > ${meta.patient_id}.MERGE.size.csv
 
     echo "Sample: ${meta.patient_id}"
     echo "Channels directory: channels/"
@@ -65,7 +65,7 @@ process MERGE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch merged_all.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.MERGE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

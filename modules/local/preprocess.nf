@@ -35,7 +35,7 @@ process PREPROCESS {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${ome_tiff})
-    echo "${task.process},${meta.patient_id},${ome_tiff.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${ome_tiff.name},\${input_bytes}" > ${meta.patient_id}.PREPROCESS.size.csv
 
     preprocess.py \\
         --image ${ome_tiff} \\
@@ -62,7 +62,7 @@ process PREPROCESS {
     """
     touch ${ome_tiff.simpleName}_corrected.ome.tif
     touch ${ome_tiff.simpleName}_dims.txt
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.PREPROCESS.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

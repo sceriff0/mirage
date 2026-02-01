@@ -32,7 +32,7 @@ process CONVERSION {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${merged_image})
-    echo "${task.process},${meta.patient_id},${merged_image.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${merged_image.name},\${input_bytes}" > ${meta.patient_id}.CONVERSION.size.csv
 
     echo "Sample: ${meta.patient_id}"
 
@@ -57,7 +57,7 @@ process CONVERSION {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch pyramid.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.CONVERSION.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

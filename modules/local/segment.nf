@@ -43,7 +43,7 @@ process SEGMENT {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${merged_file})
-    echo "${task.process},${meta.patient_id},${merged_file.name},\${input_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},${merged_file.name},\${input_bytes}" > ${meta.patient_id}.SEGMENT.size.csv
 
     echo "Sample: ${meta.patient_id}"
     echo "Attempt: ${task.attempt} - Using n_tiles_y=${n_tiles_y}, n_tiles_x=${n_tiles_x}"
@@ -83,7 +83,7 @@ process SEGMENT {
     """
     touch ${prefix}_nuclei_mask.tif
     touch ${prefix}_cell_mask.tif
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.SEGMENT.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

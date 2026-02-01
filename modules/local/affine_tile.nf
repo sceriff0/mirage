@@ -35,7 +35,7 @@ process AFFINE_TILE {
     ref_bytes=\$(stat --printf="%s" ${reference})
     mov_bytes=\$(stat --printf="%s" ${moving})
     total_bytes=\$((ref_bytes + mov_bytes))
-    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.size.csv
+    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.AFFINE_TILE.size.csv
 
     echo "=================================================="
     echo "AFFINE_TILE: ${tile_id}"
@@ -66,7 +66,7 @@ process AFFINE_TILE {
     """
     echo '{}' > ${tile_id}_meta.json
     python -c "import numpy as np; np.save('${tile_id}.npy', np.zeros((1, 100, 100), dtype=np.float32))"
-    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.size.csv
+    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.AFFINE_TILE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

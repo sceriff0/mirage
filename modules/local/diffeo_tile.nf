@@ -36,7 +36,7 @@ process DIFFEO_TILE {
     ref_bytes=\$(stat --printf="%s" ${reference})
     aff_bytes=\$(stat --printf="%s" ${affine_image})
     total_bytes=\$((ref_bytes + aff_bytes))
-    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${affine_image.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.size.csv
+    echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${affine_image.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.DIFFEO_TILE.size.csv
 
     echo "=================================================="
     echo "DIFFEO_TILE: ${tile_id}"
@@ -69,7 +69,7 @@ process DIFFEO_TILE {
     """
     echo '{}' > ${tile_id}_meta.json
     python -c "import numpy as np; np.save('${tile_id}.npy', np.zeros((1, 100, 100), dtype=np.float32))"
-    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.size.csv
+    echo "STUB,${meta.patient_id}_${tile_id},stub,0" > ${meta.patient_id}_${tile_id}.DIFFEO_TILE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -22,7 +22,7 @@ process GET_IMAGE_DIMS {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${image})
-    echo "${task.process},${meta.patient_id},${image.name},\${input_bytes}" > ${meta.patient_id}_${image.simpleName}.size.csv
+    echo "${task.process},${meta.patient_id},${image.name},\${input_bytes}" > ${meta.patient_id}_${image.simpleName}.GET_IMAGE_DIMS.size.csv
 
     python3 <<'EOF'
 from PIL import Image
@@ -59,7 +59,7 @@ EOF
     def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
     echo "${image.name} 5000 5000" > ${prefix}_dims.txt
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${image.simpleName}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${image.simpleName}.GET_IMAGE_DIMS.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

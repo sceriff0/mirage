@@ -32,7 +32,7 @@ process STITCH_AFFINE {
     """
     # Log input size for tracing (sum of all tiles)
     total_bytes=\$(du -sb tiles/ | cut -f1)
-    echo "${task.process},${meta.patient_id},tiles/,\${total_bytes}" > ${meta.patient_id}.size.csv
+    echo "${task.process},${meta.patient_id},tiles/,\${total_bytes}" > ${meta.patient_id}.STITCH_AFFINE.size.csv
 
     echo "=================================================="
     echo "STITCH_AFFINE"
@@ -65,7 +65,7 @@ process STITCH_AFFINE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${prefix}_affine.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.STITCH_AFFINE.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
