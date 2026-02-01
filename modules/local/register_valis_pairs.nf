@@ -40,7 +40,7 @@ process REGISTER_VALIS_PAIRS {
     ref_bytes=\$(stat --printf="%s" ${reference})
     mov_bytes=\$(stat --printf="%s" ${moving})
     total_bytes=\$((ref_bytes + mov_bytes))
-    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.REGISTER_VALIS_PAIRS.size.csv
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${moving.simpleName}.REGISTER_VALIS_PAIRS.size.csv
 
     mkdir -p registered_slides preprocessed
 
@@ -123,7 +123,7 @@ process REGISTER_VALIS_PAIRS {
     stub:
     """
     touch ${moving.simpleName}_registered.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.REGISTER_VALIS_PAIRS.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${moving.simpleName}.REGISTER_VALIS_PAIRS.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

@@ -22,7 +22,7 @@ process PAD_IMAGES {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${preprocessed_file})
-    echo "${task.process},${meta.patient_id},${preprocessed_file.name},\${input_bytes}" > ${meta.patient_id}.PAD_IMAGES.size.csv
+    echo "${task.process},${meta.patient_id},${preprocessed_file.name},\${input_bytes}" > ${meta.patient_id}_${preprocessed_file.simpleName}.PAD_IMAGES.size.csv
 
     # Read max dimensions from file
     MAX_HEIGHT=\$(grep MAX_HEIGHT ${max_dims_file} | awk '{print \$2}')
@@ -49,7 +49,7 @@ process PAD_IMAGES {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${preprocessed_file.simpleName}_padded.ome.tif
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.PAD_IMAGES.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${preprocessed_file.simpleName}.PAD_IMAGES.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

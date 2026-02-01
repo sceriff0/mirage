@@ -24,7 +24,7 @@ process GENERATE_REGISTRATION_QC {
     reg_bytes=\$(stat --printf="%s" ${registered})
     ref_bytes=\$(stat --printf="%s" ${reference})
     total_bytes=\$((reg_bytes + ref_bytes))
-    echo "${task.process},${meta.patient_id},${registered.name}+${reference.name},\${total_bytes}" > ${meta.patient_id}.GENERATE_REGISTRATION_QC.size.csv
+    echo "${task.process},${meta.patient_id},${registered.name}+${reference.name},\${total_bytes}" > ${meta.patient_id}_${registered.simpleName}.GENERATE_REGISTRATION_QC.size.csv
 
     mkdir -p qc
 
@@ -48,7 +48,7 @@ process GENERATE_REGISTRATION_QC {
     mkdir -p qc
     touch qc/${registered.simpleName}_QC_RGB.png
     touch qc/${registered.simpleName}_QC_RGB_fullres.tif
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.GENERATE_REGISTRATION_QC.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${registered.simpleName}.GENERATE_REGISTRATION_QC.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

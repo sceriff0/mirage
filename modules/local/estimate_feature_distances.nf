@@ -36,7 +36,7 @@ process ESTIMATE_FEATURE_DISTANCES {
     mov_bytes=\$(stat --printf="%s" ${moving})
     reg_bytes=\$(stat --printf="%s" ${registered})
     total_bytes=\$((ref_bytes + mov_bytes + reg_bytes))
-    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name}+${registered.name},\${total_bytes}" > ${meta.patient_id}.ESTIMATE_FEATURE_DISTANCES.size.csv
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name}+${registered.name},\${total_bytes}" > ${meta.patient_id}_${registered.simpleName}.ESTIMATE_FEATURE_DISTANCES.size.csv
 
     echo "=================================================================="
     echo "Feature Distance Estimation (Before vs After Registration)"
@@ -76,7 +76,7 @@ process ESTIMATE_FEATURE_DISTANCES {
     """
     touch ${prefix}_feature_distances.json
     touch ${prefix}_distance_histogram.png
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.ESTIMATE_FEATURE_DISTANCES.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${registered.simpleName}.ESTIMATE_FEATURE_DISTANCES.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

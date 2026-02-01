@@ -39,7 +39,7 @@ process SPLIT_CHANNELS {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${registered_image})
-    echo "${task.process},${meta.patient_id},${registered_image.name},\${input_bytes}" > ${meta.patient_id}.SPLIT_CHANNELS.size.csv
+    echo "${task.process},${meta.patient_id},${registered_image.name},\${input_bytes}" > ${meta.patient_id}_${registered_image.simpleName}.SPLIT_CHANNELS.size.csv
 
     echo "Sample: ${meta.patient_id}"
     echo "Channels: ${(meta.channels && meta.channels instanceof List) ? meta.channels.join(', ') : 'Will read from OME metadata'}"
@@ -68,7 +68,7 @@ process SPLIT_CHANNELS {
         'touch Marker1.tiff'}
 
     ls -1 *.tiff | sort > channel_names.txt
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.SPLIT_CHANNELS.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${registered_image.simpleName}.SPLIT_CHANNELS.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

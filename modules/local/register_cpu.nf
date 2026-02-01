@@ -47,7 +47,7 @@ process CPU_REGISTER {
     ref_bytes=\$(stat --printf="%s" ${reference})
     mov_bytes=\$(stat --printf="%s" ${moving})
     total_bytes=\$((ref_bytes + mov_bytes))
-    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}.CPU_REGISTER.size.csv
+    echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${moving.simpleName}.CPU_REGISTER.size.csv
 
     echo "=================================================="
     echo "CPU Registration - Dynamic Resource Allocation"
@@ -90,7 +90,7 @@ process CPU_REGISTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.CPU_REGISTER.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${moving.simpleName}.CPU_REGISTER.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

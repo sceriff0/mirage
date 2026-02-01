@@ -23,7 +23,7 @@ process GENERATE_PREPROCESS_QC {
     """
     # Log input size for tracing
     input_bytes=\$(stat --printf="%s" ${preprocessed})
-    echo "${task.process},${meta.patient_id},${preprocessed.name},\${input_bytes}" > ${meta.patient_id}.GENERATE_PREPROCESS_QC.size.csv
+    echo "${task.process},${meta.patient_id},${preprocessed.name},\${input_bytes}" > ${meta.patient_id}_${preprocessed.simpleName}.GENERATE_PREPROCESS_QC.size.csv
 
     mkdir -p qc
 
@@ -50,7 +50,7 @@ process GENERATE_PREPROCESS_QC {
     mkdir -p qc
     touch qc/${prefix}_DAPI.png
     touch qc/${prefix}_channel1.png
-    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.GENERATE_PREPROCESS_QC.size.csv
+    echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${preprocessed.simpleName}.GENERATE_PREPROCESS_QC.size.csv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
