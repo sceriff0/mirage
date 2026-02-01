@@ -118,7 +118,7 @@ def parse_duration(val):
         total_seconds += float(m_match.group(1)) * 60
 
     # Parse seconds
-    s_match = re.search(r'([\d.]+)\s*s(?!$)', val)
+    s_match = re.search(r'([\d.]+)\s*s\b', val)
     if s_match:
         total_seconds += float(s_match.group(1))
 
