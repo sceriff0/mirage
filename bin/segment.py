@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger, configure_logging
 from typing import Tuple
 
+import dask.array as da
 import numpy as np
 import tifffile
 from csbdeep.utils import normalize
@@ -243,10 +244,10 @@ def expand_labels_tiled(
     tile_size: int = 1024
 ) -> NDArray:
     """
-    Tiled wrapper around skimage.segmentation.expand_labels.
+    Parallel tiled expansion using Dask.
 
-    Processes image in overlapping tiles, using only the center region
-    of each tile to avoid boundary artifacts. Produces IDENTICAL results
+    Uses dask.array.map_overlap to process tiles in parallel while
+    handling boundary overlaps correctly. Produces identical results
     to calling expand_labels on the full image.
 
     Parameters
@@ -263,44 +264,30 @@ def expand_labels_tiled(
     ndarray
         Expanded label image with same shape as input.
     """
-    h, w = label_image.shape
-    out = label_image.copy()
-
     # Overlap must be >= distance to ensure correct boundary handling
     overlap = distance + 1
-    step = tile_size - 2 * overlap
 
-    if step <= 0:
+    if tile_size <= 2 * overlap:
         # Tile too small for this distance, fall back to full image
         return segmentation.expand_labels(label_image, distance=distance)
 
-    for y in range(0, h, step):
-        for x in range(0, w, step):
-            # Tile boundaries with overlap
-            y1 = max(0, y - overlap)
-            y2 = min(h, y + tile_size - overlap)
-            x1 = max(0, x - overlap)
-            x2 = min(w, x + tile_size - overlap)
+    # Convert to dask array with tile_size chunks
+    dask_labels = da.from_array(label_image, chunks=tile_size)
 
-            # Extract tile
-            tile = label_image[y1:y2, x1:x2]
+    # Define the expansion function for each tile
+    def _expand_tile(tile: NDArray) -> NDArray:
+        return segmentation.expand_labels(tile, distance=distance).astype(np.uint32)
 
-            # Skip empty tiles
-            if not np.any(tile > 0):
-                continue
+    # Process tiles in parallel with overlap handling
+    expanded = da.map_overlap(
+        _expand_tile,
+        dask_labels,
+        depth=overlap,
+        boundary='none',
+        dtype=np.uint32
+    )
 
-            # Use original expand_labels on tile
-            tile_expanded = segmentation.expand_labels(tile, distance=distance)
-
-            # Copy center region back (avoid overlap artifacts)
-            cy1 = overlap if y > 0 else 0
-            cy2 = tile_expanded.shape[0] - (overlap if y2 < h else 0)
-            cx1 = overlap if x > 0 else 0
-            cx2 = tile_expanded.shape[1] - (overlap if x2 < w else 0)
-
-            out[y1 + cy1:y1 + cy2, x1 + cx1:x1 + cx2] = tile_expanded[cy1:cy2, cx1:cx2]
-
-    return out
+    return expanded.compute()
 
 
 def segment_nuclei(
