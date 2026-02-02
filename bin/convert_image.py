@@ -50,34 +50,49 @@ def get_file_format(file_path: Path) -> str:
 def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
     """Read image using BioIO (ND2, CZI, LIF, TIFF)."""
     from bioio import BioImage
-    
+
     logger.info(f"Reading with BioIO: {file_path.name}")
-    
+
     img = BioImage(file_path)
-    
+
     logger.info(f"Dimensions: {img.dims}")
     logger.info(f"Shape: {img.shape}")
     logger.info(f"Dimension order: {img.dims.order}")
-    
+
+    # Determine channel count - handle 'S' (Samples) as channels if 'C' is not used
+    dim_order = img.dims.order
+    num_channels = img.dims.C
+
+    # Check if 'S' dimension should be treated as channels
+    # This happens when image has 'S' but 'C' is 1 or not meaningful
+    if 'S' in dim_order and (num_channels == 1 or 'C' not in dim_order):
+        s_count = img.dims.S
+        if s_count > 1:
+            logger.info(f"Detected 'S' dimension ({s_count}) used as channels instead of 'C' ({num_channels})")
+            num_channels = s_count
+            # Remap dimension order for downstream processing (treat S as C)
+            dim_order = dim_order.replace('S', 'C')
+            logger.info(f"Remapped dimension order: {dim_order}")
+
     ps = img.physical_pixel_sizes
     pixel_size_x = ps.X if ps.X is not None else PIXEL_SIZE_UM
     pixel_size_y = ps.Y if ps.Y is not None else PIXEL_SIZE_UM
     pixel_size_z = ps.Z
-    
+
     logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}, Z: {pixel_size_z}")
     logger.info(f"Channel names from file: {img.channel_names}")
-    
-    image_data = img.data  # TCZYX order
-    
+
+    image_data = img.data  # TCZYX order (or TSZYX if S is used)
+
     metadata = {
-        'num_channels': img.dims.C,
+        'num_channels': num_channels,
         'physical_pixel_size_x': pixel_size_x,
         'physical_pixel_size_y': pixel_size_y,
         'physical_pixel_size_z': pixel_size_z,
         'channel_names_from_file': img.channel_names,
-        'original_dims': img.dims.order,
+        'original_dims': dim_order,
     }
-    
+
     return image_data, metadata
 
 
