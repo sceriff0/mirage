@@ -9,7 +9,6 @@ nextflow.enable.dsl = 2
 include { GET_IMAGE_DIMS                    } from '../../modules/local/get_image_dims'
 include { MAX_DIM                           } from '../../modules/local/max_dim'
 include { PAD_IMAGES                        } from '../../modules/local/pad_images'
-include { WRITE_CHECKPOINT_CSV              } from '../../modules/local/write_checkpoint_csv'
 include { GENERATE_REGISTRATION_QC          } from '../../modules/local/generate_registration_qc'
 
 include { VALIS_ADAPTER                     } from './adapters/valis_adapter'
@@ -241,7 +240,8 @@ workflow REGISTRATION {
     // ========================================================================
     // STEP 4: CHECKPOINT
     // ========================================================================
-    ch_checkpoint_data = ch_registered
+    // Use collectFile() for non-blocking aggregation (enables patient-level parallelism)
+    ch_checkpoint_csv = ch_registered
         .map { meta, file ->
             // Construct the path where the file will be published
             // Must match the publishDir configuration in modules.config
@@ -264,16 +264,14 @@ workflow REGISTRATION {
             def relative_path = is_work_hash ? filename : "${parent_name}/${filename}"
 
             def published_path = "${params.outdir}/${meta.patient_id}/registered/${relative_path}"
-            [meta.patient_id, published_path, meta.is_reference, meta.channels.join('|')]
+            "${meta.patient_id},${published_path},${meta.is_reference},${meta.channels.join('|')}"
         }
-        .toList()
-        .view { data -> "Checkpoint data: $data" }
-
-    WRITE_CHECKPOINT_CSV(
-        'registered',
-        'patient_id,registered_image,is_reference,channels',
-        ch_checkpoint_data
-    )
+        .collectFile(
+            name: 'registered.csv',
+            newLine: true,
+            storeDir: "${params.outdir}/csv",
+            seed: 'patient_id,registered_image,is_reference,channels'
+        )
 
     // Collect size logs from all registration processes
     ch_size_logs = Channel.empty()
@@ -315,6 +313,7 @@ workflow REGISTRATION {
     }
 
     emit:
-    checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    registered = ch_registered
+    checkpoint_csv = ch_checkpoint_csv
     size_logs = ch_size_logs
 }

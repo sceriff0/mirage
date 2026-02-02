@@ -83,51 +83,37 @@ workflow {
     /* -------------------- PREPROCESSING -------------------- */
 
     if (params.step == 'preprocessing') {
-
         ch_input = loadInputChannel(params.input, 'path_to_file')
         PREPROCESSING(ch_input)
-        ch_preprocess_csv = PREPROCESSING.out.checkpoint_csv
     }
     
     /* -------------------- REGISTRATION -------------------- */
 
     if (params.step in ['preprocessing','registration']) {
 
-        // When starting from registration, params.input is a string path
-        // When continuing from preprocessing, ch_preprocess_csv is a channel
+        // When starting from registration, params.input is a string path to CSV
+        // When continuing from preprocessing, use direct channel (streaming, no wait)
         ch_for_registration = params.step == 'registration'
             ? loadInputChannel(params.input, 'preprocessed_image')
-            : ch_preprocess_csv
-                .splitCsv(header: true)
-                .map { row ->
-                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
-                    return tuple(meta, file(row['preprocessed_image']))
-                }
+            : PREPROCESSING.out.preprocessed  // Direct channel - enables patient-level parallelism!
 
         REGISTRATION(
             ch_for_registration,
             params.registration_method
         )
-
-        ch_registration_csv = REGISTRATION.out.checkpoint_csv
     }
 
     /* -------------------- POSTPROCESSING -------------------- */
 
     if (params.step in ['preprocessing','registration','postprocessing']) {
 
+        // When starting from postprocessing, params.input is a string path to CSV
+        // When continuing from registration, use direct channel (streaming, no wait)
         ch_for_postprocessing = params.step == 'postprocessing'
             ? loadInputChannel(params.input, 'registered_image')
-            : ch_registration_csv
-                .splitCsv(header: true)
-                .map { row ->
-                    def meta = CsvUtils.parseMetadata(row, "Checkpoint CSV")
-                    return tuple(meta, file(row['registered_image']))
-                }
+            : REGISTRATION.out.registered  // Direct channel - enables patient-level parallelism!
 
         POSTPROCESSING(ch_for_postprocessing)
-
-        ch_postprocessing_csv = POSTPROCESSING.out.checkpoint_csv
 
         /* -------------------- COPY RESULTS TO SAVEDIR -------------------- */
 

@@ -12,7 +12,6 @@ include { QUANTIFY              } from '../../modules/local/quantify'
 include { MERGE_QUANT_CSVS      } from '../../modules/local/quantify'
 include { PHENOTYPE             } from '../../modules/local/phenotype'
 include { MERGE_AND_PYRAMID     } from '../../modules/local/merge_and_pyramid'
-include { WRITE_CHECKPOINT_CSV  } from '../../modules/local/write_checkpoint_csv'
 
 /*
 ========================================================================================
@@ -160,7 +159,9 @@ workflow POSTPROCESSING {
     // ========================================================================
     // CHECKPOINT - Collect all outputs by patient
     // ========================================================================
-    ch_checkpoint_data = PHENOTYPE.out.csv
+    // Use collectFile() for non-blocking aggregation (enables patient-level parallelism)
+    // The join chain is kept (it's per-patient and doesn't block other patients)
+    ch_checkpoint_csv = PHENOTYPE.out.csv
         .map { meta, csv ->
             def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${csv.name}"
             [meta.patient_id, published_path]
@@ -186,24 +187,14 @@ workflow POSTPROCESSING {
             [meta.patient_id, published_path]
         })
         .map { patient_id, pheno_csv, pheno_geojson, pheno_map, merged_csv, cell_mask, pyramid ->
-            [
-                patient_id,
-                pheno_csv,
-                pheno_geojson,
-                pheno_map,
-                merged_csv,
-                cell_mask,
-                pyramid
-            ]
+            "${patient_id},${pheno_csv},${pheno_geojson},${pheno_map},${merged_csv},${cell_mask},${pyramid}"
         }
-        .toList()
-        .view { data -> "Checkpoint data: $data" }
-
-    WRITE_CHECKPOINT_CSV(
-        'postprocessed',
-        'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid',
-        ch_checkpoint_data
-    )
+        .collectFile(
+            name: 'postprocessed.csv',
+            newLine: true,
+            storeDir: "${params.outdir}/csv",
+            seed: 'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid'
+        )
 
     // Collect size logs from all postprocessing processes
     ch_size_logs = Channel.empty()
@@ -215,6 +206,6 @@ workflow POSTPROCESSING {
         .mix(MERGE_AND_PYRAMID.out.size_log)
 
     emit:
-    checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    checkpoint_csv = ch_checkpoint_csv
     size_logs = ch_size_logs
 }

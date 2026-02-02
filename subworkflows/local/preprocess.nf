@@ -9,7 +9,6 @@ nextflow.enable.dsl = 2
 include { CONVERT_IMAGE           } from '../../modules/local/convert_image'
 include { PREPROCESS              } from '../../modules/local/preprocess'
 include { GENERATE_PREPROCESS_QC  } from '../../modules/local/generate_preprocess_qc'
-include { WRITE_CHECKPOINT_CSV    } from '../../modules/local/write_checkpoint_csv'
 
 /*
 ========================================================================================
@@ -62,20 +61,19 @@ workflow PREPROCESSING {
     // GENERATE_PREPROCESS_QC ( ch_preprocessed_with_meta )
 
     // Generate checkpoint CSV for restart from preprocessing step
-    ch_checkpoint_data = ch_preprocessed_with_meta
+    // Use collectFile() for non-blocking aggregation (enables patient-level parallelism)
+    ch_checkpoint_csv = ch_preprocessed_with_meta
         .map { meta, image_file ->
             def image_path = "${params.outdir}/${meta.patient_id}/preprocessed/${image_file.name}"
             def channels = meta.channels.join('|')
-            [meta.patient_id, image_path, meta.is_reference.toString(), channels]
+            "${meta.patient_id},${image_path},${meta.is_reference},${channels}"
         }
-        .toList()
-        .view { data -> "Checkpoint data: $data" }
-
-    WRITE_CHECKPOINT_CSV(
-        'preprocessed',
-        'patient_id,preprocessed_image,is_reference,channels',
-        ch_checkpoint_data
-    )
+        .collectFile(
+            name: 'preprocessed.csv',
+            newLine: true,
+            storeDir: "${params.outdir}/csv",
+            seed: 'patient_id,preprocessed_image,is_reference,channels'
+        )
 
     // Collect size logs from all processes
     ch_size_logs = channel.empty()
@@ -84,6 +82,6 @@ workflow PREPROCESSING {
 
     emit:
     preprocessed = ch_preprocessed_with_meta
-    checkpoint_csv = WRITE_CHECKPOINT_CSV.out.csv
+    checkpoint_csv = ch_checkpoint_csv
     size_logs = ch_size_logs
 }
