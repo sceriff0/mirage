@@ -789,7 +789,6 @@ def valis_registration(
                         non_rigid=use_non_rigid,
                         crop=True,
                         interp_method=interp_method,
-                        compression='lzw',  # LZW compression - smaller files, faster I/O
                     )
                     warp_succeeded = True
                     warped_count += 1
