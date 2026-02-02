@@ -9,7 +9,6 @@
  */
 process PREPROCESS {
     tag "${meta.patient_id}"
-    label 'process_high'
 
     container 'docker://bolt3x/attend_image_analysis:preprocess'
 
