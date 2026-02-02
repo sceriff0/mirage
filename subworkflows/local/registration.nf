@@ -1,7 +1,5 @@
 nextflow.enable.dsl = 2
 
-import nextflow.util.groupKey
-
 /*
 ========================================================================================
     IMPORT MODULES
