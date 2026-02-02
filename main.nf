@@ -146,6 +146,7 @@ workflow {
     /* -------------------- TRACE AGGREGATION -------------------- */
 
     // Aggregate input size logs from all processes (only if tracing enabled)
+    '''
     if (params.enable_trace) {
         ch_all_sizes = Channel.empty()
 
@@ -161,6 +162,7 @@ workflow {
 
         AGGREGATE_SIZE_LOGS(ch_all_sizes.collect())
     }
+    '''
 }
 
 /*
