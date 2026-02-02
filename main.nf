@@ -149,23 +149,24 @@ workflow {
     /* -------------------- TRACE AGGREGATION -------------------- */
 
     // Aggregate input size logs from all processes (only if tracing enabled)
-    '''
     if (params.enable_trace) {
         ch_all_sizes = Channel.empty()
 
-        if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
+        // PREPROCESSING only runs when step == 'preprocessing'
+        if (params.step == 'preprocessing') {
             ch_all_sizes = ch_all_sizes.mix(PREPROCESSING.out.size_logs)
         }
-        if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
+        // REGISTRATION runs when step is 'preprocessing' or 'registration'
+        if (params.step in ['preprocessing', 'registration']) {
             ch_all_sizes = ch_all_sizes.mix(REGISTRATION.out.size_logs)
         }
+        // POSTPROCESSING runs for all three steps
         if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
             ch_all_sizes = ch_all_sizes.mix(POSTPROCESSING.out.size_logs)
         }
 
         AGGREGATE_SIZE_LOGS(ch_all_sizes.collect())
     }
-    '''
 }
 
 /*

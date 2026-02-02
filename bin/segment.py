@@ -113,6 +113,12 @@ def extract_dapi_channel(
             logger.info("  - Single channel image (assuming DAPI)")
             # Load single channel into RAM
             dapi_image = np.array(image_memmap, copy=True)
+            # Clip negative values from interpolation artifacts (e.g., bicubic overshoot)
+            if np.issubdtype(dapi_image.dtype, np.signedinteger) or np.issubdtype(dapi_image.dtype, np.floating):
+                neg_count = np.sum(dapi_image < 0)
+                if neg_count > 0:
+                    logger.warning(f"  Clipping {neg_count} negative values to 0 (interpolation artifacts)")
+                    dapi_image = np.clip(dapi_image, 0, None)
         elif image_memmap.ndim == 3:
             # Multichannel image (C, Y, X) format
             logger.info(f"  - Multichannel image with {n_channels} channels")
@@ -126,6 +132,12 @@ def extract_dapi_channel(
             # Extract ONLY the DAPI channel into RAM (not all channels)
             logger.info(f"  - Extracting DAPI channel (index {dapi_channel_index}) - memory efficient")
             dapi_image = np.array(image_memmap[dapi_channel_index, :, :], copy=True)
+            # Clip negative values from interpolation artifacts (e.g., bicubic overshoot)
+            if np.issubdtype(dapi_image.dtype, np.signedinteger) or np.issubdtype(dapi_image.dtype, np.floating):
+                neg_count = np.sum(dapi_image < 0)
+                if neg_count > 0:
+                    logger.warning(f"  Clipping {neg_count} negative values to 0 (interpolation artifacts)")
+                    dapi_image = np.clip(dapi_image, 0, None)
             logger.info(f"  - Extracted DAPI channel (index {dapi_channel_index})")
         else:
             raise ValueError(

@@ -39,6 +39,13 @@ workflow POSTPROCESSING {
     main:
 
     // ========================================================================
+    // PHENOTYPE CONFIG - Resolve config file (custom or default)
+    // ========================================================================
+    phenotype_config_ch = params.phenotype_config
+        ? Channel.fromPath(params.phenotype_config, checkIfExists: true)
+        : Channel.fromPath("${projectDir}/assets/phenotype_config.json", checkIfExists: true)
+
+    // ========================================================================
     // SEGMENTATION - Process reference images only
     // ========================================================================
     ch_references = ch_registered
@@ -110,9 +117,12 @@ workflow POSTPROCESSING {
     MERGE_QUANT_CSVS(ch_grouped_csvs)
 
     // ========================================================================
-    // PHENOTYPING - Run on merged CSV (no longer needs segmentation mask)
+    // PHENOTYPING - Run on merged CSV with configurable rules
     // ========================================================================
-    PHENOTYPE(MERGE_QUANT_CSVS.out.merged_csv)
+    PHENOTYPE(
+        MERGE_QUANT_CSVS.out.merged_csv,
+        phenotype_config_ch.first()  // .first() converts to value channel for reuse across samples
+    )
 
     // ========================================================================
     // MERGE - Combine split channel TIFFs with segmentation mask (per patient)

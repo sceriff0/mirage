@@ -4,7 +4,9 @@
  * Classifies cells into phenotypes based on marker expression using z-score
  * thresholding. Generates QuPath-compatible GeoJSON and classification outputs.
  *
- * Input: Merged quantification CSV with per-cell marker intensities
+ * Input:
+ *   - Merged quantification CSV with per-cell marker intensities
+ *   - Phenotype configuration JSON (thresholds and classification rules)
  * Output: Phenotype data CSV, GeoJSON annotations, and classification mappings
  */
 process PHENOTYPE {
@@ -17,6 +19,7 @@ process PHENOTYPE {
 
     input:
     tuple val(meta), path(quant_csv)
+    path(phenotype_config)
 
     output:
     tuple val(meta), path("pheno/phenotypes_data.csv")            , emit: csv
@@ -32,8 +35,6 @@ process PHENOTYPE {
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
-    def markers_arg = params.pheno_markers ? "--markers ${params.pheno_markers.join(' ')}" : ''
-    def cutoffs_arg = params.pheno_cutoffs ? "--cutoffs ${params.pheno_cutoffs.join(' ')}" : ''
     def pixel_size = params.pixel_size ?: 0.325
     """
     # Log input size for tracing (-L follows symlinks)
@@ -46,9 +47,8 @@ process PHENOTYPE {
     phenotype.py \\
         --cell_data ${quant_csv} \\
         -o pheno \\
+        --config ${phenotype_config} \\
         --pixel_size ${pixel_size} \\
-        ${markers_arg} \\
-        ${cutoffs_arg} \\
         --quality_percentile ${params.pheno_quality_percentile} \\
         --noise_percentile ${params.pheno_noise_percentile} \\
         ${args}

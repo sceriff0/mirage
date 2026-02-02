@@ -65,7 +65,7 @@ DEFAULT_CUTOFFS = [
     1.2, 1.5, 0.4
 ]
 
-# Phenotype colors for QuPath visualization (RGB)
+# Phenotype colors for QuPath visualization (RGB) - used as fallback
 PHENOTYPE_COLORS = {
     "Background": (0, 0, 0),
     "Unknown": (64, 64, 64),
@@ -83,6 +83,163 @@ PHENOTYPE_COLORS = {
     "Stroma": (128, 128, 128),
 }
 
+# Global variable to hold custom colors from config (set at runtime)
+_CUSTOM_COLORS: Dict[str, Tuple[int, int, int]] = {}
+
+
+# =============================================================================
+# CONFIG LOADING
+# =============================================================================
+
+def load_phenotype_config(config_path: str) -> dict:
+    """Load and validate phenotype configuration from JSON file.
+
+    Parameters
+    ----------
+    config_path : str
+        Path to the phenotype configuration JSON file.
+
+    Returns
+    -------
+    config : dict
+        Validated configuration with keys:
+        - thresholds: dict mapping marker names to z-score cutoffs
+        - phenotypes: list of phenotype definitions (sorted by priority)
+        - colors: dict mapping phenotype names to RGB tuples (optional)
+
+    Raises
+    ------
+    ValueError
+        If required keys are missing from the config.
+    FileNotFoundError
+        If the config file does not exist.
+    """
+    logger.info(f"Loading phenotype config: {config_path}")
+
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+
+    # Validate required keys
+    required = ['thresholds', 'phenotypes']
+    for key in required:
+        if key not in config:
+            raise ValueError(f"Phenotype config missing required key: '{key}'")
+
+    # Validate thresholds
+    if not isinstance(config['thresholds'], dict):
+        raise ValueError("'thresholds' must be a dictionary mapping marker names to cutoff values")
+
+    # Validate phenotypes
+    if not isinstance(config['phenotypes'], list):
+        raise ValueError("'phenotypes' must be a list of phenotype definitions")
+
+    for i, pheno in enumerate(config['phenotypes']):
+        if 'name' not in pheno:
+            raise ValueError(f"Phenotype at index {i} missing required 'name' field")
+        if 'rules' not in pheno:
+            raise ValueError(f"Phenotype '{pheno['name']}' missing required 'rules' field")
+        if not isinstance(pheno['rules'], dict):
+            raise ValueError(f"Phenotype '{pheno['name']}' rules must be a dictionary")
+        # Validate rule values
+        for marker, status in pheno['rules'].items():
+            if status not in ('+', '-'):
+                raise ValueError(
+                    f"Phenotype '{pheno['name']}' has invalid rule for '{marker}': "
+                    f"expected '+' or '-', got '{status}'"
+                )
+
+    # Sort phenotypes by priority (lower priority applied first, higher overrides)
+    config['phenotypes'] = sorted(
+        config['phenotypes'],
+        key=lambda x: x.get('priority', 0)
+    )
+
+    # Convert colors from list to tuple if present
+    if 'colors' in config:
+        global _CUSTOM_COLORS
+        _CUSTOM_COLORS = {}
+        for name, rgb in config['colors'].items():
+            if isinstance(rgb, list) and len(rgb) == 3:
+                _CUSTOM_COLORS[name] = tuple(rgb)
+            else:
+                logger.warning(f"Invalid color for '{name}': {rgb}, expected [R, G, B]")
+
+    logger.info(f"  Loaded {len(config['thresholds'])} marker thresholds")
+    logger.info(f"  Loaded {len(config['phenotypes'])} phenotype definitions")
+    if 'colors' in config:
+        logger.info(f"  Loaded {len(config.get('colors', {}))} custom colors")
+
+    return config
+
+
+def apply_phenotype_rules(df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Apply phenotype classification rules from config to dataframe.
+
+    This function marks cells as positive/negative for each marker based on
+    z-score thresholds, then assigns phenotypes based on marker combinations.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Cell data with z-score normalized marker columns.
+    config : dict
+        Phenotype configuration with 'thresholds' and 'phenotypes' keys.
+
+    Returns
+    -------
+    pd.DataFrame
+        Input dataframe with added columns:
+        - pheno_markers: list of positive markers for each cell
+        - phenotype: assigned phenotype name
+    """
+    thresholds = config['thresholds']
+    phenotypes = config['phenotypes']
+
+    logger.info("Applying phenotype rules from config")
+    logger.info(f"  Thresholds: {thresholds}")
+
+    # Initialize marker positivity tracking
+    df['pheno_markers'] = [[] for _ in range(len(df))]
+
+    # Mark positive cells for each marker based on thresholds
+    for marker, cutoff in thresholds.items():
+        if marker in df.columns:
+            positive_mask = df[marker] >= cutoff
+            positive_count = positive_mask.sum()
+            logger.debug(f"  {marker} >= {cutoff}: {positive_count} positive cells")
+            for idx in df[positive_mask].index:
+                df.at[idx, 'pheno_markers'].append(marker)
+
+    # Apply phenotype rules (sorted by priority, lower first so higher overrides)
+    df['phenotype'] = 'Unknown'
+
+    for pheno_def in phenotypes:
+        name = pheno_def['name']
+        rules = pheno_def['rules']
+        priority = pheno_def.get('priority', 0)
+
+        # Build mask: all rules must match (AND logic)
+        mask = pd.Series(True, index=df.index)
+
+        for marker, status in rules.items():
+            if status == '+':
+                # Marker must be positive
+                mask &= df['pheno_markers'].apply(lambda x: marker in x)
+            elif status == '-':
+                # Marker must be negative
+                mask &= df['pheno_markers'].apply(lambda x: marker not in x)
+
+        matched_count = mask.sum()
+        if matched_count > 0:
+            df.loc[mask, 'phenotype'] = name
+            logger.debug(f"  {name} (priority {priority}): {matched_count} cells")
+
+    # Log phenotype distribution
+    pheno_counts = df['phenotype'].value_counts()
+    logger.info(f"Phenotype distribution:\n{pheno_counts}")
+
+    return df
+
 
 # =============================================================================
 # GEOJSON EXPORT FUNCTIONS
@@ -97,10 +254,18 @@ def rgb_to_qupath_color(r: int, g: int, b: int, a: int = 255) -> int:
 
 
 def get_phenotype_color(phenotype: str, index: int = 0) -> Tuple[int, int, int]:
-    """Get color for a phenotype, generating one if not predefined."""
+    """Get color for a phenotype, generating one if not predefined.
+
+    Checks custom colors from config first, then falls back to defaults.
+    """
+    # Check custom colors from config first
+    if phenotype in _CUSTOM_COLORS:
+        return _CUSTOM_COLORS[phenotype]
+
+    # Fall back to built-in defaults
     if phenotype in PHENOTYPE_COLORS:
         return PHENOTYPE_COLORS[phenotype]
-    
+
     # Generate deterministic color for unknown phenotypes
     h = (index * 0.618033988749895) % 1.0
     s = 0.7 + (index % 3) * 0.1
@@ -293,6 +458,7 @@ def export_classifications(
 
 def run_phenotyping_pipeline(
     cell_df: pd.DataFrame,
+    config: dict = None,
     markers: list = None,
     cutoffs: list = None,
     quality_percentile: float = 1.0,
@@ -304,10 +470,13 @@ def run_phenotyping_pipeline(
     ----------
     cell_df : DataFrame
         Cell data with marker intensities and morphological features.
+    config : dict, optional
+        Phenotype configuration with 'thresholds' and 'phenotypes' keys.
+        If provided, markers/cutoffs parameters are ignored.
     markers : list, optional
-        List of marker names for phenotyping.
+        DEPRECATED: List of marker names for phenotyping. Use config instead.
     cutoffs : list, optional
-        Expression cutoffs for each marker.
+        DEPRECATED: Expression cutoffs for each marker. Use config instead.
     quality_percentile : float, optional
         Percentile for quality filtering.
     noise_percentile : float, optional
@@ -320,9 +489,12 @@ def run_phenotyping_pipeline(
     phenotype_mapping : dict
         Mapping of phenotype number to name.
     """
-    if markers is None:
+    # Determine markers from config or legacy parameters
+    if config is not None:
+        markers = list(config['thresholds'].keys())
+    elif markers is None:
         markers = DEFAULT_MARKERS
-    if cutoffs is None:
+    if cutoffs is None and config is None:
         cutoffs = DEFAULT_CUTOFFS
 
     logger.info("Starting phenotyping pipeline")
@@ -405,114 +577,122 @@ def run_phenotyping_pipeline(
     # Phenotyping based on marker expression
     logger.info("Assigning phenotypes")
 
-    marker_cutoffs = dict(zip(markers[:len(cutoffs)], cutoffs))
-    df_nn['pheno_markers'] = [[] for _ in range(len(df_nn))]
+    if config is not None:
+        # Use config-driven phenotyping
+        df_nn = apply_phenotype_rules(df_nn, config)
+    else:
+        # Legacy hardcoded phenotyping (for backward compatibility)
+        logger.warning("Using legacy hardcoded phenotyping rules. Consider using --config instead.")
+        marker_cutoffs = dict(zip(markers[:len(cutoffs)], cutoffs))
+        df_nn['pheno_markers'] = [[] for _ in range(len(df_nn))]
 
-    # Mark positive cells for each marker
-    for marker, cutoff in marker_cutoffs.items():
-        if marker in df_nn.columns:
-            sel = df_nn[df_nn[marker] >= cutoff]
-            sel_idx = sel.index
-            for idx in sel_idx:
-                df_nn.at[idx, 'pheno_markers'].append(marker)
+        # Mark positive cells for each marker
+        for marker, cutoff in marker_cutoffs.items():
+            if marker in df_nn.columns:
+                sel = df_nn[df_nn[marker] >= cutoff]
+                sel_idx = sel.index
+                for idx in sel_idx:
+                    df_nn.at[idx, 'pheno_markers'].append(marker)
 
-    # Assign phenotypes based on marker combinations
-    df_nn['phenotype'] = 'Unknown'
+        # Assign phenotypes based on marker combinations
+        df_nn['phenotype'] = 'Unknown'
 
-    # Immune compartment (CD45+)
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(lambda x: "CD45" in x),
-        'phenotype'
-    ] = "Immune"
+        # Immune compartment (CD45+)
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(lambda x: "CD45" in x),
+            'phenotype'
+        ] = "Immune"
 
-    # T cell subsets (CD45+ CD3+)
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" in x and "CD4" in x and
-            "FOXP3" in x and "CD8" not in x
-        ),
-        'phenotype'
-    ] = "CD4 T regulatory"
+        # T cell subsets (CD45+ CD3+)
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" in x and "CD4" in x and
+                "FOXP3" in x and "CD8" not in x
+            ),
+            'phenotype'
+        ] = "CD4 T regulatory"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" in x and "CD4" in x and
-            "FOXP3" not in x and "CD8" not in x
-        ),
-        'phenotype'
-    ] = "T helper"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" in x and "CD4" in x and
+                "FOXP3" not in x and "CD8" not in x
+            ),
+            'phenotype'
+        ] = "T helper"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" in x and "GZMB" not in x and
-            "FOXP3" not in x and "CD8" in x and "CD4" not in x
-        ),
-        'phenotype'
-    ] = "T cytotoxic"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" in x and "GZMB" not in x and
+                "FOXP3" not in x and "CD8" in x and "CD4" not in x
+            ),
+            'phenotype'
+        ] = "T cytotoxic"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" in x and "GZMB" not in x and
-            "FOXP3" in x and "CD8" in x and "CD4" not in x
-        ),
-        'phenotype'
-    ] = "CD8 T regulatory"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" in x and "GZMB" not in x and
+                "FOXP3" in x and "CD8" in x and "CD4" not in x
+            ),
+            'phenotype'
+        ] = "CD8 T regulatory"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" in x and "GZMB" in x and
-            "CD8" in x and "CD4" not in x
-        ),
-        'phenotype'
-    ] = "activated T cytotoxic"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" in x and "GZMB" in x and
+                "CD8" in x and "CD4" not in x
+            ),
+            'phenotype'
+        ] = "activated T cytotoxic"
 
-    # Macrophages (CD45+ CD3-)
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" not in x and "CD14" in x and "CD163" in x
-        ),
-        'phenotype'
-    ] = "Macrophages"
+        # Macrophages (CD45+ CD3-)
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" not in x and "CD14" in x and "CD163" in x
+            ),
+            'phenotype'
+        ] = "Macrophages"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" not in x and "CD14" in x and "CD163" not in x
-        ),
-        'phenotype'
-    ] = "M1"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" not in x and "CD14" in x and "CD163" not in x
+            ),
+            'phenotype'
+        ] = "M1"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" in x and "CD3" not in x and "CD14" not in x and "CD163" in x
-        ),
-        'phenotype'
-    ] = "M2"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" in x and "CD3" not in x and "CD14" not in x and "CD163" in x
+            ),
+            'phenotype'
+        ] = "M2"
 
-    # Stroma (CD45-)
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(lambda x: "CD45" not in x),
-        'phenotype'
-    ] = "Stroma"
+        # Stroma (CD45-)
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(lambda x: "CD45" not in x),
+            'phenotype'
+        ] = "Stroma"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(lambda x: "CD45" not in x and "SMA" in x),
-        'phenotype'
-    ] = "Stroma"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(lambda x: "CD45" not in x and "SMA" in x),
+            'phenotype'
+        ] = "Stroma"
 
-    # Tumor (CD45- SMA-)
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" not in x and "SMA" not in x and "PANCK" in x
-        ),
-        'phenotype'
-    ] = "PANCK+ Tumor"
+        # Tumor (CD45- SMA-)
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" not in x and "SMA" not in x and "PANCK" in x
+            ),
+            'phenotype'
+        ] = "PANCK+ Tumor"
 
-    df_nn.loc[
-        df_nn['pheno_markers'].apply(
-            lambda x: "CD45" not in x and "SMA" not in x and "VIMENTIN" in x
-        ),
-        'phenotype'
-    ] = "VIM+ Tumor"
+        df_nn.loc[
+            df_nn['pheno_markers'].apply(
+                lambda x: "CD45" not in x and "SMA" not in x and "VIMENTIN" in x
+            ),
+            'phenotype'
+        ] = "VIM+ Tumor"
+
+        logger.info(f"Phenotype distribution:\n{df_nn['phenotype'].value_counts()}")
 
     # Add numeric phenotype labels
     pheno_complete = df_nn['phenotype'].value_counts().index.values
@@ -583,17 +763,23 @@ def parse_args():
 
     # Phenotyping parameters
     parser.add_argument(
+        '--config',
+        type=str,
+        default=None,
+        help='Path to phenotype configuration JSON file (thresholds and rules)'
+    )
+    parser.add_argument(
         '--markers',
         nargs='+',
         default=DEFAULT_MARKERS,
-        help='List of marker names for phenotyping'
+        help='DEPRECATED: Use --config instead. List of marker names for phenotyping'
     )
     parser.add_argument(
         '--cutoffs',
         nargs='+',
         type=float,
         default=DEFAULT_CUTOFFS,
-        help='Expression cutoffs for each marker'
+        help='DEPRECATED: Use --config instead. Expression cutoffs for each marker'
     )
     parser.add_argument(
         '--quality_percentile',
@@ -644,9 +830,15 @@ def main():
     
     logger.info(f"Loaded {len(cell_df)} cells")
 
+    # Load phenotype config if provided
+    config = None
+    if args.config:
+        config = load_phenotype_config(args.config)
+
     # Run phenotyping
     phenotypes_df, phenotype_mapping = run_phenotyping_pipeline(
         cell_df,
+        config=config,
         markers=args.markers,
         cutoffs=args.cutoffs,
         quality_percentile=args.quality_percentile,

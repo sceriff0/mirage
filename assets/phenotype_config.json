@@ -1,0 +1,98 @@
+{
+  "thresholds": {
+    "CD163": 0.7,
+    "CD14": 0.9,
+    "CD45": 0.4,
+    "CD3": 0.2,
+    "CD8": 0.4,
+    "CD4": 0.9,
+    "FOXP3": 1.3,
+    "PANCK": 0.2,
+    "VIMENTIN": 0.2,
+    "SMA": 0.2,
+    "L1CAM": 0.3,
+    "PAX2": 1.0,
+    "CD74": 1.3,
+    "GZMB": 1.2,
+    "PD1": 1.5,
+    "PDL1": 0.4
+  },
+  "phenotypes": [
+    {
+      "name": "Immune",
+      "priority": 1,
+      "rules": { "CD45": "+" }
+    },
+    {
+      "name": "T helper",
+      "priority": 10,
+      "rules": { "CD45": "+", "CD3": "+", "CD4": "+", "FOXP3": "-", "CD8": "-" }
+    },
+    {
+      "name": "CD4 T regulatory",
+      "priority": 11,
+      "rules": { "CD45": "+", "CD3": "+", "CD4": "+", "FOXP3": "+", "CD8": "-" }
+    },
+    {
+      "name": "T cytotoxic",
+      "priority": 12,
+      "rules": { "CD45": "+", "CD3": "+", "CD8": "+", "CD4": "-", "FOXP3": "-", "GZMB": "-" }
+    },
+    {
+      "name": "CD8 T regulatory",
+      "priority": 13,
+      "rules": { "CD45": "+", "CD3": "+", "CD8": "+", "CD4": "-", "FOXP3": "+" }
+    },
+    {
+      "name": "activated T cytotoxic",
+      "priority": 14,
+      "rules": { "CD45": "+", "CD3": "+", "CD8": "+", "CD4": "-", "GZMB": "+" }
+    },
+    {
+      "name": "Macrophages",
+      "priority": 20,
+      "rules": { "CD45": "+", "CD3": "-", "CD14": "+", "CD163": "+" }
+    },
+    {
+      "name": "M1",
+      "priority": 21,
+      "rules": { "CD45": "+", "CD3": "-", "CD14": "+", "CD163": "-" }
+    },
+    {
+      "name": "M2",
+      "priority": 22,
+      "rules": { "CD45": "+", "CD3": "-", "CD14": "-", "CD163": "+" }
+    },
+    {
+      "name": "Stroma",
+      "priority": 30,
+      "rules": { "CD45": "-" }
+    },
+    {
+      "name": "PANCK+ Tumor",
+      "priority": 40,
+      "rules": { "CD45": "-", "SMA": "-", "PANCK": "+" }
+    },
+    {
+      "name": "VIM+ Tumor",
+      "priority": 41,
+      "rules": { "CD45": "-", "SMA": "-", "VIMENTIN": "+" }
+    }
+  ],
+  "colors": {
+    "Background": [0, 0, 0],
+    "Unknown": [64, 64, 64],
+    "Immune": [0, 255, 0],
+    "T helper": [255, 255, 0],
+    "T cytotoxic": [0, 255, 255],
+    "activated T cytotoxic": [0, 200, 255],
+    "CD4 T regulatory": [255, 200, 0],
+    "CD8 T regulatory": [200, 255, 0],
+    "Macrophages": [255, 128, 0],
+    "M1": [255, 80, 80],
+    "M2": [255, 160, 80],
+    "PANCK+ Tumor": [255, 0, 0],
+    "VIM+ Tumor": [255, 0, 255],
+    "Stroma": [128, 128, 128]
+  }
+}
