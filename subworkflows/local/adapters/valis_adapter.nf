@@ -90,12 +90,12 @@ workflow VALIS_ADAPTER {
                 def file_patient = parts[0]
                 def file_markers = parts.drop(1)  // All parts after patient_id
 
-                // Validate patient ID
-                if (file_patient != patient_id) {
+                // Validate patient ID (use toString().trim() to handle GString/String and whitespace issues)
+                if (file_patient.toString().trim() != patient_id.toString().trim()) {
                     def error_msg = """
                     ❌ VALIS adapter: Patient ID mismatch
-                    📍 Expected: ${patient_id}
-                    📍 Got: ${file_patient}
+                    📍 Expected: '${patient_id}' (length: ${patient_id.toString().length()})
+                    📍 Got: '${file_patient}' (length: ${file_patient.toString().length()})
                     📍 File: ${reg_file.name}
                     """.stripIndent()
                     throw new Exception(error_msg)
