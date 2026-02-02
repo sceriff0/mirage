@@ -21,15 +21,29 @@ IMPORT and DECLARE HELPERS
 import static CsvUtils.*
 import static ParamUtils.*
 
-def loadInputChannel(csv_path, image_column) {
-    return Channel
+def loadInputChannel(csv_path, image_column, patient_counts = null) {
+    def ch = Channel
         .fromPath(csv_path, checkIfExists: true)
         .splitCsv(header: true)
         .map { row ->
             // Use CsvUtils to handle the complex metadata parsing
-            def meta = CsvUtils.parseMetadata(row, "CSV ${csv_path}") 
+            def meta = CsvUtils.parseMetadata(row, "CSV ${csv_path}")
             return tuple(meta, file(row[image_column]))
         }
+
+    // If patient counts provided, add images_count to meta for streaming groupTuple
+    if (patient_counts) {
+        def counts_ch = Channel.fromList(patient_counts.collect { k, v -> [k, v] })
+        ch = ch
+            .map { meta, f -> [meta.patient_id, meta, f] }
+            .combine(counts_ch, by: 0)
+            .map { patient_id, meta, f, count ->
+                def updated_meta = meta.clone()
+                updated_meta.images_count = count
+                [updated_meta, f]
+            }
+    }
+    return ch
 }
 
 /*
@@ -82,8 +96,11 @@ workflow {
 
     /* -------------------- PREPROCESSING -------------------- */
 
+    // Pre-count images per patient for streaming groupTuple operations
+    def patient_counts = CsvUtils.countImagesPerPatient(params.input)
+
     if (params.step == 'preprocessing') {
-        ch_input = loadInputChannel(params.input, 'path_to_file')
+        ch_input = loadInputChannel(params.input, 'path_to_file', patient_counts)
         PREPROCESSING(ch_input)
     }
     
@@ -94,7 +111,7 @@ workflow {
         // When starting from registration, params.input is a string path to CSV
         // When continuing from preprocessing, use direct channel (streaming, no wait)
         ch_for_registration = params.step == 'registration'
-            ? loadInputChannel(params.input, 'preprocessed_image')
+            ? loadInputChannel(params.input, 'preprocessed_image', patient_counts)
             : PREPROCESSING.out.preprocessed  // Direct channel - enables patient-level parallelism!
 
         REGISTRATION(
@@ -110,7 +127,7 @@ workflow {
         // When starting from postprocessing, params.input is a string path to CSV
         // When continuing from registration, use direct channel (streaming, no wait)
         ch_for_postprocessing = params.step == 'postprocessing'
-            ? loadInputChannel(params.input, 'registered_image')
+            ? loadInputChannel(params.input, 'registered_image', patient_counts)
             : REGISTRATION.out.registered  // Direct channel - enables patient-level parallelism!
 
         POSTPROCESSING(ch_for_postprocessing)

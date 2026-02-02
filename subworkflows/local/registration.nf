@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+import nextflow.util.groupKey
+
 /*
 ========================================================================================
     IMPORT MODULES
@@ -70,9 +72,13 @@ workflow REGISTRATION {
         GET_IMAGE_DIMS(ch_preprocessed)
 
         // Group by patient and find max dimensions per patient
+        // Use groupKey for streaming - emits as soon as images_count items collected
         ch_grouped_dims = GET_IMAGE_DIMS.out.dims
-            .map { meta, dims -> [meta.patient_id, dims] }
-            .groupTuple(by: 0)
+            .map { meta, dims ->
+                def key = meta.images_count ? groupKey(meta.patient_id, meta.images_count) : meta.patient_id
+                [key, dims]
+            }
+            .groupTuple()
 
         MAX_DIM(ch_grouped_dims)
 
@@ -96,10 +102,16 @@ workflow REGISTRATION {
     // Output: [patient_id, reference_item, all_items]
     //   where reference_item = [meta, file]
     //   and all_items = [[meta1, file1], [meta2, file2], ...]
+    //
+    // Use groupKey for streaming - emits as soon as images_count items collected
+    // This enables patient-level parallelism (Patient A processes while Patient B preprocesses)
 
     ch_grouped = ch_images
-        .map { meta, file -> [meta.patient_id, meta, file] }
-        .groupTuple(by: 0)
+        .map { meta, file ->
+            def key = meta.images_count ? groupKey(meta.patient_id, meta.images_count) : meta.patient_id
+            [key, meta, file]
+        }
+        .groupTuple()
         .map { patient_id, metas, files ->
             // Combine metas and files into items
             def items = [metas, files].transpose()
