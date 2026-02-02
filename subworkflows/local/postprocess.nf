@@ -117,10 +117,31 @@ workflow POSTPROCESSING {
     MERGE_QUANT_CSVS(ch_grouped_csvs)
 
     // ========================================================================
+    // CONTOURS - Collect one contours file per patient (all identical since same mask)
+    // ========================================================================
+    // When export_contours is enabled, each QUANTIFY outputs a contours file
+    // We only need one per patient (they're identical). Take first per patient_id.
+    ch_contours_raw = params.export_contours
+        ? QUANTIFY.out.contours
+            .map { meta, contours -> [meta.patient_id, contours] }
+            .groupTuple(by: 0)
+            .map { patient_id, contours_list -> [patient_id, contours_list[0]] }  // Take first (all identical)
+        : Channel.empty()
+
+    // Join merged CSV with contours (left join - use placeholder if no contours)
+    ch_merged_with_contours = MERGE_QUANT_CSVS.out.merged_csv
+        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .join(ch_contours_raw, by: 0, remainder: true)
+        .map { patient_id, meta, csv, contours ->
+            def contours_file = contours ?: file('NO_CONTOURS')
+            [meta, csv, contours_file]
+        }
+
+    // ========================================================================
     // PHENOTYPING - Run on merged CSV with configurable rules
     // ========================================================================
     PHENOTYPE(
-        MERGE_QUANT_CSVS.out.merged_csv,
+        ch_merged_with_contours,  // [meta, csv, contours_file]
         phenotype_config_ch.first()  // .first() converts to value channel for reuse across samples
     )
 

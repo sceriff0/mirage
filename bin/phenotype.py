@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import colorsys
+import gzip
 import json
 import logging
 import os
@@ -284,10 +285,11 @@ def export_to_geojson(
     cell_id_col: str = 'label',
     exclude_background: bool = True,
     measurement_cols: Optional[List[str]] = None,
+    contours: Optional[Dict[int, List]] = None,
 ) -> Tuple[int, Dict]:
     """
     Export phenotyped cells to QuPath-compatible GeoJSON.
-    
+
     Parameters
     ----------
     df : DataFrame
@@ -308,7 +310,11 @@ def export_to_geojson(
         Skip cells with phenotype "Background" or "Unknown".
     measurement_cols : list, optional
         Columns to include as measurements. If None, includes all numeric columns.
-    
+    contours : dict, optional
+        Mapping of cell label to contour coordinates [(x, y), ...].
+        If provided, cells with contours are exported as Polygon geometry;
+        otherwise, Point geometry (centroid) is used.
+
     Returns
     -------
     num_exported : int
@@ -376,14 +382,26 @@ def export_to_geojson(
                 except (ValueError, TypeError):
                     pass
 
+        # Determine geometry: Polygon if contour available, else Point
+        cell_label = int(cell_id) if isinstance(cell_id, (int, float, np.integer)) else cell_id
+        if contours and cell_label in contours:
+            # Use actual cell boundary contour
+            geometry = {
+                "type": "Polygon",
+                "coordinates": [contours[cell_label]]  # GeoJSON Polygon: array of rings
+            }
+        else:
+            # Fallback to Point (centroid)
+            geometry = {
+                "type": "Point",
+                "coordinates": [x, y]
+            }
+
         # Create GeoJSON feature (coordinates in pixels for QuPath)
         feature = {
             "type": "Feature",
             "id": str(cell_id),
-            "geometry": {
-                "type": "Point",
-                "coordinates": [x, y]
-            },
+            "geometry": geometry,
             "properties": {
                 "objectType": "detection",
                 "classification": {
@@ -392,7 +410,7 @@ def export_to_geojson(
                 "measurements": measurements
             }
         }
-        
+
         features.append(feature)
     
     logger.info(f"  Exported {len(features)} cells, skipped {skipped}")
@@ -805,6 +823,12 @@ def parse_args():
         default='phenotypes',
         help='Prefix for output files'
     )
+    parser.add_argument(
+        '--contours-file',
+        type=str,
+        default=None,
+        help='Path to gzipped JSON file with cell contours (from quantify.py --export-contours)'
+    )
 
     return parser.parse_args()
 
@@ -858,8 +882,22 @@ def main():
         csv_df = csv_df.drop(columns=['pheno_markers'])
     csv_df.to_csv(output_csv, index=False)
 
+    # Load contours if provided
+    contours = None
+    if args.contours_file and Path(args.contours_file).exists():
+        logger.info(f"Loading contours: {args.contours_file}")
+        if args.contours_file.endswith('.gz'):
+            with gzip.open(args.contours_file, 'rt') as f:
+                contours = {int(k): v for k, v in json.load(f).items()}
+        else:
+            with open(args.contours_file, 'r') as f:
+                contours = {int(k): v for k, v in json.load(f).items()}
+        logger.info(f"  Loaded {len(contours)} cell contours")
+
     # Export GeoJSON for QuPath
     logger.info(f"Exporting GeoJSON: {output_geojson}")
+    geometry_type = "Polygon" if contours else "Point"
+    logger.info(f"  Geometry type: {geometry_type}")
     num_exported, phenotype_colors = export_to_geojson(
         df=phenotypes_df,
         output_path=output_geojson,
@@ -869,6 +907,7 @@ def main():
         phenotype_col='phenotype',
         cell_id_col=args.cell_id_col,
         exclude_background=not args.include_unknown,
+        contours=contours,
     )
 
     # Export classifications JSON (for QuPath color setup)

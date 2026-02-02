@@ -12,11 +12,13 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, List
+import gzip
+import json
 
 import numpy as np
 import pandas as pd
-from skimage.measure import regionprops_table
+from skimage.measure import regionprops, find_contours, approximate_polygon
 from numpy.typing import NDArray
 
 # Add parent directory to path to import lib modules
@@ -39,9 +41,11 @@ __all__ = [
 
 def compute_morphology(
     mask: NDArray,
-    min_area: int = 0
-) -> Tuple[Optional[pd.DataFrame], Optional[NDArray], Optional[NDArray]]:
-    """Compute morphological properties for all cells.
+    min_area: int = 0,
+    export_contours: bool = False,
+    simplify_tolerance: float = 1.0
+) -> Tuple[Optional[pd.DataFrame], Optional[NDArray], Optional[NDArray], Optional[Dict[int, List]]]:
+    """Compute morphological properties and optionally extract contours.
 
     Parameters
     ----------
@@ -49,6 +53,11 @@ def compute_morphology(
         Segmentation mask with cell labels (background=0, cells>=1).
     min_area : int, default=0
         Minimum cell area in pixels. Cells smaller than this are excluded.
+    export_contours : bool, default=False
+        If True, extract cell boundary contours for each cell.
+    simplify_tolerance : float, default=1.0
+        Douglas-Peucker simplification tolerance in pixels.
+        Higher values = fewer points, smaller file. Set to 0 to disable.
 
     Returns
     -------
@@ -68,6 +77,9 @@ def compute_morphology(
     valid_labels : ndarray or None
         Array of label IDs for cells that passed filtering.
         Returns None if no valid cells found.
+    contours : dict or None
+        Mapping of label -> list of (x, y) coordinates forming closed polygon.
+        Only returned if export_contours=True, otherwise None.
 
     Notes
     -----
@@ -75,16 +87,19 @@ def compute_morphology(
     using scikit-image's regionprops. The filtering removes artifacts and
     debris that don't meet size criteria.
 
+    When export_contours=True, contours are extracted using marching squares
+    on each cell's bounding box region for efficiency.
+
     Examples
     --------
     >>> mask = np.array([[0, 1, 1], [0, 1, 1], [2, 2, 0]])
-    >>> props_df, mask_filt, valid = compute_morphology(mask, min_area=2)
+    >>> props_df, mask_filt, valid, contours = compute_morphology(mask, min_area=2)
     >>> print(props_df['area'].values)
     [4 2]
 
     See Also
     --------
-    skimage.measure.regionprops_table : Underlying morphology computation
+    skimage.measure.regionprops : Underlying morphology computation
     compute_channel_intensity : Intensity measurements per cell
     """
     logger.debug(f"Computing morphology: mask shape={mask.shape}, min_area={min_area}")
@@ -96,33 +111,64 @@ def compute_morphology(
 
     if len(valid_labels) == 0:
         logger.warning("[WARN] No valid cells found after area filtering")
-        return None, None, None
+        return None, None, None, None
 
     # Create filtered mask
     mask_filtered = np.where(np.isin(mask, valid_labels), mask, 0)
 
     if np.all(mask_filtered == 0):
         logger.warning("[WARN] Filtered mask is empty")
-        return None, None, None
+        return None, None, None, None
 
-    # Compute morphological properties
+    # Compute morphological properties using regionprops (single pass)
     logger.debug("Computing morphological properties...")
-    props = regionprops_table(
-        mask_filtered,
-        properties=[
-            'label', 'centroid', 'area',
-            'eccentricity', 'perimeter',
-            'convex_area', 'axis_major_length', 'axis_minor_length'
-        ]
-    )
-    props_df = pd.DataFrame(props).set_index('label')
-    props_df.rename(
-        columns={'centroid-0': 'y', 'centroid-1': 'x'},
-        inplace=True
-    )
+    regions = regionprops(mask_filtered)
+
+    rows = []
+    contours = {} if export_contours else None
+
+    for region in regions:
+        # Extract morphology
+        rows.append({
+            'label': region.label,
+            'y': region.centroid[0],
+            'x': region.centroid[1],
+            'area': region.area,
+            'eccentricity': region.eccentricity,
+            'perimeter': region.perimeter,
+            'convex_area': region.convex_area,
+            'axis_major_length': region.axis_major_length,
+            'axis_minor_length': region.axis_minor_length,
+        })
+
+        # Extract contour from bounding box (efficient - only processes local region)
+        if export_contours:
+            minr, minc, maxr, maxc = region.bbox
+            local_mask = (mask_filtered[minr:maxr, minc:maxc] == region.label)
+            local_contours = find_contours(local_mask.astype(float), 0.5)
+
+            if local_contours:
+                # Take the largest contour (handles any holes)
+                contour = max(local_contours, key=len)
+
+                # Simplify with Douglas-Peucker algorithm
+                if simplify_tolerance > 0 and len(contour) > 10:
+                    contour = approximate_polygon(contour, tolerance=simplify_tolerance)
+
+                # Offset to global coords, convert (row, col) to (x, y), close polygon
+                coords = [(round(pt[1] + minc, 1), round(pt[0] + minr, 1)) for pt in contour]
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0])
+
+                contours[region.label] = coords
+
+    props_df = pd.DataFrame(rows).set_index('label')
 
     logger.debug(f"Found {len(props_df)} valid cells")
-    return props_df, mask_filtered, valid_labels
+    if export_contours:
+        logger.debug(f"Extracted {len(contours)} contours")
+
+    return props_df, mask_filtered, valid_labels, contours
 
 
 def compute_channel_intensity(
@@ -206,8 +252,10 @@ def quantify_single_channel(
     mask: NDArray,
     channel_image: NDArray,
     channel_name: str,
-    min_area: int = 0
-) -> pd.DataFrame:
+    min_area: int = 0,
+    export_contours: bool = False,
+    simplify_tolerance: float = 1.0
+) -> Tuple[pd.DataFrame, Optional[Dict[int, List]]]:
     """Quantify a single channel.
 
     Parameters
@@ -220,37 +268,47 @@ def quantify_single_channel(
         Name of the channel/marker.
     min_area : int, optional
         Minimum cell area filter.
+    export_contours : bool, default=False
+        If True, extract cell boundary contours.
+    simplify_tolerance : float, default=1.0
+        Douglas-Peucker simplification tolerance in pixels.
 
     Returns
     -------
-    DataFrame
+    result_df : DataFrame
         Morphological properties + channel intensity for all cells.
+    contours : dict or None
+        Cell contours if export_contours=True, else None.
     """
-    # Compute morphology
-    props_df, mask_filtered, valid_labels = compute_morphology(mask, min_area)
+    # Compute morphology (and optionally contours)
+    props_df, mask_filtered, valid_labels, contours = compute_morphology(
+        mask, min_area,
+        export_contours=export_contours,
+        simplify_tolerance=simplify_tolerance
+    )
 
     if props_df is None:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     # Compute intensity for this channel
     intensity_series = compute_channel_intensity(
         mask_filtered, channel_image, valid_labels, channel_name
     )
-    
+
     # Add intensity to morphology dataframe
     result_df = props_df.copy()
     result_df[channel_name] = intensity_series
 
     # Reset index to make 'label' a column
     result_df = result_df.reset_index()
-    
+
     # Reorder: label first, then morphology, then intensity
     morpho_cols = ['label', 'y', 'x', 'area', 'eccentricity', 'perimeter',
                    'convex_area', 'axis_major_length', 'axis_minor_length']
     cols_order = morpho_cols + [channel_name]
     result_df = result_df[cols_order]
 
-    return result_df
+    return result_df, contours
 
 
 def run_quantification(
@@ -258,8 +316,10 @@ def run_quantification(
     channel_path: str,
     output_path: str,
     min_area: int = 0,
-    channel_name: str = None
-) -> pd.DataFrame:
+    channel_name: str = None,
+    export_contours: bool = False,
+    simplify_tolerance: float = 1.0
+) -> Tuple[pd.DataFrame, Optional[str]]:
     """Run quantification for a single channel.
 
     Parameters
@@ -276,15 +336,22 @@ def run_quantification(
     channel_name : str, optional
         Explicit channel/marker name. If not provided, will be parsed
         from the channel file basename.
+    export_contours : bool, default=False
+        If True, extract and save cell boundary contours to a gzipped JSON file.
+    simplify_tolerance : float, default=1.0
+        Douglas-Peucker simplification tolerance in pixels for contour reduction.
+        Higher values = fewer points, smaller file. Set to 0 to disable.
 
     Returns
     -------
-    pd.DataFrame
+    result_df : pd.DataFrame
         Quantification results with columns:
         - label: Cell ID
         - y, x: Centroid coordinates
         - area, eccentricity, perimeter, etc.: Morphology features
         - {channel_name}: Mean intensity for this channel
+    contour_path : str or None
+        Path to saved contours file if export_contours=True, else None.
 
     Raises
     ------
@@ -301,6 +368,7 @@ def run_quantification(
     3. Compute morphology and filter by area
     4. Compute mean intensities per cell
     5. Save results to CSV
+    6. Optionally save contours to gzipped JSON
 
     If no valid cells are found, an empty CSV with proper column
     headers is created.
@@ -312,7 +380,8 @@ def run_quantification(
     ...     channel_path="channels/P001_CD3.tif",
     ...     output_path="quant/P001_CD3_quant.csv",
     ...     min_area=10,
-    ...     channel_name="CD3"
+    ...     channel_name="CD3",
+    ...     export_contours=True
     ... )
 
     See Also
@@ -369,14 +438,28 @@ def run_quantification(
         )
 
     # Quantify
-    result_df = quantify_single_channel(
-        mask, channel_image, channel_name, min_area=min_area
+    result_df, contours = quantify_single_channel(
+        mask, channel_image, channel_name,
+        min_area=min_area,
+        export_contours=export_contours,
+        simplify_tolerance=simplify_tolerance
     )
 
-    # Save
+    # Save CSV
+    contour_path = None
     if not result_df.empty:
         result_df.to_csv(output_path, index=False)
         logger.info(f"[OK] Saved {len(result_df)} cells to {output_path}")
+
+        # Save contours if extracted
+        if contours:
+            contour_path = output_path.replace('_quant.csv', '_contours.json.gz')
+            if contour_path == output_path:
+                # Fallback if filename doesn't match expected pattern
+                contour_path = output_path.rsplit('.', 1)[0] + '_contours.json.gz'
+            with gzip.open(contour_path, 'wt') as f:
+                json.dump({str(k): v for k, v in contours.items()}, f)
+            logger.info(f"[OK] Saved {len(contours)} contours to {contour_path}")
     else:
         logger.warning("[WARN] No results to save")
         # Create empty CSV with expected columns
@@ -388,7 +471,7 @@ def run_quantification(
 
     logger.info("Quantification complete")
 
-    return result_df
+    return result_df, contour_path
 
 
 def run_quantification_gpu(
@@ -556,6 +639,18 @@ def parse_args():
         default=None,
         help='Explicit channel name (if not provided, will parse from filename)'
     )
+    parser.add_argument(
+        '--export-contours',
+        action='store_true',
+        default=False,
+        help='Extract and save cell boundary contours to gzipped JSON'
+    )
+    parser.add_argument(
+        '--simplify-tolerance',
+        type=float,
+        default=1.0,
+        help='Douglas-Peucker simplification tolerance in pixels (0 to disable)'
+    )
 
     return parser.parse_args()
 
@@ -579,12 +674,17 @@ def main():
     # Run quantification (CPU mode)
     # Note: GPU mode removed - use GPU container if GPU acceleration needed
     logger.info('Running CPU quantification')
+    if args.export_contours:
+        logger.info(f'Contour export enabled (tolerance={args.simplify_tolerance})')
+
     run_quantification(
         mask_path=args.mask_file,
         channel_path=args.channel_tiff,
         output_path=output_path,
         min_area=args.min_area,
-        channel_name=args.channel_name
+        channel_name=args.channel_name,
+        export_contours=args.export_contours,
+        simplify_tolerance=args.simplify_tolerance
     )
 
     return 0

@@ -22,6 +22,7 @@ process QUANTIFY {
 
     output:
     tuple val(meta), path("${meta.id}_quant.csv"), emit: individual_csv
+    tuple val(meta), path("*_contours.json.gz")  , emit: contours, optional: true
     path "versions.yml"                           , emit: versions
     path("*.size.csv")                            , emit: size_log
 
@@ -33,6 +34,7 @@ process QUANTIFY {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     // Extract channel name from filename (split_multichannel.py creates files like "PANCK.tiff")
     def channel_name = channel_tiff.simpleName
+    def contour_args = params.export_contours ? "--export-contours --simplify-tolerance ${params.simplify_tolerance}" : ''
     """
     # Log input sizes for tracing (sum of channel_tiff + seg_mask, -L follows symlinks)
     tiff_bytes=\$(stat -L --printf="%s" ${channel_tiff})
@@ -51,6 +53,7 @@ process QUANTIFY {
         --outdir . \\
         --output_file ${meta.id}_quant.csv \\
         --min_area ${params.quant_min_area} \\
+        ${contour_args} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

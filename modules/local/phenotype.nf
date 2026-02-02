@@ -18,7 +18,7 @@ process PHENOTYPE {
     publishDir "${params.outdir}/${meta.patient_id}/phenotype", mode: 'copy'
 
     input:
-    tuple val(meta), path(quant_csv)
+    tuple val(meta), path(quant_csv), path(contours_file)
     path(phenotype_config)
 
     output:
@@ -36,6 +36,7 @@ process PHENOTYPE {
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def pixel_size = params.pixel_size ?: 0.325
+    def contours_arg = contours_file.name != 'NO_CONTOURS' ? "--contours-file ${contours_file}" : ''
     """
     # Log input size for tracing (-L follows symlinks)
     input_bytes=\$(stat -L --printf="%s" ${quant_csv})
@@ -51,6 +52,7 @@ process PHENOTYPE {
         --pixel_size ${pixel_size} \\
         --quality_percentile ${params.pheno_quality_percentile} \\
         --noise_percentile ${params.pheno_noise_percentile} \\
+        ${contours_arg} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml
