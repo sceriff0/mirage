@@ -79,7 +79,6 @@ process COPY_RESULTS {
             --inplace \\
             --append-verify \\
             --timeout=600 \\
-            --contimeout=120 \\
             --bwlimit=200000 \\
             --progress \\
             --stats \\
