@@ -144,8 +144,10 @@ workflow POSTPROCESSING {
 
     def pixie_channel_count = pixie_channels_list.size()
 
+    log.info "PIXIE SETUP: pixie_channels_list=${pixie_channels_list}, count=${pixie_channel_count}, enabled=${params.pixie_enabled}"
+
     // Define Pixie channel OUTSIDE if block (required for proper dataflow subscription)
-    // This channel collects split TIFFs from ALL images, filtered to only pixie_channels
+    // Uses same proven pattern as ch_split_grouped (which successfully feeds MERGE_AND_PYRAMID)
     ch_for_pixie_pixel = SPLIT_CHANNELS.out.channels
         .flatMap { meta, tiffs ->
             def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
@@ -153,15 +155,13 @@ workflow POSTPROCESSING {
                 [meta.patient_id, tiff.baseName, tiff]
             }
         }
-        .filter { patient_id, marker, tiff ->
-            pixie_channels_list.contains(marker)
+        .filter { _patient_id, marker, _tiff ->
+            // Case-insensitive match against pixie_channels_list
+            pixie_channels_list.any { ch -> ch.equalsIgnoreCase(marker) }
         }
-        .unique { patient_id, marker, tiff -> [patient_id, marker] }
-        .map { patient_id, marker, tiff ->
-            def key = groupKey(patient_id, pixie_channel_count)
-            [key, tiff]
-        }
-        .groupTuple()
+        .unique { patient_id, marker, _tiff -> [patient_id, marker] }
+        .map { patient_id, _marker, tiff -> [patient_id, tiff] }
+        .groupTuple(by: 0)  // Simple grouping - no groupKey (which can block)
         .map { patient_id, tiffs ->
             def patient_meta = [
                 patient_id: patient_id,
@@ -173,7 +173,9 @@ workflow POSTPROCESSING {
         .join(
             SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
         )
-        .map { patient_id, meta, channel_tiffs, mask -> [meta, channel_tiffs, mask] }
+        .map { _patient_id, meta, channel_tiffs, mask ->
+            [meta, channel_tiffs, mask]
+        }
 
     if (params.pixie_enabled) {
         // Validate required parameter
