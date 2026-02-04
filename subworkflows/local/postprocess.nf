@@ -145,12 +145,35 @@ workflow POSTPROCESSING {
                 .tokenize(',')
                 .collect { it.trim() }
 
-        // Pixel clustering needs: split channel TIFFs (reference only) + cell mask
-        ch_ref_split_channels = SPLIT_CHANNELS.out.channels
-            .filter { meta, tiffs -> meta.is_reference }
-            .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
+        // Pixel clustering needs: split channel TIFFs (ALL images, deduplicated) + cell mask
+        // Filter to only pixie_channels and use groupKey for streaming (we know exact count)
+        def pixie_channel_set = pixie_channels_list.toSet()
 
-        ch_for_pixie_pixel = ch_ref_split_channels
+        ch_all_split_channels = SPLIT_CHANNELS.out.channels
+            .flatMap { meta, tiffs ->
+                def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
+                tiff_list.collect { tiff ->
+                    [meta.patient_id, tiff.baseName, tiff]
+                }
+            }
+            .filter { patient_id, marker, tiff -> marker in pixie_channel_set }  // Only keep pixie channels
+            .unique { patient_id, marker, tiff -> [patient_id, marker] }  // Deduplicate by patient+marker
+            .map { patient_id, marker, tiff ->
+                // Use groupKey with known size (pixie_channels count) for streaming
+                def key = groupKey(patient_id, pixie_channels_list.size())
+                [key, tiff]
+            }
+            .groupTuple()
+            .map { patient_id, tiffs ->
+                def patient_meta = [
+                    patient_id: patient_id,
+                    id: patient_id,
+                    is_reference: true
+                ]
+                [patient_id, patient_meta, tiffs]
+            }
+
+        ch_for_pixie_pixel = ch_all_split_channels
             .join(
                 SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
             )

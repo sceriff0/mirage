@@ -90,6 +90,19 @@ def main():
     print(f"Seed: {args.seed}")
     print()
 
+    # Validate channels exist in TIFF directory
+    tiff_fov_dir = os.path.join(args.tiff_dir, args.fov_name)
+    if os.path.isdir(tiff_fov_dir):
+        available = sorted([f.rsplit('.', 1)[0] for f in os.listdir(tiff_fov_dir)
+                            if f.endswith(('.tiff', '.tif'))])
+        print(f"Available channels: {available}")
+        missing = [ch for ch in channels if ch not in available]
+        if missing:
+            print(f"ERROR: Requested channels not found: {missing}", file=sys.stderr)
+            print(f"Available channels are: {available}", file=sys.stderr)
+            sys.exit(1)
+    print()
+
     # Output directory structure (matching notebook)
     pixel_output_dir = "pixel_output"
     pixel_data_dir = os.path.join(pixel_output_dir, 'pixel_mat_data')
