@@ -227,7 +227,9 @@ workflow POSTPROCESSING {
     // ========================================================================
     // Use collectFile() for non-blocking aggregation (enables patient-level parallelism)
     // The join chain is kept (it's per-patient and doesn't block other patients)
-    ch_checkpoint_csv = PHENOTYPE.out.csv
+
+    // Base checkpoint data (always present)
+    ch_base_checkpoint = PHENOTYPE.out.csv
         .map { meta, csv ->
             def published_path = "${params.outdir}/${meta.patient_id}/phenotype/${csv.name}"
             [meta.patient_id, published_path]
@@ -252,15 +254,43 @@ workflow POSTPROCESSING {
             def published_path = "${params.outdir}/${meta.patient_id}/pyramid/${pyramid.name}"
             [meta.patient_id, published_path]
         })
-        .map { patient_id, pheno_csv, pheno_geojson, pheno_map, merged_csv, cell_mask, pyramid ->
-            "${patient_id},${pheno_csv},${pheno_geojson},${pheno_map},${merged_csv},${cell_mask},${pyramid}"
-        }
-        .collectFile(
-            name: 'postprocessed.csv',
-            newLine: true,
-            storeDir: "${params.outdir}/csv",
-            seed: 'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid'
-        )
+
+    // Conditionally add Pixie outputs to checkpoint
+    if (params.pixie_enabled) {
+        ch_checkpoint_csv = ch_base_checkpoint
+            .join(PIXIE_CELL_CLUSTER.out.cell_table_clustered.map { meta, csv ->
+                def published_path = "${params.outdir}/${meta.patient_id}/pixie/cell_clustering/cell_output/${csv.name}"
+                [meta.patient_id, published_path]
+            })
+            .join(PIXIE_CELL_CLUSTER.out.geojson.map { meta, geojson ->
+                def published_path = "${params.outdir}/${meta.patient_id}/pixie/cell_clustering/cell_output/${geojson.name}"
+                [meta.patient_id, published_path]
+            })
+            .join(PIXIE_CELL_CLUSTER.out.mapping_json.map { meta, mapping ->
+                def published_path = "${params.outdir}/${meta.patient_id}/pixie/cell_clustering/cell_output/${mapping.name}"
+                [meta.patient_id, published_path]
+            })
+            .map { patient_id, pheno_csv, pheno_geojson, pheno_map, merged_csv, cell_mask, pyramid, pixie_csv, pixie_geojson, pixie_mapping ->
+                "${patient_id},${pheno_csv},${pheno_geojson},${pheno_map},${merged_csv},${cell_mask},${pyramid},${pixie_csv},${pixie_geojson},${pixie_mapping}"
+            }
+            .collectFile(
+                name: 'postprocessed.csv',
+                newLine: true,
+                storeDir: "${params.outdir}/csv",
+                seed: 'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid,pixie_cell_table,pixie_geojson,pixie_mapping'
+            )
+    } else {
+        ch_checkpoint_csv = ch_base_checkpoint
+            .map { patient_id, pheno_csv, pheno_geojson, pheno_map, merged_csv, cell_mask, pyramid ->
+                "${patient_id},${pheno_csv},${pheno_geojson},${pheno_map},${merged_csv},${cell_mask},${pyramid}"
+            }
+            .collectFile(
+                name: 'postprocessed.csv',
+                newLine: true,
+                storeDir: "${params.outdir}/csv",
+                seed: 'patient_id,phenotype_csv,phenotype_geojson,phenotype_mapping,merged_csv,cell_mask,pyramid'
+            )
+    }
 
     // Collect size logs from all postprocessing processes
     ch_size_logs = Channel.empty()
