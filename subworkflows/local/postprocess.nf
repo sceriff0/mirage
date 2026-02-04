@@ -148,6 +148,9 @@ workflow POSTPROCESSING {
         // Pixel clustering needs: split channel TIFFs (ALL images, deduplicated) + cell mask
         // Filter to only pixie_channels and use groupKey for streaming (we know exact count)
         def pixie_channel_set = pixie_channels_list.toSet()
+        def pixie_channel_count = pixie_channels_list.size()
+
+        log.info "PIXIE DEBUG: pixie_channels_list=${pixie_channels_list}, set=${pixie_channel_set}, count=${pixie_channel_count}"
 
         ch_all_split_channels = SPLIT_CHANNELS.out.channels
             .flatMap { meta, tiffs ->
@@ -156,14 +159,19 @@ workflow POSTPROCESSING {
                     [meta.patient_id, tiff.baseName, tiff]
                 }
             }
+            .view { patient_id, marker, tiff -> "PIXIE flatMap: patient=${patient_id}, marker=${marker}, pixie_set=${pixie_channel_set}" }
             .filter { patient_id, marker, tiff -> marker in pixie_channel_set }  // Only keep pixie channels
+            .view { patient_id, marker, tiff -> "PIXIE after filter: patient=${patient_id}, marker=${marker}" }
             .unique { patient_id, marker, tiff -> [patient_id, marker] }  // Deduplicate by patient+marker
+            .view { patient_id, marker, tiff -> "PIXIE after unique: patient=${patient_id}, marker=${marker}" }
             .map { patient_id, marker, tiff ->
                 // Use groupKey with known size (pixie_channels count) for streaming
-                def key = groupKey(patient_id, pixie_channels_list.size())
+                def key = groupKey(patient_id, pixie_channel_count)
                 [key, tiff]
             }
+            .view { key, tiff -> "PIXIE before groupTuple: key=${key}, tiff=${tiff.name}" }
             .groupTuple()
+            .view { patient_id, tiffs -> "PIXIE after groupTuple: patient=${patient_id}, tiffs=${tiffs*.name}" }
             .map { patient_id, tiffs ->
                 def patient_meta = [
                     patient_id: patient_id,
