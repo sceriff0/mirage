@@ -176,23 +176,9 @@ COMPLETION HANDLERS
 */
 
 workflow.onComplete {
-
     if (workflow.success) {
         log.info "Pipeline completed successfully!"
-
-        // Clean up work directory if requested
-        if (params.cleanup_work) {
-            log.info "Cleaning up work directory: ${workflow.workDir}"
-            def workDir = new File("${workflow.workDir}")
-            if (workDir.exists() && workDir.isDirectory()) {
-                try {
-                    workDir.deleteDir()
-                    log.info "Work directory removed successfully"
-                } catch (Exception e) {
-                    log.warn "Failed to remove work directory: ${e.message}"
-                }
-            }
-        }
+        // Work directory cleanup handled by nf-boost plugin during execution
     } else {
         log.error "Pipeline failed - work directory preserved for debugging"
     }
