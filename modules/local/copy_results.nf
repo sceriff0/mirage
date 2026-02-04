@@ -23,8 +23,8 @@ process COPY_RESULTS {
     set -uo pipefail
     
     LOG="rsync.log"
-    MAX_RETRIES=10
-    RETRY_DELAY=300
+    MAX_RETRIES=50
+    RETRY_DELAY=180
     
     exec > >(tee -a \$LOG) 2>&1
     
