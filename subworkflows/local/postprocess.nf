@@ -152,27 +152,33 @@ workflow POSTPROCESSING {
 
         log.info "PIXIE DEBUG: pixie_channels_list=${pixie_channels_list}, set=${pixie_channel_set}, count=${pixie_channel_count}"
 
-        ch_all_split_channels = SPLIT_CHANNELS.out.channels
+        // Create a separate branch from ch_split_output for Pixie
+        ch_pixie_input = SPLIT_CHANNELS.out.channels
+
+        ch_all_split_channels = ch_pixie_input
             .flatMap { meta, tiffs ->
+                log.info "PIXIE flatMap input: patient=${meta.patient_id}, tiffs=${tiffs instanceof List ? tiffs*.name : [tiffs.name]}"
                 def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
-                tiff_list.collect { tiff ->
+                def result = tiff_list.collect { tiff ->
                     [meta.patient_id, tiff.baseName, tiff]
                 }
+                log.info "PIXIE flatMap output: ${result.collect { it[0..1] }}"
+                result
             }
-            .view { patient_id, marker, tiff -> "PIXIE flatMap: patient=${patient_id}, marker=${marker}, pixie_set=${pixie_channel_set}" }
-            .filter { patient_id, marker, tiff -> marker in pixie_channel_set }  // Only keep pixie channels
-            .view { patient_id, marker, tiff -> "PIXIE after filter: patient=${patient_id}, marker=${marker}" }
-            .unique { patient_id, marker, tiff -> [patient_id, marker] }  // Deduplicate by patient+marker
-            .view { patient_id, marker, tiff -> "PIXIE after unique: patient=${patient_id}, marker=${marker}" }
+            .filter { patient_id, marker, tiff ->
+                def match = pixie_channels_list.contains(marker)
+                log.info "PIXIE filter: patient=${patient_id}, marker=${marker}, in_list=${match}"
+                match
+            }
+            .unique { patient_id, marker, tiff -> [patient_id, marker] }
             .map { patient_id, marker, tiff ->
-                // Use groupKey with known size (pixie_channels count) for streaming
+                log.info "PIXIE before groupTuple: patient=${patient_id}, marker=${marker}"
                 def key = groupKey(patient_id, pixie_channel_count)
                 [key, tiff]
             }
-            .view { key, tiff -> "PIXIE before groupTuple: key=${key}, tiff=${tiff.name}" }
             .groupTuple()
-            .view { patient_id, tiffs -> "PIXIE after groupTuple: patient=${patient_id}, tiffs=${tiffs*.name}" }
             .map { patient_id, tiffs ->
+                log.info "PIXIE after groupTuple: patient=${patient_id}, tiffs=${tiffs*.name}"
                 def patient_meta = [
                     patient_id: patient_id,
                     id: patient_id,
