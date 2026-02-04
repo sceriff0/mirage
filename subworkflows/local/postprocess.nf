@@ -130,68 +130,59 @@ workflow POSTPROCESSING {
     // PIXIE CLUSTERING (optional, runs in PARALLEL with PHENOTYPE)
     // Data-driven unsupervised cell clustering using Pixie
     // ========================================================================
+    // IMPORTANT: Channel definitions must be OUTSIDE the if block for proper dataflow subscription
+    // Only process invocations go inside the if block
+
+    // Convert channels param to list (do this unconditionally for channel definition)
+    def pixie_channels_list = params.pixie_channels instanceof List ?
+        params.pixie_channels :
+        (params.pixie_channels ?: '').toString()
+            .replaceAll(/[\[\]']/, '')
+            .tokenize(',')
+            .collect { it.trim() }
+            .findAll { it }  // Remove empty strings
+
+    def pixie_channel_count = pixie_channels_list.size()
+
+    // Define Pixie channel OUTSIDE if block (required for proper dataflow subscription)
+    // This channel collects split TIFFs from ALL images, filtered to only pixie_channels
+    ch_for_pixie_pixel = SPLIT_CHANNELS.out.channels
+        .flatMap { meta, tiffs ->
+            def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
+            tiff_list.collect { tiff ->
+                [meta.patient_id, tiff.baseName, tiff]
+            }
+        }
+        .filter { patient_id, marker, tiff ->
+            pixie_channels_list.contains(marker)
+        }
+        .unique { patient_id, marker, tiff -> [patient_id, marker] }
+        .map { patient_id, marker, tiff ->
+            def key = groupKey(patient_id, pixie_channel_count)
+            [key, tiff]
+        }
+        .groupTuple()
+        .map { patient_id, tiffs ->
+            def patient_meta = [
+                patient_id: patient_id,
+                id: patient_id,
+                is_reference: true
+            ]
+            [patient_id, patient_meta, tiffs]
+        }
+        .join(
+            SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
+        )
+        .map { patient_id, meta, channel_tiffs, mask -> [meta, channel_tiffs, mask] }
+
     if (params.pixie_enabled) {
         // Validate required parameter
-        if (!params.pixie_channels) {
+        if (!params.pixie_channels || pixie_channels_list.isEmpty()) {
             error "ERROR: params.pixie_channels is required when pixie_enabled=true. " +
                   "Provide a list of channels, e.g.: --pixie_channels \"['CD3','CD4','CD8']\""
         }
 
-        // Convert channels param to list if needed
-        def pixie_channels_list = params.pixie_channels instanceof List ?
-            params.pixie_channels :
-            params.pixie_channels.toString()
-                .replaceAll(/[\[\]']/, '')
-                .tokenize(',')
-                .collect { it.trim() }
-
-        // Pixel clustering needs: split channel TIFFs (ALL images, deduplicated) + cell mask
-        // Filter to only pixie_channels and use groupKey for streaming (we know exact count)
-        def pixie_channel_set = pixie_channels_list.toSet()
-        def pixie_channel_count = pixie_channels_list.size()
-
-        log.info "PIXIE DEBUG: pixie_channels_list=${pixie_channels_list}, set=${pixie_channel_set}, count=${pixie_channel_count}"
-
-        // Create a separate branch from ch_split_output for Pixie
-        ch_pixie_input = SPLIT_CHANNELS.out.channels
-
-        ch_all_split_channels = ch_pixie_input
-            .flatMap { meta, tiffs ->
-                log.info "PIXIE flatMap input: patient=${meta.patient_id}, tiffs=${tiffs instanceof List ? tiffs*.name : [tiffs.name]}"
-                def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
-                def result = tiff_list.collect { tiff ->
-                    [meta.patient_id, tiff.baseName, tiff]
-                }
-                log.info "PIXIE flatMap output: ${result.collect { it[0..1] }}"
-                result
-            }
-            .filter { patient_id, marker, tiff ->
-                def match = pixie_channels_list.contains(marker)
-                log.info "PIXIE filter: patient=${patient_id}, marker=${marker}, in_list=${match}"
-                match
-            }
-            .unique { patient_id, marker, tiff -> [patient_id, marker] }
-            .map { patient_id, marker, tiff ->
-                log.info "PIXIE before groupTuple: patient=${patient_id}, marker=${marker}"
-                def key = groupKey(patient_id, pixie_channel_count)
-                [key, tiff]
-            }
-            .groupTuple()
-            .map { patient_id, tiffs ->
-                log.info "PIXIE after groupTuple: patient=${patient_id}, tiffs=${tiffs*.name}"
-                def patient_meta = [
-                    patient_id: patient_id,
-                    id: patient_id,
-                    is_reference: true
-                ]
-                [patient_id, patient_meta, tiffs]
-            }
-
-        ch_for_pixie_pixel = ch_all_split_channels
-            .join(
-                SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
-            )
-            .map { patient_id, meta, channel_tiffs, mask -> [meta, channel_tiffs, mask] }
+        log.info "PIXIE: channels=${pixie_channels_list}, count=${pixie_channel_count}"
 
         PIXIE_PIXEL_CLUSTER(
             ch_for_pixie_pixel,
