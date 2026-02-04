@@ -12,6 +12,8 @@ include { QUANTIFY              } from '../../modules/local/quantify'
 include { MERGE_QUANT_CSVS      } from '../../modules/local/quantify'
 include { PHENOTYPE             } from '../../modules/local/phenotype'
 include { MERGE_AND_PYRAMID     } from '../../modules/local/merge_and_pyramid'
+include { PIXIE_PIXEL_CLUSTER   } from '../../modules/local/pixie_pixel_cluster'
+include { PIXIE_CELL_CLUSTER    } from '../../modules/local/pixie_cell_cluster'
 
 /*
 ========================================================================================
@@ -125,6 +127,60 @@ workflow POSTPROCESSING {
     )
 
     // ========================================================================
+    // PIXIE CLUSTERING (optional, runs in PARALLEL with PHENOTYPE)
+    // Data-driven unsupervised cell clustering using Pixie
+    // ========================================================================
+    if (params.pixie_enabled) {
+        // Validate required parameter
+        if (!params.pixie_channels) {
+            error "ERROR: params.pixie_channels is required when pixie_enabled=true. " +
+                  "Provide a list of channels, e.g.: --pixie_channels \"['CD3','CD4','CD8']\""
+        }
+
+        // Convert channels param to list if needed
+        def pixie_channels_list = params.pixie_channels instanceof List ?
+            params.pixie_channels :
+            params.pixie_channels.toString()
+                .replaceAll(/[\[\]']/, '')
+                .tokenize(',')
+                .collect { it.trim() }
+
+        // Pixel clustering needs: split channel TIFFs (reference only) + cell mask
+        ch_ref_split_channels = SPLIT_CHANNELS.out.channels
+            .filter { meta, tiffs -> meta.is_reference }
+            .map { meta, tiffs -> [meta.patient_id, meta, tiffs] }
+
+        ch_for_pixie_pixel = ch_ref_split_channels
+            .join(
+                SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
+            )
+            .map { patient_id, meta, channel_tiffs, mask -> [meta, channel_tiffs, mask] }
+
+        PIXIE_PIXEL_CLUSTER(
+            ch_for_pixie_pixel,
+            pixie_channels_list
+        )
+
+        // Cell clustering needs: pixel data + cell table + mask + params
+        ch_for_pixie_cell = PIXIE_PIXEL_CLUSTER.out.pixel_data
+            .map { meta, data -> [meta.patient_id, meta, data] }
+            .join(
+                MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] }
+            )
+            .join(
+                SEGMENT.out.cell_mask.map { meta, mask -> [meta.patient_id, mask] }
+            )
+            .join(
+                PIXIE_PIXEL_CLUSTER.out.cell_params.map { meta, params_file -> [meta.patient_id, params_file] }
+            )
+            .map { patient_id, meta, pixel_data, cell_table, mask, cell_params ->
+                [meta, pixel_data, cell_table, mask, cell_params]
+            }
+
+        PIXIE_CELL_CLUSTER(ch_for_pixie_cell)
+    }
+
+    // ========================================================================
     // MERGE - Combine split channel TIFFs with segmentation mask (per patient)
     // ========================================================================
     // Group split channel TIFFs by patient for merging
@@ -214,6 +270,13 @@ workflow POSTPROCESSING {
         .mix(MERGE_QUANT_CSVS.out.size_log)
         .mix(PHENOTYPE.out.size_log)
         .mix(MERGE_AND_PYRAMID.out.size_log)
+
+    // Add Pixie size logs if enabled
+    if (params.pixie_enabled) {
+        ch_size_logs = ch_size_logs
+            .mix(PIXIE_PIXEL_CLUSTER.out.size_log)
+            .mix(PIXIE_CELL_CLUSTER.out.size_log)
+    }
 
     emit:
     checkpoint_csv = ch_checkpoint_csv
