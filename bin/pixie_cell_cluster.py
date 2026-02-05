@@ -15,7 +15,11 @@ Steps:
 5. Perform consensus clustering for meta-clusters
 6. Generate cluster mappings and profiles
 7. Update cell table with cluster assignments
-8. Export QuPath-compatible GeoJSON and classifications
+8. Adjust coordinates for tiled inputs (if applicable)
+9. Export QuPath-compatible GeoJSON and classifications
+
+Supports tiled inputs from pixie_pixel_cluster.py with automatic coordinate
+reconstruction to original image space.
 
 Author: ATEIA Pipeline (adapted from ark-analysis)
 """
@@ -26,10 +30,15 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Add parent directory to path for utils imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from utils.tiling import load_tile_positions, TileInfo
 
 
 # =============================================================================
@@ -270,18 +279,32 @@ def main():
     pixel_data_dir = cell_params['pixel_data_dir']
     pc_chan_avg_meta_cluster_name = cell_params['pc_chan_avg_meta_cluster_name']
 
+    # Check for tiling information
+    is_tiled = cell_params.get('is_tiled', False)
+    original_fov = cell_params.get('original_fov', fovs[0] if fovs else None)
+    tile_positions_path = cell_params.get('tile_positions_path')
+    tile_positions: Optional[Dict[str, TileInfo]] = None
+
+    if is_tiled and tile_positions_path and os.path.exists(tile_positions_path):
+        print(f"Loading tile positions from: {tile_positions_path}")
+        tile_positions, tile_metadata = load_tile_positions(Path(tile_positions_path))
+        print(f"  Loaded {len(tile_positions)} tile positions")
+        print(f"  Original image: {tile_metadata['original_width']}x{tile_metadata['original_height']}")
+
     base_dir = args.base_dir
     cell_output_dir = args.output_dir
     os.makedirs(os.path.join(base_dir, cell_output_dir), exist_ok=True)
 
     print(f"Pixie Cell Clustering")
     print(f"=" * 50)
-    print(f"FOVs: {', '.join(fovs)}")
+    print(f"FOVs: {', '.join(fovs[:5])}{'...' if len(fovs) > 5 else ''}")
     print(f"Channels: {', '.join(channels)}")
     print(f"Pixel cluster column: {args.pixel_cluster_col}")
     print(f"Max K: {args.max_k}")
     print(f"Cap: {args.cap}")
     print(f"Seed: {args.seed}")
+    if is_tiled:
+        print(f"Tiled input: {len(fovs)} tiles from {original_fov}")
     print()
 
     # Output file names (matching notebook structure)
@@ -498,6 +521,36 @@ def main():
         how='left'
     )
 
+    # =========================================================================
+    # Step 7b: Adjust coordinates for tiled inputs
+    # =========================================================================
+    if tile_positions is not None and 'fov' in cell_table_clustered.columns:
+        print("Step 7b: Adjusting coordinates for tiled input...")
+
+        # Create a lookup for x_start, y_start from tile positions
+        def adjust_coordinates(row):
+            fov = row.get('fov')
+            if fov and fov in tile_positions:
+                tile_info = tile_positions[fov]
+                row['x'] = row['x'] + tile_info.x_start
+                row['y'] = row['y'] + tile_info.y_start
+            return row
+
+        # Adjust x and y coordinates based on tile position
+        if 'x' in cell_table_clustered.columns and 'y' in cell_table_clustered.columns:
+            adjusted_count = 0
+            for idx, row in cell_table_clustered.iterrows():
+                fov = row.get('fov')
+                if fov and fov in tile_positions:
+                    tile_info = tile_positions[fov]
+                    cell_table_clustered.at[idx, 'x'] = row['x'] + tile_info.x_start
+                    cell_table_clustered.at[idx, 'y'] = row['y'] + tile_info.y_start
+                    adjusted_count += 1
+
+            print(f"  Adjusted coordinates for {adjusted_count} cells")
+        else:
+            print("  Warning: x/y columns not found, skipping coordinate adjustment")
+
     # Save updated cell table
     output_path = os.path.join(base_dir, cell_output_dir, 'cell_table_with_clusters.csv')
     cell_table_clustered.to_csv(output_path, index=False)
@@ -561,6 +614,9 @@ def main():
     print(f"  Cells with cluster assignment: {n_assigned}")
     print(f"  Cell meta-clusters identified: {n_clusters}")
     print(f"  Channels used: {len(channels)}")
+    if is_tiled:
+        print(f"  FOV tiles processed: {len(fovs)}")
+        print(f"  Coordinates adjusted to original image space")
     print()
     print("Output files:")
     print(f"  Cell table:       {output_path}")

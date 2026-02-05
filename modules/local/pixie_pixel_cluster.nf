@@ -8,6 +8,11 @@ nextflow.enable.dsl = 2
  *
  * Based on: https://github.com/angelolab/pixie (ark-analysis 0.6.4)
  *
+ * Features:
+ *   - Automatic FOV tiling for large images (>2048x2048)
+ *   - Multiprocessing support for parallel tile processing
+ *   - Batch size auto-calculated from allocated CPUs
+ *
  * Input:
  *   - Split channel TIFFs (from SPLIT_CHANNELS)
  *   - Cell segmentation mask
@@ -17,6 +22,7 @@ nextflow.enable.dsl = 2
  *   - SOM weights
  *   - Cluster profiles
  *   - Parameters for cell clustering
+ *   - Tile positions (if tiling was used)
  */
 process PIXIE_PIXEL_CLUSTER {
     tag "${meta.patient_id}"
@@ -36,6 +42,7 @@ process PIXIE_PIXEL_CLUSTER {
     tuple val(meta), path("pixel_output/pixel_channel_avg_*.csv")         , emit: cluster_profiles
     tuple val(meta), path("pixel_output/channel_norm_post_rowsum.feather"), emit: norm_vals
     tuple val(meta), path("pixel_output/cell_clustering_params.json")     , emit: cell_params
+    tuple val(meta), path("pixel_output/tile_positions.json")             , emit: tile_positions, optional: true
     tuple val(meta), path("pixel_masks/*_pixel_mask.tiff")                , emit: pixel_masks, optional: true
     path "versions.yml"                                                    , emit: versions
     path("*.size.csv")                                                     , emit: size_log
@@ -48,6 +55,10 @@ process PIXIE_PIXEL_CLUSTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def fov_name = meta.patient_id
     def channels_arg = channels.join(' ')
+    // Calculate batch_size from allocated CPUs (use half to leave headroom)
+    def batch_size = params.pixie_batch_size ?: Math.max(1, (task.cpus / 2).intValue())
+    def tile_size = params.pixie_tile_size ?: 2048
+    def multiprocess_flag = params.pixie_multiprocess != false ? '--multiprocess' : ''
     """
     # Log input sizes for tracing
     total_bytes=0
@@ -61,6 +72,9 @@ process PIXIE_PIXEL_CLUSTER {
 
     echo "Sample: ${meta.patient_id}"
     echo "Channels for clustering: ${channels_arg}"
+    echo "Tile size: ${tile_size}"
+    echo "Batch size: ${batch_size}"
+    echo "Multiprocessing: ${multiprocess_flag ? 'enabled' : 'disabled'}"
 
     # Create FOV directory structure expected by Pixie
     mkdir -p tiff_dir/${fov_name}
@@ -72,7 +86,7 @@ process PIXIE_PIXEL_CLUSTER {
     mkdir -p seg_dir
     ln -s \$PWD/${cell_mask} seg_dir/${fov_name}_cell_mask.tif
 
-    # Run pixel clustering
+    # Run pixel clustering with tiling and multiprocessing support
     pixie_pixel_cluster.py \\
         --tiff_dir tiff_dir \\
         --fov_name ${fov_name} \\
@@ -86,6 +100,9 @@ process PIXIE_PIXEL_CLUSTER {
         --max_k ${params.pixie_max_k} \\
         --cap ${params.pixie_cap} \\
         --seed ${params.pixie_seed} \\
+        --tile_size ${tile_size} \\
+        --batch_size ${batch_size} \\
+        ${multiprocess_flag} \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml
@@ -107,7 +124,8 @@ process PIXIE_PIXEL_CLUSTER {
     touch pixel_output/pixel_channel_avg_som_cluster.csv
     touch pixel_output/pixel_channel_avg_meta_cluster.csv
     touch pixel_output/channel_norm_post_rowsum.feather
-    echo '{"fovs": ["${meta.patient_id}"], "channels": []}' > pixel_output/cell_clustering_params.json
+    echo '{"fovs": ["${meta.patient_id}"], "channels": [], "is_tiled": false, "original_fov": "${meta.patient_id}"}' > pixel_output/cell_clustering_params.json
+    # tile_positions.json is optional - only created when tiling is used
     touch pixel_masks/${meta.patient_id}_pixel_mask.tiff
     echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.PIXIE_PIXEL_CLUSTER.size.csv
 

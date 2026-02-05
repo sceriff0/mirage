@@ -8,12 +8,15 @@ This script performs pixel-level clustering using Self-Organizing Maps (SOM)
 followed by consensus clustering to identify pixel phenotypes.
 
 Steps:
-1. Create pixel matrix from multi-channel images
+1. Create pixel matrix from multi-channel images (with optional FOV tiling)
 2. Train pixel SOM on subset of data
 3. Assign all pixels to SOM clusters
 4. Perform consensus clustering for meta-clusters
 5. Generate cluster average profiles
 6. Export parameters for cell clustering
+
+Supports FOV tiling for large images and Pixie's internal multiprocessing
+for parallel processing of multiple FOV tiles.
 
 Author: ATEIA Pipeline (adapted from ark-analysis)
 """
@@ -26,6 +29,32 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import tifffile
+
+# Add parent directory to path for utils imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+from utils.tiling import (
+    create_fov_directory_structure,
+    needs_tiling,
+    save_tile_positions,
+    calculate_tile_grid,
+)
+
+
+def get_image_dimensions(tiff_dir: str, fov_name: str) -> tuple:
+    """Get dimensions of the first channel image in FOV directory."""
+    fov_dir = Path(tiff_dir) / fov_name
+    if not fov_dir.is_dir():
+        raise ValueError(f"FOV directory not found: {fov_dir}")
+
+    tiff_files = list(fov_dir.glob("*.tif")) + list(fov_dir.glob("*.tiff"))
+    if not tiff_files:
+        raise ValueError(f"No TIFF files found in: {fov_dir}")
+
+    with tifffile.TiffFile(tiff_files[0]) as tif:
+        shape = tif.pages[0].shape
+    return shape[:2]  # (height, width)
 
 
 def main():
@@ -57,6 +86,13 @@ def main():
                         help='Z-score capping value')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    # New tiling and multiprocessing arguments
+    parser.add_argument('--tile_size', type=int, default=2048,
+                        help='FOV tile size for splitting large images')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size for multiprocessing (default: auto from CPU count)')
+    parser.add_argument('--multiprocess', action='store_true', default=False,
+                        help='Enable Pixie multiprocessing for parallel FOV processing')
     args = parser.parse_args()
 
     # Import ark modules (delayed import to check availability)
@@ -76,8 +112,12 @@ def main():
     base_dir = args.output_dir
     os.makedirs(base_dir, exist_ok=True)
 
-    fovs = [args.fov_name]
     channels = args.channels
+
+    # Determine batch_size from CPU count if not specified
+    if args.batch_size is None:
+        cpu_count = os.cpu_count() or 4
+        args.batch_size = max(1, cpu_count // 2)
 
     print(f"Pixie Pixel Clustering")
     print(f"=" * 50)
@@ -88,14 +128,73 @@ def main():
     print(f"Max K: {args.max_k}")
     print(f"Cap: {args.cap}")
     print(f"Seed: {args.seed}")
+    print(f"Tile size: {args.tile_size}")
+    print(f"Multiprocess: {args.multiprocess}")
+    print(f"Batch size: {args.batch_size}")
     print()
 
-    # Validate channels exist in TIFF directory
-    tiff_fov_dir = os.path.join(args.tiff_dir, args.fov_name)
+    # Get image dimensions to check if tiling is needed
+    height, width = get_image_dimensions(args.tiff_dir, args.fov_name)
+    print(f"Image dimensions: {width}x{height}")
+
+    do_tiling = needs_tiling(height, width, args.tile_size)
+    tile_positions = None
+
+    if do_tiling:
+        n_rows, n_cols = calculate_tile_grid(height, width, args.tile_size)
+        n_tiles = n_rows * n_cols
+        print(f"Tiling enabled: {n_rows}x{n_cols} = {n_tiles} tiles")
+
+        # Get channel TIFF paths
+        fov_dir = Path(args.tiff_dir) / args.fov_name
+        channel_tiffs = [fov_dir / f"{ch}.tif" for ch in channels]
+
+        # Check for .tiff extension if .tif not found
+        channel_tiffs = []
+        for ch in channels:
+            tif_path = fov_dir / f"{ch}.tif"
+            tiff_path = fov_dir / f"{ch}.tiff"
+            if tif_path.exists():
+                channel_tiffs.append(tif_path)
+            elif tiff_path.exists():
+                channel_tiffs.append(tiff_path)
+            else:
+                print(f"ERROR: Channel file not found for {ch}", file=sys.stderr)
+                sys.exit(1)
+
+        # Get cell mask path
+        cell_mask = Path(args.seg_dir) / f"{args.fov_name}{args.seg_suffix}"
+        if not cell_mask.exists():
+            print(f"ERROR: Cell mask not found: {cell_mask}", file=sys.stderr)
+            sys.exit(1)
+
+        # Create tiled FOV directory structure
+        tiled_dir = Path(base_dir) / "tiled_fovs"
+        tiff_dir, seg_dir, fovs, tile_positions = create_fov_directory_structure(
+            channel_tiffs=channel_tiffs,
+            cell_mask=cell_mask,
+            output_dir=tiled_dir,
+            tile_size=args.tile_size,
+            patient_id=args.fov_name
+        )
+
+        # Update paths to use tiled structure
+        args.tiff_dir = str(tiff_dir)
+        args.seg_dir = str(seg_dir)
+
+        print(f"Created {len(fovs)} FOV tiles: {fovs[:3]}{'...' if len(fovs) > 3 else ''}")
+    else:
+        fovs = [args.fov_name]
+        print(f"No tiling needed (image fits in {args.tile_size}x{args.tile_size})")
+
+    print()
+
+    # Validate channels exist in TIFF directory (check first FOV)
+    tiff_fov_dir = os.path.join(args.tiff_dir, fovs[0])
     if os.path.isdir(tiff_fov_dir):
         available = sorted([f.rsplit('.', 1)[0] for f in os.listdir(tiff_fov_dir)
                             if f.endswith(('.tiff', '.tif'))])
-        print(f"Available channels: {available}")
+        print(f"Available channels in FOV: {available}")
         missing = [ch for ch in channels if ch not in available]
         if missing:
             print(f"ERROR: Requested channels not found: {missing}", file=sys.stderr)
@@ -111,6 +210,16 @@ def main():
 
     os.makedirs(os.path.join(base_dir, pixel_data_dir), exist_ok=True)
     os.makedirs(os.path.join(base_dir, pixel_subset_dir), exist_ok=True)
+
+    # Multiprocessing settings
+    use_multiprocess = args.multiprocess and len(fovs) > 1
+    batch_size = args.batch_size if use_multiprocess else 1
+
+    if use_multiprocess:
+        print(f"Multiprocessing enabled: batch_size={batch_size}, FOVs={len(fovs)}")
+    else:
+        print(f"Sequential processing: {len(fovs)} FOV(s)")
+    print()
 
     # =========================================================================
     # Step 1: Create pixel matrix
@@ -130,8 +239,8 @@ def main():
         norm_vals_name=norm_vals_name,
         blur_factor=args.blur_factor,
         subset_proportion=args.subset_proportion,
-        multiprocess=False,
-        batch_size=1
+        multiprocess=use_multiprocess,
+        batch_size=batch_size
     )
     print("  Pixel matrix created successfully.")
 
@@ -165,8 +274,8 @@ def main():
         base_dir=base_dir,
         pixel_pysom=pixel_pysom,
         data_dir=pixel_data_dir,
-        multiprocess=False,
-        batch_size=1
+        multiprocess=use_multiprocess,
+        batch_size=batch_size
     )
 
     pixel_som_clustering.generate_som_avg_files(
@@ -191,8 +300,8 @@ def main():
         cap=args.cap,
         data_dir=pixel_data_dir,
         pc_chan_avg_som_cluster_name=pc_chan_avg_som_cluster_name,
-        multiprocess=False,
-        batch_size=1
+        multiprocess=use_multiprocess,
+        batch_size=batch_size
     )
 
     pixel_meta_clustering.generate_meta_avg_files(
@@ -207,17 +316,40 @@ def main():
     print("  Consensus clustering complete.")
 
     # =========================================================================
-    # Step 5: Export parameters for cell clustering
+    # Step 5: Save tile positions (if tiling was used)
     # =========================================================================
-    print("Step 5: Exporting parameters for cell clustering...")
+    tile_positions_path = None
+    if tile_positions is not None:
+        print("Step 5a: Saving tile positions...")
+        tile_positions_path = os.path.join(base_dir, pixel_output_dir, 'tile_positions.json')
+        save_tile_positions(
+            tile_positions=tile_positions,
+            output_path=Path(tile_positions_path),
+            patient_id=args.fov_name,
+            tile_size=args.tile_size,
+            original_height=height,
+            original_width=width
+        )
+        print(f"  Tile positions saved to: {tile_positions_path}")
+
+    # =========================================================================
+    # Step 6: Export parameters for cell clustering
+    # =========================================================================
+    print("Step 5b: Exporting parameters for cell clustering...")
     cell_clustering_params = {
         'fovs': fovs,
+        'original_fov': args.fov_name,
         'channels': channels,
         'segmentation_dir': args.seg_dir,
         'seg_suffix': args.seg_suffix,
         'pixel_data_dir': pixel_data_dir,
         'pc_chan_avg_som_cluster_name': pc_chan_avg_som_cluster_name,
-        'pc_chan_avg_meta_cluster_name': pc_chan_avg_meta_cluster_name
+        'pc_chan_avg_meta_cluster_name': pc_chan_avg_meta_cluster_name,
+        'is_tiled': do_tiling,
+        'tile_size': args.tile_size if do_tiling else None,
+        'tile_positions_path': tile_positions_path,
+        'original_height': height,
+        'original_width': width
     }
 
     params_path = os.path.join(base_dir, pixel_output_dir, 'cell_clustering_params.json')
@@ -239,6 +371,9 @@ def main():
         print(f"  Pixel meta-clusters identified: {n_meta_clusters}")
         print(f"  Channels used: {len(channels)}")
         print(f"  FOVs processed: {len(fovs)}")
+        if do_tiling:
+            print(f"  Tiling: {len(fovs)} tiles from {args.fov_name}")
+            print(f"  Original dimensions: {width}x{height}")
 
     print()
     print("Pixel clustering complete!")
