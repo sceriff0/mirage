@@ -1,152 +1,142 @@
 process COPY_RESULTS {
     tag "Copying to savedir"
-    label 'process_single'
+    label 'process_medium'  // Need more CPUs for parallel
     container null
-    
-    errorStrategy 'terminate'
-    time '72h'  // 10TB of huge files needs time
-    
+
+    errorStrategy 'retry'
+    maxRetries 3
+    time '72h'
+
     input:
     val(results_ready)
     val(source_dir)
     val(destination_dir)
-    
+
     output:
-    path("rsync.log"), emit: log
-    
+    path("transfer.log"), emit: log
+    path("verification.log"), emit: verification
+
     when:
     destination_dir && destination_dir != source_dir
-    
+
     script:
+    def parallel_jobs = task.cpus ?: 4
     """
     #!/bin/bash
-    set -uo pipefail
-    
-    LOG="rsync.log"
-    MAX_RETRIES=50
-    RETRY_DELAY=180
-    
+    set -euo pipefail
+
+    LOG="transfer.log"
+    VERIFY_LOG="verification.log"
+    MAX_RETRIES=10
+    RETRY_DELAY=120
+
     exec > >(tee -a \$LOG) 2>&1
-    
+
     echo "========================================"
-    echo "Copying pipeline results to savedir"
+    echo "Parallel Copy to Savedir"
     echo "========================================"
     echo "Source:      ${source_dir}"
     echo "Destination: ${destination_dir}"
-    echo "Start time:  \$(date)"
+    echo "Parallel:    ${parallel_jobs} jobs"
+    echo "Start:       \$(date)"
     echo ""
-    
-    # List what we're transferring
-    echo "Files to transfer:"
-    ls -lhS ${source_dir}/ | head -20
-    echo ""
-    
-    SOURCE_SIZE=\$(du -sh ${source_dir} | cut -f1)
+
+    # Pre-flight checks
+    SOURCE_SIZE=\$(du -sb ${source_dir} | cut -f1)
     SOURCE_FILES=\$(find ${source_dir} -type f | wc -l)
-    echo "Total: \$SOURCE_SIZE in \$SOURCE_FILES files"
-    echo ""
-    
+    echo "Source: \$(numfmt --to=iec \$SOURCE_SIZE) in \$SOURCE_FILES files"
+
     mkdir -p ${destination_dir}
-    
-    # Check destination space
-    DEST_AVAIL=\$(df -BG ${destination_dir} | awk 'NR==2 {print \$4}' | tr -d 'G')
-    SOURCE_GB=\$(du -BG -s ${source_dir} | cut -f1 | tr -d 'G')
-    echo "Destination available: \${DEST_AVAIL}G, Need: \${SOURCE_GB}G"
-    
-    if [ "\$DEST_AVAIL" -lt "\$SOURCE_GB" ]; then
-        echo "ERROR: Insufficient space at destination!"
+
+    DEST_AVAIL=\$(df -B1 ${destination_dir} | awk 'NR==2 {print \$4}')
+    NEEDED=\$(echo "\$SOURCE_SIZE * 1.05" | bc | cut -d. -f1)  # 5% buffer
+    if [ "\$DEST_AVAIL" -lt "\$NEEDED" ]; then
+        echo "ERROR: Insufficient space! Available: \$(numfmt --to=iec \$DEST_AVAIL), Need: \$(numfmt --to=iec \$NEEDED)"
         exit 1
     fi
     echo ""
-    
-    # Retry loop
+
+    # Retry loop for transfer
     attempt=1
     SUCCESS=false
-    
+
     while [ \$attempt -le \$MAX_RETRIES ]; do
         echo "----------------------------------------"
-        echo "Attempt \$attempt of \$MAX_RETRIES - \$(date)"
+        echo "Transfer attempt \$attempt of \$MAX_RETRIES - \$(date)"
         echo "----------------------------------------"
-        
-        # Key flags for huge files over NFS:
-        # --inplace: write directly to dest file (avoids temp file close/rename issues)
-        # --append-verify: resume huge files from where they left off + verify
-        # --timeout: don't hang on stalled NFS
-        # --bwlimit: don't overwhelm NFS (adjust based on your network)
-        
-        rsync \\
-            -avL \\
+
+        # Parallel rsync by top-level items
+        # Each item gets its own rsync process for parallelism
+        ls ${source_dir} | parallel -j ${parallel_jobs} --halt soon,fail=1 \\
+            rsync -avL \\
             --inplace \\
             --append-verify \\
             --timeout=600 \\
-            --bwlimit=200000 \\
-            --progress \\
-            --stats \\
-            ${source_dir}/ \\
-            ${destination_dir}/
-        
+            --partial \\
+            ${source_dir}/{} ${destination_dir}/
+
         EXIT_CODE=\$?
-        
-        echo ""
-        echo "Rsync exit code: \$EXIT_CODE"
-        
+
         if [ \$EXIT_CODE -eq 0 ]; then
             SUCCESS=true
             break
         fi
-        
-        echo "Failed. Waiting \${RETRY_DELAY}s before retry..."
+
+        echo "Transfer incomplete (exit \$EXIT_CODE). Retrying in \${RETRY_DELAY}s..."
         sleep \$RETRY_DELAY
         ((attempt++))
     done
-    
-    echo ""
-    echo "========================================"
-    echo "End time: \$(date)"
-    
-    if [ "\$SUCCESS" = true ]; then
-        echo "Status: SUCCESS"
-        echo ""
-        
-        # Verify with checksums for huge files (most reliable)
-        echo "Verifying transfer with checksums..."
-        VERIFY_FAILED=false
-        
-        cd ${source_dir}
-        for f in *; do
-            if [ -f "\$f" ]; then
-                echo -n "  Checking \$f... "
-                SRC_SUM=\$(md5sum "\$f" | cut -d' ' -f1)
-                DST_SUM=\$(md5sum "${destination_dir}/\$f" | cut -d' ' -f1)
-                if [ "\$SRC_SUM" = "\$DST_SUM" ]; then
-                    echo "OK"
-                else
-                    echo "MISMATCH!"
-                    VERIFY_FAILED=true
-                fi
-            fi
-        done
-        
-        echo ""
-        if [ "\$VERIFY_FAILED" = true ]; then
-            echo "ERROR: Checksum verification failed!"
-            echo "Source NOT deleted"
-            exit 1
-        fi
-        
-        echo "All checksums verified"
-        echo ""
-        echo "Deleting source: ${source_dir}"
-        rm -rf ${source_dir}
-        echo "Source deleted successfully"
-    else
-        echo "Status: FAILED after \$MAX_RETRIES attempts"
+
+    if [ "\$SUCCESS" != true ]; then
+        echo "ERROR: Transfer failed after \$MAX_RETRIES attempts"
         exit 1
     fi
+
+    echo ""
+    echo "========================================"
+    echo "Verifying transfer with checksums"
+    echo "========================================"
+
+    cd ${source_dir}
+
+    # Use BLAKE3 if available (5-10x faster than MD5), fallback to parallel MD5
+    if command -v b3sum &> /dev/null; then
+        echo "Using BLAKE3 (parallel, fast)..."
+        find . -type f -print0 | parallel -0 -j ${parallel_jobs} b3sum {} > /tmp/checksums.txt
+        cd ${destination_dir}
+        b3sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
+    else
+        echo "Using MD5 (parallel)..."
+        find . -type f -print0 | parallel -0 -j ${parallel_jobs} md5sum {} > /tmp/checksums.txt
+        cd ${destination_dir}
+        md5sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
+    fi
+
+    VERIFY_EXIT=\$?
+
+    if [ \$VERIFY_EXIT -ne 0 ] || grep -q "FAILED" \$VERIFY_LOG; then
+        echo ""
+        echo "ERROR: Checksum verification failed!"
+        grep "FAILED" \$VERIFY_LOG || true
+        echo "Source NOT deleted"
+        exit 1
+    fi
+
+    echo ""
+    echo "All \$SOURCE_FILES files verified successfully"
+    echo ""
+    echo "Deleting source: ${source_dir}"
+    rm -rf ${source_dir}
+
+    echo ""
+    echo "========================================"
+    echo "Complete: \$(date)"
+    echo "========================================"
     """
-    
+
     stub:
     """
-    echo "STUB MODE: Would copy ~10TB" > rsync.log
+    echo "STUB: Would parallel copy data" > transfer.log
+    echo "STUB: All files OK" > verification.log
     """
 }
