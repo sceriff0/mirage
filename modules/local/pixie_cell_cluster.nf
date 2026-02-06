@@ -10,9 +10,11 @@ nextflow.enable.dsl = 2
  *
  * Input:
  *   - Pixel cluster data (from PIXIE_PIXEL_CLUSTER)
+ *   - Pixel cluster profiles (pixel_channel_avg_*.csv from PIXIE_PIXEL_CLUSTER)
  *   - Merged quantification CSV (cell table)
  *   - Cell segmentation mask
  *   - Cell clustering parameters JSON
+ *   - Tile positions JSON (optional, for tiled inputs)
  * Output:
  *   - Cluster counts per cell
  *   - Cell cluster assignments
@@ -28,7 +30,7 @@ process PIXIE_CELL_CLUSTER {
     publishDir "${params.outdir}/${meta.patient_id}/pixie/cell_clustering", mode: 'copy'
 
     input:
-    tuple val(meta), path(pixel_data_dir), path(cell_table), path(cell_mask), path(cell_params)
+    tuple val(meta), path(pixel_data_dir), path(cluster_profiles), path(cell_table), path(cell_mask), path(cell_params), path(tile_positions)
 
     output:
     tuple val(meta), path("cell_output/cluster_counts_size_norm.feather")  , emit: cluster_counts
@@ -63,6 +65,18 @@ process PIXIE_CELL_CLUSTER {
     # Create output directories
     mkdir -p cell_output
     mkdir -p cell_masks
+
+    # Symlink cluster profile CSVs to current directory (required by Python script)
+    for csv in ${cluster_profiles}; do
+        ln -sf \$PWD/\$csv .
+    done
+    echo "Cluster profiles staged: \$(ls -1 pixel_channel_avg_*.csv 2>/dev/null | wc -l) files"
+
+    # Symlink tile positions if available (for tiled images)
+    if [ -f "${tile_positions}" ] && [ "${tile_positions}" != "NO_TILE_POSITIONS" ]; then
+        ln -sf \$PWD/${tile_positions} .
+        echo "Tile positions staged: ${tile_positions}"
+    fi
 
     # Run cell clustering
     pixie_cell_cluster.py \\

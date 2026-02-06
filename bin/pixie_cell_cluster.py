@@ -443,11 +443,29 @@ def main():
     tile_positions_path = cell_params.get('tile_positions_path')
     tile_positions: Optional[Dict[str, TileInfo]] = None
 
-    if is_tiled and tile_positions_path and os.path.exists(tile_positions_path):
-        print(f"Loading tile positions from: {tile_positions_path}")
-        tile_positions, tile_metadata = load_tile_positions(Path(tile_positions_path))
-        print(f"  Loaded {len(tile_positions)} tile positions")
-        print(f"  Original image: {tile_metadata['original_width']}x{tile_metadata['original_height']}")
+    if is_tiled and tile_positions_path:
+        # Check multiple locations for tile positions file (priority: staged in cwd first)
+        tile_pos_basename = os.path.basename(tile_positions_path)
+        tile_pos_candidates = [
+            tile_pos_basename,  # Current directory (staged by Nextflow)
+            tile_positions_path,  # Original path from JSON
+            os.path.join(args.base_dir, tile_pos_basename),  # base_dir
+        ]
+
+        actual_tile_pos_path = None
+        for path in tile_pos_candidates:
+            if os.path.exists(path):
+                actual_tile_pos_path = path
+                break
+
+        if actual_tile_pos_path:
+            print(f"Loading tile positions from: {actual_tile_pos_path}")
+            tile_positions, tile_metadata = load_tile_positions(Path(actual_tile_pos_path))
+            print(f"  Loaded {len(tile_positions)} tile positions")
+            print(f"  Original image: {tile_metadata['original_width']}x{tile_metadata['original_height']}")
+        else:
+            print(f"  Warning: Tile positions file not found, coordinate adjustment will be skipped")
+            print(f"  Searched: {tile_pos_candidates}")
 
     base_dir = args.base_dir
     cell_output_dir = args.output_dir
@@ -539,12 +557,29 @@ def main():
     print("Step 2: Computing weighted channel expression...")
 
     # Determine which channel average file to use
-    pc_chan_avg_path = os.path.join(base_dir, pc_chan_avg_meta_cluster_name)
-    if not os.path.exists(pc_chan_avg_path):
-        # Try relative to pixel_output_dir
-        pc_chan_avg_path = os.path.join(args.pixel_output_dir,
-                                        os.path.basename(pc_chan_avg_meta_cluster_name))
+    # Priority: 1) current directory (staged by Nextflow), 2) base_dir + path from JSON,
+    # 3) pixel_output_dir + basename
+    pc_chan_avg_basename = os.path.basename(pc_chan_avg_meta_cluster_name)
+    search_paths = [
+        pc_chan_avg_basename,  # Current directory (staged by Nextflow)
+        os.path.join(base_dir, pc_chan_avg_basename),  # base_dir
+        os.path.join(base_dir, pc_chan_avg_meta_cluster_name),  # Full path from JSON
+        os.path.join(args.pixel_output_dir, pc_chan_avg_basename),  # pixel_output_dir
+    ]
 
+    pc_chan_avg_path = None
+    for path in search_paths:
+        if os.path.exists(path):
+            pc_chan_avg_path = path
+            break
+
+    if pc_chan_avg_path is None:
+        raise FileNotFoundError(
+            f"Cannot find pixel channel average file '{pc_chan_avg_basename}'. "
+            f"Searched paths:\n  - " + "\n  - ".join(search_paths)
+        )
+
+    print(f"  Using pixel channel averages: {pc_chan_avg_path}")
     pixel_channel_avg = pd.read_csv(pc_chan_avg_path)
     weighted_cell_channel = weighted_channel_comp.compute_p2c_weighted_channel_avg(
         pixel_channel_avg=pixel_channel_avg,

@@ -191,9 +191,16 @@ workflow POSTPROCESSING {
             pixie_channels_list
         )
 
-        // Cell clustering needs: pixel data + cell table + mask + params
+        // Cell clustering needs: pixel data + cluster profiles + cell table + mask + params + tile positions
+        // Handle optional tile_positions (not all runs use tiling)
+        ch_tile_positions = PIXIE_PIXEL_CLUSTER.out.tile_positions
+            .map { meta, positions -> [meta.patient_id, positions] }
+
         ch_for_pixie_cell = PIXIE_PIXEL_CLUSTER.out.pixel_data
             .map { meta, data -> [meta.patient_id, meta, data] }
+            .join(
+                PIXIE_PIXEL_CLUSTER.out.cluster_profiles.map { meta, profiles -> [meta.patient_id, profiles] }
+            )
             .join(
                 MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] }
             )
@@ -203,8 +210,14 @@ workflow POSTPROCESSING {
             .join(
                 PIXIE_PIXEL_CLUSTER.out.cell_params.map { meta, params_file -> [meta.patient_id, params_file] }
             )
-            .map { patient_id, meta, pixel_data, cell_table, mask, cell_params ->
-                [meta, pixel_data, cell_table, mask, cell_params]
+            .join(
+                ch_tile_positions,
+                remainder: true  // Allow missing tile_positions for non-tiled runs
+            )
+            .map { patient_id, meta, pixel_data, cluster_profiles, cell_table, mask, cell_params, tile_positions ->
+                // Handle null tile_positions for non-tiled runs
+                def tile_pos = tile_positions ?: file('NO_TILE_POSITIONS')
+                [meta, pixel_data, cluster_profiles, cell_table, mask, cell_params, tile_pos]
             }
 
         PIXIE_CELL_CLUSTER(ch_for_pixie_cell)
