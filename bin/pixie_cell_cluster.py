@@ -42,6 +42,164 @@ from utils.tiling import load_tile_positions, TileInfo
 
 
 # =============================================================================
+# Tiled c2pc Data Creation (for images split into tiles)
+# =============================================================================
+
+def create_c2pc_data_tiled(
+    fovs: List[str],
+    pixel_data_path: str,
+    cell_table_path: str,
+    pixel_cluster_col: str = 'pixel_meta_cluster_rename'
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Create cell-to-pixel-cluster data by aggregating across all tiles.
+
+    Unlike the original `cell_cluster_utils.create_c2pc_data` which filters
+    cells by FOV, this function aggregates pixel cluster counts by global
+    cell label across ALL tiles. This preserves boundary cell pixels that
+    span multiple tiles.
+
+    Parameters
+    ----------
+    fovs : List[str]
+        List of FOV/tile names (e.g., ['sample_tile_0_0', 'sample_tile_0_1', ...])
+    pixel_data_path : str
+        Path to directory containing per-FOV feather files with pixel cluster data.
+    cell_table_path : str
+        Path to cell table CSV containing 'fov', 'label', and 'cell_size' columns.
+    pixel_cluster_col : str
+        Name of pixel cluster column (e.g., 'pixel_meta_cluster_rename')
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, pd.DataFrame]
+        (cluster_counts, cluster_counts_size_norm)
+        - cluster_counts: DataFrame with fov, label, cell_size, + cluster count columns
+        - cluster_counts_size_norm: Same but counts normalized by cell_size
+
+    Notes
+    -----
+    This function is Pixie-compatible and returns the same DataFrame format as
+    `cell_cluster_utils.create_c2pc_data`. Downstream functions like `train_cell_som`,
+    `cluster_cells`, and `cell_consensus_cluster` work unchanged.
+
+    The key difference is that pixel counts are summed across ALL tiles for each
+    cell label, rather than filtering by FOV. This ensures boundary cells get
+    100% of their pixels counted.
+    """
+    import feather
+    from collections import defaultdict
+
+    # Read cell table
+    cell_table = pd.read_csv(cell_table_path)
+
+    # Verify required columns exist
+    required_cols = ['fov', 'label', 'cell_size']
+    missing_cols = [col for col in required_cols if col not in cell_table.columns]
+    if missing_cols:
+        raise ValueError(f"Cell table missing required columns: {missing_cols}")
+
+    cell_table['label'] = cell_table['label'].astype(int)
+
+    # Accumulate pixel cluster counts per cell (by global label)
+    # Using defaultdict of defaultdict for easy accumulation
+    cell_cluster_counts: Dict[int, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    all_cluster_cols = set()
+
+    print(f"    Processing {len(fovs)} tiles...")
+    tiles_processed = 0
+
+    for fov in fovs:
+        fov_path = os.path.join(pixel_data_path, f"{fov}.feather")
+        if not os.path.exists(fov_path):
+            print(f"    Warning: Tile data not found: {fov_path}")
+            continue
+
+        pixel_data = feather.read_dataframe(fov_path)
+
+        # Handle column name variations
+        if 'segmentation_label' in pixel_data.columns:
+            pixel_data.rename(columns={'segmentation_label': 'label'}, inplace=True)
+
+        if pixel_cluster_col not in pixel_data.columns:
+            print(f"    Warning: {pixel_cluster_col} not in {fov}.feather, skipping")
+            continue
+
+        # Group by label and cluster, count pixels
+        counts = pixel_data.groupby(['label', pixel_cluster_col]).size()
+
+        # Accumulate counts across tiles (sums boundary cell pixels)
+        for (label, cluster), count in counts.items():
+            col_name = f"{pixel_cluster_col}_{int(cluster)}"
+            cell_cluster_counts[int(label)][col_name] += int(count)
+            all_cluster_cols.add(col_name)
+
+        tiles_processed += 1
+
+    print(f"    Processed {tiles_processed} tiles with pixel data")
+
+    if not cell_cluster_counts:
+        raise ValueError("No pixel cluster data found in any tile")
+
+    # Convert nested dict to DataFrame
+    counts_df = pd.DataFrame.from_dict(cell_cluster_counts, orient='index')
+    counts_df = counts_df.fillna(0).astype(int)
+    counts_df.index.name = 'label'
+    counts_df = counts_df.reset_index()
+
+    # Get valid labels (exist in both cell_table and pixel data)
+    cell_table_labels = set(cell_table['label'])
+    pixel_data_labels = set(counts_df['label'])
+    valid_labels = cell_table_labels.intersection(pixel_data_labels)
+
+    if len(valid_labels) == 0:
+        raise ValueError("No matching cell labels between cell_table and pixel data")
+
+    missing_from_pixels = len(cell_table_labels - pixel_data_labels)
+    missing_from_cells = len(pixel_data_labels - cell_table_labels)
+
+    if missing_from_pixels > 0:
+        print(f"    Note: {missing_from_pixels} cells in table have no pixel data (small cells)")
+    if missing_from_cells > 0:
+        print(f"    Note: {missing_from_cells} pixel labels not in cell table (filtered out)")
+
+    # Subset cell table to valid labels and select required columns
+    cell_subset = cell_table[cell_table['label'].isin(valid_labels)][
+        ['fov', 'label', 'cell_size']
+    ].copy()
+
+    # Subset counts to valid labels
+    counts_df = counts_df[counts_df['label'].isin(valid_labels)]
+
+    # Merge cell info with cluster counts
+    cluster_counts = cell_subset.merge(counts_df, on='label', how='left').fillna(0)
+
+    # Ensure cluster columns are int
+    cluster_cols = sorted([c for c in cluster_counts.columns if pixel_cluster_col in c])
+    for col in cluster_cols:
+        cluster_counts[col] = cluster_counts[col].astype(int)
+
+    # Create size-normalized version (required by Pixie)
+    cluster_counts_norm = cluster_counts.copy()
+    cluster_counts_norm[cluster_cols] = cluster_counts_norm[cluster_cols].div(
+        cluster_counts_norm['cell_size'], axis=0
+    )
+
+    # Sort columns to match Pixie's expected order: fov, label, cell_size, then cluster cols
+    meta_cols = ['fov', 'label', 'cell_size']
+    final_cols = meta_cols + cluster_cols
+    cluster_counts = cluster_counts[final_cols]
+    cluster_counts_norm = cluster_counts_norm[final_cols]
+
+    # Reset index for consistency with original function
+    cluster_counts = cluster_counts.reset_index(drop=True)
+    cluster_counts_norm = cluster_counts_norm.reset_index(drop=True)
+
+    print(f"    Created c2pc data: {len(cluster_counts)} cells, {len(cluster_cols)} cluster columns")
+
+    return cluster_counts, cluster_counts_norm
+
+
+# =============================================================================
 # QuPath Export Functions
 # =============================================================================
 
@@ -338,12 +496,23 @@ def main():
 
     print(f"  Pixel data path: {pixel_data_path}")
 
-    cluster_counts, cluster_counts_size_norm = cell_cluster_utils.create_c2pc_data(
-        fovs,
-        pixel_data_path,
-        args.cell_table_path,
-        pixel_cluster_col
-    )
+    # Use tiled aggregation for tiled inputs, standard Pixie for single FOV
+    if is_tiled and len(fovs) > 1:
+        print(f"  Using tiled aggregation (preserves boundary cell pixels)...")
+        cluster_counts, cluster_counts_size_norm = create_c2pc_data_tiled(
+            fovs,
+            pixel_data_path,
+            args.cell_table_path,
+            pixel_cluster_col
+        )
+    else:
+        # Standard Pixie for non-tiled (single FOV) inputs
+        cluster_counts, cluster_counts_size_norm = cell_cluster_utils.create_c2pc_data(
+            fovs,
+            pixel_data_path,
+            args.cell_table_path,
+            pixel_cluster_col
+        )
 
     feather.write_dataframe(
         cluster_counts,
@@ -528,25 +697,16 @@ def main():
     if tile_positions is not None and 'fov' in cell_table_clustered.columns:
         print("Step 7b: Adjusting coordinates for tiled input...")
 
-        # Create a lookup for x_start, y_start from tile positions
-        def adjust_coordinates(row):
-            fov = row.get('fov')
-            if fov and fov in tile_positions:
-                tile_info = tile_positions[fov]
-                row['x'] = row['x'] + tile_info.x_start
-                row['y'] = row['y'] + tile_info.y_start
-            return row
-
-        # Adjust x and y coordinates based on tile position
+        # Adjust x and y coordinates based on tile position (vectorized)
         if 'x' in cell_table_clustered.columns and 'y' in cell_table_clustered.columns:
             adjusted_count = 0
-            for idx, row in cell_table_clustered.iterrows():
-                fov = row.get('fov')
-                if fov and fov in tile_positions:
-                    tile_info = tile_positions[fov]
-                    cell_table_clustered.at[idx, 'x'] = row['x'] + tile_info.x_start
-                    cell_table_clustered.at[idx, 'y'] = row['y'] + tile_info.y_start
-                    adjusted_count += 1
+            for fov_name, tile_info in tile_positions.items():
+                mask = cell_table_clustered['fov'] == fov_name
+                n_cells = mask.sum()
+                if n_cells > 0:
+                    cell_table_clustered.loc[mask, 'x'] += tile_info.x_start
+                    cell_table_clustered.loc[mask, 'y'] += tile_info.y_start
+                    adjusted_count += n_cells
 
             print(f"  Adjusted coordinates for {adjusted_count} cells")
         else:
