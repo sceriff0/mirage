@@ -49,7 +49,7 @@ process COPY_RESULTS {
     mkdir -p ${destination_dir}
 
     DEST_AVAIL=\$(df -B1 ${destination_dir} | awk 'NR==2 {print \$4}')
-    NEEDED=\$(awk "BEGIN {printf \"%.0f\", \$SOURCE_SIZE * 1.05}")  # 5% buffer
+    NEEDED=\$(awk -v size="\$SOURCE_SIZE" 'BEGIN {printf "%.0f", size * 1.05}')  # 5% buffer
     if [ "\$DEST_AVAIL" -lt "\$NEEDED" ]; then
         echo "ERROR: Insufficient space! Available: \$(numfmt --to=iec \$DEST_AVAIL), Need: \$(numfmt --to=iec \$NEEDED)"
         exit 1
