@@ -32,12 +32,9 @@ process REGISTER {
     def ref_filename = reference ? reference.name.replaceAll(/^ref\//, '') : ''
     def ref_arg = ref_filename ? "--reference ${ref_filename}" :
                   params.reg_reference_markers ? "--reference-markers ${params.reg_reference_markers.join(' ')}" : ''
-    // Reduced defaults for large 25GB+ OME-TIFF files to prevent memory issues
-    // Lower resolution for initial rigid registration reduces RAM requirements significantly
-    def max_processed_dim = params.reg_max_processed_dim ?: 512
-    def max_non_rigid_dim = params.reg_max_non_rigid_dim ?: 2048
+    // Memory mode controls feature detector, matcher, and dimension settings
+    def memory_mode = params.memory_mode ?: 'high'
     def micro_reg_fraction = params.reg_micro_reg_fraction ?: 0.125
-    def num_features = params.reg_num_features ?: 5000
     def max_image_dim = params.reg_max_image_dim ?: 4000
     // Smart retry: skip micro-registration after multiple failures
     // - Exit 1 (general failure): would benefit from skipping on attempt 2
@@ -62,8 +59,7 @@ process REGISTER {
     echo "VALIS Registration - Attempt ${task.attempt}"
     echo "========================================================================"
     echo "Settings:"
-    echo "  - max_processed_dim: ${max_processed_dim}"
-    echo "  - max_non_rigid_dim: ${max_non_rigid_dim}"
+    echo "  - memory_mode: ${memory_mode}"
     echo "  - max_image_dim: ${max_image_dim}"
     echo "  - skip_micro_registration: ${skip_micro ? 'YES' : 'NO'}"
     if [ ${task.attempt} -gt 2 ]; then
@@ -111,10 +107,8 @@ process REGISTER {
         --input-dir preprocessed \\
         --out registered_slides \\
         ${ref_arg} \\
-        --max-processed-dim ${max_processed_dim} \\
-        --max-non-rigid-dim ${max_non_rigid_dim} \\
+        --memory-mode ${memory_mode} \\
         --micro-reg-fraction ${micro_reg_fraction} \\
-        --num-features ${num_features} \\
         --max-image-dim ${max_image_dim} \\
         ${skip_micro} \\
         ${parallel_warping} \\
