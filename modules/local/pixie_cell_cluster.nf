@@ -51,7 +51,7 @@ process PIXIE_CELL_CLUSTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     # Log input sizes for tracing
-    pixel_bytes=\$(du -sb ${pixel_data_dir} 2>/dev/null | cut -f1 || echo 0)
+    pixel_bytes=\$(du -sLb ${pixel_data_dir} 2>/dev/null | cut -f1 || echo 0)
     table_bytes=\$(stat -L --printf="%s" ${cell_table} 2>/dev/null || echo 0)
     mask_bytes=\$(stat -L --printf="%s" ${cell_mask} 2>/dev/null || echo 0)
     total_bytes=\$((pixel_bytes + table_bytes + mask_bytes))

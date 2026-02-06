@@ -35,7 +35,7 @@ process MERGE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     # Log input size for tracing (sum of channels/ + masks, -L follows symlinks)
-    channels_bytes=\$(du -sb channels/ | cut -f1)
+    channels_bytes=\$(du -sLb channels/ | cut -f1)
     seg_bytes=\$(stat -L --printf="%s" ${seg_mask})
     pheno_bytes=\$(stat -L --printf="%s" ${pheno_mask})
     total_bytes=\$((channels_bytes + seg_bytes + pheno_bytes))
