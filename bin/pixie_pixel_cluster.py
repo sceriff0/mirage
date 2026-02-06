@@ -318,6 +318,27 @@ def main():
     print("  Consensus clustering complete.")
 
     # =========================================================================
+    # Step 4b: Create pixel_meta_cluster_rename column (default identity mapping)
+    # =========================================================================
+    # In the interactive notebook workflow, users rename clusters which creates
+    # the pixel_meta_cluster_rename column. For automated pipelines, we create
+    # this column as an identity mapping (same values as pixel_meta_cluster).
+    print("Step 4b: Creating pixel_meta_cluster_rename column...")
+    import feather
+
+    pixel_data_full_path = os.path.join(base_dir, pixel_data_dir)
+    renamed_count = 0
+    for fov in fovs:
+        feather_path = os.path.join(pixel_data_full_path, f"{fov}.feather")
+        if os.path.exists(feather_path):
+            df = feather.read_dataframe(feather_path)
+            if 'pixel_meta_cluster' in df.columns and 'pixel_meta_cluster_rename' not in df.columns:
+                df['pixel_meta_cluster_rename'] = df['pixel_meta_cluster']
+                feather.write_dataframe(df, feather_path, compression='uncompressed')
+                renamed_count += 1
+    print(f"  pixel_meta_cluster_rename column created for {renamed_count} FOV(s).")
+
+    # =========================================================================
     # Step 5: Save tile positions (if tiling was used)
     # =========================================================================
     tile_positions_path = None
