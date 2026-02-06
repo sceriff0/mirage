@@ -200,6 +200,21 @@ process MERGE_QUANT_CSVS {
     final_column_order = morpho_present + ['DAPI'] + sorted(marker_cols_all)
     merged = merged[final_column_order]
 
+    # Add required columns for Pixie cell clustering
+    # fov: Field of view identifier (use patient_id)
+    # cell_size: Cell size in pixels (copy from 'area' column)
+    merged['fov'] = '${meta.patient_id}'
+    if 'area' in merged.columns:
+        merged['cell_size'] = merged['area']
+
+    # Update column order to put fov first, then cell_size near the beginning
+    cols = merged.columns.tolist()
+    for col_to_move in ['cell_size', 'fov']:
+        if col_to_move in cols:
+            cols.remove(col_to_move)
+            cols = [col_to_move] + cols
+    merged = merged[cols]
+
     # Save merged CSV
     merged.to_csv('merged_quant.csv', index=False)
     print(f"\\n✓ Merged CSV saved: {len(merged)} cells, {len(merged.columns)} columns")
