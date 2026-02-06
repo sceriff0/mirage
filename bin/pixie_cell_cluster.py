@@ -243,7 +243,7 @@ def main():
                         help='Path to cell_clustering_params.json from pixel clustering')
     parser.add_argument('--output_dir', required=True,
                         help='Output directory for cell clustering results')
-    parser.add_argument('--pixel_cluster_col', default='pixel_meta_cluster',
+    parser.add_argument('--pixel_cluster_col', default='pixel_meta_cluster_rename',
                         help='Pixel cluster column to use for cell clustering')
     parser.add_argument('--max_k', type=int, default=20,
                         help='Maximum number of cell meta-clusters')
@@ -379,7 +379,7 @@ def main():
     weighted_cell_channel = weighted_channel_comp.compute_p2c_weighted_channel_avg(
         pixel_channel_avg=pixel_channel_avg,
         channels=channels,
-        cluster_counts=cluster_counts,
+        cell_counts=cluster_counts,
         fovs=fovs,
         pixel_cluster_col=pixel_cluster_col
     )
@@ -424,7 +424,7 @@ def main():
 
     cell_som_clustering.generate_som_avg_files(
         base_dir=base_dir,
-        cluster_counts_size_norm=cluster_counts_size_norm,
+        cell_som_input_data=cluster_counts_size_norm,
         cell_som_cluster_cols=cell_som_cluster_cols,
         cell_som_expr_col_avg_name=cell_som_cluster_count_avg_name
     )
@@ -440,7 +440,8 @@ def main():
         cell_som_input_data=cluster_counts_size_norm,
         cell_som_expr_col_avg_name=cell_som_cluster_count_avg_name,
         max_k=args.max_k,
-        cap=args.cap
+        cap=args.cap,
+        seed=args.seed
     )
 
     feather.write_dataframe(

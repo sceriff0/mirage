@@ -239,6 +239,7 @@ def main():
         norm_vals_name=norm_vals_name,
         blur_factor=args.blur_factor,
         subset_proportion=args.subset_proportion,
+        seed=args.seed,
         multiprocess=use_multiprocess,
         batch_size=batch_size
     )
@@ -301,7 +302,8 @@ def main():
         data_dir=pixel_data_dir,
         pc_chan_avg_som_cluster_name=pc_chan_avg_som_cluster_name,
         multiprocess=use_multiprocess,
-        batch_size=batch_size
+        batch_size=batch_size,
+        seed=args.seed
     )
 
     pixel_meta_clustering.generate_meta_avg_files(
