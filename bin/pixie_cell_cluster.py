@@ -339,10 +339,10 @@ def main():
     print(f"  Pixel data path: {pixel_data_path}")
 
     cluster_counts, cluster_counts_size_norm = cell_cluster_utils.create_c2pc_data(
-        fovs=fovs,
-        pixel_data_dir=pixel_data_path,
-        cell_table_path=args.cell_table_path,
-        pixel_cluster_col=pixel_cluster_col
+        fovs,
+        pixel_data_path,
+        args.cell_table_path,
+        pixel_cluster_col
     )
 
     feather.write_dataframe(
