@@ -21,6 +21,7 @@ process REGISTER {
     tuple val(patient_id), path("registered_slides/*_registered.ome.tiff"), val(all_metas), emit: registered
     path "versions.yml"                                                                    , emit: versions
     path("*.size.csv")                                                                     , emit: size_log
+    path("data/*.csv")                                                                     , emit: summary, optional: true
 
     when:
     task.ext.when == null || task.ext.when
