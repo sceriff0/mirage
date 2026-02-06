@@ -95,11 +95,17 @@ MEMORY_PRESETS = {
         "num_features": 5000,
     },
     "low": {
+        # Feature detection
         "feature_detector_cls": feature_detectors.BriskFD,
         "matcher": feature_matcher.Matcher(),  # RANSAC-based
+        "num_features": 1000,  # Reduced from 2000
+        # Image dimensions (biggest memory impact)
         "max_processed_image_dim_px": 256,
-        "max_non_rigid_registration_dim_px": 1024,
-        "num_features": 2000,
+        "max_non_rigid_registration_dim_px": 1024,  # Reduced from 1024 (4x RAM reduction)
+        "max_image_dim_px": 2000,  # Controls cached image pyramid level
+        # Tiled registration
+        "tile_wh": 512,  # Smaller tiles = lower peak RAM
+        "tile_buffer": 100,  # Reduced from 200
     },
 }
 
@@ -423,6 +429,10 @@ def valis_registration(
     num_features = preset["num_features"]
     feature_detector_cls = preset["feature_detector_cls"]
     matcher = preset["matcher"]
+    # New preset keys with fallbacks to CLI args/defaults
+    preset_tile_wh = preset.get("tile_wh", tile_size)
+    preset_tile_buffer = preset.get("tile_buffer", 200)
+    preset_max_image_dim = preset.get("max_image_dim_px", max_image_dim_px)
 
     # Initialize phase reporter for structured progress tracking
     reporter = PhaseReporter()
@@ -501,7 +511,7 @@ def valis_registration(
     logger.info(f"Memory optimization parameters:")
     logger.info(f"  max_processed_image_dim_px: {max_processed_image_dim_px} (controls analysis resolution)")
     logger.info(f"  max_non_rigid_registration_dim_px: {max_non_rigid_dim_px} (controls non-rigid accuracy)")
-    logger.info(f"  max_image_dim_px: {max_image_dim_px} (limits cached image size for RAM control)")
+    logger.info(f"  max_image_dim_px: {preset_max_image_dim} (limits cached image size for RAM control)")
 
     # ========================================================================
     # Configure Non-Rigid Registration Strategy
@@ -510,8 +520,8 @@ def valis_registration(
     # but better performance for large images. Each tile is registered independently and
     # displacement fields are stitched together.
     if use_tiled_registration:
-        logger.info(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_size={tile_size}px)")
-        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=tile_size, tile_buffer=200)
+        logger.info(f"  Non-rigid registrar: NonRigidTileRegistrar (tile_wh={preset_tile_wh}px, tile_buffer={preset_tile_buffer})")
+        non_rigid_registrar = NonRigidTileRegistrar(tile_wh=preset_tile_wh, tile_buffer=preset_tile_buffer)
     else:
         logger.info(f"  Non-rigid registrar: OpticalFlowWarper (default)")
         non_rigid_registrar = OpticalFlowWarper()
@@ -534,7 +544,7 @@ def valis_registration(
         # Image size parameters - tuned for memory efficiency
         "max_processed_image_dim_px": max_processed_image_dim_px,
         "max_non_rigid_registration_dim_px": max_non_rigid_dim_px,
-        "max_image_dim_px": max_image_dim_px,
+        "max_image_dim_px": preset_max_image_dim,
 
         # Feature detection - determined by memory_mode preset
         "feature_detector_cls": feature_detector_cls,
