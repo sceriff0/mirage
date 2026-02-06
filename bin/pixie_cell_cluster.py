@@ -483,16 +483,17 @@ def main():
     # =========================================================================
     print("Step 1: Creating cell-to-pixel-cluster data...")
 
-    # The pixel_data_dir is relative to base_dir in the original notebook
-    # But we receive it as absolute/relative from the process
+    # The pixel_data_dir from JSON is the original relative path from pixie_pixel_cluster.py
+    # But Nextflow stages it differently, so use args.pixel_output_dir directly
     pixel_data_path = args.pixel_output_dir
     if not os.path.isabs(pixel_data_path):
-        pixel_data_path = os.path.join(base_dir, pixel_data_dir)
+        pixel_data_path = os.path.join(base_dir, args.pixel_output_dir)
 
-    # Check if pixel data directory exists and contains feather files
+    # Fallback to JSON path only if the direct path doesn't exist
     if not os.path.exists(pixel_data_path):
-        # Try the path from params
-        pixel_data_path = os.path.join(base_dir, pixel_data_dir)
+        fallback_path = os.path.join(base_dir, pixel_data_dir)
+        if os.path.exists(fallback_path):
+            pixel_data_path = fallback_path
 
     print(f"  Pixel data path: {pixel_data_path}")
 
