@@ -42,7 +42,7 @@ process COPY_RESULTS {
     echo ""
 
     # Pre-flight checks
-    SOURCE_SIZE=\$(du -sb ${source_dir} | cut -f1)
+    SOURCE_SIZE=\$(du -sLb ${source_dir} | cut -f1)
     SOURCE_FILES=\$(find ${source_dir} -type f | wc -l)
     echo "Source: \$(numfmt --to=iec \$SOURCE_SIZE) in \$SOURCE_FILES files"
 
