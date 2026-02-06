@@ -65,9 +65,8 @@ process COPY_RESULTS {
         echo "Transfer attempt \$attempt of \$MAX_RETRIES - \$(date)"
         echo "----------------------------------------"
 
-        # Parallel rsync by top-level items
-        # Each item gets its own rsync process for parallelism
-        ls ${source_dir} | parallel -j ${parallel_jobs} --halt soon,fail=1 \\
+        # Parallel rsync by top-level items using xargs
+        ls ${source_dir} | xargs -I {} -P ${parallel_jobs} \\
             rsync -avL \\
             --inplace \\
             --append-verify \\
@@ -99,15 +98,15 @@ process COPY_RESULTS {
 
     cd ${source_dir}
 
-    # Use BLAKE3 if available (5-10x faster than MD5), fallback to parallel MD5
+    # Use BLAKE3 if available (5-10x faster than MD5), fallback to MD5
     if command -v b3sum &> /dev/null; then
         echo "Using BLAKE3 (parallel, fast)..."
-        find . -type f -print0 | parallel -0 -j ${parallel_jobs} b3sum {} > /tmp/checksums.txt
+        find . -type f -print0 | xargs -0 -P ${parallel_jobs} -I {} b3sum {} > /tmp/checksums.txt
         cd ${destination_dir}
         b3sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
     else
         echo "Using MD5 (parallel)..."
-        find . -type f -print0 | parallel -0 -j ${parallel_jobs} md5sum {} > /tmp/checksums.txt
+        find . -type f -print0 | xargs -0 -P ${parallel_jobs} -I {} md5sum {} > /tmp/checksums.txt
         cd ${destination_dir}
         md5sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
     fi
