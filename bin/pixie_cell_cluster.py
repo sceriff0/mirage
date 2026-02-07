@@ -581,11 +581,14 @@ def main():
 
     print(f"  Using pixel channel averages: {pc_chan_avg_path}")
     pixel_channel_avg = pd.read_csv(pc_chan_avg_path)
+    # For tiled workflows, use FOVs from cluster_counts (original FOV names from cell table)
+    # not the tile FOV names. The cluster_counts already aggregates across all tiles.
+    cell_fovs = cluster_counts['fov'].unique().tolist() if is_tiled else fovs
     weighted_cell_channel = weighted_channel_comp.compute_p2c_weighted_channel_avg(
         pixel_channel_avg=pixel_channel_avg,
         channels=channels,
         cell_counts=cluster_counts,
-        fovs=fovs,
+        fovs=cell_fovs,
         pixel_cluster_col=pixel_cluster_col
     )
     feather.write_dataframe(
@@ -600,7 +603,7 @@ def main():
     # =========================================================================
     print("Step 3: Training cell SOM...")
     cell_pysom = cell_som_clustering.train_cell_som(
-        fovs=fovs,
+        fovs=cell_fovs,
         base_dir=base_dir,
         cell_table_path=args.cell_table_path,
         cell_som_cluster_cols=cell_som_cluster_cols,
@@ -665,7 +668,7 @@ def main():
     )
 
     weighted_channel_comp.generate_wc_avg_files(
-        fovs=fovs,
+        fovs=cell_fovs,
         channels=channels,
         base_dir=base_dir,
         cell_cc=cell_cc,
