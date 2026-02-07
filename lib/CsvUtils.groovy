@@ -26,6 +26,37 @@ class CsvUtils {
         return counts
     }
 
+    /**
+     * Count unique channels per patient from a CSV file.
+     * Returns a Map of patient_id -> unique channel count
+     * Used for streaming groupTuple with groupKey in postprocessing.
+     */
+    static Map<String, Integer> countChannelsPerPatient(String csvPath) {
+        def file = new File(csvPath)
+        if (!file.exists()) return [:]
+
+        def channelSets = [:].withDefault { new HashSet<String>() }
+        def lines = file.readLines()
+        if (lines.size() < 2) return [:]  // Header only or empty
+
+        def header = lines[0].split(',')*.trim()
+        def patientIdx = header.findIndexOf { it == 'patient_id' }
+        def channelsIdx = header.findIndexOf { it == 'channels' }
+        if (patientIdx == -1 || channelsIdx == -1) return [:]
+
+        lines.drop(1).each { line ->
+            def cols = line.split(',')
+            if (cols.size() > channelsIdx) {
+                def patientId = cols[patientIdx].trim()
+                def channels = cols[channelsIdx].split('\\|')*.trim()
+                channelSets[patientId].addAll(channels)
+            }
+        }
+
+        // Convert Set sizes to counts
+        return channelSets.collectEntries { k, v -> [k, v.size()] }
+    }
+
     static Map validateMetadata(Map meta, String context = 'unknown') {
 
         if (!meta.patient_id)

@@ -99,6 +99,7 @@ workflow POSTPROCESSING {
     // ========================================================================
     // MERGE - Group CSVs by patient_id
     // Deduplicate by patient_id + marker (take first occurrence if same marker appears multiple times)
+    // Use groupKey for streaming - emits as soon as channels_count items collected
     // ========================================================================
     ch_grouped_csvs = QUANTIFY.out.individual_csv
         .map { meta, csv ->
@@ -106,11 +107,18 @@ workflow POSTPROCESSING {
             [[meta.patient_id, marker], meta, csv]  // Key by [patient_id, marker]
         }
         .unique { entry -> entry[0] }  // Keep only first occurrence of each [patient_id, marker] pair
-        .map { key, meta, csv -> [key[0], meta, csv] }  // Restore to [patient_id, meta, csv]
+        .map { key, meta, csv ->
+            // Use groupKey for streaming if channels_count is available
+            def gkey = meta.channels_count
+                ? groupKey(key[0], meta.channels_count)
+                : key[0]
+            [gkey, meta, csv]
+        }
         .groupTuple(by: 0)
         .map { patient_id, metas, csvs ->
             def meta = metas[0].clone()
-            meta.id = patient_id
+            // Extract actual patient_id from groupKey wrapper if needed
+            meta.id = patient_id.toString()
             [meta, csvs]
         }
 
@@ -130,21 +138,31 @@ workflow POSTPROCESSING {
     // Group split channel TIFFs by patient for merging
     // SPLIT_CHANNELS already handles DAPI filtering correctly
     // Deduplicate by patient_id + marker to avoid duplicate channel names
+    // Use groupKey for streaming - emits as soon as channels_count items collected
     ch_split_grouped = SPLIT_CHANNELS.out.channels
         .flatMap { meta, tiffs ->
             // Normalize to List and create entries keyed by [patient_id, marker]
+            // Carry channels_count for groupKey
             def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
             tiff_list.collect { tiff ->
-                [meta.patient_id, tiff.baseName, tiff]
+                [meta.patient_id, meta.channels_count, tiff.baseName, tiff]
             }
         }
-        .unique { patient_id, marker, _tiff -> [patient_id, marker] }  // Keep first occurrence of each patient+marker
-        .map { patient_id, _marker, tiff -> [patient_id, tiff] }
+        .unique { patient_id, _channels_count, marker, _tiff -> [patient_id, marker] }  // Keep first occurrence of each patient+marker
+        .map { patient_id, channels_count, _marker, tiff ->
+            // Use groupKey for streaming if channels_count is available
+            def gkey = channels_count
+                ? groupKey(patient_id, channels_count)
+                : patient_id
+            [gkey, tiff]
+        }
         .groupTuple(by: 0)
         .map { patient_id, tiffs ->
             // Create patient-level metadata
+            // Extract actual patient_id from groupKey wrapper
+            def pid = patient_id.toString()
             def patient_meta = [
-                patient_id: patient_id,
+                patient_id: pid,
                 is_reference: false  // Not relevant at patient level
             ]
             [patient_meta, tiffs]
