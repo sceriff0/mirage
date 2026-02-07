@@ -338,6 +338,17 @@ def main():
                 renamed_count += 1
     print(f"  pixel_meta_cluster_rename column created for {renamed_count} FOV(s).")
 
+    # Also add pixel_meta_cluster_rename to the channel average CSVs
+    for csv_path in [pc_chan_avg_som_cluster_name, pc_chan_avg_meta_cluster_name]:
+        full_csv_path = os.path.join(base_dir, csv_path) if not os.path.isabs(csv_path) else csv_path
+        if os.path.exists(full_csv_path):
+            csv_df = pd.read_csv(full_csv_path)
+            if 'pixel_meta_cluster' in csv_df.columns and 'pixel_meta_cluster_rename' not in csv_df.columns:
+                # Rename the column (not copy) since downstream expects pixel_meta_cluster_rename
+                csv_df = csv_df.rename(columns={'pixel_meta_cluster': 'pixel_meta_cluster_rename'})
+                csv_df.to_csv(full_csv_path, index=False)
+                print(f"  Renamed pixel_meta_cluster -> pixel_meta_cluster_rename in {os.path.basename(csv_path)}")
+
     # =========================================================================
     # Step 5: Save tile positions (if tiling was used)
     # =========================================================================
