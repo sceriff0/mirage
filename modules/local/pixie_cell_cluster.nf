@@ -66,16 +66,17 @@ process PIXIE_CELL_CLUSTER {
     mkdir -p cell_output
     mkdir -p cell_masks
 
-    # Symlink cluster profile CSVs to current directory (required by Python script)
-    for csv in ${cluster_profiles}; do
-        ln -sf \$PWD/\$csv .
-    done
+    # Verify cluster profiles are staged by Nextflow (no manual symlinking needed)
     echo "Cluster profiles staged: \$(ls -1 pixel_channel_avg_*.csv 2>/dev/null | wc -l) files"
+    for csv in ${cluster_profiles}; do
+        if [ -L "\$csv" ] && [ ! -e "\$csv" ]; then
+            echo "WARNING: Broken symlink detected: \$csv"
+        fi
+    done
 
-    # Symlink tile positions if available (for tiled images)
+    # Verify tile positions (no manual symlinking needed)
     if [ -f "${tile_positions}" ] && [ "${tile_positions}" != "NO_TILE_POSITIONS" ]; then
-        ln -sf \$PWD/${tile_positions} .
-        echo "Tile positions staged: ${tile_positions}"
+        echo "Tile positions available: ${tile_positions}"
     fi
 
     # Run cell clustering
