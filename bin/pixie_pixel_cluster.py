@@ -57,6 +57,34 @@ def get_image_dimensions(tiff_dir: str, fov_name: str) -> tuple:
     return shape[:2]  # (height, width)
 
 
+def align_norm_vals_channel_order(base_dir: str, norm_vals_name: str, channels: list) -> None:
+    """Ensure channel normalization columns follow the requested channel order."""
+    import feather
+
+    norm_vals_path = os.path.join(base_dir, norm_vals_name)
+    if not os.path.exists(norm_vals_path):
+        raise FileNotFoundError(f"Normalization values file not found: {norm_vals_path}")
+
+    norm_vals = feather.read_dataframe(norm_vals_path)
+    norm_cols = list(norm_vals.columns)
+    expected_cols = list(channels)
+
+    if set(norm_cols) != set(expected_cols):
+        missing = [ch for ch in expected_cols if ch not in norm_cols]
+        extra = [ch for ch in norm_cols if ch not in expected_cols]
+        raise ValueError(
+            f"Normalization file channels do not match requested channels. "
+            f"Missing: {missing}, Extra: {extra}"
+        )
+
+    if norm_cols != expected_cols:
+        norm_vals = norm_vals.loc[:, expected_cols]
+        feather.write_dataframe(norm_vals, norm_vals_path, compression='uncompressed')
+        print("  Reordered normalization columns to match requested channel order.")
+    else:
+        print("  Normalization column order already matches requested channels.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Pixie Pixel Clustering',
@@ -244,6 +272,7 @@ def main():
         batch_size=batch_size
     )
     print("  Pixel matrix created successfully.")
+    align_norm_vals_channel_order(base_dir, norm_vals_name, channels)
 
     # =========================================================================
     # Step 2: Train pixel SOM
