@@ -1,5 +1,7 @@
 import numpy as np
+import pytest
 
+pytest.importorskip("basicpy")
 from preprocess import split_image_into_fovs, reconstruct_image_from_fovs, preprocess_multichannel_image
 
 

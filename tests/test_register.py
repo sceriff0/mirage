@@ -1,5 +1,6 @@
-import os
+import pytest
 
+pytest.importorskip("valis")
 from register import merge_first_file
 
 

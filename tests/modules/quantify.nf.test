@@ -43,9 +43,6 @@ nextflow_process {
         tag "slow"
 
         when {
-            params {
-                quant_gpu = false
-            }
             process {
                 """
                 input[0] = [

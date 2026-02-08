@@ -16,7 +16,6 @@ nextflow_workflow {
                 skip_registration_qc = true
                 padding = false
                 enable_feature_error = false
-                enable_segmentation_error = false
             }
             workflow {
                 """
@@ -48,7 +47,6 @@ nextflow_workflow {
             params {
                 skip_registration_qc = true
                 padding = false
-                gpu_register = false  // Disable GPU for testing
             }
             workflow {
                 """

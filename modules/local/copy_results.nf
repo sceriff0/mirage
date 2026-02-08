@@ -1,6 +1,6 @@
 process COPY_RESULTS {
     tag "Copying to savedir"
-    label 'process_medium'  // Need more CPUs for parallel
+    label 'process_medium'
     container null
 
     errorStrategy 'retry'
@@ -11,6 +11,7 @@ process COPY_RESULTS {
     val(results_ready)
     val(source_dir)
     val(destination_dir)
+    val(delete_source)
 
     output:
     path("transfer.log"), emit: log
@@ -38,17 +39,43 @@ process COPY_RESULTS {
     echo "Source:      ${source_dir}"
     echo "Destination: ${destination_dir}"
     echo "Parallel:    ${parallel_jobs} jobs"
+    echo "Delete source after copy: ${delete_source}"
     echo "Start:       \$(date)"
     echo ""
 
     # Pre-flight checks
-    SOURCE_SIZE=\$(du -sLb ${source_dir} | cut -f1)
-    SOURCE_FILES=\$(find ${source_dir} -type f | wc -l)
+    if [ ! -d "${source_dir}" ]; then
+        echo "ERROR: Source directory does not exist: ${source_dir}"
+        exit 1
+    fi
+
+    if [ "${source_dir}" = "/" ] || [ -z "${source_dir}" ]; then
+        echo "ERROR: Refusing to copy from unsafe source path: '${source_dir}'"
+        exit 1
+    fi
+
+    if [ "${destination_dir}" = "/" ] || [ -z "${destination_dir}" ]; then
+        echo "ERROR: Refusing to copy to unsafe destination path: '${destination_dir}'"
+        exit 1
+    fi
+
+    if [ "${source_dir}" = "${destination_dir}" ]; then
+        echo "ERROR: Source and destination are identical"
+        exit 1
+    fi
+
+    if [[ "${destination_dir}" == "${source_dir}"/* ]]; then
+        echo "ERROR: Destination is nested inside source (would recurse)"
+        exit 1
+    fi
+
+    SOURCE_SIZE=\$(du -sLb "${source_dir}" | cut -f1)
+    SOURCE_FILES=\$(find "${source_dir}" -type f | wc -l)
     echo "Source: \$(numfmt --to=iec \$SOURCE_SIZE) in \$SOURCE_FILES files"
 
-    mkdir -p ${destination_dir}
+    mkdir -p "${destination_dir}"
 
-    DEST_AVAIL=\$(df -B1 ${destination_dir} | awk 'NR==2 {print \$4}')
+    DEST_AVAIL=\$(df -B1 "${destination_dir}" | awk 'NR==2 {print \$4}')
     NEEDED=\$(awk -v size="\$SOURCE_SIZE" 'BEGIN {printf "%.0f", size * 1.05}')  # 5% buffer
     if [ "\$DEST_AVAIL" -lt "\$NEEDED" ]; then
         echo "ERROR: Insufficient space! Available: \$(numfmt --to=iec \$DEST_AVAIL), Need: \$(numfmt --to=iec \$NEEDED)"
@@ -65,14 +92,14 @@ process COPY_RESULTS {
         echo "Transfer attempt \$attempt of \$MAX_RETRIES - \$(date)"
         echo "----------------------------------------"
 
-        # Parallel rsync by top-level items using xargs
-        ls ${source_dir} | xargs -I {} -P ${parallel_jobs} \\
+        # Parallel rsync by top-level items using find (safe for spaces)
+        find "${source_dir}" -mindepth 1 -maxdepth 1 -print0 | xargs -0 -I {} -P ${parallel_jobs} \\
             rsync -avL \\
             --inplace \\
             --append-verify \\
             --timeout=600 \\
             --partial \\
-            ${source_dir}/{} ${destination_dir}/
+            "{}" "${destination_dir}/"
 
         EXIT_CODE=\$?
 
@@ -96,36 +123,43 @@ process COPY_RESULTS {
     echo "Verifying transfer with checksums"
     echo "========================================"
 
-    cd ${source_dir}
+    CHECKSUM_FILE=\$(mktemp)
+    trap 'rm -f "\$CHECKSUM_FILE"' EXIT
+    cd "${source_dir}"
 
     # Use BLAKE3 if available (5-10x faster than MD5), fallback to MD5
     if command -v b3sum &> /dev/null; then
         echo "Using BLAKE3 (parallel, fast)..."
-        find . -type f -print0 | xargs -0 -P ${parallel_jobs} -I {} b3sum {} > /tmp/checksums.txt
-        cd ${destination_dir}
-        b3sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
+        find . -type f -print0 | sort -z | xargs -0 -P ${parallel_jobs} -I {} b3sum {} > "\$CHECKSUM_FILE"
+        cd "${destination_dir}"
+        b3sum -c "\$CHECKSUM_FILE" > "\$VERIFY_LOG" 2>&1
     else
         echo "Using MD5 (parallel)..."
-        find . -type f -print0 | xargs -0 -P ${parallel_jobs} -I {} md5sum {} > /tmp/checksums.txt
-        cd ${destination_dir}
-        md5sum -c /tmp/checksums.txt > \$VERIFY_LOG 2>&1
+        find . -type f -print0 | sort -z | xargs -0 -P ${parallel_jobs} -I {} md5sum {} > "\$CHECKSUM_FILE"
+        cd "${destination_dir}"
+        md5sum -c "\$CHECKSUM_FILE" > "\$VERIFY_LOG" 2>&1
     fi
 
     VERIFY_EXIT=\$?
 
-    if [ \$VERIFY_EXIT -ne 0 ] || grep -q "FAILED" \$VERIFY_LOG; then
+    if [ \$VERIFY_EXIT -ne 0 ] || grep -q "FAILED" "\$VERIFY_LOG"; then
         echo ""
         echo "ERROR: Checksum verification failed!"
-        grep "FAILED" \$VERIFY_LOG || true
+        grep "FAILED" "\$VERIFY_LOG" || true
         echo "Source NOT deleted"
         exit 1
     fi
 
     echo ""
     echo "All \$SOURCE_FILES files verified successfully"
-    echo ""
-    echo "Deleting source: ${source_dir}"
-    rm -rf ${source_dir}
+
+    if [ "${delete_source}" = "true" ]; then
+        echo ""
+        echo "Deleting source: ${source_dir}"
+        rm -rf --one-file-system "${source_dir}"
+    else
+        echo "Source retention is enabled; source directory was not deleted"
+    fi
 
     echo ""
     echo "========================================"
@@ -135,7 +169,7 @@ process COPY_RESULTS {
 
     stub:
     """
-    echo "STUB: Would parallel copy data" > transfer.log
-    echo "STUB: All files OK" > verification.log
+    echo "STUB: Would copy data from ${source_dir} to ${destination_dir}" > transfer.log
+    echo "STUB: All files verified" > verification.log
     """
 }

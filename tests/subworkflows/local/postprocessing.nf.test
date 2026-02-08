@@ -15,7 +15,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95
@@ -52,7 +51,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95
@@ -91,7 +89,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95
@@ -126,7 +123,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95
@@ -165,7 +161,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95
@@ -202,7 +197,6 @@ nextflow_workflow {
             params {
                 outdir = "$outputDir"
                 seg_gpu = false
-                quant_gpu = false
                 pixel_size = 0.325
                 pheno_quality_percentile = 0.05
                 pheno_noise_percentile = 0.95

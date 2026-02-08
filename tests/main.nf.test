@@ -17,18 +17,15 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
             }
         }
 
         then {
             assert workflow.success
-            assert path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv").exists()
+            assert path("$outputDir/csv/preprocessed.csv").exists()
         }
     }
 
@@ -41,12 +38,9 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
             }
         }
 
@@ -70,13 +64,10 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
 
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
 
                 preproc_tile_size = 256
                 preproc_n_iter = 1
@@ -101,20 +92,17 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/valid_preprocessing.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
 
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
             }
         }
 
         then {
             assertAll(
                 { assert workflow.success },
-                { assert path("$outputDir/checkpoint_csvs").exists() }
+                { assert path("$outputDir/csv").exists() }
             )
         }
     }
@@ -135,7 +123,6 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                gpu_register = false
                 skip_registration_qc = true
             }
         }
@@ -161,7 +148,6 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                gpu_register = false
                 skip_registration_qc = true
             }
         }
@@ -184,7 +170,6 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                gpu_register = false  // Disable GPU for CI
                 skip_registration_qc = true
             }
         }
@@ -204,6 +189,50 @@ nextflow_pipeline {
                 outdir = "$outputDir"
                 step = "registration"
                 registration_method = "cpu"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run registration with VALIS pairwise method - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "valis_pairs"
+
+                max_cpus = 2
+                max_memory = '6.GB'
+                skip_registration_qc = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run registration with CPU tiled method - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_registration.csv"
+                outdir = "$outputDir"
+                step = "registration"
+                registration_method = "cpu_tiled"
 
                 max_cpus = 2
                 max_memory = '6.GB'
@@ -255,7 +284,23 @@ nextflow_pipeline {
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("Should run copy_results without input CSV - stub") {
+
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$projectDir/tests/testdata"
+                savedir = "$outputDir/copied_results"
+                step = "copy_results"
             }
         }
 
@@ -307,7 +352,6 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/invalid_no_dapi.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
             }
         }
 
@@ -323,7 +367,6 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/invalid_no_ref.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
                 allow_auto_reference = false
             }
         }
@@ -342,13 +385,11 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/invalid_no_ref.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
                 allow_auto_reference = true
 
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
             }
         }
 

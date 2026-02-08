@@ -9,6 +9,7 @@ import sys
 # Add bin/ to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'bin'))
 
+pytest.importorskip("basicpy")
 from preprocess import split_image_into_fovs, reconstruct_image_from_fovs, apply_basic_correction
 
 

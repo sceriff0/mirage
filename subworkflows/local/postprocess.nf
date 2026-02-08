@@ -13,6 +13,10 @@ include { MERGE_QUANT_CSVS      } from '../../modules/local/quantify'
 include { PHENOTYPE             } from '../../modules/local/phenotype'
 include { MERGE_AND_PYRAMID     } from '../../modules/local/merge_and_pyramid'
 
+def withDebugView(channel, Closure formatter) {
+    return params.debug_channels ? channel.view(formatter) : channel
+}
+
 /*
 ========================================================================================
     SUBWORKFLOW:POSTPROCESSING
@@ -63,8 +67,10 @@ workflow POSTPROCESSING {
     // ========================================================================
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
-    ch_split_output = SPLIT_CHANNELS.out.channels
-        .view { meta, tiffs -> "SPLIT_CHANNELS output: meta.patient_id=${meta.patient_id}, tiffs=${tiffs*.name}" }
+    ch_split_output = withDebugView(
+        SPLIT_CHANNELS.out.channels,
+        { meta, tiffs -> "SPLIT_CHANNELS output: patient=${meta.patient_id}, tiffs=${tiffs*.name}" }
+    )
 
     ch_flatmapped = ch_split_output
         .flatMap { meta, tiffs ->
@@ -79,20 +85,32 @@ workflow POSTPROCESSING {
                 [channel_meta, tiff]
             }
         }
-        .view { meta, tiff -> "After flatMap: meta.id=${meta.id}, channel=${meta.channel_name}, tiff=${tiff.name}" }
+    ch_flatmapped = withDebugView(
+        ch_flatmapped,
+        { meta, tiff -> "After flatMap: id=${meta.id}, channel=${meta.channel_name}, tiff=${tiff.name}" }
+    )
 
     ch_for_combine = ch_flatmapped
         .map { meta, tiff -> [meta.patient_id, meta, tiff] }
-        .view { patient_id, _meta, _tiff -> "Before combine: key=${patient_id}, channel=${_meta.channel_name}" }
+    ch_for_combine = withDebugView(
+        ch_for_combine,
+        { patient_id, _meta, _tiff -> "Before combine: key=${patient_id}, channel=${_meta.channel_name}" }
+    )
 
     ch_mask = SEGMENT.out.cell_mask
         .map { meta, mask -> [meta.patient_id, mask] }
-        .view { patient_id, _mask -> "Mask available: key=${patient_id}, mask=${_mask.name}" }
+    ch_mask = withDebugView(
+        ch_mask,
+        { patient_id, _mask -> "Mask available: key=${patient_id}, mask=${_mask.name}" }
+    )
 
     ch_for_quant = ch_for_combine
         .combine(ch_mask, by: 0)
-        .view { patient_id, _meta, _tiff, _mask -> "After combine: patient=${patient_id}, channel=${_meta.channel_name}" }
         .map { _patient_id, meta, tiff, mask -> [meta, tiff, mask] }
+    ch_for_quant = withDebugView(
+        ch_for_quant,
+        { meta, _tiff, _mask -> "After combine: patient=${meta.patient_id}, channel=${meta.channel_name}" }
+    )
 
     QUANTIFY(ch_for_quant)
 

@@ -7,6 +7,7 @@ It gracefully falls back to CPU if GPU libraries are unavailable.
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import sys
@@ -74,7 +75,7 @@ def print_memory_usage(prefix: str = "") -> None:
         except Exception:
             pass
 
-    print(f"{prefix}CPU: {cpu_mem:.2f} GB | GPU: {gpu_mem:.2f}/{gpu_total:.2f} GB")
+    logger.info(f"{prefix}CPU: {cpu_mem:.2f} GB | GPU: {gpu_mem:.2f}/{gpu_total:.2f} GB")
 
 
 def gpu_extract_features(
@@ -427,9 +428,8 @@ def run_marker_quantification(
     return markers_data
 
 
-if __name__ == '__main__':
-    import argparse
-
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='GPU-accelerated cell quantification on single-channel TIFFs'
     )
@@ -481,18 +481,15 @@ if __name__ == '__main__':
         default=500000,
         help="Process regionprops in chunks if cell count exceeds this (for very large datasets)"
     )
+    return parser.parse_args()
 
-    args = parser.parse_args()
 
-    # Setup logging
+def main() -> int:
+    """Run quantification CLI."""
+    args = parse_args()
+
     log_level = logging.INFO if args.verbose else logging.WARNING
-    handlers = [logging.StreamHandler()]
-
-    if args.log_file:
-        os.makedirs(os.path.dirname(args.log_file), exist_ok=True)
-        handlers.append(logging.FileHandler(args.log_file))
-
-    configure_logging(level=log_level)
+    configure_logging(level=log_level, log_file=args.log_file)
 
     # Run quantification
     try:
@@ -507,6 +504,11 @@ if __name__ == '__main__':
             chunk_size=args.chunk_size
         )
         logger.info("Quantification completed successfully")
+        return 0
     except Exception as e:
         logger.error(f"Quantification failed: {e}")
-        raise
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

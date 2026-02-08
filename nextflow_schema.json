@@ -2,277 +2,438 @@
     "$schema": "http://json-schema.org/draft-07/schema",
     "$id": "https://raw.githubusercontent.com/your-org/ateia/main/nextflow_schema.json",
     "title": "ATEIA WSI Processing Pipeline Parameters",
-    "description": "Whole Slide Image (WSI) processing pipeline for preprocessing, registration, segmentation, quantification, and phenotyping",
+    "description": "Schema synchronized with nextflow.config canonical params surface.",
     "type": "object",
-    "definitions": {
-        "input_output_options": {
-            "title": "Input/Output Options",
-            "type": "object",
-            "fa_icon": "fas fa-terminal",
-            "description": "Define where the pipeline should find input data and save output data.",
-            "required": ["input", "outdir"],
-            "properties": {
-                "input": {
-                    "type": "string",
-                    "format": "file-path",
-                    "exists": true,
-                    "description": "Path to input CSV or glob pattern for image files",
-                    "help_text": "Provide either a CSV file with patient metadata or a glob pattern (e.g., 'data/*.nd2')"
-                },
-                "outdir": {
-                    "type": "string",
-                    "format": "directory-path",
-                    "description": "The output directory where the results will be saved",
-                    "default": "./results"
-                },
-                "savedir": {
-                    "type": "string",
-                    "format": "directory-path",
-                    "description": "Final archive directory for long-term storage",
-                    "default": "./results/final"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Sample/experiment identifier"
-                }
-            }
+    "properties": {
+        "allow_auto_reference": {
+            "type": "boolean",
+            "description": "Pipeline parameter `allow_auto_reference`.",
+            "default": false
         },
-        "pipeline_control_options": {
-            "title": "Pipeline Control Options",
-            "type": "object",
-            "fa_icon": "fas fa-cogs",
-            "description": "Control pipeline execution and restart behavior",
-            "properties": {
-                "step": {
-                    "type": "string",
-                    "default": "preprocessing",
-                    "enum": ["preprocessing", "registration", "postprocessing", "results"],
-                    "description": "Pipeline entry point for checkpoint-based restart",
-                    "help_text": "Set to 'registration' to skip preprocessing, 'postprocessing' to skip registration, etc."
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Validate inputs without executing pipeline"
-                },
-                "allow_auto_reference": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Auto-select first image as reference if none specified"
-                }
-            }
+        "compression": {
+            "type": "string",
+            "description": "Pipeline parameter `compression`.",
+            "default": "lzw",
+            "enum": [
+                "lzw",
+                "zlib",
+                "jpeg",
+                "none"
+            ]
         },
-        "preprocessing_options": {
-            "title": "Preprocessing Options",
-            "type": "object",
-            "fa_icon": "fas fa-image",
-            "description": "BaSiC illumination correction parameters",
-            "properties": {
-                "skip_nd2_conversion": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Skip ND2 to OME-TIFF conversion"
-                },
-                "preproc_tile_size": {
-                    "type": "integer",
-                    "default": 1950,
-                    "minimum": 512,
-                    "maximum": 4096,
-                    "description": "FOV tile size for BaSiC correction"
-                },
-                "preproc_n_iter": {
-                    "type": "integer",
-                    "default": 3,
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Number of BaSiC optimization iterations"
-                },
-                "preproc_overlap": {
-                    "type": "integer",
-                    "default": 0,
-                    "minimum": 0,
-                    "description": "Overlap between FOV tiles (pixels)"
-                }
-            }
+        "copy_delete_source": {
+            "type": "boolean",
+            "description": "Pipeline parameter `copy_delete_source`.",
+            "default": false
         },
-        "registration_options": {
-            "title": "Registration Options",
-            "type": "object",
-            "fa_icon": "fas fa-crosshairs",
-            "description": "Image registration method and parameters",
-            "required": ["registration_method"],
-            "properties": {
-                "registration_method": {
-                    "type": "string",
-                    "default": "gpu",
-                    "enum": ["valis", "gpu", "cpu"],
-                    "description": "Registration method to use",
-                    "help_text": "VALIS: batch registration with SuperPoint features. GPU: pairwise affine+diffeomorphic. CPU: multi-threaded pairwise"
-                },
-                "padding": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Pad images to uniform dimensions per patient"
-                },
-                "skip_registration_qc": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Skip QC visualization generation"
-                },
-                "qc_scale_factor": {
-                    "type": "number",
-                    "default": 0.25,
-                    "minimum": 0.1,
-                    "maximum": 1.0,
-                    "description": "Downsampling factor for QC images"
-                },
-                "gpu_reg_affine_crop_size": {
-                    "type": "integer",
-                    "default": 10000,
-                    "minimum": 1000,
-                    "description": "Crop size for GPU affine registration"
-                },
-                "gpu_reg_diffeo_crop_size": {
-                    "type": "integer",
-                    "default": 2000,
-                    "minimum": 500,
-                    "description": "Crop size for GPU diffeomorphic registration"
-                },
-                "cpu_reg_affine_crop_size": {
-                    "type": "integer",
-                    "default": 10000,
-                    "minimum": 1000,
-                    "description": "Crop size for CPU affine registration"
-                }
-            }
+        "cpu_reg_affine_crop_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `cpu_reg_affine_crop_size`.",
+            "default": 10000
         },
-        "segmentation_options": {
-            "title": "Segmentation Options",
-            "type": "object",
-            "fa_icon": "fas fa-divide",
-            "description": "Cell segmentation parameters",
-            "properties": {
-                "seg_gpu": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Use GPU for segmentation"
-                },
-                "seg_model": {
-                    "type": "string",
-                    "default": "cellpose",
-                    "description": "Segmentation model to use"
-                },
-                "segmentation_model_dir": {
-                    "type": "string",
-                    "format": "directory-path",
-                    "description": "Directory containing segmentation models"
-                },
-                "seg_n_tiles_y": {
-                    "type": "integer",
-                    "default": 24,
-                    "minimum": 1,
-                    "description": "Number of tiles in Y direction"
-                },
-                "seg_n_tiles_x": {
-                    "type": "integer",
-                    "default": 24,
-                    "minimum": 1,
-                    "description": "Number of tiles in X direction"
-                }
-            }
+        "cpu_reg_diffeo_crop_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `cpu_reg_diffeo_crop_size`.",
+            "default": 2000
         },
-        "quantification_phenotyping_options": {
-            "title": "Quantification & Phenotyping Options",
-            "type": "object",
-            "fa_icon": "fas fa-chart-bar",
-            "description": "Cell quantification and phenotyping parameters",
-            "properties": {
-                "classification_method": {
-                    "type": "string",
-                    "default": "classic",
-                    "enum": ["classic", "quantify"],
-                    "description": "Classification method",
-                    "help_text": "classic: DeepCell-types. quantify: intensity-based phenotyping"
-                },
-                "quant_gpu": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Use GPU for quantification"
-                },
-                "quant_min_area": {
-                    "type": "integer",
-                    "default": 10,
-                    "minimum": 1,
-                    "description": "Minimum cell area in pixels"
-                },
-                "pixel_size": {
-                    "type": "number",
-                    "default": 0.325,
-                    "minimum": 0.01,
-                    "description": "Pixel size in microns"
-                }
-            }
+        "cpu_reg_inv_tol": {
+            "type": "number",
+            "description": "Pipeline parameter `cpu_reg_inv_tol`.",
+            "default": 1e-06
         },
-        "slurm_options": {
-            "title": "SLURM Configuration",
-            "type": "object",
-            "fa_icon": "fas fa-server",
-            "description": "SLURM cluster configuration",
-            "properties": {
-                "slurm_partition": {
-                    "type": "string",
-                    "description": "SLURM partition/queue name"
-                },
-                "slurm_account": {
-                    "type": "string",
-                    "description": "SLURM account for billing"
-                },
-                "slurm_qos": {
-                    "type": "string",
-                    "description": "SLURM quality of service"
-                },
-                "gpu_type": {
-                    "type": "string",
-                    "default": "nvidia_h200:1",
-                    "description": "GPU type specification"
-                }
-            }
+        "cpu_reg_n_features": {
+            "type": "integer",
+            "description": "Pipeline parameter `cpu_reg_n_features`.",
+            "default": 5000
         },
-        "resource_limits": {
-            "title": "Resource Limits",
-            "type": "object",
-            "fa_icon": "fas fa-memory",
-            "description": "Maximum resource allocation",
-            "properties": {
-                "max_memory": {
-                    "type": "string",
-                    "default": "512.GB",
-                    "pattern": "^\\d+(\\.\\d+)?\\.?\\s*(K|M|G|T)?B?$",
-                    "description": "Maximum memory allocation"
-                },
-                "max_cpus": {
-                    "type": "integer",
-                    "default": 16,
-                    "minimum": 1,
-                    "description": "Maximum CPUs per job"
-                },
-                "max_time": {
-                    "type": "string",
-                    "default": "240.h",
-                    "pattern": "^\\d+(\\.\\d+)?\\.?\\s*(ms|s|m|h|d)?$",
-                    "description": "Maximum job runtime"
-                }
-            }
+        "cpu_reg_opt_tol": {
+            "type": "number",
+            "description": "Pipeline parameter `cpu_reg_opt_tol`.",
+            "default": 1e-06
+        },
+        "cpu_reg_overlap_percent": {
+            "type": "number",
+            "description": "Pipeline parameter `cpu_reg_overlap_percent`.",
+            "default": 40.0
+        },
+        "debug_channels": {
+            "type": "boolean",
+            "description": "Pipeline parameter `debug_channels`.",
+            "default": false
+        },
+        "dry_run": {
+            "type": "boolean",
+            "description": "Pipeline parameter `dry_run`.",
+            "default": false
+        },
+        "enable_feature_error": {
+            "type": "boolean",
+            "description": "Pipeline parameter `enable_feature_error`.",
+            "default": false
+        },
+        "enable_trace": {
+            "type": "boolean",
+            "description": "Pipeline parameter `enable_trace`.",
+            "default": true
+        },
+        "feature_detector": {
+            "type": "string",
+            "description": "Pipeline parameter `feature_detector`.",
+            "default": "superpoint",
+            "enum": [
+                "superpoint",
+                "disk",
+                "dedode",
+                "brisk",
+                "vgg"
+            ]
+        },
+        "feature_max_dim": {
+            "type": "integer",
+            "description": "Pipeline parameter `feature_max_dim`.",
+            "default": 2048
+        },
+        "feature_n_features": {
+            "type": "integer",
+            "description": "Pipeline parameter `feature_n_features`.",
+            "default": 5000
+        },
+        "gpu_reg_affine_crop_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `gpu_reg_affine_crop_size`.",
+            "default": 10000
+        },
+        "gpu_reg_diffeo_crop_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `gpu_reg_diffeo_crop_size`.",
+            "default": 2000
+        },
+        "gpu_reg_inv_tol": {
+            "type": "number",
+            "description": "Pipeline parameter `gpu_reg_inv_tol`.",
+            "default": 1e-06
+        },
+        "gpu_reg_n_features": {
+            "type": "integer",
+            "description": "Pipeline parameter `gpu_reg_n_features`.",
+            "default": 5000
+        },
+        "gpu_reg_n_workers": {
+            "type": "integer",
+            "description": "Pipeline parameter `gpu_reg_n_workers`.",
+            "default": 8
+        },
+        "gpu_reg_opt_tol": {
+            "type": "number",
+            "description": "Pipeline parameter `gpu_reg_opt_tol`.",
+            "default": 1e-06
+        },
+        "gpu_reg_overlap_percent": {
+            "type": "number",
+            "description": "Pipeline parameter `gpu_reg_overlap_percent`.",
+            "default": 40.0
+        },
+        "gpu_type": {
+            "type": "string",
+            "description": "Pipeline parameter `gpu_type`.",
+            "default": "nvidia_h200:1"
+        },
+        "input": {
+            "type": "string",
+            "description": "Pipeline parameter `input`.",
+            "default": ""
+        },
+        "max_cpus": {
+            "type": "integer",
+            "description": "Pipeline parameter `max_cpus`.",
+            "default": 64
+        },
+        "max_memory": {
+            "type": "string",
+            "description": "Pipeline parameter `max_memory`.",
+            "default": "700.GB"
+        },
+        "max_time": {
+            "type": "string",
+            "description": "Pipeline parameter `max_time`.",
+            "default": "240.h"
+        },
+        "memory_mode": {
+            "type": "string",
+            "description": "Pipeline parameter `memory_mode`.",
+            "default": "high"
+        },
+        "outdir": {
+            "type": "string",
+            "description": "Pipeline parameter `outdir`.",
+            "default": "./results"
+        },
+        "pad_mode": {
+            "type": "string",
+            "description": "Pipeline parameter `pad_mode`.",
+            "default": "constant",
+            "enum": [
+                "constant",
+                "edge",
+                "reflect",
+                "symmetric"
+            ]
+        },
+        "padding": {
+            "type": "boolean",
+            "description": "Pipeline parameter `padding`.",
+            "default": false
+        },
+        "pheno_noise_percentile": {
+            "type": "integer",
+            "description": "Pipeline parameter `pheno_noise_percentile`.",
+            "default": 5
+        },
+        "pheno_quality_percentile": {
+            "type": "integer",
+            "description": "Pipeline parameter `pheno_quality_percentile`.",
+            "default": 95
+        },
+        "phenotype_config": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "Pipeline parameter `phenotype_config`.",
+            "default": null
+        },
+        "pixel_size": {
+            "type": "number",
+            "description": "Pipeline parameter `pixel_size`.",
+            "default": 0.325
+        },
+        "preproc_autotune": {
+            "type": "boolean",
+            "description": "Pipeline parameter `preproc_autotune`.",
+            "default": false
+        },
+        "preproc_n_iter": {
+            "type": "integer",
+            "description": "Pipeline parameter `preproc_n_iter`.",
+            "default": 100
+        },
+        "preproc_no_darkfield": {
+            "type": "boolean",
+            "description": "Pipeline parameter `preproc_no_darkfield`.",
+            "default": false
+        },
+        "preproc_overlap": {
+            "type": "integer",
+            "description": "Pipeline parameter `preproc_overlap`.",
+            "default": 0
+        },
+        "preproc_pool_workers": {
+            "type": "integer",
+            "description": "Pipeline parameter `preproc_pool_workers`.",
+            "default": 4
+        },
+        "preproc_skip_dapi": {
+            "type": "boolean",
+            "description": "Pipeline parameter `preproc_skip_dapi`.",
+            "default": true
+        },
+        "preproc_tile_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `preproc_tile_size`.",
+            "default": 1950
+        },
+        "preprocess_qc_scale_factor": {
+            "type": "number",
+            "description": "Pipeline parameter `preprocess_qc_scale_factor`.",
+            "default": 0.25
+        },
+        "publish_dir_mode": {
+            "type": "string",
+            "description": "Pipeline parameter `publish_dir_mode`.",
+            "default": "copy"
+        },
+        "pyramid_resolutions": {
+            "type": "integer",
+            "description": "Pipeline parameter `pyramid_resolutions`.",
+            "default": 3
+        },
+        "pyramid_scale": {
+            "type": "integer",
+            "description": "Pipeline parameter `pyramid_scale`.",
+            "default": 2
+        },
+        "qc_scale_factor": {
+            "type": "number",
+            "description": "Pipeline parameter `qc_scale_factor`.",
+            "default": 0.25
+        },
+        "quant_min_area": {
+            "type": "integer",
+            "description": "Pipeline parameter `quant_min_area`.",
+            "default": 10
+        },
+        "reg_max_image_dim": {
+            "type": "integer",
+            "description": "Pipeline parameter `reg_max_image_dim`.",
+            "default": 4000
+        },
+        "reg_micro_reg_fraction": {
+            "type": "number",
+            "description": "Pipeline parameter `reg_micro_reg_fraction`.",
+            "default": 0.125
+        },
+        "reg_n_workers": {
+            "type": "integer",
+            "description": "Pipeline parameter `reg_n_workers`.",
+            "default": 8
+        },
+        "reg_parallel_warping": {
+            "type": "boolean",
+            "description": "Pipeline parameter `reg_parallel_warping`.",
+            "default": false
+        },
+        "reg_reference_markers": {
+            "type": "array",
+            "description": "Pipeline parameter `reg_reference_markers`.",
+            "default": [
+                "DAPI",
+                "FITC"
+            ]
+        },
+        "reg_tile_size": {
+            "type": "integer",
+            "description": "Pipeline parameter `reg_tile_size`.",
+            "default": 2048
+        },
+        "reg_use_tiled_registration": {
+            "type": "boolean",
+            "description": "Pipeline parameter `reg_use_tiled_registration`.",
+            "default": true
+        },
+        "registration_method": {
+            "type": "string",
+            "description": "Pipeline parameter `registration_method`.",
+            "default": "valis",
+            "enum": [
+                "valis",
+                "valis_pairs",
+                "gpu",
+                "cpu",
+                "cpu_tiled"
+            ]
+        },
+        "savedir": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "Pipeline parameter `savedir`.",
+            "default": null
+        },
+        "seg_expand_distance": {
+            "type": "integer",
+            "description": "Pipeline parameter `seg_expand_distance`.",
+            "default": 10
+        },
+        "seg_gpu": {
+            "type": "boolean",
+            "description": "Pipeline parameter `seg_gpu`.",
+            "default": true
+        },
+        "seg_n_tiles_x": {
+            "type": "integer",
+            "description": "Pipeline parameter `seg_n_tiles_x`.",
+            "default": 16
+        },
+        "seg_n_tiles_y": {
+            "type": "integer",
+            "description": "Pipeline parameter `seg_n_tiles_y`.",
+            "default": 16
+        },
+        "seg_pmax": {
+            "type": "number",
+            "description": "Pipeline parameter `seg_pmax`.",
+            "default": 99.8
+        },
+        "seg_pmin": {
+            "type": "number",
+            "description": "Pipeline parameter `seg_pmin`.",
+            "default": 1.0
+        },
+        "segmentation_model": {
+            "type": "string",
+            "description": "Pipeline parameter `segmentation_model`.",
+            "default": "stardist_full_e200_lr00001_aug1_seed10_es50p0.001_rlr0.5p50"
+        },
+        "segmentation_model_dir": {
+            "type": "string",
+            "description": "Pipeline parameter `segmentation_model_dir`.",
+            "default": "/hpcnfs/scratch/P_DIMA_ATTEND/models/"
+        },
+        "skip_micro_registration": {
+            "type": "boolean",
+            "description": "Pipeline parameter `skip_micro_registration`.",
+            "default": true
+        },
+        "skip_registration_qc": {
+            "type": "boolean",
+            "description": "Pipeline parameter `skip_registration_qc`.",
+            "default": false
+        },
+        "slurm_account": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "Pipeline parameter `slurm_account`.",
+            "default": null
+        },
+        "slurm_partition": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "Pipeline parameter `slurm_partition`.",
+            "default": null
+        },
+        "slurm_qos": {
+            "type": [
+                "string",
+                "null"
+            ],
+            "description": "Pipeline parameter `slurm_qos`.",
+            "default": null
+        },
+        "step": {
+            "type": "string",
+            "description": "Pipeline parameter `step`.",
+            "default": "preprocessing",
+            "enum": [
+                "preprocessing",
+                "registration",
+                "postprocessing",
+                "copy_results"
+            ]
+        },
+        "tilex": {
+            "type": "integer",
+            "description": "Pipeline parameter `tilex`.",
+            "default": 512
+        },
+        "tiley": {
+            "type": "integer",
+            "description": "Pipeline parameter `tiley`.",
+            "default": 512
+        },
+        "trace_dir": {
+            "type": "string",
+            "description": "Pipeline parameter `trace_dir`.",
+            "default": ".trace"
         }
     },
-    "allOf": [
-        {"$ref": "#/definitions/input_output_options"},
-        {"$ref": "#/definitions/pipeline_control_options"},
-        {"$ref": "#/definitions/preprocessing_options"},
-        {"$ref": "#/definitions/registration_options"},
-        {"$ref": "#/definitions/segmentation_options"},
-        {"$ref": "#/definitions/quantification_phenotyping_options"},
-        {"$ref": "#/definitions/slurm_options"},
-        {"$ref": "#/definitions/resource_limits"}
-    ]
+    "required": [
+        "outdir",
+        "step"
+    ],
+    "additionalProperties": true
 }

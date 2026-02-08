@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""
-Merge single-channel TIFF files into a single multi-channel PYRAMIDAL OME-TIFF.
-
-FIXED VERSION - Proper pyramidal structure for QuPath compatibility.
-
-Key fixes:
-1. Write all channels together at each pyramid level (not channel-by-channel)
-2. Proper OME-XML with correct TiffData references
-3. Channels stored as CYX with SubIFDs for pyramid levels
-"""
+"""Merge single-channel TIFF files into a pyramidal multi-channel OME-TIFF."""
 
 import argparse
 import sys
@@ -25,6 +16,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 # Add path for utils
 sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import get_logger, configure_logging
+
 try:
     from validation import log_image_stats, detect_wrapped_values, validate_image_range
 except ImportError:
@@ -37,9 +30,11 @@ os.environ['NUMBA_DISABLE_JIT'] = '0'
 os.environ['NUMBA_CACHE_DIR'] = tempfile.gettempdir() + '/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
+logger = get_logger(__name__)
+
 
 def log(msg):
-    print(f"[INFO] {msg}")
+    logger.info(msg)
 
 
 # =============================================================================
@@ -668,7 +663,8 @@ def merge_channels(
     return channel_names, phenotype_colormap
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Merge single-channel TIFFs into pyramidal OME-TIFF (QuPath compatible)',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -696,8 +692,13 @@ def main():
     parser.add_argument('--compression', type=str, default='lzw',
                         choices=['lzw', 'zlib', 'jpeg', 'none'],
                         help='Compression algorithm (default: lzw)')
+    return parser.parse_args()
 
-    args = parser.parse_args()
+
+def main() -> int:
+    """Run merge and pyramid CLI."""
+    configure_logging()
+    args = parse_args()
     compression = None if args.compression == 'none' else args.compression
 
     try:
@@ -715,12 +716,13 @@ def main():
             compression=compression,
         )
         log("Complete!")
+        return 0
     except Exception as e:
         log(f"Error: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -1,5 +1,8 @@
 import numpy as np
+import pytest
 
+pytest.importorskip("csbdeep")
+pytest.importorskip("stardist")
 from segment import remap_labels, normalize_image
 
 

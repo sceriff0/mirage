@@ -9,19 +9,18 @@ Supports:
 - NDPI/NDPIS (Hamamatsu) via tifffile
 """
 
-import logging
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Tuple, Optional
 
 import numpy as np
 import tifffile
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 PIXEL_SIZE_UM = 0.325
 
@@ -360,65 +359,75 @@ def convert_to_ome_tiff(
     # Verify
     with tifffile.TiffFile(output_filename) as tif:
         if tif.ome_metadata:
-            logger.info("✓ OME-XML metadata present")
+            logger.info("OME-XML metadata present")
         else:
-            logger.warning("⚠ No OME metadata in saved file")
+            logger.warning("No OME metadata found in saved file")
     
     return output_filename, output_channels
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description='Convert microscopy images to OME-TIFF'
     )
     parser.add_argument('--input_file', type=str, required=True)
     parser.add_argument('--output_dir', type=str, required=True)
     parser.add_argument('--patient_id', type=str, required=True)
-    parser.add_argument('--channels', type=str, default=None,
-                        help='Comma-separated channel names (optional, will read from file if not specified)')
+    parser.add_argument(
+        '--channels',
+        type=str,
+        default=None,
+        help='Comma-separated channel names (optional, reads metadata when omitted)'
+    )
     parser.add_argument('--pixel_size', type=float, default=PIXEL_SIZE_UM)
-    
-    args = parser.parse_args()
-    
+    return parser.parse_args()
+
+
+def main() -> int:
+    """Run conversion CLI."""
+    configure_logging()
+    args = parse_args()
+
     input_path = Path(args.input_file)
     output_dir = Path(args.output_dir)
     channel_names = None
     if args.channels:
         channel_names = [ch.strip() for ch in args.channels.split(',')]
-    
+
     if not input_path.exists():
         logger.error(f"Input file not found: {input_path}")
         return 1
-    
+
     logger.info("=" * 70)
-    logger.info("Image Converter (Bio-Formats enabled)")
+    logger.info("Image Converter")
     logger.info("=" * 70)
     logger.info(f"Input: {input_path}")
     if channel_names:
         logger.info(f"Channels (override): {channel_names}")
     else:
-        logger.info("Channels: will read from file metadata")
+        logger.info("Channels: read from image metadata")
     logger.info("=" * 70)
-    
+
     try:
         output_path, output_channels = convert_to_ome_tiff(
             input_path, output_dir, args.patient_id, channel_names, args.pixel_size
         )
-    except Exception as e:
-        logger.error(f"Conversion failed: {e}")
-        raise
-    
+    except Exception as exc:
+        logger.error(f"Conversion failed: {exc}")
+        return 1
+
     logger.info("=" * 70)
-    logger.info(f"✓ Output: {output_path}")
-    logger.info(f"✓ Channel order: {output_channels}")
+    logger.info(f"Output: {output_path}")
+    logger.info(f"Channel order: {output_channels}")
     logger.info("=" * 70)
-    
-    # Write channels file for Nextflow
+
+    # Write channels file for Nextflow metadata propagation
     channels_file = output_dir / f"{args.patient_id}_channels.txt"
     channels_file.write_text(','.join(output_channels))
-    
+
     return 0
 
 
 if __name__ == '__main__':
-    exit(main())
+    raise SystemExit(main())

@@ -31,77 +31,16 @@ os.environ['NUMBA_DISABLE_CACHING'] = '1'
 sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger
 from image_utils import load_image_grayscale
+from registration_utils import (
+    build_feature_detector,
+    build_feature_matcher,
+    match_feature_points,
+)
 
 # Module-level logger
 logger = get_logger(__name__)
 
-from valis import feature_detectors
-from valis import feature_matcher
-
-# Function definitions removed - now imported from utils modules:
-# - get_logger() -> imported from utils.logger
-# - load_image_grayscale() -> imported from utils.image_utils
-
-
-def get_feature_detector(detector_type: str = "superpoint"):
-    """Get feature detector instance.
-
-    Parameters
-    ----------
-    detector_type : str
-        Type of detector: 'superpoint', 'disk', 'dedode', or 'brisk'
-
-    Returns
-    -------
-    Feature detector instance (FeatureDD subclass)
-    """
-    detector_type = detector_type.lower()
-
-    if detector_type == "superpoint":
-        logger.info("Initializing SuperPoint feature detector")
-        return feature_detectors.SuperPointFD()
-    elif detector_type == "disk":
-        logger.info("Initializing DISK feature detector")
-        return feature_detectors.DiskFD()
-    elif detector_type == "dedode":
-        logger.info("Initializing DeDoDe feature detector")
-        return feature_detectors.DeDoDeFD()
-    elif detector_type == "brisk":
-        logger.info("Initializing BRISK feature detector")
-        return feature_detectors.BriskFD()
-    elif detector_type == "vgg":
-        logger.info("Initializing VGG feature detector")
-        return feature_detectors.VggFD()
-    else:
-        raise ValueError(f"Unknown detector type: {detector_type}")
-
-
-def get_feature_matcher(detector_type: str = "superpoint"):
-    """Get feature matcher instance compatible with detector.
-
-    Parameters
-    ----------
-    detector_type : str
-        Type of detector (determines matcher)
-
-    Returns
-    -------
-    Feature matcher instance (Matcher, SuperGlueMatcher, or LightGlueMatcher)
-    """
-    detector_type = detector_type.lower()
-
-    if detector_type == "superpoint":
-        logger.info("Initializing SuperGlue matcher")
-        return feature_matcher.SuperGlueMatcher()
-    elif detector_type in ["disk", "dedode"]:
-        logger.info("Initializing LightGlue matcher")
-        return feature_matcher.LightGlueMatcher()
-    else:
-        logger.info("Initializing standard Matcher with USAC_MAGSAC filter")
-        return feature_matcher.Matcher(
-            match_filter_method='USAC_MAGSAC',
-            ransac_thresh=7
-        )
+# Function definitions removed - now imported from utils modules.
 
 
 def compute_and_match_features(
@@ -150,8 +89,8 @@ def compute_and_match_features(
 
     # Initialize detector and matcher
     logger.info("\n[2/4] Initializing feature detector and matcher...")
-    detector = get_feature_detector(detector_type)
-    matcher = get_feature_matcher(detector_type)
+    detector = build_feature_detector(detector_type, logger=logger)
+    matcher = build_feature_matcher(detector_type, logger=logger)
 
     # Detect features using the correct VALIS API (detect_and_compute with underscores)
     # Returns: kp_pos_xy (numpy array of shape (N, 2)), desc (numpy array of shape (N, M))
@@ -172,26 +111,15 @@ def compute_and_match_features(
     # SuperGlueMatcher/LightGlueMatcher signature: (img1, desc1, kp1_xy, img2, desc2, kp2_xy, additional_filtering_kwargs)
     logger.info("\n[4/4] Matching features...")
 
-    # Check if this is SuperGlue or LightGlue matcher (needs images)
-    if isinstance(matcher, feature_matcher.SuperGlueMatcher) or \
-       (hasattr(feature_matcher, 'LightGlueMatcher') and isinstance(matcher, feature_matcher.LightGlueMatcher)):
-        # SuperGlue and LightGlue need the images
-        match_info12, filtered_match_info12, match_info21, filtered_match_info21 = matcher.match_images(
-            img1=ref_img,
-            desc1=ref_desc,
-            kp1_xy=ref_kp,
-            img2=mov_img,
-            desc2=mov_desc,
-            kp2_xy=mov_kp
-        )
-    else:
-        # Standard Matcher only needs descriptors and keypoints
-        match_info12, filtered_match_info12, match_info21, filtered_match_info21 = matcher.match_images(
-            desc1=ref_desc,
-            kp1_xy=ref_kp,
-            desc2=mov_desc,
-            kp2_xy=mov_kp
-        )
+    match_info12, filtered_match_info12, match_info21, filtered_match_info21 = match_feature_points(
+        matcher,
+        ref_img,
+        ref_desc,
+        ref_kp,
+        mov_img,
+        mov_desc,
+        mov_kp,
+    )
 
     # Use the filtered match info (after RANSAC/GMS filtering)
     match_info = filtered_match_info12

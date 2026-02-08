@@ -111,20 +111,16 @@ P001,/data/P001.nd2,true,PANCK|DAPI|SMA  # DAPI not first, but will be moved by 
 
 ---
 
-### Test Case 2.2: Invalid - DAPI Not First (Conversion Disabled)
+### Test Case 2.2: Invalid - DAPI Not First (Pre-converted OME-TIFF)
 **Input CSV:**
 ```csv
 patient_id,path_to_file,is_reference,channels
 P001,/data/P001.ome.tiff,true,PANCK|DAPI|SMA  # ❌ DAPI not first!
 ```
 
-**Config:** `skip_nd2_conversion = true`
-
 **Expected Result:** ❌ Fail with error message:
 ```
 ❌ CRITICAL: DAPI must be in channel 0 for P001!
-
-You are using pre-converted images (skip_nd2_conversion=true).
 The channels in your input CSV are: [PANCK, DAPI, SMA]
 DAPI is in position: 1
 
@@ -139,47 +135,28 @@ DAPI is in position: 1
 nextflow run main.nf \
   --input tests/fixtures/invalid_dapi_position.csv \
   --step preprocessing \
-  --skip_nd2_conversion true \
   --outdir test_output
 ```
 
 ---
 
-### Test Case 2.3: Valid - DAPI First (Conversion Disabled)
+### Test Case 2.3: Valid - DAPI First (Pre-converted OME-TIFF)
 **Input CSV:**
 ```csv
 patient_id,path_to_file,is_reference,channels
 P001,/data/P001.ome.tiff,true,DAPI|PANCK|SMA  # ✅ DAPI first!
 ```
 
-**Config:** `skip_nd2_conversion = true`
-
 **Expected Result:** ✅ Pass validation
 
 ---
 
-## Issue #3: Metadata Loss in Results Step
+## Issue #3: Results Step Removed
 
-### Test Case 3.1: Resume from Results Step - Channels Preserved
-**Checkpoint CSV (from postprocessing):**
-```csv
-patient_id,is_reference,channels,phenotype_csv,phenotype_mask,phenotype_mapping,merged_csv,cell_mask
-P001,true,DAPI|PANCK|SMA,/path/pheno.csv,/path/mask.tiff,/path/map.json,/path/merged.csv,/path/cell.tiff
-```
-
-**Test Command:**
-```bash
-nextflow run main.nf \
-  --input postprocessing_checkpoint.csv \
-  --step results \
-  --outdir test_output
-```
-
-**Validation:**
-```groovy
-// Check that metadata includes channels field
-assert meta.channels == ['DAPI', 'PANCK', 'SMA']
-```
+The legacy `--step results` entrypoint has been removed.
+Use one of:
+- `--step postprocessing` with `registered.csv` input
+- `--step copy_results` to copy an existing `--outdir` to `--savedir`
 
 ---
 
@@ -417,12 +394,11 @@ else
   exit 1
 fi
 
-# Test Case 2.2: DAPI not first (skip conversion)
-echo "[TEST 2.2] Invalid - DAPI not in channel 0 (skip_nd2_conversion=true)"
+# Test Case 2.2: DAPI not first
+echo "[TEST 2.2] Invalid - DAPI not in channel 0"
 if nextflow run main.nf \
   --input "$FIXTURES/invalid_dapi_position.csv" \
   --step preprocessing \
-  --skip_nd2_conversion true \
   --outdir "$OUTPUT/test_2_2" 2>&1 | grep -q "DAPI must be in channel 0"; then
   echo "✅ PASS - Correctly detected DAPI position error"
 else
@@ -543,9 +519,9 @@ jobs:
 | 1.2 | Invalid: 2+ refs/patient | ❌ Fail with clear error |
 | 1.3 | Invalid: 0 refs/patient | ❌ Fail with clear error |
 | 2.1 | DAPI anywhere (conversion on) | ✅ Pass (DAPI moved to ch0) |
-| 2.2 | DAPI not ch0 (conversion off) | ❌ Fail with clear error |
-| 2.3 | DAPI in ch0 (conversion off) | ✅ Pass |
-| 3.1 | Resume from results | ✅ Channels preserved |
+| 2.2 | DAPI not ch0 (pre-converted OME-TIFF) | ❌ Fail with clear error |
+| 2.3 | DAPI in ch0 (pre-converted OME-TIFF) | ✅ Pass |
+| 3.1 | `copy_results` (no CSV input) | ✅ Path checks + copy preflight |
 | 4.1 | MERGE with DAPI ref | ✅ Uses DAPI as marker |
 | 6.1 | Valid checkpoint CSV | ✅ Pass |
 | 6.2 | Missing column | ❌ Fail with clear error |

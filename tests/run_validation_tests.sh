@@ -106,8 +106,7 @@ run_test \
     "Valid input - one reference per patient" \
     "pass" \
     "$TESTDATA_DIR/valid_preprocessing.csv" \
-    --step preprocessing \
-    --skip_nd2_conversion true
+    --step preprocessing
 
 # Test 1.2: Invalid - multiple references per patient
 run_test \
@@ -115,7 +114,6 @@ run_test \
     "fail" \
     "$TESTDATA_DIR/invalid_multi_ref.csv" \
     --step preprocessing \
-    --skip_nd2_conversion true \
     "Multiple reference images found"
 
 # Test 1.3: Invalid - no reference per patient
@@ -124,29 +122,25 @@ run_test \
     "fail" \
     "$TESTDATA_DIR/invalid_no_ref.csv" \
     --step preprocessing \
-    --skip_nd2_conversion true \
     "No reference image found"
 
-# Test 2.1: Valid - DAPI in any position (conversion enabled)
-# Note: With skip_nd2_conversion=false, DAPI can be anywhere
+# Test 2.1: Valid - DAPI in any position
 echo -e "${YELLOW}[INFO]${NC} Test 2.1 skipped - requires ND2 conversion which needs ND2 files"
 
-# Test 2.2: Invalid - DAPI not in channel 0 (conversion disabled)
+# Test 2.2: Invalid - DAPI not in channel 0
 run_test \
-    "Invalid - DAPI not in channel 0 (skip_nd2_conversion=true)" \
+    "Invalid - DAPI not in channel 0" \
     "fail" \
     "$TESTDATA_DIR/invalid_dapi_position.csv" \
     --step preprocessing \
-    --skip_nd2_conversion true \
     "DAPI must be in channel 0"
 
-# Test 2.3: Valid - DAPI in channel 0 (conversion disabled)
+# Test 2.3: Valid - DAPI in channel 0
 run_test \
-    "Valid - DAPI in channel 0 (skip_nd2_conversion=true)" \
+    "Valid - DAPI in channel 0" \
     "pass" \
     "$TESTDATA_DIR/valid_preprocessing.csv" \
-    --step preprocessing \
-    --skip_nd2_conversion true
+    --step preprocessing
 
 echo ""
 echo "=========================================="
@@ -160,7 +154,7 @@ run_test \
     "pass" \
     "$TESTDATA_DIR/valid_checkpoint_registration.csv" \
     --step registration \
-    --gpu_register false
+    --registration_method gpu
 
 # Test 6.2: Invalid - missing required column
 run_test \

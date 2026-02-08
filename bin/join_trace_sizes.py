@@ -9,8 +9,16 @@ with the input size metadata collected during pipeline execution. The resulting 
 dataset enables analysis of resource usage as a function of input file size.
 """
 
-import pandas as pd
+import argparse
 import sys
+from pathlib import Path
+
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 def parse_mem(val):
@@ -38,22 +46,32 @@ def parse_mem(val):
         return None
 
 
-def main():
-    if len(sys.argv) != 4:
-        print("Usage: join_trace_sizes.py <trace.txt> <input_sizes.csv> <output.csv>")
-        print("Example: python bin/join_trace_sizes.py .trace/trace.txt .trace/input_sizes.csv .trace/merged.csv")
-        sys.exit(1)
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Merge Nextflow trace data with input size metadata."
+    )
+    parser.add_argument("trace", help="Path to Nextflow trace.txt file")
+    parser.add_argument("sizes", help="Path to input_sizes.csv file")
+    parser.add_argument("output", help="Path to merged output CSV file")
+    return parser.parse_args()
 
-    trace_file = sys.argv[1]
-    sizes_file = sys.argv[2]
-    output_file = sys.argv[3]
+
+def main() -> int:
+    """Run trace/size join CLI."""
+    configure_logging()
+    args = parse_args()
+
+    trace_file = args.trace
+    sizes_file = args.sizes
+    output_file = args.output
 
     # Read trace file (tab-separated)
-    print(f"Reading trace: {trace_file}")
+    logger.info(f"Reading trace: {trace_file}")
     trace = pd.read_csv(trace_file, sep='\t')
 
     # Read sizes file (comma-separated)
-    print(f"Reading sizes: {sizes_file}")
+    logger.info(f"Reading sizes: {sizes_file}")
     sizes = pd.read_csv(sizes_file)
 
     # Extract sample_id from the trace 'tag' column
@@ -81,12 +99,14 @@ def main():
 
     # Write output
     merged.to_csv(output_file, index=False)
-    print(f"Merged {len(merged)} rows -> {output_file}")
+    logger.info(f"Merged {len(merged)} rows -> {output_file}")
 
     # Print summary statistics
     if 'bytes' in merged.columns:
         matched = merged['bytes'].notna().sum()
-        print(f"  - {matched}/{len(merged)} rows have input size data")
+        logger.info(f"  - {matched}/{len(merged)} rows have input size data")
+
+    return 0
 
 
 def parse_duration(val):
@@ -133,4 +153,4 @@ def parse_duration(val):
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

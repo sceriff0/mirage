@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import colorsys
 import json
-import logging
 import os
 import sys
 from pathlib import Path
@@ -29,17 +28,10 @@ from numpy.typing import NDArray
 # Add parent directory to path to import lib modules
 sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-try:
-    from logger import get_logger, configure_logging
-    from image_utils import ensure_dir
-    logger = get_logger(__name__)
-except ImportError:
-    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-    logger = logging.getLogger(__name__)
-    def configure_logging(level=logging.INFO):
-        logging.basicConfig(level=level)
-    def ensure_dir(path):
-        Path(path).mkdir(parents=True, exist_ok=True)
+from logger import get_logger, configure_logging
+from image_utils import ensure_dir
+
+logger = get_logger(__name__)
 
 
 __all__ = [
@@ -529,13 +521,22 @@ def run_phenotyping_pipeline(
         nuc_thres = np.percentile(cell_df['DAPI'], quality_percentile)
         size_thres = np.percentile(cell_df['area'], quality_percentile)
         cell_df_filtered = cell_df[
-            (cell_df['DAPI'] > nuc_thres) & (cell_df['area'] > size_thres)
+            (cell_df['DAPI'] >= nuc_thres) & (cell_df['area'] >= size_thres)
         ].copy()
     else:
         size_thres = np.percentile(cell_df['area'], quality_percentile)
-        cell_df_filtered = cell_df[cell_df['area'] > size_thres].copy()
+        cell_df_filtered = cell_df[cell_df['area'] >= size_thres].copy()
 
     logger.info(f"Cells after quality filter: {len(cell_df_filtered)}")
+
+    if cell_df_filtered.empty:
+        logger.warning("No cells passed quality filtering")
+        empty_df = cell_df_filtered.copy()
+        empty_df['pheno_markers'] = [[] for _ in range(len(empty_df))]
+        empty_df['phenotype'] = pd.Series(dtype=str)
+        empty_df['phenotype_num'] = pd.Series(dtype=int)
+        empty_df['pheno_markers_str'] = pd.Series(dtype=str)
+        return empty_df, {0: "Background"}
 
     # Normalization
     logger.info("Normalizing marker intensities")
@@ -717,7 +718,7 @@ def run_phenotyping_pipeline(
 # CLI
 # =============================================================================
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Cell phenotyping with QuPath GeoJSON export',
@@ -809,9 +810,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> int:
     """Main entry point."""
-    configure_logging(level=logging.INFO)
+    configure_logging()
     args = parse_args()
 
     ensure_dir(args.output_dir)
@@ -904,4 +905,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(main())
+    raise SystemExit(main())

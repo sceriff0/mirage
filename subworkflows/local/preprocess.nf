@@ -76,7 +76,7 @@ workflow PREPROCESSING {
         )
 
     // Collect size logs from all processes
-    ch_size_logs = channel.empty()
+    ch_size_logs = Channel.empty()
         .mix(CONVERT_IMAGE.out.size_log)
         .mix(PREPROCESS.out.size_log)
 

@@ -14,8 +14,7 @@ process GPU_REGISTER {
 
     container 'docker://bolt3x/attend_image_analysis:debug_diffeo'
 
-    // FIX WARNING #2: Add retry strategy for GPU OOM errors
-    // Retry with reduced crop sizes on memory errors
+    // Retry memory-related failures with reduced crop sizes
     errorStrategy { task.exitStatus in [137, 139, 140, 143] ? 'retry' : 'finish' }
     maxRetries 3
 
@@ -43,12 +42,7 @@ process GPU_REGISTER {
 
     cpus { check_max( 2 * task.attempt, 'cpus' ) }
 
-    // FIX EDGE CASE #6: Make GPU type configurable
     clusterOptions "--gres=gpu:${params.gpu_type}"
-
-    // FIX BUG #6: Move GPU check into script (not beforeScript)
-    // beforeScript runs before SLURM allocates GPU, causing false failures
-    // GPU availability is validated in the main script after allocation
 
     input:
     tuple val(meta), path(reference), path(moving)
@@ -63,12 +57,10 @@ process GPU_REGISTER {
 
     script:
     def args = task.ext.args ?: ''
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
 
-    // FIX WARNING #2: Reduce crop sizes on retry to handle OOM errors
-    // Base crop sizes
-    def base_affine_crop = params.gpu_reg_affine_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
-    def base_diffeo_crop = params.gpu_reg_diffeo_crop_size ?: (params.gpu_reg_crop_size ?: 2000)
+    // Reduce crop sizes on retry attempts to ease memory pressure
+    def base_affine_crop = params.gpu_reg_affine_crop_size ?: 2000
+    def base_diffeo_crop = params.gpu_reg_diffeo_crop_size ?: 2000
 
     // Reduce by 20% per retry attempt
     def reduction_factor = Math.pow(0.8, task.attempt - 1)
@@ -103,21 +95,21 @@ process GPU_REGISTER {
     echo "Resource tier: ${resource_tier}"
     echo "Allocated memory: ${allocated_mem}"
     echo "Allocated time: ${allocated_time}"
-    echo "GPU: nvidia_h200:1"
+    echo "GPU: ${params.gpu_type}"
     echo "Attempt: ${task.attempt}/${task.maxRetries + 1}"
     echo "Affine crop size: ${affine_crop_size} (base: ${base_affine_crop})"
     echo "Diffeo crop size: ${diffeo_crop_size} (base: ${base_diffeo_crop})"
     echo "=================================================="
     echo ""
 
-    # FIX BUG #6: Validate GPU availability AFTER SLURM allocation
+    # Validate GPU availability after scheduler allocation
     echo "Checking GPU availability..."
     if ! nvidia-smi &>/dev/null; then
-        echo "❌ ERROR: GPU not available but GPU registration requested"
-        echo "💡 Either run on a GPU node or use --registration_method cpu"
+        echo "ERROR: GPU not available but GPU registration requested"
+        echo "Run on a GPU node or use --registration_method cpu"
         exit 1
     fi
-    echo "✅ GPU available: \$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+    echo "GPU available: \$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
     echo ""
 
     register_gpu.py \\
@@ -142,7 +134,6 @@ process GPU_REGISTER {
     """
 
     stub:
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
     echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${moving.simpleName}.GPU_REGISTER.size.csv

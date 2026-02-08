@@ -1,9 +1,6 @@
-site_name: My Nextflow Pipeline
-site_description: Documentation for my awesome Nextflow pipeline
-site_author: Your Name
-
-repo_url: https://github.com/username/my-nextflow-pipeline
-repo_name: username/my-nextflow-pipeline
+site_name: ATEIA Pipeline
+site_description: Nextflow pipeline for microscopy preprocessing, registration, segmentation, quantification, and phenotyping.
+site_author: ATEIA Team
 
 theme:
   name: material
@@ -12,13 +9,29 @@ theme:
     accent: cyan
   features:
     - navigation.tabs
+    - navigation.sections
+    - navigation.top
     - search.highlight
 
 nav:
   - Home: index.md
+  - Getting Started: getting_started.md
+  - Installation: installation.md
+  - Input Format: input_spec.md
+  - Workflow: workflow.md
+  - Registration Methods: registration_methods.md
+  - Parameters: parameters.md
+  - Outputs: outputs.md
+  - Restartability: restartability_guide.md
+  - SLURM: slurm.md
+  - Testing: testing_guide.md
+  - Troubleshooting: troubleshooting.md
+  - Developer Guide: developer_guide.md
+  - Changelog: changelog.md
 
 markdown_extensions:
   - admonition
   - codehilite
+  - tables
   - toc:
       permalink: true

@@ -283,7 +283,6 @@ params {
     max_time   = '1.h'
 
     seg_gpu    = false
-    quant_gpu  = false
 
     input = 'tests/testdata/test_input.csv'
 }

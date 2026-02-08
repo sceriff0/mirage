@@ -148,8 +148,8 @@ process MERGE_QUANT_CSVS {
                       'convex_area', 'axis_major_length', 'axis_minor_length']
 
     # Merge marker columns from other CSVs
-    # FIX BUG #7: Use left join to preserve all cells from reference
-    # Fill missing values with 0 (cell not detected in that channel)
+    # Use left join to preserve all cells from the reference
+    # Fill missing values with 0 (cell not detected in this channel)
     print("\\nValidating CSV compatibility...")
     reference_cells = set(reference_csv[1]['label'])
 
@@ -160,10 +160,10 @@ process MERGE_QUANT_CSVS {
         extra = other_cells - reference_cells
 
         if missing:
-            print(f"  ⚠️  {csv_file.name}: Missing {len(missing)} cells from reference")
+            print(f"  WARNING: {csv_file.name}: Missing {len(missing)} cells from reference")
             print(f"     These cells will have 0 intensity for this channel")
         if extra:
-            print(f"  ⚠️  {csv_file.name}: Has {len(extra)} extra cells not in reference")
+            print(f"  WARNING: {csv_file.name}: Has {len(extra)} extra cells not in reference")
             print(f"     Extra cells will be ignored (not in segmentation mask)")
 
         # Get only marker columns (exclude morphology and DAPI if present)
@@ -173,7 +173,6 @@ process MERGE_QUANT_CSVS {
             # Select label + marker columns
             merge_df = df[['label'] + marker_cols]
 
-            # FIX BUG #7: Use left join to keep all reference cells
             # Cells missing from this channel will have NaN, which we fill with 0
             merged = merged.merge(merge_df, on='label', how='left')
 
@@ -186,12 +185,12 @@ process MERGE_QUANT_CSVS {
     # Validate no cells were lost (should never happen with left join)
     cells_lost = len(reference_csv[1]) - len(merged)
     if cells_lost > 0:
-        print(f"\\n❌ CRITICAL ERROR: Lost {cells_lost} cells during merge!")
+        print(f"\\nCRITICAL ERROR: Lost {cells_lost} cells during merge")
         print(f"  Reference had {len(reference_csv[1])} cells, merged has {len(merged)}")
         print(f"  This should not happen with left join - investigation needed")
         sys.exit(1)
     else:
-        print(f"\\n✓ All {len(merged)} cells from reference preserved")
+        print(f"\\nAll {len(merged)} cells from reference preserved")
 
     # Reorder columns: morphology first, then DAPI, then other markers
     morpho_present = [col for col in morphology_cols if col in merged.columns]
@@ -202,7 +201,7 @@ process MERGE_QUANT_CSVS {
 
     # Save merged CSV
     merged.to_csv('merged_quant.csv', index=False)
-    print(f"\\n✓ Merged CSV saved: {len(merged)} cells, {len(merged.columns)} columns")
+    print(f"\\nMerged CSV saved: {len(merged)} cells, {len(merged.columns)} columns")
     print(f"  Final columns: {', '.join(merged.columns)}")
 
     # Write versions file

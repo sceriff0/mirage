@@ -34,12 +34,9 @@ process SEGMENT {
     def pmin = params.seg_pmin ?: 1.0
     def pmax = params.seg_pmax ?: 99.8
 
-    // Quadruple n_tiles on each retry attempt to reduce memory usage
+    // Increase n_tiles on retry to reduce per-tile memory usage
     def n_tiles_y = (params.seg_n_tiles_y ?: 1) * Math.pow(4, task.attempt - 1) as Integer
     def n_tiles_x = (params.seg_n_tiles_x ?: 1) * Math.pow(4, task.attempt - 1) as Integer
-
-    // FIX WARNING #1: Validate DAPI is in channel 0
-    def dapi_validation = meta.channels && meta.channels[0]?.toUpperCase() == 'DAPI'
     """
     # Log input size for tracing (-L follows symlinks)
     input_bytes=\$(stat -L --printf="%s" ${merged_file})
@@ -48,14 +45,14 @@ process SEGMENT {
     echo "Sample: ${meta.patient_id}"
     echo "Attempt: ${task.attempt} - Using n_tiles_y=${n_tiles_y}, n_tiles_x=${n_tiles_x}"
 
-    # FIX WARNING #1: Runtime validation that DAPI is in channel 0
+    # Runtime validation: DAPI must be in channel 0 for segmentation
     if [ "${meta.channels ? meta.channels[0].toUpperCase() : 'UNKNOWN'}" != "DAPI" ]; then
-        echo "❌ ERROR: DAPI must be in channel 0 for segmentation!"
+        echo "ERROR: DAPI must be in channel 0 for segmentation"
         echo "Found channels: ${meta.channels ? meta.channels.join(', ') : 'Unknown'}"
         echo "Channel 0: ${meta.channels ? meta.channels[0] : 'Unknown'}"
         exit 1
     fi
-    echo "✅ Validated: DAPI is in channel 0"
+    echo "Validated: DAPI is in channel 0"
 
     segment.py \\
         --image ${merged_file} \\

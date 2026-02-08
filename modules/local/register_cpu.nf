@@ -27,10 +27,8 @@ process CPU_REGISTER {
 
     script:
     def args = task.ext.args ?: ''
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
-    // New separate crop sizes for affine and diffeomorphic stages
-    def affine_crop_size = params.cpu_reg_affine_crop_size ?: (params.cpu_reg_crop_size ?: 2000)
-    def diffeo_crop_size = params.cpu_reg_diffeo_crop_size ?: (params.cpu_reg_crop_size ?: 2000)
+    def affine_crop_size = params.cpu_reg_affine_crop_size ?: 2000
+    def diffeo_crop_size = params.cpu_reg_diffeo_crop_size ?: 2000
     def overlap_percent = params.cpu_reg_overlap_percent ?: 10.0
     def n_features = params.cpu_reg_n_features ?: 2000
     def n_workers = task.cpus  // Use all allocated CPUs
@@ -87,7 +85,6 @@ process CPU_REGISTER {
     """
 
     stub:
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch ${moving.simpleName}_registered.ome.tiff
     echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${moving.simpleName}.CPU_REGISTER.size.csv

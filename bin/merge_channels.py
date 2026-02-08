@@ -30,11 +30,14 @@ os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 # Import from lib modules for DRY principle
 sys.path.insert(0, str(Path(__file__).parent / 'utils'))
-try:
-    from logger import log_progress as log
-except ImportError:
-    def log(msg):
-        print(f"[INFO] {msg}")
+from logger import get_logger, configure_logging
+
+logger = get_logger(__name__)
+
+
+def log(msg: str) -> None:
+    """Log informational messages."""
+    logger.info(msg)
 
 try:
     from validation import log_image_stats, detect_wrapped_values, validate_image_range
@@ -639,7 +642,8 @@ def merge_channels(
     return channel_names, phenotype_colormap
 
 
-def main():
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Merge single-channel TIFFs into multi-channel OME-TIFF (QuPath compatible)'
     )
@@ -654,8 +658,13 @@ def main():
                         help='Pixel size in X (micrometers)')
     parser.add_argument('--physical-size-y', type=float, default=0.325,
                         help='Pixel size in Y (micrometers)')
+    return parser.parse_args()
 
-    args = parser.parse_args()
+
+def main() -> int:
+    """Run merge channels CLI."""
+    configure_logging()
+    args = parse_args()
 
     try:
         merge_channels(
@@ -669,12 +678,13 @@ def main():
             physical_size_y=args.physical_size_y,
         )
         log("Complete!")
+        return 0
     except Exception as e:
         log(f"Error: {e}")
         import traceback
         traceback.print_exc()
-        sys.exit(1)
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

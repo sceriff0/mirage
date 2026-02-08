@@ -32,7 +32,7 @@ workflow VALIS_ADAPTER {
         .map { patient_id, ref_item, all_items ->
             def ref_file = ref_item[1]
 
-            // CRITICAL: VALIS needs ALL images including reference for batch registration
+            // VALIS requires all slides, including the reference, for graph optimization.
             // We pass reference both separately (for --reference flag) AND in all_files
             // The REGISTER process uses stageAs to avoid filename collision
             def all_files = all_items.collect { item -> item[1] }
@@ -53,8 +53,7 @@ workflow VALIS_ADAPTER {
     // VALIS outputs: [patient_id, [registered_files], [metas]]
     // Need to convert to: [meta, file]
     //
-    // KISS PRINCIPLE: VALIS outputs are sorted by filename, so we sort inputs
-    // the same way to maintain 1:1 correspondence
+    // Match registered outputs back to metadata using marker signatures.
 
     ch_registered = REGISTER.out.registered
         .flatMap { patient_id, reg_files, metas ->
@@ -69,7 +68,7 @@ workflow VALIS_ADAPTER {
                 throw new Exception(error_msg)
             }
 
-            // CRITICAL: preprocess.py may reorder channel names in filenames
+            // preprocess.py may reorder channel names in filenames
             // Build lookup by marker SET (order-independent)
             def marker_set_to_meta = metas.collectEntries { meta ->
                 // Create sorted marker signature for matching

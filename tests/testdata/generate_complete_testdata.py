@@ -171,7 +171,7 @@ with open(OUT_DIR / 'invalid_no_ref.csv', 'w') as f:
     f.write(f'P001,{TESTDATA_ABS}/P001_mov2.ome.tiff,false,DAPI|PANCK|SMA\n')
 print(f"  Created invalid_no_ref.csv (no reference)")
 
-# 4c. DAPI not in channel 0 (when skip_nd2_conversion=true)
+# 4c. DAPI not in channel 0 (pre-converted OME-TIFF input)
 with open(OUT_DIR / 'invalid_dapi_position.csv', 'w') as f:
     f.write('patient_id,path_to_file,is_reference,channels\n')
     f.write(f'P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,PANCK|DAPI|SMA\n')  # DAPI NOT FIRST

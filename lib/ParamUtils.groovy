@@ -1,7 +1,7 @@
 class ParamUtils {
 
     static void validateStep(String step) {
-        def valid = ['preprocessing', 'registration', 'postprocessing', 'results', 'copy_results']
+        def valid = ['preprocessing', 'registration', 'postprocessing', 'copy_results']
         if (!(step in valid)) {
             throw new IllegalArgumentException("Invalid --step '${step}'. Valid values: ${valid}")
         }
@@ -19,11 +19,6 @@ class ParamUtils {
             preprocessing : ['patient_id','path_to_file','is_reference','channels'],
             registration  : ['patient_id','preprocessed_image','is_reference','channels'],
             postprocessing: ['patient_id','registered_image','is_reference','channels'],
-            results       : [
-                'patient_id',
-                'phenotype_csv','phenotype_geojson',
-                'phenotype_mapping','merged_csv','cell_mask','pyramid'
-            ],
             copy_results  : []  // No CSV required - just copies outdir to savedir
         ]
 

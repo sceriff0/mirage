@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -31,6 +31,9 @@ __all__ = [
     "place_crop_hardcutoff",
     "create_memmaps_for_merge",
     "cleanup_memmaps",
+    "build_feature_detector",
+    "build_feature_matcher",
+    "match_feature_points",
 ]
 
 
@@ -473,3 +476,74 @@ def cleanup_memmaps(tmp_dir: Path) -> None:
         logger.debug(f"Cleaned up temporary directory: {tmp_dir}")
     except Exception as e:
         logger.warning(f"Could not clean up temp directory {tmp_dir}: {e}")
+
+
+def build_feature_detector(detector_type: str = "superpoint", logger: Optional[Any] = None):
+    """Create a VALIS feature detector instance for the selected detector."""
+    from valis import feature_detectors
+
+    detector = detector_type.lower()
+    detector_map = {
+        "superpoint": feature_detectors.SuperPointFD,
+        "disk": feature_detectors.DiskFD,
+        "dedode": feature_detectors.DeDoDeFD,
+        "brisk": feature_detectors.BriskFD,
+        "vgg": feature_detectors.VggFD,
+    }
+    if detector not in detector_map:
+        raise ValueError(f"Unknown detector type: {detector_type}")
+
+    if logger:
+        logger.info(f"Initializing feature detector: {detector}")
+    return detector_map[detector]()
+
+
+def build_feature_matcher(detector_type: str = "superpoint", logger: Optional[Any] = None):
+    """Create a matcher compatible with the selected detector."""
+    from valis import feature_matcher
+
+    detector = detector_type.lower()
+    if detector == "superpoint":
+        if logger:
+            logger.info("Initializing SuperGlue matcher")
+        return feature_matcher.SuperGlueMatcher()
+    if detector in {"disk", "dedode"}:
+        if logger:
+            logger.info("Initializing LightGlue matcher")
+        return feature_matcher.LightGlueMatcher()
+    if logger:
+        logger.info("Initializing Matcher with USAC_MAGSAC filter")
+    return feature_matcher.Matcher(match_filter_method="USAC_MAGSAC", ransac_thresh=7)
+
+
+def match_feature_points(
+    matcher: Any,
+    ref_img: NDArray,
+    ref_desc: NDArray,
+    ref_kp: NDArray,
+    mov_img: NDArray,
+    mov_desc: NDArray,
+    mov_kp: NDArray,
+) -> Tuple[Any, Any, Any, Any]:
+    """Run feature matching with the correct matcher-specific signature."""
+    from valis import feature_matcher
+
+    if isinstance(matcher, feature_matcher.SuperGlueMatcher) or (
+        hasattr(feature_matcher, "LightGlueMatcher")
+        and isinstance(matcher, feature_matcher.LightGlueMatcher)
+    ):
+        return matcher.match_images(
+            img1=ref_img,
+            desc1=ref_desc,
+            kp1_xy=ref_kp,
+            img2=mov_img,
+            desc2=mov_desc,
+            kp2_xy=mov_kp,
+        )
+
+    return matcher.match_images(
+        desc1=ref_desc,
+        kp1_xy=ref_kp,
+        desc2=mov_desc,
+        kp2_xy=mov_kp,
+    )

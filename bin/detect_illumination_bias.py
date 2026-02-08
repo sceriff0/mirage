@@ -6,11 +6,20 @@ This module analyzes image channels to determine if they would benefit from
 BaSiC illumination correction or if correction would introduce artifacts.
 """
 
+import argparse
+import sys
+from pathlib import Path
+from typing import Dict, Tuple
+
 import numpy as np
 from numpy.typing import NDArray
-from typing import Tuple, Dict
 from scipy import ndimage
-from sklearn.preprocessing import StandardScaler
+
+# Add parent directory to path to import lib modules
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
+from logger import configure_logging, get_logger
+
+logger = get_logger(__name__)
 
 
 def compute_radial_intensity_profile(
@@ -98,6 +107,13 @@ def compute_spatial_variance(
                 tile_means.append(np.mean(tile))
                 tile_stds.append(np.std(tile))
 
+    if not tile_means:
+        return {
+            'tile_mean_cv': 0.0,
+            'tile_std_cv': 0.0,
+            'n_tiles': 0
+        }
+
     tile_means = np.array(tile_means)
     tile_stds = np.array(tile_stds)
 
@@ -142,6 +158,9 @@ def detect_vignetting(
     center_intensity = np.mean(profile_norm[:3])  # Center bins
     edge_intensity = np.mean(profile_norm[-3:])   # Edge bins
 
+    if center_intensity <= 1e-10:
+        return False, 0.0
+
     intensity_drop = (center_intensity - edge_intensity) / center_intensity
 
     return intensity_drop > threshold, float(intensity_drop)
@@ -153,8 +172,15 @@ def compute_signal_sparsity(image: NDArray) -> float:
 
     Sparse signals (< 5% coverage) may not have enough information for BaSiC.
     """
-    # Threshold at 2 sigma above background
-    threshold = np.percentile(image, 50) + 2 * np.std(image)
+    # Estimate foreground threshold from dynamic range.
+    # This keeps dense tissue channels high and sparse channels low.
+    low = np.percentile(image, 5)
+    high = np.percentile(image, 99)
+
+    if high <= low:
+        return 0.0
+
+    threshold = low + 0.1 * (high - low)
     signal_pixels = np.sum(image > threshold)
     total_pixels = image.size
 
@@ -229,7 +255,7 @@ def should_apply_basic_correction(
         decision = True
 
     # Rule 4: Apply if high tile variance
-    elif spatial_vars['tile_mean_cv'] > 0.2:
+    elif spatial_vars['tile_mean_cv'] > 0.2 or spatial_vars['tile_std_cv'] > 0.15:
         reasons.append(f"High tile variance (CV={spatial_vars['tile_mean_cv']:.2f})")
         decision = True
 
@@ -239,7 +265,7 @@ def should_apply_basic_correction(
         decision = False
 
     # Default: apply if moderate tile variance
-    elif spatial_vars['tile_mean_cv'] > 0.15:
+    elif spatial_vars['tile_mean_cv'] > 0.15 or spatial_vars['tile_std_cv'] > 0.12:
         reasons.append(f"Moderate tile variance (CV={spatial_vars['tile_mean_cv']:.2f})")
         decision = True
 
@@ -252,13 +278,13 @@ def should_apply_basic_correction(
 
     if verbose:
         status = "✓ APPLY BaSiC" if decision else "✗ SKIP BaSiC"
-        print(f"{status} - {channel_name}")
-        print(f"  Reasons: {' | '.join(reasons)}")
-        print(f"  Metrics:")
-        print(f"    - Vignetting: {vignetting_drop*100:.1f}% drop")
-        print(f"    - Tile variance CV: {spatial_vars['tile_mean_cv']:.3f}")
-        print(f"    - Signal sparsity: {sparsity*100:.1f}%")
-        print(f"    - Gradient magnitude: {gradient_mag:.4f}")
+        logger.info(f"{status} - {channel_name}")
+        logger.info(f"  Reasons: {' | '.join(reasons)}")
+        logger.info("  Metrics:")
+        logger.info(f"    - Vignetting: {vignetting_drop*100:.1f}% drop")
+        logger.info(f"    - Tile variance CV: {spatial_vars['tile_mean_cv']:.3f}")
+        logger.info(f"    - Signal sparsity: {sparsity*100:.1f}%")
+        logger.info(f"    - Gradient magnitude: {gradient_mag:.4f}")
 
     return decision, metrics
 
@@ -286,9 +312,9 @@ def analyze_all_channels(
         Dict mapping channel index to (should_correct, metrics)
     """
     if verbose:
-        print("=" * 80)
-        print("ILLUMINATION BIAS DETECTION")
-        print("=" * 80)
+        logger.info("=" * 80)
+        logger.info("ILLUMINATION BIAS DETECTION")
+        logger.info("=" * 80)
 
     decisions = {}
 
@@ -305,34 +331,39 @@ def analyze_all_channels(
         decisions[i] = (should_correct, metrics)
 
         if verbose:
-            print()
+            logger.info("")
 
     # Summary
     if verbose:
         n_correct = sum(1 for d, _ in decisions.values() if d)
         n_skip = len(decisions) - n_correct
-        print("=" * 80)
-        print(f"SUMMARY: Apply BaSiC to {n_correct}/{len(decisions)} channels")
-        print(f"         Skip {n_skip}/{len(decisions)} channels")
-        print("=" * 80)
+        logger.info("=" * 80)
+        logger.info(f"SUMMARY: Apply BaSiC to {n_correct}/{len(decisions)} channels")
+        logger.info(f"         Skip {n_skip}/{len(decisions)} channels")
+        logger.info("=" * 80)
 
     return decisions
 
 
-if __name__ == '__main__':
-    import argparse
-    import tifffile
-
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description='Detect which channels need BaSiC illumination correction'
     )
     parser.add_argument('--input', required=True, help='Input multichannel TIFF')
     parser.add_argument('--channel-names', nargs='+', help='Channel names')
+    return parser.parse_args()
 
-    args = parser.parse_args()
+
+def main() -> int:
+    """Run illumination bias analysis CLI."""
+    configure_logging()
+    args = parse_args()
+
+    import tifffile
 
     # Load image
-    print(f"Loading: {args.input}")
+    logger.info(f"Loading: {args.input}")
     image = tifffile.imread(args.input)
 
     if image.ndim == 2:
@@ -348,8 +379,14 @@ if __name__ == '__main__':
     decisions = analyze_all_channels(image, channel_names, verbose=True)
 
     # Print results
-    print("\nRECOMMENDATIONS:")
+    logger.info("RECOMMENDATIONS:")
     for i, (should_correct, metrics) in decisions.items():
         status = "APPLY" if should_correct else "SKIP"
-        print(f"  Channel {i} ({channel_names[i]}): {status}")
-        print(f"    → {metrics['reasoning']}")
+        logger.info(f"  Channel {i} ({channel_names[i]}): {status}")
+        logger.info(f"    -> {metrics['reasoning']}")
+
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

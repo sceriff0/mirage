@@ -13,13 +13,10 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/valid_preprocessing.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
 
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
 
                 preproc_tile_size = 256
                 preproc_n_iter = 1
@@ -30,10 +27,10 @@ nextflow_pipeline {
             assertAll(
                 { assert workflow.success },
                 // Checkpoint CSV created
-                { assert path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv").exists() },
+                { assert path("$outputDir/csv/preprocessed.csv").exists() },
                 // Validate checkpoint has correct structure
                 {
-                    def checkpoint = path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv")
+                    def checkpoint = path("$outputDir/csv/preprocessed.csv")
                     def lines = checkpoint.readLines()
                     assert lines.size() >= 2, "Checkpoint should have header + data"
                     assert lines[0].contains('patient_id'), "Checkpoint should have patient_id column"
@@ -54,7 +51,6 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                gpu_register = false
                 skip_registration_qc = true
             }
         }
@@ -63,10 +59,10 @@ nextflow_pipeline {
             assertAll(
                 { assert workflow.success },
                 // Registration checkpoint created
-                { assert path("$outputDir/checkpoint_csvs/registration_checkpoint.csv").exists() },
+                { assert path("$outputDir/csv/registered.csv").exists() },
                 // Validate checkpoint structure
                 {
-                    def checkpoint = path("$outputDir/checkpoint_csvs/registration_checkpoint.csv")
+                    def checkpoint = path("$outputDir/csv/registered.csv")
                     def lines = checkpoint.readLines()
                     assert lines.size() >= 2, "Checkpoint should have header + data"
                     assert lines[0].contains('patient_id'), "Checkpoint should have patient_id column"
@@ -87,7 +83,6 @@ nextflow_pipeline {
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
             }
         }
 
@@ -109,13 +104,10 @@ nextflow_pipeline {
                 input = "$projectDir/tests/testdata/valid_preprocessing.csv"
                 outdir = "$outputDir"
                 step = "preprocessing"
-                skip_nd2_conversion = true
 
                 max_cpus = 2
                 max_memory = '6.GB'
                 seg_gpu = false
-                quant_gpu = false
-                gpu_register = false
             }
         }
 
@@ -123,10 +115,10 @@ nextflow_pipeline {
             assertAll(
                 { assert workflow.success },
                 // Checkpoint CSV exists
-                { assert path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv").exists() },
+                { assert path("$outputDir/csv/preprocessed.csv").exists() },
                 // Verify multiple patients are processed (P001, P002 in test data)
                 {
-                    def checkpoint = path("$outputDir/checkpoint_csvs/preprocessing_checkpoint.csv")
+                    def checkpoint = path("$outputDir/csv/preprocessed.csv")
                     def lines = checkpoint.readLines()
                     // Header + at least 2 data rows (one per patient)
                     assert lines.size() >= 3, "Should have outputs for multiple patients"

@@ -29,8 +29,7 @@ include { ESTIMATE_FEATURE_DISTANCES        } from '../../modules/local/estimate
         - params.skip_registration_qc: true | false (skip QC generation)
         - params.qc_scale_factor: float (QC downsampling factor, default 0.25)
         - params.enable_feature_error: true | false (enable feature-based TRE)
-        - params.enable_segmentation_error: true | false (enable segmentation metrics)
-        - method: 'valis' | 'valis_pairs' | 'gpu' | 'cpu' (registration method)
+        - method: 'valis' | 'valis_pairs' | 'gpu' | 'cpu' | 'cpu_tiled'
 
     Input:
         ch_preprocessed: Channel of [meta, file] tuples
@@ -117,7 +116,6 @@ workflow REGISTRATION {
             // Find reference image
             def ref = items.find { item -> item[0].is_reference }
 
-            // FIX BUG #3: Make reference fallback configurable instead of silent
             if (!ref) {
                 if (params.allow_auto_reference) {
                     log.warn """

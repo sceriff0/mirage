@@ -1,5 +1,4 @@
 process GET_IMAGE_DIMS {
-    // FIX BUG #5: Use patient_id instead of non-existent meta.id
     tag "${meta.patient_id}"
     label 'process_single'
 

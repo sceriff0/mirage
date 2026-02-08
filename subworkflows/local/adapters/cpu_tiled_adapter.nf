@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+import static ChannelUtils.*
+
 /*
 ========================================================================================
     CPU TILED REGISTRATION ADAPTER
@@ -27,44 +29,7 @@ include { AFFINE_TILE       } from '../../../modules/local/affine_tile'
 include { STITCH_AFFINE     } from '../../../modules/local/stitch_affine'
 include { DIFFEO_TILE       } from '../../../modules/local/diffeo_tile'
 include { STITCH_DIFFEO     } from '../../../modules/local/stitch_diffeo'
-
-/*
-========================================================================================
-    PROCESS: PUBLISH_REFERENCE_CPU_TILED
-    Simple pass-through to publish reference images to registered directory
-========================================================================================
-*/
-process PUBLISH_REFERENCE_CPU_TILED {
-    tag "$meta.id"
-    label 'process_single'
-
-    publishDir "${params.outdir}/${meta.patient_id}/registered", mode: 'copy'
-
-    input:
-    tuple val(meta), path(image)
-
-    output:
-    tuple val(meta), path(image), emit: published
-    path "versions.yml"          , emit: versions
-
-    script:
-    """
-    # File is already staged by Nextflow, publishDir will copy it
-
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        bash: \$(bash --version | head -n1 | sed 's/GNU bash, version //')
-    END_VERSIONS
-    """
-
-    stub:
-    """
-    cat <<-END_VERSIONS > versions.yml
-    "${task.process}":
-        bash: stub
-    END_VERSIONS
-    """
-}
+include { PUBLISH_REFERENCE as PUBLISH_REFERENCE_CPU_TILED } from '../../../modules/local/publish_reference'
 
 workflow CPU_TILED_ADAPTER {
     take:
@@ -78,14 +43,8 @@ workflow CPU_TILED_ADAPTER {
     // for all non-reference images
 
     ch_pairs = ch_grouped_meta
-        .flatMap { patient_id, ref_item, all_items ->
-            def ref_file = ref_item[1]
-
-            all_items
-                .findAll { item -> !item[0].is_reference }
-                .collect { moving_item ->
-                    tuple(moving_item[0], ref_file, moving_item[1])
-                }
+        .flatMap { _patient_id, reference_item, all_items ->
+            toPairwiseTuples(reference_item, all_items)
         }
 
     // ========================================================================
@@ -192,7 +151,9 @@ workflow CPU_TILED_ADAPTER {
     // to the registered directory for checkpoint CSV consistency
 
     ch_references = ch_grouped_meta
-        .map { patient_id, ref_item, all_items -> ref_item }
+        .map { _patient_id, reference_item, _all_items ->
+            referenceTuple(reference_item)
+        }
 
     PUBLISH_REFERENCE_CPU_TILED(ch_references)
 

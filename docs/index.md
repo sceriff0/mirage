@@ -1,26 +1,30 @@
-# My Nextflow Pipeline
+# ATEIA Documentation
 
-Welcome to the documentation for My Nextflow Pipeline.
+ATEIA is a Nextflow DSL2 pipeline for multiplex microscopy processing:
 
-## Overview
+1. Preprocessing (image conversion and illumination correction)
+2. Registration (multiple methods, including tiled CPU)
+3. Postprocessing (segmentation, quantification, phenotyping, pyramid export)
+4. Result copy/archival (`copy_results`)
 
-This pipeline performs [describe what your pipeline does]. It is built 
-using Nextflow and can be run on various execution platforms including 
-local, SLURM, AWS Batch, and Google Cloud.
+This site is the canonical documentation surface for running and maintaining the pipeline.
 
-## Quick Start
-```bash
-nextflow run username/my-nextflow-pipeline \
-    --input samplesheet.csv \
-    --outdir results \
-    -profile docker
-```
+## Quick Links
 
-## Features
+- Start here: [Getting Started](getting_started.md)
+- Input CSV formats: [Input Format](input_spec.md)
+- Step and channel flow: [Workflow](workflow.md)
+- Parameters and defaults: [Parameters](parameters.md)
+- Restart and archival: [Restartability](restartability_guide.md)
 
-This pipeline includes quality control, alignment, variant calling, 
-and comprehensive reporting capabilities.
+## Canonical Runtime Surface
 
-## Citation
+- `--step`: `preprocessing`, `registration`, `postprocessing`, `copy_results`
+- `--registration_method`: `valis`, `valis_pairs`, `gpu`, `cpu`, `cpu_tiled`
+- `copy_results` does not require `--input`; it requires `--outdir` and `--savedir`
 
-If you use this pipeline, please cite: [your citation]
+## Source of Truth
+
+- Pipeline entrypoint: `main.nf`
+- Defaults: `nextflow.config`
+- Schema: `nextflow_schema.json`

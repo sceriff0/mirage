@@ -5,8 +5,7 @@ nextflow.enable.dsl = 2
     MERGE AND PYRAMID MODULE
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Merges single-channel TIFFs into a pyramidal OME-TIFF with proper metadata
-    for QuPath visualization. This replaces the previous two-step approach of
-    merge_channels.py followed by bfconvert.
+    for QuPath visualization.
 
     Features:
     - Generates pyramidal OME-TIFF directly (no bfconvert needed)
@@ -39,9 +38,8 @@ process MERGE_AND_PYRAMID {
 
     script:
     def args = task.ext.args ?: ''
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
 
-    // Get pixel size from params (use pixel_size which is already defined in config)
+    // Parameters are centralized in nextflow.config; keep conservative fallbacks.
     def pixel_size_x = params.pixel_size ?: 0.325
     def pixel_size_y = params.pixel_size ?: 0.325
     def pyramid_resolutions = params.pyramid_resolutions ?: 5
@@ -81,7 +79,6 @@ process MERGE_AND_PYRAMID {
     """
 
     stub:
-    def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     touch pyramid.ome.tiff
     echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}.MERGE_AND_PYRAMID.size.csv
