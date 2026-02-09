@@ -680,17 +680,11 @@ def run_phenotyping_pipeline(
         # Tumor (CD45- SMA-)
         df_nn.loc[
             df_nn['pheno_markers'].apply(
-                lambda x: "CD45" not in x and "SMA" not in x and "PANCK" in x
+                lambda x: "CD45" not in x and "SMA" not in x #and "PANCK" in x
             ),
             'phenotype'
-        ] = "PANCK+ Tumor"
-
-        df_nn.loc[
-            df_nn['pheno_markers'].apply(
-                lambda x: "CD45" not in x and "SMA" not in x and "VIMENTIN" in x
-            ),
-            'phenotype'
-        ] = "VIM+ Tumor"
+        ] = "Tumor"
+        
 
         logger.info(f"Phenotype distribution:\n{df_nn['phenotype'].value_counts()}")
 
