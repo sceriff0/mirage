@@ -96,9 +96,11 @@ MEMORY_PRESETS = {
     },
     "low": {
         # Feature detection
-        "feature_detector_cls": feature_detectors.BriskFD,
-        "matcher": feature_matcher.Matcher(),  # RANSAC-based
-        "num_features": 1000,  # Reduced from 2000
+        #"feature_detector_cls": feature_detectors.BriskFD,
+        #"matcher": feature_matcher.Matcher(),  # RANSAC-based
+        "feature_detector_cls": feature_detectors.SuperPointFD,
+        "matcher": feature_matcher.SuperGlueMatcher(),
+        "num_features": 5000,  
         # Image dimensions (biggest memory impact)
         "max_processed_image_dim_px": 256,
         "max_non_rigid_registration_dim_px": 1024,  # Reduced from 1024 (4x RAM reduction)
