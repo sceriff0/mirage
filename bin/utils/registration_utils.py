@@ -485,8 +485,8 @@ def build_feature_detector(detector_type: str = "superpoint", logger: Optional[A
     detector = detector_type.lower()
     detector_map = {
         "superpoint": feature_detectors.SuperPointFD,
-        "disk": feature_detectors.DiskFD,
-        "dedode": feature_detectors.DeDoDeFD,
+        #"disk": feature_detectors.DiskFD,
+        #"dedode": feature_detectors.DeDoDeFD,
         "brisk": feature_detectors.BriskFD,
         "vgg": feature_detectors.VggFD,
     }
