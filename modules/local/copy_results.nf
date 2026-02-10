@@ -118,41 +118,6 @@ process COPY_RESULTS {
         exit 1
     fi
 
-    echo ""
-    echo "========================================"
-    echo "Verifying transfer with checksums"
-    echo "========================================"
-
-    CHECKSUM_FILE=\$(mktemp)
-    trap 'rm -f "\$CHECKSUM_FILE"' EXIT
-    cd "${source_dir}"
-
-    # Use BLAKE3 if available (5-10x faster than MD5), fallback to MD5
-    if command -v b3sum &> /dev/null; then
-        echo "Using BLAKE3 (parallel, fast)..."
-        find . -type f -print0 | sort -z | xargs -0 -P ${parallel_jobs} -I {} b3sum {} > "\$CHECKSUM_FILE"
-        cd "${destination_dir}"
-        b3sum -c "\$CHECKSUM_FILE" > "\$VERIFY_LOG" 2>&1
-    else
-        echo "Using MD5 (parallel)..."
-        find . -type f -print0 | sort -z | xargs -0 -P ${parallel_jobs} -I {} md5sum {} > "\$CHECKSUM_FILE"
-        cd "${destination_dir}"
-        md5sum -c "\$CHECKSUM_FILE" > "\$VERIFY_LOG" 2>&1
-    fi
-
-    VERIFY_EXIT=\$?
-
-    if [ \$VERIFY_EXIT -ne 0 ] || grep -q "FAILED" "\$VERIFY_LOG"; then
-        echo ""
-        echo "ERROR: Checksum verification failed!"
-        grep "FAILED" "\$VERIFY_LOG" || true
-        echo "Source NOT deleted"
-        exit 1
-    fi
-
-    echo ""
-    echo "All \$SOURCE_FILES files verified successfully"
-
     if [ "${delete_source}" = "true" ]; then
         echo ""
         echo "Deleting source: ${source_dir}"
