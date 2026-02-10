@@ -43,6 +43,43 @@ from utils.tiling import (
 )
 
 
+# =============================================================================
+# Performance optimization: Monkey-patch SOM cluster mapping with larger batch
+# Original pixie uses batch_size=100, causing 21M iterations for 2B pixels.
+# This patch uses batch_size=10000 for ~100x fewer iterations.
+# =============================================================================
+def _patched_generate_som_clusters(self, external_data: pd.DataFrame) -> np.ndarray:
+    """Optimized SOM cluster mapping with larger batch size."""
+    from pyFlowSOM import map_data_to_nodes
+    from alpineer.misc_utils import verify_in_list
+
+    weights_cols = self.weights.columns.values
+    verify_in_list(weights_cols=weights_cols, external_data_cols=external_data.columns.values)
+
+    # Pre-cast types once (not per-batch)
+    weights_data = self.weights.values.astype(np.float64)
+    external_values = external_data[weights_cols].values.astype(np.float64)
+
+    cluster_labels = []
+    batch_size = 10000  # Was 100 in original!
+
+    for i in range(0, external_values.shape[0], batch_size):
+        cluster_labels.append(map_data_to_nodes(
+            weights_data,
+            external_values[i:i + batch_size]
+        )[0])
+
+    if not cluster_labels:
+        return np.empty(0)
+    return np.concatenate(cluster_labels)
+
+
+def _apply_som_optimization():
+    """Apply the monkey-patch to PixieSOMCluster."""
+    from ark.phenotyping.cluster_helpers import PixieSOMCluster
+    PixieSOMCluster.generate_som_clusters = _patched_generate_som_clusters
+
+
 def get_image_dimensions(tiff_dir: str, fov_name: str) -> tuple:
     """Get dimensions of the first channel image in FOV directory."""
     fov_dir = Path(tiff_dir) / fov_name
@@ -132,6 +169,8 @@ def main():
             pixel_som_clustering,
             pixie_preprocessing
         )
+        # Apply SOM optimization (batch_size 100 -> 10000)
+        _apply_som_optimization()
     except ImportError as e:
         print(f"ERROR: Failed to import ark-analysis modules: {e}", file=sys.stderr)
         print("Please ensure ark-analysis==0.6.4 is installed.", file=sys.stderr)
@@ -148,7 +187,7 @@ def main():
         args.batch_size = 3  # Conservative default
 
     # Cap batch_size to prevent memory issues with spawn multiprocessing
-    MAX_BATCH_SIZE = 5
+    MAX_BATCH_SIZE = 4
     args.batch_size = min(args.batch_size, MAX_BATCH_SIZE)
 
     print(f"Pixie Pixel Clustering")
