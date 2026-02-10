@@ -62,12 +62,15 @@ def _patched_generate_som_clusters(self, external_data: pd.DataFrame) -> np.ndar
 
     cluster_labels = []
     batch_size = 10000  # Was 100 in original!
+    total_batches = (external_values.shape[0] + batch_size - 1) // batch_size
 
-    for i in range(0, external_values.shape[0], batch_size):
+    for batch_idx, i in enumerate(range(0, external_values.shape[0], batch_size)):
         cluster_labels.append(map_data_to_nodes(
             weights_data,
             external_values[i:i + batch_size]
         )[0])
+        if (batch_idx + 1) % 200 == 0:
+            print(f"    SOM mapping progress: {batch_idx + 1}/{total_batches} batches")
 
     if not cluster_labels:
         return np.empty(0)
