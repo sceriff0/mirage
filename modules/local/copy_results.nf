@@ -24,7 +24,6 @@ process COPY_RESULTS {
     def parallel_jobs = task.cpus ?: 4
     """
     #!/bin/bash
-    set -euo pipefail
 
     LOG="transfer.log"
     VERIFY_LOG="verification.log"
@@ -97,7 +96,7 @@ process COPY_RESULTS {
             rsync -avL \\
             --inplace \\
             --append-verify \\
-            --timeout=600 \\
+            --timeout=1800 \\
             --partial \\
             "{}" "${destination_dir}/"
 
