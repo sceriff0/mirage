@@ -270,10 +270,10 @@ def process_image_pair(
     # Compute improvement metrics
     log_progress(f"\n[5/5] Computing improvement metrics...")
     improvement = {
-        "distance_reduction_pixels": before_stats['mean'] - after_stats['mean'],
-        "distance_reduction_percent": ((before_stats['mean'] - after_stats['mean']) / before_stats['mean'] * 100) if before_stats['mean'] > 0 else 0,
-        "match_count_increase": n_matches_after - n_matches_before,
-        "descriptor_distance_decrease": mean_desc_distance_before - mean_desc_distance_after
+        "distance_reduction_pixels": float(before_stats['mean'] - after_stats['mean']),
+        "distance_reduction_percent": float(((before_stats['mean'] - after_stats['mean']) / before_stats['mean'] * 100) if before_stats['mean'] > 0 else 0),
+        "match_count_increase": int(n_matches_after - n_matches_before),
+        "descriptor_distance_decrease": float(mean_desc_distance_before - mean_desc_distance_after)
     }
     log_progress(f"  Distance reduction: {improvement['distance_reduction_pixels']:.2f} pixels ({improvement['distance_reduction_percent']:.1f}%)")
     log_progress(f"  Match count change: {improvement['match_count_increase']:+d}")
