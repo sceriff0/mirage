@@ -313,22 +313,56 @@ def convert_to_ome_tiff(
     px_y = metadata.get('physical_pixel_size_y', pixel_size_um)
     px_z = metadata.get('physical_pixel_size_z')
     
-    # Normalize dimensions
+    # Normalize dimensions to standard OME-TIFF order (C before spatial dims)
+    # Handle case where C is at the end (e.g., TZYXC from S dimension remapping)
+    if 'C' in original_dims and original_dims.endswith('C'):
+        # Move C from end to before spatial dimensions
+        c_pos = original_dims.index('C')
+        # Find where Y starts (spatial dimensions)
+        y_pos = original_dims.index('Y')
+
+        # Transpose: move C axis to position just before Y
+        axes_list = list(range(image_data.ndim))
+        axes_list.remove(c_pos)
+        axes_list.insert(y_pos, c_pos)
+        image_data = np.transpose(image_data, axes_list)
+
+        # Rebuild dimension string
+        dims_list = list(original_dims)
+        dims_list.remove('C')
+        dims_list.insert(y_pos, 'C')
+        original_dims = ''.join(dims_list)
+        logger.info(f"Transposed C to standard position: {original_dims}, shape: {image_data.shape}")
+
     if original_dims == 'TCZYX':
         c_axis = 1
         if image_data.shape[0] == 1:
             image_data = image_data[0]
             original_dims = 'CZYX'
             c_axis = 0
+    elif original_dims == 'TZCYX':
+        c_axis = 2
+        # Squeeze T if singleton
+        if image_data.shape[0] == 1:
+            image_data = image_data[0]
+            original_dims = 'ZCYX'
+            c_axis = 1
+    elif original_dims == 'ZCYX':
+        c_axis = 1
     elif original_dims in ('CZYX', 'CYX'):
         c_axis = 0
     else:
-        c_axis = 0
-    
+        # Try to find C axis position
+        c_axis = original_dims.index('C') if 'C' in original_dims else 0
+
     # Squeeze Z if singleton
     if original_dims == 'CZYX' and image_data.shape[1] == 1:
         image_data = image_data[:, 0, :, :]
         original_dims = 'CYX'
+    elif original_dims == 'ZCYX' and image_data.shape[0] == 1:
+        image_data = image_data[0]
+        original_dims = 'CYX'
+        c_axis = 0
     
     # Rearrange channels
     if channel_names != output_channels:
