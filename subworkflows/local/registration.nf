@@ -239,10 +239,19 @@ workflow REGISTRATION {
                 tuple(meta, ref_file, mov_file, reg_file)
             }
 
-        if (params.enable_feature_error) {
-            ESTIMATE_FEATURE_DISTANCES(ch_for_error)
-            ch_error_metrics = ch_error_metrics.mix(ESTIMATE_FEATURE_DISTANCES.out.distance_metrics)
-        }
+        // Validate that we have images to process
+        ch_for_error
+            .count()
+            .subscribe { n ->
+                if (n == 0) {
+                    log.warn "No images available for feature error estimation - check channel metadata consistency"
+                } else {
+                    log.info "Feature error estimation: processing ${n} image(s)"
+                }
+            }
+
+        ESTIMATE_FEATURE_DISTANCES(ch_for_error)
+        ch_error_metrics = ch_error_metrics.mix(ESTIMATE_FEATURE_DISTANCES.out.distance_metrics)
     }
 
     // ========================================================================

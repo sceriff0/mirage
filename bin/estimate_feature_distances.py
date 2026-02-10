@@ -191,7 +191,7 @@ def process_image_pair(
     log_progress(f"\n[2/5] Processing reference image...")
     log_progress(f"  Reference: {Path(reference_path).name}")
     log_progress(f"  Extracting DAPI channel (channel 0) for feature detection...")
-    reference_img = load_image_grayscale(reference_path, max_dim=None)
+    reference_img = load_image_grayscale(reference_path, max_dim=max_dim)
 
     log_progress("  Detecting reference features...")
     ref_kp, ref_desc = detector.detect_and_compute(reference_img)
@@ -201,7 +201,7 @@ def process_image_pair(
     log_progress(f"\n[3/5] Processing moving image (BEFORE registration)...")
     log_progress(f"  Moving: {Path(moving_path).name}")
     log_progress(f"  Extracting DAPI channel (channel 0) for feature detection...")
-    moving_img = load_image_grayscale(moving_path, max_dim=None)
+    moving_img = load_image_grayscale(moving_path, max_dim=max_dim)
 
     # Detect features in moving image
     log_progress("  Detecting features in moving image...")
@@ -236,7 +236,7 @@ def process_image_pair(
     log_progress(f"\n[4/5] Processing registered image (AFTER registration)...")
     log_progress(f"  Registered: {Path(registered_path).name}")
     log_progress(f"  Extracting DAPI channel (channel 0) for feature detection...")
-    registered_img = load_image_grayscale(registered_path, max_dim=None)
+    registered_img = load_image_grayscale(registered_path, max_dim=max_dim)
 
     # Detect features in registered image
     log_progress("  Detecting features in registered image...")
