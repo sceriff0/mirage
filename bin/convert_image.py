@@ -64,14 +64,30 @@ def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
 
     # Check if 'S' dimension should be treated as channels
     # This happens when image has 'S' but 'C' is 1 or not meaningful
+    image_data = None  # Will be set below
     if 'S' in dim_order and (num_channels == 1 or 'C' not in dim_order):
         s_count = img.dims.S
         if s_count > 1:
             logger.info(f"Detected 'S' dimension ({s_count}) used as channels instead of 'C' ({num_channels})")
             num_channels = s_count
+
+            # If there's a singleton C dimension, squeeze it out to avoid
+            # having two 'C' characters in the dimension order
+            if 'C' in dim_order and img.dims.C == 1:
+                c_pos = dim_order.index('C')
+                image_data = np.squeeze(img.data, axis=c_pos)
+                dim_order = dim_order[:c_pos] + dim_order[c_pos+1:]
+                logger.info(f"Squeezed singleton C dimension at position {c_pos}")
+            else:
+                image_data = img.data
+
             # Remap dimension order for downstream processing (treat S as C)
             dim_order = dim_order.replace('S', 'C')
             logger.info(f"Remapped dimension order: {dim_order}")
+
+    # Load data if not already loaded during S dimension handling
+    if image_data is None:
+        image_data = img.data
 
     ps = img.physical_pixel_sizes
     pixel_size_x = ps.X if ps.X is not None else PIXEL_SIZE_UM
@@ -80,8 +96,6 @@ def read_image_bioio(file_path: Path) -> Tuple[np.ndarray, dict]:
 
     logger.info(f"Pixel sizes - X: {pixel_size_x}, Y: {pixel_size_y}, Z: {pixel_size_z}")
     logger.info(f"Channel names from file: {img.channel_names}")
-
-    image_data = img.data  # TCZYX order (or TSZYX if S is used)
 
     metadata = {
         'num_channels': num_channels,
