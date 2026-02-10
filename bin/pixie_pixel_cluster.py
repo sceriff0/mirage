@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import tifffile
+import gc
 
 # Add parent directory to path for utils imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -142,10 +143,13 @@ def main():
 
     channels = args.channels
 
-    # Determine batch_size from CPU count if not specified
+    # Determine batch_size with conservative default (original pixie uses batch_size=5 max)
     if args.batch_size is None:
-        cpu_count = os.cpu_count() or 4
-        args.batch_size = max(1, cpu_count // 2)
+        args.batch_size = 3  # Conservative default
+
+    # Cap batch_size to prevent memory issues with spawn multiprocessing
+    MAX_BATCH_SIZE = 5
+    args.batch_size = min(args.batch_size, MAX_BATCH_SIZE)
 
     print(f"Pixie Pixel Clustering")
     print(f"=" * 50)
@@ -247,6 +251,11 @@ def main():
         print(f"Multiprocessing enabled: batch_size={batch_size}, FOVs={len(fovs)}")
     else:
         print(f"Sequential processing: {len(fovs)} FOV(s)")
+
+    # Warn if tile count is very high
+    if len(fovs) > 100:
+        print(f"WARNING: High tile count ({len(fovs)}). Consider increasing tile_size.")
+        print(f"  Current: {args.tile_size}. For 50k images, use 4096-8192.")
     print()
 
     # =========================================================================
@@ -273,6 +282,7 @@ def main():
     )
     print("  Pixel matrix created successfully.")
     align_norm_vals_channel_order(base_dir, norm_vals_name, channels)
+    gc.collect()  # Free memory before SOM training
 
     # =========================================================================
     # Step 2: Train pixel SOM
@@ -293,6 +303,7 @@ def main():
         seed=args.seed
     )
     print("  SOM training complete.")
+    gc.collect()  # Free training data memory before cluster assignment
 
     # =========================================================================
     # Step 3: Assign pixels to SOM clusters
@@ -317,6 +328,7 @@ def main():
         pc_chan_avg_som_cluster_name=pc_chan_avg_som_cluster_name
     )
     print("  SOM cluster assignment complete.")
+    gc.collect()  # Free memory before consensus clustering
 
     # =========================================================================
     # Step 4: Consensus clustering for meta-clusters
@@ -345,6 +357,7 @@ def main():
         pc_chan_avg_meta_cluster_name=pc_chan_avg_meta_cluster_name
     )
     print("  Consensus clustering complete.")
+    gc.collect()  # Free memory after consensus clustering
 
     # =========================================================================
     # Step 4b: Create pixel_meta_cluster_rename column (default identity mapping)

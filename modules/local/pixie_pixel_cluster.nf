@@ -55,8 +55,9 @@ process PIXIE_PIXEL_CLUSTER {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     def fov_name = meta.patient_id
     def channels_arg = channels.join(' ')
-    // Calculate batch_size from allocated CPUs (use half to leave headroom)
-    def batch_size = params.pixie_batch_size ?: Math.max(1, (task.cpus / 2).intValue())
+    // Calculate batch_size with memory-aware cap (original pixie uses batch_size=5 max)
+    def raw_batch = params.pixie_batch_size ?: Math.max(1, (task.cpus / 4).intValue())
+    def batch_size = Math.min(raw_batch, 5)  // Cap at 5 to prevent OOM with spawn multiprocessing
     def tile_size = params.pixie_tile_size ?: 2048
     def multiprocess_flag = params.pixie_multiprocess != false ? '--multiprocess' : ''
     """
