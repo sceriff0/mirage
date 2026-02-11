@@ -5,8 +5,6 @@ process ESTIMATE_FEATURE_DISTANCES {
     label 'process_medium'
     container "${params.container.registration}"
 
-    publishDir "${params.outdir}/${meta.patient_id}/${params.registration_method}/feature_distances", mode: 'copy', pattern: "*.{json,png}"
-
     // Measures feature distances BEFORE and AFTER registration for a single image
     // Detects and matches features in (ref vs moving), then (ref vs registered)
     // Computes pixel-level distances between matched features as TRE metric

@@ -9,7 +9,6 @@ IMPORT SUBWORKFLOWS
 include { PREPROCESSING       } from './subworkflows/local/preprocess'
 include { REGISTRATION        } from './subworkflows/local/registration'
 include { POSTPROCESSING      } from './subworkflows/local/postprocess'
-include { COPY_RESULTS        } from './modules/local/copy_results'
 include { AGGREGATE_SIZE_LOGS } from './modules/local/aggregate_size_logs'
 
 /*
@@ -75,44 +74,7 @@ workflow {
         validateRegistrationMethod(params.registration_method)
     }
 
-    def csv_steps = ['preprocessing', 'registration', 'postprocessing']
-    def resolveToAbsolute = { String raw_path ->
-        raw_path.startsWith('/') ? raw_path : "${workflow.launchDir}/${raw_path}"
-    }
-    def normalizePath = { String raw_path ->
-        new File(resolveToAbsolute(raw_path)).toPath().normalize().toString()
-    }
-    def validateCopyPaths = { String source_path, String destination_path, boolean require_source ->
-        if (!destination_path) {
-            error "Please provide --savedir for copy_results"
-        }
-
-        def source_norm = normalizePath(source_path)
-        def destination_norm = normalizePath(destination_path)
-
-        if (source_norm == destination_norm) {
-            error "savedir and outdir cannot be the same path"
-        }
-
-        // Prevent recursive copy paths (destination nested inside source)
-        if (destination_norm.startsWith("${source_norm}${File.separator}")) {
-            error "savedir cannot be inside outdir (${destination_norm} is under ${source_norm})"
-        }
-
-        if (require_source) {
-            def source_dir = new File(source_norm)
-            if (!source_dir.exists()) {
-                error "Source directory for copy_results does not exist: ${source_norm}"
-            }
-            if (!source_dir.isDirectory()) {
-                error "Source path for copy_results is not a directory: ${source_norm}"
-            }
-        }
-
-        return [source_norm, destination_norm]
-    }
-
-    if (params.step in csv_steps) {
+    if (params.step in ['preprocessing', 'registration', 'postprocessing']) {
         if (!params.input) {
             error "Please provide --input for step '${params.step}'"
         }
@@ -122,27 +84,8 @@ workflow {
         )
     }
 
-    def copy_paths = null
-    if (params.step == 'copy_results') {
-        copy_paths = validateCopyPaths(params.outdir, params.savedir, true)
-    } else if (params.savedir) {
-        copy_paths = validateCopyPaths(params.outdir, params.savedir, false)
-    }
-
     if (params.dry_run) {
         log.info "DRY RUN: all validations passed"
-        return
-    }
-
-    /* -------------------- COPY RESULTS ONLY -------------------- */
-
-    if (params.step == 'copy_results') {
-        COPY_RESULTS(
-            Channel.of('ready'),
-            copy_paths[0],
-            copy_paths[1],
-            params.copy_delete_source
-        )
         return
     }
 
@@ -184,18 +127,6 @@ workflow {
             : REGISTRATION.out.registered  // Direct channel - enables patient-level parallelism!
 
         POSTPROCESSING(ch_for_postprocessing)
-
-        /* -------------------- COPY RESULTS TO SAVEDIR -------------------- */
-
-        // Copy results to savedir after postprocessing completes
-        if (params.savedir && copy_paths) {
-            COPY_RESULTS(
-                POSTPROCESSING.out.checkpoint_csv.map { 'ready' },
-                copy_paths[0],
-                copy_paths[1],
-                params.copy_delete_source
-            )
-        }
     }
 
     /* -------------------- TRACE AGGREGATION -------------------- */

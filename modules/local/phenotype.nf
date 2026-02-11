@@ -15,8 +15,6 @@ process PHENOTYPE {
 
     container 'docker://bolt3x/attend_image_analysis:quantification_gpu'
 
-    publishDir "${params.outdir}/${meta.patient_id}/phenotype", mode: 'copy'
-
     input:
     tuple val(meta), path(quant_csv)
     path(phenotype_config)

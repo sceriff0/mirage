@@ -1,7 +1,7 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema",
-    "$id": "https://raw.githubusercontent.com/your-org/ateia/main/nextflow_schema.json",
-    "title": "ATEIA WSI Processing Pipeline Parameters",
+    "$id": "https://raw.githubusercontent.com/your-org/mirage/main/nextflow_schema.json",
+    "title": "MIRAGE WSI Processing Pipeline Parameters",
     "description": "Schema synchronized with nextflow.config canonical params surface.",
     "type": "object",
     "properties": {
@@ -20,11 +20,6 @@
                 "jpeg",
                 "none"
             ]
-        },
-        "copy_delete_source": {
-            "type": "boolean",
-            "description": "Pipeline parameter `copy_delete_source`.",
-            "default": false
         },
         "cpu_reg_affine_crop_size": {
             "type": "integer",
@@ -322,14 +317,6 @@
                 "cpu_tiled"
             ]
         },
-        "savedir": {
-            "type": [
-                "string",
-                "null"
-            ],
-            "description": "Pipeline parameter `savedir`.",
-            "default": null
-        },
         "seg_expand_distance": {
             "type": "integer",
             "description": "Pipeline parameter `seg_expand_distance`.",
@@ -411,8 +398,7 @@
             "enum": [
                 "preprocessing",
                 "registration",
-                "postprocessing",
-                "copy_results"
+                "postprocessing"
             ]
         },
         "tilex": {

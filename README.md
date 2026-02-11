@@ -1,6 +1,6 @@
-# ATEIA
+# MIRAGE
 
-ATEIA is a Nextflow DSL2 pipeline for whole-slide and multiplex microscopy workflows:
+MIRAGE is a Nextflow DSL2 pipeline for whole-slide and multiplex microscopy workflows:
 
 - preprocessing
 - registration
@@ -8,7 +8,6 @@ ATEIA is a Nextflow DSL2 pipeline for whole-slide and multiplex microscopy workf
 - quantification
 - phenotyping
 - pyramidal OME-TIFF export
-- results archival (`copy_results`)
 
 ## Quick Start
 

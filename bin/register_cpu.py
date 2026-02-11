@@ -12,6 +12,7 @@ Memory-aware design:
 
 Usage: same CLI as GPU script. Requires DIPY for CPU-based diffeomorphic registration.
 """
+from __future__ import annotations
 
 import argparse
 import logging
@@ -56,6 +57,8 @@ except Exception as e:
     _dipy_import_error = str(e)
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def print_dipy_diagnostics():

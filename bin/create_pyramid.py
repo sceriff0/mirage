@@ -24,6 +24,8 @@ import tifffile
 
 logger = get_logger(__name__)
 
+__all__ = ["main"]
+
 
 def create_pyramidal_ometiff(
     merged_image_path: Path,

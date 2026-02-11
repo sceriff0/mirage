@@ -9,7 +9,7 @@
         <meta name="description" content="Nextflow pipeline for microscopy preprocessing, registration, segmentation, quantification, and phenotyping.">
       
       
-        <meta name="author" content="ATEIA Team">
+        <meta name="author" content="MIRAGE Team">
       
       
       
@@ -27,7 +27,7 @@
     
     
       
-        <title>Restartability - ATEIA Pipeline</title>
+        <title>Restartability - MIRAGE Pipeline</title>
       
     
     
@@ -90,7 +90,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href=".." title="ATEIA Pipeline" class="md-header__button md-logo" aria-label="ATEIA Pipeline" data-md-component="logo">
+    <a href=".." title="MIRAGE Pipeline" class="md-header__button md-logo" aria-label="MIRAGE Pipeline" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -104,7 +104,7 @@
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
           <span class="md-ellipsis">
-            ATEIA Pipeline
+            MIRAGE Pipeline
           </span>
         </div>
         <div class="md-header__topic" data-md-component="header-topic">
@@ -467,13 +467,13 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href=".." title="ATEIA Pipeline" class="md-nav__button md-logo" aria-label="ATEIA Pipeline" data-md-component="logo">
+    <a href=".." title="MIRAGE Pipeline" class="md-nav__button md-logo" aria-label="MIRAGE Pipeline" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
 
     </a>
-    ATEIA Pipeline
+    MIRAGE Pipeline
   </label>
   
   <ul class="md-nav__list" data-md-scrollfix>
@@ -1101,7 +1101,7 @@
 
 
 <h1 id="restartability-and-copy-results">Restartability and Copy Results<a class="headerlink" href="#restartability-and-copy-results" title="Permanent link">&para;</a></h1>
-<p>ATEIA is checkpoint-driven. Each major stage writes a CSV that can be used as input to the next stage.</p>
+<p>MIRAGE is checkpoint-driven. Each major stage writes a CSV that can be used as input to the next stage.</p>
 <h2 id="valid-step-entrypoints">Valid Step Entrypoints<a class="headerlink" href="#valid-step-entrypoints" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>preprocessing</code></li>
@@ -1137,7 +1137,7 @@
 <div class="codehilite"><pre><span></span><code>nextflow<span class="w"> </span>run<span class="w"> </span>main.nf<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--step<span class="w"> </span>copy_results<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--outdir<span class="w"> </span>results<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--savedir<span class="w"> </span>/archive/ateia_run
+<span class="w">  </span>--savedir<span class="w"> </span>/archive/mirage_run
 </code></pre></div>
 
 <h2 id="safety-behavior-for-copy_results">Safety Behavior for <code>copy_results</code><a class="headerlink" href="#safety-behavior-for-copy_results" title="Permanent link">&para;</a></h2>

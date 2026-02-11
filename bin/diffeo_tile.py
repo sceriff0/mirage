@@ -12,6 +12,7 @@ Usage:
                    --reference ref.tiff --affine affine.tiff \
                    --output-prefix tile_diffeo_0001
 """
+from __future__ import annotations
 
 import argparse
 import gc
@@ -30,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger, configure_logging
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 # CPU imports with availability check
 try:

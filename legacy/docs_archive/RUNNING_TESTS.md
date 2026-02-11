@@ -1,6 +1,6 @@
-# Running Tests in ATEIA Pipeline
+# Running Tests in MIRAGE Pipeline
 
-This guide explains how to run tests for the ATEIA WSI processing pipeline using both the Nextflow test profile and the nf-test framework, following [nf-core best practices](https://nf-co.re/docs/guidelines/pipelines/recommendations/testing).
+This guide explains how to run tests for the MIRAGE WSI processing pipeline using both the Nextflow test profile and the nf-test framework, following [nf-core best practices](https://nf-co.re/docs/guidelines/pipelines/recommendations/testing).
 
 ---
 
@@ -51,7 +51,7 @@ nf-test test
 
 ## Test Framework Overview
 
-The ATEIA pipeline uses a two-tiered testing approach following nf-core guidelines:
+The MIRAGE pipeline uses a two-tiered testing approach following nf-core guidelines:
 
 ### 1. **Nextflow Test Profile** (`-profile test`)
 - **Purpose**: Quick end-to-end validation with minimal data

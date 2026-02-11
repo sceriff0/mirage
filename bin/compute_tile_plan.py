@@ -13,6 +13,7 @@ The output JSON contains:
     - affine_tiles: List of tile coordinates for affine stage (larger tiles)
     - diffeo_tiles: List of tile coordinates for diffeo stage (smaller tiles)
 """
+from __future__ import annotations
 
 import argparse
 import json
@@ -30,6 +31,8 @@ from logger import get_logger, configure_logging
 from registration_utils import extract_crop_coords
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def get_image_metadata(image_path: Path) -> Dict[str, Any]:

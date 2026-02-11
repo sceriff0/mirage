@@ -1,4 +1,4 @@
-name: ateia
+name: mirage
 channels:
   - conda-forge
 dependencies:

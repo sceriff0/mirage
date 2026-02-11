@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ateia_test
+#SBATCH --job-name=mirage_test
 #SBATCH --output=logs/nftest_%j.out
 #SBATCH --error=logs/nftest_%j.err
 #SBATCH --time=2:00:00
@@ -10,7 +10,7 @@
 #SBATCH --mail-user=your.email@domain.com
 
 # ============================================================================
-# ATEIA WSI Processing Pipeline - TEST MODE SLURM Submission Script
+# MIRAGE WSI Processing Pipeline - TEST MODE SLURM Submission Script
 # ============================================================================
 #
 # This script runs nf-test suite on SLURM
@@ -27,7 +27,7 @@
 PROFILE="test,singularity"  # Use singularity on HPC
 # PROFILE="stub"            # Uncomment for fast stub-only tests (no containers)
 
-SRC_DIR="/beegfs/scratch/ieo7660/analysis_runs/ateia"
+SRC_DIR="/beegfs/scratch/ieo7660/analysis_runs/mirage"
 
 # Create necessary directories
 mkdir -p logs reports .nf-test

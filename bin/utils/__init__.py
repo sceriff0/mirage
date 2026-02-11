@@ -1,6 +1,6 @@
-"""ATEIA pipeline utilities.
+"""MIRAGE pipeline utilities.
 
-This package provides common utilities for the ATEIA image processing pipeline:
+This package provides common utilities for the MIRAGE image processing pipeline:
 
 - **logger**: Centralized logging configuration with timing utilities
 - **constants**: Pipeline-wide constants and exit codes

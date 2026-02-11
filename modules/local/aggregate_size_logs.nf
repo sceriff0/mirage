@@ -11,8 +11,6 @@ process AGGREGATE_SIZE_LOGS {
     tag "aggregate"
     label 'process_single'
 
-    publishDir "${params.trace_dir}", mode: 'copy'
-
     input:
     path(size_csvs)
 

@@ -12,6 +12,7 @@ Memory-aware design:
 
 Usage: same CLI as original script. Requires CuPy + cuDIPY for GPU diffeo.
 """
+from __future__ import annotations
 
 import argparse
 import logging
@@ -72,6 +73,8 @@ CUDA_FATAL_ERRORS = (
 )
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def print_cuda_diagnostics():

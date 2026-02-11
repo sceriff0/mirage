@@ -4,6 +4,7 @@
 This script pads a single OME-TIFF image to target height and width,
 ensuring uniform spatial dimensions for downstream registration.
 """
+from __future__ import annotations
 
 import argparse
 import logging
@@ -20,6 +21,8 @@ import numpy as np
 import tifffile
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def pad_image_to_shape(

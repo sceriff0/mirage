@@ -57,7 +57,7 @@ def get_channel_names(filename: str | Path) -> List[str]:
     Notes
     -----
     This function implements the standard naming convention used throughout
-    the ATEIA pipeline:
+    the MIRAGE pipeline:
     - First part (before first underscore) is the sample ID
     - Remaining parts are channel marker names
     - Suffixes like '_corrected', '_padded', '_registered', '_preprocessed'

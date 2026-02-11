@@ -22,9 +22,6 @@ process MERGE_AND_PYRAMID {
 
     container 'docker://bolt3x/attend_image_analysis:merge'
 
-    // Publish both the pyramid and colormap files
-    publishDir "${params.outdir}/${meta.patient_id}/pyramid", mode: 'copy'
-
     input:
     tuple val(meta), path(split_channels, stageAs: 'channels/*'), path(seg_mask)
 

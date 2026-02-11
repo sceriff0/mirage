@@ -1,6 +1,6 @@
 # Input Format
 
-ATEIA uses CSV manifests. Required columns depend on `--step`.
+MIRAGE uses CSV manifests. Required columns depend on `--step`.
 
 ## `--step preprocessing`
 

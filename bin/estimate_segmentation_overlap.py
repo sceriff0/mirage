@@ -38,6 +38,8 @@ from csbdeep.utils import normalize
 from stardist.models import StarDist2D
 from skimage.measure import regionprops
 
+__all__ = ["main"]
+
 
 def load_dapi_channel(image_path: str, max_dim: Optional[int] = None) -> np.ndarray:
     """Load DAPI channel from image using memory-mapped I/O.

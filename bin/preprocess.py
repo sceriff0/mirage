@@ -15,11 +15,11 @@ import logging
 import math
 from pathlib import Path
 
-# Add parent directory to path to import lib modules
+# Add utils directory to path to import shared modules
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 
-from utils.logger import get_logger, configure_logging
+from logger import get_logger, configure_logging
 from typing import Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -49,8 +49,8 @@ if BASICPY_VERSION != 'unknown' and PYDANTIC_VERSION != 'unknown':
 
 from basicpy import BaSiC  # type: ignore
 
-from utils.image_utils import ensure_dir
-from utils.validation import log_image_stats, clip_negative_values, detect_negative_values
+from image_utils import ensure_dir
+from validation import log_image_stats, clip_negative_values, detect_negative_values
 
 logger = get_logger(__name__)
 

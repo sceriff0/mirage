@@ -40,6 +40,8 @@ from registration_utils import (
 # Module-level logger
 logger = get_logger(__name__)
 
+__all__ = ["main"]
+
 # Function definitions removed - now imported from utils modules.
 
 

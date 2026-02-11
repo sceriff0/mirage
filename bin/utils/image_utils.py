@@ -1,4 +1,4 @@
-"""Image processing utilities for the ATEIA pipeline.
+"""Image processing utilities for the MIRAGE pipeline.
 
 This module provides common image processing functions used across
 multiple scripts, following DRY principles.

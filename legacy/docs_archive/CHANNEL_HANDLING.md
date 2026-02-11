@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ATEIA pipeline automatically places DAPI in **channel 0** of all output images, regardless of where DAPI appears in your input CSV or source images. This document explains how this works and what to expect.
+The MIRAGE pipeline automatically places DAPI in **channel 0** of all output images, regardless of where DAPI appears in your input CSV or source images. This document explains how this works and what to expect.
 
 ## Key Principle
 

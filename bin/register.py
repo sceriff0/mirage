@@ -53,6 +53,9 @@ from validation import log_image_stats, detect_wrapped_values
 
 # Module-level logger
 logger = get_logger(__name__)
+
+__all__ = ["main"]
+
 from progress import PhaseReporter, ProgressTracker
 from registration_errors import (
     ErrorSeverity,

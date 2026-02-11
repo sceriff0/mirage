@@ -1,6 +1,6 @@
 # Input CSV Format Guide
 
-The ATEIA pipeline uses a standardized CSV format for input that supports patient tracking, multiple image formats, and flexible channel configuration.
+The MIRAGE pipeline uses a standardized CSV format for input that supports patient tracking, multiple image formats, and flexible channel configuration.
 
 ## CSV Schema
 

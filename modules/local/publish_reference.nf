@@ -2,8 +2,6 @@ process PUBLISH_REFERENCE {
     tag "${meta.id ?: meta.patient_id}"
     label 'process_single'
 
-    publishDir "${params.outdir}/${meta.patient_id}/registered", mode: 'copy'
-
     input:
     tuple val(meta), path(image)
 

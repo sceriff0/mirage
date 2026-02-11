@@ -7,6 +7,7 @@ Usage:
     python split_multichannel.py input.ome.tiff output_folder --is-reference
     python split_multichannel.py input.ome.tiff output_folder  # skips DAPI
 """
+from __future__ import annotations
 
 import argparse
 import os
@@ -22,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger, configure_logging
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def get_ome_channel_names(tiff_path):

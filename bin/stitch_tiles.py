@@ -16,6 +16,7 @@ Usage:
     stitch_tiles.py --tile-plan plan.json --tiles-dir ./tiles \
                     --stage diffeo --output output.ome.tiff --moving orig.tiff
 """
+from __future__ import annotations
 
 import argparse
 import gc
@@ -36,6 +37,8 @@ from registration_utils import calculate_bounds
 from metadata import create_ome_xml, extract_channel_names_from_ome, extract_channel_names_from_filename
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def find_tile_files(tiles_dir: Path, stage: str) -> List[Path]:

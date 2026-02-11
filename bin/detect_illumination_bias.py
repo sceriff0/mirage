@@ -5,6 +5,7 @@ Automatic detection of illumination bias in microscopy channels.
 This module analyzes image channels to determine if they would benefit from
 BaSiC illumination correction or if correction would introduce artifacts.
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -20,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def compute_radial_intensity_profile(

@@ -1,7 +1,7 @@
 class ParamUtils {
 
     static void validateStep(String step) {
-        def valid = ['preprocessing', 'registration', 'postprocessing', 'copy_results']
+        def valid = ['preprocessing', 'registration', 'postprocessing']
         if (!(step in valid)) {
             throw new IllegalArgumentException("Invalid --step '${step}'. Valid values: ${valid}")
         }
@@ -18,8 +18,7 @@ class ParamUtils {
         def requirements = [
             preprocessing : ['patient_id','path_to_file','is_reference','channels'],
             registration  : ['patient_id','preprocessed_image','is_reference','channels'],
-            postprocessing: ['patient_id','registered_image','is_reference','channels'],
-            copy_results  : []  // No CSV required - just copies outdir to savedir
+            postprocessing: ['patient_id','registered_image','is_reference','channels']
         ]
 
         if (!requirements.containsKey(step)) {

@@ -1,13 +1,12 @@
-# Restartability and Copy Results
+# Restartability
 
-ATEIA is checkpoint-driven. Each major stage writes a CSV that can be used as input to the next stage.
+MIRAGE is checkpoint-driven. Each major stage writes a CSV that can be used as input to the next stage.
 
 ## Valid Step Entrypoints
 
 - `preprocessing`
 - `registration`
 - `postprocessing`
-- `copy_results`
 
 ## Restart Patterns
 
@@ -39,21 +38,3 @@ nextflow run main.nf \
   --step postprocessing \
   --outdir results
 ```
-
-## Copy/archive only
-
-```bash
-nextflow run main.nf \
-  --step copy_results \
-  --outdir results \
-  --savedir /archive/ateia_run
-```
-
-## Safety Behavior for `copy_results`
-
-- `savedir` must be provided.
-- `savedir` cannot equal `outdir`.
-- `savedir` cannot be nested under `outdir`.
-- Source directory must exist for `copy_results`.
-- Source deletion is opt-in (`copy_delete_source=true`) and performed only after verification.
-

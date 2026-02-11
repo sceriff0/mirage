@@ -40,6 +40,8 @@ from registration_utils import (
 
 logger = get_logger(__name__)
 
+__all__ = ["main"]
+
 
 def log_progress(message: str) -> None:
     """Compatibility wrapper for existing progress output."""

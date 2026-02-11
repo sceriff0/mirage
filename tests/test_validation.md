@@ -1,6 +1,6 @@
 # Pipeline Validation Test Cases
 
-This document outlines comprehensive test cases for the logical correctness fixes applied to the ATEIA pipeline.
+This document outlines comprehensive test cases for the logical correctness fixes applied to the MIRAGE pipeline.
 
 ## Test Suite Organization
 

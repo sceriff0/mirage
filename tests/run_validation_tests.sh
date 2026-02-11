@@ -24,7 +24,7 @@ TESTS_FAILED=0
 TESTS_TOTAL=0
 
 echo "=========================================="
-echo "ATEIA Pipeline Validation Test Suite"
+echo "MIRAGE Pipeline Validation Test Suite"
 echo "=========================================="
 echo ""
 

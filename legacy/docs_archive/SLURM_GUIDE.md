@@ -1,6 +1,6 @@
 # SLURM Execution Guide
 
-This guide explains how to run the ATEIA WSI processing pipeline on SLURM clusters.
+This guide explains how to run the MIRAGE WSI processing pipeline on SLURM clusters.
 
 ## Quick Start
 
@@ -10,7 +10,7 @@ Create a submission script `submit_pipeline.sh`:
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=ateia_wsi
+#SBATCH --job-name=mirage_wsi
 #SBATCH --output=logs/nextflow_%j.out
 #SBATCH --error=logs/nextflow_%j.err
 #SBATCH --time=48:00:00
@@ -133,7 +133,7 @@ withLabel: 'gpu' {             // 8 CPUs, 64 GB, 12h, --gres=gpu:1
 
 ```bash
 #!/bin/bash
-#SBATCH --job-name=ateia_wsi
+#SBATCH --job-name=mirage_wsi
 #SBATCH --output=logs/nextflow_%j.out
 #SBATCH --error=logs/nextflow_%j.err
 #SBATCH --time=48:00:00
@@ -167,7 +167,7 @@ Create `run_samples.sh`:
 #!/bin/bash
 
 for sample in sample1 sample2 sample3; do
-  sbatch --job-name=ateia_${sample} << EOF
+  sbatch --job-name=mirage_${sample} << EOF
 #!/bin/bash
 #SBATCH --output=logs/${sample}_%j.out
 #SBATCH --error=logs/${sample}_%j.err
@@ -213,7 +213,7 @@ process {
 squeue -u $USER
 
 # View specific pipeline jobs
-squeue -u $USER | grep ateia
+squeue -u $USER | grep mirage
 
 # Check job details
 scontrol show job <JOB_ID>

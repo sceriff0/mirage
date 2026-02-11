@@ -8,6 +8,7 @@ but for DAPI only retains it from the reference image.
 
 Uses VALIS slide_io for robust image reading.
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -29,6 +30,8 @@ from metadata import extract_channel_names_from_ome as get_channel_names_from_om
 from metadata import extract_markers_from_filename
 from image_utils import normalize_image_dimensions
 from validation import log_image_stats, validate_image_range, clip_negative_values
+
+__all__ = ["main"]
 
 # Import only slide_io to avoid heavy VALIS dependencies
 import valis.slide_io as slide_io

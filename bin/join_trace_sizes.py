@@ -8,6 +8,7 @@ This script joins the Nextflow execution trace (containing runtime, memory usage
 with the input size metadata collected during pipeline execution. The resulting merged
 dataset enables analysis of resource usage as a function of input file size.
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -19,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def parse_mem(val):

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge single-channel TIFF files into a pyramidal multi-channel OME-TIFF."""
+from __future__ import annotations
 
 import argparse
 import sys
@@ -31,6 +32,8 @@ os.environ['NUMBA_CACHE_DIR'] = tempfile.gettempdir() + '/numba_cache'
 os.environ['NUMBA_DISABLE_CACHING'] = '1'
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def log(msg):

@@ -1,4 +1,4 @@
-# ATEIA Pipeline Output Structure
+# MIRAGE Pipeline Output Structure
 
 ## Table of Contents
 

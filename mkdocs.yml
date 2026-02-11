@@ -1,6 +1,6 @@
-site_name: ATEIA Pipeline
+site_name: MIRAGE Pipeline
 site_description: Nextflow pipeline for microscopy preprocessing, registration, segmentation, quantification, and phenotyping.
-site_author: ATEIA Team
+site_author: MIRAGE Team
 
 theme:
   name: material

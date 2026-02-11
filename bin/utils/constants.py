@@ -1,7 +1,7 @@
 """Pipeline constants and configuration defaults.
 
 This module centralizes magic numbers and configuration values used
-throughout the ATEIA pipeline for consistency and maintainability.
+throughout the MIRAGE pipeline for consistency and maintainability.
 
 Examples
 --------

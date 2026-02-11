@@ -1,6 +1,6 @@
-# ATEIA Pipeline Testing Guide
+# MIRAGE Pipeline Testing Guide
 
-This document explains the testing infrastructure for the ATEIA pipeline, how tests work, and how to run them.
+This document explains the testing infrastructure for the MIRAGE pipeline, how tests work, and how to run them.
 
 ---
 
@@ -19,7 +19,7 @@ This document explains the testing infrastructure for the ATEIA pipeline, how te
 
 ## Overview
 
-The ATEIA pipeline uses **nf-test** as its testing framework. nf-test is the official testing framework for Nextflow pipelines, developed by the nf-core community.
+The MIRAGE pipeline uses **nf-test** as its testing framework. nf-test is the official testing framework for Nextflow pipelines, developed by the nf-core community.
 
 ### Why Testing Matters
 
@@ -69,7 +69,7 @@ If not installed, follow the [official installation guide](https://www.nf-test.c
 ### Directory Layout
 
 ```
-ateia/
+mirage/
 ├── tests/
 │   ├── main.nf.test              # Pipeline-level tests
 │   ├── modules/

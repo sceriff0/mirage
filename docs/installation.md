@@ -11,8 +11,8 @@
 ## Clone and Enter Repository
 
 ```bash
-git clone <your-repo-url> ateia
-cd ateia
+git clone <your-repo-url> mirage
+cd mirage
 ```
 
 ## Verify Nextflow

@@ -8,6 +8,7 @@ Supports:
 - TIFF/OME-TIFF via bioio-tifffile/bioio-ome-tiff
 - NDPI/NDPIS (Hamamatsu) via tifffile
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -21,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import configure_logging, get_logger
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 PIXEL_SIZE_UM = 0.325
 

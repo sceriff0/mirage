@@ -10,6 +10,7 @@ Optionally appends segmentation and phenotype masks as additional channels.
 
 FIXED VERSION: Proper OME-XML with embedded colormap for QuPath compatibility.
 """
+from __future__ import annotations
 
 import argparse
 import sys
@@ -33,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger, configure_logging
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def log(msg: str) -> None:

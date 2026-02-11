@@ -1,6 +1,6 @@
-# ATEIA Documentation
+# MIRAGE Documentation
 
-ATEIA is a Nextflow DSL2 pipeline for multiplex microscopy processing:
+MIRAGE is a Nextflow DSL2 pipeline for multiplex microscopy processing:
 
 1. Preprocessing (image conversion and illumination correction)
 2. Registration (multiple methods, including tiled CPU)

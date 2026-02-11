@@ -1,6 +1,6 @@
-# ATEIA Pipeline Testing Infrastructure
+# MIRAGE Pipeline Testing Infrastructure
 
-Comprehensive testing suite for the ATEIA (Automated Tissue Exploration and Image Analysis) pipeline following nf-core best practices.
+Comprehensive testing suite for the MIRAGE (Automated Tissue Exploration and Image Analysis) pipeline following nf-core best practices.
 
 ---
 
@@ -19,7 +19,7 @@ Comprehensive testing suite for the ATEIA (Automated Tissue Exploration and Imag
 
 ## Overview
 
-The ATEIA testing infrastructure includes:
+The MIRAGE testing infrastructure includes:
 
 - ✅ **Python Unit Tests** - Test individual Python scripts (pytest)
 - ✅ **Nextflow Process Tests** - Test individual processes (nf-test)

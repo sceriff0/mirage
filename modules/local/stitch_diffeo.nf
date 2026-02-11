@@ -15,8 +15,6 @@ process STITCH_DIFFEO {
 
     container 'docker://bolt3x/attend_image_analysis:debug_diffeo'
 
-    publishDir "${params.outdir}/${meta.patient_id}/registered", mode: params.publish_dir_mode
-
     input:
     tuple val(meta), path(tile_plan), path(moving), path("tiles/*")
 

@@ -1,4 +1,4 @@
-# Copilot / AI agent instructions — ateia
+# Copilot / AI agent instructions — mirage
 
 Purpose: Provide concise, actionable context so an AI coding agent can be productive immediately in this repository.
 

@@ -1,10 +1,10 @@
 nextflow_pipeline {
 
-    name "Test full ATEIA pipeline"
+    name "Test full MIRAGE pipeline"
     script "main.nf"
 
     tag "pipeline"
-    tag "pipeline_ateia"
+    tag "pipeline_mirage"
 
     //==========================================================================
     // TEST PROFILE TESTS - Quick validation

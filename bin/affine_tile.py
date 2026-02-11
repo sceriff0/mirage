@@ -12,6 +12,7 @@ Usage:
                    --reference ref.tiff --moving mov.tiff \
                    --output-prefix tile_affine_0001
 """
+from __future__ import annotations
 
 import argparse
 import gc
@@ -31,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).parent / 'utils'))
 from logger import get_logger, configure_logging
 
 logger = get_logger(__name__)
+
+__all__ = ["main"]
 
 
 def compute_affine_mapping_cv2(

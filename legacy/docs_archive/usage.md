@@ -1,4 +1,4 @@
-# ATEIA Pipeline Usage Guide
+# MIRAGE Pipeline Usage Guide
 
 ## Table of Contents
 
