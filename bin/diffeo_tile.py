@@ -219,7 +219,12 @@ def process_diffeo_tile(
         else:
             result = affine_crop
 
-        del ref_crop, affine_crop, ref_mem, affine_mem
+        del ref_crop, affine_crop
+        # Explicitly close memory maps before deletion to prevent SIGBUS on BeeGFS
+        for mmap_arr in [ref_mem, affine_mem]:
+            if hasattr(mmap_arr, '_mmap') and mmap_arr._mmap is not None:
+                mmap_arr._mmap.close()
+        del ref_mem, affine_mem
         gc.collect()
         return result, tile_meta
 
@@ -262,7 +267,12 @@ def process_diffeo_tile(
             result = affine_crop
 
     # Clean up
-    del ref_crop, affine_crop, ref_mem, affine_mem
+    del ref_crop, affine_crop
+    # Explicitly close memory maps before deletion to prevent SIGBUS on BeeGFS
+    for mmap_arr in [ref_mem, affine_mem]:
+        if hasattr(mmap_arr, '_mmap') and mmap_arr._mmap is not None:
+            mmap_arr._mmap.close()
+    del ref_mem, affine_mem
     gc.collect()
 
     return result, tile_meta
