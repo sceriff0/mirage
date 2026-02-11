@@ -2,3 +2,4 @@ valis_lib/*
 *.pyc
 pixie-main/*
 tests/__pycache__/*
+notebooks/*
