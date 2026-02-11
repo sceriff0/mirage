@@ -319,8 +319,8 @@ def main():
         blur_factor=args.blur_factor,
         subset_proportion=args.subset_proportion,
         seed=args.seed,
-        multiprocess=use_multiprocess,
-        batch_size=batch_size
+        multiprocess=True, #use_multiprocess,
+        batch_size=5 #batch_size
     )
     print("  Pixel matrix created successfully.")
     align_norm_vals_channel_order(base_dir, norm_vals_name, channels)

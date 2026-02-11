@@ -685,6 +685,14 @@ def main():
         _som_avg[_som_cols] = _som_avg[_som_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
         _som_avg.to_csv(_som_avg_path, index=False)
 
+    # Safety net: clean NaN/inf in per-cell data before consensus clustering
+    _cell_cols = [c for c in cluster_counts_size_norm.columns if c in cell_som_cluster_cols]
+    if cluster_counts_size_norm[_cell_cols].isna().any().any() or cluster_counts_size_norm[_cell_cols].isin([np.inf, -np.inf]).any().any():
+        print("  Warning: Per-cell cluster data contains NaN/inf. Cleaning before consensus clustering.")
+        cluster_counts_size_norm[_cell_cols] = cluster_counts_size_norm[_cell_cols].replace(
+            [np.inf, -np.inf], np.nan
+        ).fillna(0)
+
     # =========================================================================
     # Step 5: Consensus clustering for meta-clusters
     # =========================================================================
