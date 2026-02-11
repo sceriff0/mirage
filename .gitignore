@@ -1,3 +1,4 @@
 valis_lib/*
 *.pyc
 pixie-main/*
+notebooks/*
