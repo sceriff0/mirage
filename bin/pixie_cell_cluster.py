@@ -183,6 +183,16 @@ def create_c2pc_data_tiled(
     cluster_counts_norm[cluster_cols] = cluster_counts_norm[cluster_cols].div(
         cluster_counts_norm['cell_size'], axis=0
     )
+    # Handle division by zero: cells with cell_size=0 produce inf/NaN
+    nan_inf_mask = (
+        cluster_counts_norm[cluster_cols].isin([np.inf, -np.inf]).any(axis=1)
+        | cluster_counts_norm[cluster_cols].isna().any(axis=1)
+    )
+    if nan_inf_mask.any():
+        print(f"    Warning: {nan_inf_mask.sum()} cells have inf/NaN after size normalization (cell_size=0). Replacing with 0.")
+    cluster_counts_norm[cluster_cols] = cluster_counts_norm[cluster_cols].replace(
+        [np.inf, -np.inf], np.nan
+    ).fillna(0)
 
     # Sort columns to match Pixie's expected order: fov, label, cell_size, then cluster cols
     meta_cols = ['fov', 'label', 'cell_size']
@@ -551,6 +561,27 @@ def main():
     print(f"  Created c2pc data with {len(cell_som_cluster_cols)} cluster columns.")
     print(f"  Cells: {len(cluster_counts_size_norm)}")
 
+    # Filter degenerate cells (cell_size <= 0) before clustering
+    _degenerate = cluster_counts_size_norm['cell_size'] <= 0
+    if _degenerate.any():
+        print(f"  Filtering {_degenerate.sum()} cells with cell_size <= 0 (degenerate, no pixel data)")
+        cluster_counts_size_norm = cluster_counts_size_norm[~_degenerate].reset_index(drop=True)
+        cluster_counts = cluster_counts[~_degenerate].reset_index(drop=True)
+        # Re-save filtered data
+        feather.write_dataframe(cluster_counts, os.path.join(base_dir, cluster_counts_name), compression='uncompressed')
+        feather.write_dataframe(cluster_counts_size_norm, os.path.join(base_dir, cluster_counts_size_norm_name), compression='uncompressed')
+
+    # Safety net: clean any remaining NaN/inf in feature columns
+    _bad = (
+        cluster_counts_size_norm[cell_som_cluster_cols].isin([np.inf, -np.inf]).any(axis=1)
+        | cluster_counts_size_norm[cell_som_cluster_cols].isna().any(axis=1)
+    )
+    if _bad.any():
+        print(f"  Warning: {_bad.sum()} cells still have NaN/inf in cluster columns. Replacing with 0.")
+        cluster_counts_size_norm[cell_som_cluster_cols] = cluster_counts_size_norm[cell_som_cluster_cols].replace(
+            [np.inf, -np.inf], np.nan
+        ).fillna(0)
+
     # =========================================================================
     # Step 2: Compute weighted channel expression per cell
     # =========================================================================
@@ -591,6 +622,13 @@ def main():
         fovs=cell_fovs,
         pixel_cluster_col=pixel_cluster_col
     )
+    # Clean NaN/inf from weighted channel expression (division by cell_size)
+    _wc_cols = [c for c in weighted_cell_channel.columns if c in channels]
+    if weighted_cell_channel[_wc_cols].isna().any().any() or weighted_cell_channel[_wc_cols].isin([np.inf, -np.inf]).any().any():
+        print("  Warning: Weighted channel expression contains NaN/inf. Replacing with 0.")
+        weighted_cell_channel[_wc_cols] = weighted_cell_channel[_wc_cols].replace(
+            [np.inf, -np.inf], np.nan
+        ).fillna(0)
     feather.write_dataframe(
         weighted_cell_channel,
         os.path.join(base_dir, weighted_cell_channel_name),
@@ -637,6 +675,15 @@ def main():
         cell_som_expr_col_avg_name=cell_som_cluster_count_avg_name
     )
     print("  Cell SOM cluster assignment complete.")
+
+    # Safety net: clean NaN/inf in SOM cluster average file before consensus clustering
+    _som_avg_path = os.path.join(base_dir, cell_som_cluster_count_avg_name)
+    _som_avg = pd.read_csv(_som_avg_path)
+    _som_cols = [c for c in _som_avg.columns if c in cell_som_cluster_cols]
+    if _som_avg[_som_cols].isna().any().any() or _som_avg[_som_cols].isin([np.inf, -np.inf]).any().any():
+        print("  Warning: SOM cluster average file contains NaN/inf. Cleaning before consensus clustering.")
+        _som_avg[_som_cols] = _som_avg[_som_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+        _som_avg.to_csv(_som_avg_path, index=False)
 
     # =========================================================================
     # Step 5: Consensus clustering for meta-clusters
