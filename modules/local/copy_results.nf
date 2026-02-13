@@ -37,7 +37,6 @@ process COPY_RESULTS {
     echo "Source:      ${source_dir}"
     echo "Destination: ${destination_dir}"
     echo "Parallel:    ${parallel_jobs} jobs"
-    echo "Delete source after copy: ${delete_source}"
     echo "Start:       \$(date)"
     echo ""
 
