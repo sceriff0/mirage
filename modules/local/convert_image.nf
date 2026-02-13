@@ -46,7 +46,7 @@ process CONVERT_IMAGE {
     def channels = meta.channels.join(',')
     """
     touch ${prefix}.ome.tif
-    echo "${channels}" > ${prefix}_channels.txt
+    echo "${channels}" > ${prefix}_${image_file.simpleName}_channels.txt
     echo "STUB,${meta.patient_id},stub,0" > ${meta.patient_id}_${image_file.simpleName}.CONVERT_IMAGE.size.csv
 
     cat <<-END_VERSIONS > versions.yml

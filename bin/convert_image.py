@@ -474,7 +474,7 @@ def main() -> int:
     logger.info("=" * 70)
 
     # Write channels file for Nextflow metadata propagation
-    channels_file = output_dir / f"{args.patient_id}_channels.txt"
+    channels_file = output_dir / f"{args.patient_id}_{input_path.stem}_channels.txt"
     channels_file.write_text(','.join(output_channels))
 
     return 0
