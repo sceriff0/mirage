@@ -21,8 +21,8 @@ process GENERATE_REGISTRATION_QC {
     def scale_factor = params.qc_scale_factor ?: 0.25
     """
     # Log input sizes for tracing (sum of registered + reference, -L follows symlinks)
-    reg_bytes=\$(stat -L --printf="%s" ${registered})
-    ref_bytes=\$(stat -L --printf="%s" ${reference})
+    reg_bytes=\$(stat -L --printf="%s" ${registered} 2>/dev/null || echo 0)
+    ref_bytes=\$(stat -L --printf="%s" ${reference} 2>/dev/null || echo 0)
     total_bytes=\$((reg_bytes + ref_bytes))
     echo "${task.process},${meta.patient_id},${registered.name}+${reference.name},\${total_bytes}" > ${meta.patient_id}_${registered.simpleName}.GENERATE_REGISTRATION_QC.size.csv
 

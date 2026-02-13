@@ -33,8 +33,8 @@ process DIFFEO_TILE {
     def inv_tol = params.cpu_reg_inv_tol ?: 1e-5
     """
     # Log input sizes for tracing (sum of reference + affine, -L follows symlinks)
-    ref_bytes=\$(stat -L --printf="%s" ${reference})
-    aff_bytes=\$(stat -L --printf="%s" ${affine_image})
+    ref_bytes=\$(stat -L --printf="%s" ${reference} 2>/dev/null || echo 0)
+    aff_bytes=\$(stat -L --printf="%s" ${affine_image} 2>/dev/null || echo 0)
     total_bytes=\$((ref_bytes + aff_bytes))
     echo "${task.process},${meta.patient_id}_${tile_id},${reference.name}+${affine_image.name},\${total_bytes}" > ${meta.patient_id}_${tile_id}.DIFFEO_TILE.size.csv
 

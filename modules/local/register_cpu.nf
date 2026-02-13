@@ -42,8 +42,8 @@ process CPU_REGISTER {
     def allocated_time = file_size_gb < 10 ? "8h" : file_size_gb < 25 ? "10h" : "24h"
     """
     # Log input sizes for tracing (sum of reference + moving, -L follows symlinks)
-    ref_bytes=\$(stat -L --printf="%s" ${reference})
-    mov_bytes=\$(stat -L --printf="%s" ${moving})
+    ref_bytes=\$(stat -L --printf="%s" ${reference} 2>/dev/null || echo 0)
+    mov_bytes=\$(stat -L --printf="%s" ${moving} 2>/dev/null || echo 0)
     total_bytes=\$((ref_bytes + mov_bytes))
     echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${moving.simpleName}.CPU_REGISTER.size.csv
 

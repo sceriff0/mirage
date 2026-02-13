@@ -39,7 +39,7 @@ process SEGMENT {
     def n_tiles_x = (params.seg_n_tiles_x ?: 1) * Math.pow(4, task.attempt - 1) as Integer
     """
     # Log input size for tracing (-L follows symlinks)
-    input_bytes=\$(stat -L --printf="%s" ${merged_file})
+    input_bytes=\$(stat -L --printf="%s" ${merged_file} 2>/dev/null || echo 0)
     echo "${task.process},${meta.patient_id},${merged_file.name},\${input_bytes}" > ${meta.patient_id}.SEGMENT.size.csv
 
     echo "Sample: ${meta.patient_id}"

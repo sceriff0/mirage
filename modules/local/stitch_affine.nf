@@ -31,7 +31,7 @@ process STITCH_AFFINE {
     def prefix = task.ext.prefix ?: "${meta.patient_id}"
     """
     # Log input size for tracing (sum of all tiles)
-    total_bytes=\$(du -sLb tiles/ | cut -f1)
+    total_bytes=\$(du -sLb tiles/ 2>/dev/null | cut -f1 || echo 0)
     echo "${task.process},${meta.patient_id},tiles/,\${total_bytes}" > ${meta.patient_id}.STITCH_AFFINE.size.csv
 
     echo "=================================================="

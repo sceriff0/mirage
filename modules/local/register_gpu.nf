@@ -81,8 +81,8 @@ process GPU_REGISTER {
     def retry_info = task.attempt > 1 ? " (RETRY #${task.attempt}, crops reduced by ${(int)((1-reduction_factor)*100)}%)" : ""
     """
     # Log input sizes for tracing (sum of reference + moving, -L follows symlinks)
-    ref_bytes=\$(stat -L --printf="%s" ${reference})
-    mov_bytes=\$(stat -L --printf="%s" ${moving})
+    ref_bytes=\$(stat -L --printf="%s" ${reference} 2>/dev/null || echo 0)
+    mov_bytes=\$(stat -L --printf="%s" ${moving} 2>/dev/null || echo 0)
     total_bytes=\$((ref_bytes + mov_bytes))
     echo "${task.process},${meta.patient_id},${reference.name}+${moving.name},\${total_bytes}" > ${meta.patient_id}_${moving.simpleName}.GPU_REGISTER.size.csv
 

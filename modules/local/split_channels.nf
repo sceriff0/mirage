@@ -37,7 +37,7 @@ process SPLIT_CHANNELS {
         "--channels ${meta.channels.join(' ')}" : ""
     """
     # Log input size for tracing (-L follows symlinks)
-    input_bytes=\$(stat -L --printf="%s" ${registered_image})
+    input_bytes=\$(stat -L --printf="%s" ${registered_image} 2>/dev/null || echo 0)
     echo "${task.process},${meta.patient_id},${registered_image.name},\${input_bytes}" > ${meta.patient_id}_${registered_image.simpleName}.SPLIT_CHANNELS.size.csv
 
     echo "Sample: ${meta.patient_id}"

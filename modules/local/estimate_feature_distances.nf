@@ -30,9 +30,9 @@ process ESTIMATE_FEATURE_DISTANCES {
     def prefix = meta.channels.join('_')
     """
     # Log input sizes for tracing (sum of reference + moving + registered, -L follows symlinks)
-    ref_bytes=\$(stat -L --printf="%s" ${reference})
-    mov_bytes=\$(stat -L --printf="%s" ${moving})
-    reg_bytes=\$(stat -L --printf="%s" ${registered})
+    ref_bytes=\$(stat -L --printf="%s" ${reference} 2>/dev/null || echo 0)
+    mov_bytes=\$(stat -L --printf="%s" ${moving} 2>/dev/null || echo 0)
+    reg_bytes=\$(stat -L --printf="%s" ${registered} 2>/dev/null || echo 0)
     total_bytes=\$((ref_bytes + mov_bytes + reg_bytes))
     echo "${task.process},${meta.patient_id},${reference.name}+${moving.name}+${registered.name},\${total_bytes}" > ${meta.patient_id}_${registered.simpleName}.ESTIMATE_FEATURE_DISTANCES.size.csv
 

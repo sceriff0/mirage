@@ -20,7 +20,7 @@ process GET_IMAGE_DIMS {
     def prefix = task.ext.prefix ?: "${image.simpleName}"
     """
     # Log input size for tracing (-L follows symlinks)
-    input_bytes=\$(stat -L --printf="%s" ${image})
+    input_bytes=\$(stat -L --printf="%s" ${image} 2>/dev/null || echo 0)
     echo "${task.process},${meta.patient_id},${image.name},\${input_bytes}" > ${meta.patient_id}_${image.simpleName}.GET_IMAGE_DIMS.size.csv
 
     python3 <<'EOF'

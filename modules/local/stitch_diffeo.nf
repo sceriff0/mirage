@@ -31,8 +31,8 @@ process STITCH_DIFFEO {
     def prefix = task.ext.prefix ?: "${moving.simpleName}"
     """
     # Log input size for tracing (sum of tiles + moving, -L follows symlinks)
-    tiles_bytes=\$(du -sLb tiles/ | cut -f1)
-    moving_bytes=\$(stat -L --printf="%s" ${moving})
+    tiles_bytes=\$(du -sLb tiles/ 2>/dev/null | cut -f1 || echo 0)
+    moving_bytes=\$(stat -L --printf="%s" ${moving} 2>/dev/null || echo 0)
     total_bytes=\$((tiles_bytes + moving_bytes))
     echo "${task.process},${meta.patient_id},tiles/+${moving.name},\${total_bytes}" > ${meta.patient_id}.STITCH_DIFFEO.size.csv
 
