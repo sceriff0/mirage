@@ -11,7 +11,6 @@ process COPY_RESULTS {
     val(results_ready)
     val(source_dir)
     val(destination_dir)
-    val(delete_source)
 
     output:
     path("transfer.log"), emit: log
@@ -117,7 +116,7 @@ process COPY_RESULTS {
         exit 1
     fi
 
-    if [ "${delete_source}" = "true" ]; then
+    if [ "true" = "true" ]; then
         echo ""
         echo "Deleting source: ${source_dir}"
         rm -rf --one-file-system "${source_dir}"
