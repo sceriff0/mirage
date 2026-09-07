@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=mirage_bench
-#SBATCH --output=logs/bench_%j.out
-#SBATCH --error=logs/bench_%j.err
+#SBATCH --output=/hpcnfs/home/ieo7660/logs/bench_%j.out
+#SBATCH --error=/hpcnfs/home/ieo7660/logs/bench_%j.err
 #SBATCH --time=72:00:00
 #SBATCH --cpus-per-task=8   # headroom for CONCURRENCY Nextflow JVMs (they mostly poll SLURM, not compute)
 #SBATCH --mem=64G           # all CONCURRENCY heads share this; NXF_OPTS -Xmx caps each head's heap (below)
@@ -41,7 +41,7 @@
 # ============================================================================
 
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
-BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark}"
+BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"   # the checkout. NOTE: unquoted $HOME, never "~/..."
 MATRIX_DIR="${MATRIX_DIR:-$BENCH_DIR/bench_matrix}"  # from generate_matrix --outdir (BIG -- see below)
 RUN_PLAN="$BENCH_DIR/bench_run_plan.csv"  # written by this script (step 1 below)
@@ -62,7 +62,6 @@ CONCURRENCY="${SWEEP_CONCURRENCY:-16}"   # pipeline runs launched AT ONCE (each 
 # -------------------------------------------------------------------------------
 
 cd "$BENCH_DIR"
-mkdir -p logs
 
 # shellcheck disable=SC1090
 source ~/.bashrc
