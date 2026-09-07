@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=mirage_arms
-#SBATCH --output=logs/arms_%j.out
-#SBATCH --error=logs/arms_%j.err
+#SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/arms_%j.out
+#SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/arms_%j.err
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4    # headroom for CONCURRENCY Nextflow heads (they poll SLURM, not compute)
 #SBATCH --mem=64G            # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below)
