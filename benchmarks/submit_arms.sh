@@ -4,7 +4,7 @@
 #SBATCH --error=logs/arms_%j.err
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4    # headroom for CONCURRENCY Nextflow heads (they poll SLURM, not compute)
-#SBATCH --mem=32G            # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below)
+#SBATCH --mem=64G            # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below)
 #SBATCH --partition=normal
 #
 # ============================================================================
@@ -43,20 +43,20 @@
 # ============================================================================
 
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
-BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark}"
+BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"   # the checkout. NOTE: unquoted $HOME, never "~/..."
-INPUT="${INPUT:-/beegfs/scratch/ieo7660/analysis_runs/method_paper/new_samples/input.csv}"
+INPUT="${INPUT:-/beegfs/scratch/ieo7660/ihc_method/head_neck/input.csv}"
 RESULTS="${RESULTS:-$BENCH_DIR/arm_results}"   # every arm's outdir + work dir lands under here
 ARMS_YAML="$SRC_DIR/benchmarks/configs/arms.yaml"
 PROFILES="${PROFILES:-singularity,ieo}"        # OVERRIDES run_arms.sh's default -profile docker
 SITE_CONFIG="$SRC_DIR/conf/ieo.config"    # gitignored: executor=slurm + cacheDir + paths
 CONDA_ENV="nf-env"
-CONCURRENCY="${ARMS_CONCURRENCY:-4}"      # arms launched AT ONCE. Each is one Nextflow head.
+CONCURRENCY="${ARMS_CONCURRENCY:-8}"      # arms launched AT ONCE. Each is one Nextflow head.
                                           # 4 heads x 3 GB heap = 12 GB < --mem=32G. RAISE --mem
                                           # BEFORE raising this: N heads x -Xmx must fit, and the
                                           # default NXF_JVM_ARGS people copy from the normal
                                           # launcher (-Xmx32g) would blow a 32 GB job at N=2.
-ENABLE_CSE="${ENABLE_CSE:-false}"         # true => score the segmentation arms with CSE.
+ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms with CSE.
                                           # Needs bolt3x/mirage-segeval:${segeval_tag} published
                                           # (1.0.1 is live as of 2026-08-21).
 # -------------------------------------------------------------------------------
