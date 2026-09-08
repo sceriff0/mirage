@@ -12,13 +12,13 @@
 # Dockerfile tokens first, so the guard read 1.15.3 and passed while the published
 # bolt3x/mirage-regqc:1.0.0 image shipped something under 1.13. Naming scipy in the last
 # pip step means the number the guard reads and the number pip installs are the same line.
-scipy==1.15.3
+scipy==1.18.1
 
-opencv-python==4.10.0.82
-tifffile==2025.5.10
-imagecodecs==2025.3.30
-zarr==2.18.3
-numcodecs==0.13.1
+opencv-python==5.0.0.93
+tifffile==2026.8.23
+imagecodecs==2026.8.16
+zarr==3.3.0
+numcodecs==0.16.5
 
 # THE REMOVALS, and the rule behind them: an install nothing imports is the same defect as
 # a bin/utils module nothing imports, one layer down (tests/test_no_dead_bin_modules.py

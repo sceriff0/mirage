@@ -18,13 +18,13 @@
 # xmltodict versions, which no image other than this one pins.
 -c constraints.txt
 
-numpy==1.26.4          # harmonised; <2.0 is also what the vendored subset expects
-scipy==1.15.3          # harmonised
-pandas==2.3.3          # harmonised
-scikit-image==0.25.2   # harmonised — regionprops / find_boundaries, the geometry metrics
-scikit-learn==1.5.2    # KMeans over the channel matrix (functions.py) + the PCA model
-tifffile==2025.5.10    # harmonised — the image reader, see bin/seg_quality_eval.py
-xmltodict==0.13.0      # OME-XML parsing for the pixel-size lookup
+numpy==2.5.2          # harmonised; <2.0 is also what the vendored subset expects
+scipy==1.18.1          # harmonised
+pandas==3.0.5          # harmonised
+scikit-image==0.26.0   # harmonised — regionprops / find_boundaries, the geometry metrics
+scikit-learn==1.9.0    # KMeans over the channel matrix (functions.py) + the PCA model
+tifffile==2026.8.23    # harmonised — the image reader, see bin/seg_quality_eval.py
+xmltodict==1.0.4      # OME-XML parsing for the pixel-size lookup
 
 # REQUIRED, despite never being used for what its name suggests. The vendored CSE source runs
 # `import matplotlib.pyplot as plt` at the top of functions.py's foreground_separation() and then
@@ -34,7 +34,7 @@ xmltodict==0.13.0      # OME-XML parsing for the pixel-size lookup
 # which conf/modules.config's errorStrategy 'ignore' branch would swallow, publishing a run with
 # no seg-eval numbers and no failure. Pinned and installed rather than deleted from the vendored
 # copy, which is kept byte-identical to upstream on purpose. The Dockerfile smoke-tests it.
-matplotlib==3.8.4
+matplotlib==3.11.1
 
 # NO aicsimageio. It was here to read a physical pixel size out of OME metadata, and that value is
 # always overridden: modules/local/seg_quality_eval.nf always renders --pixel-size-um (from

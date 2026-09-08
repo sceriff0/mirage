@@ -14,4 +14,4 @@
 # suite installs this file, so tests/test_coarse_frontend.py's DISK cases cannot
 # importorskip away in the blocking gate.
 --index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1
+torch==2.14.0
