@@ -56,4 +56,4 @@ imagecodecs==2026.8.16     # zstd/LZW codecs used by MERGE_AND_PYRAMID's OME-TIF
 # cKDTree for the QC-residual -> cell_mask spatial join.
 scipy==1.18.1
 pandas==3.0.5
-numpy==2.4.6
+numpy==2.5.2

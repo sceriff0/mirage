@@ -24,15 +24,15 @@
 # Ceilings are the newest release that still supports Python 3.10, except numpy, which is
 # held at the last 1.x because the segmentation image's TensorFlow 2.15 base requires
 # numpy<2.
-numpy==1.26.4
-tifffile==2025.5.10
-imagecodecs==2025.3.30
-zarr==2.18.3
-numcodecs==0.13.1
-pandas==2.3.3
-scikit-image==0.25.2
-scipy==1.15.3
-dask==2026.7.1
+numpy==2.5.2
+tifffile==2026.8.23
+imagecodecs==2026.8.16
+zarr==3.3.0
+numcodecs==0.16.5
+pandas==3.0.5
+scikit-image==0.26.0
+scipy==1.18.1
+dask==2026.8.0
 
 # csbdeep USED TO BE HERE and is not any more. It is installed by exactly ONE image now --
 # containers/stardist, which pins it inline at 0.8.0's successor 0.8.2 because
@@ -55,8 +55,8 @@ dask==2026.7.1
 # `git diff` apart. tests/test_ci_stack_pinned.py's EQUIVALENT_DISTRIBUTIONS asserts they
 # stay equal, and exempts the headless line from the "installed by more than one image"
 # rule that every other entry here must satisfy.
-opencv-python==4.10.0.82
-opencv-python-headless==4.10.0.82
+opencv-python==5.0.0.93
+opencv-python-headless==5.0.0.93
 
 # ---------------------------------------------------------------------------------------
 # DELIBERATELY NOT CONSTRAINED HERE, and where each one's single copy actually lives.

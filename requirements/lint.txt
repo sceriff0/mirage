@@ -3,4 +3,4 @@
 #
 # Pinned so a new ruff release cannot turn a green build red without a commit. Its
 # configuration is ruff.toml; keep the pin and that file in step.
-ruff==0.16.0
+ruff==0.16.6

@@ -7,13 +7,13 @@
 # requirement rather than overriding it, so a drift fails the build).
 -c constraints.txt
 
-numpy==1.26.4
-scipy==1.15.3
-scikit-image==0.25.2
-tifffile==2025.5.10
-zarr==2.18.3          # lazy region reads for the streaming gigapixel stitch (tifffile aszarr)
-numcodecs==0.13.1     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
-imagecodecs==2025.3.30 # zstd/LZW codecs for the stitched OME-TIFF
+numpy==2.5.2
+scipy==1.18.1
+scikit-image==0.26.0
+tifffile==2026.8.23
+zarr==3.3.0          # lazy region reads for the streaming gigapixel stitch (tifffile aszarr)
+numcodecs==0.16.5     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
+imagecodecs==2026.8.16 # zstd/LZW codecs for the stitched OME-TIFF
 
 # torch and kornia live in requirements/torch-cpu.txt and requirements/kornia.txt, NOT
 # here, and are installed as two SEPARATE pip invocations after this file: torch needs
