@@ -155,7 +155,16 @@ U-Net and 4096 px extrapolates to ~123 GB of need (~185 GB of request). See
 --reg_tiled_mode low                                   # every STARE knob from the low row
 --reg_tiled_mode custom --reg_tiled_tile 4096          # high everywhere else, tile overridden
 --memory_mode custom --reg_valis_max_non_rigid_dim 2048
+-profile tma                                           # the same pair for TMA cores: custom + 1024
 ```
+
+**Tissue microarrays.** The `tma` profile pins `memory_mode = 'custom'` and
+`reg_valis_max_non_rigid_dim = 1024` (the `low` row's non-rigid size), because VALIS
+cannot register a slide whose full resolution is no larger than that size and a TMA
+core is typically 2000–3000 px on its long side. It describes the *data*, so it composes
+with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
+on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
+cores are larger and you want a finer non-rigid stage.
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first
 process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that reports

@@ -82,7 +82,7 @@ last two come from `site.config` — see [Make a site config](installation.md#si
 | `dry_run` | param | no | Validate inputs and the samplesheet, then exit without running tasks. Boolean — set it in a `-params-file` (`params/dry_run.json`), never on the CLI; see [Boolean parameters](#boolean-parameters). |
 | `--cleanup_level` | param | no | Which published outputs to keep: `final` (default — final artifacts only) or `none` (everything). Pass `none` when this run's output will be re-entered by `--start` or `add_cycle`. |
 | `cleanup_work` | param | no | Delete `work/` after a successful run. **On by default**; incompatible with `-resume`. Boolean — set it in a `-params-file`, never on the CLI; see [Boolean parameters](#boolean-parameters). |
-| `-profile` | option | no | Execution/config profiles, comma-combined (e.g. `slurm,singularity`). |
+| `-profile` | option | no | Execution/config profiles, comma-combined (e.g. `slurm,singularity`). `tma` is a data-shape profile for tissue-microarray cores (VALIS non-rigid size 1024 px under `memory_mode custom`); add it to the site profiles, e.g. `slurm,singularity,tma`. See [Tiers](parameters.md#tiers). |
 | `-params-file` | option | no | JSON preset of parameters, e.g. `params/full_pipeline.json`. |
 | `-resume` | option | no | Reuse cached results from a previous run's `work/`. |
 | `-c` | option | yes on a cluster | Layer your `site.config` (required `max_cpus`/`max_memory`, SLURM fields). See [Make a site config](installation.md#size-your-run). |

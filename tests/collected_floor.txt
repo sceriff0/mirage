@@ -739,4 +739,8 @@
 # RE-MEASURED 2026-09-08 on benchmarking after merging dev@53849500 (the VALIS
 # pyramid-level -1 preflight): dev's 1957 + the two benchmarks.yml parametrisations
 # that exist only on this branch = 1959.
-1959
+# RE-MEASURED 2026-09-08 (tests/test_tma_profile.py, four cases for the `tma` data-shape
+# profile). 1957 + 4 = 1961.
+# RE-MEASURED 2026-09-08 on benchmarking after merging dev@66e5ec1d (the `tma` profile):
+# dev's 1961 + the two benchmarks.yml parametrisations that exist only here = 1963.
+1963
