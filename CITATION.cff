@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use MIRAGE, please cite it as below."
 title: "MIRAGE: a Nextflow pipeline for multiplex whole-slide image processing"
 version: 1.0.0
-date-released: 2026-09-06
+date-released: 2026-09-08
 license: MIT
 repository-code: "https://github.com/sceriff0/mirage"
 url: "https://mirage-pipeline.readthedocs.io/"
