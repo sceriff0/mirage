@@ -59,6 +59,12 @@ after that doc and is detailed inline below:
    run that already passed an explicit `--pixel_size`.
 
 ### Added
+- **`-profile tma`** — a data-shape profile for tissue-microarray input that pins
+  `memory_mode = 'custom'` and `reg_valis_max_non_rigid_dim = 1024` (the `low` tier's
+  non-rigid size), so it composes with a site profile (`-profile slurm,ieo,tma`). Needed
+  because VALIS 1.0.0–1.2.0 cannot register a slide whose full resolution is no larger
+  than its non-rigid size (see the pyramid-level −1 entry under Fixed) and TMA cores are
+  typically 2000–3000 px on the long side. Safe for cores of 2048 px or more.
 - **`PREFLIGHT_SCALE` process** (`modules/local/preflight_scale.nf` /
   `bin/preflight_scale.py`), run once over every input slide before any heavy work
   is staged (`subworkflows/local/input_check.nf`). It reads only OME metadata —
