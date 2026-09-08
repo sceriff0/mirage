@@ -732,4 +732,11 @@
 # RE-MEASURED 2026-09-06 on benchmarking after merging dev@82754a6e (the eight
 # identity commits from plans 03/14 plus the lazy cleanup_level gate): dev's 1947
 # + the two benchmarks.yml parametrisations that exist only on this branch = 1949.
-1949
+# RE-MEASURED 2026-09-08 (tests/test_valis_preflight.py: eight cases for the VALIS
+# pyramid-level -1 preflight and register.py's None-return check) plus the two
+# per-module parametrisations that pick up the new bin/utils/valis_preflight.py.
+# 1947 + 8 + 2 = 1957.
+# RE-MEASURED 2026-09-08 on benchmarking after merging dev@53849500 (the VALIS
+# pyramid-level -1 preflight): dev's 1957 + the two benchmarks.yml parametrisations
+# that exist only on this branch = 1959.
+1959

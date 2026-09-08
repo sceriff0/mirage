@@ -564,6 +564,30 @@ after that doc and is detailed inline below:
   prose docs, so a figure can no longer show the CLI-rejected `--dry_run true` form.
 
 ### Fixed
+- **VALIS registration of small-format slides (TMA cores) died with "JVM is not running"
+  after the whole rigid stage, blamed on micro-registration.** Root cause, reproduced with
+  VALIS's own geometry code: `prep_images_for_large_non_rigid_registration` picks the
+  pyramid level to read as `np.where(level_max < needed)[0][0] - 1`, which is **-1** for
+  any slide whose full resolution is smaller than the source size the non-rigid stage
+  needs. `slide2vips(-1)` then sizes its tile grid from `slide_dimensions[-1]` (Python's
+  negative index: the smallest level, silently), Bio-Formats rejects `setResolution(-1)`,
+  the tile reader swallows the exception and leaves `tile` unbound, and the resulting
+  `UnboundLocalError: local variable 'tile' referenced before assignment` reaches
+  `Valis.register()`'s catch-all, which kills the JVM and **returns `(None, None, None)`
+  instead of raising**. VALIS's own clamp ("not all images are this large. Setting
+  `max_non_rigid_registration_dim_px` to 2720") does not prevent it: the source size it
+  then needs is `processed × s` with `s` scaling the reference frame — or, with
+  `create_masks=True`, the smaller tissue-mask box — up to the clamped value, so the
+  smallest slide is always short (2721 vs 2720 without a mask, 4096 vs 2720 with a mask
+  covering 60 % of the frame). Unchanged upstream at 1.2.0. Three pipeline-side changes,
+  none of which patches VALIS: (1) `REGISTER` now **refuses at start**, before the JVM
+  and the rigid stage, when any slide's full resolution is no larger than the non-rigid
+  size, naming the slides and the two remedies (`bin/utils/valis_preflight.py`); (2)
+  `register()` returning `None` is now raised as the failure it is, pointing at the
+  swallowed traceback on stdout, instead of being logged as "Initial registration
+  completed"; (3) the dead-JVM banner and `--max-non-rigid-dim`'s help, the schema and
+  `docs/parameters.md` no longer say the clamp is benign or that `--micro-reg 0` is the
+  cure. The one-line upstream fix is `max(closest_img_levels[0] - 1, 0)`.
 - **`cleanup_level` set in a profile or a `-c` site config was silently ignored by
   the publish gates.** Each intermediate `publishDir` gated on a plain
   `enabled: params.cleanup_level == 'none'` boolean, which Nextflow evaluates at the

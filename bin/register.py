@@ -82,6 +82,15 @@ from valis_config import (  # noqa: E402
     resolve_memory_mode,
 )
 
+# VALIS-free (tifffile only), but named for what it guards; it sits below the
+# numba guard with the other valis_* imports so tests/test_numba_guard.py's
+# `^from valis` rule reads it the same way it reads valis_config.
+from valis_preflight import (  # noqa: E402
+    level0_max_dims,
+    refusal_message,
+    slides_too_small_for_non_rigid,
+)
+
 
 def validate_input_slides(input_dir: str) -> Tuple[List[str], List[str]]:
     """Validate input slides before registration.
@@ -410,6 +419,30 @@ def valis_registration(
         max_non_rigid_dim=max_non_rigid_dim,
     )
 
+    # ------------------------------------------------------------------
+    # Preflight: refuse input VALIS 1.0.0-1.2.0 cannot register, BEFORE the
+    # JVM starts and the rigid stage runs. A slide whose full resolution is no
+    # larger than max_non_rigid_registration_dim_px makes VALIS read it at
+    # pyramid level -1; Bio-Formats rejects that, the reader swallows the
+    # error, and register() kills the JVM and returns None 158 s later. VALIS's
+    # own clamp of that parameter does not prevent it. bin/utils/valis_preflight.py
+    # carries the full chain and the reproduction.
+    # ------------------------------------------------------------------
+    slide_files = sorted(
+        os.path.join(input_dir, f)
+        for f in os.listdir(input_dir)
+        if f.lower().endswith((".tif", ".tiff", ".ome.tif", ".ome.tiff"))
+    )
+    non_rigid_dim = registrar_kwargs["max_non_rigid_registration_dim_px"]
+    too_small = slides_too_small_for_non_rigid(
+        level0_max_dims(slide_files), non_rigid_dim
+    )
+    if too_small:
+        raise RuntimeError(refusal_message(too_small, non_rigid_dim=non_rigid_dim))
+    logger.info(
+        f"  Preflight: every slide's full resolution exceeds the non-rigid size ({non_rigid_dim}px)"
+    )
+
     registrar = registration.Valis(input_dir, results_dir, **registrar_kwargs)
 
     # ========================================================================
@@ -421,6 +454,23 @@ def valis_registration(
 
     try:
         _, _, error_df = registrar.register()
+        if error_df is None:
+            # Valis.register() never raises: on any exception it prints the traceback,
+            # warns with the message, kills the JVM and returns (None, None, None). The
+            # real error is on stdout above this line -- if it reads "local variable
+            # 'tile' referenced before assignment", a slide was read at pyramid level -1
+            # (see bin/utils/valis_preflight.py) and the Bio-Formats exception it hides
+            # is a few lines further up.
+            raise RuntimeError(
+                "VALIS registration failed inside Valis.register(), which swallowed the "
+                "exception, killed the JVM and returned None. The traceback it printed "
+                "is on stdout just above. A 'local variable 'tile' referenced before "
+                "assignment' warning means a slide was read at pyramid level -1 because "
+                "its full resolution is smaller than the source size the non-rigid stage "
+                "needs (slides only slightly larger than --max-non-rigid-dim can still "
+                "hit this through the tissue-mask term); lower --max-non-rigid-dim or use "
+                "registration_method = 'tiled'."
+            )
         logger.info("Initial registration completed")
         logger.info(f"\nRegistration errors:\n{error_df}")
 
@@ -763,26 +813,34 @@ def valis_registration(
             logger.error(
                 "This prevents warping slides because BioFormats requires JVM."
             )
+            logger.error("")
             logger.error(
-                "\nThis typically happens when VALIS encounters an internal error"
+                "VALIS kills the JVM from Valis.register()'s catch-all, after printing"
             )
             logger.error(
-                "during registration and calls kill_jvm() in its exception handler."
+                "the real exception and its traceback to stdout. Look there, not here."
+            )
+            logger.error("")
+            logger.error(
+                "Suggested workarounds. The known cause is a slide whose full resolution"
             )
             logger.error(
-                "\nThe transformation matrices WERE computed successfully, but"
+                "is smaller than the source size the non-rigid stage needs, which VALIS"
             )
-            logger.error("we cannot warp the slides without JVM for BioFormats I/O.")
-            logger.error("\nSuggested workarounds:")
-            logger.error("  1. Try --micro-reg 0 (micro passes may be killing JVM)")
-            logger.error("  2. Reduce --max-image-dim to lower memory usage")
             logger.error(
-                "  3. Check logs above for specific errors that triggered JVM kill"
+                "then reads at pyramid level -1 (bin/utils/valis_preflight.py):"
             )
+            logger.error(
+                "  1. Lower --max-non-rigid-dim below the smallest slide, with a margin"
+            )
+            logger.error(
+                "     (pipeline: memory_mode = 'custom', reg_valis_max_non_rigid_dim = N)."
+            )
+            logger.error("  2. Use the tiled backend: registration_method = 'tiled'.")
             logger.error("=" * 70)
             raise RuntimeError(
-                "JVM was killed during registration. Warping cannot proceed. "
-                "Try --micro-reg 0 or check for errors above."
+                "JVM was killed during registration. Warping cannot proceed. The exception "
+                "VALIS swallowed is printed on stdout above the 'JVM is not running' banner."
             )
         logger.info("  JVM is running - proceeding with warping")
     except ImportError:
@@ -1028,9 +1086,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Override the preset's non-rigid registration size (px). Unset = take it from "
-            "--memory-mode. Requesting more than the smallest slide's full resolution makes "
-            "VALIS clamp this to that slide's largest dimension; lower it below that on "
-            "small-format input such as TMA cores."
+            "--memory-mode. Must be SMALLER than the full resolution of every slide: VALIS "
+            "1.0.0-1.2.0 reads a slide no larger than this at pyramid level -1 and dies "
+            "(its own clamp does not prevent it), so register.py refuses such input up "
+            "front. Lower it below the smallest slide on small-format input such as TMA "
+            "cores, with a margin."
         ),
     )
     parser.add_argument(

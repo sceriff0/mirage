@@ -169,7 +169,12 @@ def test_jvm_death_message_names_the_jvm_and_a_remedy():
     # The surrounding log block is the "remedy" half -- suggested workarounds
     # printed immediately before this RuntimeError is raised.
     assert "Suggested workarounds" in text
-    assert "--micro-reg 0" in text
+    # The remedy named must be a real one. Until 2026-09-08 this asserted
+    # `--micro-reg 0`, which was folklore: the micro pass is consumed only by
+    # register_micro(), which had not run in any recorded JVM death -- the JVM
+    # dies inside Valis.register() (bin/utils/valis_preflight.py has the chain).
+    assert "--max-non-rigid-dim" in text
+    assert "Try --micro-reg 0" not in text
 
 
 def test_jvm_death_message_is_distinct_from_tile_read_failure_message():
