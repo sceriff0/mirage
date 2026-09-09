@@ -164,7 +164,8 @@ cannot register a slide whose full resolution is no larger than that size and a 
 core is typically 2000–3000 px on its long side. It describes the *data*, so it composes
 with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
 on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
-cores are larger and you want a finer non-rigid stage.
+cores are larger and you want a finer non-rigid stage. It also lowers `REGISTER`'s
+memory request from 300 GB to 32 GB per attempt — see [Resources](resources.md).
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first
 process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that reports

@@ -33,6 +33,9 @@ def _profile_body(name: str) -> str:
     return m.group(1)
 
 
+REGISTER_GB = 32
+
+
 def test_the_tma_profile_pins_exactly_the_custom_pair():
     body = _profile_body("tma")
     assigned = dict(re.findall(r"params\.([a-z_]+)\s*=\s*([^\n]+)", body))
@@ -70,4 +73,32 @@ def test_the_profile_is_documented_where_operators_look():
     )
     assert "tma" in params and "slurm,ieo,tma" in params, (
         "docs/parameters.md's Tiers section does not show the profile composing with a site profile"
+    )
+
+
+def test_the_tma_profile_sizes_register_for_cores_not_slides():
+    """conf/modules.config reserves a flat 300 GB x attempt for REGISTER, sized for
+    whole slides. Five ~2800 px cores need a small fraction of that, and on SLURM a
+    300 GB request is what the run waits in the queue for. The profile overrides the
+    one process, keeps the retry ramp, and leaves cpus/time alone; register.nf's JVM
+    heap is derived from task.memory, so it scales down with it."""
+    body = _profile_body("tma")
+    at = body.find("withName: 'REGISTER'")
+    assert at != -1, "no withName: 'REGISTER' override in the tma profile"
+    # Everything from the selector to the profile's end: the selector's own block
+    # ends at the first `}` past the closure, so a non-greedy brace match would stop
+    # inside the closure. Nothing else follows the override in this profile.
+    override = body[at:]
+    assert re.search(
+        rf"memory\s*=\s*\{{\s*{REGISTER_GB}\.GB \* task\.attempt\s*\}}", override
+    ), override
+    assert "cpus" not in override and "time" not in override, (
+        "the profile should override memory only; cpus and time stay with conf/modules.config"
+    )
+
+
+def test_the_register_override_is_documented_next_to_the_300_gb_row():
+    resources = (REPO_ROOT / "docs" / "resources.md").read_text()
+    assert "tma" in resources and f"{REGISTER_GB} GB" in resources, (
+        "docs/resources.md's REGISTER row does not say the tma profile lowers it"
     )

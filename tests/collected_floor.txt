@@ -712,4 +712,6 @@
 # profile). 1957 + 4 = 1961.
 # RE-MEASURED 2026-09-09 (tests/test_valis_tier_sizes.py, three cases holding every prose
 # copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
-1964
+# RE-MEASURED 2026-09-09 (tests/test_tma_profile.py: two cases for the REGISTER memory
+# override in the `tma` profile). 1964 + 2 = 1966.
+1966

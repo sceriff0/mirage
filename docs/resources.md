@@ -114,6 +114,10 @@ real slide. Changing either number changes an unguarded figure, so change it her
 |---|---|---|---|---|
 | `REGISTER` | `8` | `300 GB × attempt` | `24.h × attempt` | `withName` |
 
+The `tma` profile overrides only `REGISTER`'s memory, to `32 GB × attempt`: tissue-microarray
+cores are ~2800 px on a side, and the 300 GB request is sized for whole slides. Cpus and time
+stay as above, and the JVM heap follows `task.memory` down (28 GiB on attempt 1).
+
 `REGISTER` also carries `maxForks = Math.min(10, params.max_forks)` and its own error
 strategy — see [Retry policy](#retry-policy) and
 [Execution & concurrency](#execution-concurrency).
