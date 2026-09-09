@@ -714,4 +714,8 @@
 # copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
 # RE-MEASURED 2026-09-09 (tests/test_tma_profile.py: two cases for the REGISTER memory
 # override in the `tma` profile). 1964 + 2 = 1966.
-1966
+# RE-MEASURED 2026-09-09 (tests/test_frozen_config_params.py: four cases plus a per-config
+# parametrisation of the plain-map resourceLimits rule over nextflow.config and conf/*.config,
+# and tests/test_concurrency_params.py: two cases for the per-process caps' new home).
+# 1966 + 10 = 1976.
+1976
