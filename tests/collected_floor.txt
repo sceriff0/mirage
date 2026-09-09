@@ -710,4 +710,6 @@
 # 1947 + 8 + 2 = 1957.
 # RE-MEASURED 2026-09-08 (tests/test_tma_profile.py, four cases for the `tma` data-shape
 # profile). 1957 + 4 = 1961.
-1961
+# RE-MEASURED 2026-09-09 (tests/test_valis_tier_sizes.py, three cases holding every prose
+# copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
+1964

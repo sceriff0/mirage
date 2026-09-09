@@ -3,7 +3,7 @@
 Tissue-microarray cores are small (a 1 mm core is ~2000-3000 px on the long side at
 typical scan resolutions), and VALIS 1.0.0-1.2.0 dies on any slide whose full
 resolution is no larger than its non-rigid registration size -- the `high` tier's
-4096 px (bin/utils/valis_preflight.py has the chain; REGISTER now refuses such input
+2048 px (bin/utils/valis_preflight.py has the chain; REGISTER now refuses such input
 at start). The remedy is `memory_mode = 'custom'` with a small
 `reg_valis_max_non_rigid_dim`, and a profile is the right vehicle: it says what the
 DATA is, the way `ieo` says where the run happens, and the two compose
@@ -12,7 +12,7 @@ are read late -- by ParamUtils.validateRegPresets in workflow scope and by REGIS
 script block at task time -- never frozen at config-parse time the way the publishDir
 gates were (tests/test_cleanup_publish_gates.py).
 
-1024 px is the `low` tier's non-rigid size and is safe for any core of 2048 px or
+1024 px is the `medium` tier's size and is safe for any core of 2048 px or
 more on its long side, with the margin VALIS's tissue-mask term needs. A CLI
 `--reg_valis_max_non_rigid_dim` still outranks the profile for larger cores.
 """
@@ -42,11 +42,12 @@ def test_the_tma_profile_pins_exactly_the_custom_pair():
     }, assigned
 
 
-def test_the_tma_size_is_the_low_tiers_non_rigid_size():
-    """Not an arbitrary number: the `low` row's non-rigid size, the smallest value the
-    tier table already vouches for."""
+def test_the_tma_size_is_the_medium_tiers_non_rigid_size():
+    """Not an arbitrary number: the `medium` row's size, a value the tier table already
+    vouches for (the `tma` profile keeps `high`'s 2048 px feature matching and lowers
+    only the non-rigid stage)."""
     presets = (REPO_ROOT / "bin" / "utils" / "valis_config.py").read_text()
-    low = re.search(r'"low":\s*\{(.*?)\}', presets, re.S).group(1)
+    low = re.search(r'"medium":\s*\{(.*?)\}', presets, re.S).group(1)
     low_nr = int(
         re.search(r'"max_non_rigid_registration_dim_px":\s*(\d+)', low).group(1)
     )
