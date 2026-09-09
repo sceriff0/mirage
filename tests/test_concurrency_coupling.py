@@ -57,15 +57,22 @@ def test_no_per_process_cap_reads_the_bare_param():
     # params.max_forks is null unless explicitly set, so a bare read yields null
     # and Math.min throws at closure-run time -- the silent-resolution failure
     # mode this repo keeps rediscovering.
+    #
+    # The per-process caps live in nextflow.config's post-profiles "Concurrency"
+    # block since 2026-09-09 (a scalar in conf/modules.config froze before any
+    # profile ran -- tests/test_frozen_config_params.py). with_name_blocks() only
+    # models conf/modules.config, so the caps are read off the comment-stripped
+    # nextflow.config here, and modules.config is asserted to hold NONE.
     offenders = []
     found_any = False
-    for block in with_name_blocks():
-        for expr in re.findall(r"^\s*maxForks\s*=\s*(.+)$", block.body, re.M):
-            found_any = True
-            normalised = re.sub(r"\s+", " ", expr.strip())
-            if not _CANONICAL_MAX_FORKS_RE.match(normalised):
-                offenders.append(f"{block.selector}: {normalised!r}")
-    assert found_any, "expected per-process maxForks overrides in conf/modules.config"
+    for selector, expr in re.findall(r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*(.+?)\s*\}", CFG):
+        found_any = True
+        normalised = re.sub(r"\s+", " ", expr.strip())
+        if not _CANONICAL_MAX_FORKS_RE.match(normalised):
+            offenders.append(f"{selector}: {normalised!r}")
+    stray = [b.selector for b in with_name_blocks() if re.search(r"^\s*maxForks\s*=", b.body, re.M)]
+    assert not stray, f"conf/modules.config must not assign maxForks (froze before profiles): {stray}"
+    assert found_any, "expected per-process maxForks overrides in nextflow.config's concurrency block"
     assert not offenders, (
         "per-process maxForks must be exactly `Math.min(<cap>, (params.max_forks != "
         "null ? params.max_forks : params.concurrency) as int)` (only <cap> may vary "

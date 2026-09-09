@@ -192,6 +192,53 @@ def announceDroppedTasks() {
 ================================================================================
 */
 
+
+/*
+================================================================================
+    POST-RUN: PRUNE THE EMPTY PUBLISH DIRECTORIES A CLEANING LEVEL LEAVES
+================================================================================
+    publishDir creates its target directory when the process starts, before the
+    `saveAs:` gate has decided whether any file lands there. At a cleaning
+    --cleanup_level every intermediate's gate returns null for every file, so a
+    successful run leaves an empty converted/, preprocessed/, split_channels/,
+    segmentation/, quantify/, cell_properties/ and registered/summary/ per patient
+    (measured 2026-09-09: seven on the stub dataset). They are noise that reads as
+    "something was supposed to be here", so they go. Only EMPTY directories, and
+    only outside any .zarr store; never a file. tests/cleanup_work.sh asserts none
+    remain.
+*/
+def pruneEmptyPublishDirs(Map cfg) {
+    if (cfg.cleanup_level == 'none') {
+        return
+    }
+    try {
+        def root = new File(cfg.outdir.toString())
+        if (!root.isDirectory()) {
+            return
+        }
+        def dirs = []
+        root.eachDirRecurse { File d -> dirs << d }
+        // Deepest first, so a directory left empty by its children's removal goes too.
+        dirs.sort { File d -> -d.toPath().getNameCount() }
+        def removed = 0
+        dirs.each { File d ->
+            if (d.path.contains('.zarr')) {
+                return
+            }
+            def entries = d.list()
+            if (entries != null && entries.length == 0 && d.delete()) {
+                removed += 1
+            }
+        }
+        if (removed > 0) {
+            log.info "Removed ${removed} empty publish director${removed == 1 ? 'y' : 'ies'} under ${root}: " +
+                     "intermediates are not published at --cleanup_level=${cfg.cleanup_level}."
+        }
+    } catch (Exception e) {
+        log.warn "Could not prune empty publish directories (non-fatal): ${e.message}"
+    }
+}
+
 workflow {
     main:
 
@@ -210,6 +257,7 @@ workflow {
     workflow.onComplete {
         announceDroppedTasks()
         writeCheckpointReadme(report_cfg)
+        pruneEmptyPublishDirs(report_cfg)
         generateResourceReport(report_cfg)
     }
 

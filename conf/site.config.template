@@ -28,6 +28,16 @@
     Note the ordering trap if you do: a profile body is evaluated while
     nextflow.config is parsed, whereas a `-c` file is layered afterwards and
     wins on params regardless of argument order.
+
+    THE REVERSE TRAP -- SIX PARAMS MUST NOT BE SET IN THIS FILE. cleanup_work,
+    enable_trace, trace_dir, concurrency, max_forks and queue_size each drive a
+    SCALAR inside nextflow.config (`cleanup`, `trace.enabled`, `executor.queueSize`,
+    `process.maxForks`, ...) that is evaluated while nextflow.config is parsed --
+    which is BEFORE this file is layered. A pin here changes the param and reaches
+    nothing that reads it (measured 2026-09-09). The pipeline REFUSES such a run at
+    launch (ParamUtils.validateFrozenConfig) rather than ignore the pin. Pass those
+    six with -params-file (the two booleans can only go that way) or on the command
+    line.
 ========================================================================================
 */
 

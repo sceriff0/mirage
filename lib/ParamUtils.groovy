@@ -340,6 +340,102 @@ class ParamUtils {
                 "--cleanup_level none.")
     }
 
+
+    /*
+     * Settings nextflow.config derives from a param as a SCALAR. A scalar freezes at
+     * the line it is written on, and nextflow.config is parsed IN FULL before any `-c`
+     * file is merged -- so a `-c site.config` pin of one of these changes `params.x`
+     * and reaches nothing that reads it. Measured 2026-09-09 (Nextflow 25.04.7): a -c
+     * pin of concurrency=7 / cleanup_work=true / enable_trace=false left queueSize 20,
+     * every maxForks 5, `cleanup` false and the trace enabled, while `params.*` printed
+     * the pinned values. The CLI, a -params-file and a profile all reach them.
+     *
+     * tests/test_frozen_config_params.py DISCOVERS this set by scanning nextflow.config
+     * and asserts it equals this list in both directions, so a new params-derived
+     * scalar in the config fails the suite until it is checked here.
+     */
+    static final List<String> FROZEN_CONFIG_PARAMS = [
+        'cleanup_work', 'enable_trace', 'trace_dir', 'concurrency', 'max_forks', 'queue_size',
+    ].asImmutable()
+
+    /*
+     * The four per-process maxForks caps in nextflow.config's "Concurrency" block, keyed
+     * by process name. Each is `Math.min(cap, derivedMaxForks)` there; this table lets
+     * validateFrozenConfig recompute what the config SHOULD hold, since conf/*.config
+     * cannot see lib/ classes and the config cannot share a helper.
+     * tests/test_concurrency_params.py asserts the config literals match this table.
+     */
+    static final Map<String, Integer> PER_PROCESS_MAX_FORKS_CAP = [
+        REGISTER: 10, TILED_REG_TILE: 20, TILED_COARSE: 20, TILED_STITCH: 10,
+    ].asImmutable()
+
+    /** process.maxForks as nextflow.config derives it: max_forks if set, else concurrency. */
+    static int derivedMaxForks(Map params) {
+        return (params.max_forks != null ? params.max_forks : params.concurrency) as int
+    }
+
+    /** executor.queueSize as nextflow.config derives it: queue_size if set, else concurrency * 4. */
+    static int derivedQueueSize(Map params) {
+        return (params.queue_size != null ? params.queue_size : (params.concurrency as int) * 4) as int
+    }
+
+    /**
+     * Refuse a run whose final params disagree with the scalars nextflow.config froze
+     * from them.
+     *
+     * `config` is the resolved session config (workflow.session.config). Every
+     * comparison recomputes the expected value from `params` exactly as the config
+     * line does, so the only way they differ is that the param arrived by a route the
+     * config line could not see -- a `-c` file. A silent mismatch here is the worst
+     * kind: `nextflow config` prints the pinned param, the run honours the old scalar,
+     * and for cleanup_work that means deleting (or keeping) work/ against the operator's
+     * stated intent. Refusing at launch costs nothing; a wrong `cleanup` is discovered
+     * at teardown, after the whole run.
+     *
+     * `commandLine` is workflow.commandLine. Nextflow's own `-with-trace <file>`,
+     * `-with-report <file>` and `-with-timeline <file>` flags legitimately overwrite
+     * that scope's `enabled` and `file` AFTER nextflow.config, so a scope named that
+     * way on the command line is not checked. nf-test passes `-with-trace` on every
+     * run -- measured 2026-09-09: without this exemption 43 of 235 stub tests refused
+     * at launch on `trace.file = .../meta/trace.csv`.
+     */
+    static void validateFrozenConfig(Map params, Map config, String commandLine = '') {
+        def mismatches = []
+        def check = { String param, String key, Object expected, Object actual ->
+            if (expected != actual) {
+                mismatches << "${key} = ${actual} but ${param} resolves to ${expected}".toString()
+            }
+        }
+
+        check('cleanup_work', 'cleanup', params.cleanup_work as boolean, config.cleanup as boolean)
+        [trace: 'trace.txt', report: 'report.html', timeline: 'timeline.html'].each { String scope, String file ->
+            if ((commandLine ?: '').contains("-with-${scope}")) {
+                return   // overridden on the command line by Nextflow's own flag; not frozen
+            }
+            check('enable_trace', "${scope}.enabled".toString(),
+                  params.enable_trace as boolean, config[scope]?.enabled as boolean)
+            check('trace_dir', "${scope}.file".toString(),
+                  "${params.trace_dir}/${file}".toString(), config[scope]?.file?.toString())
+        }
+        check('concurrency/queue_size', 'executor.queueSize', derivedQueueSize(params), config.executor?.queueSize as Integer)
+        check('concurrency/max_forks', 'process.maxForks', derivedMaxForks(params), config.process?.maxForks as Integer)
+        PER_PROCESS_MAX_FORKS_CAP.each { String name, Integer cap ->
+            check('concurrency/max_forks', "process.withName:${name}.maxForks".toString(),
+                  Math.min(cap, derivedMaxForks(params)), config.process?."withName:${name}"?.maxForks as Integer)
+        }
+
+        if (mismatches) {
+            throw new IllegalArgumentException(
+                "validateFrozenConfig: the resolved config disagrees with the final params:\n  - " +
+                mismatches.join("\n  - ") + "\n" +
+                "These settings are computed inside nextflow.config while it is parsed, which is " +
+                "BEFORE any `-c` file is merged, so a `-c site.config` pin of " +
+                "${FROZEN_CONFIG_PARAMS} changes the param but not the setting it drives. Pass " +
+                "these with -params-file (required for the booleans), on the command line " +
+                "(numbers and paths), or in a profile defined in nextflow.config -- not in a -c file.")
+        }
+    }
+
     /**
      * Refuse a run whose pixel size cannot possibly be legal.
      *

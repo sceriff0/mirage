@@ -749,4 +749,6 @@
 # override in the `tma` profile). 1964 + 2 = 1966.
 # RE-MEASURED 2026-09-09 on benchmarking after merging dev@3f482063 (equalised VALIS tiers,
 # tma REGISTER memory): dev's 1966 + the two benchmarks.yml parametrisations = 1968.
-1968
+# RE-MEASURED 2026-09-09 on benchmarking after merging dev@1f14d75b (frozen-config guards,
+# +10 on dev): 1968 + 10 = 1978.
+1978
