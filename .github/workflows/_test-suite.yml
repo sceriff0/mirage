@@ -399,6 +399,15 @@ jobs:
         run: |
           bash tests/cleanup_level_pin.sh
 
+      - name: Verify a -c pin of a frozen config param is refused, not ignored (behavioural)
+        # tests/test_frozen_config_params.py pins WHERE nextflow.config's params-derived
+        # scalars sit and that the launch check names each param; only a run shows the
+        # check fires. Three container-free stub runs: a `-c` pin (must be refused,
+        # naming the route), the same pin via -params-file, and via the CLI (both must
+        # arrive -- asserted on the local executor's `capacity=` line and the trace).
+        run: |
+          bash tests/frozen_config_pin.sh
+
       - name: Verify -resume reuses the cache (behavioural)
         # The behavioural counterpart to tests/test_resume_determinism.py, and like
         # tests/cleanup_work.sh it needs its own step or it runs nowhere: it is

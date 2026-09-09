@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,
+  `max_forks` or `queue_size` was silently ignored.** Each drives a scalar evaluated while
+  `nextflow.config` is parsed (`cleanup`, `trace.*`, `executor.queueSize`,
+  `process.maxForks`), which is before any `-c` file is merged, so the param changed and
+  the setting did not — `nextflow config` printed the pin, the run honoured the old value.
+  The run is now **refused at launch** with the route named
+  (`ParamUtils.validateFrozenConfig`); `-params-file`, the CLI and profiles all work.
+- **A profile pin of `concurrency` / `max_forks` / `queue_size` never arrived either**:
+  the `executor.queueSize` / `process.maxForks` scalars sat above `profiles {}`. They and the
+  four per-process `maxForks` caps (formerly in `conf/modules.config`, also frozen) now sit in
+  a concurrency block after the profiles.
+- **`-profile slurm` ran with no resource ceiling** on the documented
+  `-profile slurm,singularity -c site.config` route: the profile shadowed the top-level
+  `resourceLimits` closure with a plain map that froze to `[cpus:null, memory:null]`. The
+  map is gone; the closure applies.
+- **A cleaning `--cleanup_level` left seven empty intermediate directories per patient**
+  (`publishDir` creates its target before `saveAs` runs). `main.nf`'s `onComplete` now
+  prunes empty directories under `--outdir` at those levels.
+
+Guarded by `tests/test_frozen_config_params.py` (position and coverage, discovered from the
+config), `tests/frozen_config_pin.sh` (the refusal and both working routes, run) and an
+extra case in `tests/cleanup_work.sh`.
 
 ## [1.0.0] - 2026-09-08
 

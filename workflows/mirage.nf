@@ -64,6 +64,11 @@ workflow MIRAGE {
     // --cleanup_level against --mode. add_cycle must PRODUCE a re-enterable tree, so a
     // cleaning level is refused outright rather than discovered by the next cycle.
     ParamUtils.validateCleanup(params)
+    // Settings nextflow.config derives from params as SCALARS (cleanup, trace.*,
+    // executor.queueSize, process.maxForks) froze when that file was parsed -- before
+    // any `-c` file was merged. Refuse a run whose final params disagree with them,
+    // naming the route, rather than let a site.config pin be silently ignored.
+    ParamUtils.validateFrozenConfig(params, workflow.session.config)
 
     // cleanup_work is mutually exclusive with -resume: the work directory's task files
     // are removed at teardown of a SUCCESSFUL run, so the NEXT -resume finds nothing

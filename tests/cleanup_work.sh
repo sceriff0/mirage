@@ -104,6 +104,20 @@ grep -q -- '--cleanup_level none' "$O/csv/README.txt" \
 echo "ok: csv/ holds only the README"
 
 # --------------------------------------------------------------------------
+# 3c. And no EMPTY directory is left behind. publishDir creates its target
+#     directory before saveAs decides whether anything lands there, so a cleaning
+#     level used to leave seven empty intermediate directories per patient
+#     (converted/, preprocessed/, ... registered/summary/) -- measured 2026-09-09.
+#     main.nf's onComplete prunes them; this is the only place that can see it.
+# --------------------------------------------------------------------------
+empties=$(find "$O" -type d -empty 2>/dev/null | wc -l | tr -d ' ')
+if [ "$empties" -ne 0 ]; then
+    find "$O" -type d -empty
+    fail "$empties empty director(ies) left under --outdir at --cleanup_level=final"
+fi
+echo "ok: no empty directory left behind"
+
+# --------------------------------------------------------------------------
 # 4. A FAILED run KEEPS its work directory. The evidence must survive.
 # --------------------------------------------------------------------------
 W2="$TMP/w2"; O2="$TMP/o2"

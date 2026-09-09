@@ -330,7 +330,11 @@ ALLOWED_LINES = {
         # 1269 -> 1270 (2026-09-06): the cleanup-gate comment on CONVERT_IMAGE's
         # publishDir grew by one line when the gate moved into `saveAs:`.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1270
-        1270: (
+        # 1270 -> 1274 (2026-09-09): the four per-process `maxForks` caps moved out
+        # of conf/modules.config into nextflow.config's post-profiles concurrency
+        # block, each replaced by a two-line pointer comment (+4 net).
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1274
+        1274: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

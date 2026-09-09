@@ -10,8 +10,9 @@ overridden. They are declared `null` rather than a numeric default computed from
 `concurrency` because `nextflow.config`'s params block is evaluated BEFORE the CLI is
 applied -- a default computed there would use `concurrency`'s own default and silently
 ignore `--concurrency`. The derivation therefore lives in the `executor`/`process` scopes
-below the includes (and in conf/modules.config's seven per-process caps), which are
-evaluated/included after CLI resolution.
+in nextflow.config's "Concurrency" block AFTER `profiles {}` (with the four per-process
+caps), so the CLI, a -params-file and a profile all reach it. A `-c` file does not, and
+the run is refused rather than the pin ignored -- tests/test_frozen_config_params.py.
 
 WHY THIS FILE EXISTS RATHER THAN A COMMENT. Wiring a parameter into `maxForks` fails in
 three different ways depending on where you write it, and **two of the three fail silently
@@ -163,9 +164,16 @@ _CANONICAL_MAX_FORKS_RE = re.compile(
 )
 
 
-def test_every_per_process_max_forks_is_bounded_by_the_parameter(modules):
+def test_every_per_process_max_forks_is_bounded_by_the_parameter(nf):
     """Lowering --max_forks (or --concurrency) must throttle EVERY module, not just
     those without an override.
+
+    The per-process caps live in nextflow.config's "Concurrency" block, AFTER
+    `profiles {}` -- not in conf/modules.config, where they sat until 2026-09-09: that
+    file is included before the profiles, and a scalar there froze against the
+    pre-profile params, so `withName` (which wins over the scope default) silently
+    overrode the value a profile asked for. tests/test_frozen_config_params.py pins
+    the position; this test pins the shape.
 
     Each per-process value must be EXACTLY
     `Math.min(<its own limit>, (params.max_forks != null ? params.max_forks : params.concurrency) as int)`:
@@ -175,8 +183,8 @@ def test_every_per_process_max_forks_is_bounded_by_the_parameter(modules):
     --concurrency, or worse, throw only when the closure runs -- see the module-level
     comment above for why a substring check cannot tell these apart.
     """
-    assignments = re.findall(r"^\s*maxForks\s*=\s*(.+)$", modules, flags=re.M)
-    assert assignments, "expected per-process maxForks overrides in conf/modules.config"
+    assignments = re.findall(r"withName:\s*'\w+'\s*\{\s*maxForks\s*=\s*(.+?)\s*\}", nf)
+    assert assignments, "expected per-process maxForks overrides in nextflow.config"
     offenders = []
     for raw in assignments:
         normalised = re.sub(r"\s+", " ", raw.strip())
@@ -186,6 +194,29 @@ def test_every_per_process_max_forks_is_bounded_by_the_parameter(modules):
         f"{len(offenders)} per-process maxForks value(s) are not the exact "
         "`Math.min(<cap>, (params.max_forks != null ? params.max_forks : "
         f"params.concurrency) as int)` shape (only <cap> may vary): {offenders!r}"
+    )
+
+
+def test_no_per_process_max_forks_remains_in_modules_config(modules):
+    """The old position. A cap written here is included BEFORE `profiles {}` and, being
+    a withName setting, would win over the correctly-placed scope default -- silently
+    re-introducing the frozen value for that one process."""
+    stray = re.findall(r"^\s*maxForks\s*=.*$", modules, flags=re.M)
+    assert not stray, f"conf/modules.config must not assign maxForks (it froze before profiles): {stray}"
+
+
+def test_per_process_caps_match_the_paramutils_table(nf):
+    """ParamUtils.PER_PROCESS_MAX_FORKS_CAP is what validateFrozenConfig recomputes the
+    expected per-process value from, and conf/*.config cannot read lib/ classes, so the
+    two copies can only be kept equal by a test. Both directions."""
+    in_config = dict(re.findall(r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*Math\.min\(\s*(\d+)", nf))
+    src = (ROOT / "lib" / "ParamUtils.groovy").read_text()
+    m = re.search(r"PER_PROCESS_MAX_FORKS_CAP\s*=\s*\[(.*?)\]", src, flags=re.S)
+    assert m, "lib/ParamUtils.groovy must declare PER_PROCESS_MAX_FORKS_CAP"
+    in_lib = dict(re.findall(r"(\w+)\s*:\s*(\d+)", m.group(1)))
+    assert in_config == in_lib, (
+        f"nextflow.config's per-process maxForks caps {in_config} != "
+        f"ParamUtils.PER_PROCESS_MAX_FORKS_CAP {in_lib}"
     )
 
 

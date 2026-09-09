@@ -270,7 +270,8 @@ samplesheet — feed it back in with a matching `--start`.
     which one you meant is genuinely ambiguous.
 
     While you are iterating with `-resume`, put `{"cleanup_work": false}` in a
-    `-params-file`. `--start` restarts are unaffected either way: they read
+    `-params-file` — not in a `-c site.config`, which `nextflow.config`'s `cleanup`
+    line cannot see; such a run is refused at launch rather than silently cleaned. `--start` restarts are unaffected either way: they read
     published paths under `--outdir`, never `work/` — but see `--cleanup_level`
     below, because at the default level those published paths are not written.
     Details: [Output cleanup](parameters.md#output-cleanup).

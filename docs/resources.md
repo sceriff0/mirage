@@ -118,9 +118,9 @@ The `tma` profile overrides only `REGISTER`'s memory, to `32 GB × attempt`: tis
 cores are ~2800 px on a side, and the 300 GB request is sized for whole slides. Cpus and time
 stay as above, and the JVM heap follows `task.memory` down (28 GiB on attempt 1).
 
-`REGISTER` also carries `maxForks = Math.min(10, params.max_forks)` and its own error
-strategy — see [Retry policy](#retry-policy) and
-[Execution & concurrency](#execution-concurrency).
+`REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
+concurrency block, after the profiles) and its own error strategy — see
+[Retry policy](#retry-policy) and [Execution & concurrency](#execution-concurrency).
 
 ### Registration — tiled / STARE
 
@@ -480,9 +480,18 @@ queue_size 80`). `--max_forks` and `--queue_size` remain available and **overrid
 per-process cap. `max_forks`/`queue_size` are declared `null` in `nextflow.config`, not a
 numeric default: the params block is evaluated *before* the CLI is applied, so a default
 computed there would use `concurrency`'s own default and silently ignore `--concurrency`.
-The derivation instead lives in the `executor`/`process` scopes below the includes (and in
-`conf/modules.config`'s seven per-process caps), which are evaluated/included after CLI
-resolution.
+The derivation instead lives in `nextflow.config`'s concurrency block **after
+`profiles {}`**, together with the four per-process caps, so the CLI, a `-params-file` and a
+profile all reach it.
+
+!!! warning "A `-c site.config` pin of these does NOT arrive — and the run says so"
+    `queueSize` and `maxForks` are scalars evaluated while `nextflow.config` is parsed,
+    which is before any `-c` file is merged. So `params { concurrency = 20 }` in a
+    `site.config` changes the param and reaches nothing that reads it (measured
+    2026-09-09; the same holds for `cleanup_work`, `enable_trace` and `trace_dir`).
+    Rather than ignore the pin, the pipeline refuses the run at launch
+    (`ParamUtils.validateFrozenConfig`) and names the route. Pass these six with
+    `-params-file` or on the command line, never in a `-c` file.
 
 **`max_forks` and `queue_size` are a pair, and the LOWER one binds.** `max_forks` caps how
 many tasks of any ONE process run at once; `queue_size` caps how many run at once across
@@ -498,7 +507,9 @@ resolved `max_forks` of 5 clamps ALL of them: the `REGISTER` / `TILED_STITCH` 10
 conservative default — raise it with `--concurrency` or `--max_forks` when the cluster
 can take it.
 
-Per-process `maxForks` overrides: `REGISTER`, `TILED_STITCH` at `10`; `TILED_COARSE` /
+Per-process `maxForks` overrides (in `nextflow.config`'s concurrency block, not in
+`conf/modules.config` — that file is included before the profiles, and a cap frozen there
+overrode the profile's value): `REGISTER`, `TILED_STITCH` at `10`; `TILED_COARSE` /
 `TILED_REG_TILE` at `20`. These bound how many memory-heavy registration tasks can be in
 flight at once. Each is written `Math.min(<its own limit>, the resolved max_forks)`, so
 **lowering** `--max_forks` (or `--concurrency`) really does throttle every module, while

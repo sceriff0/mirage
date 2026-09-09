@@ -403,6 +403,13 @@ is far lower, so raising `queue_size` alone has no effect — raise `max_forks` 
 `concurrency`), or raise both. See
 [Resources → Execution & concurrency](resources.md#execution-concurrency).
 
+!!! warning "Not in a `-c site.config` — refused at launch"
+    `concurrency`, `max_forks`, `queue_size`, `cleanup_work`, `enable_trace` and
+    `trace_dir` each drive a scalar evaluated while `nextflow.config` is parsed, before
+    any `-c` file is merged, so a pin there changes the param and not the setting. The
+    pipeline refuses such a run at launch (`ParamUtils.validateFrozenConfig`) instead of
+    silently ignoring it. Pass them with `-params-file` or on the command line.
+
 !!! info "How resources scale"
     Per-process memory and time scale with `task.attempt`, bounded by the
     ceilings above, so a retry after an OOM kill automatically climbs the ramp.
