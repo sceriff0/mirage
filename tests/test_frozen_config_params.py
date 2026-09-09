@@ -168,8 +168,13 @@ def test_mirage_nf_calls_the_validator_with_the_session_config():
     live nowhere else. Read comment-stripped: a comment naming the call is not a call."""
     code = strip_comments(MIRAGE_NF.read_text())
     assert re.search(
-        r"ParamUtils\.validateFrozenConfig\(\s*params\s*,\s*workflow\.session\.config\s*\)", code
-    ), "workflows/mirage.nf must call ParamUtils.validateFrozenConfig(params, workflow.session.config)"
+        r"ParamUtils\.validateFrozenConfig\(\s*params\s*,\s*workflow\.session\.config\s*,\s*workflow\.commandLine\s*\)",
+        code,
+    ), (
+        "workflows/mirage.nf must call ParamUtils.validateFrozenConfig(params, "
+        "workflow.session.config, workflow.commandLine) -- the command line is what "
+        "exempts Nextflow's own -with-trace/-report/-timeline overrides"
+    )
 
 
 # ---------------------------------------------------------------------------

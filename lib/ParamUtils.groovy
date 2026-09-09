@@ -391,8 +391,15 @@ class ParamUtils {
      * and for cleanup_work that means deleting (or keeping) work/ against the operator's
      * stated intent. Refusing at launch costs nothing; a wrong `cleanup` is discovered
      * at teardown, after the whole run.
+     *
+     * `commandLine` is workflow.commandLine. Nextflow's own `-with-trace <file>`,
+     * `-with-report <file>` and `-with-timeline <file>` flags legitimately overwrite
+     * that scope's `enabled` and `file` AFTER nextflow.config, so a scope named that
+     * way on the command line is not checked. nf-test passes `-with-trace` on every
+     * run -- measured 2026-09-09: without this exemption 43 of 235 stub tests refused
+     * at launch on `trace.file = .../meta/trace.csv`.
      */
-    static void validateFrozenConfig(Map params, Map config) {
+    static void validateFrozenConfig(Map params, Map config, String commandLine = '') {
         def mismatches = []
         def check = { String param, String key, Object expected, Object actual ->
             if (expected != actual) {
@@ -401,13 +408,15 @@ class ParamUtils {
         }
 
         check('cleanup_work', 'cleanup', params.cleanup_work as boolean, config.cleanup as boolean)
-        ['trace', 'report', 'timeline'].each { String scope ->
+        [trace: 'trace.txt', report: 'report.html', timeline: 'timeline.html'].each { String scope, String file ->
+            if ((commandLine ?: '').contains("-with-${scope}")) {
+                return   // overridden on the command line by Nextflow's own flag; not frozen
+            }
             check('enable_trace', "${scope}.enabled".toString(),
                   params.enable_trace as boolean, config[scope]?.enabled as boolean)
+            check('trace_dir', "${scope}.file".toString(),
+                  "${params.trace_dir}/${file}".toString(), config[scope]?.file?.toString())
         }
-        check('trace_dir', 'trace.file', "${params.trace_dir}/trace.txt".toString(), config.trace?.file?.toString())
-        check('trace_dir', 'report.file', "${params.trace_dir}/report.html".toString(), config.report?.file?.toString())
-        check('trace_dir', 'timeline.file', "${params.trace_dir}/timeline.html".toString(), config.timeline?.file?.toString())
         check('concurrency/queue_size', 'executor.queueSize', derivedQueueSize(params), config.executor?.queueSize as Integer)
         check('concurrency/max_forks', 'process.maxForks', derivedMaxForks(params), config.process?.maxForks as Integer)
         PER_PROCESS_MAX_FORKS_CAP.each { String name, Integer cap ->
