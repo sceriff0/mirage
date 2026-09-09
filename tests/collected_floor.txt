@@ -743,4 +743,10 @@
 # profile). 1957 + 4 = 1961.
 # RE-MEASURED 2026-09-08 on benchmarking after merging dev@66e5ec1d (the `tma` profile):
 # dev's 1961 + the two benchmarks.yml parametrisations that exist only here = 1963.
-1963
+# RE-MEASURED 2026-09-09 (tests/test_valis_tier_sizes.py, three cases holding every prose
+# copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
+# RE-MEASURED 2026-09-09 (tests/test_tma_profile.py: two cases for the REGISTER memory
+# override in the `tma` profile). 1964 + 2 = 1966.
+# RE-MEASURED 2026-09-09 on benchmarking after merging dev@3f482063 (equalised VALIS tiers,
+# tma REGISTER memory): dev's 1966 + the two benchmarks.yml parametrisations = 1968.
+1968

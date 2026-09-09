@@ -60,11 +60,13 @@ after that doc and is detailed inline below:
 
 ### Added
 - **`-profile tma`** — a data-shape profile for tissue-microarray input that pins
-  `memory_mode = 'custom'` and `reg_valis_max_non_rigid_dim = 1024` (the `low` tier's
-  non-rigid size), so it composes with a site profile (`-profile slurm,ieo,tma`). Needed
+  `memory_mode = 'custom'` and `reg_valis_max_non_rigid_dim = 1024` (the `medium` tier's
+  size), so it composes with a site profile (`-profile slurm,ieo,tma`). Needed
   because VALIS 1.0.0–1.2.0 cannot register a slide whose full resolution is no larger
   than its non-rigid size (see the pyramid-level −1 entry under Fixed) and TMA cores are
-  typically 2000–3000 px on the long side. Safe for cores of 2048 px or more.
+  typically 2000–3000 px on the long side. Safe for cores of 2048 px or more. It also
+  overrides `REGISTER`'s memory to 32 GB × attempt (from the whole-slide 300 GB), which
+  is what a SLURM queue would otherwise wait for; the JVM heap follows `task.memory`.
 - **`PREFLIGHT_SCALE` process** (`modules/local/preflight_scale.nf` /
   `bin/preflight_scale.py`), run once over every input slide before any heavy work
   is staged (`subworkflows/local/input_check.nf`). It reads only OME metadata —
@@ -237,6 +239,17 @@ after that doc and is detailed inline below:
   corrected contract is recorded here.
 
 ### Changed
+- **The VALIS tiers use one size for both stages: `high` 2048, `medium` 1024, `low` 512 px.**
+  The non-rigid column was 4096 / 4096 / 1024 and the feature-matching column 2048 / 1024 /
+  256, so `high` ran its non-rigid stage at twice its matching size. **Registration output
+  changes for every VALIS run that used a tier**: `high`'s displacement fields are now
+  estimated at 2048 px instead of 4096, `medium`'s at 1024, `low`'s at 512 (and `low`'s
+  feature matching rises from 256 to 512 px). Outputs are not bit-comparable across this
+  change; `custom` runs that set both knobs explicitly are unaffected. Every prose copy of
+  the table (register.py, nextflow.config, docs/parameters.md, the registration figure) is
+  held to `MEMORY_PRESETS` by `tests/test_valis_tier_sizes.py`. Note this does NOT lift the
+  pyramid-level −1 limit above: the source size VALIS needs still scales with the tissue-mask
+  term, so the preflight and the `tma` profile remain necessary for small slides.
 - **The resource report is plots, not tables.** The per-process rollup,
   resource-vs-input-size, top-10-by-RSS, top-10-by-runtime and per-task
   retry/failure tables are replaced by four hand-rolled SVG panels: wall-time by

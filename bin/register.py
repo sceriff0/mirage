@@ -238,7 +238,7 @@ def valis_registration(
         alphabetically first slide is used.
     memory_mode : str, optional
         Memory preset, from bin/utils/valis_config.py's MEMORY_PRESETS: "high"
-        (2048/4096 px), "medium" (1024/4096 px) or "low" (256/1024 px). All three use
+        (2048/2048 px), "medium" (1024/1024 px) or "low" (512/512 px). All three use
         SuperPoint + SuperGlue with 5000 features. Default: "high"
     micro_reg_fraction : float, optional
         Fraction of image size for micro-registration. Default: 0.125
@@ -1066,7 +1066,7 @@ def parse_args() -> argparse.Namespace:
             "Memory preset, from MEMORY_PRESETS in bin/utils/valis_config.py. All three "
             "use SuperPoint + SuperGlue with 5000 features and differ only in the "
             "processed / non-rigid registration dimensions: "
-            '"high" 2048/4096 px, "medium" 1024/4096 px, "low" 256/1024 px. '
+            '"high" 2048/2048 px, "medium" 1024/1024 px, "low" 512/512 px. '
             '"custom" starts from "high" and applies whichever of --max-processed-dim / '
             "--max-non-rigid-dim are given, leaving the rest at the high values."
         ),
