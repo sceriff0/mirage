@@ -713,8 +713,7 @@ NOT_SWEPT = {
     # --- run identity / where the data is. Not knobs: they select the job, not its cost. ---
     "input": "samplesheet path — supplied per run by run_sweep.sh",
     "outdir": "output path — supplied per run by run_sweep.sh",
-    "prior_outdir": "add_cycle input; the sweep benchmarks standard mode only",
-    "mode": "'standard' vs 'add_cycle' — a different PIPELINE, not a knob (see docs/add_cycle.md)",
+    "mode": "'standard' is the only value on this branch (add_cycle lives on dev) — a run label, not a knob",
     "config_profile_name": (
         "nf-core provenance string: a display string echoed into the run header and the QC "
         "report. Null by default and set by a site profile; it reaches no process and has "

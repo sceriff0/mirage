@@ -122,7 +122,7 @@ RUNNERS = ("benchmarks/run_sweep.sh", "benchmarks/run_arms.sh")
 # Path-like flags that stay on the command line. They are `"type": "string"` in
 # the schema, so a String IS the right type for them, and they are per-run
 # locations rather than swept knobs.
-CLI_ALLOWED = {"input", "outdir", "trace_dir", "prior_outdir"}
+CLI_ALLOWED = {"input", "outdir", "trace_dir"}
 
 
 def _code_lines(rel):
