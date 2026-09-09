@@ -35,9 +35,8 @@
 # `_commands()` extractor the static guard uses -- no second regex parses the
 # docs. That module also owns the substitution table (`_executable()`) that
 # turns a documented command into one this repo's own fixtures can satisfy:
-# `--input` becomes the fixture samplesheet matching the command's `--start`
-# (or `mode=add_cycle`'s own shape), `--prior_outdir` becomes the canned
-# `tests/testdata/prior_run` checkpoint pair, a placeholder `-profile
+# `--input` becomes the fixture samplesheet matching the command's `--start`,
+# a placeholder `-profile
 # <profile>`/`<site>` becomes `-profile test`, and `--outdir`/`-c` become the
 # sentinels `__OUTDIR__`/`__SITE_CONFIG__` this script fills in with tmp paths
 # it controls. A command whose doc text marks it illustrative (a `# not-runnable:

@@ -21,7 +21,7 @@ inert and misleading; those have been removed. What remains is three cases:
 
 <div class="gate">
   <div class="g"><div class="k">case 1</div><div class="v">withName owns all three</div><div class="d">No label. The block sets cpus, memory and time. 15 processes.</div></div>
-  <div class="g"><div class="k">case 2</div><div class="v">label owns all three</div><div class="d">The withName block, if any, sets only publishDir / ext.args. 7 processes.</div></div>
+  <div class="g"><div class="k">case 2</div><div class="v">label owns all three</div><div class="d">The withName block, if any, sets only publishDir / ext.args. 6 processes.</div></div>
   <div class="g"><div class="k">case 3</div><div class="v">partial override</div><div class="d">withName sets one or two fields; a label supplies the rest. 6 processes.</div></div>
 </div>
 
@@ -237,7 +237,6 @@ constraint.
 | `SEGMENT` | `8` | tier: `f<10` → 32, `f<30` → 64, else 128 GB, `× attempt` | `4.h × attempt` | `withName` |
 | `EXTRACT_CELL_PROPERTIES` | `1` | `64 GB × attempt` | `12.h × attempt` | `withName` |
 | `EXTRACT_NUCLEI_PROPERTIES` | `1` | `64 GB × attempt` | `12.h × attempt` | `withName` |
-| `EXTRACT_MASK_SERIES` | `2` | `32 GB × attempt` | `2.h × attempt` | `process_low` |
 | `SEG_QUALITY_EVAL` | `8` | tier on image: `f<10` → 128, `f<30` → 256, else 448 GB, `× attempt` | `4.h × attempt` | `withName` |
 
 `SEGMENT` asks for 8 CPUs so a CPU-only path — and the CPU-bound label expansion
@@ -280,8 +279,7 @@ observed ~450 GB ceiling, and the retry ramp (`× task.attempt`, capped at 4 att
 `workflows/mirage.nf` logs a `log.warn` at launch whenever the run reaches
 `MERGE_AND_PYRAMID` — gated on the same `run_postprocessing` boolean
 (`ParamUtils.shouldRun('postprocessing', ...)`, against the `ParamUtils.STEPS` table) that
-routes the standard start/stop path, so it also fires under `mode=add_cycle`, which
-reaches the same process through `ASSEMBLE_EXPORT` without ever setting `--start`/`--stop`.
+routes the start/stop path.
 
 **To measure the real coefficient on your own data**, run one representative real slide
 through `SPLIT_CHANNELS` (or use an existing run's per-channel TIFFs) and, per channel:
@@ -570,7 +568,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-cellsam:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method cellsam` |
 | *(per backend, `lib/WarpBackends.groovy`)* | `WARP_SEG_QC` |
 | `bolt3x/mirage-quantify:1.0.0` | `SEG_QC_GEOJSON`, `QUANTIFY`, `MERGE_QUANT_CSVS`, `EXTRACT_CELL_PROPERTIES`, `EXTRACT_NUCLEI_PROPERTIES`, `EXPORT_GEOJSON`, `GENERATE_POSTPROCESSING_QC` |
-| `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID`, `EXTRACT_MASK_SERIES` |
+| `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID` |
 | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` |
 
 `SEGMENT` and `WARP_SEG_QC` resolve their image from a backend table

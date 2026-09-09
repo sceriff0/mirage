@@ -31,7 +31,6 @@ from tests.nfmodel import REPO_ROOT, processes, strip_comments, with_name_blocks
 PROCESS = "GENERATE_REGISTRATION_QC"
 CALL_SITES = (
     "subworkflows/local/registration.nf",
-    "subworkflows/local/add_cycle.nf",
 )
 
 

@@ -35,7 +35,7 @@ in-process assertions deliberately are not.
 The execution counterpart is `tests/documented_commands_launch.sh`. It calls
 this file's `_commands()` (via `python3 -m tests.test_documented_commands_are_runnable
 --emit`, the ONE extractor -- no second regex) to get the same command list,
-substitutes each command's `--input`/`--outdir`/`--prior_outdir`/`-profile
+substitutes each command's `--input`/`--outdir`/`-profile
 <placeholder>`/`-params-file` tokens for real repo fixtures, and actually runs
 `nextflow -stub -params-file params/dry_run.json -c <site.config>` for every
 one, asserting real launch validation passes. `--dry_run` is what makes that
@@ -148,11 +148,7 @@ def _skip_reason(text, line_no):
 # Which fixture samplesheet satisfies the entry step's requiredColumns (the
 # STEPS table in lib/ParamUtils), keyed by the step name found after --start,
 # or 'preprocessing' (the schema default) when --start is absent.
-# mode=add_cycle reads its --input through the same preprocessing-shaped
-# columns (path_to_file, not a checkpoint column), so it is keyed separately
-# and checked first, ahead of any (disallowed, but harmless to check) --start.
 _INPUT_FIXTURES = {
-    "add_cycle": "tests/testdata/new_cycle.csv",
     "preprocessing": "tests/testdata/valid_preprocessing.csv",
     "registration": "tests/testdata/valid_checkpoint_registration.csv",
     # Named for what it was produced for, not what it feeds here: this
@@ -166,15 +162,8 @@ _INPUT_FIXTURES = {
     "postprocessing": "tests/testdata/valid_checkpoint_segmented.csv",
 }
 
-# A completed prior run's checkpoint pair (csv/registered.csv +
-# csv/postprocessed.csv) -- the shape --prior_outdir must point at
-# (Layout.ADD_CYCLE_CHECKPOINTS). Read-only, so every add_cycle-shaped command
-# can safely point at the same fixture directory.
-_PRIOR_OUTDIR_FIXTURE = "tests/testdata/prior_run"
-
 _INPUT_FLAG = re.compile(r"--input\s+\S+")
 _OUTDIR_FLAG = re.compile(r"--outdir\s+\S+")
-_PRIOR_OUTDIR_FLAG = re.compile(r"--prior_outdir\s+\S+")
 _PARAMS_FILE_FLAG = re.compile(r"-params-file\s+\S+")
 _PLACEHOLDER_PROFILE = re.compile(r"-profile\s+<[^>]+>")
 _C_FLAG = re.compile(r"(^|\s)-c\s+\S+")
@@ -199,19 +188,12 @@ def _executable(command):
     """
     command = _TRAILING_COMMENT.sub("", command)
 
-    if "--mode add_cycle" in command:
-        step = "add_cycle"
-    else:
-        match = re.search(r"--start\s+(\S+)", command)
-        step = match.group(1) if match else "preprocessing"
+    match = re.search(r"--start\s+(\S+)", command)
+    step = match.group(1) if match else "preprocessing"
     fixture = _INPUT_FIXTURES.get(step, _INPUT_FIXTURES["preprocessing"])
     input_path = (REPO / fixture).resolve()
     if _INPUT_FLAG.search(command):
         command = _INPUT_FLAG.sub(f"--input {input_path}", command)
-
-    if _PRIOR_OUTDIR_FLAG.search(command):
-        prior = (REPO / _PRIOR_OUTDIR_FIXTURE).resolve()
-        command = _PRIOR_OUTDIR_FLAG.sub(f"--prior_outdir {prior}", command)
 
     if _OUTDIR_FLAG.search(command):
         command = _OUTDIR_FLAG.sub(f"--outdir {OUTDIR_SENTINEL}", command)

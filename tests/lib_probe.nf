@@ -424,16 +424,14 @@ def checkRegBackends() {
     assert !RegBackends.of('tiled').hasStageCheckpoint
     assert RegBackends.of('tiled').hasIntrinsicTre
 
-    // Which run modes each backend supports. add_cycle re-registers the new cycle
-    // through the classic VALIS adapter only.
+    // Which run modes each backend supports. Only 'linear' exists on this branch
+    // (the dev branch adds 'add_cycle', VALIS-only).
     assert RegBackends.supportsMode('valis', 'linear') :
         'valis must support the linear (default registration) run mode'
-    assert RegBackends.supportsMode('valis', 'add_cycle') :
-        'valis must support add_cycle -- it is the only backend add_cycle re-registers through'
     assert RegBackends.supportsMode('tiled', 'linear') :
         'tiled must support the linear (default registration) run mode'
     assert !RegBackends.supportsMode('tiled', 'add_cycle') :
-        'tiled must NOT support add_cycle -- workflows/mirage.nf rejects it at launch'
+        'no backend on this branch declares add_cycle -- that mode lives on dev only'
 
     // An unknown method throws, and the message names the valid ones. This is the
     // property that makes the dispatch's fall-through loud instead of a silent VALIS.

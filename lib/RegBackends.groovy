@@ -5,7 +5,6 @@
     The registration method's identity was re-decided in five places:
 
       1. nextflow_schema.json's `registration_method` enum (the valid names)
-      2. workflows/mirage.nf's add_cycle allowlist (which names that mode accepts)
       3. subworkflows/local/register_patient.nf's dispatch (which adapter to invoke)
       4. subworkflows/local/seg_qc.nf's branch (which join shape the transforms have)
       5. lib/WarpBackends.groovy's own two-key map (the reg_qc=2 warp's knobs)
@@ -70,7 +69,8 @@ class RegBackends {
      *                      that needs to know "does this method have a stage checkpoint"
      *                      discovering the answer by reading an adapter instead of
      *                      asking the table.
-     *   supportedModes     the params.mode values this backend may run under.
+     *   supportedModes     the run modes this backend may run under. Only 'linear'
+     *                      exists on this branch; the dev branch adds 'add_cycle'.
      *   warp               the lib/WarpBackends.groovy key for this method. Equal to the
      *                      method name today, and stated rather than assumed so that a
      *                      future backend reusing another's warp does not have to be
@@ -78,7 +78,7 @@ class RegBackends {
      */
     static final Map<String, Map> BACKENDS = [
         valis: [adapter: 'VALIS_ADAPTER', segQcJoin: 'per_patient', hasStageCheckpoint: true,
-                hasIntrinsicTre: false, supportedModes: ['linear', 'add_cycle'], warp: 'valis'],
+                hasIntrinsicTre: false, supportedModes: ['linear'],              warp: 'valis'],
         tiled: [adapter: 'TILED_ADAPTER', segQcJoin: 'per_slide',   hasStageCheckpoint: false,
                 hasIntrinsicTre: true,  supportedModes: ['linear'],              warp: 'tiled'],
     ].asImmutable()
@@ -107,7 +107,7 @@ class RegBackends {
         return backend
     }
 
-    /** Whether `method` may run under `mode` (params.mode: 'linear' | 'add_cycle'). */
+    /** Whether `method` may run under `mode` ('linear' here; dev adds 'add_cycle'). */
     static boolean supportsMode(String method, String mode) {
         return mode in of(method).supportedModes
     }

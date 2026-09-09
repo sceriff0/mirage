@@ -118,7 +118,6 @@ def test_nf_files_are_present_to_scan():
     for expected in (
         "workflows/mirage.nf",
         "subworkflows/local/final_qc.nf",
-        "subworkflows/local/add_cycle.nf",
         "subworkflows/local/segmentation.nf",
     ):
         assert expected in rel, f"{expected} missing from the scanned set"

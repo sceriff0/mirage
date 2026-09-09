@@ -180,11 +180,6 @@ tests/testdata/expected/morphology_columns.txt
 tests/testdata/expected/intensity_csv_columns.txt
 tests/testdata/expected/preproc_checkpoint_columns.txt
 tests/testdata/expected/reg_checkpoint_columns.txt
-# Minimal "prior completed run" checkpoint CSVs for the add_cycle subworkflow test,
-# and the new-cycle samplesheet that pairs with it.
-tests/testdata/prior_run/
-tests/testdata/new_cycle.csv
-tests/testdata/new_cycle_extra_column.csv
 # Shipped-defaults smoke fixture -- the one image pair with a real OME
 # PhysicalSizeX/Y, and the samplesheet naming it (see generate_complete_testdata.py).
 # The SEGMENTATION fixture: separated, StarDist-shaped nuclei. Separate from

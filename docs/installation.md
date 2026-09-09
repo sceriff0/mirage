@@ -158,7 +158,7 @@ The first real run downloads each tool's image, which can take several minutes. 
 | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
 | `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` (default) |
 | `bolt3x/mirage-cellsam:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method cellsam` |
-| `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID`, `EXTRACT_MASK_SERIES` |
+| `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
 | `bolt3x/mirage-tiled:1.0.0` | the `tiled` (STARE) registration backend, and `WARP_SEG_QC`'s tiled path |
 | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` |

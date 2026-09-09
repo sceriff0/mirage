@@ -57,27 +57,26 @@ nextflow_workflow {
         }
     }
 
-    test("add_cycle path: only the kinds add_cycle emits -> the same single report") {
+    test("a path contributing only some kinds -> the same single report") {
         tag "stub"
         options "-stub"
 
         when {
             workflow {
                 """
-                // No preprocess_qc / registration_tre / postprocess_qc: ADD_CYCLE re-uses
-                // the prior segmentation and does not re-expose PREPROCESSING's QC.
+                // No preprocess_qc / registration_tre / postprocess_qc: a caller that
+                // contributes only some kinds (dev's add_cycle path is the live example).
                 input[0] = Channel.of(
                     ['registration_qc', file('$projectDir/tests/testdata/sample_PANCK.tif')],
                     ['seg_qc',          file('$projectDir/tests/testdata/sample_seg_qc.json')],
                     ['versions',        file('$projectDir/tests/testdata/sample_versions.yml')],
                     ['size_log',        file('$projectDir/tests/testdata/sample_size_log1.csv')]
                 )
-                input[1] = Channel.value([stop: 'add_cycle', patients: [P001: 1], channels: [P001: 2], declared_channels: [P001: 3]])
+                input[1] = Channel.value([stop: 'postprocessing', patients: [P001: 1], channels: [P001: 2], declared_channels: [P001: 3]])
                 """
             }
             params {
                 outdir = "$outputDir"
-                mode = 'add_cycle'
                 skip_final_qc_report = false
                 enable_trace = true
             }

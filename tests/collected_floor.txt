@@ -751,4 +751,7 @@
 # tma REGISTER memory): dev's 1966 + the two benchmarks.yml parametrisations = 1968.
 # RE-MEASURED 2026-09-09 on benchmarking after merging dev@1f14d75b (frozen-config guards,
 # +10 on dev): 1968 + 10 = 1978.
-1978
+# RE-MEASURED 2026-09-09 on benchmarking after merging main@9de83bb8: the add_cycle feature
+# and its tests now live on dev only (-16, see main's note), so this branch follows main's
+# floor plus its two benchmarks.yml parametrisations. 1978 - 16 = 1962.
+1962

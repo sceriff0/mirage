@@ -57,20 +57,11 @@
                 },
                 "mode": {
                     "type": "string",
-                    "description": "Execution mode. 'standard' runs the linear start/stop step flow; 'add_cycle' rejects --start/--stop (it runs a fixed path from the new-cycle samplesheet through export) to fold a new imaging cycle into a completed patient run (requires --prior_outdir).",
+                    "description": "Execution mode, recorded in qc/run_summary.json. Only 'standard' (the linear start/stop step flow) exists on this branch; the dev branch adds 'add_cycle' (incremental cyclic-IF).",
                     "default": "standard",
                     "enum": [
-                        "standard",
-                        "add_cycle"
+                        "standard"
                     ]
-                },
-                "prior_outdir": {
-                    "type": [
-                        "string",
-                        "null"
-                    ],
-                    "description": "For mode='add_cycle': the --outdir of the previously completed run, containing csv/registered.csv and csv/postprocessed.csv checkpoints to reuse.",
-                    "default": null
                 }
             }
         },
@@ -553,7 +544,7 @@
                 },
                 "embed_masks": {
                     "type": "boolean",
-                    "description": "When true and quantify_compartments + expanded_quantification are also enabled, embed the cell + nuclei segmentation masks as a second, single-resolution uint32 OME series (Image:1) inside the pyramid OME-TIFF. Required on a prior run for that run's outputs to be extendable via mode='add_cycle'.",
+                    "description": "When true and quantify_compartments + expanded_quantification are also enabled, embed the cell + nuclei segmentation masks as a second, single-resolution uint32 OME series (Image:1) inside the pyramid OME-TIFF. The masks then travel with the pyramid, for any consumer that reads Image:1 back out of it.",
                     "default": false
                 }
             }
