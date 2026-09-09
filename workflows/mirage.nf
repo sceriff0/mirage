@@ -66,8 +66,10 @@ workflow MIRAGE {
     // Settings nextflow.config derives from params as SCALARS (cleanup, trace.*,
     // executor.queueSize, process.maxForks) froze when that file was parsed -- before
     // any `-c` file was merged. Refuse a run whose final params disagree with them,
-    // naming the route, rather than let a site.config pin be silently ignored.
-    ParamUtils.validateFrozenConfig(params, workflow.session.config)
+    // naming the route, rather than let a site.config pin be silently ignored. The
+    // command line is passed so Nextflow's own -with-trace/-report/-timeline overrides
+    // (nf-test passes -with-trace on every run) are not mistaken for a frozen scalar.
+    ParamUtils.validateFrozenConfig(params, workflow.session.config, workflow.commandLine)
 
     // cleanup_work is mutually exclusive with -resume: the work directory's task files
     // are removed at teardown of a SUCCESSFUL run, so the NEXT -resume finds nothing
