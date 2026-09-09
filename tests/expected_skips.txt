@@ -101,7 +101,6 @@ tests/test_param_presets_are_coherent.py::test_a_preset_does_not_bake_in_site_si
 # --- doing its job: the allowlist had been calibrated locally.
 ?tests/test_channels_count_invariant.py::test_channels_count_dual_invariant_holds_for_a_within_slide_duplicate
 ?tests/test_channels_count_invariant.py::test_the_probe_actually_contains_the_within_slide_duplicate_case
-?tests/test_cleanup_validation.py::test_add_cycle_at_a_cleaning_level_is_refused
 ?tests/test_cleanup_validation.py::test_an_unknown_level_names_the_valid_set
 ?tests/test_cleanup_validation.py::test_start_past_preprocessing_at_a_cleaning_level_says_something
 ?tests/test_cleanup_validation.py::test_the_default_path_still_launches

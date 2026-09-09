@@ -714,4 +714,11 @@
 # copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
 # RE-MEASURED 2026-09-09 (tests/test_tma_profile.py: two cases for the REGISTER memory
 # override in the `tma` profile). 1964 + 2 = 1966.
-1966
+# RE-MEASURED 2026-09-09 on main. The ratchet is LOWERED here, once, on purpose: the
+# add_cycle feature now lives on the dev branch only, and its tests left with it
+# (tests/test_add_cycle_writes_what_it_requires.py, tests/test_extract_mask_series.py,
+# tests/test_mask_series_write_contract.py, one case in tests/test_cleanup_validation.py,
+# and the extract_mask_series parametrisations in tests/test_tiff_writer_layout.py and
+# tests/test_slide_io_seam.py), while the frozen-config guards were added (+10).
+# 1966 - 16 + 10 = 1960. dev's own floor is 1976; this file is branch-specific from here on.
+1960

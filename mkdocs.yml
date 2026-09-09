@@ -132,7 +132,6 @@ nav:
   - Inputs & outputs: outputs.md
   - Resources: resources.md
   - Illumination correction: basic_illumination.md
-  - Incremental cycles: add_cycle.md
   - Registration QC: registration_qc.md
   - SpatialData & FlowPath: spatialdata.md
   - Development: developing.md

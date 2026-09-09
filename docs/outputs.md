@@ -65,7 +65,6 @@ existence.
 | StarDist model dir | `--segmentation_model_dir` | Required when `--seg_method stardist` — no model ships with the repo. |
 | InstanSeg cache | `--instanseg_model_dir` | Writable BioImage.IO cache; exported as `INSTANSEG_BIOIMAGEIO_PATH`. |
 | CellSAM weights | `--cellsam_model_path` | Pre-downloaded weights. If unset, weights auto-download and need `DEEPCELL_ACCESS_TOKEN` in the launch environment. |
-| Prior run | `--prior_outdir` | `add_cycle` only — the `--outdir` of a completed run. |
 
 ---
 
@@ -79,7 +78,7 @@ existence.
     what it names.
 
     Run with `--cleanup_level none` the moment you intend to resume from a run's
-    output, or use it as a `--prior_outdir`. See
+    output. See
     [Output cleanup](parameters.md#output-cleanup).
 
 Each step ends by writing one CSV under `<outdir>/csv/`. These are the
@@ -106,10 +105,6 @@ nextflow run . --input results/csv/preprocessed.csv --outdir results --start reg
     extractor does not run), but the **column is still present**. Readers test
     for an empty value, never for a missing column — one header serves every
     run.
-
-`mode=add_cycle` reads two of these out of `--prior_outdir`: `csv/registered.csv`
-(for the frozen reference) and `csv/postprocessed.csv` (for the mask pyramid and
-the merged quantification table).
 
 ---
 
@@ -144,9 +139,8 @@ Everything else in the full tree below — `converted/`, `preprocessed/`,
 of `work/` for a file nobody reads.
 
 `--cleanup_level none` publishes the complete tree below, byte-for-byte as the
-pipeline always did. Use it whenever the output will be re-entered: `--start
-<step>`, or as the `--prior_outdir` of a `--mode add_cycle` run (which is refused
-at launch at any other level). Details: [Output cleanup](parameters.md#output-cleanup).
+pipeline always did. Use it whenever the output will be re-entered with `--start
+<step>`. Details: [Output cleanup](parameters.md#output-cleanup).
 
 ### The published tree (`--cleanup_level none`)
 
@@ -179,7 +173,6 @@ results/                              # = --outdir
 │   │   ├── contours.json
 │   │   └── nuclei/                   # morphology.csv, contours.json — EXTRACT_NUCLEI_PROPERTIES
 │   ├── split_channels/               # <MARKER>.tiff, one per marker — SPLIT_CHANNELS
-│   │   └── prior/                    # add_cycle only: prior pyramid re-split
 │   ├── quantify/                     # <id>_quant.csv, per-marker, pre-merge — QUANTIFY
 │   ├── quantification/               # merged_quant.csv      — MERGE_QUANT_CSVS
 │   ├── geojson/

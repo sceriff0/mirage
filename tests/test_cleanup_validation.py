@@ -2,7 +2,7 @@
 
 `--dry_run` exercises exactly this surface, so each case below is a launch-time
 check with an actionable message rather than a surprise forty minutes into a
-run -- or, for add_cycle, a whole cycle later.
+run.
 
 These shell out to `nextflow`, which the pytest CI job does not install, so they
 skip cleanly there and run locally and in any job that has it. The static half
@@ -52,30 +52,6 @@ def _launch(*args, outdir):
         text=True,
         timeout=600,
     )
-
-
-def test_add_cycle_at_a_cleaning_level_is_refused(tmp_path):
-    """mode=add_cycle must PUBLISH registered/ and segmentation/ for the NEXT
-    cycle to read. At --cleanup_level=final it would not, so cycle N+1 would
-    fail launch validation on a checkpoint this run silently declined to write
-    -- discovering the mistake one whole registration too late.
-
-    --prior_outdir points at nothing on purpose: the cleanup rule must fire
-    BEFORE the prior-run checks, or the message a user sees is about a missing
-    checkpoint rather than about the flag that caused it."""
-    r = _launch(
-        "--mode",
-        "add_cycle",
-        "--cleanup_level",
-        "final",
-        "--prior_outdir",
-        "/nonexistent-prior-outdir",
-        outdir=tmp_path,
-    )
-    out = r.stdout + r.stderr
-    assert r.returncode != 0, out
-    assert "cleanup_level" in out, out
-    assert "add_cycle" in out, out
 
 
 def test_start_past_preprocessing_at_a_cleaning_level_says_something(tmp_path):

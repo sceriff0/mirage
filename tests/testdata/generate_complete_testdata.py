@@ -397,125 +397,6 @@ with open(OUT_DIR / "segmented.csv", "w") as f:
     )
 print("  Created segmented.csv (entry_point_equivalence.nf.test fixture)")
 
-# 3d. A minimal "prior completed run" for the add_cycle path. ADD_CYCLE rebuilds
-#     the assets it reuses from these two checkpoint CSVs under
-#     <prior_outdir>/csv/, so tests/subworkflows/add_cycle.nf.test only has to
-#     point --prior_outdir at this directory. Every referenced file must really
-#     exist: Nextflow stages merged_csv and pyramid into the processes.
-#     add_cycle.nf's own readers don't dereference the 'id' column (they extract
-#     specific named columns into synthetic per-patient assets, never a per-image
-#     meta), but it's included anyway to match what a REAL registered.csv/
-#     postprocessed.csv now always carries (RULING R17).
-PRIOR_DIR = OUT_DIR / "prior_run" / "csv"
-PRIOR_DIR.mkdir(parents=True, exist_ok=True)
-with open(PRIOR_DIR / "registered.csv", "w") as f:
-    f.write("patient_id,id,registered_image,is_reference,channels\n")
-    f.write(f"P001,P001_image,{TESTDATA_ABS}/P001_image.tiff,true,DAPI|PANCK\n")
-with open(PRIOR_DIR / "postprocessed.csv", "w") as f:
-    f.write("patient_id,id,cell_csv,cell_geojson,merged_csv,cell_mask,pyramid\n")
-    f.write(
-        f"P001,P001,{TESTDATA_ABS}/P001_merged_quant.csv,{TESTDATA_ABS}/sample_contours.json,"
-        f"{TESTDATA_ABS}/P001_merged_quant.csv,{TESTDATA_ABS}/P001_cell_mask.tif,"
-        f"{TESTDATA_ABS}/P001_pyramid.ome.tiff\n"
-    )
-print("  Created prior_run/csv/{registered,postprocessed}.csv")
-
-# 3d-bis. The prior run's two IMAGE fixtures, named by the two checkpoint CSVs above.
-#
-#   P001_image.tiff       -- the prior run's registered reference. registered.csv
-#                            declares it DAPI|PANCK, so it carries exactly those two.
-#   P001_pyramid.ome.tiff -- the prior run's combined pyramid, WITH the mask series.
-#                            bin/extract_mask_series.py exits non-zero unless series 1
-#                            is a (2, H, W) unsigned-integer [cell, nuclei] stack, and
-#                            add_cycle.nf reads the prior channel names off series 0.
-#
-# A DEDICATED Generator, like the keep-set fixtures above: drawing from _img_rng here
-# would shift the stream that renders every image written before this point.
-#
-# Written with an explicit `ome=True` / TiffWriter rather than through
-# create_multichannel_image, because tifffile only emits OME-XML by default for a
-# name ending in `.ome.tif`/`.ome.tiff` -- and the first of these two deliberately
-# does not (the checkpoint CSV names it `P001_image.tiff`).
-_prior_rng = np.random.default_rng(44)
-_prior_channels = ["DAPI", "PANCK"]
-_prior_planes = np.stack(
-    [
-        _render_channel(
-            p001_anatomy, (128, 128), (0, 0), 1.0 if ch == 0 else 0.5, _prior_rng
-        )
-        for ch in range(len(_prior_channels))
-    ]
-)
-tifffile.imwrite(
-    OUT_DIR / "P001_image.tiff",
-    _prior_planes,
-    photometric="minisblack",
-    ome=True,
-    metadata={"axes": "CYX", "Channel": {"Name": _prior_channels}},
-)
-print(
-    f"  Created P001_image.tiff - shape: {_prior_planes.shape}, channels: {_prior_channels}"
-)
-
-_prior_masks = np.stack(
-    [
-        tifffile.imread(OUT_DIR / "P001_cell_mask.tif").astype(np.uint32),
-        tifffile.imread(OUT_DIR / "P001_nuclei_mask.tif").astype(np.uint32),
-    ]
-)
-with tifffile.TiffWriter(
-    OUT_DIR / "P001_pyramid.ome.tiff", ome=True, bigtiff=True
-) as _tif:
-    # subifds=1 reserves one sub-resolution level, exactly as
-    # bin/merge_channels_pyramid.py does; the next write with subfiletype=1 fills it.
-    _tif.write(
-        _prior_planes,
-        photometric="minisblack",
-        subifds=1,
-        metadata={"axes": "CYX", "Channel": {"Name": _prior_channels}},
-    )
-    _tif.write(_prior_planes[:, ::2, ::2], photometric="minisblack", subfiletype=1)
-    # A separate top-level write with its own metadata becomes OME Image:1.
-    _tif.write(
-        _prior_masks,
-        photometric="minisblack",
-        metadata={"axes": "CYX", "Channel": {"Name": ["cell_mask", "nuclei_mask"]}},
-    )
-print(
-    f"  Created P001_pyramid.ome.tiff - 2 series (image {_prior_planes.shape} + masks {_prior_masks.shape})"
-)
-
-# 3e. The NEW-CYCLE samplesheet that goes with prior_run/ — i.e. what a real
-#     `--mode add_cycle --prior_outdir <prior_run> --input <this>` run consumes.
-#     By design it has NO reference row: the registration reference is the frozen
-#     prior-run reference, which is never a row in this sheet (mirage.nf passes
-#     allow-no-reference=true for exactly this shape).
-#
-#     ONE slide, deliberately. add_cycle builds one registration group per new
-#     slide, each carrying the prior reference, so N new slides for a patient
-#     re-emit that reference N times — which would put N identical reference rows
-#     in csv/registered.csv. Keeping the fixture at one slide keeps the manifest
-#     test asserting the writer rather than that pre-existing fan-out.
-with open(OUT_DIR / "new_cycle.csv", "w") as f:
-    f.write("patient_id,path_to_file,is_reference,channels\n")
-    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8\n")
-print("  Created new_cycle.csv (add_cycle new-cycle samplesheet for prior_run/)")
-
-# 3f. The SAME new-cycle samplesheet, plus one unknown column -- the add_cycle-mode
-# counterpart of extra_column_input.csv (section 10i). workflows/mirage.nf's
-# add_cycle branch calls CsvUtils.validateInputCSV(params.input,
-# ParamUtils.requiredColumnsForStep('preprocessing')) exactly like the linear
-# path, but until fix round 1 nothing warned about a column that call ignores --
-# a mistyped column in a new-cycle samplesheet stayed silent. This pins the fix:
-# warnUnknownColumns (workflows/mirage.nf) fires on THIS path too, with the
-# literal step 'preprocessing' (add_cycle has no --start/--stop choice).
-with open(OUT_DIR / "new_cycle_extra_column.csv", "w") as f:
-    f.write("patient_id,path_to_file,is_reference,channels,operator\n")
-    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8,AB\n")
-print(
-    "  Created new_cycle_extra_column.csv (add_cycle samplesheet with one unknown column)"
-)
-
 # =============================================================================
 # 4. Generate INVALID input CSVs for validation testing
 # =============================================================================
@@ -710,14 +591,10 @@ with open(OUT_DIR / "sample_merged_quant.csv", "w") as f:
         )
 print("  Created sample_merged_quant.csv (20 cells)")
 
-# 6a-bis. The PRIOR RUN's merged quantification CSV, named by
-# prior_run/csv/postprocessed.csv's `cell_csv` and `merged_csv` columns.
-#
-# TWO markers, not three. The prior run has exactly one slide, declared DAPI|PANCK
-# in prior_run/csv/registered.csv, and Task 3's P001_pyramid.ome.tiff carries those
-# two channels. Reusing sample_merged_quant.csv here (three markers, SMA included)
-# would hand ADD_CYCLE's MERGE_QUANT_CSVS a prior marker that appears in no prior
-# image.
+# 6a-bis. A two-marker merged quantification CSV (DAPI|PANCK), used by the
+# assemble_export and seg_qc subworkflow tests as a second patient's table.
+# (It began life as the add_cycle path's "prior run" table; that path lives on the
+# dev branch only, and the fixture stays because those two tests read it.)
 #
 # Column order is bin/merge_quant_csvs.reorder_columns': fov, cell_size, then
 # MORPHOLOGY_COLS' order for whatever morphology is present, then the markers. It is

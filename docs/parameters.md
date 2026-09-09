@@ -92,8 +92,6 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
     produced two different alignments and nothing recorded that the pipeline had
     chosen. Passing the flag now **fails the launch** as an unrecognised parameter
     (`validation.logging.unrecognisedParams = 'error'`).
-    The one exception is `--mode add_cycle`, whose sheet carries no reference at
-    all because it reuses the prior run's.
 
 ### VALIS
 
@@ -464,11 +462,6 @@ but its `cell_mask` column names a segmentation mask, which is an intermediate.
 Pass `--cleanup_level none` when this run's output will be **re-entered**:
 
 * `--start <step>` reads the published intermediates of a previous run.
-* `--mode add_cycle` reads the prior run's `registered/` images **and** its
-  segmentation masks — and the *next* cycle will read this run's. `add_cycle` is
-  therefore **refused at launch** at any level other than `none`
-  (`ParamUtils.validateCleanup`), rather than letting cycle N+1 discover it after a
-  whole registration.
 
 `--start` past `preprocessing` only warns: this run reads a *prior* tree fine; what
 it cannot do is be re-entered the same way itself.
@@ -511,30 +504,12 @@ the directory to disappear entirely.
     opt-in); when either is dropped, `main.nf`'s `onComplete` says so by name in the
     run log rather than leaving it to be inferred from an absent column.
 
-## Incremental cyclic-IF mode (`add_cycle`)
-
-Fold a **new imaging cycle** into an already-completed patient run, reusing the prior
-reference, segmentation mask, and old-marker quantification instead of recomputing them.
-Full walkthrough: [Incremental cycles](add_cycle.md).
+## Run mode and mask embedding
 
 | Parameter | Default | Description |
 |---|---|---|
-| `mode` | `standard` | `standard` = normal `--start`/`--stop` pipeline; `add_cycle` = incremental cyclic-IF. |
-| `prior_outdir` | `null` | **Required for `add_cycle`.** The `--outdir` of the previously completed run (supplies the reusable reference, mask, and quantification via its checkpoint CSVs). |
-| `embed_masks` | `false` | Embed the segmentation masks as a second uint32 series in the pyramid OME-TIFF. Written only when `embed_masks && quantify_compartments && expanded_quantification`; `add_cycle` consumes this series, so a prior run must have it to be extendable. `embed_masks = true` REQUIRES both `quantify_compartments` and `expanded_quantification` also true — the launch validation rejects the combination otherwise (see warning below). |
-
-!!! warning "`add_cycle` prerequisites"
-    `embed_masks` defaults to `false`, so a default run is **not** add_cycle-extendable.
-    Set `embed_masks = true` (together with `quantify_compartments`, which is on
-    by default, and `expanded_quantification`, which is **not** — set it in your
-    `-params-file`) to make a run extendable.
-    `embed_masks = true` with either sibling off is rejected **at launch**
-    (`ParamUtils.validateCompartmentQuant`) rather than silently producing a
-    plain pyramid, so a prior run either failed to launch with `embed_masks=true`
-    misconfigured, or has the mask series if `embed_masks=true` was accepted at
-    all. Without the embedded mask series, `mode=add_cycle` **fast-fails** before
-    doing any work. See
-    [Incremental cycles → Fast-fail behavior](add_cycle.md#fast-fail-behavior).
+| `mode` | `standard` | Recorded in `qc/run_summary.json`. Only `standard` (the `--start`/`--stop` step flow) exists on this branch; the `dev` branch adds `add_cycle` (incremental cyclic-IF). |
+| `embed_masks` | `false` | Embed the segmentation masks as a second uint32 series in the pyramid OME-TIFF. Written only when `embed_masks && quantify_compartments && expanded_quantification`; `embed_masks = true` with either sibling off is rejected **at launch** (`ParamUtils.validateCompartmentQuant`) rather than silently producing a plain pyramid. |
 
 ## Parameter presets
 

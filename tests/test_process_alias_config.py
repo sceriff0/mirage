@@ -78,7 +78,8 @@ def _aliases():
 def test_scan_finds_the_known_aliases():
     """A scan that matched nothing would pass every rule below vacuously."""
     aliases = {alias for _base, alias, _src in _aliases()}
-    for expected in ("SPLIT_PRIOR_PYRAMID", "SEG_QC_SEGMENT"):
+    # (SPLIT_PRIOR_PYRAMID, the second alias, belongs to the add_cycle path on dev.)
+    for expected in ("SEG_QC_SEGMENT",):
         assert expected in aliases, (
             f"{expected} is an aliased include in this repo but the scan missed it -- "
             f"ALIAS_INCLUDE_RE has gone stale. Found: {sorted(aliases)}"

@@ -15,9 +15,8 @@ Four writers, four ``tifffile.imwrite`` call sites:
 * ``bin/segment.py`` (StarDist backend)
 * ``bin/segment_cellsam.py`` (CellSAM backend)
 * ``bin/segment_instantseg.py`` (InstanSeg backend)
-* ``bin/extract_mask_series.py`` (mask re-read on the ``add_cycle`` path)
 
-``bin/segment_cellsam.py``, ``bin/segment_instantseg.py`` and ``bin/extract_mask_series.py``
+``bin/segment_cellsam.py`` and ``bin/segment_instantseg.py``
 have no heavy ML import at module level (cellSAM/torch are imported lazily inside their
 run functions -- see ``tests/test_segment_lazy_dapi_read.py``'s docstring), so they import
 cleanly here and this file references their real ``MASK_TIFF_TILE`` module constants
@@ -49,10 +48,8 @@ below is the AST call-site check that closes that gap, applied uniformly to all 
 ML-backend writers (``bin/segment_cellsam.py`` and ``bin/segment_instantseg.py`` don't need
 the AST workaround to be importable, but the SAME check is still the only thing that
 verifies their real call sites, so it is applied to all three rather than segment.py alone).
-``extract_mask_series.py`` IS cheaply callable (no heavy deps at all), so its test drives
-the real ``main()`` end to end, the way ``tests/test_mask_series_write_contract.py`` does --
-which already exercises its one real call site directly, so no separate AST check is
-needed for it.
+(``bin/extract_mask_series.py``, the mask re-read on the add_cycle path, was covered here
+too; that path lives on the dev branch only.)
 
 Two properties are pinned for every writer, per the task brief:
 
@@ -87,7 +84,6 @@ for _dir in (BIN_DIR, UTILS_DIR):
 tifffile = pytest.importorskip("tifffile")
 zarr = pytest.importorskip("zarr")
 
-import extract_mask_series as ems  # noqa: E402
 import segment_cellsam  # noqa: E402
 import segment_instantseg  # noqa: E402
 
@@ -206,7 +202,6 @@ def _write_like(path, array, tile):
 
 _ALL_WRITER_TILES = [
     *_TILE_BY_WRITER.items(),
-    ("extract_mask_series", ems.MASK_TIFF_TILE),
 ]
 
 
@@ -303,53 +298,3 @@ def test_a_striped_write_of_the_same_array_fails_the_chunk_geometry_assertion(tm
         "a striped TIFF reports one chunk per whole plane -- this is the cost the tile= "
         "fix removes"
     )
-
-
-# ---------------------------------------------------------------------------
-# extract_mask_series.py: cheaply callable, exercised through its real code path
-# ---------------------------------------------------------------------------
-
-
-def test_extract_mask_series_writes_tiled_masks_through_its_own_code_path(
-    tmp_path, monkeypatch
-):
-    """No heavy ML deps -- unlike the three backends above, drive the real ``main()``.
-
-    Mirrors ``tests/test_mask_series_write_contract.py``'s fixture: a two-series OME-TIFF
-    (an intensity pyramid, then the uint32 mask series), smaller than one tile in both
-    dims to exercise the same pad-to-tile edge case as the parametrized tests above.
-    """
-    h, w = 40, 30
-    image = np.zeros((2, h, w), dtype=np.uint16)
-    masks = np.stack(
-        [
-            np.arange(h * w, dtype=np.uint32).reshape(h, w) % 97,
-            np.arange(h * w, dtype=np.uint32).reshape(h, w) % 31,
-        ]
-    )
-    pyramid = tmp_path / "merged.ome.tiff"
-    with tifffile.TiffWriter(str(pyramid), bigtiff=True) as tw:
-        tw.write(image, photometric="minisblack")
-        tw.write(masks, photometric="minisblack")
-
-    outdir = tmp_path / "out"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["extract_mask_series.py", "--pyramid", str(pyramid), "--outdir", str(outdir)],
-    )
-    ems.main()
-
-    tile = ems.MASK_TIFF_TILE
-    for name, expected in (("cell_mask.tif", masks[0]), ("nuclei_mask.tif", masks[1])):
-        path = outdir / name
-        back = tifffile.imread(str(path))
-        np.testing.assert_array_equal(back, expected)
-        assert back.shape == expected.shape
-
-        with tifffile.TiffFile(str(path)) as tif:
-            tags = tif.pages[0].tags
-            assert tags["TileWidth"].value == tile
-            assert tags["TileLength"].value == tile
-
-        assert _chunks(path) == (tile, tile)

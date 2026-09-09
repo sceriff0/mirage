@@ -196,7 +196,6 @@ Full documentation is hosted at **<https://mirage-pipeline.readthedocs.io/>**.
 - [Quick start walkthrough](docs/usage.md#quick-start-synthetic-data) — end-to-end run on the bundled test data
 - [Troubleshooting](docs/usage.md#troubleshooting-faq) — common failures and remediation
 - [Parameters](docs/parameters.md) — full parameter reference
-- [Incremental cyclic-IF](docs/add_cycle.md) — folding a new imaging cycle into a completed run
 - [Registration QC](docs/registration_qc.md) — interpreting registration quality metrics
 - [Citation](docs/citation.md) — how to cite MIRAGE and its dependencies
 - [Supported formats](docs/validation/format_validation.md) — which readers were validated, and on what

@@ -79,16 +79,10 @@ tree sees one artifact per moving slide exactly as before. It is simply twice as
 wide.
 
 The native image costs nothing extra to obtain: it is the stream that entered
-registration (`REGISTER_PATIENT.out.images_multi` on the linear path,
-`PREPROCESSING.out.preprocessed` under `--mode add_cycle`), joined back in on
+registration (`REGISTER_PATIENT.out.images_multi`), joined back in on
 `meta.id`. It does cost memory — the process now holds three full-resolution
 planes instead of two — which is why its request is tiered on the combined size
 of all three inputs (see [Resources](resources.md#registration-qc)).
-
-Under `--mode add_cycle` the pair reads the same way, with one asymmetry worth
-knowing: the reference is the **frozen prior** reference read out of
-`--prior_outdir`, so the "before" panel measures the new cycle against a frame
-established in an earlier run. That is the drift the mode exists to detect.
 
 ## Why the correspondence is fixed, and fixed *there*
 

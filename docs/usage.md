@@ -39,11 +39,6 @@ flowchart LR
     intensities** with a constant `"Cell"` classification, so you gate and phenotype
     downstream in QuPath or [FlowPath](https://flowpath.readthedocs.io/).
 
-!!! tip "Adding a new imaging cycle later?"
-    To fold a fresh cyclic-IF cycle into an already-completed run — reusing the prior
-    reference, segmentation mask, and old-marker quantification — use
-    `--mode add_cycle` instead of the linear stages. See [Incremental cycles](add_cycle.md).
-
 ## Quick start (synthetic data)
 
 No real images, no GPU, no HPC — runs on any laptop in ~15 minutes:
@@ -284,8 +279,7 @@ samplesheet — feed it back in with a matching `--start`.
     That means a default run's output **cannot be re-entered**: `--start
     registration` opens the paths `csv/registered.csv` names, and neither the
     manifest nor the images are there. Pass `--cleanup_level none` on the run whose
-    output you intend to restart from, or to use as a `--prior_outdir`.
-    `--mode add_cycle` is refused at launch at any other level.
+    output you intend to restart from.
     Details: [Output cleanup](parameters.md#output-cleanup).
 
 !!! warning "Two tasks always re-run"
@@ -401,7 +395,7 @@ rejected rather than silently coerced.
 
 Rules a JSON Schema cannot express — `--stop` must not precede `--start`,
 `--expanded_quantification` requires `--quantify_compartments`, samplesheet
-semantics, `add_cycle` prerequisites — are still checked in `lib/` and fire
+semantics — are still checked in `lib/` and fire
 right after schema validation.
 
 ### Offline / air-gapped execution
@@ -475,8 +469,7 @@ results/                          # = --outdir
 │   ├── registered/               # *_registered.ome.tiff (+ summary/ error CSVs)
 │   ├── segmentation/             # *_nuclei_mask.tif, *_cell_mask.tif
 │   ├── cell_properties/          # morphology.csv, contours.json (+ nuclei/ subdir)
-│   ├── split_channels/           # *.tiff, one per marker (add_cycle: + prior/ subdir,
-│   │                             #   the prior run's re-split pyramid channels)
+│   ├── split_channels/           # *.tiff, one per marker
 │   ├── quantify/                 # <patient>_<marker>_quant.csv, per-marker, pre-merge
 │   ├── quantification/           # merged_quant.csv
 │   ├── geojson/export/           # cells.geojson, cells_wholecell.geojson, cells_data.csv

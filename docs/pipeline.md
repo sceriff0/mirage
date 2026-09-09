@@ -70,7 +70,6 @@ prior run's output.
   <span><b>--start preprocessing</b> (default)</span>
   <span><b>--stop</b> omitted → run to end</span>
   <span><b>--start X --stop X</b> → one step</span>
-  <span><b>--mode add_cycle</b> → bypasses the gate (e)</span>
 </div>
 
 !!! info "The step vocabulary has exactly one owner"
@@ -229,10 +228,8 @@ Chips give real defaults. Every process runs in a pinned container and emits
     tuple, same emit names (`transform`, `transform_by_slide`, `intrinsic_tre`,
     `stage_checkpoint`, `registered`, `size_logs`, `versions`).
     `params.registration_method` is read **once on the linear registration path**, in
-    `subworkflows/local/registration.nf`, and passed down as an argument
-    (`workflows/mirage.nf` also reads it once, separately, to reject
-    `--registration_method tiled` under `mode=add_cycle`, which the incremental
-    path doesn't support). Optional emits use a null object: an adapter for a
+    `subworkflows/local/registration.nf`, and passed down as an argument.
+    Optional emits use a null object: an adapter for a
     method that produces no TRE emits `Channel.empty()`, and consumers tolerate
     zero artifacts.
 
@@ -266,27 +263,6 @@ and Vitessce without conversion.
 
 Complete tree, filenames and the measurement-key contract:
 [Inputs & outputs](outputs.md).
-
----
-
-## e — Incremental mode: `--mode add_cycle`
-
-Fold a new imaging cycle into a completed patient run, reusing prior assets.
-Bypasses the step gate; `--start` / `--stop` are rejected in this mode.
-
-```bash
-nextflow run . --mode add_cycle --cleanup_level none --prior_outdir results/ --input new_cycle.csv --outdir results_cycle2 -c site.config
-```
-
-| Stage | What happens | Reused? |
-|---|---|---|
-| Reference | Register the new cycle to the **frozen prior reference** | from `csv/registered.csv` |
-| `EXTRACT_MASK_SERIES` | Read cell + nuclei masks out of the prior pyramid's `Image:1` | no re-segmentation |
-| Registration | Only the new slides go through the backend | VALIS only |
-| Quantification | Measure new markers on the reused mask; old markers carried over | prior columns |
-
-Full walkthrough, prerequisites and fast-fail behaviour:
-[Incremental cycles](add_cycle.md).
 
 ---
 

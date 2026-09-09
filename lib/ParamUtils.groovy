@@ -6,8 +6,8 @@
  * once in nextflow_schema.json and enforced by nf-schema's validateParameters()
  * at the top of workflows/mirage.nf. What remains below is what no JSON Schema
  * can express: cross-parameter rules (--stop must not precede --start,
- * --expanded_quantification implies --quantify_compartments), mode-conditional
- * rules (add_cycle), filesystem prerequisites, and plain control-flow helpers.
+ * --expanded_quantification implies --quantify_compartments), filesystem
+ * prerequisites, and plain control-flow helpers.
  */
 class ParamUtils {
 
@@ -144,71 +144,6 @@ class ParamUtils {
     }
 
     /**
-     * Launch-time validation of mode='add_cycle'.
-     *
-     * Three rules, all checked before any process is instantiated:
-     *
-     *  1. --prior_outdir must be given; add_cycle re-enters a completed run's tree.
-     *  2. --outdir must not resolve to the same directory as --prior_outdir.
-     *     Compared as CANONICAL paths, so a trailing slash, a '.', or a symlink
-     *     cannot defeat it. add_cycle writes its registered-checkpoint CSV through
-     *     collectFile(storeDir:), which OVERWRITES: sharing the directory would
-     *     clobber the prior run's complete manifest with add_cycle's partial one
-     *     while the postprocessed checkpoint survived untouched, leaving
-     *     --prior_outdir internally inconsistent and unrecoverable.
-     *  3. Every checkpoint in Layout.ADD_CYCLE_CHECKPOINTS must already exist under
-     *     --prior_outdir. Absence means either the prior run did not reach
-     *     postprocessing, or it ran at the default --cleanup_level, which does not
-     *     publish the intermediates add_cycle re-enters from.
-     *
-     * Which checkpoints those are, and where they live, is Layout's to say --
-     * add_cycle.nf reads the very same files.
-     *
-     * @throws IllegalArgumentException for rules 1 and 2.
-     * @throws FileNotFoundException for rule 3, naming the missing checkpoint.
-     */
-    static void validateAddCycle(String outdir, String priorOutdir) {
-        if (!priorOutdir?.trim()) {
-            throw new IllegalArgumentException(
-                "mode='add_cycle' requires --prior_outdir pointing at the previous run's --outdir")
-        }
-        // add_cycle writes its registered-checkpoint CSV via collectFile(storeDir:),
-        // which OVERWRITES. If --outdir resolved to the same directory as
-        // --prior_outdir, that write would clobber the prior run's complete
-        // manifest with add_cycle's partial one, while the postprocessed-checkpoint
-        // CSV (untouched by add_cycle) survives — leaving --prior_outdir internally
-        // inconsistent and unrecoverable. Compare canonical paths, not raw strings:
-        // a trailing slash, a '.', or a symlink must not defeat this check.
-        if (outdir?.trim()) {
-            def outdirCanonical = new File(outdir).canonicalPath
-            def priorOutdirCanonical = new File(priorOutdir).canonicalPath
-            if (outdirCanonical == priorOutdirCanonical) {
-                def registeredRel = Layout.checkpointCsvRelative(Layout.REGISTERED)
-                def postprocessedRel = Layout.checkpointCsvRelative(Layout.POSTPROCESSED)
-                throw new IllegalArgumentException(
-                    "mode='add_cycle': --outdir must not be the same directory as --prior_outdir " +
-                    "('${priorOutdir}'). add_cycle's '${registeredRel}' checkpoint write overwrites " +
-                    "in place, which would clobber the prior run's manifest while '${postprocessedRel}' " +
-                    "survives untouched, leaving --prior_outdir internally inconsistent. Use a FRESH " +
-                    "--outdir for the incremental run, as docs/add_cycle.md describes.")
-            }
-        }
-        // Which checkpoints a prior run must have left behind, and where they live,
-        // is Layout's to state — add_cycle.nf reads the very same two files.
-        Layout.ADD_CYCLE_CHECKPOINTS.each { step ->
-            def rel = Layout.checkpointCsvRelative(step)
-            def f = new File(Layout.checkpointCsv(priorOutdir, step))
-            if (!f.exists()) {
-                throw new FileNotFoundException(
-                    "mode='add_cycle': required checkpoint '${rel}' not found under --prior_outdir '${priorOutdir}'. " +
-                    "Either the prior run was not completed through postprocessing, or it ran at the " +
-                    "default --cleanup_level=final, which does not publish the intermediates add_cycle " +
-                    "re-enters from. Re-run the prior cycle with --cleanup_level none.")
-            }
-        }
-    }
-
-    /**
      * Check whether a given pipeline step should run, based on --start and --stop.
      */
     static boolean shouldRun(String targetStep, String start, String stop) {
@@ -278,39 +213,11 @@ class ParamUtils {
     }
 
     /**
-     * add_cycle runs a FIXED path — new-cycle samplesheet -> preprocess -> register against
-     * the frozen prior reference -> quantify -> export — there is no --start/--stop choice
-     * to make, and 'add_cycle' is not itself a member of STEP_ORDER (it is a mode, not a
-     * step; see the header comment on STEPS). Accepting either flag and silently ignoring it
-     * used to let a run report whatever --stop the caller typed as though it had been
-     * honoured (e.g. --stop registration completing the FULL path through export while
-     * run_summary.json claimed the run stopped after registration) — accept-and-ignore is
-     * the defect, not the label, so this rejects both rather than trying to describe
-     * whatever was ignored.
-     *
-     * --stop defaults to null, so an explicit --stop is exactly `params.stop != null`.
-     * --start defaults to 'preprocessing', so an explicit non-default --start is exactly
-     * `params.start != 'preprocessing'` — a caller who explicitly passes
-     * --start preprocessing is indistinguishable from one who passed neither flag, and
-     * that ambiguity is harmless: 'preprocessing' is also the only correct description of
-     * where add_cycle's own fixed path begins.
-     */
-    static void validateAddCycleStepFlags(Map params) {
-        if (params.stop != null || params.start != 'preprocessing') {
-            throw new IllegalArgumentException(
-                "mode='add_cycle' runs a fixed path from the new-cycle samplesheet through " +
-                "export (preprocess -> register against the frozen prior reference -> " +
-                "quantify -> export) — --start/--stop do not apply in this mode and must be omitted.")
-        }
-    }
-
-    /**
      * Cross-parameter rules for --cleanup_level.
      *
-     * The per-value enum is the schema's job (nextflow_schema.json); this is the
-     * layer that knows a level can be individually valid and still contradict
-     * --mode. Runs before any process is instantiated, like every other rule in
-     * this file, so a contradictory invocation costs nothing.
+     * The per-value enum is the schema's job (nextflow_schema.json); this layer
+     * re-checks it for callers that never went through nf-schema. Runs before any
+     * process is instantiated, like every other rule in this file.
      *
      * The level is re-checked here rather than trusted from the schema because
      * validateCleanup is also reachable from a caller that never went through
@@ -325,19 +232,6 @@ class ParamUtils {
                 "${Layout.CLEANUP_LEVELS}. 'final' (the default) publishes only " +
                 "${Layout.FINAL_KINDS} plus run-level ${Layout.SURVIVING_RUN_LEVEL}; " +
                 "'none' publishes everything.")
-
-        // add_cycle must PRODUCE a re-enterable output tree, not merely consume one.
-        // The next cycle reads THIS run's registered/ images and segmentation/ masks,
-        // so at any cleaning level cycle N+1 would fail its own launch validation on
-        // a checkpoint this run silently declined to publish -- discovering the
-        // mistake one whole cycle, and one whole registration, too late.
-        if (params.mode == 'add_cycle' && level != 'none')
-            throw new IllegalArgumentException(
-                "mode='add_cycle' requires --cleanup_level none. add_cycle reuses the " +
-                "prior run's registered/ images and segmentation/ masks, and the NEXT " +
-                "cycle will read this run's. At --cleanup_level=${level} they are not " +
-                "published at all, so cycle N+1 could not launch. Re-run with " +
-                "--cleanup_level none.")
     }
 
 
@@ -590,9 +484,8 @@ class ParamUtils {
      *                                 whether the pyramid gets a mask series (Image:1).
      *                                 --embed_masks true with either sibling off used to
      *                                 exit 0 and silently publish a pyramid with NO mask
-     *                                 series; that run only fails months later, when its
-     *                                 --outdir is handed to a --prior_outdir add_cycle run
-     *                                 and EXTRACT_MASK_SERIES finds no Image:1.)
+     *                                 series; a consumer reading Image:1 back out of it
+     *                                 only discovers that much later.)
      */
     static void validateCompartmentQuant(Map mode) {
         if (mode.expanded && !mode.compartments) {
@@ -607,9 +500,8 @@ class ParamUtils {
                 "embed_masks requires both quantify_compartments and " +
                 "expanded_quantification to also be true -- without both, the pyramid's " +
                 "mask series (Image:1) is never written, and a run advertising " +
-                "embed_masks that silently omits it is only discovered later, when " +
-                "this --outdir is handed to mode='add_cycle' as --prior_outdir and " +
-                "EXTRACT_MASK_SERIES finds no Image:1 to reuse. All three are booleans -- " +
+                "embed_masks that silently omits it is only discovered later, by whatever " +
+                "reads Image:1 back out of the pyramid. All three are booleans -- " +
                 "set them in a -params-file or a profile, never on the command line."
             )
         }

@@ -56,19 +56,19 @@ nextflow_function {
         }
     }
 
-    test("buildManifest reads declared_channels, not channels -- add_cycle path") {
+    test("buildManifest reads declared_channels, not channels -- reference-less sheet") {
 
-        // The regression this whole task closes: add_cycle's 3-channel new cycle
-        // declares DAPI on its (non-reference) rows, but channels_count drops DAPI
-        // since add_cycle's INPUT_CHECK always runs with autoReference=false. Before
-        // this task the manifest read `channels` and silently reported 2.
+        // The regression this whole task closes: a 3-channel sheet declares DAPI on
+        // its (non-reference) rows, but channels_count drops DAPI when INPUT_CHECK
+        // runs with autoReference=false (dev's add_cycle path is the live example).
+        // Before this task the manifest read `channels` and silently reported 2.
         function "buildManifest"
 
         when {
             function {
                 """
                 input[0] = [
-                    stop: 'add_cycle',
+                    stop: 'postprocessing',
                     patients: [P001: 1],
                     channels: [P001: 2],
                     declared_channels: [P001: 3],
@@ -142,7 +142,7 @@ nextflow_function {
         }
     }
 
-    test("buildRunSummary assembles the complete run_summary.json content -- add_cycle path") {
+    test("buildRunSummary assembles the complete run_summary.json content -- reference-less sheet") {
 
         function "buildRunSummary"
 
@@ -150,13 +150,13 @@ nextflow_function {
             function {
                 """
                 input[0] = [
-                    stop: 'add_cycle',
+                    stop: 'postprocessing',
                     patients: [P001: 1],
                     channels: [P001: 2],
                     declared_channels: [P001: 3],
                 ]
                 input[1] = [
-                    mode: 'add_cycle',
+                    mode: 'standard',
                     start: 'preprocessing',
                     registration_method: 'valis',
                     seg_method: 'cellpose',
@@ -176,9 +176,9 @@ nextflow_function {
                 pipeline: [name: 'mirage', version: '1.0.0'],
                 run: [
                     timestamp: '2026-08-06 00:00:00 UTC',
-                    mode: 'add_cycle',
+                    mode: 'standard',
                     start: 'preprocessing',
-                    stop: 'add_cycle',
+                    stop: 'postprocessing',
                 ],
                 params: [
                     registration_method: 'valis',

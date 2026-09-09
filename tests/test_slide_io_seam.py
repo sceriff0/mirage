@@ -17,7 +17,6 @@ The measured inventory, at the time of writing:
     tiled_stitch.py                   yes     minisblack   none         out_tile  yes
     split_multichannel.py             no      -            zlib         2048      yes
     segment.py / _cellsam / _instanseg no     -            zlib         none      NO
-    extract_mask_series.py            no      -            zlib         none      yes
     utils/image_utils.py              generic passed through by the caller
 
 Two inconsistencies that fall straight out of it, recorded rather than fixed here because both
@@ -71,10 +70,6 @@ PIXEL_WRITERS = {
         "the illumination-corrected multi-channel slide",
     ),
     "bin/convert_image.py": (1, "the converted multi-channel slide"),
-    "bin/extract_mask_series.py": (
-        1,
-        "cell/nuclei masks recovered from a prior pyramid",
-    ),
     "bin/merge_channels_pyramid.py": (1, "the published QuPath pyramid"),
     "bin/segment.py": (2, "StarDist cell + nuclei masks"),
     "bin/segment_cellsam.py": (2, "CellSAM cell + nuclei masks"),
@@ -290,7 +285,6 @@ MASK_WRITERS = (
     "bin/segment.py",
     "bin/segment_cellsam.py",
     "bin/segment_instantseg.py",
-    "bin/extract_mask_series.py",
 )
 
 
@@ -308,7 +302,7 @@ def test_every_mask_writer_compresses(rel):
 
 @pytest.mark.parametrize("rel", MASK_WRITERS)
 def test_every_mask_writer_sets_bigtiff(rel):
-    """The same masks, written by four files, must not disagree about the 4 GB ceiling.
+    """The same masks, written by three files, must not disagree about the 4 GB ceiling.
 
     A 40000x40000 uint32 mask is 6.4 GB before compression. `tiled_stitch.py:118` states the
     rule: classic TIFF's 32-bit offsets overflow past 4 GB. Compression usually keeps a label
@@ -316,8 +310,7 @@ def test_every_mask_writer_sets_bigtiff(rel):
     structure is exactly the case that compresses worst AND is largest.
     """
     assert "bigtiff=True" in (REPO / rel).read_text(), (
-        f"{rel} writes a full-resolution label mask without bigtiff, while its sibling "
-        "extract_mask_series.py -- writing the same masks back out of the pyramid -- sets it"
+        f"{rel} writes a full-resolution label mask without bigtiff, while its siblings set it"
     )
 
 

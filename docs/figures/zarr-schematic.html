@@ -596,11 +596,10 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
   <section class="panel">
     <span class="plabel">f</span>
     <div class="panel-head"><h2>Where lazy reads do not help, and why &mdash; three classes</h2>
-      <p>Fourteen processes read pixels or masks and are untouched. None of them is an oversight: each falls into
+      <p>Thirteen processes read pixels or masks and are untouched. None of them is an oversight: each falls into
         one of three classes, and in every class laziness is either impossible or buys nothing. This panel carries
-        the same weight as panel <b>c</b>. It said <i>twelve</i> until <code>EXTRACT_MASK_SERIES</code> and
-        <code>SEG_QUALITY_EVAL</code> were found missing from it — a count in a figure is a claim like any
-        other.</p></div>
+        the same weight as panel <b>c</b>. It said <i>twelve</i> until <code>SEG_QUALITY_EVAL</code> was found
+        missing from it — a count in a figure is a claim like any other.</p></div>
     <div class="tbl-scroll">
       <table class="own">
         <thead><tr><th style="width:22%">process</th><th style="width:31%">what it actually does</th><th>why a lazy region read cannot help</th></tr></thead>
@@ -623,12 +622,6 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
               <td>CSE's per-pixel index structures are built over the entire label field at once, so the algorithm
                 holds what a lazy read would defer. <code>--cse_max_pixels</code> bins the input instead — a
                 <i>decimation</i> knob, which is the honest lever here, not laziness.</td></tr>
-
-          <tr class="grp"><td colspan="3">class 1b &mdash; the read is a whole series, not a region</td></tr>
-          <tr><td class="st">EXTRACT_MASK_SERIES</td>
-              <td class="kd"><code>tif.series[1].asarray()</code> on the pyramid's embedded mask series<br>bin/extract_mask_series.py:40</td>
-              <td>Its entire job is to lift a whole series back out of the pyramid and write it as its own file.
-                There is no subset to defer to: the output <i>is</i> the input.</td></tr>
 
           <tr class="grp"><td colspan="3">class 2 &mdash; the input is already one plane, or is not pixels at all</td></tr>
           <tr><td class="st">QUANTIFY</td>
@@ -685,7 +678,7 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
   <section class="panel">
     <span class="plabel">g</span>
     <div class="panel-head"><h2>Four structural blockers, and the one opportunity that was left &mdash; now taken</h2>
-      <p>Beyond the fourteen processes of panel <b>f</b>, four specific mechanisms make a <i>spatial</i> saving
+      <p>Beyond the thirteen processes of panel <b>f</b>, four specific mechanisms make a <i>spatial</i> saving
         unavailable even at sites that <i>are</i> now lazy. They are why <code>factor</code> is 1 everywhere
         outside STARE.</p></div>
     <div class="two">
@@ -998,7 +991,7 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
     load-bearing results are the scaling shape — doubling the channel count grew the old peak 31% and the new one
     1.3% — and the convert's 435 &rarr; 168 MB. <b>(e)</b> The comment both segmentation
     backends carried was false: <code>asarray(out="memmap")</code> decodes the entire compressed image into a new
-    full-size uncompressed temporary file and maps that instead of the source. <b>(f)</b> Fourteen processes are
+    full-size uncompressed temporary file and maps that instead of the source. <b>(f)</b> Thirteen processes are
     untouched, in three classes — whole-array algorithms whose objects cross block boundaries, consumers whose
     input is already one plane or is a table, and reads owned by another library (VALIS, and now the vendored
     nf-core BASICPY container) — while the STARE per-tile path shows the

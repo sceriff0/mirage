@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The incremental cyclic-IF mode (`add_cycle`) now lives on the `dev` branch only.**
+  This branch carries no `--mode add_cycle`, no `prior_outdir`, no `EXTRACT_MASK_SERIES`
+  and no `docs/add_cycle.md`; `mode` stays as a parameter with the single value
+  `standard` so `qc/run_summary.json`'s `run.mode` field is unchanged. `embed_masks` is
+  unaffected. The shared plumbing add_cycle was built on (`REGISTER_PATIENT`,
+  `QUANTIFY_MARKERS`, `ASSEMBLE_EXPORT`, `POSTPROCESSED_CHECKPOINT`) stays, and the
+  comments that explain *why* it is shared still name add_cycle as the reason.
+
 ### Fixed
 
 - **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,

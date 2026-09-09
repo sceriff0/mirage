@@ -19,7 +19,6 @@ include { PREPROCESSING       } from '../subworkflows/local/preprocess'
 include { REGISTRATION        } from '../subworkflows/local/registration'
 include { SEGMENTATION; READ_SEGMENTED_CHECKPOINT } from '../subworkflows/local/segmentation'
 include { POSTPROCESSING      } from '../subworkflows/local/postprocess'
-include { ADD_CYCLE           } from '../subworkflows/local/add_cycle'
 include { FINAL_QC            } from '../subworkflows/local/final_qc'
 
 // Unknown columns are ACCEPTED -- a checkpoint CSV legitimately carries columns
@@ -147,104 +146,6 @@ workflow MIRAGE {
     // params.expanded_quantification / params.embed_masks directly;
     // tests/test_compartment_mode_routing.py enforces that.
     def compartment_mode = ParamUtils.compartmentMode(params)
-
-    /* -------------------- MODE: ADD_CYCLE -------------------- */
-    if (params.mode == 'add_cycle') {
-        // add_cycle has a FIXED path (no --start/--stop choice), so a caller who
-        // passes either is rejected here rather than accepted-and-ignored: the
-        // earlier behaviour let --stop registration run the ENTIRE path through
-        // export while run_summary.json claimed the run stopped after
-        // registration — an accuracy bug at the label's source, not the label.
-        ParamUtils.validateAddCycleStepFlags(params)
-        ParamUtils.validateAddCycle(params.outdir, params.prior_outdir)
-        ParamUtils.validateCompartmentQuant(compartment_mode)
-        // add_cycle re-registers the new cycle through whichever adapters declare they
-        // support that mode — today VALIS alone; add_cycle.nf hands REGISTER_PATIENT the
-        // literal 'valis'. Reject anything else loudly rather than registering with VALIS
-        // under another method's name.
-        //
-        // ALLOWLIST, NOT DENYLIST, and now one the backend TABLE owns. This used to name
-        // 'tiled' explicitly (so any method the enum gained afterwards passed the check
-        // and was silently registered with VALIS), was then narrowed to `!= 'valis'`
-        // (correct, but a second place to update when a backend gains add_cycle support),
-        // and is now RegBackends.supportsMode — the same field lib_probe asserts and the
-        // same table register_patient.nf dispatches from.
-        if (!RegBackends.supportsMode(params.registration_method, 'add_cycle')) {
-            def supported = RegBackends.methods().findAll {
-                RegBackends.supportsMode(it, 'add_cycle')
-            }
-            error "mode='add_cycle' does not support --registration_method " +
-                  "${params.registration_method}; supported: ${supported.join(', ')}."
-        }
-
-        if (!params.input) error "mode='add_cycle' requires --input (the new cycle samplesheet)"
-        CsvUtils.validateInputCSV(params.input, ParamUtils.requiredColumnsForStep('preprocessing'))
-        // add_cycle has no --start/--stop choice, so the step is always the
-        // literal 'preprocessing' here -- the same column set INPUT_CHECK reads
-        // below via 'path_to_file'.
-        warnUnknownColumns(params.input, 'preprocessing')
-
-        // The new-cycle samplesheet intentionally has NO reference row: the
-        // registration reference is the frozen prior-run reference (external to
-        // this CSV). Pass allow-no-reference=true so validation does not reject
-        // the by-design zero-reference sheet. (Registration still uses the prior
-        // reference — ADD_CYCLE forces the new cycle to is_reference=false.)
-        CsvUtils.validateInputSemantics(params.input, 'preprocessing', true, params.nuclear_markers)
-
-        // Fast-fail: every new-cycle patient must exist in the prior run's
-        // postprocessed checkpoint, else its masks/base-table can't be sourced.
-        def newPatients   = CsvUtils.countImagesPerPatient(params.input).keySet()
-        def priorPostCsv  = Layout.checkpointCsv(params.prior_outdir, Layout.POSTPROCESSED)
-        def priorPatients = CsvUtils.countImagesPerPatient(priorPostCsv).keySet()
-        def orphans = newPatients - priorPatients
-        if (orphans) {
-            error "mode='add_cycle': new-cycle patient(s) ${orphans} have no entry in ${priorPostCsv}. " +
-                  "Each new-cycle patient_id must match a patient from the prior completed run."
-        }
-
-        if (params.dry_run) {
-            log.info "DRY RUN (add_cycle): validations passed for --input=${params.input}, --prior_outdir=${params.prior_outdir}; mask extraction will run against ${priorPostCsv}'s pyramid column."
-            return
-        }
-
-        // add_cycle registers against the PRIOR run's reference, which is never a row
-        // in this sheet, so no row here keeps its nuclear channel and the new cycle's
-        // markers are the declared channels minus the nuclear one. INPUT_CHECK no
-        // longer takes a flag for this: it never promotes a reference on any path.
-        INPUT_CHECK(params.input, 'path_to_file')
-
-        // ADD_CYCLE rebuilds the prior run's reusable assets itself, from
-        // --prior_outdir's checkpoint CSVs.
-        ADD_CYCLE(INPUT_CHECK.out.samples, compartment_mode)
-
-        // ADD_CYCLE has no preprocess_qc / registration_tre / postprocess_qc of its own
-        // (it calls PREPROCESSING internally without re-exposing its QC pngs, and has no
-        // POSTPROCESSING step at all — masks are reused, not re-segmented). Those kinds
-        // are simply not contributed; FINAL_QC defaults them to empty. seg_residuals IS
-        // now contributed: ADD_CYCLE captures SEG_QC.out.per_cell (previously dropped).
-        FINAL_QC(
-            Channel.empty()
-                .mix(INPUT_CHECK.out.versions.map    { f -> ['versions', f] })
-                .mix(INPUT_CHECK.out.size_logs.map   { f -> ['size_log', f] })
-                .mix(ADD_CYCLE.out.qc.map            { _meta, files -> ['registration_qc', files] })
-                .mix(ADD_CYCLE.out.seg_qc.map        { _meta, files -> ['seg_qc', files] })
-                .mix(ADD_CYCLE.out.seg_residuals.map { _meta, files -> ['seg_residuals', files] })
-                .mix(ADD_CYCLE.out.versions.map      { f -> ['versions', f] })
-                .mix(ADD_CYCLE.out.size_logs.map     { f -> ['size_log', f] }),
-            // ParamUtils.STEP_ORDER.last() ('postprocessing'), NOT effective_stop and NOT
-            // the literal 'add_cycle' this used to smuggle in. Neither of those was safe:
-            // 'add_cycle' is not a member of STEP_ORDER, so a consumer indexing it would
-            // get -1; effective_stop reflects whatever --stop the caller passed, but
-            // validateAddCycleStepFlags (above) now REJECTS a non-default --start/--stop
-            // in this mode, so the only value that can ever reach here honestly is "ran
-            // the whole fixed path through export" — the last step, unconditionally. Before
-            // that rejection existed, an accepted-and-ignored --stop registration ran the
-            // FULL path through export while still labelling itself "registration" here.
-            INPUT_CHECK.out.counts.map { counts -> counts + [stop: ParamUtils.STEP_ORDER.last()] }
-        )
-
-        return   // do NOT fall through to the standard start/stop flow
-    }
 
     if (run_postprocessing) {
         ParamUtils.validateCompartmentQuant(compartment_mode)

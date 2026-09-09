@@ -3,10 +3,10 @@
  *
  * `conf/modules.config` decides where each process actually publishes. Everything
  * else that needs to KNOW that answer - the checkpoint CSVs that record published
- * paths for a later `--start`, the add_cycle reader that opens a prior run's
- * checkpoints, the validator that asserts they exist, the onComplete resource
- * report - used to restate the rule by hand. Six independent copies, kept in
- * agreement only by eye:
+ * paths for a later `--start`, the validator that asserts they exist, the
+ * onComplete resource report - used to restate the rule by hand. Six independent
+ * copies, kept in agreement only by eye (two of them on the add_cycle path, which
+ * lives on the dev branch only):
  *
  *   1. subworkflows/local/preprocess.nf   "<outdir>/<pid>/preprocessed/<name>"
  *                                          + collectFile storeDir "<outdir>/csv"
@@ -61,10 +61,6 @@ class Layout {
 
     static final List<String> CHECKPOINT_STEPS =
         [PREPROCESSED, REGISTERED, SEGMENTED, POSTPROCESSED].asImmutable()
-
-    /** The two checkpoints a `mode='add_cycle'` run reads out of --prior_outdir. */
-    static final List<String> ADD_CYCLE_CHECKPOINTS =
-        [REGISTERED, POSTPROCESSED].asImmutable()
 
     private static String requireStep(String step) {
         if (!CHECKPOINT_STEPS.contains(step))

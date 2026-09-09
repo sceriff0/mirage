@@ -95,9 +95,9 @@ rounding, same log lines — only the order the pixels are visited in changed.
 > `bin/tiled_stitch.py` included) is a bug and not a style choice, and it is what those two
 > tests now hold the line on — not a historical footnote.
 >
-> **One known degradation this does not size for.** A run resumed from a `--prior_outdir`
-> published before the producers were tiled, or an `add_cycle` run reading an older
-> published tree, can still hand these processes an untiled slide, and the plane-decode
+> **One known degradation this does not size for.** A run re-entered with `--start` from
+> a tree published before the producers were tiled can still hand these processes an
+> untiled slide, and the plane-decode
 > cost above returns for that input. That is covered by the exit-137 retry ramp
 > (`conf/base.config`), not by a term in either formula — sizing the steady state for an
 > input the pipeline will stop producing would keep every normal run's request permanently
