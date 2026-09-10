@@ -143,7 +143,10 @@ registration_arms:
 # WARP_SEG_QC for a pairing cross, and the aggregation) runs again, publishing into
 # the cross arm's own outdir. Which is why both crosses can afford `all`: the cost of a
 # cross arm is one segmentation of the native slides, or one pairing pass, not a
-# registration. (A resume that misses is correct and merely slow.)
+# registration. MEASURED 2026-09-10 on the stub pipeline (trace of a -resume run with
+# only the instrument changed): --seg_qc_pairing mutual_nn -> REGISTER CACHED, only
+# WARP_SEG_QC re-ran; --seg_method changed -> REGISTER CACHED, SEG_QC_SEGMENT and
+# WARP_SEG_QC re-ran. (A resume that misses is correct and merely slow.)
 #
 # ONE INSTRUMENT AT A TIME, NOT A FACTORIAL. Each cross varies its own axis off the base
 # arm's other instrument: segmenters at the baseline pairing, pairings at the baseline
