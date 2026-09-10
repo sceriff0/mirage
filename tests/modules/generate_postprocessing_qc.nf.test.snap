@@ -1,0 +1,14 @@
+{
+    "Should emit three QC PNGs, a size log and versions - stub": {
+        "content": [
+            [
+                "versions.yml:md5,2eac80fa149fee6ee4f5a63adfb8f10e"
+            ]
+        ],
+        "timestamp": "2026-09-10T17:20:14.782115",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "25.04.7"
+        }
+    }
+}

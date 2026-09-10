@@ -1,0 +1,91 @@
+nextflow_process {
+
+    name "Test GENERATE_POSTPROCESSING_QC process"
+    script "modules/local/generate_postprocessing_qc.nf"
+    process "GENERATE_POSTPROCESSING_QC"
+
+    tag "modules"
+    tag "modules_local"
+    tag "generate_postprocessing_qc"
+
+    test("Should emit three QC PNGs, a size log and versions - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'] ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_merged_quant.csv', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            with(process.out.qc) {
+                assert size() == 1
+                assert get(0).get(0).patient_id == 'P001'
+                def names = get(0).get(1).collect { new File(it.toString()).name }.sort()
+                // The three figure names are the contract conf/modules.config publishes
+                // under <pid>/qc/postprocessing; a renamed figure silently vanishes from
+                // the published tree.
+                assert names == ['P001_cell_stats.png', 'P001_intensity_distributions.png', 'P001_seg_overlay.png']
+            }
+            with(process.out.size_log) {
+                assert size() == 1
+                assert get(0).toString().endsWith('P001.GENERATE_POSTPROCESSING_QC.size.csv')
+            }
+            assert snapshot(process.out.versions).match()
+        }
+    }
+
+    test("Should pass the mask, CSV, output dir and prefix to generate_postprocessing_qc.py - rendered command") {
+
+        // Tagged `stub` so the blocking gate runs it, deliberately WITHOUT
+        // options "-stub": a stub run never evaluates script:, so it can never see
+        // the rendered command. bin/generate_postprocessing_qc.py needs matplotlib
+        // and skimage, which are not on the local PATH under -profile test, so the
+        // process may fail -- the assertions read .command.sh, not the outcome.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'] ],
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_merged_quant.csv', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('generate_postprocessing_qc.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered GENERATE_POSTPROCESSING_QC .command.sh found under the task work dir" },
+                { assert rendered.every { it.contains('--mask P001_cell_mask.tif') },
+                    "rendered command: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--csv P001_merged_quant.csv') },
+                    "rendered command: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--output qc') },
+                    "rendered command: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--prefix P001') },
+                    "prefix must be meta.patient_id; the publishDir pattern is qc/*.png under the patient: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('mkdir -p qc') },
+                    "the qc/ directory is created before the script runs: " + rendered.join(' --- ') }
+            )
+        }
+    }
+}
