@@ -87,7 +87,10 @@ def _frozen_scalars(code: str) -> list[tuple[str, str, int]]:
     Returns (key, param, offset) triples, one per param referenced.
     """
     blanked = strip_comments_and_strings(code)
-    skip = [_top_level_block_span(blanked, "params"), _top_level_block_span(blanked, "profiles")]
+    skip = [
+        _top_level_block_span(blanked, "params"),
+        _top_level_block_span(blanked, "profiles"),
+    ]
     out = []
     for m in re.finditer(r"(?m)^\s*([\w.]+)\s*=\s*(.+?)\s*$", code):
         start = m.start()
@@ -103,8 +106,12 @@ def _frozen_scalars(code: str) -> list[tuple[str, str, int]]:
 
 def _paramutils_list(name: str) -> list[str]:
     src = strip_comments(PARAM_UTILS.read_text())
-    m = re.search(rf"static\s+final\s+List<String>\s+{name}\s*=\s*\[(.*?)\]", src, flags=re.S)
-    assert m, f"lib/ParamUtils.groovy must declare `static final List<String> {name} = [...]`"
+    m = re.search(
+        rf"static\s+final\s+List<String>\s+{name}\s*=\s*\[(.*?)\]", src, flags=re.S
+    )
+    assert m, (
+        f"lib/ParamUtils.groovy must declare `static final List<String> {name} = [...]`"
+    )
     return re.findall(r"'([^']+)'", m.group(1))
 
 
@@ -119,7 +126,9 @@ def test_every_params_derived_scalar_sits_after_the_profiles_block(nf_code):
     above the block ignored a profile's `params.concurrency = 7`."""
     scalars = _frozen_scalars(nf_code)
     assert scalars, "expected at least one params-derived scalar in nextflow.config"
-    _, profiles_end = _top_level_block_span(strip_comments_and_strings(nf_code), "profiles")
+    _, profiles_end = _top_level_block_span(
+        strip_comments_and_strings(nf_code), "profiles"
+    )
     early = sorted({(k, p) for k, p, off in scalars if off < profiles_end})
     assert not early, (
         f"params-derived scalar(s) assigned ABOVE `profiles {{}}` in nextflow.config: "
@@ -151,15 +160,21 @@ def test_validate_frozen_config_reads_every_frozen_param():
     alone proves nothing about what the method compares."""
     src = strip_comments(PARAM_UTILS.read_text())
     m = re.search(r"static\s+void\s+validateFrozenConfig\s*\([^)]*\)\s*\{", src)
-    assert m, "lib/ParamUtils.groovy must define `static void validateFrozenConfig(...)`"
+    assert m, (
+        "lib/ParamUtils.groovy must define `static void validateFrozenConfig(...)`"
+    )
     body = src[m.end() : block_extent(src, m.end())]
     # One level of static helper is allowed (derivedMaxForks / derivedQueueSize exist so
     # the validator recomputes exactly what the config line computes); their bodies count.
     for helper in set(re.findall(r"\b(derived\w+)\s*\(", body)):
         h = re.search(rf"static\s+\w+\s+{helper}\s*\([^)]*\)\s*\{{", src)
-        assert h, f"validateFrozenConfig calls {helper}() but ParamUtils does not define it"
+        assert h, (
+            f"validateFrozenConfig calls {helper}() but ParamUtils does not define it"
+        )
         body += src[h.end() : block_extent(src, h.end())]
-    missing = [p for p in _paramutils_list("FROZEN_CONFIG_PARAMS") if f"params.{p}" not in body]
+    missing = [
+        p for p in _paramutils_list("FROZEN_CONFIG_PARAMS") if f"params.{p}" not in body
+    ]
     assert not missing, f"validateFrozenConfig never reads params.{missing}"
 
 
@@ -182,12 +197,18 @@ def test_mirage_nf_calls_the_validator_with_the_session_config():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", CONFIGS, ids=[str(p.relative_to(ROOT)) for p in CONFIGS])
+@pytest.mark.parametrize(
+    "path", CONFIGS, ids=[str(p.relative_to(ROOT)) for p in CONFIGS]
+)
 def test_resource_limits_is_a_closure_everywhere(path: Path):
     """`resourceLimits = [ ... ]` is evaluated where it is written. Inside a profile that
     is before any `-c` file and before a later profile's params, so it froze to
     [cpus:null, memory:null] on the documented SLURM route. Only the closure form defers
     to task-submission time."""
     code = strip_comments(path.read_text())
-    plain = re.findall(r"(?m)^[ \t]*(?:process\.)?resourceLimits[ \t]*=[ \t]*\[.*$", code)
-    assert not plain, f"{path.relative_to(ROOT)} assigns resourceLimits as a plain map: {plain}"
+    plain = re.findall(
+        r"(?m)^[ \t]*(?:process\.)?resourceLimits[ \t]*=[ \t]*\[.*$", code
+    )
+    assert not plain, (
+        f"{path.relative_to(ROOT)} assigns resourceLimits as a plain map: {plain}"
+    )

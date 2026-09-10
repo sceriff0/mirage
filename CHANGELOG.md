@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`skip_preprocessing` defaults to `true`**: a default run converts every slide to the
+  standardised OME-TIFF and goes straight to registration; BaSiC illumination correction is
+  now opt-in (`"skip_preprocessing": false` in a params file or profile — never on the CLI).
+  `csv/preprocessed.csv` then records the converted image, and the `BASICPY` image is not
+  pulled. `conf/test.config` pins `false` so the suite keeps covering the correction path;
+  the `shipped_defaults_test` stub run covers the new default. The benchmark sweep's
+  `baseline:` follows (`benchmarking` branch), and its `skip_preprocessing: [false, true]`
+  axis still prices the whole stage — it now varies OFF a skipping baseline.
 - **The incremental cyclic-IF mode (`add_cycle`) now lives on the `dev` branch only.**
   This branch carries no `--mode add_cycle`, no `prior_outdir`, no `EXTRACT_MASK_SERIES`
   and no `docs/add_cycle.md`; `mode` stays as a parameter with the single value

@@ -23,7 +23,11 @@
 #   2. `-params-file pin.json`, same values plus trace_dir -> the run must SUCCEED,
 #      the local executor's monitor line must show capacity=28 (7 * 4), and no
 #      trace.txt may be written at the pinned trace_dir (enable_trace=false).
-#   3. `--concurrency 7` on the CLI -> succeed, capacity=28.
+#   3. `--concurrency 7` on the CLI -> on Nextflow 25.x it is coerced to an integer
+#      and the run must succeed with capacity=28; Nextflow 26 delivers every CLI
+#      param as a String and nf-schema must REFUSE it ("[string] but should be
+#      [integer]"). Either outcome proves the CLI route is not silently ignored;
+#      what must never happen is a success with any other capacity.
 #
 # The `capacity=` needle is the local executor's own report of executor.queueSize
 # (`Creating local task monitor for executor 'local' > ... capacity=N`), read from a
@@ -88,13 +92,20 @@ cap=$(capacity_of "$TMP/run2.nflog")
 echo "ok: -params-file pin arrived (capacity=$cap, no trace written)"
 
 # --------------------------------------------------------------------------
-# 3. The CLI route arrives: capacity=28.
+# 3. The CLI route: arrives (25.x, capacity=28) or is refused by the schema (26.x).
+#    NF26 stringifies every --param, so an integer on the CLI is a type error
+#    there -- the same trap CLAUDE.md records for booleans. A silent success
+#    with the OLD capacity is the only outcome this leg forbids.
 # --------------------------------------------------------------------------
-"$NF" -q -log "$TMP/run3.nflog" run . -profile test -stub \
-    --concurrency 7 -w "$TMP/w3" --outdir "$TMP/o3" > "$TMP/run3.log" 2>&1 \
-    || { cat "$TMP/run3.log"; fail "the CLI run did not succeed"; }
-cap=$(capacity_of "$TMP/run3.nflog")
-[ "$cap" = "28" ] || fail "--concurrency 7 should give executor.queueSize 28, local executor reports capacity=${cap:-<none>}"
-echo "ok: CLI pin arrived (capacity=$cap)"
+if "$NF" -q -log "$TMP/run3.nflog" run . -profile test -stub \
+    --concurrency 7 -w "$TMP/w3" --outdir "$TMP/o3" > "$TMP/run3.log" 2>&1; then
+    cap=$(capacity_of "$TMP/run3.nflog")
+    [ "$cap" = "28" ] || fail "--concurrency 7 was accepted but executor.queueSize did not follow: local executor reports capacity=${cap:-<none>}"
+    echo "ok: CLI pin arrived (capacity=$cap)"
+else
+    grep -q "should be \[integer\]" "$TMP/run3.log" \
+        || { cat "$TMP/run3.log"; fail "the CLI run failed for a reason other than nf-schema rejecting a String integer"; }
+    echo "ok: CLI pin refused by the schema as a String (Nextflow 26 behaviour); the -params-file route above is the supported one"
+fi
 
 echo "PASS"

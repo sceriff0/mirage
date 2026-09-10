@@ -108,10 +108,11 @@ Chips give real defaults. Every process runs in a pinned container and emits
           fiducial skip once; <b>APPLY_PROFILES</b> does the division/subtraction and reassembles
           the slide. The nuclear/fiducial channels are left uncorrected by default: they drive both
           registration and segmentation, so correcting them changes what each consumes.
-          <b>skip_preprocessing</b> turns the correction off entirely — conversion still runs, so
+          <b>skip_preprocessing</b> (the default since 1.0.0's final round) turns the correction off
+          entirely — conversion still runs, so
           the step still emits one image per slide and the checkpoint still has a row per slide,
           pointing at <code>converted/</code> instead.</div>
-        <div class="pp"><span>skip_preprocessing <b>false</b></span><span>skip_nuclear <b>true</b></span><span>tile <b>1950</b></span></div></div>
+        <div class="pp"><span>skip_preprocessing <b>true</b></span><span>skip_nuclear <b>true</b></span><span>tile <b>1950</b></span></div></div>
       <div class="mod"><div class="n">GENERATE_PREPROCESS_QC <span class="tag">opt</span></div>
         <div class="x">Per-channel downsampled PNG for visual inspection.</div>
         <div class="pp"><span>scale <b>0.25</b></span></div></div>

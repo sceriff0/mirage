@@ -164,7 +164,7 @@ The first real run downloads each tool's image, which can take several minutes. 
 | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` |
 | `bolt3x/mirage-segeval:1.0.0` | `SEG_QUALITY_EVAL`, `MERGE_SEG_EVAL` (opt-in) |
 | `cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6` (upstream, not vendored) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
-| `docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4` (vendored nf-core module's own image, repinned) | `BASICPY` — real by default, since illumination correction is not `--skip_preprocessing` |
+| `docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4` (vendored nf-core module's own image, repinned) | `BASICPY` — pulled only when `skip_preprocessing` is set `false` (illumination correction is off by default) |
 
 === "Docker"
 
