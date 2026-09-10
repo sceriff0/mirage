@@ -62,6 +62,34 @@ _REF = re.compile(r"tests/testdata/([\w\-][\w\-.]*[\w\-])")
 # resolve to the right file instead of just the first path segment.
 _REF_CSV_FIELD = re.compile(r'tests/testdata/([^,"\n]+)')
 
+# A tests/testdata/<name> reference wrapped in a quoted argument -- e.g. an
+# nf-test `file('$projectDir/tests/testdata/with space/P001 ref.ome.tiff',
+# checkIfExists: true)` call. Like the CSV field pattern above (and unlike
+# _REF), a quoted Groovy/Python string argument has its own unambiguous
+# terminator -- the closing quote -- so this can safely allow a space or a
+# `/` subdirectory in the captured name. The char class before the literal
+# `tests/testdata/` accepts the opening quote itself OR a `/` (the case where
+# the fixture path is written as `$projectDir/tests/testdata/...`, so the
+# character immediately before `tests/testdata` is the path separator, not
+# the quote).
+#
+# The captured group is deliberately NOT "anything up to the next quote":
+# this file's own docstrings and assertion messages quote-wrap a *prose*
+# mention of a fixture path too (`'tests/testdata/<name>'` in an f-string
+# error message, `"tests/testdata/generate_complete_testdata.py first: " +
+# ...`), and an unrestricted `[^'"\n]+?` swallows the trailing English words
+# right up to that string's real closing quote. Restricting the group to
+# path-safe characters -- word chars, `-`, `.`, `/`, plus AT MOST ONE space
+# between path-safe runs (the "with space" case) -- makes every one of those
+# prose sentences fail to reach a quote at all (a bare `<`, or a `:` inside
+# "first:", breaks the run before any quote is in reach), while the one
+# legitimate multi-segment, space-containing fixture path still matches in
+# full. This pattern is unioned with _REF's matches in _referenced() below
+# rather than replacing it, and the text a quoted match consumed is masked
+# out first so _REF cannot also emit a truncated word-boundary match (e.g.
+# plain "with") for the same reference.
+_REF_QUOTED = re.compile(r"""['"/]tests/testdata/([\w\-./]+(?: [\w\-./]+)*)['"]""")
+
 # Fixtures that are DELIBERATELY empty, keyed on the name, with the reason. Each
 # entry is verified below to still exist AND still be empty -- a stale exemption is
 # a licence nobody is using that the next reader will trust.
@@ -164,8 +192,26 @@ def _referenced():
         # fixture CSV has no prose to protect against, and its own comma/quote
         # syntax is what lets a space or a `/` subdirectory be captured safely
         # (see _REF_CSV_FIELD's doc above).
-        pattern = _REF_CSV_FIELD if path.suffix == ".csv" else _REF
-        for name in pattern.findall(strip_comments(path.read_text(errors="ignore"))):
+        text = strip_comments(path.read_text(errors="ignore"))
+        if path.suffix == ".csv":
+            names = set(_REF_CSV_FIELD.findall(text))
+        else:
+            # Quoted references (see _REF_QUOTED's doc above) are captured
+            # whole first, INCLUDING an embedded space, then masked out of the
+            # text before the prose-safe _REF pattern runs -- otherwise _REF
+            # would also match the same reference up to its first whitespace
+            # (e.g. "with" out of "with space/P001 ref.ome.tiff") and demand a
+            # producer for a fixture that was never really referenced.
+            names = set()
+            masked = list(text)
+            for m in _REF_QUOTED.finditer(text):
+                names.add(m.group(1))
+                start, end = m.span(1)
+                for i in range(start, end):
+                    if masked[i] != "\n":
+                        masked[i] = " "
+            names |= set(_REF.findall("".join(masked)))
+        for name in names:
             refs.setdefault(name, set()).add(str(path.relative_to(ROOT)))
     return refs
 
