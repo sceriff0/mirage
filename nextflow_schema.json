@@ -80,8 +80,8 @@
             "properties": {
                 "skip_preprocessing": {
                     "type": "boolean",
-                    "description": "Skip BaSiC illumination correction entirely. Images are still converted to standardised OME-TIFF; the preprocessed checkpoint then records the converted image.",
-                    "default": false
+                    "description": "Skip BaSiC illumination correction entirely (the default). Images are still converted to standardised OME-TIFF; the preprocessed checkpoint then records the converted image. Set false to run the correction.",
+                    "default": true
                 },
                 "preproc_skip_nuclear": {
                     "type": "boolean",

@@ -26,8 +26,9 @@ flowchart LR
     style E fill:#fff3e0,stroke:#f57c00
 ```
 
-- **Preprocessing** — Bio-Formats conversion (nuclear marker → channel 0) + BaSiC illumination
-  correction. The correction is optional (`--skip_preprocessing`); the conversion is not.
+- **Preprocessing** — Bio-Formats conversion (nuclear marker → channel 0), plus optional BaSiC
+  illumination correction. The correction is **off by default** (`skip_preprocessing` is `true`;
+  set it `false` in a params file or profile to run it); the conversion always runs.
 - **Registration** — whole-slide alignment of every panel onto the reference panel, via
   `--registration_method`: **VALIS** (default, graph-based) or **tiled/STARE**
   (JVM-free, fully parallel — see [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
@@ -472,7 +473,7 @@ which is likewise absent from `PUBLISHED_KINDS`.
 results/                          # = --outdir
 ├── <patient_id>/
 │   ├── converted/                # standardized OME-TIFF (nuclear marker → ch0)
-│   ├── preprocessed/             # *_corrected.ome.tif (BaSiC; absent if --skip_preprocessing)
+│   ├── preprocessed/             # *_corrected.ome.tif (BaSiC; only when skip_preprocessing=false)
 │   ├── registered/               # *_registered.ome.tiff (+ summary/ error CSVs)
 │   ├── segmentation/             # *_nuclei_mask.tif, *_cell_mask.tif
 │   ├── cell_properties/          # morphology.csv, contours.json (+ nuclei/ subdir)

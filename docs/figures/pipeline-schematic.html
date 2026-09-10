@@ -345,10 +345,10 @@
               reassembles the slide. It runs at nf-core's <i>upstream</i> defaults, so no darkfield is estimated. The
               nuclear/fiducial channels are left uncorrected by default: they drive both
               registration and segmentation, so correcting them changes what each consumes.
-              <b>skip_preprocessing</b> turns the correction off entirely — conversion still runs, so the step still
+              <b>skip_preprocessing</b> (the default) turns the correction off entirely — conversion still runs, so the step still
               emits one image per slide and the checkpoint still has a row per slide, pointing at
               <code>converted/</code> instead.</div>
-            <div class="pp"><span>skip_preprocessing <b>false</b></span><span>skip_nuclear <b>true</b></span><span>tile <b>1950</b></span></div></div>
+            <div class="pp"><span>skip_preprocessing <b>true</b></span><span>skip_nuclear <b>true</b></span><span>tile <b>1950</b></span></div></div>
           <div class="mod"><div class="n">GENERATE_PREPROCESS_QC <span class="tag">opt</span></div>
             <div class="x">Per-channel downsampled PNG for visual inspection.</div>
             <div class="pp"><span>scale <b>0.25</b></span></div></div>
@@ -782,7 +782,7 @@
         </table>
         <h4>Preprocessing</h4>
         <table class="pr">
-          <tr><td class="k">skip_preprocessing</td><td class="v">false</td><td class="d">true &rarr; convert only, no BaSiC</td></tr>
+          <tr><td class="k">skip_preprocessing</td><td class="v">true</td><td class="d">convert only, no BaSiC; false &rarr; run the correction</td></tr>
           <tr><td class="k">preproc_skip_nuclear</td><td class="v">true</td><td class="d">don't correct nuclear markers</td></tr>
           <tr><td class="k">preproc_tile_size</td><td class="v">1950</td><td class="d">BaSiC tile (px)</td></tr>
         </table>
