@@ -15,6 +15,11 @@ bin/utils/valis_config.py applies two bounds:
      the detector would honour 5000 while the matcher still budgeted for 20000.
   2. `bound_cpu_count(task.cpus)` rebinds `multiprocessing.cpu_count` so the six VALIS
      pools that size themselves on it see the allocation register.nf passes as `--cpus`.
+  3. `_inference_only` wraps the SuperPoint / SuperGlue methods in `torch.no_grad()`. VALIS
+     never disables autograd, so every attention layer's activations were RETAINED per pair
+     (four pairs in flight still exceeded 64 GB with bounds 1 and 2 alone). Grad mode is
+     thread-local in PyTorch and VALIS matches on joblib threads, so the guard has to run
+     on the calling thread -- which a wrapped method does and a global switch does not.
 
 Both are checked against a FAKE valis whose feature_detectors / feature_matcher mirror the
 1.0.0 source shapes that matter (a module constant, a function with a bound default, a
@@ -26,10 +31,12 @@ from __future__ import annotations
 import multiprocessing
 import re
 import sys
+import threading
 import types
 from pathlib import Path
 
 import pytest
+import torch
 
 from tests.nfmodel import processes
 
@@ -47,7 +54,15 @@ def fake_valis(monkeypatch):
         return kp[:n_keep], desc[:n_keep]
 
     fd.filter_features = filter_features
-    fd.SuperPointFD = type("SuperPointFD", (), {})
+
+    class SuperPointFD:
+        def detect_and_compute(self, img):
+            return torch.is_grad_enabled()
+
+        def compute(self, img, kp_xy):
+            return torch.is_grad_enabled()
+
+    fd.SuperPointFD = SuperPointFD
 
     fm = types.ModuleType("valis.feature_matcher")
 
@@ -55,6 +70,10 @@ def fake_valis(monkeypatch):
         def __init__(self):
             # valis_lib/feature_matcher.py:1007 -- copied at construction.
             self.config = {"superpoint": {"max_keypoints": fd.MAX_FEATURES}}
+
+        def match_images(self, img1=None, img2=None):
+            # valis_lib/feature_matcher.py:1234 -- runs SuperPoint + SuperGlue inline.
+            return torch.is_grad_enabled()
 
     fm.SuperGlueMatcher = SuperGlueMatcher
 
@@ -150,3 +169,46 @@ def test_register_py_accepts_the_flag_and_applies_it_before_the_registrar():
         "bound_cpu_count must run before the registrar is built -- VALIS reads cpu_count() "
         "when its pools start, and the first pool is the rigid matcher inside register()"
     )
+
+
+@pytest.mark.parametrize("call", ["match", "detect", "compute"])
+def test_superpoint_and_superglue_run_without_autograd(valis_config, call):
+    """The wrapped methods see grad mode OFF; the caller's grad mode is untouched."""
+    matcher = valis_config.MEMORY_PRESETS["high"]["matcher"]
+    detector = valis_config.MEMORY_PRESETS["high"]["feature_detector_cls"]()
+    assert torch.is_grad_enabled()
+    inside = {
+        "match": lambda: matcher.match_images(img1=None, img2=None),
+        "detect": lambda: detector.detect_and_compute(None),
+        "compute": lambda: detector.compute(None, None),
+    }[call]()
+    assert inside is False, f"{call} ran with autograd ON"
+    assert torch.is_grad_enabled(), "the wrapper leaked grad mode into the caller"
+
+
+def test_no_grad_holds_on_a_worker_thread(valis_config):
+    """Grad mode is thread-local. VALIS matches on joblib threads, which start with
+    autograd ON whatever the main thread set -- the wrapper must guard per call."""
+    matcher = valis_config.MEMORY_PRESETS["high"]["matcher"]
+    seen = {}
+
+    def worker():
+        seen["before"] = torch.is_grad_enabled()
+        seen["inside"] = matcher.match_images(img1=None, img2=None)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join()
+    assert seen["before"] is True, "a fresh thread should start with autograd ON"
+    assert seen["inside"] is False
+
+
+def test_bound_cpu_count_also_bounds_torch_threads(valis_config, monkeypatch):
+    monkeypatch.setattr(multiprocessing, "cpu_count", multiprocessing.cpu_count)
+    before = torch.get_num_threads()
+    try:
+        valis_config.bound_cpu_count(3)
+        assert torch.get_num_threads() == 3
+    finally:
+        torch.set_num_threads(before)
+

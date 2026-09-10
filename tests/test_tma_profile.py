@@ -33,12 +33,12 @@ def _profile_body(name: str) -> str:
     return m.group(1)
 
 
-REGISTER_GB = 32
+REGISTER_GB = 64
 # A flat heap, not register.nf's 32 + 16 x attempt ramp: Bio-Formats on five ~2800 px
-# cores needs single-digit GiB, and under the 32 GB request the ramp's
-# min(48, task.memory - 4) gave Java 28 of 32 GiB on attempt 1 -- leaving 4 for the
-# Python side, which is where REGISTER's peak (SuperGlue matching) actually is.
-JVM_HEAP_GB = 8
+# cores needs single-digit GiB, and the ramp's min(48, task.memory - 4) would hand Java
+# most of a small request -- the Python side, where REGISTER's peak (SuperGlue matching)
+# actually is, gets the remainder.
+JVM_HEAP_GB = 16
 
 
 def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
@@ -52,9 +52,9 @@ def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
 
 
 def test_the_jvm_pin_is_below_the_ramps_attempt_1_request():
-    """The pin exists to hand memory BACK to Python under the 32 GB request. If it is
-    not smaller than what the ramp would have derived on attempt 1 (min(48, 32 - 4)
-    = 28), it changes nothing."""
+    """The pin exists to hand memory BACK to Python under the profile's request. If it
+    is not smaller than what the ramp would have derived on attempt 1
+    (min(48, REGISTER_GB - 4)), it changes nothing."""
     assert JVM_HEAP_GB < min(48, REGISTER_GB - 4)
 
 

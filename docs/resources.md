@@ -114,14 +114,17 @@ real slide. Changing either number changes an unguarded figure, so change it her
 |---|---|---|---|---|
 | `REGISTER` | `8` | `300 GB × attempt` | `24.h × attempt` | `withName` |
 
-The `tma` profile overrides only `REGISTER`'s memory, to `32 GB × attempt`: tissue-microarray
+The `tma` profile overrides only `REGISTER`'s memory, to `64 GB × attempt`: tissue-microarray
 cores are ~2800 px on a side, and the 300 GB request is sized for whole slides. Cpus and time
-stay as above. The profile also pins the Bio-Formats JVM heap flat at 8 GiB (`reg_jvm_heap_gb`)
-instead of `register.nf`'s `32 + 16 × attempt` ramp, which under a 32 GB request handed Java
-28 of 32 GiB on attempt 1. `REGISTER`'s peak is not pixels but SuperGlue matching (quadratic in
-keypoints, every image pair at once), so `bin/utils/valis_config.py` caps keypoints at 5000 and
-bounds VALIS's thread pools to `task.cpus` (`register.py --cpus`); before that, five ~2800 px
-cores were OOM-killed at 128 GB on 2026-09-10.
+stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`)
+instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a small
+request. `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
+image pair at once, and — in VALIS 1.0.0 — with autograd ON, so every attention layer's
+activations are retained for a backward pass nobody runs. `bin/utils/valis_config.py` caps
+keypoints at 5000, wraps the SuperPoint/SuperGlue methods in `torch.no_grad()` (grad mode is
+thread-local, so a global switch would miss VALIS's joblib threads), and bounds VALIS's thread
+pools to `task.cpus` (`register.py --cpus`). Before that, five ~2800 px cores were OOM-killed
+at 128 GB on 2026-09-10, and at 64 GB with only the first and third fix in place.
 
 `REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
 concurrency block, after the profiles) and its own error strategy — see
