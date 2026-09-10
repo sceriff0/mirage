@@ -30,7 +30,6 @@ from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_bl
 # the reason. Delete the entry in the same commit that closes the gap;
 # test_known_gaps_only_shrink fails on an entry that is no longer a gap.
 KNOWN_GAPS = {
-    "GENERATE_POSTPROCESSING_QC": "no module test (W1)",
     "EXPORT_SPATIALDATA": "no module test (W2)",
     "EXTRACT_NUCLEI_PROPERTIES": "no module test (W3)",
     "PREFLIGHT_SCALE": "no module test (W4)",
