@@ -1,0 +1,143 @@
+nextflow_process {
+
+    name "Test PREFLIGHT_SCALE process"
+    script "modules/local/preflight_scale.nf"
+    process "PREFLIGHT_SCALE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "preflight_scale"
+
+    test("Should emit one report and one run-level size log - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.report.size() == 1
+            assert process.out.report.get(0).toString().endsWith('preflight_scale_report.json')
+            // One task fans in over every slide, so the size log carries sample id `all`
+            // and a fixed name rather than a per-patient one.
+            assert process.out.size_log.get(0).toString().endsWith('PREFLIGHT_SCALE.size.csv')
+            assert snapshot(process.out.versions).match()
+        }
+    }
+
+    test("Should stage inputs as input_N/ and pass --pixel-size from params - rendered command") {
+
+        // No options "-stub". preflight_scale.py is tifffile-only and runs under
+        // -profile test, which pins pixel_size = 0.325.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('preflight_scale.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert process.success },
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--pixel-size 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('find -L input_* -maxdepth 1 -type f -print0') },
+                    "the NUL-delimited find is the fix for space-in-filename word splitting: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--images "${images[@]}"') },
+                    "the images array must be expanded quoted: " + rendered.join(' --- ') },
+                // The module's explanatory comment names `mapfile` by prose (bash 4's
+                // `mapfile -d ''` alternative), so a bare substring check on the whole
+                // rendered text false-fails on the comment itself. Check functional
+                // (non-comment) lines only for an actual `mapfile` invocation.
+                { assert rendered.every { text ->
+                    !text.readLines().any { !it.trim().startsWith('#') && it.contains('mapfile') }
+                }, "mapfile is bash 4; the container-less local loop runs on macOS bash 3.2: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --pixel-size auto when params.pixel_size is 'auto' - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                pixel_size = 'auto'
+            }
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('preflight_scale.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--pixel-size auto') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--pixel-size null') },
+                    "a null pixel_size renders the literal 'null' and the script exits 1: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should resolve a staged filename that contains a space - real script under the test profile") {
+
+        // The module's comment block describes exactly this bug: an unquoted
+        // $(find ...) split "P001 ref.ome.tiff" into two argv words, both
+        // nonexistent, and the report said the real file was missing. This is the
+        // behavioural test that comment never had.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    file('$projectDir/tests/testdata/with space/P001 ref.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            def report = new groovy.json.JsonSlurper().parse(new File(process.out.report.get(0).toString()))
+            // Two images in, two images reported. The exact key layout is the
+            // script's; assert on the count of entries whose name carries the space.
+            def text = new File(process.out.report.get(0).toString()).text
+            assert text.contains('P001 ref.ome.tiff') : "the space-named image is missing from the report: " + text
+            assert text.contains('P001_mov1.ome.tiff') : text
+        }
+    }
+}

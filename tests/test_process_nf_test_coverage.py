@@ -31,7 +31,6 @@ from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_bl
 # test_known_gaps_only_shrink fails on an entry that is no longer a gap.
 KNOWN_GAPS = {
     "EXPORT_SPATIALDATA": "no module test (W2)",
-    "PREFLIGHT_SCALE": "no module test (W4)",
     "TILED_REG_TILE": "no module test (W5)",
     "SEG_QUALITY_EVAL": "stub only (W6)",
     "CONVERT_IMAGE": "rendered case is real-tagged (W7)",
