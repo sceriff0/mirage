@@ -55,9 +55,11 @@ process REGISTER {
     // Tier-owned VALIS knobs. Rendered ONLY when set, so an unset knob leaves register.py to take
     // it from --memory-mode's preset row -- passing an explicit 'null' would override the preset
     // with nothing. ParamUtils has already rejected these under any tier other than 'custom'.
+    // reg_valis_max_keypoints is NOT tier-owned (legal under any tier); unset = VALIS's own 20000.
     def valis_override_flags = [
         (params.reg_valis_max_processed_dim != null ? "--max-processed-dim ${params.reg_valis_max_processed_dim}" : null),
         (params.reg_valis_max_non_rigid_dim != null ? "--max-non-rigid-dim ${params.reg_valis_max_non_rigid_dim}" : null),
+        (params.reg_valis_max_keypoints != null ? "--max-keypoints ${params.reg_valis_max_keypoints}" : null),
     ].findAll { it != null }
     // `?: ['']` is load-bearing, not defensive: with no overrides the interpolation below sits at
     // column 0 between two backslash-continued lines, and an EMPTY line there ends the shell
