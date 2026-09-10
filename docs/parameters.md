@@ -100,6 +100,7 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
 | `memory_mode` | `high` | VALIS cost/accuracy tier: `high` \| `medium` \| `low` \| `custom` (processed / non-rigid dims): `high` = 2048/2048 px, `medium` = 1024/1024 px, `low` = 512/512 px — one size per tier, used for both stages. All three use SuperPoint + SuperGlue with 5000 features — the tier changes resolution, not the feature matcher. `custom` starts from `high` and applies the `reg_valis_*` overrides below. Source: `MEMORY_PRESETS` in `bin/utils/valis_config.py`. See [Tiers](#tiers). |
 | `reg_valis_max_processed_dim` | tier (`high`: 2048) | Feature detection/matching working size (px). **Tier-owned** — only settable under `--memory_mode custom`. |
 | `reg_valis_max_non_rigid_dim` | tier (`high`: 2048) | Non-rigid registration size (px). **Tier-owned.** Must be **smaller than the full resolution of every slide**: VALIS 1.0.0–1.2.0 reads a slide no larger than this at pyramid level −1 and kills its JVM (its own size clamp does not prevent it), so `REGISTER` refuses such input at start with the offending slides named. Lower it below the smallest slide on small-format input such as TMA cores, with a margin — or use `registration_method = 'tiled'`. |
+| `reg_valis_max_keypoints` | `null` | Keypoints kept per image for SuperPoint detection and SuperGlue matching. `null` = VALIS's own 20000, what every run has used. SuperGlue's cost is quadratic in it; the `tma` profile pins 2000. **Lowering it changes which matches exist**, so registrations at different values are not comparable. Legal under any `memory_mode`. |
 | `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
 | `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
 | `reg_micro_reg` | `1` | Micro-registration depth (nested, default `1`): `0` = none, `1` = micro-rigid only (refines `slide.M`) — default, `2` = + micro non-rigid (`register_micro`). At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
@@ -163,8 +164,9 @@ core is typically 2000–3000 px on its long side. It describes the *data*, so i
 with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
 on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
 cores are larger and you want a finer non-rigid stage. It also lowers `REGISTER`'s
-memory request from 300 GB to 64 GB per attempt and pins the Bio-Formats JVM heap
-flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
+memory request from 300 GB to 64 GB per attempt, pins `reg_valis_max_keypoints` to 2000
+(a ~2800 px core has no use for VALIS's 20000, and SuperGlue's cost is quadratic in it)
+and pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
 REGISTER's real peak — SuperGlue matching — lives; see [Resources](resources.md).
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first

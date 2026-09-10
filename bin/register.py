@@ -77,6 +77,7 @@ from valis import warp_tools as valis_warp_tools  # noqa: E402
 # single-source-of-truth module so there is one heap formula. See bin/utils/valis_config.py.
 from valis_config import (  # noqa: E402
     MEMORY_PRESETS,
+    apply_keypoint_cap,
     bound_cpu_count,
     build_registrar_kwargs,
     init_jvm,
@@ -219,6 +220,7 @@ def valis_registration(
     jvm_heap_gb: Optional[int] = None,
     stage_checkpoint_dir: Optional[str] = None,
     n_cpus: Optional[int] = None,
+    max_keypoints: Optional[int] = None,
 ) -> int:
     """Perform VALIS registration on preprocessed images.
 
@@ -261,6 +263,10 @@ def valis_registration(
         CPUs this task was allocated (Nextflow's ``task.cpus``). Bounds every VALIS
         thread pool, most importantly the all-pairs SuperGlue matching, which otherwise
         sizes itself on the NODE's core count. None = the scheduler affinity mask.
+    max_keypoints : int, optional
+        Keypoints kept per image for SuperPoint and SuperGlue. None = VALIS's own 20000
+        (``valis_config.MAX_KEYPOINTS``). Quadratic in SuperGlue cost; changes which
+        matches exist, so it is a per-cohort choice (the tma profile passes 2000).
 
     Returns
     -------
@@ -281,7 +287,9 @@ def valis_registration(
         if max_non_rigid_dim is not None
         else preset["max_non_rigid_registration_dim_px"]
     )
-    num_features = preset["num_features"]
+    # Applied BEFORE anything reads the preset: rewrites the module constant and the
+    # preset matchers' snapshotted config (bin/utils/valis_config.py, apply_keypoint_cap).
+    num_features = apply_keypoint_cap(max_keypoints)
     feature_detector_cls = preset["feature_detector_cls"]
     matcher = preset["matcher"]
     # New preset keys with fallbacks to CLI args/defaults
@@ -424,7 +432,8 @@ def valis_registration(
     logger.info(
         f"  VALIS thread pools bounded to {effective_cpus} CPU(s) "
         f"({'task.cpus' if n_cpus is not None else 'scheduler affinity'}); "
-        f"keypoints capped at {num_features} per image"
+        f"keypoints capped at {num_features} per image "
+        f"({'--max-keypoints' if max_keypoints is not None else 'VALIS default'})"
     )
 
     # Build registrar kwargs via the shared single-source-of-truth builder (bin/utils/valis_config.py).
@@ -1150,6 +1159,14 @@ def parse_args() -> argparse.Namespace:
         "Useful for scaling on retries.",
     )
     parser.add_argument(
+        "--max-keypoints",
+        type=int,
+        default=None,
+        help="Keypoints kept per image for SuperPoint detection and SuperGlue matching. "
+        "Default: VALIS's own 20000. SuperGlue's cost is quadratic in this; lowering it "
+        "changes which matches exist (the pipeline's tma profile passes 2000).",
+    )
+    parser.add_argument(
         "--cpus",
         type=int,
         default=None,
@@ -1193,6 +1210,7 @@ def main() -> int:
             jvm_heap_gb=args.jvm_heap_gb,
             stage_checkpoint_dir=args.stage_checkpoint_dir,
             n_cpus=args.cpus,
+            max_keypoints=args.max_keypoints,
         )
     except Exception as e:
         logger.error(f"[FAIL] Registration failed: {e}")

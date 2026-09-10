@@ -24,11 +24,16 @@ from valis.non_rigid_registrars import OpticalFlowWarper
 # in that count -- ~1.6 GB each per image pair at 20000 -- and serial_rigid.py matches every
 # pair concurrently (see bound_cpu_count below). That, not pixel count, is REGISTER's peak:
 # measured 2026-08-12 on whole slides at 483 GB, and again 2026-09-10 on five ~2800 px TMA
-# cores, which were OOM-killed at "Matching images 0/10" on 128 GB. A 2048 px processed
-# image cannot use 20000 keypoints for a rigid fit; 5000 is the value every preset row has
-# declared as `num_features` since the presets were written, and it cuts the per-pair
-# footprint sixteenfold. Guarded by tests/test_valis_matching_bounds.py.
-MAX_KEYPOINTS = 5000
+# cores, which were OOM-killed at "Matching images 0/10" on 128 GB.
+#
+# The value is VALIS's own 20000 -- what every run so far has used -- by user ruling
+# (2026-09-10): the larger memory term turned out to be autograd (see _inference_only
+# below), and keeping 20000 keeps new registrations comparable with old ones. The
+# mechanism stays so the number has ONE home that reaches both SuperPoint and SuperGlue;
+# lowering it (5000 is plenty for a rigid fit at 2048 px and cuts the per-pair footprint
+# sixteenfold) is a results-changing decision, not a memory tweak. The presets' old
+# `num_features: 5000` never reached VALIS. Guarded by tests/test_valis_matching_bounds.py.
+MAX_KEYPOINTS = 20000
 
 
 def _cap_valis_keypoints(n_keep):
@@ -52,6 +57,36 @@ def _cap_valis_keypoints(n_keep):
 
 
 _cap_valis_keypoints(MAX_KEYPOINTS)
+
+
+def apply_keypoint_cap(n_keep=None):
+    """Set the keypoint ceiling at RUN time, reaching the already-built preset matchers.
+
+    ``_cap_valis_keypoints`` ran at import with MAX_KEYPOINTS; the pipeline's
+    ``--reg_valis_max_keypoints`` (register.py ``--max-keypoints``) arrives later, after
+    ``MEMORY_PRESETS`` has constructed its ``SuperGlueMatcher()`` instances, each of which
+    snapshotted the constant into ``config['superpoint']['max_keypoints']``. So the module
+    constant AND every preset matcher's config are rewritten here. SuperPoint detectors
+    are constructed later, inside ``Valis``, and read the module constant.
+
+    Parameters
+    ----------
+    n_keep : int or None
+        Keypoints per image. None keeps MAX_KEYPOINTS (VALIS's own 20000).
+
+    Returns
+    -------
+    int
+        The value now in force.
+    """
+    n = MAX_KEYPOINTS if n_keep is None else int(n_keep)
+    _cap_valis_keypoints(n)
+    for row in MEMORY_PRESETS.values():
+        cfg = getattr(row["matcher"], "config", None)
+        if isinstance(cfg, dict) and isinstance(cfg.get("superpoint"), dict):
+            cfg["superpoint"]["max_keypoints"] = n
+        row["num_features"] = n
+    return n
 
 
 def _inference_only(cls, method_name):
@@ -141,9 +176,9 @@ def bound_cpu_count(n_cpus=None):
 # `max_processed_image_dim_px` and `max_non_rigid_registration_dim_px` to Valis(...). It does NOT
 # pass the 'low' row's `tile_wh` / `tile_buffer` — those are dead keys that reach nothing, left in
 # place because removing them is a behavioural question; there is deliberately no pipeline param
-# for them: a knob that changes nothing is worse than no knob. `num_features` IS live since
-# 2026-09-10, but not through this dict: it is the one MAX_KEYPOINTS cap applied above, before
-# the matchers below are constructed, and the rows restate it only so register.py's settings log
+# for them: a knob that changes nothing is worse than no knob. `num_features` reports the ONE
+# MAX_KEYPOINTS value applied above, before the matchers below are constructed (it used to say
+# 5000 while VALIS ran at its own 20000); the rows restate it only so register.py's settings log
 # prints the number that is actually in force.
 MEMORY_PRESETS = {
     "high": {

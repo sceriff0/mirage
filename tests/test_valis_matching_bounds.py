@@ -9,10 +9,13 @@ once on `multiprocessing.cpu_count() - 1` threads -- the NODE's core count, not 
 
 bin/utils/valis_config.py applies two bounds:
 
-  1. `MAX_KEYPOINTS` (5000) is written into `feature_detectors.MAX_FEATURES` BEFORE
+  1. `MAX_KEYPOINTS` is written into `feature_detectors.MAX_FEATURES` BEFORE
      `MEMORY_PRESETS` constructs its `SuperGlueMatcher()` instances, because the matcher
      copies the value into its config in `__init__` (feature_matcher.py:1007). Applied after,
-     the detector would honour 5000 while the matcher still budgeted for 20000.
+     the detector would honour the value while the matcher still budgeted for its own. The
+     value itself is VALIS's 20000 by user ruling (results comparable with earlier runs);
+     the fixture's upstream constant is deliberately DIFFERENT so the plumbing is still
+     observable.
   2. `bound_cpu_count(task.cpus)` rebinds `multiprocessing.cpu_count` so the six VALIS
      pools that size themselves on it see the allocation register.nf passes as `--cpus`.
   3. `_inference_only` wraps the SuperPoint / SuperGlue methods in `torch.no_grad()`. VALIS
@@ -41,7 +44,9 @@ import torch
 from tests.nfmodel import processes
 
 ROOT = Path(__file__).resolve().parent.parent
-UPSTREAM_MAX_FEATURES = 20000
+# Not VALIS's real 20000: MAX_KEYPOINTS equals that today, and a fixture starting at the same
+# number could not tell "the cap reached the matcher" from "nothing happened".
+UPSTREAM_MAX_FEATURES = 12345
 
 
 @pytest.fixture
@@ -105,8 +110,10 @@ def valis_config(fake_valis):
     return vc
 
 
-def test_the_cap_is_a_real_reduction(valis_config):
-    assert 0 < valis_config.MAX_KEYPOINTS < UPSTREAM_MAX_FEATURES
+def test_the_default_is_valis_own_ceiling(valis_config):
+    """User ruling 2026-09-10: keep VALIS 1.0.0's 20000 so registrations stay comparable
+    with every earlier run. Lowering it is a results-changing decision to make explicitly."""
+    assert valis_config.MAX_KEYPOINTS == 20000
 
 
 def test_the_cap_reaches_the_module_constant(valis_config, fake_valis):
@@ -116,9 +123,8 @@ def test_the_cap_reaches_the_module_constant(valis_config, fake_valis):
 def test_the_cap_reaches_filter_features_bound_default(valis_config, fake_valis):
     """`filter_features(kp, desc, n_keep=MAX_FEATURES)` froze 20000 into its default at
     definition time; the OpenCV-detector paths call it with no argument."""
-    kp, desc = fake_valis.feature_detectors.filter_features(
-        list(range(UPSTREAM_MAX_FEATURES)), list(range(UPSTREAM_MAX_FEATURES))
-    )
+    big = list(range(max(UPSTREAM_MAX_FEATURES, valis_config.MAX_KEYPOINTS) + 1))
+    kp, desc = fake_valis.feature_detectors.filter_features(big, big)
     assert len(kp) == len(desc) == valis_config.MAX_KEYPOINTS
 
 
@@ -211,4 +217,32 @@ def test_bound_cpu_count_also_bounds_torch_threads(valis_config, monkeypatch):
         assert torch.get_num_threads() == 3
     finally:
         torch.set_num_threads(before)
+
+
+def test_apply_keypoint_cap_reaches_the_already_built_matchers(valis_config, fake_valis):
+    """The pipeline's --reg_valis_max_keypoints arrives at RUN time, after MEMORY_PRESETS
+    constructed its matchers; the runtime cap must rewrite their snapshotted config too."""
+    n = valis_config.apply_keypoint_cap(2000)
+    assert n == 2000
+    assert fake_valis.feature_detectors.MAX_FEATURES == 2000
+    for tier, row in valis_config.MEMORY_PRESETS.items():
+        assert row["matcher"].config["superpoint"]["max_keypoints"] == 2000, tier
+        assert row["num_features"] == 2000, tier
+    big = list(range(30000))
+    assert len(fake_valis.feature_detectors.filter_features(big, big)[0]) == 2000
+
+
+def test_apply_keypoint_cap_none_means_valis_default(valis_config, fake_valis):
+    valis_config.apply_keypoint_cap(2000)
+    assert valis_config.apply_keypoint_cap(None) == valis_config.MAX_KEYPOINTS == 20000
+    assert fake_valis.feature_detectors.MAX_FEATURES == 20000
+
+
+def test_register_nf_renders_the_keypoint_flag_only_when_set():
+    body = processes()["REGISTER"].script_body
+    assert re.search(
+        r"params\.reg_valis_max_keypoints != null \? \"--max-keypoints \$\{params\.reg_valis_max_keypoints\}\" : null",
+        body,
+    ), "register.nf no longer renders --max-keypoints from params.reg_valis_max_keypoints"
+    assert '"--max-keypoints"' in (ROOT / "bin" / "register.py").read_text()
 
