@@ -1,0 +1,177 @@
+nextflow_process {
+
+    name "Test EXPORT_SPATIALDATA process"
+    script "modules/local/export_spatialdata.nf"
+    process "EXPORT_SPATIALDATA"
+
+    tag "modules"
+    tag "modules_local"
+    tag "export_spatialdata"
+
+    // The meta MUST carry pixel_size. EXPORT_SPATIALDATA is handed a CSV and a
+    // pyramid, never the source image, so it cannot resolve params.pixel_size ==
+    // 'auto' itself; it renders meta.pixel_size, and a hand-built meta without it
+    // renders the literal `null` (documented in postprocessing.nf.test).
+    def fullInputs = { String pd ->
+        """
+        input[0] = [
+            [ patient_id: 'P001', pixel_size: 0.325 ],
+            file('${pd}/tests/testdata/sample_merged_quant.csv', checkIfExists: true),
+            file('${pd}/tests/testdata/sample_contours.json', checkIfExists: true),
+            file('${pd}/tests/testdata/sample_contours.json', checkIfExists: true),
+            file('${pd}/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+            file('${pd}/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true),
+            file('${pd}/tests/testdata/P001_pyramid.ome.tiff', checkIfExists: true)
+        ]
+        input[1] = file('${pd}/tests/testdata/sample_seg_qc.json', checkIfExists: true)
+        input[2] = file('${pd}/tests/testdata/sample_reg_residuals.csv', checkIfExists: true)
+        """
+    }
+
+    test("Should emit the patient zarr with a .zgroup, a size log and versions - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process { fullInputs.call("$projectDir") }
+        }
+
+        then {
+            assert process.success
+            def zarr = process.out.zarr.get(0).get(1).toString()
+            assert zarr.endsWith('spatialdata/P001.zarr')
+            assert new File(zarr, '.zgroup').exists()
+            assert process.out.size_log.get(0).toString().endsWith('P001.EXPORT_SPATIALDATA.size.csv')
+            assert snapshot(process.out.versions).match()
+        }
+    }
+
+    test("Should render every default flag: nucleus contours on, image off, residual join 15.0 - rendered command") {
+
+        // No options "-stub". export_spatialdata.py needs the spatialdata stack,
+        // absent locally; assertions read .command.sh only.
+        tag "stub"
+
+        when {
+            process { fullInputs.call("$projectDir") }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_spatialdata.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--quant-csv sample_merged_quant.csv') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--contours-json sample_contours.json') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--cell-mask P001_cell_mask.tif') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nuclei-mask P001_nuclei_mask.tif') }, rendered.join(' --- ') },
+                // quantify_compartments defaults true -> the nucleus contours flag, and it names
+                // the stageAs alias, not the source filename.
+                { assert rendered.every { it.contains('--nucleus-contours-json nucleus_contours.json') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--include-image') },
+                    "spatialdata_include_image defaults false: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--qc-json sample_seg_qc.json') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--reg-residuals sample_reg_residuals.csv') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--patient-id P001') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--pixel-size 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--residual-join-max-px 15.0') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('-o spatialdata/P001.zarr') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --include-image --pyramid when spatialdata_include_image is on - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                spatialdata_include_image = true
+            }
+            process { fullInputs.call("$projectDir") }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_spatialdata.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--include-image --pyramid P001_pyramid.ome.tiff') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should drop the nucleus contours flag when quantify_compartments is off - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                quantify_compartments = false
+            }
+            process { fullInputs.call("$projectDir") }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_spatialdata.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { !it.contains('--nucleus-contours-json') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should drop --qc-json and --reg-residuals when those inputs are empty - rendered command") {
+
+        // The two optional path inputs are the null-object seam: a run with reg_qc=0
+        // has no seg-QC JSON and no residuals, and the flags must vanish rather than
+        // render an empty path.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', pixel_size: 0.325 ],
+                    file('$projectDir/tests/testdata/sample_merged_quant.csv', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_pyramid.ome.tiff', checkIfExists: true)
+                ]
+                input[1] = []
+                input[2] = []
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_spatialdata.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { !it.contains('--qc-json') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--reg-residuals') }, rendered.join(' --- ') }
+            )
+        }
+    }
+}
