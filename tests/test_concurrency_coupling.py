@@ -65,14 +65,24 @@ def test_no_per_process_cap_reads_the_bare_param():
     # nextflow.config here, and modules.config is asserted to hold NONE.
     offenders = []
     found_any = False
-    for selector, expr in re.findall(r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*(.+?)\s*\}", CFG):
+    for selector, expr in re.findall(
+        r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*(.+?)\s*\}", CFG
+    ):
         found_any = True
         normalised = re.sub(r"\s+", " ", expr.strip())
         if not _CANONICAL_MAX_FORKS_RE.match(normalised):
             offenders.append(f"{selector}: {normalised!r}")
-    stray = [b.selector for b in with_name_blocks() if re.search(r"^\s*maxForks\s*=", b.body, re.M)]
-    assert not stray, f"conf/modules.config must not assign maxForks (froze before profiles): {stray}"
-    assert found_any, "expected per-process maxForks overrides in nextflow.config's concurrency block"
+    stray = [
+        b.selector
+        for b in with_name_blocks()
+        if re.search(r"^\s*maxForks\s*=", b.body, re.M)
+    ]
+    assert not stray, (
+        f"conf/modules.config must not assign maxForks (froze before profiles): {stray}"
+    )
+    assert found_any, (
+        "expected per-process maxForks overrides in nextflow.config's concurrency block"
+    )
     assert not offenders, (
         "per-process maxForks must be exactly `Math.min(<cap>, (params.max_forks != "
         "null ? params.max_forks : params.concurrency) as int)` (only <cap> may vary "
