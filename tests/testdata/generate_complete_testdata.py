@@ -1017,11 +1017,17 @@ print("  Created sample_reg_residuals.csv")
 # the only consumer. Reuses P001's own anatomy (defined in section 1 above) so
 # the fixture is patient-consistent, and carries PhysicalSizeX/Y=0.325um to
 # match every other P001 checkpoint row's pixel_size. Two levels via subIFDs,
-# same pattern as fmt_pyramid.ome.tiff (section 11a) below.
+# same subIFD construction as fmt_pyramid.ome.tiff (section 11a) below -- but
+# its own dedicated RNG stream, NOT _img_rng: this block sits between an
+# earlier _img_rng consumer and the P900 shipped-defaults fixtures further
+# down (section 9), which also draw from _img_rng, so reusing it here would
+# shift every later _img_rng draw and rewrite fixtures this block has nothing
+# to do with. Same reasoning as _seg_rng's own comment below.
+_p001_pyramid_rng = np.random.default_rng(102)
 _p001_pyramid = np.stack(
     [
-        _render_channel(p001_anatomy, (128, 128), (0, 0), 1.0, _img_rng, True),
-        _render_channel(p001_anatomy, (128, 128), (0, 0), 0.5, _img_rng, True),
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 1.0, _p001_pyramid_rng, True),
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 0.5, _p001_pyramid_rng, True),
     ],
     axis=0,
 )
