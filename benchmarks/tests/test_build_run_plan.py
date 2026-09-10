@@ -557,28 +557,6 @@ def test_project_sweep_enables_qc_signals():
 # below, not a silent pass -- the same shrink-only discipline the debt allowlists in
 # tests/ follow. A stale exemption is how the seg_method desync survived.
 BASELINE_DEVIATIONS = {
-    "cleanup_level": (
-        "The pipeline ships 'final' (publish final artifacts only); the sweep pins "
-        "'none'. The analysis layer READS published intermediates -- "
-        "analysis/lib/quality.py::_cell_masks rglobs the run's out/ for "
-        "*_cell_mask.tif, and 'segmentation' is an INTERMEDIATE kind "
-        "(Layout.FINAL_KINDS), so at the shipped default those masks are never "
-        "published and the cell-count metric silently returns no rows while every "
-        "run exits 0. `registered/` is an INTERMEDIATE_KIND for the same reason, so "
-        "<patient>/registered/summary/*.csv -- which "
-        "benchmarks/analysis/lib/quality.py:142 globs to build the "
-        "registration-quality table -- is not published at 'final' either, and a "
-        "swept arm there would report an empty table while exiting 0, exactly like "
-        "cleanup_work. Benchmarking 'final' is worth doing one day, but it needs an "
-        "analysis that does not depend on the files it removes.\n"
-        "THIS ENTRY IS THE ONLY HOME FOR THAT REASON, and it was briefly not: the "
-        "benchmarking branch listed cleanup_level in NOT_SWEPT while the remediation "
-        "branch moved it here, and the merge of the two carried BOTH -- a param at "
-        "once pinned in the baseline and excused as never set. It is not an excuse; "
-        "it is a DEVIATION, because sweep.yaml really does set it. "
-        "test_not_swept_registry_has_no_stale_entries is what caught the duplicate, "
-        "and it does not run on dev -- this merge was the first moment it could."
-    ),
 }
 
 

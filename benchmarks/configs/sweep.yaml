@@ -209,9 +209,12 @@ baseline:
                                       # renders (modules/local/generate_registration_qc.nf). Pure QC
                                       # cost — it changes no measurement, only the rendered overlay.
   # --- output cleanup ---
-  cleanup_level: none                 # NOT the pipeline default ('final'), and pinned in the BASELINE
-                                      # rather than swept as an axis, so contract.axes() correctly
-                                      # excludes it and every run shares the value.
+  cleanup_level: none                 # The pipeline default since 2026-09-10 (it was 'final' before),
+                                      # pinned in the BASELINE rather than swept as an axis, so
+                                      # contract.axes() excludes it and every run shares the value.
+                                      # Kept explicit: the analysis layer reads published intermediates
+                                      # (segmentation masks, registered/summary/*.csv), so 'final' would
+                                      # empty its tables while every run exits 0.
                                       #
                                       # The analysis layer READS published intermediates. Concretely,
                                       # analysis/lib/quality.py::_cell_masks rglobs the run's out/ for
