@@ -109,25 +109,34 @@ Verify the whole harness with no data at all:
   - `segmentation_grid:` — pins `seg_method` per backend and crosses that backend's own knobs
     (StarDist tile grid; InstanSeg tile size × batch size; CellSAM block size × bbox threshold).
     All three shipped backends are covered.
-  - `registration_method_grid:` — pins `registration_method` and crosses that method's knobs.
-    **One grid, both methods, at equal dimensionality** — 3 knobs × 3 levels = **27 cells each**:
-    `valis` crosses `memory_mode` × `reg_micro_reg` × `reg_max_image_dim`; `tiled`/STARE crosses
-    `reg_tiled_tile` × `reg_tiled_gate_tre` × `reg_tiled_coarse_max_dim`. The last knob of each
-    pair is the same thing for its method — the resolution the global transform is solved at —
-    and both bracket their shipped default in both directions.
+  - `registration_method_grid:` — pins `registration_method` and crosses that method's **tier**
+    with its **refinement knob**. **One grid, both methods, at equal dimensionality** — 2 knobs ×
+    3 levels = **9 cells each**: `valis` crosses `memory_mode` {low, medium, high} ×
+    `reg_micro_reg` {0, 1, 2}; `tiled`/STARE crosses `reg_tiled_mode` {low, medium, high} ×
+    `reg_tiled_gate_tre` {0.5, 1.0, 2.0}. Both tiers are the same three-rung resolution ladder
+    (high → medium → low = 2048 → 1024 → 512 px; VALIS uses SuperPoint+SuperGlue at every rung, STARE's
+    row moves tile, halo, out_tile, coarse anchor and upsample together — `lib/RegPresets.groovy`),
+    so `low` against `low` is the same question asked of both methods. `reg_max_image_dim`
+    (VALIS, ungated, live at every tier) is an OFAT axis.
 
-    **This used to be asymmetric, and the fix is the reason the grid holds both methods.** VALIS's
-    knobs were split across a VALIS-only `registration_param_grid` (2 of them) and a flat
-    `axes:` entry for `reg_max_image_dim` (the third, varied at *one* point of the other two),
-    which measured VALIS on **11 of its 27 cells** against STARE's full 27 — never more than two
-    knobs off-default at once, where STARE had eight cells with all three. That confounds "which
-    method wins" with "which method got more cells", and the direction flips with the estimator
-    (best-cell flatters the method with more draws; mean-over-cells flatters the method whose
-    cells cluster near its default). `test_project_sweep_backends_are_crossed_at_equal_dimensionality`
-    now enforces equal knob count, equal levels, and a hole-free product.
-    `test_project_stare_resolution_axis_mirrors_the_valis_one` still checks the per-axis
-    bracketing — it compares *marginals*, which is why it passed throughout the period the
-    *joint* coverage was broken.
+    **Why the tier and not the knobs (2026-09-10).** The grid used to pin `reg_tiled_mode=custom`
+    and cross `reg_tiled_tile` × `reg_tiled_gate_tre` × `reg_tiled_coarse_max_dim` (27 cells)
+    against VALIS's `memory_mode` × `reg_micro_reg` × `reg_max_image_dim` (27). Equal in count —
+    but STARE's shipped presets never ran: `custom` starts from the `high` row, so only the
+    (2048, 2048) cell was a tier; the 1024 cell kept `high`'s halo/out_tile/upsample and 512 was
+    not a level. The tier knobs are tier-owned (`ParamUtils.validateRegPresets` refuses them under
+    any tier but `custom`), so a tier axis and a knob cross cannot share a grid; the tier won,
+    because it is what an operator chooses and what the real-sample arms compare.
+
+    **The older asymmetry this grid fixed still matters, and is still guarded.** VALIS's knobs
+    were once split across a VALIS-only grid and a flat `axes:` entry, measuring VALIS on 11 of
+    its 27 cells against STARE's full 27 — "which method wins" confounded with "which method got
+    more cells", with the direction flipping by estimator. `test_project_sweep_backends_are_crossed_at_equal_dimensionality`
+    enforces equal knob count, equal levels and a hole-free product;
+    `test_project_tiers_are_crossed_on_the_same_rungs` enforces that the first knob of each entry is
+    its tier, that both list the full shipped ladder, that the two ladders resolve to the same
+    pixel sizes (read from `RegPresets.groovy` and `valis_config.py`), and that no tier-owned knob
+    is crossed beside a tier.
 
     STARE has a single execution shape (the per-tile fan-out
     `TILED_COARSE`/`TILED_REG_TILE`/`TILED_SOLVE`/`TILED_STITCH`); the `reg_tiled_fanout` flag and

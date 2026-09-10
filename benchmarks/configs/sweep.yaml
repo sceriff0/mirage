@@ -87,8 +87,8 @@ baseline:
                                       # accurate than the shipped config. The baseline must BE the shipped
                                       # config, so this tracks nextflow.config and nothing else.
                                       # Replaces the old boolean skip_micro_registration (removed on main);
-                                      # crossed with memory_mode AND reg_max_image_dim by
-                                      # registration_method_grid.valis (full 3x3x3).
+                                      # crossed with memory_mode by registration_method_grid.valis
+                                      # (tier x depth, 3x3).
   reg_tiled_mode: high                # STARE cost/accuracy tier (high|medium|low|custom), pipeline default.
                                       # This is now the SHIPPED default for the tier-owned knobs below —
                                       # they are null in nextflow.config and take their values from this
@@ -123,13 +123,15 @@ baseline:
                                       # VALIS accuracy/cost tradeoff — every image is downscaled to fit
                                       # this before feature detection, so it sets both registration
                                       # runtime and the resolution the transform is solved at.
-                                      # Live at this baseline (registration_method=valis).
+                                      # Live at this baseline (registration_method=valis); an OFAT
+                                      # axis above, ungated so legal at every tier.
   reg_tiled_coarse_max_dim: null      # STARE coarse-anchor thumbnail, longest side (px). null = from
-                                      # reg_tiled_mode (high -> 4096), which is the pipeline
+                                      # reg_tiled_mode (high -> 2048, RegPresets.STARE), the pipeline
                                       # default. The resolution M0 is solved at — STARE's counterpart to
-                                      # reg_max_image_dim. Crossed by registration_method_grid.tiled's
-                                      # coarse_res sub-grid; declared here for column uniformity, and
-                                      # inert at this baseline cell (registration_method=valis).
+                                      # reg_max_image_dim. TIER-OWNED: it moves with reg_tiled_mode,
+                                      # which registration_method_grid.tiled crosses, so it is never
+                                      # set directly here (validateRegPresets would refuse it under a
+                                      # tier). Declared for column uniformity; inert at this baseline.
   # The two STARE control-point gates. PINNED AT THE DEFAULT, DELIBERATELY NOT SWEPT.
   # They are ACCURACY knobs with no cost signature -- the phase correlation they gate on
   # has already been computed by the time either applies, so neither moves memory or
@@ -277,11 +279,15 @@ axes:
   seg_qc_match_radius_factor: [1.0, 1.5, 2.0]     # match radius x median nuclear radius. Brackets the
                                                   # default in both directions, as the STARE/VALIS
                                                   # resolution axes do.
-  # NOTE — NO registration knob is an OFAT axis, for EITHER method. registration_method_grid below
-  # crosses each method's own three knobs in full. reg_max_image_dim used to be a flat axis here and
-  # was moved into that grid: as an OFAT axis it varied only at the baseline (memory_mode=high,
-  # reg_micro_reg=1), which measured VALIS's dominant accuracy knob at ONE point of the other two
-  # while STARE's counterpart was measured at all nine. See the grid's header.
+  # --- registration: the one ungated VALIS knob that is not a tier ---
+  reg_max_image_dim:          [2000, 4000, 8000]  # VALIS's max processing dimension (px); brackets the
+                                                  # default 4000. OFAT at the baseline tier since
+                                                  # 2026-09-10 -- it used to be the third knob of the
+                                                  # registration_method_grid cross; see that grid's
+                                                  # header for why the tier took its place.
+  # NOTE — every OTHER registration knob lives in registration_method_grid below, which crosses each
+  # method's TIER with its REFINEMENT knob at the same dimensionality. A method-specific knob varied
+  # off the other method's baseline would be a no-op run.
   # NOTE — registration_method is NOT an OFAT axis either: it is the key of that grid, each method run
   # with its OWN live knobs (a tiled-only knob off the VALIS baseline would be a no-op).
   # NOTE — seg_method and its per-method params (seg_n_tiles_*, seg_cellsam_*, seg_instantseg_*) are NOT
@@ -312,113 +318,56 @@ segmentation_grid:
 # registration axes this needs a --paired matrix (a moving panel to register).
 #
 # ============================ THE SYMMETRY RULE ============================
-# EACH METHOD'S ENTRY MUST CROSS THE SAME NUMBER OF KNOBS AT THE SAME NUMBER OF LEVELS.
-# Not a style preference — it is what makes the head-to-head readable at all.
+# EACH METHOD'S ENTRY MUST CROSS THE SAME NUMBER OF KNOBS AT THE SAME NUMBER OF LEVELS, AND THE
+# FIRST KNOB OF EACH IS ITS TIER, AT THE SAME THREE RUNGS.
 #
-# This grid used to hold `tiled` alone, with VALIS's knobs split across two other structures:
-# registration_param_grid crossed memory_mode x reg_micro_reg (9 cells at ONE resolution) and
-# reg_max_image_dim sat in flat `axes:` (3 values at ONE memory_mode/micro_reg). Both backends have
-# three knobs at three levels — 27 possible cells each — but the measured coverage was:
+# Both backends ship a three-rung preset ladder over the same vocabulary (RegPresets.MODES):
 #
-#     STARE  27/27   full cube; up to 3 knobs off-default simultaneously (8 such cells)
-#     VALIS  11/27   a 3x3 plane at reg_max_image_dim=4000, plus a 1-D spur through (high, 1);
-#                    NEVER more than 2 knobs off-default at once; all 16 missing cells vary
-#                    reg_max_image_dim, which was measured at exactly ONE (memory_mode, micro) point
+#     tier     VALIS `memory_mode` (bin/utils/valis_config.py)      STARE `reg_tiled_mode` (lib/RegPresets.groovy)
+#     high     SuperPoint+SuperGlue at 2048 px (detect + non-rigid)  tile 2048, halo 256, out_tile 1024, coarse 2048, upsample 10
+#     medium   same matcher at 1024 px                               tile 1024, halo 192, out_tile 768, coarse 1024, upsample 10
+#     low      same matcher at 512 px                                tile 512,  halo 128, out_tile 512, coarse 512,  upsample 5
 #
-# That confounds "which method wins" with "which method got more cells", and the direction flips with
-# the estimator: a BEST-CELL comparison flatters STARE (a min over 27 noisy draws beats a min over 11,
-# and VALIS's optimum may sit in an unmeasured cell — memory_mode low/high are DIFFERENT MATCHERS, so
-# a matcher x resolution interaction is plausible and was unobservable), while a MEAN-OVER-CELLS
-# comparison flatters VALIS (9 of its 11 cells sat at its default resolution; 8 of STARE's 27 have all
-# three knobs off-default and drag its mean down). Neither estimator was safe.
+# i.e. since 60f624d7 (VALIS: one size per tier, same matcher throughout) both tiers are pure
+# RESOLUTION LADDERS on the same 2048/1024/512 rungs. The tier is therefore the like-for-like axis:
+# `memory_mode=low` against `reg_tiled_mode=low` is the same question asked of both methods. The
+# second knob of each is its REFINEMENT DEPTH: VALIS's reg_micro_reg (0 none | 1 micro-rigid | 2 +
+# micro non-rigid) and STARE's reg_tiled_gate_tre (the rigid-stage TRE above which a tile gets
+# non-rigid refinement -- lower = more tiles refined). 3 x 3 = 9 cells per method, 18 in all.
 #
-# test_project_sweep_backends_are_crossed_at_equal_dimensionality enforces the rule directly. The older
-# test_project_stare_resolution_axis_mirrors_the_valis_one checked that each method's resolution axis
-# was SWEPT and BRACKETED its default — true of both, and it passed throughout. It compares MARGINALS;
-# this asymmetry lived in the JOINT coverage, one level up from what that guard can see.
-# ===========================================================================
+# WHY NOT THE KNOB CROSS THIS GRID USED TO BE (2026-09-10). The previous `tiled` entry pinned
+# reg_tiled_mode=custom and crossed reg_tiled_tile x reg_tiled_gate_tre x reg_tiled_coarse_max_dim
+# (27 cells) against VALIS's memory_mode x reg_micro_reg x reg_max_image_dim (27). Equal in count,
+# but the STARE PRESETS NEVER RAN: `custom` starts from the high row, so the (2048, 2048) cell was
+# `high` and nothing else was a tier -- the 1024/1024 cell kept high's halo/out_tile/upsample, and
+# 512 was not a level at all. A sweep that prices a method's shipped configurations must run them.
+# The tier knobs (tile, coarse_max_dim, halo, out_tile, upsample) are TIER-OWNED --
+# ParamUtils.validateRegPresets refuses a per-knob override under any tier but `custom` -- so a
+# tier axis and a knob cross cannot live in one grid; the tier axis won, because it is what an
+# operator actually chooses and what the real-sample arms already compare (docs/benchmarks_real.md).
 #
-# reg_tiled_tile is THE fairness / granularity knob: it sets both the tile core size AND the mesh grid
-# resolution (nextflow.config), so a finer grid gives STARE more local (piecewise) deformation freedom.
-# reg_tiled_gate_tre gates which tiles get non-rigid refinement (accuracy vs cost).
+# reg_max_image_dim (VALIS, ungated, live at every tier) therefore goes back to flat `axes:` as an
+# OFAT knob, varied at the baseline tier. That is a deliberate downgrade from its former place in
+# the cross, recorded here so it is not mistaken for the 11-of-27 asymmetry this grid once had:
+# THAT asymmetry was two methods crossed at different dimensionality; this grid crosses both at
+# 2 x 3, and the resolution question is now carried by the tier, on identical rungs, for both.
 #
-# reg_tiled_coarse_max_dim is the resolution the GLOBAL M0 anchor is solved at — STARE's counterpart
-# to VALIS's reg_max_image_dim, and the dominant runtime-and-accuracy axis of the method.
+# test_project_sweep_backends_are_crossed_at_equal_dimensionality enforces the shape (same knob
+# count, same levels, no holes). test_project_tiers_are_crossed_on_the_same_rungs enforces that
+# the first knob of each method is its tier and that both list the same three rungs.
 #
-# There is no execution-shape axis: STARE has ONE shape, the per-tile Nextflow fan-out
-# (TILED_COARSE -> TILED_REG_TILE -> TILED_SOLVE -> TILED_STITCH). The old boolean that selected a
-# single-task TILED_REGISTER instead was removed upstream, because that path could not bound its
-# memory. Every tiled run in this sweep therefore exercises the four fan-out processes.
-#
-# Held at pipeline defaults: reg_tiled_halo / reg_tiled_upsample (secondary accuracy) and
-# reg_tiled_out_tile (write-side I/O) — add them here if a curve for them is ever needed.
+# Held at pipeline defaults, deliberately: the tier-owned STARE knobs (they move WITH the tier);
+# the two STARE control-point gates (see the baseline block: accuracy knobs with no cost
+# signature); reg_tiled_nuclear_index. There is no execution-shape axis -- STARE has ONE shape,
+# the per-tile fan-out TILED_COARSE -> TILED_REG_TILE -> TILED_SOLVE -> TILED_STITCH -- and no
+# coarse front-end axis: COARSE is unconditionally DISK+LightGlue (:fire: 5f7f986 deleted the
+# classical front-ends and the param that selected them), so this sweep cannot say what the
+# learned matcher bought over them; that is answerable only against pipeline history.
 registration_method_grid:
-  # VALIS — the shipped default backend. Three knobs, three levels, FULL CROSS = 27 cells.
-  #
-  # None of these are tier-owned, so no `custom` pin is needed (unlike the tiled entry below):
-  # memory_mode IS the tier here, and reg_max_image_dim is ungated and live at every tier.
-  # reg_valis_max_processed_dim / reg_valis_max_non_rigid_dim ARE tier-owned and are deliberately
-  # NOT crossed here — varying them would require memory_mode=custom, which would collapse the
-  # memory_mode axis this grid exists to measure.
   valis:
-    # low = BRISK/RANSAC, high = SuperPoint/SuperGlue — DIFFERENT FEATURE MATCHERS, not one matcher
-    # at two resolutions. medium interpolates cost between them. This is why the interaction with
-    # reg_max_image_dim below is plausible rather than pedantic.
-    memory_mode:       [low, medium, high]
-    # micro-registration DEPTH: 0=none | 1=micro-rigid only | 2=+micro non-rigid. A depth, not a
-    # flag, which is why it is 3 levels and not 2.
-    reg_micro_reg:     [0, 1, 2]
-    # VALIS's counterpart to STARE's reg_tiled_coarse_max_dim: the resolution the transform is
-    # solved at, and the dominant runtime-and-accuracy axis of the method. Brackets its shipped
-    # default (4000) in both directions. Doubling it roughly quadruples the pixels VALIS solves on,
-    # so it is simultaneously the dominant runtime axis AND an accuracy axis (reg_qc=2 scores it) —
-    # read the two together.
-    reg_max_image_dim: [2000, 4000, 8000]
-
+    memory_mode:       [low, medium, high]    # the tier: 512 / 1024 / 2048 px, one matcher throughout
+    reg_micro_reg:     [0, 1, 2]              # refinement DEPTH: none | micro-rigid | + micro non-rigid
   tiled:
-    # reg_tiled_tile and reg_tiled_coarse_max_dim are TIER-OWNED: ParamUtils.validateRegPresets
-    # rejects a per-knob override under any tier other than 'custom', so this grid must pin it or
-    # every run here fails validation before the first process starts. 'custom' means "start from
-    # the high row and apply what is set", so the 2048 / 4096 cells below remain exactly the
-    # shipped values — pinning custom changes which runs are LEGAL, not what they measure.
-    reg_tiled_mode:     [custom]
-    reg_tiled_tile:     [1024, 2048, 4096]         # grid granularity / mesh resolution (px) — the fairness knob
-    reg_tiled_gate_tre: [0.5, 1.0, 2.0]            # per-tile non-rigid refine gate (rigid-stage TRE, px)
-    # STARE's counterpart to VALIS's reg_max_image_dim: the resolution the GLOBAL M0 transform is
-    # solved at. Both are the dominant runtime-and-accuracy axis of their method, so sweeping one
-    # and not the other would compare a TUNED VALIS against an UNTUNED STARE. Brackets the default
-    # in both directions, mirroring reg_max_image_dim's [2000, 4000, 8000] around its 4000.
-    #
-    # RE-BASED [2048, 4096, 8192] -> [1024, 2048, 4096] when the shipped default moved 4096 -> 2048
-    # (RegPresets.STARE.high.coarse_max_dim). The old list no longer bracketed the default DOWNWARD
-    # at all -- 2048 was its minimum -- so it measured only the expensive half of the curve and
-    # test_project_stare_resolution_axis_mirrors_the_valis_one failed on exactly that.
-    #
-    # COST NOTE — THE BINDING CONSTRAINT IS NOW MEMORY, NOT WALLTIME, and this replaces the old
-    # classical-detector note (48 s @ 1024 px, 255 s @ 2048 px, peak flat at ~0.9 GB). COARSE is a U-Net now
-    # whose activation memory is linear in thumbnail AREA. Measured on the pinned stack, 3.03 GB at
-    # 512 px and 8.78 GB at 1024 px, i.e. GB ~= 1.1 + 7.3*Mpx -- which puts 4096 px at ~123 GB and
-    # is precisely why the shipped tier dropped to 2048. TILED_COARSE's memory request derives from
-    # this same column, so the 4096 cell ASKS for ~123 GB and is then clamped by params.max_memory;
-    # on a site whose ceiling is below that it will OOM-retry up the ramp and then fail. Drop the
-    # 4096 point (leaving no upward bracket, so relax the guard with it) if that is your cluster.
-    # 8192 would ask ~490 GB and is not a runnable cell on any site here, which is why it is gone.
-    reg_tiled_coarse_max_dim: [1024, 2048, 4096]   # M0 anchor thumbnail, longest side (px)
-    # THE COARSE FRONT-END AXIS IS GONE, and cannot come back in this form.
-    #
-    # It listed the three classical front-ends, crossing the three axes above and tripling this
-    # grid from 27 to 81 runs. Its stated purpose was to bracket the learned matcher -- then
-    # excluded, because it needed a separate stare-ml container and its matching body still
-    # raised NotImplementedError -- against two front-ends that "cost NO new dependency".
-    #
-    # Every premise of that has inverted. :fire: 5f7f986 deleted those three front-ends
-    # AND the param that selected them; :package: 0f4c649 folded torch+kornia and the
-    # DISK/LightGlue weights into the :tiled image, so there is no stare-ml container to be outside
-    # of (containers/stare-ml/ is deleted) and no NotImplementedError to wait on. COARSE is now
-    # unconditionally DISK+LightGlue. The axis has ONE value, which is not an axis.
-    #
-    # What that costs this benchmark: there is no longer any front-end comparison, so this sweep
-    # cannot say what the learned matcher bought over the classical ones. That question is now
-    # answerable only against pipeline history, not by a cell in this grid.
-    #
-    # The 81 -> 27 run count that follows is why docs/benchmarks_real.md's totals were re-derived.
+    reg_tiled_mode:    [low, medium, high]    # the tier: RegPresets.STARE rows, 512 / 1024 / 2048 px
+    reg_tiled_gate_tre: [0.5, 1.0, 2.0]       # refinement gate: rigid-stage TRE (px) above which a
+                                              # tile is non-rigidly refined; brackets the default 1.0

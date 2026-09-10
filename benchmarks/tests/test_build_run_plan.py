@@ -342,13 +342,20 @@ def test_stare_preset_parser_actually_parses():
     assert rows["high"]["tile"] > rows["low"]["tile"], "tiers are not ordered by cost"
 
 
-def test_project_stare_resolution_axis_mirrors_the_valis_one():
-    """Both methods' transform-resolution knob must be swept, or the head-to-head is biased.
+def test_project_tiers_are_crossed_on_the_same_rungs():
+    """Both methods' TIERS must be crossed, on the same three rungs, as the first knob of each entry.
 
-    reg_max_image_dim (VALIS) and reg_tiled_coarse_max_dim (STARE) are the same thing for their
-    respective methods: the resolution the global transform is solved at, and the dominant
-    runtime-and-accuracy axis of each. Sweeping one and holding the other at its default compares
-    a TUNED VALIS against an UNTUNED STARE -- a bias that is invisible in the output tables.
+    Replaces test_project_stare_resolution_axis_mirrors_the_valis_one (2026-09-10). That guard held
+    each method's RESOLUTION KNOB (reg_max_image_dim / reg_tiled_coarse_max_dim) to be swept and to
+    bracket its default -- correct while the grid crossed knobs under `custom`, and exactly what let
+    the STARE PRESETS never run: `custom` starts from the high row, so no cell but (2048, 2048) was a
+    tier. The grid now crosses the tier itself. Since 60f624d7 both tiers are pure resolution
+    ladders on identical rungs (2048 / 1024 / 512 px, one matcher throughout on the VALIS side), so
+    `memory_mode=low` against `reg_tiled_mode=low` is the same question of both methods -- IF both
+    entries list the same rungs. This asserts that they do, that the tier is the FIRST knob of each
+    entry (so a reader of the plan sees the like-for-like axis first), that the tier axis carries
+    all three shipped rungs and never `custom` (a `custom` cell would silently be `high` with edits),
+    and that reg_max_image_dim -- ungated, live at every tier -- is an OFAT axis rather than gone.
     """
     import yaml
 
@@ -356,37 +363,74 @@ def test_project_stare_resolution_axis_mirrors_the_valis_one():
         (Path(__file__).parents[1] / "configs" / "sweep.yaml").read_text()
     )
     rmg = sweep["registration_method_grid"]
-    # BOTH now live in the same grid. reg_max_image_dim used to be read out of flat `axes:`; that
-    # is exactly the split this asymmetry hid behind, so read them the same way or the comparison
-    # is being made between two different kinds of coverage again.
-    valis_values = set(rmg["valis"].get("reg_max_image_dim", []))
-    stare_values = set(rmg["tiled"].get("reg_tiled_coarse_max_dim", []))
-    assert "reg_max_image_dim" not in sweep.get("axes", {}), (
-        "reg_max_image_dim is back in flat `axes:` — as an OFAT axis it varies at ONE "
-        "(memory_mode, reg_micro_reg) point, which is the 11-of-27 coverage this grid fixed"
+    tier_knob = {"valis": "memory_mode", "tiled": "reg_tiled_mode"}
+    assert set(rmg) == set(tier_knob), (
+        f"grid methods {sorted(rmg)} != {sorted(tier_knob)}"
     )
-    assert len(valis_values) >= 3, (
-        f"the VALIS resolution axis lost points: {sorted(valis_values)}"
+
+    rungs = {}
+    for method, knob in tier_knob.items():
+        knobs = list(rmg[method])
+        assert knobs[0] == knob, (
+            f"{method}: the tier ({knob}) must be the FIRST knob of the grid entry, got {knobs}"
+        )
+        values = rmg[method][knob]
+        assert "custom" not in values, (
+            f"{method}: `custom` is not a tier -- it is `high` plus overrides -- and must not be a "
+            "cell of a tier axis"
+        )
+        rungs[method] = tuple(values)
+
+    shipped = [m for m in ("low", "medium", "high")]
+    for method, values in rungs.items():
+        assert sorted(values) == sorted(shipped), (
+            f"{method}: tier axis {list(values)} is not the full shipped ladder {shipped}"
+        )
+    assert rungs["valis"] == rungs["tiled"], (
+        f"the two tier axes list different rungs or orders: {rungs}"
     )
-    assert len(stare_values) >= 3, (
-        "reg_max_image_dim is swept but reg_tiled_coarse_max_dim is not (or has <3 points): "
-        f"{sorted(stare_values)}"
+
+    # The rungs really are the same resolutions on both sides: RegPresets.STARE's coarse_max_dim
+    # per tier against valis_config.py's max_processed_image_dim_px per tier.
+    valis_cfg = (
+        Path(__file__).parents[2] / "bin" / "utils" / "valis_config.py"
+    ).read_text()
+    for tier in shipped:
+        stare_px = stare_preset_row(tier)["coarse_max_dim"]
+        m = re.search(
+            rf'"{tier}":\s*\{{[^}}]*?"max_processed_image_dim_px":\s*(\d+)',
+            valis_cfg,
+            re.S,
+        )
+        assert m, f"valis_config.py has no max_processed_image_dim_px for tier {tier}"
+        assert int(m.group(1)) == stare_px, (
+            f"tier {tier}: VALIS detects at {m.group(1)} px but STARE's coarse anchor is "
+            f"{stare_px} px -- the ladders have diverged, so tier-vs-tier is no longer like-for-like"
+        )
+
+    # reg_max_image_dim left the cross for flat axes; it must not have left the sweep.
+    axes = sweep.get("axes", {})
+    assert "reg_max_image_dim" in axes and len(axes["reg_max_image_dim"]) >= 3, (
+        "reg_max_image_dim must be an OFAT axis with >= 3 points now that the tier replaced it in "
+        "the cross"
     )
-    valis_base = sweep["baseline"]["reg_max_image_dim"]
-    assert min(valis_values) < valis_base < max(valis_values), (
-        f"the VALIS resolution axis must bracket its default {valis_base} in both directions "
-        f"— the same bar the STARE one is held to below: {sorted(valis_values)}"
+    base = sweep["baseline"]["reg_max_image_dim"]
+    assert min(axes["reg_max_image_dim"]) < base < max(axes["reg_max_image_dim"]), (
+        f"reg_max_image_dim's axis must bracket the default {base}: {axes['reg_max_image_dim']}"
     )
-    # The baseline leaves this null: reg_tiled_mode='high' supplies it. Compare the axis against
-    # the value a default run ACTUALLY uses -- the 'high' row -- not against the literal null.
-    assert sweep["baseline"]["reg_tiled_coarse_max_dim"] is None, (
-        "baseline now pins reg_tiled_coarse_max_dim directly; if that is deliberate it must also "
-        "pin reg_tiled_mode='custom', or ParamUtils.validateRegPresets rejects every baseline run"
-    )
-    base = stare_preset_row("high")["coarse_max_dim"]
-    assert min(stare_values) < base < max(stare_values), (
-        f"the STARE resolution axis must bracket its default {base} in both directions, "
-        f"as reg_max_image_dim does: {sorted(stare_values)}"
+    # and the tier-owned STARE knobs must NOT be crossed anywhere -- validateRegPresets would
+    # refuse them under a tier, and every tiled cell now runs under one.
+    tier_owned = {
+        "reg_tiled_tile",
+        "reg_tiled_halo",
+        "reg_tiled_out_tile",
+        "reg_tiled_coarse_max_dim",
+        "reg_tiled_upsample",
+    }
+    leaked = tier_owned & (set(rmg["tiled"]) | set(axes))
+    assert not leaked, (
+        f"tier-owned STARE knobs crossed alongside a tier axis: {sorted(leaked)} -- "
+        "ParamUtils.validateRegPresets rejects them under any tier but custom"
     )
 
 

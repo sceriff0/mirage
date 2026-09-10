@@ -44,15 +44,15 @@ vary something it does not affect — the same factoring the segmentation arms u
 Segmentation and export are not run either: nothing downstream of registration
 changes the staged registration QC. **12 arms**:
 
-- **VALIS preset × micro-depth = 9.** `memory_mode` (`low` = BRISK/RANSAC,
-  `high` = SuperPoint/SuperGlue — *different feature matchers*, not one matcher at
-  two resolutions) crossed with `reg_micro_reg` (a **depth**: 0 none, 1
-  micro-rigid, 2 + micro non-rigid). A depth is why this is 3 × 3, not 3 × 2.
-  `medium` was added alongside STARE's three tiers so both backends span three
-  cost/accuracy presets and neither is the tuned one; it is the third value the
-  synthetic sweep has always carried. Read it as a **point on the curve** rather
-  than a third comparison — `low` and `high` differ in *which matcher runs*, so
-  `medium` interpolates cost between them rather than introducing a new matcher.
+- **VALIS preset × micro-depth = 9.** `memory_mode` is a **resolution ladder** —
+  `high` / `medium` / `low` detect features and solve the non-rigid field at 2048 /
+  1024 / 512 px, with the same SuperPoint+SuperGlue matcher at every rung
+  (`bin/utils/valis_config.py`; an earlier `low` used BRISK/RANSAC, which is why older
+  notes call the tiers "different matchers") — crossed with `reg_micro_reg` (a
+  **depth**: 0 none, 1 micro-rigid, 2 + micro non-rigid). A depth is why this is
+  3 × 3, not 3 × 2. STARE's ladder is the same three rungs (`lib/RegPresets.groovy`),
+  so `low` against `low` is a like-for-like comparison — the same axis the synthetic
+  sweep's `registration_method_grid` crosses.
 - **STARE (`registration_method = tiled`) × tier = 3.** A different *backend*, not
   three more cells of the grid: `memory_mode` and `reg_micro_reg` do not exist
   there, so these arms carry neither. It fans out over `reg_tiled_mode`
@@ -61,8 +61,8 @@ changes the staged registration QC. **12 arms**:
   synthetic sweep has an explicit guard against, and which was unguarded here.
   The **tier** is the right granularity rather than the individual knobs: it is what
   an operator picks, and each row of `RegPresets.STARE` moves all five tier-owned
-  values coherently. The sweep already crosses those knobs singly over 27 cells on
-  synthetic images, where a cell is cheap; here a cell is a real WSI.
+  values coherently. The synthetic sweep crosses the same tiers with the refinement
+  gate (`reg_tiled_gate_tre`) where a cell is cheap; here a cell is a real WSI.
 ### 1b. ASHLAR — the external baseline, **4 runs**
 
 ASHLAR is not a *registration* arm: `v1.0.0` removed it as a backend
