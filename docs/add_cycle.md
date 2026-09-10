@@ -8,9 +8,9 @@ reference, segmentation mask, and old-marker quantification.
 !!! danger "Every cycle must run at `--cleanup_level none`, including the first"
     `add_cycle` re-enters the prior run's output tree: it reads `csv/registered.csv`,
     `csv/postprocessed.csv` and the per-patient `registered/` and `segmentation/`
-    artifacts. The **default** `--cleanup_level=final` publishes none of those, so a
-    cycle-1 run left at the default cannot be extended at all — and the only remedy
-    is to re-run cycle 1.
+    artifacts. `--cleanup_level=final` publishes none of those, so a cycle-1 run
+    made at that level cannot be extended at all — and the only remedy is to re-run
+    cycle 1. `none` is the shipped default since 2026-09-10; it was `final` before.
 
     This applies to the add_cycle runs themselves too, because each one is the next
     one's `--prior_outdir`. The pipeline **refuses `--mode add_cycle` at launch** at

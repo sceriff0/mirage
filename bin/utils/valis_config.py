@@ -6,40 +6,117 @@ have a single definition. `init_jvm(...)` is the shared BioFormats JVM-heap size
 `bin/warp_seg_qc.py` for the reg_qc>=2 segmentation-overlap QC.
 """
 
+import multiprocessing
 import os
+import types
 
 from valis import feature_detectors, feature_matcher
 from valis.micro_rigid_registrar import MicroRigidRegistrar
 from valis.non_rigid_registrars import OpticalFlowWarper
+
+# Keypoints kept per image, for BOTH SuperPoint (detection) and SuperGlue (matching).
+#
+# VALIS 1.0.0-1.2.0 hard-codes `feature_detectors.MAX_FEATURES = 20000` and copies it into
+# every SuperPoint / SuperGlue config at construction time (feature_detectors.py:429,
+# feature_matcher.py:1007/1220). SuperGlue's attention map and Sinkhorn matrix are QUADRATIC
+# in that count -- ~1.6 GB each per image pair at 20000 -- and serial_rigid.py matches every
+# pair concurrently (see bound_cpu_count below). That, not pixel count, is REGISTER's peak:
+# measured 2026-08-12 on whole slides at 483 GB, and again 2026-09-10 on five ~2800 px TMA
+# cores, which were OOM-killed at "Matching images 0/10" on 128 GB. A 2048 px processed
+# image cannot use 20000 keypoints for a rigid fit; 5000 is the value every preset row has
+# declared as `num_features` since the presets were written, and it cuts the per-pair
+# footprint sixteenfold. Guarded by tests/test_valis_matching_bounds.py.
+MAX_KEYPOINTS = 5000
+
+
+def _cap_valis_keypoints(n_keep):
+    """Lower VALIS's keypoint ceiling to ``n_keep`` before any detector or matcher exists.
+
+    Must run BEFORE ``MEMORY_PRESETS`` is built: ``SuperGlueMatcher()`` reads
+    ``feature_detectors.MAX_FEATURES`` in its constructor, so a cap applied later would
+    leave the matcher at 20000 while the detector honoured the cap.
+
+    Parameters
+    ----------
+    n_keep : int
+        Maximum keypoints per image.
+    """
+    feature_detectors.MAX_FEATURES = n_keep
+    # filter_features(kp, desc, n_keep=MAX_FEATURES) bound the OLD value as its default at
+    # definition time; the OpenCV-detector paths call it with no argument. Rebind it too.
+    filt = getattr(feature_detectors, "filter_features", None)
+    if isinstance(filt, types.FunctionType) and filt.__defaults__:
+        filt.__defaults__ = (n_keep,)
+
+
+_cap_valis_keypoints(MAX_KEYPOINTS)
+
+
+def bound_cpu_count(n_cpus=None):
+    """Make VALIS's parallel sections see the CPUs this task was GIVEN, not the node's.
+
+    Six places in VALIS 1.0.0 size their thread pools as
+    ``multiprocessing.cpu_count() - 1`` (serial_rigid.py:578/643 -- feature matching --
+    micro_rigid_registrar.py:294, non_rigid_registrars.py:1362, slide_io.py:903,
+    warp_tools.py:2882). ``cpu_count()`` reports the NODE's cores, so under SLURM a task
+    granted 8 CPUs on a 128-core node matches all of its image pairs at once, and the
+    per-pair SuperGlue footprint (see MAX_KEYPOINTS) is multiplied by the pair count
+    rather than by the CPU budget. Rebinding ``multiprocessing.cpu_count`` is the only
+    seam VALIS exposes; it is process-wide, which is what we want -- every VALIS pool
+    should respect the allocation.
+
+    Parameters
+    ----------
+    n_cpus : int or None
+        The task's CPU allocation (Nextflow's ``task.cpus``). ``None`` falls back to the
+        scheduler affinity mask when the platform has one, else ``os.cpu_count()``.
+
+    Returns
+    -------
+    int
+        The value ``multiprocessing.cpu_count()`` now returns. Never below 2, so that
+        VALIS's ``cpu_count() - 1`` stays a legal ``n_jobs``.
+    """
+    if n_cpus is None:
+        try:
+            n_cpus = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            n_cpus = os.cpu_count() or 1
+    bounded = max(2, int(n_cpus))
+    multiprocessing.cpu_count = lambda: bounded
+    return bounded
+
 
 # Memory mode presets — bundle feature detector, matcher, and dimension settings.
 # (Kept identical to the historical register.py MEMORY_PRESETS.)
 #
 # NOT ALL KEYS ARE LIVE. build_registrar_kwargs() below passes `feature_detector_cls`, `matcher`,
 # `max_processed_image_dim_px` and `max_non_rigid_registration_dim_px` to Valis(...). It does NOT
-# pass `num_features`, nor the 'low' row's `tile_wh` / `tile_buffer` — those are dead keys that
-# reach nothing. They are left in place rather than deleted because removing them is a behavioural
-# question (num_features would have to be threaded through the detector constructor), but there is
-# deliberately no pipeline param for them: a knob that changes nothing is worse than no knob.
+# pass the 'low' row's `tile_wh` / `tile_buffer` — those are dead keys that reach nothing, left in
+# place because removing them is a behavioural question; there is deliberately no pipeline param
+# for them: a knob that changes nothing is worse than no knob. `num_features` IS live since
+# 2026-09-10, but not through this dict: it is the one MAX_KEYPOINTS cap applied above, before
+# the matchers below are constructed, and the rows restate it only so register.py's settings log
+# prints the number that is actually in force.
 MEMORY_PRESETS = {
     "high": {
         "feature_detector_cls": feature_detectors.SuperPointFD,
         "matcher": feature_matcher.SuperGlueMatcher(),
         "max_processed_image_dim_px": 2048,
         "max_non_rigid_registration_dim_px": 2048,
-        "num_features": 5000,
+        "num_features": MAX_KEYPOINTS,
     },
     "medium": {
         "feature_detector_cls": feature_detectors.SuperPointFD,
         "matcher": feature_matcher.SuperGlueMatcher(),
         "max_processed_image_dim_px": 1024,
         "max_non_rigid_registration_dim_px": 1024,
-        "num_features": 5000,
+        "num_features": MAX_KEYPOINTS,
     },
     "low": {
         "feature_detector_cls": feature_detectors.SuperPointFD,
         "matcher": feature_matcher.SuperGlueMatcher(),
-        "num_features": 5000,
+        "num_features": MAX_KEYPOINTS,
         "max_processed_image_dim_px": 512,
         "max_non_rigid_registration_dim_px": 512,
         "tile_wh": 512,

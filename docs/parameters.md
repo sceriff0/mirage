@@ -165,7 +165,9 @@ core is typically 2000–3000 px on its long side. It describes the *data*, so i
 with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
 on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
 cores are larger and you want a finer non-rigid stage. It also lowers `REGISTER`'s
-memory request from 300 GB to 32 GB per attempt — see [Resources](resources.md).
+memory request from 300 GB to 32 GB per attempt and pins the Bio-Formats JVM heap
+flat at 8 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
+REGISTER's real peak — SuperGlue matching — lives; see [Resources](resources.md).
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first
 process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that reports
@@ -429,12 +431,14 @@ is far lower, so raising `queue_size` alone has no effect — raise `max_forks` 
 
 | Parameter | Default | Description |
 |---|---|---|
-| `cleanup_level` | `'final'` | Which published outputs a run keeps: `final` or `none`. |
+| `cleanup_level` | `'none'` | Which published outputs a run keeps: `none` (everything) or `final` (final artifacts only). |
 | `cleanup_work` | `true` | Delete the Nextflow work directory after a **successful** run. |
 
 ### `cleanup_level`
 
-At `final` — the default — a run publishes only what it was run to produce:
+At `none` — the default since 2026-09-10 (it was `final` from 2026-08-25) — a run
+publishes everything, and its output can be re-entered by `--start` or `add_cycle`.
+At `final`, the opt-in cleaning level, a run publishes only what it was run to produce:
 
 | Kept | Dropped |
 |---|---|
@@ -461,7 +465,8 @@ its `cell_csv`/`cell_geojson`/`merged_csv`/`pyramid` columns are all final artif
 but its `cell_mask` column names a segmentation mask, which is an intermediate.
 `csv/README.txt` is written instead so an empty `csv/` is not a mystery.
 
-Pass `--cleanup_level none` when this run's output will be **re-entered**:
+Keep the default `none` (or pass `--cleanup_level none` explicitly) when this run's
+output will be **re-entered**:
 
 * `--start <step>` reads the published intermediates of a previous run.
 * `--mode add_cycle` reads the prior run's `registered/` images **and** its

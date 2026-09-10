@@ -160,7 +160,7 @@ class Layout {
     /**
      * The publish leaves that survive a cleaned run.
      *
-     * At --cleanup_level=final (the DEFAULT) only these are published AT ALL — not
+     * At --cleanup_level=final (opt-in; 'none' is the default) only these are published AT ALL — not
      * published-then-deleted. publishDir uses mode: 'copy', so publishing an
      * intermediate copies it out of work/ and deleting it afterwards pays that
      * I/O in full for a file nobody ever reads. Gating the publishDir itself

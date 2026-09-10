@@ -158,7 +158,7 @@ class ParamUtils {
      *     --prior_outdir internally inconsistent and unrecoverable.
      *  3. Every checkpoint in Layout.ADD_CYCLE_CHECKPOINTS must already exist under
      *     --prior_outdir. Absence means either the prior run did not reach
-     *     postprocessing, or it ran at the default --cleanup_level, which does not
+     *     postprocessing, or it ran at --cleanup_level=final, which does not
      *     publish the intermediates add_cycle re-enters from.
      *
      * Which checkpoints those are, and where they live, is Layout's to say --
@@ -201,8 +201,8 @@ class ParamUtils {
             if (!f.exists()) {
                 throw new FileNotFoundException(
                     "mode='add_cycle': required checkpoint '${rel}' not found under --prior_outdir '${priorOutdir}'. " +
-                    "Either the prior run was not completed through postprocessing, or it ran at the " +
-                    "default --cleanup_level=final, which does not publish the intermediates add_cycle " +
+                    "Either the prior run was not completed through postprocessing, or it ran at " +
+                    "--cleanup_level=final, which does not publish the intermediates add_cycle " +
                     "re-enters from. Re-run the prior cycle with --cleanup_level none.")
             }
         }
@@ -322,9 +322,9 @@ class ParamUtils {
         if (!Layout.CLEANUP_LEVELS.contains(level))
             throw new IllegalArgumentException(
                 "--cleanup_level '${level}' is not valid. Valid: " +
-                "${Layout.CLEANUP_LEVELS}. 'final' (the default) publishes only " +
-                "${Layout.FINAL_KINDS} plus run-level ${Layout.SURVIVING_RUN_LEVEL}; " +
-                "'none' publishes everything.")
+                "${Layout.CLEANUP_LEVELS}. 'none' (the default) publishes everything; " +
+                "'final' publishes only ${Layout.FINAL_KINDS} plus run-level " +
+                "${Layout.SURVIVING_RUN_LEVEL}.")
 
         // add_cycle must PRODUCE a re-enterable output tree, not merely consume one.
         // The next cycle reads THIS run's registered/ images and segmentation/ masks,

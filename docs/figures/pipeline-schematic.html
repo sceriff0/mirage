@@ -583,7 +583,7 @@
       <p>Per patient, under <code>--outdir</code>. The GeoJSON and the OME-TIFF are the primary artifacts — they
         are what QuPath and FlowPath open. The SpatialData store is additive: the same run, readable by
         <code>scanpy</code>, <code>squidpy</code>, <code>napari-spatialdata</code> and Vitessce without conversion.
-        <b>What survives is itself a parameter.</b> At <code>--cleanup_level final</code> (the default) the
+        <b>What survives is itself a parameter.</b> At <code>--cleanup_level final</code> (opt-in; <code>none</code> is the default) the
         intermediates are never published at all rather than published-then-deleted, since <code>publishDir</code>
         copies and a delete would pay for a copy nobody reads. That makes <code>none</code> load-bearing rather
         than a convenience: <code>--start</code> and <code>mode=add_cycle</code> both RE-ENTER a prior run's
@@ -832,7 +832,7 @@
           <tr><td class="k">pyramid_resolutions</td><td class="v">8</td><td class="d">pyramid levels, zstd</td></tr>
           <tr><td class="k">embed_masks</td><td class="v">false</td><td class="d">masks as 2nd OME series</td></tr>
           <tr><td class="k">enable_trace</td><td class="v">true</td><td class="d">per-process trace + size logs</td></tr>
-          <tr><td class="k">cleanup_level</td><td class="v">final</td><td class="d">final | none — 'none' required by add_cycle</td></tr>
+          <tr><td class="k">cleanup_level</td><td class="v">none</td><td class="d">none | final — 'none' required by add_cycle</td></tr>
           <tr><td class="k">cleanup_work</td><td class="v">true</td><td class="d">empty work/ at teardown; a FAILED run keeps it</td></tr>
           <tr><td class="k">skip_seg_quality_eval</td><td class="v">true</td><td class="d">CSE scoring OFF; -profile seg_quality</td></tr>
           <tr><td class="k">max_memory / max_cpus</td><td class="v nul">required</td><td class="d">ceilings — no default; a profile must set them</td></tr>

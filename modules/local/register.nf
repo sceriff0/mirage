@@ -143,6 +143,7 @@ process REGISTER {
 ${valis_overrides}
         --micro-reg ${micro_reg} \\
         --jvm-heap-gb ${jvm_heap_gb} \\
+        --cpus ${task.cpus} \\
         ${stage_ckpt} \\
         ${args}
 

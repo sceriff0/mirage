@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`cleanup_level` defaults to `'none'`** (it was `'final'` since 2026-08-25). A run's
+  output is re-enterable by `--start` and `add_cycle` without opting in; `'final'` is now
+  the opt-in cleaning level, with the same publish gates and the same launch-time refusal
+  of `add_cycle`. `conf/test.config` keeps its explicit `'none'` pin.
+- **The `tma` profile pins the Bio-Formats JVM heap flat at 8 GiB** (`reg_jvm_heap_gb`)
+  instead of `register.nf`'s `32 + 16 × attempt` ramp, which under the profile's 32 GB
+  request handed Java 28 of 32 GiB on attempt 1 and left 4 for the Python side.
+
 ### Fixed
+
+- **`REGISTER` OOM on small inputs: the peak was SuperGlue matching, not pixels.** Five
+  ~2800 px TMA cores climbed the 32/64/96/128 GB ramp and died at "Matching images 0/10"
+  on every attempt (2026-09-10), because VALIS 1.0.0 keeps 20000 keypoints per image
+  (quadratic SuperGlue cost) and matches every pair at once on `cpu_count() - 1` threads
+  — the node's cores, not the task's. `bin/utils/valis_config.py` now caps keypoints at
+  5000 (`MAX_KEYPOINTS`, applied before the preset matchers are built so SuperGlue sees
+  it too) and `register.py --cpus` (passed `task.cpus` by `register.nf`) bounds every
+  VALIS thread pool to the allocation. Guarded by `tests/test_valis_matching_bounds.py`
+  and a rendered-command case in `tests/modules/register.nf.test`.
 
 - **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,
   `max_forks` or `queue_size` was silently ignored.** Each drives a scalar evaluated while

@@ -100,11 +100,13 @@ def test_cleanup_work_is_in_the_schema_too():
 
 
 def test_defaults_are_the_requested_ones():
-    """Both defaults are the 2026-08-25 user decision: final outputs only, and
-    a successful run deletes its work directory."""
+    """cleanup_level: 'none' is the 2026-09-10 user decision (a run's output
+    is re-enterable by default; 'final' is the opt-in cleaning level). It was
+    'final' from 2026-08-25. cleanup_work: a successful run deletes its work
+    directory (2026-08-25, unchanged)."""
     cfg = strip_comments((ROOT / "nextflow.config").read_text())
-    assert re.search(r"^\s*cleanup_level\s*=\s*'final'", cfg, re.M), (
-        "cleanup_level no longer defaults to 'final'"
+    assert re.search(r"^\s*cleanup_level\s*=\s*'none'", cfg, re.M), (
+        "cleanup_level no longer defaults to 'none'"
     )
     assert re.search(r"^\s*cleanup_work\s*=\s*true", cfg, re.M), (
         "cleanup_work no longer defaults to true"
