@@ -1,0 +1,113 @@
+nextflow_process {
+
+    name "Test EXTRACT_NUCLEI_PROPERTIES process"
+    script "modules/local/extract_nuclei_properties.nf"
+    process "EXTRACT_NUCLEI_PROPERTIES"
+
+    tag "modules"
+    tag "modules_local"
+    tag "extract_nuclei_properties"
+
+    test("Should write morphology, contours and the size log under nuclei/ - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001' ],
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.morphology.get(0).get(1).toString().endsWith('nuclei/morphology.csv')
+            assert process.out.contours.get(0).get(1).toString().endsWith('nuclei/contours.json')
+            // The size log lives INSIDE nuclei/ on purpose: Layout.publishedPath's
+            // producerSubdir heuristic recovers the 'nuclei' segment from the task-dir
+            // layout, and the checkpoint writer records the published path from it.
+            assert process.out.size_log.get(0).toString().endsWith('nuclei/P001.EXTRACT_NUCLEI_PROPERTIES.size.csv')
+            assert snapshot(process.out.versions).match()
+        }
+    }
+
+    test("Should render the nuclei mask, the reference cell mask and both ext.args tunables - rendered command") {
+
+        // No options "-stub": the point is the rendered script. extract_cell_properties.py
+        // is skimage-only and runs under -profile test, so success is asserted too.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001' ],
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('extract_cell_properties.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert process.success },
+                { assert rendered.size() >= 1, "no rendered EXTRACT_NUCLEI_PROPERTIES .command.sh found" },
+                { assert rendered.every { it.contains('--mask_file P001_nuclei_mask.tif') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--reference_mask P001_cell_mask.tif') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--outdir nuclei') }, rendered.join(' --- ') },
+                // Both values come from nextflow.config defaults via conf/modules.config's
+                // ext.args closure, and must equal what EXTRACT_CELL_PROPERTIES renders.
+                { assert rendered.every { it.contains('--simplify_tolerance 1.0') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--coord_precision 2') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should honour --geojson_coord_precision in the rendered command - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                geojson_coord_precision = 4
+            }
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001' ],
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('extract_cell_properties.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--coord_precision 4') },
+                    "geojson_coord_precision did not reach the command: " + rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--coord_precision 2') }, rendered.join(' --- ') }
+            )
+        }
+    }
+}
