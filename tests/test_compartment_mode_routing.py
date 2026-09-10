@@ -337,7 +337,10 @@ ALLOWED_LINES = {
         # 1274 -> 1249 (2026-09-09): the EXTRACT_MASK_SERIES withName block left
         # with the add_cycle feature, which lives on the dev branch only (-25).
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1249
-        1249: (
+        # 1249 -> 1225 (2026-09-10): the dead SPLIT_PRIOR_PYRAMID withName block was
+        # dropped (its alias exists only on dev), -24 lines above this one.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1225
+        1225: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

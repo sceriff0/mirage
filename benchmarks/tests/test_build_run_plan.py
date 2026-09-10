@@ -556,8 +556,7 @@ def test_project_sweep_enables_qc_signals():
 # An entry whose pipeline default has caught up with the baseline is a hard failure
 # below, not a silent pass -- the same shrink-only discipline the debt allowlists in
 # tests/ follow. A stale exemption is how the seg_method desync survived.
-BASELINE_DEVIATIONS = {
-}
+BASELINE_DEVIATIONS = {}
 
 
 def test_project_sweep_baseline_matches_pipeline_defaults():
