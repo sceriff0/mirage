@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output is re-enterable by `--start` without opting in; `'final'` is now the opt-in
   cleaning level, with the same publish gates. `conf/test.config` keeps its explicit
   `'none'` pin.
-- **The `tma` profile pins the Bio-Formats JVM heap flat at 8 GiB** (`reg_jvm_heap_gb`)
-  instead of `register.nf`'s `32 + 16 × attempt` ramp, which under the profile's 32 GB
-  request handed Java 28 of 32 GiB on attempt 1 and left 4 for the Python side.
+- **The `tma` profile pins the Bio-Formats JVM heap flat at 16 GiB** (`reg_jvm_heap_gb`)
+  instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a
+  small request, and sizes `REGISTER` at `64 GB × attempt` (was 32).
 
 ### Fixed
 
@@ -33,8 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the node's cores, not the task's. `bin/utils/valis_config.py` now caps keypoints at
   5000 (`MAX_KEYPOINTS`, applied before the preset matchers are built so SuperGlue sees
   it too) and `register.py --cpus` (passed `task.cpus` by `register.nf`) bounds every
-  VALIS thread pool to the allocation. Guarded by `tests/test_valis_matching_bounds.py`
-  and a rendered-command case in `tests/modules/register.nf.test`.
+  VALIS thread pool to the allocation. **The larger term was autograd**: VALIS never
+  calls `torch.no_grad()`, so every SuperGlue attention layer's activations and
+  SuperPoint's conv activations on each 2048 px image were retained per pair — four
+  pairs in flight still exceeded 64 GB with the first two fixes alone. The SuperPoint /
+  SuperGlue methods are now wrapped in `torch.no_grad()` on the class (grad mode is
+  thread-local, so a global switch would miss VALIS's joblib threads). Guarded by
+  `tests/test_valis_matching_bounds.py` and a rendered-command case in
+  `tests/modules/register.nf.test`.
 
 - **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,
   `max_forks` or `queue_size` was silently ignored.** Each drives a scalar evaluated while

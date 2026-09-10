@@ -163,8 +163,8 @@ core is typically 2000–3000 px on its long side. It describes the *data*, so i
 with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
 on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
 cores are larger and you want a finer non-rigid stage. It also lowers `REGISTER`'s
-memory request from 300 GB to 32 GB per attempt and pins the Bio-Formats JVM heap
-flat at 8 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
+memory request from 300 GB to 64 GB per attempt and pins the Bio-Formats JVM heap
+flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
 REGISTER's real peak — SuperGlue matching — lives; see [Resources](resources.md).
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first

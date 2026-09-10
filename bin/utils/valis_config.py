@@ -6,10 +6,12 @@ have a single definition. `init_jvm(...)` is the shared BioFormats JVM-heap size
 `bin/warp_seg_qc.py` for the reg_qc>=2 segmentation-overlap QC.
 """
 
+import functools
 import multiprocessing
 import os
 import types
 
+import torch
 from valis import feature_detectors, feature_matcher
 from valis.micro_rigid_registrar import MicroRigidRegistrar
 from valis.non_rigid_registrars import OpticalFlowWarper
@@ -52,6 +54,48 @@ def _cap_valis_keypoints(n_keep):
 _cap_valis_keypoints(MAX_KEYPOINTS)
 
 
+def _inference_only(cls, method_name):
+    """Run ``cls.method_name`` under ``torch.no_grad()``.
+
+    VALIS 1.0.0 never disables autograd: ``SuperGlueMatcher._match_images`` builds a fresh
+    ``SuperGlue`` and calls it, and ``prep_data`` runs SuperPoint's conv stack on each 2048 px
+    image, all with gradient tracking ON -- so every intermediate (18 attention layers of
+    ``4 x N x M`` scores and probabilities per pair, plus the conv activations) is RETAINED
+    for a backward pass nobody will run. Measured 2026-09-10: four pairs in flight at 5000
+    keypoints exceeded a 64 GB cgroup. Grad mode is THREAD-LOCAL in PyTorch, and VALIS
+    matches on joblib threads, so ``torch.set_grad_enabled(False)`` in the main thread
+    would reach none of them; wrapping the method runs the guard on the calling thread.
+
+    Parameters
+    ----------
+    cls : type
+        The VALIS class to patch.
+    method_name : str
+        The method to wrap. Skipped when absent or not a plain function (test doubles).
+    """
+    fn = getattr(cls, method_name, None)
+    if not isinstance(fn, types.FunctionType):
+        return
+
+    @functools.wraps(fn)
+    def wrapped(self, *args, **kwargs):
+        with torch.no_grad():
+            return fn(self, *args, **kwargs)
+
+    setattr(cls, method_name, wrapped)
+
+
+for _cls, _method in (
+    (feature_matcher.SuperGlueMatcher, "match_images"),
+    (getattr(feature_matcher, "SuperPointAndGlue", None), "match_images"),
+    (feature_detectors.SuperPointFD, "detect_and_compute"),
+    (feature_detectors.SuperPointFD, "detect_and_compute_sg"),
+    (feature_detectors.SuperPointFD, "compute"),
+):
+    if _cls is not None:
+        _inference_only(_cls, _method)
+
+
 def bound_cpu_count(n_cpus=None):
     """Make VALIS's parallel sections see the CPUs this task was GIVEN, not the node's.
 
@@ -84,6 +128,9 @@ def bound_cpu_count(n_cpus=None):
             n_cpus = os.cpu_count() or 1
     bounded = max(2, int(n_cpus))
     multiprocessing.cpu_count = lambda: bounded
+    # torch's intra-op pool defaults to the node's core count too; that is CPU
+    # oversubscription rather than memory, but the allocation is the right ceiling.
+    torch.set_num_threads(bounded)
     return bounded
 
 
