@@ -1012,6 +1012,36 @@ with open(OUT_DIR / "sample_reg_residuals.csv", "w") as f:
         f.write(f"P001_mov1.ome.tiff,{x},{y},{d},micro\n")
 print("  Created sample_reg_residuals.csv")
 
+# Pyramidal OME-TIFF for EXPORT_SPATIALDATA's --include-image/--pyramid branch
+# (spatialdata_include_image=true). tests/modules/export_spatialdata.nf.test is
+# the only consumer. Reuses P001's own anatomy (defined in section 1 above) so
+# the fixture is patient-consistent, and carries PhysicalSizeX/Y=0.325um to
+# match every other P001 checkpoint row's pixel_size. Two levels via subIFDs,
+# same pattern as fmt_pyramid.ome.tiff (section 11a) below.
+_p001_pyramid = np.stack(
+    [
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 1.0, _img_rng, True),
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 0.5, _img_rng, True),
+    ],
+    axis=0,
+)
+with tifffile.TiffWriter(OUT_DIR / "P001_pyramid.ome.tiff", ome=True) as _tw:
+    _tw.write(
+        _p001_pyramid,
+        subifds=1,
+        photometric="minisblack",
+        metadata={
+            "axes": "CYX",
+            "Channel": {"Name": ["DAPI", "PANCK"]},
+            "PhysicalSizeX": 0.325,
+            "PhysicalSizeXUnit": "µm",
+            "PhysicalSizeY": 0.325,
+            "PhysicalSizeYUnit": "µm",
+        },
+    )
+    _tw.write(_p001_pyramid[:, ::2, ::2], subfiletype=1, photometric="minisblack")
+print("  Created P001_pyramid.ome.tiff (2 levels: 128x128 -> 64x64)")
+
 # =============================================================================
 # 8. Golden reference files in tests/testdata/expected/
 # =============================================================================

@@ -1,0 +1,14 @@
+{
+    "Should emit the patient zarr with a .zgroup, a size log and versions - stub": {
+        "content": [
+            [
+                "versions.yml:md5,2adf8dc886f3cf0c8ef8e76fada288bf"
+            ]
+        ],
+        "timestamp": "2026-09-10T17:28:50.359533",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "25.04.7"
+        }
+    }
+}
