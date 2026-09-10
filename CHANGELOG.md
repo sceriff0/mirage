@@ -30,10 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ~2800 px TMA cores climbed the 32/64/96/128 GB ramp and died at "Matching images 0/10"
   on every attempt (2026-09-10), because VALIS 1.0.0 keeps 20000 keypoints per image
   (quadratic SuperGlue cost) and matches every pair at once on `cpu_count() - 1` threads
-  — the node's cores, not the task's. `bin/utils/valis_config.py` now caps keypoints at
-  5000 (`MAX_KEYPOINTS`, applied before the preset matchers are built so SuperGlue sees
-  it too) and `register.py --cpus` (passed `task.cpus` by `register.nf`) bounds every
-  VALIS thread pool to the allocation. **The larger term was autograd**: VALIS never
+  — the node's cores, not the task's. `register.py --cpus` (passed `task.cpus` by
+  `register.nf`) now bounds every VALIS thread pool to the allocation. The keypoint count
+  gained one home (`MAX_KEYPOINTS` in `bin/utils/valis_config.py`, applied before the
+  preset matchers are built so SuperPoint and SuperGlue agree) and a parameter,
+  **`reg_valis_max_keypoints`** (null = VALIS's 20000, so results remain comparable with
+  earlier runs; the `tma` profile pins 2000; the presets' old `num_features: 5000` had never
+  reached VALIS). **The larger term was autograd**: VALIS never
   calls `torch.no_grad()`, so every SuperGlue attention layer's activations and
   SuperPoint's conv activations on each 2048 px image were retained per pair — four
   pairs in flight still exceeded 64 GB with the first two fixes alone. The SuperPoint /

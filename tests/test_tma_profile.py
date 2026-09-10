@@ -39,6 +39,8 @@ REGISTER_GB = 64
 # most of a small request -- the Python side, where REGISTER's peak (SuperGlue matching)
 # actually is, gets the remainder.
 JVM_HEAP_GB = 16
+# VALIS's default is 20000; a ~2800 px core has no use for it and SuperGlue is quadratic in it.
+TMA_KEYPOINTS = 2000
 
 
 def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
@@ -48,6 +50,7 @@ def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
         "memory_mode": "'custom'",
         "reg_valis_max_non_rigid_dim": str(NON_RIGID_PX),
         "reg_jvm_heap_gb": str(JVM_HEAP_GB),
+        "reg_valis_max_keypoints": str(TMA_KEYPOINTS),
     }, assigned
 
 

@@ -204,6 +204,14 @@
                     "minimum": 1,
                     "description": "VALIS non-rigid registration size (px). null = from memory_mode. Only legal with memory_mode=custom. Must be smaller than the full resolution of every slide: VALIS 1.0.0-1.2.0 reads a slide no larger than this at pyramid level -1 and kills its JVM (its own clamp does not prevent it), so REGISTER refuses such input at start. Lower it below the smallest slide on small-format input such as TMA cores, with a margin."
                 },
+                "reg_valis_max_keypoints": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "minimum": 1,
+                    "description": "Keypoints kept per image for SuperPoint detection and SuperGlue matching in REGISTER. null = VALIS's own 20000. SuperGlue's cost is quadratic in this; the tma profile lowers it to 2000. Lowering it changes which matches exist, so registrations at different values are not comparable."
+                },
                 "reg_micro_reg": {
                     "type": "integer",
                     "description": "Micro-registration depth (nested, default 1): 0=none, 1=micro-rigid only (refines slide.M) [default], 2=+micro non-rigid (register_micro).",

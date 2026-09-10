@@ -120,11 +120,14 @@ stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`r
 instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a small
 request. `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
 image pair at once, and — in VALIS 1.0.0 — with autograd ON, so every attention layer's
-activations are retained for a backward pass nobody runs. `bin/utils/valis_config.py` caps
-keypoints at 5000, wraps the SuperPoint/SuperGlue methods in `torch.no_grad()` (grad mode is
-thread-local, so a global switch would miss VALIS's joblib threads), and bounds VALIS's thread
-pools to `task.cpus` (`register.py --cpus`). Before that, five ~2800 px cores were OOM-killed
-at 128 GB on 2026-09-10, and at 64 GB with only the first and third fix in place.
+activations are retained for a backward pass nobody runs. `bin/utils/valis_config.py` wraps
+the SuperPoint/SuperGlue methods in `torch.no_grad()` (grad mode is thread-local, so a global
+switch would miss VALIS's joblib threads) and bounds VALIS's thread pools to `task.cpus`
+(`register.py --cpus`). The keypoint count defaults to VALIS's 20000 (`reg_valis_max_keypoints`
+null; `MAX_KEYPOINTS` is the one home for it), so results stay comparable with earlier runs; the
+`tma` profile pins 2000, which is a results-changing choice made per data shape. Before those two
+fixes, five ~2800 px cores were OOM-killed at 128 GB on 2026-09-10. Budget at 20000 keypoints:
+roughly 15 GB per pair in flight, `task.cpus - 1` pairs at once; at 2000, a few hundred MB.
 
 `REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
 concurrency block, after the profiles) and its own error strategy — see
