@@ -1,0 +1,14 @@
+{
+    "Should write morphology, contours and the size log under nuclei/ - stub": {
+        "content": [
+            [
+                "versions.yml:md5,825f276b74d87dc8d9d7bcccf779304d"
+            ]
+        ],
+        "timestamp": "2026-09-10T17:20:55.066813",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "25.04.7"
+        }
+    }
+}
