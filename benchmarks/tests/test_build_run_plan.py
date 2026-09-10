@@ -698,6 +698,13 @@ NOT_SWEPT = {
         "no cost curve."
     ),
     "config_profile_description": "nf-core provenance display string — see config_profile_name",
+    "reg_valis_max_keypoints": (
+        "keypoints per image for SuperPoint/SuperGlue. null = VALIS's own 20000, what "
+        "every measured run has used; the tma profile pins 2000. Lowering it changes "
+        "WHICH MATCHES EXIST, i.e. the registration itself, so an arm at a different "
+        "value is a different method, not a cheaper run of the same one -- it belongs "
+        "in a registration-quality study with landmark TRE, not in the cost sweep."
+    ),
     "start": "step gate — every sweep run is a full pipeline; a partial run is not comparable",
     "stop": "step gate — see start",
     "cleanup_work": (
