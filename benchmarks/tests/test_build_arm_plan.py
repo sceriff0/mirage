@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from benchmarks.build_arm_plan import (
+    QC_INSTRUMENTS,
     arms_manifest_rows,
     build_arm_plan,
     read_input_patients,
@@ -362,28 +363,6 @@ def test_valis_arms_are_preset_x_depth_not_a_grid_of_equals(plan):
 # ---------------------------------------------------------------------------
 
 
-def test_tiled_arms_are_the_three_shipped_tiers(plan):
-    """STARE must fan out over reg_tiled_mode, or the ranking is tuned-vs-untuned.
-
-    The sibling of test_valis_arms_are_preset_x_depth_not_a_2x2. With ONE tiled arm the
-    ranking tuned VALIS across six configurations and STARE across none -- exactly the bias
-    test_project_stare_resolution_axis_mirrors_the_valis_one refuses to allow in the sweep,
-    and this is the block that produces the manuscript's registration figure.
-
-    Pinned to the tier table rather than to a literal list: RegPresets.STARE is the owner of
-    which tiers exist, so adding a fourth there and forgetting it here should fail. 'custom'
-    is excluded deliberately -- it is not a tier, it is "start from high and apply overrides",
-    and arms.yaml sets no per-knob overrides for it to apply.
-    """
-    tiled = [r for r in plan if r.get("backend") == "tiled" and "_seg" not in r["arm"]]
-    shipped = set(stare_preset_modes())
-    assert {r["reg_tiled_mode"] for r in tiled} == shipped, (
-        f"tiled arms {sorted(r['reg_tiled_mode'] for r in tiled)} do not cover the shipped "
-        f"tiers {sorted(shipped)} in RegPresets.STARE"
-    )
-    assert len(tiled) == len(shipped)
-
-
 def test_non_tiled_arms_carry_no_tiled_params(plan):
     """The mirror direction, and the one with teeth for the LAUNCHER.
 
@@ -438,21 +417,27 @@ def test_reference_arm_must_name_a_real_arm(cfg):
 
 
 def test_cross_all_crosses_every_arm(cfg):
+    """`cross: all` on both instruments: every base arm gets (segmenters - 1) + (pairings - 1)
+    QC-only twins, and the total is the number quoted in arms.yaml's cost gate."""
     full = build_arm_plan(
-        dict(cfg, qc_segmenter_cross=dict(cfg["qc_segmenter_cross"], cross="all"))
+        dict(
+            cfg,
+            qc_segmenter_cross=dict(cfg["qc_segmenter_cross"], cross="all"),
+            qc_pairing_cross=dict(cfg["qc_pairing_cross"], cross="all"),
+        )
     )
-    reg = [r for r in full if r["arm_kind"] == "registration"]
-    n_methods = len(cfg["qc_segmenter_cross"]["seg_method"])
-    # 12 = 9 VALIS (3 presets x 3 micro-depths) + 3 STARE (tier). History: 7 originally,
-    # 9 when ashlar was a third backend, back to 7 when :fire: 6a54479 removed it, 9 when
-    # STARE gained its three tiers, and 12 now that VALIS gained memory_mode=medium so both
-    # backends span three presets. This number is quoted in docs/benchmarks_real.md and in
-    # arms.yaml's cost gate, which is why it is asserted rather than derived: the point is
-    # that the prose and the code agree, and deriving it from the plan would make the
-    # assertion vacuous.
-    assert len(reg) == 12 * n_methods, (
-        "cross: all should be 12 arms x every segmenter; docs/benchmarks_real.md quotes 36 "
-        "and the cost gate in arms.yaml depends on that number being right"
+    base = [r for r in full if r["arm_kind"] == "registration"]
+    qc = [r for r in full if r["arm_kind"] == "registration_qc"]
+    n_seg = len(cfg["qc_segmenter_cross"]["seg_method"])
+    n_pair = len(cfg["qc_pairing_cross"]["seg_qc_pairing"])
+    # 18 = 9 VALIS (3 tiers x 3 micro-depths) + 9 STARE (3 tiers x 3 gates). History: 7, 9,
+    # 7, 9, 12 (VALIS gained medium), and 18 now that STARE mirrors VALIS's shape. Quoted
+    # in docs/benchmarks_real.md and arms.yaml's cost gate, which is why it is asserted
+    # rather than derived: the point is that the prose and the code agree.
+    assert len(base) == 18, len(base)
+    assert len(qc) == 18 * ((n_seg - 1) + (n_pair - 1)) == 54, len(qc)
+    assert len(base) + len(qc) == 72, (
+        "arms.yaml's cost gate quotes 72 registration-step launches"
     )
 
 
@@ -1035,3 +1020,217 @@ def test_benchmark_config_does_not_set_concurrency_directives():
     )
     assert "queueSize" not in code, "benchmark.config still sets executor.queueSize"
     assert "maxForks = 200" not in code, "benchmark.config still sets a global maxForks"
+
+
+# ---------------------------------------------------------------------------
+# The QC instrument crosses — planned as resumes, run as one chain per base arm
+# ---------------------------------------------------------------------------
+
+
+def test_registration_arms_are_symmetric_across_backends(plan):
+    """VALIS tier x depth and STARE tier x gate: the same number of draws each, or the
+    best-cell ranking is tuned-vs-untuned in whichever direction has more cells."""
+    base = [r for r in plan if r["arm_kind"] == "registration"]
+    valis = [r for r in base if r["backend"] == "valis"]
+    tiled = [r for r in base if r["backend"] == "tiled"]
+    assert len(valis) == len(tiled) == 9, (len(valis), len(tiled))
+
+
+def test_tiled_arms_are_tier_x_gate(plan):
+    """Every shipped tier at every gate value, and the gate really varies."""
+    tiled = [
+        r for r in plan if r["backend"] == "tiled" and r["arm_kind"] == "registration"
+    ]
+    shipped = set(stare_preset_modes())
+    assert {r["reg_tiled_mode"] for r in tiled} == shipped
+    gates = {str(r["reg_tiled_gate_tre"]) for r in tiled}
+    assert len(gates) == 3, gates
+    cells = {(r["reg_tiled_mode"], str(r["reg_tiled_gate_tre"])) for r in tiled}
+    assert len(cells) == len(shipped) * len(gates) == len(tiled)
+    # and the gate is in the directory name, so a lost arms.csv cannot merge them
+    assert len({r["arm"] for r in tiled}) == len(tiled)
+    assert all("gate" in r["arm"] and "." not in r["arm"] for r in tiled)
+
+
+def test_valis_arms_carry_no_gate(plan):
+    for r in plan:
+        if r.get("backend") == "valis":
+            assert r.get("reg_tiled_gate_tre", "") == "", r["arm"]
+
+
+def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
+    """Each cross arm names a base registration arm, differs from it in exactly ONE QC
+    instrument, and is planned as arm_kind=registration_qc (the resumed pass)."""
+    by_id = {r["run_id"]: r for r in plan}
+    crosses = [r for r in plan if r["arm_kind"] == "registration_qc"]
+    assert crosses, "no QC cross arms planned"
+    for r in crosses:
+        base = by_id.get(r["resume_run"])
+        assert base is not None and base["arm_kind"] == "registration", r["arm"]
+        differs = [k for k in QC_INSTRUMENTS if str(r[k]) != str(base[k])]
+        assert differs and len(differs) == 1, (r["arm"], differs)
+        # everything that defines the REGISTRATION is identical to the base
+        for k in (
+            "backend",
+            "memory_mode",
+            "reg_micro_reg",
+            "reg_tiled_mode",
+            "reg_tiled_gate_tre",
+            "from_arm",
+        ):
+            assert str(r[k]) == str(base[k]), (r["arm"], k)
+    # base arms never resume anything
+    for r in plan:
+        if r["arm_kind"] != "registration_qc":
+            assert r["resume_run"] == "", r["arm"]
+
+
+def test_qc_crosses_are_one_instrument_at_a_time(cfg, plan):
+    """Segmenters at the baseline pairing, pairings at the baseline segmenter -- no
+    factorial cell varies both."""
+    b = cfg["baseline"]
+    for r in plan:
+        if r["arm_kind"] != "registration_qc":
+            continue
+        assert not (
+            r["seg_method"] != b["seg_method"]
+            and r["seg_qc_pairing"] != b["seg_qc_pairing"]
+        ), r["arm"]
+    n_base = sum(1 for r in plan if r["arm_kind"] == "registration")
+    n_seg = len(cfg["qc_segmenter_cross"]["seg_method"]) - 1
+    n_pair = len(cfg["qc_pairing_cross"]["seg_qc_pairing"]) - 1
+    n_cross = sum(1 for r in plan if r["arm_kind"] == "registration_qc")
+    assert n_cross == n_base * (n_seg + n_pair), (n_cross, n_base, n_seg, n_pair)
+
+
+def test_base_arms_carry_the_baseline_instruments(cfg, plan):
+    b = cfg["baseline"]
+    for r in plan:
+        if r["arm_kind"] == "registration":
+            assert (
+                r["seg_method"] == b["seg_method"]
+                and r["seg_qc_pairing"] == b["seg_qc_pairing"]
+            ), r["arm"]
+
+
+def test_qc_pass_runs_after_registration_and_before_the_rest():
+    script = (BENCH / "run_arms.sh").read_text()
+    m = re.search(r"for kind in ([\w ]+); do", script)
+    order = m.group(1).split()
+    assert (
+        order.index("registration")
+        < order.index("registration_qc")
+        < order.index("external")
+    )
+    for flag in ("seg_qc_pairing", "reg_tiled_gate_tre"):
+        assert f"add_param {flag} " in script, f"run_arms.sh does not forward --{flag}"
+
+
+def _fake_nextflow(bindir: Path, log: Path) -> None:
+    """A `nextflow` that records its argv, fakes the checkpoint a resumed arm needs,
+    writes the history line launch() reads the session id from, and FAILS if another
+    fake is already running against the same session (the cache-DB lock)."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    (bindir / "nextflow").write_text(
+        r"""#!/usr/bin/env bash
+set -e
+LOG="__LOG__"
+args=("$@")
+outdir=""; name=""; resume=""; prev=""; workdir=""
+for a in "${args[@]}"; do
+  case "$prev" in
+    --outdir) outdir="$a" ;;
+    -name) name="$a" ;;
+    -resume) resume="$a" ;;
+    -work-dir) workdir="$a" ;;
+  esac
+  [[ "$prev" == "-resume" && "$a" == -* ]] && resume="latest"
+  prev="$a"
+done
+[[ " ${args[*]} " == *" -resume"* && -z "$resume" ]] && resume="latest"
+sid="${resume:-sess-$name}"
+mkdir -p .nextflow "${workdir:-work}"
+lock=".nextflow/lock-$sid"
+# mkdir is the atomic test-and-set: two launches started in the same instant both
+# passed a `-e` test before either had touched the file.
+if ! mkdir "$lock" 2>/dev/null; then
+  echo "LOCKFAIL|$name|$sid" >> "$LOG"
+  echo "Unable to acquire lock on session $sid" >&2; exit 1
+fi
+# Hold the session for long enough that two launches of one base issued within the same
+# second MUST overlap; a shorter hold let a sabotaged (unchained) launcher pass by luck.
+sleep 2
+mkdir -p "$outdir/csv"; echo "patient_id" > "$outdir/csv/preprocessed.csv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' now 1s "$name" OK - "$sid" "nextflow ${args[*]}" >> .nextflow/history
+echo "$(pwd)|$name|${resume:-}|$outdir" >> "$LOG"
+rmdir "$lock"
+""".replace("__LOG__", str(log))
+    )
+    (bindir / "nextflow").chmod(0o755)
+
+
+def test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session(tmp_path):
+    """Behavioural: with a stub nextflow, the QC pass launches each cross arm INSIDE its
+    base arm's launch dir with `-resume <that base's session>`, cross arms of ONE base
+    never overlap (the stub dies on a concurrent resume of one session), and different
+    bases do run concurrently."""
+    import os
+    import subprocess
+
+    cfg = yaml.safe_load((BENCH / "configs" / "arms.yaml").read_text())
+    # a small plan: cross only the reference arm's twins + one more base, to keep it quick
+    cfg["registration_arms"]["valis"]["memory_mode"] = ["high"]
+    cfg["registration_arms"]["valis"]["reg_micro_reg"] = [1, 2]
+    cfg["registration_arms"]["tiled"]["enabled"] = False
+    cfg["external_baseline"]["ashlar"]["enabled"] = False
+    cfg["segmentation_arms"]["seg_method"] = []
+    cfg["qc_segmenter_cross"]["cross"] = "all"
+    cfg["qc_pairing_cross"]["cross"] = "all"
+    plan = build_arm_plan(cfg)
+    root = tmp_path / "arm_results"
+    root.mkdir()
+    plan_csv = tmp_path / "plan.csv"
+    plan_csv.write_text(_plan_csv(plan))
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,is_reference,channels\nP1,/x/a.tif,true,DAPI\n"
+    )
+    log = tmp_path / "launches.log"
+    _fake_nextflow(tmp_path / "bin", log)
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        ARMS_CONCURRENCY="4",
+    )
+    r = subprocess.run(
+        ["bash", str(BENCH / "run_arms.sh"), str(plan_csv), str(sheet), str(root)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    launches = [ln.split("|") for ln in log.read_text().splitlines()]
+    collisions = [ln for ln in launches if ln[0] == "LOCKFAIL"]
+    assert not collisions, (
+        "two cross arms resumed the same base session concurrently: "
+        + ", ".join(ln[1] for ln in collisions)
+    )
+    by_name = {ln[1]: ln for ln in launches}
+    bases = [p["run_id"] for p in plan if p["arm_kind"] == "registration"]
+    crosses = [p for p in plan if p["arm_kind"] == "registration_qc"]
+    assert len(bases) == 2 and len(crosses) == 2 * 3, (len(bases), len(crosses))
+    for c in crosses:
+        cwd, _, resume, outdir = by_name[f"arms-{c['run_id']}"]
+        assert cwd.endswith(f"/.launch/{c['resume_run']}"), (c["run_id"], cwd)
+        assert resume == f"sess-arms-{c['resume_run']}", (c["run_id"], resume)
+        assert outdir.endswith(f"/{c['arm']}"), outdir
+    for b in bases:
+        cwd, _, resume, _ = by_name[f"arms-{b}"]
+        assert cwd.endswith(f"/.launch/{b}") and resume == ""
+    # order: every base before its crosses (the pass barrier)
+    names = [ln[1] for ln in launches]
+    for c in crosses:
+        assert names.index(f"arms-{c['resume_run']}") < names.index(
+            f"arms-{c['run_id']}"
+        )

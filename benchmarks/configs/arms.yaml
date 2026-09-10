@@ -51,6 +51,8 @@ baseline:
                                # and at 2 they were costing and scoring a config nobody ships.
                                # Guarded by test_arms_baseline_values_match_the_pipeline_defaults.
   registration_method: valis
+  seg_qc_pairing: lsa          # pipeline default; the QC nucleus-pairing rule unless crossed
+                               # below (bin/utils/cell_pairs.py: lsa | mutual_nn)
 
 # -----------------------------------------------------------------------------
 # ARM 1 — REGISTRATION. Which configuration aligns real tissue best?
@@ -65,16 +67,13 @@ baseline:
 # the registration step, not the segmentation step.
 #
 # THE TWO VALIS KNOBS ARE NOT A GRID OF EQUALS. reg_micro_reg is a DEPTH (0 none,
-# 1 micro-rigid only, 2 + micro non-rigid), so preset x depth is 3 x 3 = 9 arms.
-# memory_mode low/high are DIFFERENT FEATURE MATCHERS (BRISK/RANSAC vs
-# SuperPoint/SuperGlue), not one matcher at two resolutions.
-#
-# `medium` was added alongside STARE's three tiers, so both backends now span three
-# cost/accuracy presets and neither is the tuned one. It is the third value sweep.yaml
-# has always carried (registration_method_grid.valis.memory_mode), so this closes a gap between
-# the two blocks rather than inventing an axis. Read it as a POINT ON THE CURVE, not a
-# third comparison: low and high differ in WHICH matcher runs, so medium interpolates
-# cost between them rather than introducing a new matcher.
+# 1 micro-rigid only, 2 + micro non-rigid), so tier x depth is 3 x 3 = 9 arms.
+# memory_mode is a RESOLUTION LADDER -- high / medium / low detect features and solve
+# the non-rigid field at 2048 / 1024 / 512 px with the same SuperPoint+SuperGlue matcher
+# at every rung (bin/utils/valis_config.py; an earlier `low` used BRISK/RANSAC, which is
+# why older notes call the tiers "different matchers"). STARE's ladder below is the
+# same three rungs (lib/RegPresets.groovy), so tier against tier is like-for-like --
+# the same axis sweep.yaml's registration_method_grid crosses on synthetic images.
 # -----------------------------------------------------------------------------
 registration_arms:
   valis:
@@ -101,12 +100,18 @@ registration_arms:
     #
     # THE TIER IS THE RIGHT GRANULARITY, not the individual knobs. reg_tiled_mode is what an
     # operator actually picks, and each row of RegPresets.STARE moves all five tier-owned
-    # values (tile / halo / out_tile / coarse_max_dim / upsample) coherently. Varying them
-    # singly is sweep.yaml's job: it already crosses tile x gate_tre x coarse_max_dim = 27
-    # cells, on SYNTHETIC images where a cell is cheap. Here a cell is a real WSI -- REGISTER
-    # has been observed at 483 GB -- so porting that grid would pay WSI prices for a search
-    # already done. Sweep selects; arms validates the finalists.
-    reg_tiled_mode: [low, medium, high]    # 3 arms
+    # values (tile / halo / out_tile / coarse_max_dim / upsample) coherently -- and
+    # ParamUtils.validateRegPresets refuses a per-knob override under any tier but
+    # `custom`, so those knobs cannot be crossed here anyway.
+    #
+    # TIER x REFINEMENT GATE = 9 ARMS, THE MIRROR OF THE VALIS BLOCK (2026-09-10). Three
+    # tier-only arms against VALIS's nine gave VALIS three times the draws in a best-cell
+    # ranking. reg_tiled_gate_tre is STARE's refinement depth -- the rigid-stage TRE (px)
+    # above which a tile is non-rigidly refined; lower refines more tiles -- the counterpart
+    # of reg_micro_reg, ungated, so it is legal under every tier. Same shape as
+    # sweep.yaml's registration_method_grid.tiled.
+    reg_tiled_mode:     [low, medium, high]
+    reg_tiled_gate_tre: [0.5, 1.0, 2.0]   # brackets the default 1.0; 9 arms
 
     # THE COARSE FRONT-END AXIS IS GONE. It declared the three classical front-ends and
     # deferred the learned matcher on three grounds -- a separate unpublished stare-ml image,
@@ -119,35 +124,54 @@ registration_arms:
 
 
 # -----------------------------------------------------------------------------
-# QC-SEGMENTER CROSS — does the registration verdict depend on WHO found the nuclei?
+# QC INSTRUMENT CROSSES — does the registration verdict depend on HOW it was measured?
 #
-# subworkflows/local/seg_qc.nf: "THE QC SEGMENTS WITH THE RUN'S OWN SEGMENTER."
-# SEG_QC_SEGMENT is SEGMENT under an alias, so params.seg_method selects the
-# backend that produces the nuclei the registration accuracy is scored on. Vary
-# it and the registration is IDENTICAL while the measuring instrument changes —
-# which makes this a ROBUSTNESS axis on the headline number, never a quality
-# claim about registration. Exactly the category seg_qc_pairing occupies in
-# sweep.yaml.
+# The arm ranking reads the staged seg-overlap QC (reg_qc = 2): nuclei are found on
+# the native slides by the run's own segmenter (subworkflows/local/seg_qc.nf --
+# SEG_QC_SEGMENT is SEGMENT under an alias, so params.seg_method selects it), paired
+# between reference and moving slide by params.seg_qc_pairing (bin/utils/cell_pairs.py:
+# `lsa` = linear sum assignment, `mutual_nn` = mutual nearest neighbours), and the pairs
+# are carried through every stage. Two measuring instruments, then: WHO found the nuclei
+# and HOW they were paired. Varying either leaves the registration byte-identical, so
+# these are ROBUSTNESS axes on the headline number, never a quality claim about
+# registration -- exactly the category seg_qc_pairing occupies in sweep.yaml.
 #
-# COST GATE. `cross: reference` runs the extra segmenters against ONE arm
-# (`reference_arm` below): 12 + 2 = 14 registration runs per patient. `cross: all`
-# crosses every arm and costs 12 x 3 = 36. Start at `reference` — if the headline
-# number is stable there, crossing all 12 buys a denser version of a null result.
+# THEY RESUME, THEY DO NOT RE-REGISTER. A cross arm is planned as arm_kind
+# `registration_qc` with `resume_run` naming its base arm; run_arms.sh launches it in
+# the base arm's launch directory with `-resume`, so REGISTER (483 GB on a real WSI) is
+# served from the cache and only the QC chain (SEG_QC_SEGMENT for a segmenter cross,
+# WARP_SEG_QC for a pairing cross, and the aggregation) runs again, publishing into
+# the cross arm's own outdir. Which is why both crosses can afford `all`: the cost of a
+# cross arm is one segmentation of the native slides, or one pairing pass, not a
+# registration. (A resume that misses is correct and merely slow.)
 #
-# The 12 is 9 VALIS (3 presets x 3 micro-depths) + 3 STARE (tier). It was 7 while
-# STARE ran as a single defaults arm and VALIS had two presets. Both backends now
-# span three cost/accuracy presets, which is what stops the ranking comparing a
-# tuned method against an untuned one — in either direction. Guarded by
-# test_cross_all_crosses_every_arm, test_tiled_arms_are_the_three_shipped_tiers and
-# test_valis_arms_are_preset_x_depth_not_a_grid_of_equals.
+# ONE INSTRUMENT AT A TIME, NOT A FACTORIAL. Each cross varies its own axis off the base
+# arm's other instrument: segmenters at the baseline pairing, pairings at the baseline
+# segmenter. Per base arm that is 2 + 1 = 3 QC-only runs; over the 18 registration arms,
+# 54 per cohort. The two questions -- "does WHO found the nuclei change the ranking?" and
+# "does HOW they were paired change it?" -- are answered separately, which is what a
+# robustness claim needs; the interaction would cost 5 runs per arm to answer a question
+# the paper does not ask.
+#
+# COST GATE. `cross: reference` runs the extra instruments against ONE arm
+# (`reference_arm`): 18 + 2 + 1 = 21 registration-step launches per cohort. `cross: all`
+# crosses every arm: 18 + 36 + 18 = 72 launches, of which 54 are QC-only resumes.
+# Guarded by test_cross_all_crosses_every_arm, test_tiled_arms_are_tier_x_gate,
+# test_valis_arms_are_preset_x_depth_not_a_grid_of_equals and
+# test_qc_cross_arms_resume_their_base_arm.
 qc_segmenter_cross:
-  cross: reference                         # reference | all | none
+  cross: all                               # reference | all | none
   reference_arm: valis_high_micro2         # must name an arm the grid above produces
   seg_method: [instantseg, stardist, cellsam]
   # stardist needs segmentation_model_dir and cellsam needs its weights (or a
   # valid DEEPCELL_ACCESS_TOKEN) on the cluster — see conf/ieo.config. Drop a
   # method here if it cannot run at your site; instantseg is the one that runs on
   # a fresh clone, and it is the pipeline default.
+
+qc_pairing_cross:
+  cross: all                               # reference | all | none
+  reference_arm: valis_high_micro2
+  seg_qc_pairing: [lsa, mutual_nn]         # the baseline (lsa) is the base arm itself
 
 # -----------------------------------------------------------------------------
 # ARM 2 — SEGMENTATION. Which backend segments real tissue best?

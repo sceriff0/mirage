@@ -105,14 +105,41 @@ col_val() {
 PAIRS=()
 add_param() { if [[ -n "${2:-}" ]]; then PAIRS+=("$1=$2"); fi; }
 
+# RESUME_RUN (env, optional): the run_id of a BASE arm whose Nextflow session this launch
+# resumes. Set for arm_kind=registration_qc rows -- the QC instrument crosses -- which
+# differ from their base arm only in params.seg_method or params.seg_qc_pairing. Both
+# reach only the QC chain (SEG_QC_SEGMENT via SegBackends, WARP_SEG_QC via ext.args), so
+# with the base arm's work dir and session, REGISTER and everything before it are served
+# from the cache and only the QC tasks run again -- publishing into the cross arm's OWN
+# --outdir. The launch happens INSIDE the base arm's launch directory, because that is
+# where `.nextflow/history` and `.nextflow/cache/<session>` live and -resume looks them
+# up relative to the launch directory; the session id is read out of the history by run
+# name, so a later run in the same directory cannot be picked up by accident. A resume
+# that misses is correct and merely slow (it re-registers), never wrong.
 launch() {                       # launch <run_id> <arm> <input> <outdir> <name=value...>
   local run_id="$1" arm="$2" in_csv="$3" outdir="$4"; shift 4
   local run_pairs=("$@")
   local rundir="$ROOT/.launch/$run_id"
+  local resume_args=()
+  if [[ -n "${RESUME_RUN:-}" ]]; then
+    rundir="$ROOT/.launch/$RESUME_RUN"
+    if [[ ! -d "$rundir/work" ]]; then
+      echo "[$run_id] SKIP: base arm '$RESUME_RUN' has no work dir at $rundir/work" >&2
+      return 1
+    fi
+    local sid=""
+    if [[ -f "$rundir/.nextflow/history" ]]; then
+      # history columns: timestamp, duration, run name, status, revision, SESSION ID, command
+      sid=$(awk -F'\t' -v n="arms-$RESUME_RUN" '$3 == n { s = $6 } END { print s }' "$rundir/.nextflow/history")
+    fi
+    if [[ -n "$sid" ]]; then resume_args=(-resume "$sid"); else resume_args=(-resume); fi
+    echo "[$run_id] resumes base arm $RESUME_RUN (session ${sid:-latest}); only the QC chain should run"
+  fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
   # Typed params as JSON — see the add_param comment above for why this cannot be
-  # a list of --name value flags on Nextflow 26.
-  local run_params="$rundir/params.json"
+  # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
+  # shares its base arm's launch directory and must not overwrite the base's file.
+  local run_params="$rundir/params.${run_id}.json"
   if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
           ${run_pairs[@]+"${run_pairs[@]}"}); then
     echo "[$run_id] SKIP: could not type its parameters against nextflow_schema.json" >&2
@@ -126,6 +153,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
       -c "$BENCH_CONF" \
       -work-dir "$rundir/work" \
       -name "arms-$run_id" \
+      "${resume_args[@]+"${resume_args[@]}"}" \
       -params-file "$run_params" \
       --input "$in_csv" \
       --outdir "$outdir" \
@@ -183,12 +211,11 @@ reap() {                          # block until under the concurrency cap
   done
 }
 
-run_pass() {
-  local want_kind="$1"
-  while IFS=',' read -r -a vals; do
+# launch_row <csv row values...>: assemble one plan row's flags and launch it, in the
+# FOREGROUND. The pass functions below decide what runs concurrently with what.
+launch_row() {
+    local vals=("$@")
     local kind; kind=$(col_val arm_kind "${vals[@]}")
-    [[ "$kind" == "$want_kind" ]] || continue
-
     local run_id arm start stop from_arm from_csv only_patient
     run_id=$(col_val run_id "${vals[@]}")
     arm=$(col_val arm "${vals[@]}")
@@ -211,30 +238,26 @@ run_pass() {
       ext_overlap=$(col_val ext_overlap "${vals[@]}")
       ext_shift=$(col_val ext_max_shift_um "${vals[@]}")
       if [[ "$ext_tool" != "ashlar" ]]; then
-        echo "[$run_id] SKIP: unknown ext_tool '$ext_tool'" >&2; continue
+        echo "[$run_id] SKIP: unknown ext_tool '$ext_tool'" >&2; return 1
       fi
       preproc_csv="$ROOT/$from_arm/csv/${from_csv}.csv"
       if [[ ! -f "$preproc_csv" ]]; then
         echo "[$run_id] SKIP: $preproc_csv missing — arm '$from_arm' did not complete" >&2
-        continue
+        return 1
       fi
       if [[ ! -d "$ROOT/$ext_from_arm" ]]; then
         echo "[$run_id] SKIP: $ROOT/$ext_from_arm missing — no QC nuclei to score against" >&2
-        continue
+        return 1
       fi
-      reap
       mkdir -p "$ROOT/$arm"
-      (
-        "$PIPELINE_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$ext_from_arm" "$preproc_csv" \
+      if ! "$PIPELINE_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$ext_from_arm" "$preproc_csv" \
             "$ext_tile" "$ext_overlap" "$ext_shift" \
-            > "$ROOT/$arm/ashlar.stdout.log" 2> "$ROOT/$arm/ashlar.stderr.log" \
-          || {
-            echo "[$run_id] FAILED" >&2
-            tail -n 25 "$ROOT/$arm/ashlar.stderr.log" >&2 2>/dev/null
-          }
-      ) &
-      pids+=($!)
-      continue
+            > "$ROOT/$arm/ashlar.stdout.log" 2> "$ROOT/$arm/ashlar.stderr.log"; then
+        echo "[$run_id] FAILED" >&2
+        tail -n 25 "$ROOT/$arm/ashlar.stderr.log" >&2 2>/dev/null
+        return 1
+      fi
+      return 0
     fi
 
     PAIRS=()
@@ -248,6 +271,8 @@ run_pass() {
     # tiled-only, blank on every other arm -- the add_param blank-guard is what keeps a
     # VALIS arm from ever receiving --reg_tiled_mode "", which the schema enum rejects.
     add_param reg_tiled_mode       "$(col_val reg_tiled_mode "${vals[@]}")"
+    add_param reg_tiled_gate_tre   "$(col_val reg_tiled_gate_tre "${vals[@]}")"
+    add_param seg_qc_pairing       "$(col_val seg_qc_pairing "${vals[@]}")"
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
     # all three. The external ashlar baseline is an arm_kind='external' row instead, and
@@ -265,24 +290,87 @@ run_pass() {
       in_csv="$ROOT/$from_arm/csv/${from_csv}.csv"
       if [[ ! -f "$in_csv" ]]; then
         echo "[$run_id] SKIP: $in_csv missing — arm '$from_arm' did not complete" >&2
-        continue
+        return 1
       fi
     elif [[ -n "$only_patient" ]]; then
       in_csv="$ROOT/.launch/$run_id.samplesheet.csv"
       mkdir -p "$(dirname "$in_csv")"
-      filtered_sheet "$only_patient" "$in_csv" || continue
+      filtered_sheet "$only_patient" "$in_csv" || return 1
     fi
 
+    RESUME_RUN="$(col_val resume_run "${vals[@]}")" \
+      launch "$run_id" "$arm" "$in_csv" "$ROOT/$arm" ${PAIRS[@]+"${PAIRS[@]}"}
+}
+
+# run_pass <arm_kind>: every row of that kind, up to CONCURRENCY at once.
+run_pass() {
+  local want_kind="$1"
+  if [[ "$want_kind" == "registration_qc" ]]; then run_qc_pass; return; fi
+  while IFS=',' read -r -a vals; do
+    [[ "$(col_val arm_kind "${vals[@]}")" == "$want_kind" ]] || continue
     reap
-    launch "$run_id" "$arm" "$in_csv" "$ROOT/$arm" ${PAIRS[@]+"${PAIRS[@]}"} &
+    launch_row "${vals[@]}" &
     pids+=($!)
   done < <(tail -n +2 "$PLAN" | tr -d '\r')
+}
+
+# run_qc_pass: the QC instrument crosses, ONE CHAIN PER BASE ARM.
+#
+# Every registration_qc row resumes its base arm's Nextflow session (see launch()). Two
+# runs resuming the SAME session at once fight over .nextflow/cache/<session>/db/LOCK and
+# one of them dies ("Unable to acquire lock on session") -- measured on this pipeline when
+# the documented-command launch leg was first parallelised. So the rows are grouped by
+# resume_run and each group runs SEQUENTIALLY in one background chain; the chains of
+# different base arms run concurrently, still capped by CONCURRENCY. A failed link is
+# reported and the chain continues: the next cross arm resumes the same base session
+# and is independent of the one that failed.
+run_qc_pass() {
+  local kind_col resume_col sorted
+  kind_col=$(( $(col_index arm_kind) + 1 ))
+  resume_col=$(( $(col_index resume_run) + 1 ))
+  if (( resume_col == 0 )); then
+    echo "[registration_qc] plan has no resume_run column — nothing to run in this pass"
+    return
+  fi
+  mkdir -p "$ROOT/.launch"
+  sorted="$ROOT/.launch/_registration_qc.rows"
+  tail -n +2 "$PLAN" | tr -d '\r' \
+    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
+    | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
+
+  local base="" line b
+  local rows=()
+  start_chain() {
+    reap
+    (
+      for line in "${rows[@]}"; do
+        IFS=',' read -r -a v <<< "$line"
+        if ! launch_row "${v[@]}"; then
+          echo "[chain $(col_val resume_run "${v[@]}")] $(col_val run_id "${v[@]}") failed; continuing with the next cross arm" >&2
+        fi
+      done
+    ) &
+    pids+=($!)
+  }
+  while IFS= read -r line; do
+    IFS=',' read -r -a v <<< "$line"
+    b=$(col_val resume_run "${v[@]}")
+    if [[ "$b" != "$base" && ${#rows[@]} -gt 0 ]]; then
+      start_chain
+      rows=()
+    fi
+    base="$b"
+    rows+=("$line")
+  done < "$sorted"
+  if (( ${#rows[@]} > 0 )); then start_chain; fi
 }
 
 # preprocess FIRST: every registration arm resumes from its csv/preprocessed.csv.
 # external AFTER registration (it reuses a registration arm's published QC nuclei) and
 # BEFORE compute (which is being timed and must not contend for nodes).
-for kind in preprocess registration external segmentation compute; do
+# registration_qc AFTER registration: each QC cross arm resumes its base arm's session,
+# so the base must have finished. The barrier below is what guarantees that.
+for kind in preprocess registration registration_qc external segmentation compute; do
   echo "=== pass: $kind ==="
   run_pass "$kind"
   # Barrier between passes: segmentation needs registration's checkpoint, and the

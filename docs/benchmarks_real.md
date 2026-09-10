@@ -28,12 +28,14 @@ images cannot imitate.
 Defined in `benchmarks/configs/arms.yaml`. They are **factored, not crossed** —
 registration is the expensive half, so it is paid for once.
 
-At the shipped settings that is **23 launches**: 1 shared preprocessing, 14
-registration (12 arms + 2 QC-segmenter cross), 4 external (ASHLAR), 3
+At the shipped settings that is **81 launches**: 1 shared preprocessing, 18
+registration arms (9 VALIS + 9 STARE), 54 QC instrument crosses (which **resume**
+their base arm and re-run only the QC chain — see §2), 4 external (ASHLAR), 3
 segmentation, 1 compute profile. **All but the compute profile launch the whole
 cohort**, so the launch count is not the run count — for a 6-patient cohort,
-22 × 6 = 132 patient-runs plus the compute launch. `build_arm_plan.py` prints
-this multiplier; read the arm counts below as per-patient multipliers.
+80 × 6 = 480 patient-runs plus the compute launch, of which 54 × 6 are QC-only.
+`build_arm_plan.py` prints this multiplier; read the arm counts below as
+per-patient multipliers.
 
 ### 1. Registration arms — *which configuration aligns real tissue best?*
 
@@ -42,7 +44,7 @@ shared preprocessing run**. No arm axis touches a `preproc_*` param, so running
 preprocessing nine times would repeat the expensive half of a real-WSI run to
 vary something it does not affect — the same factoring the segmentation arms use.
 Segmentation and export are not run either: nothing downstream of registration
-changes the staged registration QC. **12 arms**:
+changes the staged registration QC. **18 arms**, nine per backend:
 
 - **VALIS preset × micro-depth = 9.** `memory_mode` is a **resolution ladder** —
   `high` / `medium` / `low` detect features and solve the non-rigid field at 2048 /
@@ -53,16 +55,17 @@ changes the staged registration QC. **12 arms**:
   3 × 3, not 3 × 2. STARE's ladder is the same three rungs (`lib/RegPresets.groovy`),
   so `low` against `low` is a like-for-like comparison — the same axis the synthetic
   sweep's `registration_method_grid` crosses.
-- **STARE (`registration_method = tiled`) × tier = 3.** A different *backend*, not
-  three more cells of the grid: `memory_mode` and `reg_micro_reg` do not exist
-  there, so these arms carry neither. It fans out over `reg_tiled_mode`
-  (`low|medium|high`) because a single defaults arm left the ranking tuning VALIS
-  across six configurations and STARE across none — the tuned-vs-untuned bias the
-  synthetic sweep has an explicit guard against, and which was unguarded here.
-  The **tier** is the right granularity rather than the individual knobs: it is what
-  an operator picks, and each row of `RegPresets.STARE` moves all five tier-owned
-  values coherently. The synthetic sweep crosses the same tiers with the refinement
-  gate (`reg_tiled_gate_tre`) where a cell is cheap; here a cell is a real WSI.
+- **STARE (`registration_method = tiled`) tier × refinement gate = 9.** A different
+  *backend*: `memory_mode` and `reg_micro_reg` do not exist there, so these arms
+  carry neither. `reg_tiled_mode` (`low|medium|high`) is the same 512 / 1024 / 2048 px
+  ladder as VALIS's tiers, and `reg_tiled_gate_tre` {0.5, 1.0, 2.0} is STARE's
+  refinement depth — the rigid-stage TRE above which a tile is non-rigidly refined —
+  the counterpart of `reg_micro_reg`. Nine against nine (since 2026-09-10; it was
+  three tier-only arms against nine, which handed VALIS three times the draws in a
+  best-cell ranking). The **tier** rather than its five knobs because the tier is
+  what an operator picks, each `RegPresets.STARE` row moves all five coherently, and
+  `validateRegPresets` refuses a per-knob override under any tier but `custom`. The
+  synthetic sweep crosses exactly the same two axes on synthetic images.
 ### 1b. ASHLAR — the external baseline, **4 runs**
 
 ASHLAR is not a *registration* arm: `v1.0.0` removed it as a backend
@@ -103,20 +106,38 @@ over `[1024, 2048, 4096]`; `[1024, 4096]` brackets that range at both ends.
 against `micro` to quantify what non-rigid buys: ASHLAR attempts no non-rigid
 warp at all, so reporting only the second overstates VALIS's advantage.
 
-### 2. QC-segmenter cross — *does the verdict depend on who found the nuclei?*
+### 2. QC instrument crosses — *does the verdict depend on how it was measured?*
 
-`subworkflows/local/seg_qc.nf` segments the native slides with **the run's own
-segmenter**, so `params.seg_method` selects which nuclei registration accuracy is
-measured on. Varying it leaves the registration byte-identical, which makes this a
-**robustness** axis on the headline number — never a quality claim about
-registration. The same category `seg_qc_pairing` occupies in the synthetic sweep.
+The arm ranking reads the staged seg-overlap QC (`reg_qc = 2`): `subworkflows/local/seg_qc.nf`
+segments the native slides with **the run's own segmenter** (`params.seg_method`
+selects it), the nuclei are paired across slides by **`params.seg_qc_pairing`**
+(`lsa`, linear sum assignment — the default — or `mutual_nn`, mutual nearest
+neighbours; `bin/utils/cell_pairs.py`), and the pairs are held fixed through every
+stage. Two measuring instruments, then: *who found the nuclei* and *how they were
+paired*. Varying either leaves the registration byte-identical, which makes both
+**robustness** axes on the headline number — never a quality claim about
+registration. If the arm ranking changes with the segmenter or the pairing rule,
+the verdict is fragile and the paper should say so; if it does not, the null result
+is the evidence.
 
-`cross: reference` (the default) runs the extra segmenters against one arm:
-**14 registration runs** (12 arms + 2 extra segmenters on the reference arm).
-`cross: all` crosses all twelve and costs **36**. `arms.yaml`'s cost gate and
-`test_cross_all_crosses_every_arm` carry the same two numbers. Start at
-`reference` — if the number is stable there, crossing everything buys a denser
-null result.
+**They resume, they do not re-register.** A cross arm is planned as
+`arm_kind = registration_qc` with `resume_run` naming its base arm; `run_arms.sh`
+launches it *inside the base arm's launch directory* with `-resume <that session>`,
+so `REGISTER` — up to 483 GB on a real WSI — is served from the cache and only the
+QC chain runs again (`SEG_QC_SEGMENT` for a segmenter cross, `WARP_SEG_QC` for a
+pairing cross, then the aggregation), publishing into the cross arm's own directory.
+Cross arms of **one base run one after another** (two runs resuming the same session
+at once fight over Nextflow's cache-DB lock); different bases run concurrently.
+
+**One instrument at a time, not a factorial.** `qc_segmenter_cross` varies the
+segmenter at the baseline pairing; `qc_pairing_cross` varies the pairing at the
+baseline segmenter. Per base arm that is (3 − 1) + (2 − 1) = **3 QC-only runs**; both
+blocks ship at `cross: all`, so 18 base arms give **54** cross runs and **72**
+registration-step launches per cohort. `cross: reference` restricts either block to
+`reference_arm` (18 + 2 + 1 = 21). `test_cross_all_crosses_every_arm`,
+`test_qc_cross_arms_resume_their_base_arm` and
+`test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session` carry these
+numbers and the chaining.
 
 ### 3. Segmentation arms — *which backend segments real tissue best?*
 
@@ -409,11 +430,13 @@ Per patient, at the shipped `arms.yaml`:
 | arm | runs | pipeline extent |
 |---|---|---|
 | shared preprocessing | 1 | preprocessing only |
-| registration (9 + 2 crossed) | 11 | registration only (resumed) |
+| registration (9 VALIS + 9 STARE) | 18 | registration only (resumed from preprocessing) |
+| QC instrument crosses (2 segmenters + 1 pairing per arm) | 54 | QC chain only (resumes the base arm's session) |
+| ASHLAR external baseline | 4 | ASHLAR + the pipeline's QC scorer |
 | segmentation | 3 | segmentation → export (resumed) |
 | compute profile | 1 | full pipeline |
 
-Preprocessing is paid for **once**, not ten times. The compute-profile arm still
+Preprocessing is paid for **once**, not eighteen times, and registration is paid for eighteen times, not seventy-two. The compute-profile arm still
 runs it, because it is the arm that prices every process.
 
 Real WSI runs are not sweep cells: `REGISTER` has been observed at **483 GB** and

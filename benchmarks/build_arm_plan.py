@@ -34,7 +34,13 @@ VALIS_ONLY = ("memory_mode", "reg_micro_reg")
 # RegPresets.STARE and means nothing on a VALIS arm, so a VALIS arm must carry it BLANK --
 # both so the consumer can tell "not applicable" from "at default", and so run_arms.sh's
 # add_param blank-guard never emits `--reg_tiled_mode ""`, which schema validation rejects.
-TILED_ONLY = ("reg_tiled_mode",)
+TILED_ONLY = ("reg_tiled_mode", "reg_tiled_gate_tre")
+
+# The two QC MEASURING INSTRUMENTS every registration-step arm carries: which segmenter
+# finds the nuclei the seg-overlap QC scores on (params.seg_method) and how those nuclei
+# are paired across slides (params.seg_qc_pairing). Baseline values on a base arm; the
+# QC cross arms below vary exactly one of them.
+QC_INSTRUMENTS = ("seg_method", "seg_qc_pairing")
 
 # The external-baseline (ashlar) columns. These are arguments to
 # benchmarks/run_ashlar_arm.sh, NOT pipeline params -- the ext_ prefix is what
@@ -60,12 +66,15 @@ def valis_arm_name(memory_mode: str, micro: int) -> str:
     return f"valis_{memory_mode}_micro{micro}"
 
 
-def tiled_arm_name(mode: str) -> str:
-    # The tier is IN the name, not only in arms.csv. registration_arms.R falls back to
-    # parsing the directory name when the manifest is missing, and three STARE arms that
-    # differed only by a column it failed to read would render as one triplicated box.
-    # Keeps the `tiled` substring the consumer's backend fallback keys on.
-    return f"tiled_{mode}"
+def tiled_arm_name(mode: str, gate) -> str:
+    # The tier AND the gate are IN the name, not only in arms.csv. registration_arms.R
+    # falls back to parsing the directory name when the manifest is missing, and arms that
+    # differed only by a column it failed to read would render as one replicated box.
+    # Keeps the `tiled` substring the consumer's backend fallback keys on. The gate is
+    # written without its decimal point (0.5 -> gate05, 1.0 -> gate1, 2.0 -> gate2): a dot
+    # in a directory name reads as an extension to half the tools that will touch it.
+    g = f"{float(gate):g}".replace(".", "")
+    return f"tiled_{mode}_gate{g}"
 
 
 def _registration_arms(cfg: dict) -> list[dict]:
@@ -111,21 +120,32 @@ def _registration_arms(cfg: dict) -> list[dict]:
         # six configurations and STARE across none, which is the same tuned-vs-untuned bias
         # test_project_stare_resolution_axis_mirrors_the_valis_one guards in the sweep --
         # and it was unguarded here, in the block that produces the manuscript figure.
+        # TIER x GATE, the mirror of the VALIS block (2026-09-10). reg_tiled_gate_tre is
+        # STARE's refinement depth -- the rigid-stage TRE above which a tile is non-rigidly
+        # refined -- and is ungated, so it is legal under every tier; the tier-owned knobs
+        # (tile / halo / out_tile / coarse_max_dim / upsample) are not, and stay with the tier.
+        # Three tier-only arms against nine VALIS arms gave VALIS three times the draws.
         for mode in tiled.get("reg_tiled_mode", []):
-            arms.append(
-                {
-                    "arm": tiled_arm_name(mode),
-                    "backend": "tiled",
-                    # No memory_mode, no reg_micro_reg -- see VALIS_ONLY. The consumer keys
-                    # "is this the tiled backend" off the `backend` column when arms.csv is
-                    # present, and off the substring `tiled`/`stare` when it is not; the name
-                    # satisfies both so the fallback path stays correct too.
-                    "memory_mode": "",
-                    "reg_micro_reg": "",
-                    "reg_tiled_mode": mode,
-                    "label": f"tiled (STARE, {mode})",
-                }
-            )
+            for gate in tiled.get("reg_tiled_gate_tre", [None]):
+                arms.append(
+                    {
+                        "arm": tiled_arm_name(mode, gate)
+                        if gate is not None
+                        else f"tiled_{mode}",
+                        "backend": "tiled",
+                        # No memory_mode, no reg_micro_reg -- see VALIS_ONLY. The consumer
+                        # keys "is this the tiled backend" off the `backend` column when
+                        # arms.csv is present, and off the substring `tiled`/`stare` when it
+                        # is not; the name satisfies both so the fallback path stays correct.
+                        "memory_mode": "",
+                        "reg_micro_reg": "",
+                        "reg_tiled_mode": mode,
+                        "reg_tiled_gate_tre": "" if gate is None else gate,
+                        "label": f"tiled (STARE, {mode}"
+                        + ("" if gate is None else f", gate {float(gate):g} px")
+                        + ")",
+                    }
+                )
     return arms
 
 
@@ -200,54 +220,87 @@ def _external_arms(cfg: dict) -> list[dict]:
     return arms
 
 
-def _apply_qc_segmenter_cross(arms: list[dict], cfg: dict) -> list[dict]:
-    """Cross the registration arms with the QC segmenter (params.seg_method).
+def _apply_qc_cross(
+    arms: list[dict], cfg: dict, block: str, param: str, suffix: str, note: str
+) -> list[dict]:
+    """Cross the registration arms with ONE QC measuring instrument.
 
-    seg_qc.nf segments the native slides with the RUN'S OWN segmenter, so this
-    changes which nuclei the registration accuracy is measured on while leaving
-    the registration itself byte-identical. A robustness axis on the measuring
-    instrument, never a quality claim about registration.
+    Both instruments -- the QC segmenter (params.seg_method, block `qc_segmenter_cross`)
+    and the nucleus-pairing rule (params.seg_qc_pairing, block `qc_pairing_cross`) --
+    change what the registration accuracy is MEASURED WITH while leaving the registration
+    byte-identical: robustness axes on the headline number, never a quality claim.
+
+    A cross arm carries `resume_run` = its base arm, so run_arms.sh launches it in the
+    base arm's launch directory with -resume and only the QC chain runs again. One
+    instrument at a time: the cross arms produced here vary `param` and keep every other
+    instrument at the base arm's value; the caller applies the two crosses to the SAME
+    base list, never to each other's output, so there is no factorial.
     """
-    x = cfg.get("qc_segmenter_cross") or {}
+    x = cfg.get(block) or {}
     mode = x.get("cross", "none")
-    methods = list(x.get("seg_method", []))
-    default = (cfg.get("baseline") or {}).get("seg_method")
+    values = list(x.get(param, []))
+    default = (cfg.get("baseline") or {}).get(param)
 
-    # Every arm carries the baseline segmenter unless it is an extra cross arm.
+    # Every arm carries the baseline instrument unless it is a cross arm.
     for a in arms:
-        a.setdefault("seg_method", default)
+        a.setdefault(param, default)
+        a.setdefault("resume_run", "")
 
-    if mode == "none" or not methods:
-        return arms
+    # A reference_arm that names nothing is wrong config in EVERY mode: under `all` it is
+    # unused today and silently stale the day someone switches back to `reference`.
+    ref = x.get("reference_arm")
+    names = {a["arm"] for a in arms}
+    if ref is not None and ref not in names:
+        raise ValueError(
+            f"{block}.reference_arm={ref!r} is not an arm this config produces. "
+            f"Available: {sorted(names)}"
+        )
+
+    if mode == "none" or not values:
+        return []
 
     if mode == "reference":
-        ref = x.get("reference_arm")
-        names = {a["arm"] for a in arms}
-        if ref not in names:
-            raise ValueError(
-                f"qc_segmenter_cross.reference_arm={ref!r} is not an arm this "
-                f"config produces. Available: {sorted(names)}"
-            )
+        if ref is None:
+            raise ValueError(f"{block}.cross=reference needs a reference_arm")
         targets = [a for a in arms if a["arm"] == ref]
     elif mode == "all":
         targets = list(arms)
     else:
         raise ValueError(
-            f"qc_segmenter_cross.cross must be 'reference', 'all' or 'none', "
-            f"got {mode!r}"
+            f"{block}.cross must be 'reference', 'all' or 'none', got {mode!r}"
         )
 
     extra: list[dict] = []
     for base in targets:
-        for m in methods:
-            if m == base["seg_method"]:
+        for v in values:
+            if v == base[param]:
                 continue  # that IS the base arm; a duplicate run measures nothing
             a = dict(base)
-            a["arm"] = f"{base['arm']}_seg{m}"
-            a["seg_method"] = m
-            a["label"] = f"{base['label']} [QC seg: {m}]"
+            a["arm"] = f"{base['arm']}_{suffix}{v}"
+            a[param] = v
+            a["resume_run"] = base["arm"]
+            a["label"] = f"{base['label']} [{note}: {v}]"
             extra.append(a)
-    return arms + extra
+    return extra
+
+
+def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
+    """Base arms first, then the segmenter cross, then the pairing cross -- each applied
+    to the BASE arms only (one instrument varied per cross arm)."""
+    # Every base arm carries BOTH baseline instruments before either cross copies it,
+    # or a segmenter-cross arm would be copied without the pairing column.
+    baseline = cfg.get("baseline") or {}
+    for a in arms:
+        for param in QC_INSTRUMENTS:
+            a.setdefault(param, baseline.get(param))
+        a.setdefault("resume_run", "")
+    seg = _apply_qc_cross(
+        arms, cfg, "qc_segmenter_cross", "seg_method", "seg", "QC seg"
+    )
+    pair = _apply_qc_cross(
+        arms, cfg, "qc_pairing_cross", "seg_qc_pairing", "pair", "QC pairing"
+    )
+    return arms + seg + pair
 
 
 # The one shared preprocessing run every registration arm resumes from.
@@ -305,6 +358,8 @@ def build_arm_plan(cfg: dict) -> list[dict]:
             "memory_mode": "",
             "reg_micro_reg": "",
             "seg_method": baseline.get("seg_method", ""),
+            "seg_qc_pairing": "",
+            "resume_run": "",
             "registration_method": "",
             "reg_qc": "",
             **{k: "" for k in TILED_ONLY},
@@ -313,13 +368,19 @@ def build_arm_plan(cfg: dict) -> list[dict]:
     )
     n += 1
 
-    arms = _apply_qc_segmenter_cross(_registration_arms(cfg), cfg)
+    arms = _apply_qc_crosses(_registration_arms(cfg), cfg)
     for a in arms:
         _LABELS[a["arm"]] = a["label"]
         rows.append(
             {
                 "run_id": a["arm"],
-                "arm_kind": "registration",
+                # A QC cross arm is `registration_qc`: run_arms.sh runs that pass AFTER the
+                # registration pass and launches each one in its base arm's launch dir with
+                # -resume, so REGISTER is served from the cache and only the QC chain runs.
+                "arm_kind": "registration_qc"
+                if a.get("resume_run")
+                else "registration",
+                "resume_run": a.get("resume_run", ""),
                 "start": "registration",
                 "stop": "registration",
                 "from_arm": PREPROCESS_ARM,
@@ -334,6 +395,7 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                         "memory_mode",
                         "reg_micro_reg",
                         "seg_method",
+                        "seg_qc_pairing",
                     )
                 },
                 # Blank on every non-tiled arm, exactly as memory_mode/reg_micro_reg are
@@ -389,6 +451,8 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                 # WHICH segmenter found the nuclei is a property of the score -- it is just
                 # inherited from ext_from_arm's geojsons rather than chosen here.
                 "seg_method": "",
+                "seg_qc_pairing": "",
+                "resume_run": "",
                 "registration_method": "",
                 "reg_qc": "",
                 **{k: "" for k in TILED_ONLY},
@@ -425,6 +489,8 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                     "memory_mode": "",
                     "reg_micro_reg": "",
                     "seg_method": m,
+                    "seg_qc_pairing": "",
+                    "resume_run": "",
                     "registration_method": "",
                     "reg_qc": "",
                     **{k: "" for k in TILED_ONLY},
@@ -452,6 +518,8 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                         "memory_mode": baseline.get("memory_mode", ""),
                         "reg_micro_reg": baseline.get("reg_micro_reg", ""),
                         "seg_method": baseline.get("seg_method", ""),
+                        "seg_qc_pairing": baseline.get("seg_qc_pairing", ""),
+                        "resume_run": "",
                         "registration_method": baseline.get(
                             "registration_method", "valis"
                         ),
@@ -488,7 +556,7 @@ def arms_manifest_rows(plan: list[dict]) -> list[dict]:
             "label": _LABELS[r["arm"]],
         }
         for r in plan
-        if r["arm_kind"] in ("registration", "external")
+        if r["arm_kind"] in ("registration", "registration_qc", "external")
     ]
 
 
