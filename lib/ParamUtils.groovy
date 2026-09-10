@@ -229,9 +229,9 @@ class ParamUtils {
         if (!Layout.CLEANUP_LEVELS.contains(level))
             throw new IllegalArgumentException(
                 "--cleanup_level '${level}' is not valid. Valid: " +
-                "${Layout.CLEANUP_LEVELS}. 'final' (the default) publishes only " +
-                "${Layout.FINAL_KINDS} plus run-level ${Layout.SURVIVING_RUN_LEVEL}; " +
-                "'none' publishes everything.")
+                "${Layout.CLEANUP_LEVELS}. 'none' (the default) publishes everything; " +
+                "'final' publishes only ${Layout.FINAL_KINDS} plus run-level " +
+                "${Layout.SURVIVING_RUN_LEVEL}.")
     }
 
 

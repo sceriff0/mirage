@@ -20,8 +20,10 @@
 # directories would fail against correct behaviour, which is the worst kind of
 # guard to write.
 #
-# The test profile pins BOTH cleanup params away from the shipped defaults (see
-# conf/test.config), so this script has to put them back. Via -params-file, never
+# The test profile pins BOTH cleanup params (see conf/test.config), so this script
+# has to set the pair it is about: cleanup_work=true (the shipped default) and
+# cleanup_level=final (the CLEANING level -- the shipped default has been 'none'
+# since 2026-09-10; 'final' is what cases 2-3c assert on). Via -params-file, never
 # on the command line: Nextflow 26 delivers every CLI --param as a String, so a
 # boolean passed that way is rejected by the schema as "[string] but should be
 # [boolean]". docs/usage.md documents this for every boolean param, and
@@ -37,7 +39,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 NF="${NEXTFLOW:-nextflow}"
 
-cat > "$TMP/shipped_defaults.json" <<'JSON'
+cat > "$TMP/cleaning_level.json" <<'JSON'
 {
   "cleanup_work": true,
   "cleanup_level": "final"
@@ -51,7 +53,7 @@ fail() { echo "FAIL: $*"; exit 1; }
 # --------------------------------------------------------------------------
 W="$TMP/w1"; O="$TMP/o1"
 "$NF" -q run . -profile test -stub \
-    -params-file "$TMP/shipped_defaults.json" \
+    -params-file "$TMP/cleaning_level.json" \
     -w "$W" --outdir "$O" > "$TMP/run1.log" 2>&1 \
     || { cat "$TMP/run1.log"; fail "the baseline run did not succeed"; }
 
@@ -126,7 +128,7 @@ cat > "$TMP/fail.config" <<'CFG'
 process { withName: 'CONVERT_IMAGE' { beforeScript = 'exit 1' } }
 CFG
 "$NF" -q run . -profile test -stub \
-    -params-file "$TMP/shipped_defaults.json" \
+    -params-file "$TMP/cleaning_level.json" \
     -c "$TMP/fail.config" -w "$W2" --outdir "$O2" > "$TMP/run2.log" 2>&1
 rc=$?
 [ "$rc" -ne 0 ] || fail "the forced-failure run exited 0"

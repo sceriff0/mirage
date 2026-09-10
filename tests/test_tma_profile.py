@@ -34,15 +34,28 @@ def _profile_body(name: str) -> str:
 
 
 REGISTER_GB = 32
+# A flat heap, not register.nf's 32 + 16 x attempt ramp: Bio-Formats on five ~2800 px
+# cores needs single-digit GiB, and under the 32 GB request the ramp's
+# min(48, task.memory - 4) gave Java 28 of 32 GiB on attempt 1 -- leaving 4 for the
+# Python side, which is where REGISTER's peak (SuperGlue matching) actually is.
+JVM_HEAP_GB = 8
 
 
-def test_the_tma_profile_pins_exactly_the_custom_pair():
+def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
     body = _profile_body("tma")
     assigned = dict(re.findall(r"params\.([a-z_]+)\s*=\s*([^\n]+)", body))
     assert assigned == {
         "memory_mode": "'custom'",
         "reg_valis_max_non_rigid_dim": str(NON_RIGID_PX),
+        "reg_jvm_heap_gb": str(JVM_HEAP_GB),
     }, assigned
+
+
+def test_the_jvm_pin_is_below_the_ramps_attempt_1_request():
+    """The pin exists to hand memory BACK to Python under the 32 GB request. If it is
+    not smaller than what the ramp would have derived on attempt 1 (min(48, 32 - 4)
+    = 28), it changes nothing."""
+    assert JVM_HEAP_GB < min(48, REGISTER_GB - 4)
 
 
 def test_the_tma_size_is_the_medium_tiers_non_rigid_size():
@@ -80,8 +93,8 @@ def test_the_tma_profile_sizes_register_for_cores_not_slides():
     """conf/modules.config reserves a flat 300 GB x attempt for REGISTER, sized for
     whole slides. Five ~2800 px cores need a small fraction of that, and on SLURM a
     300 GB request is what the run waits in the queue for. The profile overrides the
-    one process, keeps the retry ramp, and leaves cpus/time alone; register.nf's JVM
-    heap is derived from task.memory, so it scales down with it."""
+    one process, keeps the retry ramp, and leaves cpus/time alone; the JVM heap is
+    pinned flat by the profile (JVM_HEAP_GB above), not derived from task.memory."""
     body = _profile_body("tma")
     at = body.find("withName: 'REGISTER'")
     assert at != -1, "no withName: 'REGISTER' override in the tma profile"
