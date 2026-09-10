@@ -457,4 +457,53 @@ nextflow_process {
             )
         }
     }
+
+    test("Should bound VALIS's thread pools to task.cpus - rendered command") {
+
+        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
+        //
+        // register.py's `--cpus` is how VALIS's all-pairs SuperGlue matching learns the
+        // task's allocation; without it serial_rigid.py sizes the pool on the NODE's core
+        // count and runs every image pair at once (five TMA cores OOM-killed at 128 GB,
+        // 2026-09-10). A stub run cannot see whether the flag is rendered, so this reads
+        // .command.sh, like the two cases above.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001'],
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('register.py')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered REGISTER .command.sh found under the task work dir" },
+                // task.cpus is a positive integer whatever the profile resolves it to; the
+                // contract is that the flag is rendered from it, on the register.py line.
+                { assert rendered.every { (it =~ /--cpus [1-9][0-9]*/).find() },
+                    "rendered command does not pass --cpus <task.cpus> to register.py: " + rendered.join(' --- ') }
+            )
+        }
+    }
 }

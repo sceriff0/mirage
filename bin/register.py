@@ -77,6 +77,7 @@ from valis import warp_tools as valis_warp_tools  # noqa: E402
 # single-source-of-truth module so there is one heap formula. See bin/utils/valis_config.py.
 from valis_config import (  # noqa: E402
     MEMORY_PRESETS,
+    bound_cpu_count,
     build_registrar_kwargs,
     init_jvm,
     resolve_memory_mode,
@@ -217,6 +218,7 @@ def valis_registration(
     interp_method: str = "bicubic",
     jvm_heap_gb: Optional[int] = None,
     stage_checkpoint_dir: Optional[str] = None,
+    n_cpus: Optional[int] = None,
 ) -> int:
     """Perform VALIS registration on preprocessed images.
 
@@ -255,6 +257,10 @@ def valis_registration(
         and before micro-registration. Consumed by WARP_SEG_QC (reg_qc=2) to report the
         'non_rigid' stage separately from 'micro'; VALIS composes the two destructively, so
         the snapshot is the only way to tell them apart. None (default) writes nothing.
+    n_cpus : int, optional
+        CPUs this task was allocated (Nextflow's ``task.cpus``). Bounds every VALIS
+        thread pool, most importantly the all-pairs SuperGlue matching, which otherwise
+        sizes itself on the NODE's core count. None = the scheduler affinity mask.
 
     Returns
     -------
@@ -408,6 +414,18 @@ def valis_registration(
     # with Elastix bindings (SimpleElastix) which is not available.
     # Registration still works well via SuperPoint/SuperGlue feature matching.
     logger.info("  Affine optimizer: None (feature-based alignment only)")
+
+    # Bound VALIS's thread pools to the task's CPU allocation BEFORE the registrar exists.
+    # serial_rigid.py matches every image pair concurrently on `cpu_count() - 1` threads,
+    # which on a shared node is the node's core count; each pair carries the SuperGlue
+    # working set (bin/utils/valis_config.py, MAX_KEYPOINTS), so an unbounded pool is
+    # what turned five TMA cores into a 128 GB OOM (2026-09-10).
+    effective_cpus = bound_cpu_count(n_cpus)
+    logger.info(
+        f"  VALIS thread pools bounded to {effective_cpus} CPU(s) "
+        f"({'task.cpus' if n_cpus is not None else 'scheduler affinity'}); "
+        f"keypoints capped at {num_features} per image"
+    )
 
     # Build registrar kwargs via the shared single-source-of-truth builder (bin/utils/valis_config.py).
     registrar_kwargs = build_registrar_kwargs(
@@ -1132,6 +1150,15 @@ def parse_args() -> argparse.Namespace:
         "Useful for scaling on retries.",
     )
     parser.add_argument(
+        "--cpus",
+        type=int,
+        default=None,
+        help="CPUs allocated to this task (the pipeline passes Nextflow's task.cpus). "
+        "Bounds every VALIS thread pool -- above all the all-pairs SuperGlue matching, "
+        "which otherwise runs as many pairs at once as the NODE has cores, regardless "
+        "of the allocation. Default: the scheduler affinity mask.",
+    )
+    parser.add_argument(
         "--stage-checkpoint-dir",
         type=str,
         default=None,
@@ -1165,6 +1192,7 @@ def main() -> int:
             interp_method=args.interp_method,
             jvm_heap_gb=args.jvm_heap_gb,
             stage_checkpoint_dir=args.stage_checkpoint_dir,
+            n_cpus=args.cpus,
         )
     except Exception as e:
         logger.error(f"[FAIL] Registration failed: {e}")

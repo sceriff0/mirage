@@ -575,9 +575,9 @@
                 },
                 "cleanup_level": {
                     "type": "string",
-                    "description": "Which published outputs a run keeps. 'final' (default) publishes only the final artifacts; 'none' publishes everything.",
-                    "help_text": "'final' publishes pyramid/, geojson/, quantification/ and the SpatialData .zarr per patient, plus run-level qc/, csv/ and size_logs/. Intermediates are never published rather than published-then-deleted: publishDir uses mode: 'copy', so the delete variant pays a full copy out of the work directory for a file nobody reads. Pass 'none' when the run's output will be RE-ENTERED -- '--start segmentation' reads registered/, and '--mode add_cycle' reads registered/ and the segmentation masks. Those combinations are refused at launch at any other level. The surviving/dropped split is owned by Layout.FINAL_KINDS.",
-                    "default": "final",
+                    "description": "Which published outputs a run keeps. 'none' (default) publishes everything; 'final' publishes only the final artifacts.",
+                    "help_text": "'none' (the default) publishes everything, so the run's output can be RE-ENTERED: '--start segmentation' reads registered/, and '--mode add_cycle' reads registered/ and the segmentation masks. 'final' publishes only pyramid/, geojson/, quantification/ and the SpatialData .zarr per patient, plus run-level qc/, csv/ and size_logs/; intermediates are never published rather than published-then-deleted (publishDir uses mode: 'copy', so the delete variant pays a full copy out of the work directory for a file nobody reads), and add_cycle is refused at launch at that level. The surviving/dropped split is owned by Layout.FINAL_KINDS.",
+                    "default": "none",
                     "enum": [
                         "none",
                         "final"

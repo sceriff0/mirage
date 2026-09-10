@@ -396,7 +396,7 @@ def test_exactly_one_resource_owner_per_process():
 #     DERIVED_MEMORY_PARAMS: recognising any `params.` mention would hand the
 #     exemption to expressions that used to be checked or loudly refused, and
 #     the exemption's whole content is "nobody checks the magnitudes here".
-#   * `SPLIT_PRIOR_PYRAMID` and `SEG_QC_SEGMENT` are ALIASES, not modules. Their
+#   * `SEG_QC_SEGMENT` (and, on dev, `SPLIT_PRIOR_PYRAMID`) are ALIASES, not modules. Their
 #     `withName:` blocks set no resource field (they override publishDir /
 #     ext.prefix only), so neither is required to have a row. SEG_QC_SEGMENT has
 #     one anyway -- it is a documented GPU/QC cost -- and ALIASES below maps it

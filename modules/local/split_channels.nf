@@ -37,7 +37,7 @@ process SPLIT_CHANNELS {
     // CsvUtils.countChannelsPerPatient's groupKey size exact by construction, rather
     // than by three copies of one rule continuing to agree by hand.
     //
-    // ABSENT vs EMPTY. An ABSENT keep-set (SPLIT_PRIOR_PYRAMID, which reads channel names
+    // ABSENT vs EMPTY. An ABSENT keep-set (dev's add_cycle alias SPLIT_PRIOR_PYRAMID, which reads channel names
     // from OME-XML at runtime) means "no keep-set was resolved" and correctly renders no
     // flag, so split_multichannel.py falls back to its is_reference rule -- that caller is
     // is_reference=true, i.e. keep everything. An EMPTY keep-set means "this slide
@@ -92,7 +92,7 @@ process SPLIT_CHANNELS {
             "by its caller (see subworkflows/local/postprocess.nf and " +
             "subworkflows/local/add_cycle.nf), not handed here.")
     def out_channels = meta.keep_channels != null ? meta.keep_channels : meta.channels
-    // When meta.channels is empty (e.g. ADD_CYCLE's SPLIT_PRIOR_PYRAMID, which
+    // When meta.channels is empty (e.g. dev's add_cycle alias SPLIT_PRIOR_PYRAMID, which
     // reads channel names from OME-XML in REAL mode only), still emit a single
     // placeholder so the mandatory `*.tiff` output binds under -stub.
     def touch_cmds = out_channels ? out_channels.collect { "touch ${it}.tiff" }.join('\n    ') : "touch prior_pyramid_channel.tiff"

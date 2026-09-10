@@ -71,14 +71,13 @@ existence.
 ## Checkpoints
 
 !!! warning "Checkpoints are written only at `--cleanup_level=none`"
-    The default is `--cleanup_level=final`, which does not publish the artifacts a
-    checkpoint names — so no checkpoint CSV is written at all, and `<outdir>/csv/`
-    holds a `README.txt` saying so. A manifest whose rows pointed at files that
-    were never published would be worse than no manifest: `--start` opens exactly
-    what it names.
+    `none` is the default (since 2026-09-10). `--cleanup_level=final` does not
+    publish the artifacts a checkpoint names — so no checkpoint CSV is written at
+    all, and `<outdir>/csv/` holds a `README.txt` saying so. A manifest whose rows
+    pointed at files that were never published would be worse than no manifest:
+    `--start` opens exactly what it names.
 
-    Run with `--cleanup_level none` the moment you intend to resume from a run's
-    output. See
+    Do not pass `final` on a run you intend to resume from. See
     [Output cleanup](parameters.md#output-cleanup).
 
 Each step ends by writing one CSV under `<outdir>/csv/`. These are the
