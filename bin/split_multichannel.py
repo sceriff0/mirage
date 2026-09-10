@@ -229,7 +229,7 @@ def split_multichannel_tiff(
             # and the number of distinct markers. Deciding here instead would mean a
             # per-slide process guessing what a sibling slide emitted.
             #
-            # The fallback below is not dead: SPLIT_PRIOR_PYRAMID reads channel names
+            # The fallback below is not dead: dev's add_cycle SPLIT_PRIOR_PYRAMID reads channel names
             # from OME-XML at runtime and so cannot be handed a precomputed list, and
             # this script stays runnable by hand.
             #
@@ -355,7 +355,7 @@ def main():
         "samplesheet by CsvUtils.resolveKeptChannelsPerSlide and carried on the meta "
         "map as keep_channels. When given it fully replaces the is-reference nuclear "
         "drop. Omitted only by callers that read channel names from OME-XML at "
-        "runtime (SPLIT_PRIOR_PYRAMID).",
+        "runtime (dev's add_cycle alias SPLIT_PRIOR_PYRAMID).",
     )
 
     parser.add_argument(
