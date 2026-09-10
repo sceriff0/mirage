@@ -270,16 +270,32 @@ else
   echo "  no compute_* or valis_high_micro2 arm found — skipped (pass --run <dir>)"
 fi
 
+echo "=== 4b   that run's resource profile -> data/run_resources/ ==="
+# One run's CPU / wall-time / peak-RSS tables against input size, for
+# analysis/run_resources.Rmd. Best effort: a run launched without a trace (or with
+# trace_dir somewhere this cannot see) is reported, not fatal -- the other four
+# hand-offs are unaffected.
+if [[ -n "$SRC_RUN" && -d "$SRC_RUN" ]]; then
+  if ! "$PIPELINE_DIR/benchmarks/pull_run_resources.sh" "$SRC_RUN" "$IHC" --handoff "$HANDOFF"; then
+    echo "  WARNING: run_resources skipped -- no usable trace.txt for $SRC_RUN." >&2
+    echo "           Run benchmarks/pull_run_resources.sh <run> $IHC --trace <trace_dir>/trace.txt by hand." >&2
+  fi
+else
+  echo "  no run selected — skipped"
+fi
+
 echo "=== 5/5  summary ==="
 printf '  %-28s %s\n' "data/registration_arms/" "$(find "$DEST_ARMS" -type f 2>/dev/null | wc -l | tr -d ' ') file(s)"
 printf '  %-28s %s\n' "data/benchmark/"         "$(find "$DEST_BENCH" -type f 2>/dev/null | wc -l | tr -d ' ') file(s)"
 printf '  %-28s %s\n' "data/mirage/"            "$(find "$IHC/data/mirage" -type f 2>/dev/null | wc -l | tr -d ' ') file(s)"
+printf '  %-28s %s\n' "data/run_resources/"     "$(find "$IHC/data/run_resources" -type f 2>/dev/null | wc -l | tr -d ' ') file(s)"
 
 echo
 echo "Done. In $IHC:"
 echo "  Rscript -e 'workflowr::wflow_build(c(\"analysis/registration_arms.Rmd\", \\"
 echo "                                       \"analysis/benchmark_pipeline.Rmd\", \\"
 echo "                                       \"analysis/benchmark_registration.Rmd\", \\"
-echo "                                       \"analysis/registration_run_qc.Rmd\"))'"
+echo "                                       \"analysis/registration_run_qc.Rmd\", \\"
+echo "                                       \"analysis/run_resources.Rmd\"))'"
 echo
 echo "data/ is gitignored in ihc_method — nothing here is committed."

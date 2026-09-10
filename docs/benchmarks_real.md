@@ -256,6 +256,29 @@ instead of `none`.
 
 Both read whatever has finished; re-run them as arms land.
 
+### 3b. What ONE run cost — the resource profile
+
+Not an arm, and not the sweep: any finished mirage run — the compute arm, a plain
+production run — has Nextflow's `trace.txt` and the pipeline's `size_logs/input_sizes.csv`,
+and `benchmarks/analysis/run_resources.py` turns those two into per-task, per-process and
+per-run tables (CPU-hours used against reserved, peak RSS against the memory requested,
+wall-time, and both against each task's input size), plus within-run fits of peak RSS and
+wall-time on input size for every process that ran on ≥ 3 inputs of different size:
+
+```bash
+make run-resources RUN=/path/to/run_outdir [TRACE=/path/to/.trace/trace.txt] IHC=../ihc_method
+# = benchmarks/pull_run_resources.sh <run_outdir> ../ihc_method [--trace ...]
+```
+
+`TRACE` matters more often than it looks: `trace_dir` defaults to `.trace` beside the
+**launch** directory, not inside `--outdir`, so a bare run's trace is found only when it
+sits at `<outdir>/../.trace`; the benchmark launchers point it into the results tree
+(`<run>/trace/`), which is found directly. The tables land in
+`ihc_method/data/run_resources/` with a `.dict.md` defining every column, and
+`analysis/run_resources.Rmd` there plots them. One run at a time, by design — the script
+replaces the tables, and a fit inside one run must not mix configurations.
+`pull_to_ihc_method.sh` runs the same step (4b) for the run it publishes as `data/mirage/`.
+
 ### 4. Hand off to `ihc_method`
 
 ```bash
@@ -318,7 +341,8 @@ renv::restore()                       # first time only
 workflowr::wflow_build(c("analysis/registration_arms.Rmd",
                          "analysis/benchmark_pipeline.Rmd",
                          "analysis/benchmark_registration.Rmd",
-                         "analysis/registration_run_qc.Rmd"))
+                         "analysis/registration_run_qc.Rmd",
+                         "analysis/run_resources.Rmd"))
 ```
 
 Each page renders its figures **inline from the CSVs** — there are no PNGs on
@@ -336,6 +360,7 @@ the figure. So a partial pull gives a partial page, never a broken build.
 | `benchmark_registration` | cost-vs-accuracy across the sweep; the two independent accuracy signals agreeing |
 | `benchmark_pipeline` | resource scaling, cost, segmentation-method comparison |
 | `registration_run_qc` | was this cohort registered well enough to analyse? |
+| `run_resources` | what one run of the cohort cost, per process, against input size |
 
 ---
 

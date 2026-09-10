@@ -12,7 +12,7 @@
 #   Docker running (for real/integration tests)
 
 .PHONY: testdata test test-stub test-real test-integration test-python test-validation test-lint test-all clean-test help \
-        arm-plan arm-run arm-tables sweep-tables arm-pull
+        arm-plan arm-run arm-tables sweep-tables arm-pull run-resources
 
 # Default target
 test: test-stub test-python
@@ -36,6 +36,7 @@ help:
 	@echo "  make arm-tables        Emit the ARM tables into _handoff/arms/"
 	@echo "  make sweep-tables      Emit the SWEEP tables (needs SWEEP=<root>)"
 	@echo "  make arm-pull          Copy the artifacts into ihc_method/data/"
+	@echo "  make run-resources     ONE run's CPU/wall/peak-RSS profile -> ihc_method/data/run_resources/ (RUN=<outdir>)"
 	@echo "    Variables: INPUT=real_input.csv ROOT=arm_results IHC=../ihc_method"
 	@echo "               SWEEP=sweep_results (adds the resource sweep to the pull)"
 
@@ -147,3 +148,15 @@ sweep-tables:
 arm-pull:
 	benchmarks/pull_to_ihc_method.sh $(ROOT) $(IHC) --handoff $(HANDOFF) \
 	    $(if $(SWEEP),--sweep $(SWEEP) --sweep-plan $(SWEEP_PLAN),)
+
+# ONE real run's resource profile (CPU-h, wall-time, peak RSS vs input size) for
+# ihc_method's analysis/run_resources.Rmd. Any finished run, arm or not:
+#   make run-resources RUN=/path/to/results [TRACE=/path/to/.trace/trace.txt]
+# TRACE is needed when trace_dir was left at its default (`.trace` beside the
+# launch directory) and that directory is not <RUN>/../.trace.
+RUN ?=
+TRACE ?=
+run-resources:
+	@[ -n "$(RUN)" ] || { echo "set RUN=<a mirage run's --outdir>"; exit 1; }
+	benchmarks/pull_run_resources.sh $(RUN) $(IHC) --handoff $(HANDOFF) \
+	    $(if $(TRACE),--trace $(TRACE),)

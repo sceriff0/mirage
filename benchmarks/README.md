@@ -286,6 +286,21 @@ Recoverable from history if either is wanted again: the landmark primitives
 `benchmarks/registration_eval/` at `61e26ec`, `benchmarks/stare_bench/` at `cacc850`.
 
 
+## C. One real run's resource profile
+
+Independent of the sweep and the arms. Any finished mirage run with tracing on has a
+`trace.txt` and a `size_logs/input_sizes.csv`; `benchmarks/analysis/run_resources.py` joins
+them into `run_resources_{tasks,processes,fits,summary}.csv` (+ `.dict.md`): CPU-hours used
+vs reserved, peak RSS vs the memory requested, wall-time, each against the task's input
+size, with within-run fits where a process ran on ≥ 3 inputs of different size.
+
+    make run-resources RUN=<run --outdir> [TRACE=<trace_dir>/trace.txt] IHC=../ihc_method
+    # -> ihc_method/data/run_resources/, read by analysis/run_resources.Rmd there
+
+It reuses `bin/generate_resource_report.py`'s parsers (the same code that renders the run's
+`qc/mirage_resource_report.html`) and the sweep's `regress.fit_memory_model`, so its fits
+are the sweep's fits applied to one run. See `docs/benchmarks_real.md` §3b.
+
 ## Inputs -> outputs at a glance
 
 | Step | You provide | You get |
