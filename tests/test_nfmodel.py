@@ -12,6 +12,7 @@ from tests.nfmodel import (
     block_extent,
     include_aliases,
     nf_files,
+    nf_test_cases,
     param_refs,
     processes,
     script_bodies,
@@ -626,3 +627,72 @@ def test_no_guard_parses_nextflow_source_privately():
         if private.search(text):
             offenders.append(f"{rel}: hand-rolled block-comment regex")
     assert not offenders, "\n".join(offenders)
+
+
+def _write_nf_test(tmp_path, name, text):
+    d = tmp_path / "tests" / "modules"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(text)
+
+
+def test_nf_test_cases_preamble_tag_applies_to_every_case(tmp_path):
+    _write_nf_test(tmp_path, "a.nf.test", '''
+nextflow_process {
+    process "FOO"
+    tag "stub"
+    test("one") { options "-stub" }
+    test("two") { }
+}
+''')
+    cases = nf_test_cases(root=tmp_path)
+    assert [c.name for c in cases] == ["one", "two"]
+    assert all("stub" in c.tags for c in cases)
+    assert [c.stub_option for c in cases] == [True, False]
+    assert {c.process for c in cases} == {"FOO"}
+
+
+def test_nf_test_cases_ignores_a_tag_that_lives_only_in_a_comment(tmp_path):
+    _write_nf_test(tmp_path, "b.nf.test", '''
+nextflow_process {
+    process "FOO"
+    // tag "stub"
+    test("one") { /* tag "stub" */ }
+}
+''')
+    (case,) = nf_test_cases(root=tmp_path)
+    assert "stub" not in case.tags
+
+
+def test_nf_test_cases_sees_stub_among_other_options(tmp_path):
+    _write_nf_test(tmp_path, "c.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("one") { tag "stub"
+        options "-stub -resume" }
+    test("two") { tag "stub"
+        options "-resume" }
+}
+''')
+    one, two = nf_test_cases(root=tmp_path)
+    assert one.stub_option is True
+    assert two.stub_option is False
+
+
+def test_nf_test_cases_workflow_file_has_no_process(tmp_path):
+    _write_nf_test(tmp_path, "d.nf.test", '''
+nextflow_workflow {
+    workflow "BAR"
+    test("one") { tag "stub" }
+}
+''')
+    (case,) = nf_test_cases(root=tmp_path)
+    assert case.process is None
+    assert case.tags == frozenset({"stub"})
+
+
+def test_nf_test_cases_covers_the_real_tree():
+    cases = nf_test_cases()
+    assert len(cases) >= 261, "the audit counted 261 cases on 2026-09-10; a drop means the parser lost files"
+    assert any(c.process == "SEG_QC_GEOJSON" and not c.stub_option and "stub" in c.tags for c in cases), (
+        "seg_qc_geojson.nf.test's rendered-command case is the precedent; the parser must see it"
+    )

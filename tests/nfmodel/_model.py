@@ -14,9 +14,9 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
-from ._lex import block_extent, strip_comments_and_strings
+from ._lex import block_extent, strip_comments, strip_comments_and_strings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -213,3 +213,52 @@ def param_refs(text: str) -> set:
             continue
         found.add(m.group(1))
     return found
+
+
+@dataclass(frozen=True)
+class NfTestCase:
+    path: Path
+    name: str
+    tags: frozenset
+    stub_option: bool
+    process: Optional[str]
+
+
+_NF_TEST_CASE_RE = re.compile(r'\btest\s*\(\s*"([^"]*)"\s*\)\s*\{')
+_NF_TEST_TAG_RE = re.compile(r'^\s*tag\s+"([^"]+)"', re.M)
+_NF_TEST_PROCESS_RE = re.compile(r'^\s*process\s+"([A-Za-z_][A-Za-z0-9_]*)"', re.M)
+_NF_TEST_STUB_OPTION_RE = re.compile(r'^\s*options\s+"[^"]*(?<![\w-])-stub(?![\w-])[^"]*"', re.M)
+
+
+@lru_cache(maxsize=None)
+def nf_test_cases(root: Path = REPO_ROOT) -> List[NfTestCase]:
+    """Every `test("...") { ... }` case in every nf-test file under `tests/`.
+
+    Parsed on the comment-stripped text, so a `tag "stub"` inside a comment is
+    not a tag and a `test("x")` inside a comment is not a case. Strings are
+    kept, because every name, tag and option IS a string. A file-preamble tag
+    (before the first case) applies to every case in the file; a case's own
+    tags are unioned in. `process` is the file's `process "NAME"` directive,
+    None for workflow/pipeline files.
+    """
+    out: List[NfTestCase] = []
+    for f in nf_test_files(root):
+        clean = strip_comments(f.read_text())
+        pm = _NF_TEST_PROCESS_RE.search(clean)
+        process = pm.group(1) if pm else None
+        first = _NF_TEST_CASE_RE.search(clean)
+        preamble = clean[: first.start()] if first else clean
+        file_tags = set(_NF_TEST_TAG_RE.findall(preamble))
+        for cm in _NF_TEST_CASE_RE.finditer(clean):
+            start = cm.end()
+            body = clean[start : block_extent(clean, start)]
+            out.append(
+                NfTestCase(
+                    path=f,
+                    name=cm.group(1),
+                    tags=frozenset(file_tags | set(_NF_TEST_TAG_RE.findall(body))),
+                    stub_option=bool(_NF_TEST_STUB_OPTION_RE.search(body)),
+                    process=process,
+                )
+            )
+    return out
