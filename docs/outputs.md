@@ -157,7 +157,7 @@ results/                              # = --outdir
 ├── <patient_id>/
 │   ├── converted/                    # <name>.ome.tif        — CONVERT_IMAGE (nuclear → ch0)
 │   ├── preprocessed/                 # *_corrected.ome.tif   — APPLY_PROFILES (BaSiC)
-│   │                                 #   absent when --skip_preprocessing; csv/preprocessed.csv
+│   │                                 #   absent by default (skip_preprocessing); csv/preprocessed.csv
 │   │                                 #   then points at converted/ instead
 │   ├── registered/
 │   │   ├── registered_slides/        # *_registered.ome.tiff — REGISTER (VALIS)

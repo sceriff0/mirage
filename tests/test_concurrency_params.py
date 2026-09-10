@@ -202,14 +202,18 @@ def test_no_per_process_max_forks_remains_in_modules_config(modules):
     a withName setting, would win over the correctly-placed scope default -- silently
     re-introducing the frozen value for that one process."""
     stray = re.findall(r"^\s*maxForks\s*=.*$", modules, flags=re.M)
-    assert not stray, f"conf/modules.config must not assign maxForks (it froze before profiles): {stray}"
+    assert not stray, (
+        f"conf/modules.config must not assign maxForks (it froze before profiles): {stray}"
+    )
 
 
 def test_per_process_caps_match_the_paramutils_table(nf):
     """ParamUtils.PER_PROCESS_MAX_FORKS_CAP is what validateFrozenConfig recomputes the
     expected per-process value from, and conf/*.config cannot read lib/ classes, so the
     two copies can only be kept equal by a test. Both directions."""
-    in_config = dict(re.findall(r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*Math\.min\(\s*(\d+)", nf))
+    in_config = dict(
+        re.findall(r"withName:\s*'(\w+)'\s*\{\s*maxForks\s*=\s*Math\.min\(\s*(\d+)", nf)
+    )
     src = (ROOT / "lib" / "ParamUtils.groovy").read_text()
     m = re.search(r"PER_PROCESS_MAX_FORKS_CAP\s*=\s*\[(.*?)\]", src, flags=re.S)
     assert m, "lib/ParamUtils.groovy must declare PER_PROCESS_MAX_FORKS_CAP"

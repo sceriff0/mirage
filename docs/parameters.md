@@ -59,7 +59,7 @@ Bio-Formats conversion + BaSiC illumination correction.
 | Parameter | Default | Description |
 |---|---|---|
 | `pixel_size` | `'auto'` | Micrometres per pixel, and the **single owner** of every µm conversion in the pipeline: GeoJSON centroids and areas, the published pyramid's `PhysicalSize`, and InstantSeg's rescaling all use this value and nothing else. `'auto'` (the default) reads `PhysicalSizeX` from each image's own OME metadata; a positive number overrides it for every slide instead, and `CONVERT_IMAGE`/`APPLY_PROFILES` then log a `[SCALE MISMATCH]` warning naming both numbers if the override disagrees with the file's own metadata by more than 1%. See `bin/utils/pixel_size.py`. |
-| `skip_preprocessing` | `false` | Skip BaSiC illumination correction entirely. Conversion still runs — everything downstream assumes the standardised OME-TIFF layout — so the step still emits one image per input and `csv/preprocessed.csv` still has a row per slide; the row points at `<pid>/converted/` instead of `<pid>/preprocessed/`. |
+| `skip_preprocessing` | `true` | Skip BaSiC illumination correction entirely (the default; set `false` in a params file or profile to run it). Conversion still runs — everything downstream assumes the standardised OME-TIFF layout — so the step still emits one image per input and `csv/preprocessed.csv` still has a row per slide; the row points at `<pid>/converted/` instead of `<pid>/preprocessed/`. |
 | `preproc_skip_nuclear` | `true` | Leave the nuclear/fiducial channels named by [`nuclear_markers`](#common) uncorrected. Those channels drive both registration and segmentation, so correcting them changes what both consume. |
 | `preproc_tile_size` | `1950` | BaSiC FOV tile size (px). |
 

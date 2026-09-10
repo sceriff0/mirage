@@ -134,7 +134,9 @@ def test_the_cap_was_applied_before_the_matchers_were_built(valis_config, tier):
     capped value, which is only true if the cap ran before MEMORY_PRESETS was built."""
     matcher = valis_config.MEMORY_PRESETS[tier]["matcher"]
     assert matcher.config["superpoint"]["max_keypoints"] == valis_config.MAX_KEYPOINTS
-    assert valis_config.MEMORY_PRESETS[tier]["num_features"] == valis_config.MAX_KEYPOINTS
+    assert (
+        valis_config.MEMORY_PRESETS[tier]["num_features"] == valis_config.MAX_KEYPOINTS
+    )
 
 
 def test_bound_cpu_count_makes_valis_see_the_allocation(valis_config, monkeypatch):
@@ -219,7 +221,9 @@ def test_bound_cpu_count_also_bounds_torch_threads(valis_config, monkeypatch):
         torch.set_num_threads(before)
 
 
-def test_apply_keypoint_cap_reaches_the_already_built_matchers(valis_config, fake_valis):
+def test_apply_keypoint_cap_reaches_the_already_built_matchers(
+    valis_config, fake_valis
+):
     """The pipeline's --reg_valis_max_keypoints arrives at RUN time, after MEMORY_PRESETS
     constructed its matchers; the runtime cap must rewrite their snapshotted config too."""
     n = valis_config.apply_keypoint_cap(2000)
@@ -243,6 +247,7 @@ def test_register_nf_renders_the_keypoint_flag_only_when_set():
     assert re.search(
         r"params\.reg_valis_max_keypoints != null \? \"--max-keypoints \$\{params\.reg_valis_max_keypoints\}\" : null",
         body,
-    ), "register.nf no longer renders --max-keypoints from params.reg_valis_max_keypoints"
+    ), (
+        "register.nf no longer renders --max-keypoints from params.reg_valis_max_keypoints"
+    )
     assert '"--max-keypoints"' in (ROOT / "bin" / "register.py").read_text()
-

@@ -155,11 +155,12 @@ baseline:
   # The pipeline exposes exactly THREE preprocessing knobs. BaSiC's own defaults stand in for
   # everything else (darkfield estimation on, no autotune, non-overlapping FOVs) and PREPROCESS's
   # cpus are owned outright by conf/modules.config — see the REMOVED axes note at the top.
-  skip_preprocessing: false           # pipeline default: BaSiC correction ON. TRUE skips the whole
-                                      # correction (CONVERT_IMAGE still runs, so the step still emits
-                                      # one image per slide), which makes this the preprocessing
-                                      # counterpart to skip_spatialdata_export: one axis that prices
-                                      # an entire stage.
+  skip_preprocessing: true            # pipeline default since 2026-09-10: BaSiC correction OFF,
+                                      # CONVERT_IMAGE only (the step still emits one image per
+                                      # slide). The axis below varies it back to false, so the
+                                      # OFAT cell PAYS for the correction relative to a skipping
+                                      # baseline -- the preprocessing counterpart to
+                                      # skip_spatialdata_export: one axis that prices a stage.
   preproc_skip_nuclear: true          # pipeline default: the nuclear/fiducial channels named by
                                       # nuclear_markers bypass BaSiC. Ungated
                                       # (modules/local/preprocess.nf) — a cost AND correction-quality
