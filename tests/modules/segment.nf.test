@@ -639,6 +639,143 @@ nextflow_process {
         }
     }
 
+    test("Should render the CellSAM knobs - rendered command") {
+
+        // Copy of "Should render the inlined StarDist flag string, in order", switched
+        // to seg_method='cellsam' to name seg_cellsam_bbox_threshold, seg_cellsam_overlap
+        // and seg_cellsam_use_wsi (conf/modules.config:1047-1056). `stub` tag but NO
+        // `options "-stub"` -- ext.args is only interpolated in script:, invisible to -stub.
+        tag "stub"
+
+        when {
+            params {
+                seg_method = 'cellsam'
+                seg_cellsam_bbox_threshold = 0.42
+                seg_cellsam_overlap = 0.25
+                seg_cellsam_use_wsi = true
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    SegBackends.ctxParams(params)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('.SEGMENT.size.csv')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered SEGMENT .command.sh found under the task work dir" },
+                { assert rendered.every { it.contains('--bbox-threshold 0.42') },
+                    "rendered command missing --bbox-threshold: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--overlap 0.25') },
+                    "rendered command missing --overlap: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--use-wsi') },
+                    "rendered command missing --use-wsi despite seg_cellsam_use_wsi=true: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render the InstanSeg batch-size knob - rendered command") {
+
+        // Copy of "Should render the inlined StarDist flag string, in order", switched
+        // to seg_method='instantseg' to name seg_instantseg_batch_size
+        // (conf/modules.config:1033-1045). `stub` tag but NO `options "-stub"`.
+        tag "stub"
+
+        when {
+            params {
+                seg_method = 'instantseg'
+                seg_instantseg_batch_size = 7
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    SegBackends.ctxParams(params)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('.SEGMENT.size.csv')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered SEGMENT .command.sh found under the task work dir" },
+                { assert rendered.every { it.contains('--batch-size 7') },
+                    "rendered command missing --batch-size: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should omit --use-wsi when seg_cellsam_use_wsi is false - rendered command") {
+
+        // Third CellSAM case: seg_cellsam_use_wsi's shipped default (nextflow.config) is
+        // `true`, so the positive case above only shows it explicitly named at the
+        // default value -- this is the case that actually flips the ternary
+        // (conf/modules.config:1054, `params.seg_cellsam_use_wsi ? '--use-wsi' : ''`).
+        tag "stub"
+
+        when {
+            params {
+                seg_method = 'cellsam'
+                seg_cellsam_use_wsi = false
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    SegBackends.ctxParams(params)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('.SEGMENT.size.csv')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered SEGMENT .command.sh found under the task work dir" },
+                { assert rendered.every { !it.contains('--use-wsi') },
+                    "rendered command carries --use-wsi despite seg_cellsam_use_wsi=false: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should render --model-dir and drop --prob-thresh when configured so - rendered command") {
 
         // The other state of both conditionals, which the case above cannot reach: the
