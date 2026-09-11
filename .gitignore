@@ -138,6 +138,7 @@ tests/testdata/invalid_dapi_position.csv
 tests/testdata/invalid_no_dapi.csv
 tests/testdata/invalid_checkpoint_missing_col.csv
 tests/testdata/invalid_checkpoint_bad_ref.csv
+tests/testdata/invalid_checkpoint_dangling_path.csv
 tests/testdata/invalid_file_not_found.csv
 tests/testdata/tiles_12_rows.csv
 tests/testdata/tiles_12_rows_trailing_blank.csv
