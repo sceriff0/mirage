@@ -101,7 +101,7 @@ nextflow_process {
         }
     }
 
-    test("Should render the doubled --pixel_size and the compartments contours flag - stub") {
+    test("Should render the doubled --pixel_size and the compartments contours flag - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
         // tag-"stub" case that reaches the rendered command. Gates the doubled
@@ -143,7 +143,7 @@ nextflow_process {
         }
     }
 
-    test("Should omit --nucleus_contours_json when quantify_compartments is off - stub") {
+    test("Should omit --nucleus_contours_json when quantify_compartments is off - rendered command") {
 
         tag "stub"
 

@@ -46,7 +46,7 @@ nextflow_process {
         }
     }
 
-    test("Should render mask_file, outdir and the two ext.args tunables - stub") {
+    test("Should render mask_file, outdir and the two ext.args tunables - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
         // tag-"stub" case that reaches the rendered command. extract_cell_properties.py
