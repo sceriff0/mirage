@@ -262,12 +262,16 @@ jobs:
       # STEP level, not job level, ON PURPOSE. The "Assert the DISK front-end
       # test is not skipped" step above runs pytest over a single file, which
       # collects far below the floor; a job-level env would fail it.
+      # tests/coverage_floor.txt is a RATCHET on bin/'s line coverage, the same shape as
+      # collected_floor.txt above: it may only go up. `--cov-fail-under` reads it via a bare
+      # `$(cat ...)`, so the file holds nothing but the integer -- no header comment, unlike
+      # collected_floor.txt, because a comment line would break the substitution.
       - name: Run Python unit tests
         env:
           MIRAGE_STRICT_SKIPS: '1'
         run: |
           pytest -v tests/ --ignore=tests/testdata --ignore=tests/modules --ignore=tests/subworkflows --ignore=tests/integration \
-            --cov=bin --cov-report=xml --cov-report=term-missing
+            --cov=bin --cov-report=xml --cov-report=term-missing --cov-fail-under="$(cat tests/coverage_floor.txt)"
 
       - name: Upload coverage
         if: ${{ inputs.upload-coverage && matrix.python-version == '3.10' }}
