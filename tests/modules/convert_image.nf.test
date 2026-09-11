@@ -254,4 +254,89 @@ nextflow_process {
             )
         }
     }
+
+    test("Should render channels, pixel_size, nuclear-markers and output_dir - stub") {
+
+        // No options "-stub": stub mode never evaluates script:, so this is the
+        // only tag-"stub" case that reaches the rendered command. Gates the same
+        // scalar-vs-list nuclear_markers defect the "real" case above pins, but
+        // under CI's blocking `--tag stub` gate.
+        tag "stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('convert_image.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--channels DAPI,PANCK,SMA') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--pixel_size 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nuclear-markers DAPI CELLTOX') },
+                    "nextflow.config's nuclear_markers list, space-joined by MarkerUtils.markerList: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--output_dir .') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--nuclear-markers D A P I') },
+                    "a scalar nuclear_markers must not be iterated character by character (the real-tagged case's point, now gated): " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render a single-marker scalar nuclear_markers without iterating characters - stub") {
+
+        tag "stub"
+
+        when {
+            params {
+                pixel_size = 0.325
+                nuclear_markers = 'DAPI'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('convert_image.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--nuclear-markers DAPI') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--nuclear-markers D A P I') },
+                    "a scalar nuclear_markers must not be iterated character by character (the real-tagged case's point, now gated): " + rendered.join(' --- ') }
+            )
+        }
+    }
 }
