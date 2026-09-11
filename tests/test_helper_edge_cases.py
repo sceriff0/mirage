@@ -134,11 +134,13 @@ def test_load_intensity_csvs_directory_glob_is_sorted(tmp_path):
     assert [p.name for p in _load_intensity_csvs(csvs_dir=tmp_path)] == ["a_quant.csv", "b_quant.csv"]
 
 
-def test_load_intensity_csvs_with_nothing_to_load_raises_or_returns_empty(tmp_path):
+def test_load_intensity_csvs_with_an_empty_directory_raises_system_exit(tmp_path):
+    """An empty directory has no `*_quant.csv` files to load. Pinned to what
+    `_load_intensity_csvs` actually does (observed directly: `csv_files` comes
+    back `[]` from the glob, `bin/merge_quant_csvs.py`'s `if not csv_files:`
+    branch logs an error and calls `sys.exit(1)`) -- it must not yield a
+    phantom file, and it must not silently return an empty list either."""
     from merge_quant_csvs import _load_intensity_csvs
 
-    try:
-        result = _load_intensity_csvs(csvs_dir=tmp_path)
-    except (FileNotFoundError, ValueError, SystemExit):
-        return
-    assert result == [], "an empty directory must not yield a phantom file"
+    with pytest.raises(SystemExit, match=r"^1$"):
+        _load_intensity_csvs(csvs_dir=tmp_path)
