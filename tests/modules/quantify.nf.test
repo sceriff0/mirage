@@ -39,7 +39,7 @@ nextflow_process {
         }
     }
 
-    test("Should render the quoted channel name and the compartments/expanded toggles - stub") {
+    test("Should render the quoted channel name and the compartments/expanded toggles - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
         // tag-"stub" case that reaches the rendered command.
@@ -79,7 +79,7 @@ nextflow_process {
         }
     }
 
-    test("Should drop --nuclei_mask_file and add --expanded when the toggles flip - stub") {
+    test("Should drop --nuclei_mask_file and add --expanded when the toggles flip - rendered command") {
 
         tag "stub"
 

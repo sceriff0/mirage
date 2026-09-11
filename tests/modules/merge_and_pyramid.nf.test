@@ -183,7 +183,7 @@ nextflow_process {
         }
     }
 
-    test("Should render the five pyramid tunables and no --masks-dir - stub") {
+    test("Should render the five pyramid tunables and no --masks-dir - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
         // tag-"stub" case that reaches the rendered command. Uses this file's own
@@ -238,7 +238,7 @@ nextflow_process {
         }
     }
 
-    test("Should render --masks-dir when a mask file is staged - stub") {
+    test("Should render --masks-dir when a mask file is staged - rendered command") {
 
         tag "stub"
 

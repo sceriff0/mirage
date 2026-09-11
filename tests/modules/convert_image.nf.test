@@ -255,7 +255,7 @@ nextflow_process {
         }
     }
 
-    test("Should render channels, pixel_size, nuclear-markers and output_dir - stub") {
+    test("Should render channels, pixel_size, nuclear-markers and output_dir - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the
         // only tag-"stub" case that reaches the rendered command. Gates the same
@@ -301,7 +301,7 @@ nextflow_process {
         }
     }
 
-    test("Should render a single-marker scalar nuclear_markers without iterating characters - stub") {
+    test("Should render a single-marker scalar nuclear_markers without iterating characters - rendered command") {
 
         tag "stub"
 
