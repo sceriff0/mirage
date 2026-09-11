@@ -266,6 +266,10 @@ jobs:
       # collected_floor.txt above: it may only go up. `--cov-fail-under` reads it via a bare
       # `$(cat ...)`, so the file holds nothing but the integer -- no header comment, unlike
       # collected_floor.txt, because a comment line would break the substitution.
+      # The measured value was 70.04% (5505/7860 statements) on Python 3.10 on 2026-09-11.
+      # The floor is 69, one point below that: this matrix runs 3.10 AND 3.11, only 3.10 was
+      # measured, and a version-gated branch in bin/ could put the 3.11 leg a little lower.
+      # The point of slack buys that leg, nothing else -- the ratchet still only goes up.
       - name: Run Python unit tests
         env:
           MIRAGE_STRICT_SKIPS: '1'
