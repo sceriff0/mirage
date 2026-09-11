@@ -604,7 +604,7 @@ nextflow_pipeline {
         // The other side of the invariant, and the reason every case above had to
         // name --cleanup_level=none explicitly.
         //
-        // At the default level the intermediates are not published, so a manifest
+        // At the opt-in 'final' level the intermediates are not published, so a manifest
         // written anyway would record paths that do not exist -- turning the
         // invariant above red for a DESIGNED reason, which is the worst possible
         // outcome for a guard. Checkpoint.writesAtLevel makes the writers
@@ -620,8 +620,9 @@ nextflow_pipeline {
             params {
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
-                // The shipped default, written out rather than relied on, so this
-                // case still means what it says if the default ever moves.
+                // 'final' is the OPT-IN cleaning level, not the shipped default
+                // (nextflow.config:485 has been 'none' since 2026-09-10), so this
+                // case has to name it and would be testing nothing without it.
                 cleanup_level = 'final'
             }
         }
