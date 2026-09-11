@@ -1597,9 +1597,17 @@ print("  Created tiled_m0.json")
 # ── invalid_checkpoint_dangling_path.csv: a registration checkpoint whose file
 # no longer exists. Used by tests/main.nf.test to prove --start registration
 # refuses a stale prior run instead of failing inside CONVERT/REGISTER later.
+# The path is deliberately OUTSIDE tests/testdata (/nonexistent/prior_run/..., same
+# style as invalid_file_not_found.csv above) rather than under TESTDATA_ABS: The
+# producer guard (tests/test_fixtures_have_a_producer.py) treats ANY "tests/
+# testdata/<name>" substring it finds inside a fixture CSV as a reference that
+# must exist on disk, with no allowance for a row whose entire point is that the
+# file does NOT exist. Keeping the basename (P001_deleted_after_the_run.ome.tiff)
+# unchanged is what matters -- tests/main.nf.test's refusal assertion greps the
+# error report for that basename, not the directory it once lived in.
 with open(OUT_DIR / "invalid_checkpoint_dangling_path.csv", "w") as f:
     f.write("patient_id,preprocessed_image,is_reference,channels\n")
-    f.write(f"P001,{TESTDATA_ABS}/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
+    f.write("P001,/nonexistent/prior_run/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
 print("  Created invalid_checkpoint_dangling_path.csv")
 
 
