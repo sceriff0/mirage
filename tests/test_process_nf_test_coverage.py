@@ -9,13 +9,14 @@ its channel wiring and nothing about the flags it passes. CI's gate is
 `nf-test test --tag stub`, so a rendered case tagged only `real` runs in
 nightly.yml on the default branch and nowhere else. The 2026-09-10 audit
 found 5 processes with no module test and 11 tunable processes with no gated
-rendered case; every one is listed in KNOWN_GAPS below, and that list can
-only shrink.
+rendered case; the 2026-09-10 build-out closed all sixteen, so KNOWN_GAPS is
+empty and the list can only shrink.
 
 All parsing goes through tests.nfmodel (test_nfmodel.py forbids a private one).
-Tunables are read off strip_comments(raw) views, never the blanked `body`:
-`ext.args` sits inside a string in conf/modules.config, and the rendered
-command is a string in the module.
+Tunables are read off `strip_comments(raw)` views. `ext.args` is an identifier,
+so the blanked `body` view would find that one too; the `params.` scan is the
+one that needs strings kept, because the rendered command -- and every
+`params.x` inside it -- lives in the module's quoted script string.
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_bl
 # Shrink-only. Each entry is a process the audit found short on 2026-09-10 and
 # the reason. Delete the entry in the same commit that closes the gap;
 # test_known_gaps_only_shrink fails on an entry that is no longer a gap.
+# Empty is the goal state, and the dict is kept rather than deleted so that a
+# future entry re-arms test_known_gaps_only_shrink; shrink-only is enforced by
+# review (nothing here can tell a new entry from a re-added old one).
 KNOWN_GAPS = {}
 
 
@@ -49,7 +53,17 @@ def _module_cases(name: str):
 
 
 def _gated_rendered_cases(name: str):
-    return [c for c in _module_cases(name) if "stub" in c.tags and not c.stub_option]
+    """Cases that run in CI's gate AND actually look at the rendered command.
+
+    `not c.stub_option` alone is not enough: a pure failure case (SEG_QUALITY_EVAL's
+    "refuse a meta without pixel_size", TILED_REG_TILE's "refuse a panel with no
+    nuclear channel") also runs without `-stub`, asserts `process.failed`, and
+    never reads `.command.sh` -- so it proves nothing about the flags."""
+    return [
+        c
+        for c in _module_cases(name)
+        if "stub" in c.tags and not c.stub_option and c.reads_command_sh
+    ]
 
 
 def _gap_reason(name: str) -> str | None:
