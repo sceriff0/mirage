@@ -36,10 +36,31 @@
 # (test_the_workflows_ -> test_the_scanned_files_actually_install_something),
 # and 1 renamed per-JOB (test_every_pytest_workflow_ -> _job_installs_torch_and_kornia).
 #
+# RE-MEASURED 2026-09-01 ON `benchmarking`, after merging main (the CI redesign) and
+# remediation/phase-7-benchmarking: 1282 passed, 12 skipped, 0 failed = 1294.
+#
+# THE +2 IS ACCOUNTED FOR, NOT ACCEPTED. Both are parametrised cases keyed on
+# `.github/workflows/benchmarks.yml`, a workflow that exists on this branch and no
+# other:
+#   test_release_workflow_graph.py::test_no_gate_aggregator_treats_skipped_as_a_pass[benchmarks.yml]
+#   test_release_workflow_graph.py::test_every_gate_aggregator_reads_every_job_it_needs[benchmarks.yml]
+# Both guards discover workflows BY GLOB, so the extra file is the whole difference;
+# `benchmarks/tests/` (217 tests) is outside this scope entirely -- the measurement
+# command below names `tests/` and nothing else. Enumerated by running
+# `--collect-only | grep -i benchmark` against this tree rather than inferred.
+#
+# So on `benchmarking` the number is 1294 and on main it is 1292. That is not drift
+# between two copies of one file: `benchmarking` is dev plus benchmarks/, the merge
+# direction is one-way (see CLAUDE.md's "Branch model"), and this line is ratcheted
+# here so the floor stays TIGHT on this branch -- deleting benchmarks.yml would drop
+# the count back to 1292 and fail, which is exactly what a floor is for.
+#
 # The check is `>=`, so adding tests never fails it. But a floor that is allowed
 # to fall arbitrarily far behind stops being a floor, so conftest.py also fails
 # once the suite has grown FLOOR_DRIFT (50) tests past this number, with the
 # replacement value in the message. Re-ratcheting is then one line, here.
+
+#
 #
 # RE-MEASURED 2026-09-02 on the 1.0.0 release branch, plan 01 (suite truth):
 # tests/test_fixtures_have_a_producer.py gained 2 cases and
@@ -682,6 +703,10 @@
 # coherence, parameters.md-vs-schema), the cases widening the CLI-boolean
 # guard to configs and to the bare form, and one BLOCKING_CHECKS
 # parametrisation for the mkdocs job.
+# RE-MEASURED 2026-09-03 on benchmarking after the plan-13 merge of dev@4ed1ff3
+# (v1.0.0 release prep, plans 01-12). `pytest --collect-only -q` reports 1936 =
+# dev's 1934 + the two test_release_workflow_graph.py cases parametrised over
+# .github/workflows/benchmarks.yml, which exists on this branch and no other.
 #
 # RE-MEASURED 2026-09-04, release 1.0.0 plan 14 Task 2 (collapse the two 1.0.0
 # CHANGELOG.md sections into one dated release). Four new cases, all in the new
@@ -704,21 +729,39 @@
 # RE-MEASURED 2026-09-06 (cleanup_level gate made lazy: one BLOCKING_CHECKS
 # parametrisation in tests/test_release_workflow_graph.py for tests/cleanup_level_pin.sh).
 # 1946 + 1 = 1947.
+# RE-MEASURED 2026-09-06 on benchmarking after merging dev@82754a6e (the eight
+# identity commits from plans 03/14 plus the lazy cleanup_level gate): dev's 1947
+# + the two benchmarks.yml parametrisations that exist only on this branch = 1949.
 # RE-MEASURED 2026-09-08 (tests/test_valis_preflight.py: eight cases for the VALIS
 # pyramid-level -1 preflight and register.py's None-return check) plus the two
 # per-module parametrisations that pick up the new bin/utils/valis_preflight.py.
 # 1947 + 8 + 2 = 1957.
+# RE-MEASURED 2026-09-08 on benchmarking after merging dev@53849500 (the VALIS
+# pyramid-level -1 preflight): dev's 1957 + the two benchmarks.yml parametrisations
+# that exist only on this branch = 1959.
 # RE-MEASURED 2026-09-08 (tests/test_tma_profile.py, four cases for the `tma` data-shape
 # profile). 1957 + 4 = 1961.
+# RE-MEASURED 2026-09-08 on benchmarking after merging dev@66e5ec1d (the `tma` profile):
+# dev's 1961 + the two benchmarks.yml parametrisations that exist only here = 1963.
 # RE-MEASURED 2026-09-09 (tests/test_valis_tier_sizes.py, three cases holding every prose
 # copy of the VALIS tier table to MEMORY_PRESETS). 1961 + 3 = 1964.
 # RE-MEASURED 2026-09-09 (tests/test_tma_profile.py: two cases for the REGISTER memory
 # override in the `tma` profile). 1964 + 2 = 1966.
-# RE-MEASURED 2026-09-09 on main. The ratchet is LOWERED here, once, on purpose: the
-# add_cycle feature now lives on the dev branch only, and its tests left with it
-# (tests/test_add_cycle_writes_what_it_requires.py, tests/test_extract_mask_series.py,
-# tests/test_mask_series_write_contract.py, one case in tests/test_cleanup_validation.py,
-# and the extract_mask_series parametrisations in tests/test_tiff_writer_layout.py and
-# tests/test_slide_io_seam.py), while the frozen-config guards were added (+10).
-# 1966 - 16 + 10 = 1960. dev's own floor is 1976; this file is branch-specific from here on.
-1960
+# RE-MEASURED 2026-09-09 on benchmarking after merging dev@3f482063 (equalised VALIS tiers,
+# tma REGISTER memory): dev's 1966 + the two benchmarks.yml parametrisations = 1968.
+# RE-MEASURED 2026-09-09 on benchmarking after merging dev@1f14d75b (frozen-config guards,
+# +10 on dev): 1968 + 10 = 1978.
+# RE-MEASURED 2026-09-09 on benchmarking after merging main@9de83bb8: the add_cycle feature
+# and its tests now live on dev only (-16, see main's note), so this branch follows main's
+# floor plus its two benchmarks.yml parametrisations. 1978 - 16 = 1962.
+#
+# RE-MEASURED 2026-09-11 on `test/suite-buildout` (branched from `benchmarking` @ ae2d7f8a)
+# after the test-suite build-out (docs/superpowers/plans/2026-09-10-test-suite-buildout.md):
+# `MIRAGE_STRICT_SKIPS=1 pytest -q tests/ --ignore=tests/testdata --ignore=tests/modules
+# --ignore=tests/subworkflows --ignore=tests/integration` gives 2042 passed, 17 skipped,
+# 1 xfailed -- 2042 + 17 + 1 = 2060. The +98 over 1962 are the new Python tests from that
+# plan: nfmodel's `nf_test_cases` cases, tests/test_process_nf_test_coverage.py,
+# tests/test_helper_edge_cases.py, tests/test_preflight_scale_inprocess.py, the
+# cluster-options slurm cases, and the fixture-guard case. This floor is branch-specific
+# (CLAUDE.md: main 1960, dev 1976 before this round of work).
+2060
