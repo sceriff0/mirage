@@ -14,11 +14,15 @@ but "nan" and "inf" are neither rejected here. `float("nan") <= 0` and
 +inf is not <= 0), so the `value <= 0` guard silently lets both through:
 `_parse_pixel_size("nan")` returns `nan`, `_parse_pixel_size("inf")` returns
 `inf`, and an infinite or NaN pixel size would be written into the report
-JSON as if it were a valid, positive scale. bin/ is read-only for this task;
-per the brief, "nan" and "inf" are dropped from the rejection parametrisation
-below rather than asserted as passing (which would hide the finding) or
-asserted as raising (which would fail). See task-14-15-report.md for the
-full write-up.
+JSON as if it were a valid, positive scale. bin/ is read-only for this task,
+so `test_parse_pixel_size_rejects_nan_and_inf` below asserts the CONTRACT --
+`pytest.raises(ValueError)` -- under `@pytest.mark.xfail(strict=True)`. That
+way the test never pins the defect as correct behaviour (a test asserting the
+nan/inf return value would turn RED when the bug is fixed, punishing the fix),
+and `strict=True` makes it fail loudly the moment `_parse_pixel_size` starts
+rejecting them, so the marker cannot outlive the defect. Same shape as the
+`_safe_mean` finding in tests/test_helper_edge_cases.py. See
+task-14-15-report.md for the full write-up.
 """
 
 from __future__ import annotations
@@ -52,17 +56,22 @@ def test_parse_pixel_size_rejects_non_positive_and_non_numeric(raw):
         preflight_scale._parse_pixel_size(raw)
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        'FINDING: bin/preflight_scale.py:57 promises "Raises ValueError for anything '
+        "that is neither\" a positive number nor 'auto', but `value <= 0` is False for "
+        "both NaN and +inf (NaN compares false to everything; +inf is not <= 0), so "
+        "both pass straight through and would be written into the report JSON as a "
+        "valid scale. bin/ is read-only for this task. This case asserts the CONTRACT, "
+        "so it xfails today and turns green -- loudly, because strict=True makes an "
+        "unexpected pass a failure -- the moment the guard is fixed."
+    ),
+)
 @pytest.mark.parametrize("raw", ["nan", "inf"])
-def test_parse_pixel_size_accepts_nan_and_inf_finding(raw):
-    """FINDING, not a spec: the docstring promises ValueError for "anything that
-    is neither" a positive number nor 'auto', but `value <= 0` is False for both
-    NaN and +inf, so both pass straight through instead of raising. Recorded
-    here (rather than in the rejects-parametrisation above) so the suite stays
-    green while the discrepancy stays visible and executable."""
-    import math
-
-    result = preflight_scale._parse_pixel_size(raw)
-    assert math.isnan(result) or math.isinf(result)
+def test_parse_pixel_size_rejects_nan_and_inf(raw):
+    with pytest.raises(ValueError):
+        preflight_scale._parse_pixel_size(raw)
 
 
 def test_main_auto_writes_a_report_naming_each_image(tmp_path):
@@ -83,7 +92,12 @@ def test_main_auto_with_no_metadata_returns_nonzero_and_names_the_offender(tmp_p
     with caplog.at_level(logging.ERROR):
         rc = preflight_scale.main(["--images", str(a), "--pixel-size", "auto", "--output", str(out)])
     assert rc != 0
-    assert "blank.ome.tiff" in caplog.text + out.read_text() if out.exists() else "blank.ome.tiff" in caplog.text
+    # `assert A if cond else B` parses as `assert (A if cond else B)`, which reads
+    # as a precedence bug even when it is not one. Two plain asserts instead.
+    if out.exists():
+        assert "blank.ome.tiff" in caplog.text + out.read_text()
+    else:
+        assert "blank.ome.tiff" in caplog.text
 
 
 def test_main_number_disagreeing_with_metadata_warns_but_succeeds(tmp_path, caplog):
