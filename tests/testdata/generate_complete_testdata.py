@@ -1594,6 +1594,14 @@ print("  Created relative_paths_input.csv (paths relative to the repo root)")
 )
 print("  Created tiled_m0.json")
 
+# ── invalid_checkpoint_dangling_path.csv: a registration checkpoint whose file
+# no longer exists. Used by tests/main.nf.test to prove --start registration
+# refuses a stale prior run instead of failing inside CONVERT/REGISTER later.
+with open(OUT_DIR / "invalid_checkpoint_dangling_path.csv", "w") as f:
+    f.write("patient_id,preprocessed_image,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
+print("  Created invalid_checkpoint_dangling_path.csv")
+
 
 print("\n" + "=" * 70)
 print("All test data generation complete!")
