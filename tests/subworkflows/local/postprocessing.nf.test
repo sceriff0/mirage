@@ -89,7 +89,125 @@ nextflow_workflow {
         then {
             assertAll(
                 { assert workflow.success },
-                { assert workflow.out.checkpoint_csv }
+                { assert workflow.out.checkpoint_csv },
+                { assert workflow.out.postprocess_qc.size() >= 1,
+                    "the QC PNG list is emitted at defaults" },
+                { assert workflow.trace.tasks().any { it.name.contains('EXPORT_SPATIALDATA') } }
+            )
+        }
+    }
+
+    test("Should emit postprocess_qc at defaults and drop it under skip_postprocessing_qc - stub") {
+        tag "stub"
+        options "-stub"
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                pixel_size = 0.325
+                skip_postprocessing_qc = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_cell_mask.tif')]
+                ])
+                input[2] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_nuclei_mask.tif')]
+                ])
+                input[3] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[4] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[5] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/sample_morphology.csv')]
+                ])
+                input[6] = Channel.fromList([
+                    [[patient_id: 'P001'], file('$projectDir/tests/testdata/sample_reg_qc.json')]
+                ])
+                input[7] = Channel.fromList([
+                    [[patient_id: 'P001'], file('$projectDir/tests/testdata/sample_reg_residuals.csv')]
+                ])
+                input[8] = ParamUtils.compartmentMode(params)
+                """
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.postprocess_qc.size() == 0,
+                    "skip_postprocessing_qc=true must leave the QC emit empty: " + workflow.out.postprocess_qc },
+                { assert !workflow.trace.tasks().any { it.name.contains('GENERATE_POSTPROCESSING_QC') },
+                    "the QC process must not be instantiated at all" },
+                { assert workflow.out.seg_eval_metrics.size() == 0,
+                    "skip_seg_quality_eval ships true, so CSE metrics are empty at defaults" }
+            )
+        }
+    }
+
+    test("Should not run EXPORT_SPATIALDATA under skip_spatialdata_export - stub") {
+        tag "stub"
+        options "-stub"
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                pixel_size = 0.325
+                skip_spatialdata_export = true
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                input[1] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_cell_mask.tif')]
+                ])
+                input[2] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_nuclei_mask.tif')]
+                ])
+                input[3] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[4] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[5] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/sample_morphology.csv')]
+                ])
+                input[6] = Channel.fromList([
+                    [[patient_id: 'P001'], file('$projectDir/tests/testdata/sample_reg_qc.json')]
+                ])
+                input[7] = Channel.fromList([
+                    [[patient_id: 'P001'], file('$projectDir/tests/testdata/sample_reg_residuals.csv')]
+                ])
+                input[8] = ParamUtils.compartmentMode(params)
+                """
+            }
+        }
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert !workflow.trace.tasks().any { it.name.contains('EXPORT_SPATIALDATA') },
+                    "EXPORT_SPATIALDATA ran despite skip_spatialdata_export=true" },
+                { assert !new File("$outputDir/P001/spatialdata").exists() }
             )
         }
     }

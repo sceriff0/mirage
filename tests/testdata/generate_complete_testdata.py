@@ -1610,6 +1610,13 @@ with open(OUT_DIR / "invalid_checkpoint_dangling_path.csv", "w") as f:
     f.write("P001,/nonexistent/prior_run/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
 print("  Created invalid_checkpoint_dangling_path.csv")
 
+# ── invalid_is_reference_yes.csv: is_reference must be literally true/false.
+with open(OUT_DIR / "invalid_is_reference_yes.csv", "w") as f:
+    f.write("patient_id,path_to_file,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,yes,DAPI|PANCK|SMA\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,no,DAPI|PANCK|SMA\n")
+print("  Created invalid_is_reference_yes.csv")
+
 
 print("\n" + "=" * 70)
 print("All test data generation complete!")

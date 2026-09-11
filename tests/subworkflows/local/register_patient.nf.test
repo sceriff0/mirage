@@ -109,6 +109,8 @@ nextflow_workflow {
                 { assert workflow.trace.tasks().findAll {
                     it.name =~ /(^|:)REGISTER\b/
                 }.size() == 0 },
+                { assert workflow.out.images_multi.size() >= 1,
+                    "a two-slide patient reaches the adapter as images_multi" },
             )
         }
     }
@@ -149,6 +151,8 @@ nextflow_workflow {
                 // via meta.is_passthrough — see tests/checkpoint_manifest.nf.test).
                 { assert workflow.out.registered.size() == 1 },
                 { assert workflow.out.checkpoint_csv },
+                { assert workflow.out.images_multi.size() == 0,
+                    "a single-slide group never reaches the adapter, so images_multi is empty" },
             )
         }
     }
