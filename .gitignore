@@ -211,6 +211,7 @@ tests/testdata/extra_column_input.csv
 tests/testdata/relative_paths_input.csv
 tests/testdata/P001_ünïcode.ome.tiff
 tests/testdata/with space/
+tests/testdata/tiled_m0.json
 .superpowers/
 
 # Internal architecture/audit reviews published as Claude Artifacts, not repo docs.

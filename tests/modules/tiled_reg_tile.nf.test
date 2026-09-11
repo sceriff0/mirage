@@ -1,0 +1,161 @@
+nextflow_process {
+
+    name "Test TILED_REG_TILE process"
+    script "modules/local/tiled_reg_tile.nf"
+    process "TILED_REG_TILE"
+
+    tag "modules"
+    tag "modules_local"
+    tag "tiled_reg_tile"
+
+    // `row` is a plain map: the shape splitCsv(header: true) yields from the
+    // tile plan TILED_COARSE writes (ix,iy,cx,cy,x0,y0,x1,y1,rx0,ry0,rx1,ry1).
+    def oneTile = { String pd, List channels ->
+        """
+        input[0] = [
+            [ patient_id: 'P001', channels: ${channels.inspect()} ],
+            file('${pd}/tests/testdata/tiled_m0.json', checkIfExists: true),
+            file('${pd}/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+            file('${pd}/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+            [ ix: 0, iy: 0, cx: 8, cy: 8, x0: 0, y0: 0, x1: 16, y1: 16, rx0: 0, ry0: 0, rx1: 16, ry1: 16 ]
+        ]
+        """
+    }
+
+    test("Should emit one control-point JSON named for patient, panel and tile - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            assert process.success
+            assert process.out.control.get(0).get(1).toString().endsWith('P001_DAPI_PANCK_SMA_0_0_ctrl.json')
+            assert snapshot(process.out.versions).match()
+        }
+    }
+
+    test("Should render the nuclear index, the high-tier upsample and the tile geometry - rendered command") {
+
+        // No options "-stub". tiled_reg_tile.py needs the tiled container; read the
+        // command only.
+        tag "stub"
+
+        when {
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--nuclear-index 0') },
+                    "DAPI is channel 0 under the default nuclear_markers: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--upsample 10') },
+                    "reg_tiled_mode defaults to 'high', whose upsample is 10: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--ix 0 --iy 0 --cx 8 --cy 8') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--rx0 0 --ry0 0 --rx1 16 --ry1 16') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--m0 tiled_m0.json') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--out P001_DAPI_PANCK_SMA_0_0_ctrl.json') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should take the low tier's upsample from reg_tiled_mode - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                reg_tiled_mode = 'low'
+            }
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--upsample 5') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should let an explicit reg_tiled_upsample override the tier - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                reg_tiled_mode = 'custom'
+                reg_tiled_upsample = 3
+            }
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--upsample 3') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should let reg_tiled_nuclear_index override the marker lookup - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                reg_tiled_nuclear_index = 2
+            }
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--nuclear-index 2') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should refuse a panel with no nuclear channel and name the override - failure") {
+
+        // The script: block throws IllegalArgumentException before any command is
+        // rendered. No options "-stub": the throw lives in script:, which -stub
+        // never evaluates, so under -stub this case would pass for the wrong reason.
+        tag "stub"
+
+        when {
+            process { oneTile.call("$projectDir", ['PANCK', 'SMA']) }
+        }
+
+        then {
+            assert process.failed
+            def report = (process.stdout + process.stderr).join('\n') + (process.errorReport ?: '')
+            assert report.contains('P001') : report
+            assert report.contains('reg_tiled_nuclear_index') : "the error must name the override: " + report
+            assert report.contains('[PANCK, SMA]') : "the error must name the panel it could not resolve: " + report
+        }
+    }
+}

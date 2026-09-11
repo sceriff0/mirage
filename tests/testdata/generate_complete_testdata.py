@@ -1582,6 +1582,18 @@ with open(OUT_DIR / "relative_paths_input.csv", "w") as f:
     f.write(f"P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8\n")
 print("  Created relative_paths_input.csv (paths relative to the repo root)")
 
+# ── tiled_m0.json: the coarse-stage output TILED_REG_TILE consumes ─────────────
+# Same content tiled_coarse.nf's stub block writes: an identity 3x3 matrix and
+# the reference geometry. Used by tests/modules/tiled_reg_tile.nf.test.
+(OUT_DIR / "tiled_m0.json").write_text(
+    json.dumps(
+        {"M0": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "ref_h": 16, "ref_w": 16,
+         "ref_name": "ref", "coarse_tre": 0, "n_inliers": 0}
+    )
+    + "\n"
+)
+print("  Created tiled_m0.json")
+
 
 print("\n" + "=" * 70)
 print("All test data generation complete!")

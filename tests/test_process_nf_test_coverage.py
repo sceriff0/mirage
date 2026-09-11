@@ -30,7 +30,6 @@ from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_bl
 # the reason. Delete the entry in the same commit that closes the gap;
 # test_known_gaps_only_shrink fails on an entry that is no longer a gap.
 KNOWN_GAPS = {
-    "TILED_REG_TILE": "no module test (W5)",
     "SEG_QUALITY_EVAL": "stub only (W6)",
     "CONVERT_IMAGE": "rendered case is real-tagged (W7)",
     "EXPORT_GEOJSON": "rendered case is real-tagged (W7)",
