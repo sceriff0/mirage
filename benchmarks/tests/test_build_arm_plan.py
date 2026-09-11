@@ -1013,13 +1013,24 @@ def test_benchmark_config_does_not_set_concurrency_directives():
     """Setting them there is worse than useless: process.maxForks cannot lift a
     per-process withName value that already resolved to min(own, 100), so the file
     reads as if it raises concurrency while doing nothing."""
-    code = "\n".join(
-        ln
-        for ln in (BENCH / "configs" / "benchmark.config").read_text().splitlines()
-        if not ln.lstrip().startswith(("//", "*", "/*"))
-    )
+    # The comment-STRIPPED view, via the one shared lexer (tests/nfmodel): a line-prefix
+    # stripper does not see inside a /* ... */ block, so the file's own prose about
+    # `maxForks` satisfied -- or, for a negative rule like this one, falsely tripped --
+    # the needle. CLAUDE.md "Verification reality" items 5 and 7.
+    if str(BENCH.parent / "tests") not in sys.path:
+        sys.path.insert(0, str(BENCH.parent / "tests"))
+    from nfmodel import strip_comments
+
+    code = strip_comments((BENCH / "configs" / "benchmark.config").read_text())
     assert "queueSize" not in code, "benchmark.config still sets executor.queueSize"
-    assert "maxForks = 200" not in code, "benchmark.config still sets a global maxForks"
+    # ANY maxForks, global or per-process. A `withName: 'REGISTER' { maxForks = 30 }`
+    # here does merge (a -c file lands after nextflow.config), but
+    # ParamUtils.validateFrozenConfig recomputes Math.min(10, max_forks) from the
+    # final params and refuses the run at launch on the disagreement -- which is how
+    # every arm of the 2026-09-11 head_neck launch (job 6740866) was SKIPped behind
+    # preprocess_shared. The per-process caps are owned by nextflow.config and raised
+    # only through --max_forks.
+    assert "maxForks" not in code, "benchmark.config still sets a maxForks directive"
 
 
 # ---------------------------------------------------------------------------
