@@ -35,6 +35,19 @@
     amount of prose goes in its own top-level `def checkX() { ... }` function
     below, called as ONE statement from inside workflow{}; only add assertions
     directly inline in workflow{} if they are genuinely a one- or two-liner.
+
+    AND THE CEILING IS COUNTED IN BYTES, NOT CHARACTERS. The javac/Groovy error
+    message talks about "Unicode code units", but the thing that actually
+    overflows is the class file's CONSTANT_Utf8_info entry, whose `length` field
+    is a u2: at most 65535 BYTES of modified UTF-8. ASCII is 1 byte per
+    character, so for an ASCII block the two counts coincide -- but an em-dash
+    costs 3 bytes and 1 code unit, so a block that looks 500 characters clear can
+    already be over. The workflow{} block was converted to ASCII-only on
+    2026-09-11 (its em-dashes became `--`) and measured 65502 bytes, i.e. 33
+    bytes of headroom. KEEP IT ASCII: a single pasted em-dash, curly quote or
+    non-breaking space now costs 2-3 bytes of that 33 and the failure surfaces
+    as a compile error with no line number. Prose with punctuation belongs in a
+    top-level `def` or in this header, neither of which counts.
 ========================================================================================
 */
 
@@ -571,7 +584,8 @@ def checkParamValidators() {
     assert CsvUtils.parseIsReference('false', 'row 1')  == false
     assert CsvUtils.parseIsReference(' TRUE ', 'row 1') == true  : 'the parser trims and lower-cases'
     assert CsvUtils.parseIsReference('False', 'row 1')  == false
-    ['yes', 'no', '1', '0', 'y', '', null, 'TRUE ', 'reference'].findAll { it != 'TRUE ' }.each { v ->
+    // No 'TRUE ' here: it trims to a valid value and is ACCEPTED above.
+    ['yes', 'no', '1', '0', 'y', '', null, 'reference'].each { v ->
         def rejected = false
         try { CsvUtils.parseIsReference(v, 'samplesheet.csv row 3') }
         catch (IllegalArgumentException e) {
