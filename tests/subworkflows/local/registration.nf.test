@@ -34,12 +34,80 @@ nextflow_workflow {
             assertAll(
                 { assert workflow.success },
                 { assert workflow.out.checkpoint_csv },
+                // The brief asked for `registration_tre.size() >= 1` here ("VALIS emits an
+                // intrinsic TRE artifact"), on the theory that VALIS always produces one.
+                // On a REAL run it usually does (bin/register.py writes
+                // preprocessed/data/{name}_summary.csv from VALIS's error_df), which is why
+                // REGISTER's `summary` output is declared `optional: true` rather than
+                // Channel.empty()-by-design. But modules/local/register.nf's `stub:` block
+                // (register.nf:222-229) only `touch`es registered_slides/*, the registrar
+                // pickle, the channels manifest and (at reg_qc>=2) the stage checkpoint -- it
+                // never writes anything under preprocessed/data/*.csv. So under -stub the glob
+                // behind `summary`/intrinsic_tre matches nothing and the channel is empty,
+                // measured here as `registration_tre.size() == 0`. This is a real discrepancy
+                // between the brief's premise and current stub behaviour (not a defect: -stub
+                // deliberately only wires channels, per CLAUDE.md "Verification reality" #1),
+                // asserted as observed rather than as specified. See task-12-report.md.
+                { assert workflow.out.registration_tre.size() == 0,
+                    "VALIS's REGISTER stub: block never touches preprocessed/data/*.csv, so " +
+                    "the optional `summary` emit (intrinsic_tre) is empty under -stub, unlike " +
+                    "a real run: " + workflow.out.registration_tre },
                 { assert snapshot(workflow.out.checkpoint_csv).match() }
             )
         }
     }
 
     // Legacy GPU/CPU registration tests moved to legacy/
+
+    test("Should run tiled/STARE registration - stub") {
+
+        // Same inputs as "Should run VALIS registration - stub", with
+        // registration_method flipped to 'tiled'.
+        //
+        // The brief for this case assumed intrinsic_tre follows the adapter seam's
+        // null-object rule for a method that "produces no TRE" -- but tiled_adapter.nf's
+        // own header and registration.nf's ch_registration_tre comment both say
+        // otherwise: "Both backends produce one (VALIS a feature-distance CSV, STARE a
+        // *_tre.json)". TILED_SOLVE declares `path("*_tre.json"), emit: tre` as a real,
+        // unconditional output (modules/local/tiled_solve.nf), so the tiled adapter's
+        // intrinsic_tre is NOT a Channel.empty() slot -- it is populated once per moving
+        // slide, including under -stub (its stub: block unconditionally writes
+        // *_tre.json, unlike VALIS's REGISTER stub -- see the comment on the VALIS case
+        // above). Asserted as such here rather than asserting an empty channel that
+        // would never be empty; see task-12-report.md for the full discrepancy note.
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                skip_registration_qc = true
+                padding = false
+                registration_method = 'tiled'
+            }
+            workflow {
+                """
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001_ref', is_reference: true, channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', id: 'P001_mov1', is_reference: false, channels: ['DAPI', 'CD3']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')]
+                ])
+                // REGISTRATION now takes only ch_preprocessed (VALIS-only)
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert workflow.out.checkpoint_csv },
+                { assert workflow.out.registration_tre.size() >= 1,
+                    "the tiled adapter also produces its own STARE *_tre.json -- " +
+                    "intrinsic_tre is not a null-object slot for this backend, contrary to " +
+                    "the brief's fallback premise. Real: " + workflow.out.registration_tre }
+            )
+        }
+    }
 
     test("Should handle multi-patient registration - stub") {
 
