@@ -101,6 +101,82 @@ nextflow_process {
         }
     }
 
+    test("Should render the doubled --pixel_size and the compartments contours flag - stub") {
+
+        // No options "-stub": stub mode never evaluates script:, so this is the only
+        // tag-"stub" case that reaches the rendered command. Gates the doubled
+        // --pixel_size (once from the script: block, once from conf/modules.config's
+        // ext.args, argparse last-wins) under CI's blocking `--tag stub` gate.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], pixel_size: 0.325],
+                    file('$projectDir/tests/testdata/sample_merged_quant.csv', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_geojson.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                // Rendered TWICE by design: once in script:, once from ext.args, argparse
+                // last-wins (export_geojson.nf:45-57). Pin that both are the same value; a
+                // drift between them is the bug this guards.
+                { assert rendered.every { (it =~ /--pixel_size 0\.325/).count == 2 },
+                    "expected exactly two identical --pixel_size 0.325 occurrences: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nucleus_contours_json') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('-o export') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--cell_data ') && it.contains('--contours_json ') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should omit --nucleus_contours_json when quantify_compartments is off - stub") {
+
+        tag "stub"
+
+        when {
+            params {
+                quantify_compartments = false
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], pixel_size: 0.325],
+                    file('$projectDir/tests/testdata/sample_merged_quant.csv', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true),
+                    file('$projectDir/tests/testdata/sample_contours.json', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('export_geojson.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { !it.contains('--nucleus_contours_json') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should produce valid GeoJSON with cell features - real") {
 
         tag "real"
