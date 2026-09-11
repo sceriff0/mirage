@@ -222,12 +222,27 @@ class NfTestCase:
     tags: frozenset
     stub_option: bool
     process: Optional[str]
+    reads_command_sh: bool
 
 
-_NF_TEST_CASE_RE = re.compile(r'\btest\s*\(\s*"([^"]*)"\s*\)\s*\{')
-_NF_TEST_TAG_RE = re.compile(r'^\s*tag\s+"([^"]+)"', re.M)
-_NF_TEST_PROCESS_RE = re.compile(r'^\s*process\s+"([A-Za-z_][A-Za-z0-9_]*)"', re.M)
-_NF_TEST_STUB_OPTION_RE = re.compile(r'^\s*options\s+"[^"]*(?<![\w-])-stub(?![\w-])[^"]*"', re.M)
+# nf-test accepts both quote styles everywhere, so every one of these matches
+# `['"]` and backreferences the opening quote. `-stub-run` is Nextflow's
+# documented primary spelling and `-stub` its alias: a case written the primary
+# way used to model as `stub_option=False`, i.e. as a RENDERED case, which is
+# how a stub-only case could satisfy the rendered-coverage rule in
+# test_process_nf_test_coverage.py while rendering nothing.
+_NF_TEST_CASE_RE = re.compile(r"""\btest\s*\(\s*(?P<q>["'])(?P<name>.*?)(?P=q)\s*\)\s*\{""")
+_NF_TEST_TAG_RE = re.compile(r"""^\s*tag\s+(?P<q>["'])(?P<val>[^"']+)(?P=q)""", re.M)
+_NF_TEST_PROCESS_RE = re.compile(
+    r"""^\s*process\s+(?P<q>["'])(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P=q)""", re.M
+)
+_NF_TEST_STUB_OPTION_RE = re.compile(
+    r"""^\s*options\s+(?P<q>["'])[^"']*(?<![\w-])-stub(?:-run)?(?![\w-])[^"']*(?P=q)""", re.M
+)
+
+
+def _tag_values(text: str) -> set:
+    return {m.group("val") for m in _NF_TEST_TAG_RE.finditer(text)}
 
 
 @lru_cache(maxsize=None)
@@ -239,26 +254,30 @@ def nf_test_cases(root: Path = REPO_ROOT) -> List[NfTestCase]:
     kept, because every name, tag and option IS a string. A file-preamble tag
     (before the first case) applies to every case in the file; a case's own
     tags are unioned in. `process` is the file's `process "NAME"` directive,
-    None for workflow/pipeline files.
+    None for workflow/pipeline files. `reads_command_sh` says whether the case
+    body mentions `.command.sh` at all -- the difference between a case that
+    asserts the RENDERED command and one (e.g. a pure `process.failed` case)
+    that merely happens to run without `-stub`.
     """
     out: List[NfTestCase] = []
     for f in nf_test_files(root):
         clean = strip_comments(f.read_text())
         pm = _NF_TEST_PROCESS_RE.search(clean)
-        process = pm.group(1) if pm else None
+        process = pm.group("name") if pm else None
         first = _NF_TEST_CASE_RE.search(clean)
         preamble = clean[: first.start()] if first else clean
-        file_tags = set(_NF_TEST_TAG_RE.findall(preamble))
+        file_tags = _tag_values(preamble)
         for cm in _NF_TEST_CASE_RE.finditer(clean):
             start = cm.end()
             body = clean[start : block_extent(clean, start)]
             out.append(
                 NfTestCase(
                     path=f,
-                    name=cm.group(1),
-                    tags=frozenset(file_tags | set(_NF_TEST_TAG_RE.findall(body))),
+                    name=cm.group("name"),
+                    tags=frozenset(file_tags | _tag_values(body)),
                     stub_option=bool(_NF_TEST_STUB_OPTION_RE.search(body)),
                     process=process,
+                    reads_command_sh=".command.sh" in body,
                 )
             )
     return out

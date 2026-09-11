@@ -678,6 +678,66 @@ nextflow_process {
     assert two.stub_option is False
 
 
+def test_nf_test_cases_sees_the_stub_run_spelling_and_single_quotes(tmp_path):
+    """`-stub-run` is Nextflow's documented primary spelling (`-stub` is the
+    alias), and nf-test accepts single-quoted option strings. A case written
+    either way used to parse as `stub_option=False`, i.e. as a RENDERED case --
+    which is how a stub-only case could satisfy the rendered-coverage rule in
+    test_process_nf_test_coverage.py while rendering nothing."""
+    _write_nf_test(tmp_path, "e.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("stub-run") { tag "stub"
+        options "-stub-run" }
+    test("single-quoted") { tag "stub"
+        options '-stub' }
+    test("stub-run with another flag") { tag "stub"
+        options "-stub-run -resume" }
+    test("really rendered") { tag "stub"
+        options "-resume" }
+}
+''')
+    cases = {c.name: c for c in nf_test_cases(root=tmp_path)}
+    assert cases["stub-run"].stub_option is True
+    assert cases["single-quoted"].stub_option is True
+    assert cases["stub-run with another flag"].stub_option is True
+    assert cases["really rendered"].stub_option is False
+
+
+def test_nf_test_cases_sees_a_single_quoted_case_name(tmp_path):
+    """`test('...')` is legal nf-test; a parser that only matched `test("...")`
+    dropped the case silently, so its tags and options were never modelled."""
+    _write_nf_test(tmp_path, "f.nf.test", """
+nextflow_process {
+    process 'FOO'
+    test('single-quoted name') { tag 'stub' }
+}
+""")
+    (case,) = nf_test_cases(root=tmp_path)
+    assert case.name == "single-quoted name"
+    assert case.process == "FOO"
+    assert case.tags == frozenset({"stub"})
+
+
+def test_nf_test_cases_records_whether_the_body_reads_command_sh(tmp_path):
+    """A case with no `options "-stub"` is not automatically a rendered-command
+    case: a pure failure case asserts `process.failed` and never looks at the
+    command. `reads_command_sh` is what separates the two."""
+    _write_nf_test(tmp_path, "g.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("renders") { tag "stub"
+        then { def cmd = new File("${workDir}/x/.command.sh").text
+               assert cmd.contains("--flag") } }
+    test("just fails") { tag "stub"
+        then { assert process.failed } }
+}
+''')
+    renders, fails = nf_test_cases(root=tmp_path)
+    assert renders.reads_command_sh is True
+    assert fails.reads_command_sh is False
+
+
 def test_nf_test_cases_workflow_file_has_no_process(tmp_path):
     _write_nf_test(tmp_path, "d.nf.test", '''
 nextflow_workflow {
