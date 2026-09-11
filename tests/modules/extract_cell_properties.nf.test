@@ -46,6 +46,49 @@ nextflow_process {
         }
     }
 
+    test("Should render mask_file, outdir and the two ext.args tunables - stub") {
+
+        // No options "-stub": stub mode never evaluates script:, so this is the only
+        // tag-"stub" case that reaches the rendered command. extract_cell_properties.py
+        // is skimage-only (no VALIS/CSE/matplotlib), so it runs without a container
+        // and process.success can be asserted too.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA']],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('extract_cell_properties.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert process.success },
+                { assert rendered.size() >= 1 },
+                // The brief pinned "P001_cell_mask.tif", but the input tuple copied from
+                // this file's own stub case above stages P001_cell_mask.npy (both
+                // fixtures exist in tests/testdata/; this process's module isn't
+                // defective, it just echoes whatever path(cell_mask) it's handed).
+                // Measured .command.sh: `--mask_file P001_cell_mask.npy`.
+                { assert rendered.every { it.contains('--mask_file P001_cell_mask.npy') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--outdir .') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--simplify_tolerance 1.0') },
+                    "must equal SEG_QC_GEOJSON's --tolerance 1.0 or the two GeoJSONs stop being comparable: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--coord_precision 2') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should produce valid morphology CSV and contours JSON - real") {
 
         tag "real"
