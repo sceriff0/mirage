@@ -1245,3 +1245,62 @@ def test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session(tmp_
         assert names.index(f"arms-{c['resume_run']}") < names.index(
             f"arms-{c['run_id']}"
         )
+
+
+def test_run_arms_refuses_a_run_name_its_launch_dir_already_holds(tmp_path):
+    """Behavioural: a second launch against the same results root must not call
+    nextflow at all. Every run_id has a fixed `-name arms-<run_id>` (the crosses look
+    their base's session up by it), and Nextflow refuses a name already in the launch
+    directory's history -- INCLUDING one written by a launch refused at
+    validateFrozenConfig before any task ran (measured 2026-09-11, job 6740866). A bare
+    resubmission would then fail on "Run name has been already used" behind the same
+    25-line log dump; run_arms.sh says which directory (or history line) to remove."""
+    import os
+    import subprocess
+
+    cfg = yaml.safe_load((BENCH / "configs" / "arms.yaml").read_text())
+    cfg["registration_arms"]["valis"]["memory_mode"] = ["high"]
+    cfg["registration_arms"]["valis"]["reg_micro_reg"] = [1, 2]
+    cfg["registration_arms"]["tiled"]["enabled"] = False
+    cfg["external_baseline"]["ashlar"]["enabled"] = False
+    cfg["segmentation_arms"]["seg_method"] = []
+    cfg["qc_segmenter_cross"]["cross"] = "all"
+    cfg["qc_pairing_cross"]["cross"] = "all"
+    plan = build_arm_plan(cfg)
+    root = tmp_path / "arm_results"
+    root.mkdir()
+    plan_csv = tmp_path / "plan.csv"
+    plan_csv.write_text(_plan_csv(plan))
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,is_reference,channels\nP1,/x/a.tif,true,DAPI\n"
+    )
+    log = tmp_path / "launches.log"
+    _fake_nextflow(tmp_path / "bin", log)
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        ARMS_CONCURRENCY="2",
+    )
+    cmd = ["bash", str(BENCH / "run_arms.sh"), str(plan_csv), str(sheet), str(root)]
+    first = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    assert first.returncode == 0, first.stdout + first.stderr
+    launched = log.read_text().splitlines()
+    assert len(launched) == len(plan), (len(launched), len(plan))
+
+    second = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    assert log.read_text().splitlines() == launched, (
+        "the relaunch reached nextflow with a run name the launch dir already holds"
+    )
+    err = second.stderr
+    bases = [p["run_id"] for p in plan if p["arm_kind"] != "registration_qc"]
+    crosses = [p for p in plan if p["arm_kind"] == "registration_qc"]
+    assert bases and crosses
+    for b in bases:
+        assert f"[{b}] SKIP: a run named arms-{b} already exists" in err, err
+        assert f"rm -rf {root}/.launch/{b}" in err, err
+    for c in crosses:
+        # the cross shares its base's launch dir: the remedy must never be rm -rf
+        line = next(ln for ln in err.splitlines() if ln.startswith(f"[{c['run_id']}] SKIP"))
+        assert "do NOT remove the directory" in line and c["resume_run"] in line, line
+        assert "rm -rf" not in line, line

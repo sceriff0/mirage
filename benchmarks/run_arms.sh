@@ -135,6 +135,24 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
     if [[ -n "$sid" ]]; then resume_args=(-resume "$sid"); else resume_args=(-resume); fi
     echo "[$run_id] resumes base arm $RESUME_RUN (session ${sid:-latest}); only the QC chain should run"
   fi
+  # A run name is fixed per run_id (the cross arms look their base's session up by it),
+  # and Nextflow refuses a -name already present in the launch directory's history --
+  # including one left by a launch that was REFUSED before any task ran. Measured
+  # 2026-09-11: validateFrozenConfig rejected preprocess_shared at launch, wrote
+  # `arms-preprocess_shared<TAB>-` to history, and a bare resubmission would have died
+  # on "Run name has been already used" with the same 79-arm SKIP cascade behind it.
+  # Say which directory to remove instead of surfacing that after a 25-line log dump.
+  if [[ -f "$rundir/.nextflow/history" ]] &&
+     awk -F'\t' -v n="arms-$run_id" '$3 == n { found = 1 } END { exit !found }' "$rundir/.nextflow/history"; then
+    local remedy="rm -rf $rundir  (the whole launch dir: its work/ and cache/ belong to that attempt)"
+    if [[ -n "${RESUME_RUN:-}" ]]; then
+      # The cross arm shares its BASE arm's launch dir; removing it would destroy the base.
+      remedy="delete the arms-$run_id line from $rundir/.nextflow/history -- do NOT remove the directory, base arm $RESUME_RUN lives there"
+    fi
+    echo "[$run_id] SKIP: a run named arms-$run_id already exists in $rundir/.nextflow/history;" \
+         "Nextflow refuses to reuse a run name. Remove the previous attempt first: $remedy" >&2
+    return 1
+  fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
   # Typed params as JSON — see the add_param comment above for why this cannot be
   # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
