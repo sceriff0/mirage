@@ -30,6 +30,8 @@ mentions the other at runtime.
 
 import re
 
+import pytest
+
 from tests.nfmodel import REPO_ROOT, strip_comments, with_name_blocks
 
 # The params the site profile's derivation reads. Not restated as a constant
@@ -151,3 +153,64 @@ def test_the_scan_finds_the_gpu_block():
         "no withName: clusterOptions asks for a --gres allocation any more -- "
         "the block these guards were written for is gone"
     )
+
+
+# Each site SLURM knob's real consumer inside nextflow.config's `slurm` profile.
+# `slurm_qos` (with `slurm_account`, not named by this task) feeds the composed
+# `process.clusterOptions` closure this file already parses above. `slurm_partition`
+# does NOT: it drives a separate scalar, `process.queue = params.slurm_partition`,
+# two lines above that closure -- a real distinction, not an oversight, so this
+# test checks each param against what it actually reaches rather than assuming
+# both funnel through clusterOptions.
+_SLURM_SITE_PARAM_CONSUMERS = {
+    "slurm_partition": "queue",
+    "slurm_qos": "clusterOptions",
+}
+
+
+@pytest.mark.parametrize(
+    "param,consumer", sorted(_SLURM_SITE_PARAM_CONSUMERS.items())
+)
+def test_slurm_site_param_is_named_and_reaches_its_consumer(param, consumer):
+    """`slurm_partition` and `slurm_qos` must each have a declared default in
+    nextflow.config's top-level params block, be offered as a site knob in
+    `conf/site.config.template`, and be referenced by name inside
+    nextflow.config's `slurm` profile.
+
+    conf/site.config.template does NOT itself define a `clusterOptions`
+    closure (or a `process.queue` assignment) -- it only sets the params
+    (both `null`, "leave null when not using SLURM"); the closures that
+    consume them live in nextflow.config's `slurm` profile, read here via
+    `Path.read_text()` and `tests.nfmodel.strip_comments` rather than a
+    private parse.
+
+    This is a config reader, not a Nextflow-source parser (nf-test's own
+    `.nf.test` files and the `modules/*.nf` process bodies are out of scope
+    here), so it is exempted from `tests.nfmodel`'s block/closure extraction
+    only for the `process.queue` half of the check -- the `clusterOptions`
+    half reuses this file's own `_profile_cluster_options_body()` rather than
+    re-parsing the closure a second way.
+    """
+    nextflow_cfg = strip_comments((REPO_ROOT / "nextflow.config").read_text())
+    site_template = strip_comments(
+        (REPO_ROOT / "conf" / "site.config.template").read_text()
+    )
+
+    assert re.search(rf"\b{param}\s*=", nextflow_cfg), (
+        f"{param} has no default declaration in nextflow.config's params block"
+    )
+    assert re.search(rf"\b{param}\s*=", site_template), (
+        f"{param} is not offered as a site knob in conf/site.config.template"
+    )
+
+    if consumer == "clusterOptions":
+        closure_body = _profile_cluster_options_body()
+        assert f"params.{param}" in closure_body, (
+            f"{param} is declared but never referenced inside nextflow.config's "
+            f"`slurm` profile's process.clusterOptions closure"
+        )
+    else:
+        assert re.search(rf"process\.queue\s*=\s*params\.{param}\b", nextflow_cfg), (
+            f"{param} is declared but never wired to process.queue in "
+            f"nextflow.config's `slurm` profile"
+        )
