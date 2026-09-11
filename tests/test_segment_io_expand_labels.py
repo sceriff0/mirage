@@ -110,3 +110,18 @@ def test_only_one_implementation_survives():
         f"expand_labels_tiled is defined in {definers}; it must be defined once, in "
         "bin/utils/segment_io.py, and imported by both segmentation backends"
     )
+
+
+def test_labels_beyond_uint16_survive_the_tiled_expansion():
+    """A checkerboard of 80 000 one-pixel labels: more than uint16 can hold. The
+    expansion fills the gaps and must keep every label id and the uint32 dtype."""
+    side = 520                       # a 260 x 260 lattice: 67 600 labels, above 65 535
+    half = side // 2
+    labels = np.zeros((side, side), dtype=np.uint32)
+    labels[::2, ::2] = np.arange(1, half * half + 1, dtype=np.uint32).reshape(half, half)
+    n = int(labels.max())
+    assert n > 65_535, "the fixture must cross the uint16 boundary or the test proves nothing"
+    out = expand_labels_tiled(labels, distance=1, tile_size=128)
+    assert out.dtype == np.uint32
+    assert int(out.max()) == n
+    assert set(np.unique(out)) - {0} == set(np.unique(labels)) - {0}
