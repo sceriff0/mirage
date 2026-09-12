@@ -52,7 +52,7 @@ def test_the_stub_control_json_is_gated_not_legacy_accepted(caplog):
     """A stub control point must go through the confidence gate like a real one."""
     control = _stub_control()
 
-    with caplog.at_level(logging.WARNING, logger="tiled_solve"):
+    with caplog.at_level(logging.WARNING, logger="stare.solve"):
         tiled_solve._grid_from_controls(
             [control], gate_tre=1.0, max_error=0.99, max_disp=256
         )

@@ -64,7 +64,7 @@ class RegPresets {
      * `benchmarking` branch -- there is no benchmarks/ directory on this one.)
      *
      * Gating and quality knobs -- reg_tiled_gate_tre, reg_tiled_max_error, reg_tiled_max_disp,
-     * reg_tiled_nuclear_index -- are deliberately NOT tiered. They set what counts as an
+     * reg_tiled_solver, reg_tiled_nuclear_index -- are deliberately NOT tiered. They set what counts as an
      * acceptable control point, which is a correctness question, not a cost/accuracy trade. Tying
      * them to a cost tier would silently change which control points are accepted when a user
      * asked only to use less memory.

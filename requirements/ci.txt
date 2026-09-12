@@ -32,6 +32,16 @@
 # ImportError, it surfaces only on a WRITE.
 -r tiled.txt
 
+# ---- The STARE package -----------------------------------------------------------------
+# packages/stare is the registration method itself; bin/tiled_*.py and the bin/utils
+# STARE modules are shims over it, so `import stare` must resolve wherever `pytest tests/`
+# or `pytest benchmarks/tests` runs. Editable, and RELATIVE TO THE CWD (pip resolves a
+# path in a requirements file against the working directory, not the file), which is the
+# repository root in every job that installs this file. It names no version: its
+# dependencies are the constrained ones above, and its own version is pyproject.toml's.
+# containers/tiled/Dockerfile installs the same directory with `pip install /tmp/stare`.
+-e ./packages/stare
+
 # ---- CI-only tooling -------------------------------------------------------------------
 pytest
 pytest-cov

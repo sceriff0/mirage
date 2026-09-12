@@ -95,6 +95,18 @@ LOCALLY_COPIED_MODULES = {
     "convert": {"jvm_cache"},
 }
 
+# {container: {import name: repo-relative package dir}} for a FIRST-PARTY PACKAGE a smoke
+# script imports -- repository code the Dockerfile COPYs as a directory and pip-installs
+# from that path, so `declared_distributions` (which reads requirement tokens and skips
+# path installs) cannot see it either. containers/tiled is the case: `stare` is the STARE
+# method itself (packages/stare), which bin/tiled_*.py shim over.
+# `test_locally_installed_packages_are_actually_installed_by_name` keeps an entry honest
+# the same way LOCALLY_COPIED_MODULES' meta-test does: the Dockerfile must literally COPY
+# that directory AND pip-install the destination, and smoke.sh must actually import it.
+LOCALLY_INSTALLED_PACKAGES = {
+    "tiled": {"stare": "packages/stare"},
+}
+
 
 def _entries() -> list[dict]:
     return json.loads(IMAGES_JSON.read_text())
@@ -348,9 +360,10 @@ def test_every_module_the_smoke_script_imports_is_installed_by_the_image(name):
         "changed."
     )
     locally_copied = LOCALLY_COPIED_MODULES.get(name, set())
+    locally_installed = LOCALLY_INSTALLED_PACKAGES.get(name, {})
     missing = []
     for module in sorted(imported_modules(smoke_path(name).read_text())):
-        if module in locally_copied:
+        if module in locally_copied or module in locally_installed:
             continue
         distribution = IMPORT_TO_DISTRIBUTION.get(module, module)
         if distribution.lower() not in declared:
@@ -390,6 +403,40 @@ def test_locally_copied_modules_are_actually_copied_by_name(name, module):
     )
     assert module in imported_modules(smoke_path(name).read_text()), (
         f"LOCALLY_COPIED_MODULES[{name!r}] names {module!r}, but "
+        f"containers/{name}/smoke.sh does not actually import it -- the entry has "
+        "outlived its reason and should be removed."
+    )
+
+
+@pytest.mark.parametrize(
+    "name,module,src_dir",
+    sorted(
+        (name, module, src_dir)
+        for name, packages in LOCALLY_INSTALLED_PACKAGES.items()
+        for module, src_dir in packages.items()
+    ),
+)
+def test_locally_installed_packages_are_actually_installed_by_name(
+    name, module, src_dir
+):
+    """Every LOCALLY_INSTALLED_PACKAGES entry must be a real `COPY <src_dir> <dest>` plus
+    a `pip install ... <dest>` in that container's own Dockerfile, and a real import in
+    its smoke.sh -- otherwise it is a silent permanent exemption from
+    test_every_module_the_smoke_script_imports_is_installed_by_the_image."""
+    text = _strip_hash_comments(dockerfile(name).read_text())
+    text = re.sub(r"\\\s*\n", " ", text)
+    copy = re.search(rf"COPY\s+{re.escape(src_dir)}/?\s+(\S+)", text)
+    assert copy, (
+        f"LOCALLY_INSTALLED_PACKAGES[{name!r}] names {module!r} from {src_dir}, but "
+        f"containers/{name}/Dockerfile has no `COPY {src_dir} <dest>` line."
+    )
+    dest = copy.group(1).rstrip("/")
+    assert re.search(rf"pip3?\s+install\b[^\n&]*\s{re.escape(dest)}/?(?:\s|$)", text), (
+        f"containers/{name}/Dockerfile COPYs {src_dir} to {dest} but never "
+        f"`pip install`s it -- a stray directory, not an installed package."
+    )
+    assert module in imported_modules(smoke_path(name).read_text()), (
+        f"LOCALLY_INSTALLED_PACKAGES[{name!r}] names {module!r}, but "
         f"containers/{name}/smoke.sh does not actually import it -- the entry has "
         "outlived its reason and should be removed."
     )

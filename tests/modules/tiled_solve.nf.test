@@ -101,7 +101,12 @@ nextflow_process {
                 // the pre-existing gate must survive the change
                 { assert rendered.every { flagValue(it, '--gate-tre') == '1.0' },
                     "--gate-tre is not exactly 1.0; got: " +
-                    rendered.collect { flagValue(it, '--gate-tre') }.join(', ') }
+                    rendered.collect { flagValue(it, '--gate-tre') }.join(', ') },
+                // The SOLVE algorithm is a rendered flag too: if it stops rendering, the
+                // package CLI's own default decides which mesh a run ships, silently.
+                { assert rendered.every { flagValue(it, '--solver') == 'robust' },
+                    "--solver is not exactly 'robust' (params.reg_tiled_solver default); got: " +
+                    rendered.collect { flagValue(it, '--solver') }.join(', ') }
             )
         }
     }

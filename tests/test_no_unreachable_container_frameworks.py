@@ -34,7 +34,7 @@ FRAMEWORKS = {
     "mesmer": "mesmer",
     "deepcell": "deepcell",
     # containers/tiled installs these for STARE's DISK+LightGlue COARSE front-end
-    # (bin/utils/coarse_align.py::_frontend_disk_lightglue). They used to live in a separate
+    # (packages/stare/src/stare/coarse_align.py::_frontend_disk_lightglue). They used to live in a separate
     # containers/stare-ml image behind `-profile stare_ml`; that image was never published, so
     # both it and the profile are gone and :tiled carries torch+kornia itself. Both are
     # reachable (imported inside that function, guarded by try/except ImportError), so listing
@@ -49,6 +49,7 @@ FRAMEWORKS = {
 # or imported by first-party code.
 CODE_DIRS = (
     "bin",
+    "packages",  # packages/stare: the STARE method; bin/tiled_*.py are shims over it
     "tests",
     "benchmarks",
     "lib",

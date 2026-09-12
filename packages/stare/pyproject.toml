@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stare-registration"
+version = "0.1.0"
+description = "STARE: tile-parallel, JVM-free, non-rigid registration of whole-slide images"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Valerio Fassi" }, { name = "Yinxiu Zhan" }]
+requires-python = ">=3.10"
+# Pins follow requirements/constraints.txt at the repo root; the container and CI
+# install from there, so a version here must equal the constraint or the build fails.
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "scikit-image>=0.24",
+    "tifffile>=2023.4",
+    "zarr>=2.18,<3",
+    "numcodecs<0.14",
+    "imagecodecs>=2023",
+]
+
+[project.optional-dependencies]
+# The learned coarse anchor (DISK + LightGlue). CPU wheels: install torch from the
+# CPU index first, then kornia, exactly as containers/tiled/Dockerfile does.
+anchor-disk = ["torch>=2.3", "kornia>=0.7.3"]
+test = ["pytest>=7"]
+
+[project.scripts]
+stare = "stare.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

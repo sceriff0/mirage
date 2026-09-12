@@ -18,6 +18,14 @@
 > decomposition, the halo contract, the streaming reads, and everything downstream of
 > COARSE. `bin/tiled_coarse.py` cites this file for the thumbnail rationale, which still
 > holds — and holds harder now that the thumbnail bound is the memory knob.
+>
+> **Added 2026-09-12 — the SOLVE stage is no longer empty, and the method is a package.**
+> §6b below describes the `robust` solver (`stare.solve`: neighbour-consistency rejection,
+> in-fill, Tikhonov smoothing, invertibility check) that replaced "lay the translations on the
+> grid and zero-fill", selectable against the byte-identical `legacy` path by
+> `reg_tiled_solver`. §3's "no global solve" and §9.1's novelty claim are corrected in place.
+> The four stages now live in `packages/stare/` (`pip install -e packages/stare`, CLI `stare`);
+> `bin/tiled_*.py` are shims over it.
 
 **Status:** implemented on branch `feat/tiled-registration` (Phases 1–2 + Nextflow wiring, 56
 Python tests, JVM-free stub run green). Remaining: reg_qc=2 seg-QC Nextflow dispatch, the slim
@@ -99,6 +107,11 @@ and cyclic-IF re-stains the **same physical section** across cycles. Two consequ
 - **The reference is the global coordinate frame.** Any slide — or any *tile* — that registers to
   the corresponding reference region gets **absolute coordinates for free**. No inter-image or
   inter-tile reconciliation, hence **no tree, no global solve.**
+  *(Corrected 2026-09-12: no tree and no ordering problem, but there IS a small solve. ASHLAR's
+  spanning tree was never only a positioning device — it is also its cross-tile consistency
+  check, and dropping it dropped that check. §6b restores neighbour consistency on the control
+  grid without a tree: a per-tile measurement that disagrees with its neighbours is rejected and
+  bridged from them. The solve runs on kilobytes and never touches the fan-out.)*
 - **Topology is a star:** every moving slide → the reference, independently and in parallel.
 
 The whole design is: make that star *tiled* (for the ≤8 GB memory bound) and *TRE-instrumented*
@@ -217,6 +230,34 @@ contribute `dᵢ = 0` — the interpolation stays smooth.
 
 ---
 
+## 6b. The SOLVE stage (added 2026-09-12)
+
+Until this date SOLVE contained no algorithm: after the three gates (confidence, range, TRE)
+it laid the accepted per-tile translations on the grid, median-filtered them over accepted
+cells only, and left every rejected or unmeasured cell at `[0, 0]` — a *step* in the field
+wherever a tile was dropped, and no defence against a **confident but wrong** tile (a partly
+blank crop that correlated against the wrong structure passes every single-tile score; see
+the "KNOWN, UNCLOSED EXPOSURE" note that used to sit in `bin/tiled_solve.py`). Every comparable
+method — approximating TPS, elastix FFD, RegWSI's diffusive solve, PIV — goes *reject →
+regularise → densify*. `stare.solve` now does the same, on the control grid, numpy/scipy only:
+
+| step | what | parameter | source |
+|---|---|---|---|
+| gates | confidence (`error ≤ max_error`), range (`|d| < max_disp`), TRE (`tre ≥ gate_tre`) | `reg_tiled_max_error`, `reg_tiled_max_disp`, `reg_tiled_gate_tre` | unchanged |
+| neighbour consistency | normalised median test: reject a cell whose displacement differs from the median of its accepted 8-neighbours by > 2.0 median-absolute-deviations (+ 0.1 px noise floor); cells with < 3 accepted neighbours are not judged | `nmt_threshold = 2.0`, `nmt_epsilon = 0.1` | Westerweel & Scarano 2005, *Exp. Fluids* 39 |
+| in-fill | a rejected or unmeasured cell takes the inverse-distance-weighted mean of accepted cells within 2 grid steps; beyond reach it stays 0, so the field decays into background instead of extrapolating | `infill_radius = 2` | — |
+| smoothing | Tikhonov: `argmin_u Σ wᵢ|uᵢ − dᵢ|² + λ Σ|∇u|²`, `wᵢ = 1 − errorᵢ` on measured cells, 0.25 on in-filled ones, sparse solve | `λ = 1.0` (grid units) | Rohr et al. approximating TPS; RegWSI's diffusive term |
+| invertibility | STITCH inverts `F` by fixed-point iteration, which converges when the field's Lipschitz constant is < 1 (Chen et al. 2008). The Jacobian of `u` on the grid is reported (max operator norm, min `det(I + J)`); if the norm reaches 0.9 the field is scaled to it and the manifest says so | `max_lipschitz = 0.9` | Chen et al. 2008; Kuang et al. 2019 |
+
+`reg_tiled_solver = 'robust'` (default) selects this; `'legacy'` reproduces the pre-2026-09-12
+mesh byte-for-byte (`packages/stare/tests/test_solve.py` pins it against a verbatim copy of
+the old stage). The solver's name and diagnostics are recorded in the manifest and in
+`*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
+changes with the solver, the arm benchmark carries it as an axis rather than silently moving the
+default: `docs/benchmarks_real.md`, "Re-running a subset after a code change".
+
+---
+
 ## 7. Non-negative output (guaranteed, not patched)
 
 Downstream quantification (per-cell mean/median marker intensity) is corrupted by negative
@@ -289,10 +330,13 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
 
 ## 9. What is genuinely new here
 
-1. **Reference-anchored tiled registration — tiling without a global solve.** ASHLAR must run an
-   MST to make tiles consistent because it has no reference; STARE registers each tile to the
-   reference region, so absolute position is free and there is no inter-tile solve. Tiling
-   composes with the star instead of needing a tree.
+1. ~~**Reference-anchored tiled registration — tiling without a global solve.**~~ **Retracted
+   2026-08-25 (research fleet) and corrected 2026-09-12.** ASHLAR's *cycle-registration* phase
+   has anchored later cycles' tiles to a fixed reference since 2021, so reference anchoring is
+   prior art; and its spanning tree is also its cross-tile consistency check, which STARE had
+   dropped rather than replaced. What survives as a differentiator is the combination in §9.2–4
+   plus a **non-rigid**, WSI-to-WSI solve that restores neighbour consistency on a grid without a
+   tree (§6b) — an engineering contribution, to be claimed as such.
 2. **Registration-as-a-DAG-of-≤8 GB-processes.** The archived tiled path tiled only the *warp*
    (monolithic VALIS `REG_PREP`); STARE tiles the *registration estimation* itself, JVM-free.
 3. **Intrinsic per-tile TRE → a spatial error heatmap** that doubles as the refinement gate —

@@ -28,6 +28,10 @@ process TILED_SOLVE {
     def prefix    = "${meta.patient_id}_${meta.channels.join('_')}"
     def slidename = meta.channels.join('_')
     def gate      = params.reg_tiled_gate_tre
+    // --solver: which SOLVE algorithm builds the mesh from the gated control points
+    // ('robust' | 'legacy', see stare.solve). A correctness knob like the gates, so it is a
+    // param rather than a tier value.
+    def solver    = params.reg_tiled_solver
     // --max-error / --max-disp: the confidence and range gates on the control points, from
     // conf/modules.config's ext.args for this process.
     def args      = task.ext.args ?: ''
@@ -36,6 +40,7 @@ process TILED_SOLVE {
         --m0 ${m0} \\
         --controls 'ctrl_*/*_ctrl.json' \\
         --gate-tre ${gate} \\
+        --solver ${solver} \\
         ${args} \\
         --moving-name '${slidename}' \\
         --out-manifest ${prefix}_manifest.json \\

@@ -39,6 +39,7 @@ from pathlib import Path
 from tests.nfmodel import block_extent as _block_extent
 from tests.nfmodel import strip_comments as _strip_comments
 from tests.nfmodel import strip_comments_and_strings as _strip_comments_and_strings
+from tests.stare_shims import shims, source_of
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "nextflow.config"
@@ -698,6 +699,14 @@ def _is_required_true(call: ast.Call) -> bool:
     return False
 
 
+def _shim_name(source: Path) -> str:
+    """The bin/ file name a scanned source belongs to: itself, or the shim over it."""
+    for shim, target in shims().items():
+        if target == source:
+            return shim.name
+    return source.name
+
+
 def find_argparse_default_sites():
     """Scan `bin/**/*.py` for `add_argument()` calls whose flag resolves to a
     `nextflow.config` params{} key, via the per-script map, the flag-only
@@ -734,7 +743,11 @@ def find_argparse_default_sites():
     skipped: list[tuple[Path, str, str, str]] = []
     required: list[tuple[Path, str, str, str]] = []
     no_correspondence: list[tuple[Path, str]] = []
-    for path in sorted(BIN_DIR.rglob("*.py")):
+    for shim in sorted(BIN_DIR.rglob("*.py")):
+        # A STARE shim (bin/tiled_stitch.py etc.) carries no argparse of its own: its
+        # flags live in the packages/stare stage it re-exports. Read that file, but keep
+        # the SHIM's name for the per-script map -- that is the name the module invokes.
+        path = source_of(shim)
         try:
             tree = ast.parse(path.read_text(), filename=str(path))
         except (SyntaxError, UnicodeDecodeError):
@@ -753,8 +766,8 @@ def find_argparse_default_sites():
             is_required = _is_required_true(call)
             for flag in flags:
                 name = _normalize_flag(flag)
-                if (path.name, name) in per_script_map:
-                    key, via = per_script_map[(path.name, name)], "per-script"
+                if (shim.name, name) in per_script_map:
+                    key, via = per_script_map[(shim.name, name)], "per-script"
                 elif name in flag_only_map:
                     key, via = flag_only_map[name], "flag-only"
                 elif name in declared:
@@ -810,7 +823,9 @@ def test_no_duplicate_bin_argparse_defaults():
 
     offending = []
     for path, flag, key, python_default, via in matched:
-        allowlist_key = f"{path.name}:{flag}"
+        # keyed by the SHIM's name for a STARE stage (`tiled_stitch.py:--pixel-size`),
+        # the same name the module invokes and the per-script map is built from
+        allowlist_key = f"{_shim_name(path)}:{flag}"
         if allowlist_key in ARGPARSE_DEFAULT_ALLOWLIST:
             continue
         config_default = _config_value_to_python(declared[key])

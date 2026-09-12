@@ -2,7 +2,8 @@
 #
 # Runs the fully-parallel, JVM-free registration method (registration_method='tiled'):
 # TILED_COARSE, TILED_REG_TILE, TILED_SOLVE, TILED_STITCH and WARP_SEG_QC's tiled backend
-# (lib/WarpBackends.groovy). (The single-task TILED_REGISTER this comment used to name was
+# (lib/WarpBackends.groovy). The method is the `stare` package (packages/stare), installed
+# below; bin/tiled_*.py are shims over its stages. (The single-task TILED_REGISTER this comment used to name was
 # removed with the reg_tiled_fanout flag — see CHANGELOG.)
 # NO Java/BioFormats, NO libvips, NO GPU — that is what keeps this image an order of
 # magnitude smaller than the VALIS image. It no longer makes the METHOD laptop-sized:
@@ -11,7 +12,7 @@
 #
 # THIS IMAGE NOW CARRIES torch + kornia (CPU wheels), and the earlier "lean, pure-CPU
 # scientific-Python, torch-free" claim is deliberately RETIRED. They power the DISK +
-# LightGlue COARSE front-end (bin/utils/coarse_align.py::_frontend_disk_lightglue), which
+# LightGlue COARSE front-end (stare/coarse_align.py::_frontend_disk_lightglue), which
 # until now lived in a second, optional image (containers/stare-ml, `-profile stare_ml`).
 # That split is gone: ONE image that always works beats TWO where the second is never
 # published. The second image was built by a plain push to main but NEVER pushed
@@ -61,6 +62,19 @@ COPY requirements/constraints.txt requirements/tiled.txt requirements/torch-cpu.
 RUN pip install --no-cache-dir -r /tmp/requirements/tiled.txt \
     && pip install --no-cache-dir -r /tmp/requirements/torch-cpu.txt \
     && pip install --no-cache-dir -r /tmp/requirements/kornia.txt
+
+# THE METHOD ITSELF. STARE's source of truth is the `stare` package under packages/stare
+# (its stages, the solve, the streaming stitch); the bin/tiled_*.py scripts the modules
+# invoke are shims over it, so the image must carry it or every TILED_* task fails at
+# import. Installed AFTER the requirements: its pyproject dependencies are all already
+# satisfied at the constrained versions, so this step resolves nothing new (and must not --
+# a version it pulled on its own would be a fourth copy of a pin). The build context is the
+# repository root, which is why `packages/stare` is COPY-able at all.
+# Guarded by tests/test_container_harmonisation.py's first-party-package check and by
+# tests/test_container_smoke_tests.py (smoke.sh imports it).
+COPY packages/stare /tmp/stare
+RUN pip install --no-cache-dir --no-deps /tmp/stare \
+    && rm -rf /tmp/stare
 
 # BAKE THE PRETRAINED WEIGHTS. kornia fetches these at FIRST USE into
 # $TORCH_HOME/hub/checkpoints -- from raw.githubusercontent.com (DISK) and

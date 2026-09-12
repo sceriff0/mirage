@@ -252,9 +252,9 @@ jobs:
           # shallow clone makes that diff either wrong or an error. The tree is ~10 MB.
           fetch-depth: 0
 
-      # The per-image path filter is GENERATED from the same two sources the build
+      # The per-image path filter is GENERATED from the same sources the build
       # itself reads -- containers/images.json and each Dockerfile's own `COPY
-      # requirements/...` lines -- so it cannot disagree with them. A hand-written
+      # requirements/...` and `COPY packages/...` lines -- so it cannot disagree with them. A hand-written
       # filter block is a third copy of the image list, and the second copy
       # (an inline matrix) is the one tests/test_container_build_matrix.py already
       # exists to forbid.
@@ -277,6 +277,7 @@ jobs:
             echo "any:"
             echo "  - 'containers/**'"
             echo "  - 'requirements/**'"
+            echo "  - 'packages/**'"
             echo "  - '.github/workflows/containers.yml'"
             for dir in $(jq -r '.[].dir' containers/images.json); do
               echo "${dir}:"
@@ -287,6 +288,14 @@ jobs:
               grep -oE 'requirements/[A-Za-z0-9._-]+\.txt' "containers/${dir}/Dockerfile" \
                 | sort -u \
                 | while read -r req; do echo "  - '${req}'"; done
+              # Every first-party package directory it COPYs and pip-installs
+              # (containers/tiled: packages/stare, the STARE method itself). Same
+              # rule as the requirements files: the image reads it, so a change to
+              # it must rebuild the image, and only that image.
+              grep -oE '^COPY packages/[A-Za-z0-9._-]+' "containers/${dir}/Dockerfile" \
+                | sed 's/^COPY //' \
+                | sort -u \
+                | while read -r pkg; do echo "  - '${pkg}/**'"; done
             done
             echo 'PATHS_FILTER_EOF'
           } >> "$GITHUB_OUTPUT"

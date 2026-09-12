@@ -289,6 +289,15 @@
                     "default": null,
                     "minimum": 0
                 },
+                "reg_tiled_solver": {
+                    "type": "string",
+                    "description": "STARE only: the SOLVE stage. 'robust' = neighbour-consistency rejection (normalised median test), in-fill of dropped tiles, Tikhonov smoothing and an invertibility check over the control grid (stare.solve); 'legacy' = the gates plus a median filter, byte-identical to manifests produced before 2026-09-12.",
+                    "default": "robust",
+                    "enum": [
+                        "robust",
+                        "legacy"
+                    ]
+                },
                 "reg_tiled_upsample": {
                     "type": [
                         "integer",
