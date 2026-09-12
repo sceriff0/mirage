@@ -140,7 +140,52 @@ def _configs(sweep: dict) -> list[tuple[dict, str]]:
             if v == baseline.get(axis):
                 continue
             configs.append((dict(baseline, **{axis: v}), axis))
+    # 5. DELTA GRIDS -- appended LAST, on purpose. run_id/config_id are assigned by
+    #    enumeration order, so a block inserted anywhere above would renumber every run
+    #    after it and a sweep already launched would no longer match its results root.
+    #    A delta grid replicates the cells of one per-method grid (`from`, `registration_method`)
+    #    with `params` applied -- e.g. the 9 STARE cells again at reg_tiled_solver=robust --
+    #    so a NEW method variant gets the same resource curves as the launched sweep without
+    #    re-running any of it. Labelled delta_grid:<name>; select with --only 'delta_grid:<name>'.
+    #    Guarded by benchmarks/tests/test_delta_grids.py.
+    for name, block in (sweep.get("delta_grids") or {}).items():
+        configs.extend(_delta_grid_configs(sweep, name, block))
     return configs
+
+
+def _delta_grid_configs(sweep: dict, name: str, block: dict) -> list[tuple[dict, str]]:
+    baseline = sweep.get("baseline", {})
+    source = block.get("from", "registration_method_grid")
+    if source != "registration_method_grid":
+        raise ValueError(
+            f"delta_grids.{name}.from={source!r}: only registration_method_grid is supported"
+        )
+    method = block.get("registration_method")
+    grid = (sweep.get(source) or {}).get(method)
+    if not grid:
+        raise ValueError(
+            f"delta_grids.{name}: {source} has no '{method}' entry to replicate"
+        )
+    params = block.get("params") or {}
+    if not params:
+        raise ValueError(f"delta_grids.{name}.params is empty -- nothing would differ")
+    keys = list(grid)
+    dkeys = list(params)
+    out = []
+    for combo in itertools.product(*(grid[k] for k in keys)):
+        for dcombo in itertools.product(*(params[k] for k in dkeys)):
+            out.append(
+                (
+                    dict(
+                        baseline,
+                        registration_method=method,
+                        **dict(zip(keys, combo)),
+                        **dict(zip(dkeys, dcombo)),
+                    ),
+                    f"delta_grid:{name}",
+                )
+            )
+    return out
 
 
 def build_run_plan(sweep: dict, repeats: int = 1) -> list[dict]:

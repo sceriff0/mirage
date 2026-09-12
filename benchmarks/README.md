@@ -156,6 +156,15 @@ Verify the whole harness with no data at all:
 - **Output:** `bench_run_plan.csv` — one row per pipeline run
   (`run_id,varied_axis,config_id,rep,<param columns incl target_px,n_channels>`).
 
+#### A2b — Add a method variant to a sweep that already ran
+
+`sweep.yaml`'s `delta_grids` replicate the cells of a per-method grid with extra params
+applied and are appended **after** every other block, so a launched sweep's run ids never
+move. `delta_grids.solver_robust` re-runs the 9 STARE cells at `reg_tiled_solver=robust`.
+Build the subset with `--only 'delta_grid:solver_robust'` (same `--repeats` as the launch),
+launch it into the same results root, then build the tables over the full plan. See
+`docs/benchmarks_real.md`, "Re-running a subset after a code change".
+
 ### A3 — Launch the sweep (cluster)
 
     benchmarks/run_sweep.sh  bench_run_plan.csv  bench_matrix/matrix_manifest.csv  bench_results \

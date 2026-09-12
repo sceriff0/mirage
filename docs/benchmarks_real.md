@@ -506,20 +506,37 @@ the subset is written to `<ROOT>_plan.subset.csv` precisely so it never
 overwrites it — and `load_runs` / the QC harvesters take the union of whatever
 each arm directory holds.
 
-### The sweep: accuracy columns, not resource curves
+### The sweep: the launched rows stay, the new solver gets its own rows
 
-`build_run_plan.py --only-method tiled` (or `--changed` / `--only <regex>` on
-`run_id`, `config_id`, `varied_axis`) writes the same row-identical subset of the
-synthetic sweep (9 of 98 runs at the shipped `sweep.yaml`), and `run_sweep.sh`
-takes `SWEEP_REPLACE=1` to move a run directory aside to
-`<root>/.replaced/<timestamp>/<run_id>` before relaunching (it otherwise skips a
-run whose name its directory already holds). But be clear about **what a
-SOLVE-only change can move there**: the resource/scaling curves are dominated by
-`TILED_COARSE` / `TILED_REG_TILE` / `TILED_STITCH` and `REGISTER`'s peak RSS, and
-a different solver moves `TILED_SOLVE`'s peak by kilobytes. The sweep's tiled rows need re-running for the
-**accuracy columns** (`registration_accuracy.csv`, `param_matrix.csv`'s
-`reg_*`), not for the resource curves, which will come back within replicate
-noise of the old ones. Do not read a moved scaling fit as a solver effect.
+A SOLVE-only change moves `TILED_SOLVE`'s peak by kilobytes, so the resource curves of the
+**launched** sweep are not invalidated, and `sweep.yaml` pins `reg_tiled_solver: legacy`
+in its baseline so those 9 STARE cells stay exactly what they were. The new solver's
+resource curves come from a **delta grid** (`delta_grids.solver_robust` in `sweep.yaml`):
+the same 9 STARE tier × gate cells replicated at `reg_tiled_solver=robust`, appended
+*after* every other block so the launched run ids never move (the new cells are new run
+ids at the end; `benchmarks/tests/test_delta_grids.py` pins that). Launch only them:
+
+```bash
+# 1. the plan, with the SAME --repeats as the original launch (run ids depend on it);
+#    the new plan is the old one plus the appended delta rows -- check:
+python benchmarks/build_run_plan.py --sweep benchmarks/configs/sweep.yaml \
+    --out sweep_plan.csv --repeats 3
+diff <(head -n $(wc -l < sweep_plan.old.csv) sweep_plan.csv) sweep_plan.old.csv && echo "launched rows unchanged"
+
+# 2. the subset: only the delta block (27 rows at --repeats 3)
+python benchmarks/build_run_plan.py --sweep benchmarks/configs/sweep.yaml \
+    --out sweep_plan.subset.csv --repeats 3 --only 'delta_grid:solver_robust'
+
+# 3. launch it into the SAME results root and matrix as the sweep (new run ids: no replace needed)
+benchmarks/run_sweep.sh sweep_plan.subset.csv matrix/matrix_manifest.csv sweep_results
+
+# 4. tables over the FULL plan: reg_tiled_solver is now an identity column, so the legacy
+#    and robust rows sit side by side rather than collapsing
+make sweep-tables SWEEP=sweep_results SWEEP_PLAN=sweep_plan.csv
+```
+
+`--only-method tiled` now selects both tiled blocks (18 cells); `--only
+'registration_method_grid:tiled'` is the launched 9 alone.
 
 ## Three traps the consumer already guards, and why the producer respects them
 

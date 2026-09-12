@@ -377,3 +377,20 @@ registration_method_grid:
     reg_tiled_mode:    [low, medium, high]    # the tier: RegPresets.STARE rows, 512 / 1024 / 2048 px
     reg_tiled_gate_tre: [0.5, 1.0, 2.0]       # refinement gate: rigid-stage TRE (px) above which a
                                               # tile is non-rigidly refined; brackets the default 1.0
+
+# ---------------------------------------------------------------------------------------------
+# DELTA GRIDS -- resource curves for a method variant that arrived AFTER the sweep was launched.
+# build_run_plan.py appends these cells after every other block, so the run ids of the launched
+# sweep never move; the new cells are new run ids at the end. Each block replicates the cells of
+# one per-method grid above with `params` applied. Launch only them with
+#   build_run_plan.py --sweep ... --out sweep_plan.subset.csv --repeats <same as the launch> \
+#       --only 'delta_grid:solver_robust'
+# and point make_tables at the FULL plan afterwards. Because `reg_tiled_solver` then differs
+# across runs it becomes an identity column of every table (analysis/lib/contract.py), so the
+# legacy and robust rows never collapse into one.
+delta_grids:
+  solver_robust:
+    from: registration_method_grid           # the 9 STARE tier x gate cells
+    registration_method: tiled
+    params:
+      reg_tiled_solver: [robust]             # the SOLVE stage that did not exist at launch

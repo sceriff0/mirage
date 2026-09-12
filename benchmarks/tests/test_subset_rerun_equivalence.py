@@ -403,9 +403,16 @@ def test_sweep_subset_is_row_identical_and_keeps_run_ids(tmp_path):
     assert {r["run_id"] for r in plan if r["registration_method"] == "tiled"} == {
         r["run_id"] for r in sub
     }
-    # --only on varied_axis, the name an operator knows a block by
+    # --only on varied_axis, the name an operator knows a block by. The tiled
+    # method spans TWO blocks since the delta grid landed (the launched 9 cells
+    # at reg_tiled_solver=legacy, and their 9 replicas at robust), so the block
+    # name selects a strict subset of the method.
     by_axis = select_runs(plan, [], only=r"registration_method_grid:tiled")
-    assert {r["run_id"] for r in by_axis} == {r["run_id"] for r in sub}
+    delta = select_runs(plan, [], only=r"delta_grid:solver_robust")
+    assert {r["run_id"] for r in by_axis} | {r["run_id"] for r in delta} == {
+        r["run_id"] for r in sub
+    }
+    assert {r["run_id"] for r in by_axis}.isdisjoint({r["run_id"] for r in delta})
     # and through the CLI, byte-identical lines under the full header
     full = tmp_path / "full.csv"
     part = tmp_path / "tiled.csv"

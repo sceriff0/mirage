@@ -901,6 +901,8 @@ def _sweep_covered_params(sweep) -> set:
     for grid in ("segmentation_grid", "registration_method_grid"):
         for per_method in sweep.get(grid, {}).values():
             covered |= set(per_method)
+    for block in (sweep.get("delta_grids") or {}).values():
+        covered |= set(block.get("params") or {})
     return covered
 
 
