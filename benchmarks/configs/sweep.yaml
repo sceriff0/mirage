@@ -145,6 +145,12 @@ baseline:
   # it costs 6x the tiled grid.
   reg_tiled_max_error: 0.99           # CONFIDENCE gate (phase-correlation error), pipeline default
   reg_tiled_max_disp: null            # RANGE gate; null = fall back to reg_tiled_halo
+  reg_tiled_solver: legacy            # SOLVE stage, PINNED to the pre-2026-09-12 path on purpose: the
+                                      # sweep measures RESOURCES, the solve runs on kilobytes of control
+                                      # points, and the sweep was launched before the `robust` solver
+                                      # existed -- pinning `legacy` keeps every launched tiled run
+                                      # reproducible without a re-run. The solver COMPARISON is the
+                                      # arm benchmark's job (arms.yaml crosses legacy x robust).
   # --- registration (ASHLAR) ---
   # THE reg_ashlar_* BASELINE ENTRIES ARE GONE, with the backend. :fire: 6a54479 removed
   # ashlar from the pipeline for v1.0.0, so reg_ashlar_tile / _overlap / _max_shift_um name

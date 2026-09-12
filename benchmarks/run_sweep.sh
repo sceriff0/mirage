@@ -80,6 +80,9 @@ moving_awk_field=$((moving_col_idx + 1))
 # Set it >1 to parallelise the sweep across the cluster; the launching host just holds N Nextflow JVMs.
 CONCURRENCY="${SWEEP_CONCURRENCY:-1}"
 pids=()
+# One timestamp per launch, so every run this invocation replaces lands under the same
+# <root>/.replaced/<timestamp>/ (see the SWEEP_REPLACE block in the loop).
+REPLACE_TS="$(date +%Y%m%d-%H%M%S)"
 
 # SWEEP_PROFILE: Nextflow profile(s) applied to EVERY run (default docker). On a cluster set
 # SWEEP_PROFILE="singularity,ieo". It is passed as a SINGLE -profile — Nextflow rejects a second
@@ -120,7 +123,28 @@ while IFS=',' read -r -a vals; do
   ref_chans="DAPI"
   for ((i=1; i<nch; i++)); do ref_chans+="|ch${i}"; done
 
-  run_dir="$ROOT/$run_id"; mkdir -p "$run_dir"
+  run_dir="$ROOT/$run_id"
+  # A run name is fixed per run_id (-name bench_<run_id>) and Nextflow refuses one its
+  # launch dir's history already holds, so a relaunch into an existing root would die
+  # per run behind a log dump. Refuse it here by name -- or, with SWEEP_REPLACE=1 (env,
+  # opt-in; the sweep's counterpart of run_arms.sh's ARMS_REPLACE), MOVE the previous
+  # run dir aside to <root>/.replaced/<timestamp>/<run_id>, never delete it: that is
+  # what a subset re-run (build_run_plan.py --only-method / --only) compares against.
+  # Sweep runs are independent launches (no resume between them), so there is no
+  # cross-of-a-base refusal to mirror here.
+  if [[ -f "$run_dir/.nextflow/history" ]] &&
+     awk -F'\t' -v n="bench_${run_id}" '$3 == n { f = 1 } END { exit !f }' "$run_dir/.nextflow/history"; then
+    if [[ "${SWEEP_REPLACE:-0}" == "1" ]]; then
+      replaced="$ROOT/.replaced/$REPLACE_TS"
+      mkdir -p "$replaced" && mv "$run_dir" "$replaced/$run_id"
+      echo "[$run_id] replaced: previous run dir moved to $replaced/$run_id (kept, not deleted)"
+    else
+      echo "SKIP: $run_id already ran in $run_dir (bench_${run_id} is in its .nextflow/history);" \
+           "relaunch with SWEEP_REPLACE=1 to move it aside to $ROOT/.replaced/<timestamp>/$run_id, or rm -rf $run_dir" >&2
+      continue
+    fi
+  fi
+  mkdir -p "$run_dir"
   sheet="$run_dir/samplesheet.csv"
   printf 'patient_id,path_to_file,is_reference,channels\n' > "$sheet"
   printf '%s,%s,true,%s\n' "$cell_id" "$img" "$ref_chans" >> "$sheet"

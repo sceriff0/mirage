@@ -25,6 +25,15 @@ import argparse
 import csv
 from pathlib import Path
 
+try:
+    from benchmarks import impact
+except ModuleNotFoundError:
+    # Run as a plain script (python benchmarks/build_arm_plan.py, which is how the
+    # Makefile and submit_arms.sh call it) the repo root is not on sys.path, only
+    # benchmarks/ is, so the package-qualified import fails. Same fallback as
+    # generate_matrix.py's for build_run_plan.
+    import impact  # type: ignore[no-redef]
+
 # Params that exist only on one backend. A tiled arm must carry NEITHER, and the
 # consumer requires them blank so it can tell "not applicable" from "at default".
 # Writing memory_mode=high on a STARE arm would invent a value the run never had.
@@ -34,7 +43,7 @@ VALIS_ONLY = ("memory_mode", "reg_micro_reg")
 # RegPresets.STARE and means nothing on a VALIS arm, so a VALIS arm must carry it BLANK --
 # both so the consumer can tell "not applicable" from "at default", and so run_arms.sh's
 # add_param blank-guard never emits `--reg_tiled_mode ""`, which schema validation rejects.
-TILED_ONLY = ("reg_tiled_mode", "reg_tiled_gate_tre")
+TILED_ONLY = ("reg_tiled_mode", "reg_tiled_gate_tre", "reg_tiled_solver")
 
 # The two QC MEASURING INSTRUMENTS every registration-step arm carries: which segmenter
 # finds the nuclei the seg-overlap QC scores on (params.seg_method) and how those nuclei
@@ -300,7 +309,40 @@ def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
     pair = _apply_qc_cross(
         arms, cfg, "qc_pairing_cross", "seg_qc_pairing", "pair", "QC pairing"
     )
-    return arms + seg + pair
+    solver = _apply_solver_cross(arms, cfg)
+    return arms + seg + pair + solver
+
+
+def _apply_solver_cross(arms: list[dict], cfg: dict) -> list[dict]:
+    """Cross the STARE base arms with the SOLVE stage (params.reg_tiled_solver).
+
+    Not a QC instrument: the solver changes the registration itself. It is still a
+    cross rather than a second STARE grid so that (a) the base arms keep their names
+    and the results they already produced -- they ARE the `legacy` solver, which is
+    byte-identical to the pre-2026-09-12 code -- and (b) the VALIS-vs-STARE draw
+    count guarded by test_registration_arms_are_symmetric_across_backends stays
+    equal. Applied to the tiled base arms only; VALIS rows carry an empty value.
+    A cross arm resumes its base arm, but the tile modules reference params in
+    their script blocks, so under -resume the tiled stages re-run: each solver
+    cross costs one STARE registration, never a whole cohort.
+    """
+    baseline = cfg.get("baseline") or {}
+    tiled = [a for a in arms if a.get("backend") == "tiled"]
+    for a in arms:
+        a.setdefault(
+            "reg_tiled_solver",
+            baseline.get("reg_tiled_solver") if a.get("backend") == "tiled" else "",
+        )
+    if not tiled:
+        return []
+    crosses = _apply_qc_cross(
+        tiled, cfg, "solver_cross", "reg_tiled_solver", "solver_", "SOLVE"
+    )
+    for a in crosses:
+        a["_cross"] = (
+            "solver"  # consumed by build_arm_plan: arm_kind=registration_solver
+        )
+    return crosses
 
 
 # The one shared preprocessing run every registration arm resumes from.
@@ -377,9 +419,13 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                 # A QC cross arm is `registration_qc`: run_arms.sh runs that pass AFTER the
                 # registration pass and launches each one in its base arm's launch dir with
                 # -resume, so REGISTER is served from the cache and only the QC chain runs.
-                "arm_kind": "registration_qc"
-                if a.get("resume_run")
-                else "registration",
+                # A solver cross is `registration_solver`: launched in the same resumed
+                # pass, but it changes the REGISTRATION (the SOLVE stage), so it is neither
+                # a base arm nor a QC instrument and every guard that reasons about
+                # "one QC instrument varied" leaves it alone.
+                "arm_kind": "registration_solver"
+                if a.pop("_cross", None) == "solver"
+                else ("registration_qc" if a.get("resume_run") else "registration"),
                 "resume_run": a.get("resume_run", ""),
                 "start": "registration",
                 "stop": "registration",
@@ -556,7 +602,8 @@ def arms_manifest_rows(plan: list[dict]) -> list[dict]:
             "label": _LABELS[r["arm"]],
         }
         for r in plan
-        if r["arm_kind"] in ("registration", "registration_qc", "external")
+        if r["arm_kind"]
+        in ("registration", "registration_qc", "registration_solver", "external")
     ]
 
 
@@ -605,12 +652,24 @@ def validate_against_schema(plan: list[dict], schema_path: Path) -> list[str]:
     return bad
 
 
-def _write_csv(path: Path, rows: list[dict], lead: list[str]) -> None:
+def csv_fields(rows: list[dict], lead: list[str]) -> list[str]:
+    """The header: `lead` first, then every other key in first-seen order."""
     fields = list(lead)
     for r in rows:
         for k in r:
             if k not in fields:
                 fields.append(k)
+    return fields
+
+
+def _write_csv(
+    path: Path, rows: list[dict], lead: list[str], fields: list[str] | None = None
+) -> None:
+    # `fields` lets a SUBSET plan be written under the FULL plan's header: a subset
+    # that happens to drop the only rows carrying a column (only_patient lives on the
+    # compute rows alone) would otherwise shrink the header, and the point of a subset
+    # plan is that its rows are byte-identical lines of the full one.
+    fields = list(fields) if fields is not None else csv_fields(rows, lead)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
         # lineterminator='\n' (not csv's '\r\n') so run_arms.sh's bash column
@@ -656,10 +715,30 @@ def main():
         "Point it at the results root the runs publish into — that "
         "is where registration_arms.R looks for it.",
     )
+    ap.add_argument(
+        "--changed",
+        action="append",
+        default=[],
+        metavar="COMPONENT",
+        help="write only the rows a change to this component affects, plus the "
+        "transitive closure over resume_run/from_arm/ext_from_arm (repeatable). "
+        f"Vocabulary: {sorted(impact.COMPONENTS)} and seg:<method>. See benchmarks/impact.py.",
+    )
+    ap.add_argument(
+        "--only",
+        default=None,
+        metavar="REGEX",
+        help="write only the rows whose arm or run_id matches this regex (re.search), "
+        "plus the same closure. Combines with --changed (union).",
+    )
     a = ap.parse_args()
 
     cfg = yaml.safe_load(a.arms.read_text())
     plan = build_arm_plan(cfg)
+    # The FULL plan is always what the schema check, the manifest and the header
+    # come from; a subset is a selection over it, never a re-expansion.
+    subset = a.changed or a.only is not None
+    rows = impact.affected_rows(plan, a.changed, a.only) if subset else plan
 
     # Fail before anything is written, so a stale plan is never left behind for
     # the launcher's non-empty check to accept.
@@ -684,8 +763,19 @@ def main():
             f"{unknown}\nPresent: {patients}"
         )
 
-    _write_csv(a.out, plan, ["run_id", "arm_kind", "arm"])
+    if subset and not rows:
+        raise SystemExit(
+            f"--changed {a.changed} / --only {a.only!r} selects no row of the "
+            f"{len(plan)}-row plan; nothing to write."
+        )
+    lead = ["run_id", "arm_kind", "arm"]
+    _write_csv(a.out, rows, lead, fields=csv_fields(plan, lead))
     root = a.results_root or a.out.parent
+    # arms.csv is the consumer's LABEL manifest and is written from the FULL plan
+    # even for a subset: registration_arms.R walks <root> and labels every arm it
+    # finds there, and a subset re-run leaves the unaffected arms' results in place.
+    # Shrinking the manifest to the subset would send those arms to the directory-
+    # name fallback, which reads the crossed names wrong (see the module docstring).
     _write_csv(
         root / "arms.csv",
         arms_manifest_rows(plan),
@@ -693,15 +783,25 @@ def main():
     )
 
     by_kind: dict[str, int] = {}
-    for r in plan:
+    for r in rows:
         by_kind[r["arm_kind"]] = by_kind.get(r["arm_kind"], 0) + 1
     kinds = ", ".join(f"{k}={v}" for k, v in sorted(by_kind.items()))
-    print(f"Wrote {len(plan)} arm runs ({kinds}) to {a.out}")
-    print(f"Wrote label manifest to {root / 'arms.csv'}")
+    if subset:
+        print(
+            f"Wrote {len(rows)} of {len(plan)} arm runs ({kinds}) to {a.out} "
+            f"-- SUBSET for --changed {a.changed} --only {a.only!r}"
+        )
+        print(
+            "NOTE: point the analysis (make arm-tables) at the FULL plan, not this "
+            "subset; the tables must cover every arm in the results root."
+        )
+    else:
+        print(f"Wrote {len(plan)} arm runs ({kinds}) to {a.out}")
+    print(f"Wrote label manifest to {root / 'arms.csv'} (full plan: {len(plan)} rows)")
     print(f"{len(patients)} patient(s) in {a.input}: {', '.join(patients)}")
     # Say the multiplier out loud. Every registration/segmentation arm runs the
     # WHOLE cohort, so the launch count is not the run count.
-    per_cohort = sum(1 for r in plan if r["arm_kind"] != "compute")
+    per_cohort = sum(1 for r in rows if r["arm_kind"] != "compute")
     print(
         f"NOTE: {per_cohort} of these launch the full cohort "
         f"({per_cohort} x {len(patients)} patient-runs), plus "

@@ -12,7 +12,7 @@
 #   Docker running (for real/integration tests)
 
 .PHONY: testdata test test-stub test-real test-integration test-python test-validation test-lint test-all clean-test help \
-        arm-plan arm-run arm-tables sweep-tables arm-pull run-resources
+        arm-plan arm-run arm-plan-subset arm-rerun arm-tables sweep-tables arm-pull run-resources
 
 # Default target
 test: test-stub test-python
@@ -33,6 +33,8 @@ help:
 	@echo "MIRAGE Real-Sample Benchmark (docs/benchmarks_real.md):"
 	@echo "  make arm-plan          Expand arms.yaml -> arm_plan.csv + arms.csv"
 	@echo "  make arm-run           Launch every arm (cluster)"
+	@echo "  make arm-plan-subset   Expand only the arms a code change affects (CHANGED=tiled ... / ONLY=<regex>)"
+	@echo "  make arm-rerun         Re-launch that subset into the SAME root, previous results moved aside (cluster)"
 	@echo "  make arm-tables        Emit the ARM tables into _handoff/arms/"
 	@echo "  make sweep-tables      Emit the SWEEP tables (needs SWEEP=<root>)"
 	@echo "  make arm-pull          Copy the artifacts into ihc_method/data/"
@@ -127,6 +129,31 @@ arm-plan:
 
 arm-run: arm-plan
 	benchmarks/run_arms.sh $(ROOT)_plan.csv $(INPUT) $(ROOT)
+
+# Re-running a SUBSET after a code change (docs/benchmarks_real.md, "Re-running a
+# subset after a code change"). CHANGED is a space-separated list of components
+# (tiled|stare|valis|qc|preprocess|seg:<method>, see benchmarks/impact.py), ONLY a
+# regex on arm/run_id; build_arm_plan.py takes the transitive closure (a QC cross
+# of a re-run base re-runs, and so on). The subset plan gets ITS OWN file so
+# $(ROOT)_plan.csv -- the FULL plan that arm-tables and arm-pull read -- is never
+# overwritten by a subset, and arms.csv is rewritten from the full plan. arm-rerun
+# launches with ARMS_REPLACE=1, which moves exactly those arms' previous results
+# aside to $(ROOT)/.replaced/<timestamp>/ (never deleted). Like arm-run, it is NOT
+# a prerequisite of any table target: hours-to-days of cluster time must never be
+# a transparent dependency of a table you reach for.
+CHANGED ?=
+ONLY ?=
+SUBSET_PLAN ?= $(ROOT)_plan.subset.csv
+
+arm-plan-subset:
+	@[ -n "$(CHANGED)$(ONLY)" ] || { echo "set CHANGED=<tiled|stare|valis|qc|preprocess|seg:<method> ...> and/or ONLY=<regex>"; exit 1; }
+	python benchmarks/build_arm_plan.py \
+	    --arms $(ARMS) --input $(INPUT) \
+	    --out $(SUBSET_PLAN) --results-root $(ROOT) \
+	    $(foreach c,$(CHANGED),--changed $(c)) $(if $(ONLY),--only '$(ONLY)',)
+
+arm-rerun: arm-plan-subset
+	ARMS_REPLACE=1 benchmarks/run_arms.sh $(SUBSET_PLAN) $(INPUT) $(ROOT)
 
 arm-tables:
 	python -m benchmarks.analysis.make_tables \

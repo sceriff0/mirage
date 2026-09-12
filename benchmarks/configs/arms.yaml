@@ -52,6 +52,9 @@ baseline:
                                # Guarded by test_arms_baseline_values_match_the_pipeline_defaults.
   registration_method: valis
   seg_qc_pairing: lsa          # pipeline default; the QC nucleus-pairing rule unless crossed
+  reg_tiled_solver: legacy     # SOLVE stage the 9 STARE base arms ran: `legacy` is byte-identical to
+                               # the code that produced them before 2026-09-12, so those results stay
+                               # valid; `robust` enters as a solver cross (solver_cross below).
                                # below (bin/utils/cell_pairs.py: lsa | mutual_nn)
 
 # -----------------------------------------------------------------------------
@@ -151,14 +154,15 @@ registration_arms:
 # ONE INSTRUMENT AT A TIME, NOT A FACTORIAL. Each cross varies its own axis off the base
 # arm's other instrument: segmenters at the baseline pairing, pairings at the baseline
 # segmenter. Per base arm that is 2 + 1 = 3 QC-only runs; over the 18 registration arms,
-# 54 per cohort. The two questions -- "does WHO found the nuclei change the ranking?" and
+# 54 per cohort -- plus the 9 solver crosses on the STARE arms (solver_cross below), 63. The two questions -- "does WHO found the nuclei change the ranking?" and
 # "does HOW they were paired change it?" -- are answered separately, which is what a
 # robustness claim needs; the interaction would cost 5 runs per arm to answer a question
 # the paper does not ask.
 #
 # COST GATE. `cross: reference` runs the extra instruments against ONE arm
 # (`reference_arm`): 18 + 2 + 1 = 21 registration-step launches per cohort. `cross: all`
-# crosses every arm: 18 + 36 + 18 = 72 launches, of which 54 are QC-only resumes.
+# crosses every arm: 18 + 36 + 18 + 9 = 81 launches, of which 54 are QC-only resumes
+# and 9 are solver crosses (a full STARE registration each).
 # Guarded by test_cross_all_crosses_every_arm, test_tiled_arms_are_tier_x_gate,
 # test_valis_arms_are_preset_x_depth_not_a_grid_of_equals and
 # test_qc_cross_arms_resume_their_base_arm.
@@ -175,6 +179,21 @@ qc_pairing_cross:
   cross: all                               # reference | all | none
   reference_arm: valis_high_micro2
   seg_qc_pairing: [lsa, mutual_nn]         # the baseline (lsa) is the base arm itself
+
+# THE SOLVE-STAGE CROSS (2026-09-12). Unlike the two QC instruments above this changes the
+# REGISTRATION, not how it is measured: `robust` replaces the legacy median filter with
+# neighbour-consistency rejection, in-fill, Tikhonov smoothing and an invertibility check
+# (stare.solve, docs/parallel_registration_design.md §6b). It is a cross rather than a
+# second STARE grid so the base arms keep their names and their already-computed results
+# (they ARE the legacy solver), and the VALIS-vs-STARE draw count stays 9 vs 9. Applied to
+# the STARE base arms only -- VALIS has no solve stage. Each cross arm resumes its base
+# arm's launch dir; because the tile modules reference params in their script block, the
+# tiled stages re-run under -resume (a full STARE registration per cross, 9 launches),
+# and only preprocessing is served from the cache. Re-run after a SOLVE change with
+# `--changed solve` (benchmarks/impact.py).
+solver_cross:
+  cross: all                               # reference | all | none
+  reg_tiled_solver: [legacy, robust]       # the baseline (legacy) is the base arm itself
 
 # -----------------------------------------------------------------------------
 # ARM 2 — SEGMENTATION. Which backend segments real tissue best?

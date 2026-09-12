@@ -600,7 +600,14 @@ def test_project_sweep_enables_qc_signals():
 # An entry whose pipeline default has caught up with the baseline is a hard failure
 # below, not a silent pass -- the same shrink-only discipline the debt allowlists in
 # tests/ follow. A stale exemption is how the seg_method desync survived.
-BASELINE_DEVIATIONS = {}
+BASELINE_DEVIATIONS = {
+    # The sweep measures RESOURCES and was launched before the `robust` solver existed;
+    # the solve runs on kilobytes of control points, so pinning `legacy` keeps every
+    # launched tiled run reproducible at no cost to the curves. The solver comparison
+    # lives in the arm benchmark (arms.yaml solver_cross). Drop this entry when the
+    # sweep is re-launched on the shipped default.
+    "reg_tiled_solver": "sweep pre-dates the robust solver; resources only",
+}
 
 
 def test_project_sweep_baseline_matches_pipeline_defaults():

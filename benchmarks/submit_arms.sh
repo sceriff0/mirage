@@ -59,6 +59,19 @@ CONCURRENCY="${ARMS_CONCURRENCY:-8}"      # arms launched AT ONCE. Each is one N
 ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms with CSE.
                                           # Needs bolt3x/mirage-segeval:${segeval_tag} published
                                           # (1.0.1 is live as of 2026-08-21).
+# SUBSET RE-RUN after a code change (docs/benchmarks_real.md, "Re-running a subset
+# after a code change"). Either builds a SUBSET plan (arm_plan.subset.csv, beside the
+# full one, which the analysis keeps reading) instead of the full plan:
+#   CHANGED="tiled"            space-separated components, each passed as
+#                              build_arm_plan.py --changed (tiled|stare|valis|qc|
+#                              preprocess|seg:<method>); the closure adds every cross,
+#                              segmentation arm and external arm that depends on them
+#   ONLY='^tiled_high_'        a regex on arm/run_id, passed as --only
+# and ARMS_REPLACE=1 makes run_arms.sh move those arms' previous results aside to
+# $RESULTS/.replaced/<timestamp>/ before launching (never deleted). Typical:
+#   CHANGED=tiled ARMS_REPLACE=1 sbatch benchmarks/submit_arms.sh
+CHANGED="${CHANGED:-}"
+ONLY="${ONLY:-}"
 # -------------------------------------------------------------------------------
 
 # NOTE: do NOT write SRC_DIR="~/..." — bash does tilde expansion BEFORE parameter
@@ -185,21 +198,35 @@ echo "Bench dir:  $BENCH_DIR"
 echo "Input:      $INPUT"
 echo "Results:    $RESULTS"
 echo "Profiles:   $PROFILES   Concurrency: $CONCURRENCY   CSE: $ENABLE_CSE"
+[ -n "$CHANGED$ONLY" ] && echo "Subset:     CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}'"
 echo "=================================================="
 
 # 1. Expand arms.yaml -> arm_plan.csv + the consumer's arms.csv (seconds, local).
 #    --results-root puts arms.csv where registration_arms.R looks for it.
+#    A SUBSET (CHANGED/ONLY set) is written to arm_plan.subset.csv so the FULL plan,
+#    which `make arm-tables` and pull_to_ihc_method.sh read, is never overwritten by
+#    a subset; arms.csv is written from the full plan either way.
+PLAN_CSV="$BENCH_DIR/arm_plan.csv"
+SUBSET_ARGS=()
+for c in $CHANGED; do SUBSET_ARGS+=(--changed "$c"); done
+[ -n "$ONLY" ] && SUBSET_ARGS+=(--only "$ONLY")
+if [ "${#SUBSET_ARGS[@]}" -gt 0 ]; then
+    PLAN_CSV="$BENCH_DIR/arm_plan.subset.csv"
+    rm -f "$PLAN_CSV"
+    echo "Subset plan: CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}' -> $PLAN_CSV"
+fi
 "$PYTHON" "$SRC_DIR/benchmarks/build_arm_plan.py" \
     --arms         "$ARMS_YAML" \
     --input        "$INPUT" \
-    --out          "$BENCH_DIR/arm_plan.csv" \
-    --results-root "$RESULTS"
+    --out          "$PLAN_CSV" \
+    --results-root "$RESULTS" \
+    "${SUBSET_ARGS[@]+"${SUBSET_ARGS[@]}"}"
 
 # Checked explicitly because there is no `set -e` here: without this, a failed or
 # skipped plan step falls straight through to run_arms.sh, which would launch days
 # of cluster work against a STALE plan from a previous submission.
-if [ ! -s "$BENCH_DIR/arm_plan.csv" ]; then
-    echo "ERROR: $BENCH_DIR/arm_plan.csv was not written; not launching." >&2
+if [ ! -s "$PLAN_CSV" ]; then
+    echo "ERROR: $PLAN_CSV was not written; not launching." >&2
     exit 1
 fi
 
@@ -209,10 +236,12 @@ fi
 #    alone so its numbers are not taken under self-inflicted contention.
 #    Pass the profile via ARMS_PROFILE, NOT a trailing -profile: Nextflow accepts
 #    -profile only once. A trailing -c IS fine (Nextflow merges multiple -c).
+#    ARMS_REPLACE (if set in the submitting environment) reaches run_arms.sh through
+#    the environment unchanged: sbatch --export=ALL is the default.
 export ARMS_CONCURRENCY="$CONCURRENCY"
 export ARMS_PROFILE="$PROFILES"
 "$SRC_DIR/benchmarks/run_arms.sh" \
-    "$BENCH_DIR/arm_plan.csv" \
+    "$PLAN_CSV" \
     "$INPUT" \
     "$RESULTS" \
     -c "$SITE_CONFIG" \

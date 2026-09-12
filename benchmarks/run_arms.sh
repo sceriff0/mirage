@@ -8,6 +8,12 @@
 #   ARMS_PROFILE="singularity,ieo" ARMS_CONCURRENCY=3 \
 #     benchmarks/run_arms.sh arm_plan.csv real_input.csv arm_results
 #
+# Re-running a SUBSET after a code change (docs/benchmarks_real.md, "Re-running a
+# subset after a code change"): build the subset plan with build_arm_plan.py
+# --changed <component>, then launch it into the SAME results root with
+# ARMS_REPLACE=1, which moves the previous results of exactly those arms aside to
+# <root>/.replaced/<timestamp>/ (see replace_previous_results below).
+#
 # The sibling of run_sweep.sh, and deliberately simpler in one way: the
 # samplesheet is GIVEN (your real slides) rather than synthesized from a matrix,
 # so there is no cell resolution and no channel-name construction here.
@@ -150,7 +156,8 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
       remedy="delete the arms-$run_id line from $rundir/.nextflow/history -- do NOT remove the directory, base arm $RESUME_RUN lives there"
     fi
     echo "[$run_id] SKIP: a run named arms-$run_id already exists in $rundir/.nextflow/history;" \
-         "Nextflow refuses to reuse a run name. Remove the previous attempt first: $remedy" >&2
+         "Nextflow refuses to reuse a run name. Remove the previous attempt first: $remedy" \
+         "-- or relaunch this plan with ARMS_REPLACE=1 to move every previous result it names aside" >&2
     return 1
   fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
@@ -204,6 +211,104 @@ filtered_sheet() {
     echo "ERROR: no rows for patient '$pat' in $INPUT" >&2; return 1
   fi
 }
+
+# ---------------------------------------------------------------------------
+# ARMS_REPLACE=1 (env, opt-in): RE-RUN THE ARMS OF THIS PLAN INTO A ROOT THAT ALREADY
+# HOLDS THEM. The plan is normally a SUBSET (build_arm_plan.py --changed <component>
+# / --only <regex>): after a code change confined to one backend, only that backend's
+# arms and everything that depends on them need to run again, and the untouched arms'
+# results stay where they are so `make arm-tables` reads the union.
+#
+# For every row of the plan, the previous <root>/<arm> output dir and (for a base arm)
+# its <root>/.launch/<run_id> launch dir -- work/, .nextflow/ cache and history -- are
+# MOVED, never deleted, to <root>/.replaced/<timestamp>/...: the old result is what the
+# new one is compared against. A cross arm has no launch dir of its own (it resumes its
+# base's); when its base is NOT in the plan, only its `arms-<cross>` history line is
+# removed from the base's history (a copy is kept under .replaced/), so Nextflow accepts
+# the run name again while the base's session stays intact.
+#
+# THE REFUSAL. A base arm's QC crosses resume its Nextflow session. Replacing the base
+# while leaving a cross out of the plan would keep that cross's OLD score -- taken on the
+# OLD registration -- in the table beside the base's NEW one, and nothing would say so.
+# The launch dir's history is the ground truth of which runs resumed a base (every cross
+# launches inside it), so a base whose history names a run this plan lacks is refused
+# by name, before anything is moved. build_arm_plan.py's closure adds those crosses
+# automatically; a hand-filtered CSV is how this case arises.
+#
+# Without ARMS_REPLACE the refuse-and-name-the-remedy behaviour in launch() stands.
+# ---------------------------------------------------------------------------
+replace_previous_results() {
+  local ts dest run_id resume_run base name hist
+  ts="$(date +%Y%m%d-%H%M%S)"
+  dest="$ROOT/.replaced/$ts"
+  [[ -e "$dest" ]] && dest="$dest-$$"
+  local plan_ids=" "
+  local bases=() crosses=()
+  while IFS=',' read -r -a vals; do
+    run_id=$(col_val run_id "${vals[@]}")
+    resume_run=$(col_val resume_run "${vals[@]}")
+    [[ -n "$run_id" ]] || continue
+    plan_ids+="$run_id "
+    if [[ -n "$resume_run" ]]; then crosses+=("$run_id|$resume_run"); else bases+=("$run_id"); fi
+  done < <(tail -n +2 "$PLAN" | tr -d '\r')
+
+  # 1. Refuse before moving anything.
+  local missing=()
+  for base in "${bases[@]+"${bases[@]}"}"; do
+    hist="$ROOT/.launch/$base/.nextflow/history"
+    [[ -f "$hist" ]] || continue
+    while IFS= read -r name; do
+      name="${name#arms-}"
+      [[ -n "$name" && "$name" != "$base" ]] || continue
+      [[ "$plan_ids" == *" $name "* ]] || missing+=("$base: its cross $name resumed its session and is not in the plan")
+    done < <(awk -F'\t' '{ print $3 }' "$hist" | sort -u)
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "ERROR: ARMS_REPLACE=1 refused -- a base arm in this plan has QC crosses the plan does not carry;" >&2
+    echo "       they would keep scoring the OLD registration from the OLD session beside the base's new one:" >&2
+    printf '         %s\n' "${missing[@]}" >&2
+    echo "       Rebuild the plan with build_arm_plan.py --changed <component> / --only <regex>, whose closure adds them." >&2
+    return 1
+  fi
+
+  # 2. Move aside: bases first (their launch dir carries the crosses' history), then crosses.
+  local moved=0
+  for base in "${bases[@]+"${bases[@]}"}"; do
+    if [[ -e "$ROOT/$base" ]]; then
+      mkdir -p "$dest" && mv "$ROOT/$base" "$dest/$base" && moved=$((moved + 1))
+      echo "[$base] replaced: previous results moved to $dest/$base"
+    fi
+    if [[ -e "$ROOT/.launch/$base" ]]; then
+      mkdir -p "$dest/.launch" && mv "$ROOT/.launch/$base" "$dest/.launch/$base"
+      echo "[$base] replaced: previous launch dir (work/, cache, history) moved to $dest/.launch/$base"
+    fi
+  done
+  local pair cross
+  for pair in "${crosses[@]+"${crosses[@]}"}"; do
+    cross="${pair%%|*}"; base="${pair#*|}"
+    if [[ -e "$ROOT/$cross" ]]; then
+      mkdir -p "$dest" && mv "$ROOT/$cross" "$dest/$cross" && moved=$((moved + 1))
+      echo "[$cross] replaced: previous results moved to $dest/$cross"
+    fi
+    # Base NOT in the plan (its launch dir is still here): free the cross's run name only.
+    hist="$ROOT/.launch/$base/.nextflow/history"
+    if [[ -f "$hist" ]] && awk -F'\t' -v n="arms-$cross" '$3 == n { f = 1 } END { exit !f }' "$hist"; then
+      mkdir -p "$dest/.launch/$base/.nextflow"
+      cp "$hist" "$dest/.launch/$base/.nextflow/history.before-$cross"
+      awk -F'\t' -v n="arms-$cross" '$3 != n' "$hist" > "$hist.tmp" && mv "$hist.tmp" "$hist"
+      echo "[$cross] replaced: its run name freed in base $base's history (copy kept under $dest/.launch/$base/.nextflow/)"
+    fi
+  done
+  if (( moved == 0 )); then
+    echo "ARMS_REPLACE=1: nothing to replace under $ROOT for the ${#bases[@]} base + ${#crosses[@]} cross row(s) of this plan"
+  else
+    echo "ARMS_REPLACE=1: $moved previous result dir(s) moved aside under $dest (kept, not deleted; remove them once compared)"
+  fi
+}
+
+if [[ "${ARMS_REPLACE:-0}" == "1" ]]; then
+  replace_previous_results || exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # PASS ORDER IS A DEPENDENCY, NOT A PREFERENCE.
@@ -290,6 +395,7 @@ launch_row() {
     # VALIS arm from ever receiving --reg_tiled_mode "", which the schema enum rejects.
     add_param reg_tiled_mode       "$(col_val reg_tiled_mode "${vals[@]}")"
     add_param reg_tiled_gate_tre   "$(col_val reg_tiled_gate_tre "${vals[@]}")"
+    add_param reg_tiled_solver     "$(col_val reg_tiled_solver "${vals[@]}")"
     add_param seg_qc_pairing       "$(col_val seg_qc_pairing "${vals[@]}")"
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
@@ -353,7 +459,7 @@ run_qc_pass() {
   mkdir -p "$ROOT/.launch"
   sorted="$ROOT/.launch/_registration_qc.rows"
   tail -n +2 "$PLAN" | tr -d '\r' \
-    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
+    | awk -F, -v k="$kind_col" '$k == "registration_qc" || $k == "registration_solver"' \
     | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
 
   local base="" line b

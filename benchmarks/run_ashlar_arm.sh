@@ -58,6 +58,21 @@ OUT="$ROOT/$ARM"
 WORK="$ROOT/.launch/$ARM"
 mkdir -p "$OUT" "$WORK"
 
+# RESOURCE CAPTURE. Every other arm is a Nextflow run and gets a trace for free;
+# this one runs outside Nextflow and got none, so ASHLAR was absent from
+# measurements.csv / run_cost / resource_stats while sitting in the accuracy table.
+# Each heavy invocation below goes through benchmarks/trace_step.py, which appends
+# one Nextflow-format trace row (wall-clock, peak RSS, CPU time, exit status) to
+# the SAME path load_runs reads for every arm -- <root>/<arm>/trace/trace.txt --
+# and records the step's input size in size_logs/input_sizes.csv. Process names
+# ASHLAR_RETILE / ASHLAR_SOLVE / ASHLAR_SEG_QC, tag = patient. The wrapper exits
+# with the child's status, so `set -e` and the `|| { ... }` below behave as before.
+TRACE="$OUT/trace/trace.txt"
+mkdir -p "$OUT/trace"
+step() {                         # step <PROCESS> <patient> [--input PATH ...] -- <command...>
+  python3 "$HERE/trace_step.py" --trace "$TRACE" --process "$1" --tag "$2" "${@:3}"
+}
+
 # preprocessed.csv columns (lib/Checkpoint.groovy): the header is read rather than
 # assumed, because a positional read is exactly how a schema change becomes a silent
 # mis-registration instead of an error.
@@ -107,7 +122,8 @@ for pid in $patients; do
   ref_tiles="$WORK/$pid/ref"
   mkdir -p "$ref_tiles"
   # shellcheck disable=SC2086
-  $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
+  step ASHLAR_RETILE "$pid" --input "$ref_img" -- \
+      $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
       --image "$ref_img" --outdir "$ref_tiles" --cycle 0 \
       --tile-size "$TILE" --overlap "$OVERLAP"
 
@@ -135,11 +151,13 @@ for pid in $patients; do
 
     echo "[$ARM/$pid] $ref_name -> $mov_name (tile=$TILE shift=${MAXSHIFT}um)"
     # shellcheck disable=SC2086
-    $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
+    step ASHLAR_RETILE "$pid" --input "$mov_img" -- \
+        $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
         --image "$mov_img" --outdir "$d/mov" --cycle 1 \
         --tile-size "$TILE" --overlap "$OVERLAP"
     # shellcheck disable=SC2086
-    $ASHLAR_EXEC python3 -m benchmarks.ashlar.solve \
+    step ASHLAR_SOLVE "$pid" --input "$ref_tiles" --input "$d/mov" -- \
+        $ASHLAR_EXEC python3 -m benchmarks.ashlar.solve \
         --ref-tiles "$ref_tiles" --moving-tiles "$d/mov" \
         --reference-name "$ref_name" --moving-name "$mov_name" \
         --maximum-shift "$MAXSHIFT" \
@@ -150,7 +168,8 @@ for pid in $patients; do
     # no --jvm-heap-gb. ashlar's terminal stage is `refined`, the same name STARE's is,
     # which is what lets the analysis layer's _STAGE_RANK reduce both without a case.
     # shellcheck disable=SC2086
-    $QC_EXEC python3 "$REPO/bin/warp_seg_qc.py" \
+    step ASHLAR_SEG_QC "$pid" --input "$ref_gj" --input "$mov_gj" -- \
+        $QC_EXEC python3 "$REPO/bin/warp_seg_qc.py" \
         --method tiled \
         --pickle "$d/manifest.json" \
         --ref-slide "$ref_name" \

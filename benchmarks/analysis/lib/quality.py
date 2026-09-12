@@ -45,6 +45,27 @@ def _leaf(process: str) -> str:
     return str(process).split(":")[-1]
 
 
+def _run_out(results_root, run_id) -> Path:
+    """Where a run's PIPELINE OUTPUTS are, under either results layout.
+
+    The two benchmarks publish differently (load.load_runs documents the same
+    split for the size logs):
+
+      sweep  <root>/<run_id>/out/...   run_sweep.sh isolates --outdir under out/
+      arms   <root>/<arm>/...          run_arms.sh publishes --outdir straight to
+                                       <root>/<arm>, because <arm>/<patient>/qc/... IS
+                                       ihc_method's consumer contract
+
+    The harvesters below hardcoded the `out/` segment, so on an arm results root
+    every one of them returned nothing: registration_accuracy.csv came out empty
+    for the whole arm benchmark while the trace-based tables filled normally, and
+    nothing raised. `out/` wins when it exists, so the sweep layout is unchanged.
+    """
+    run_dir = Path(results_root) / str(run_id)
+    out = run_dir / "out"
+    return out if out.is_dir() else run_dir
+
+
 # ─────────────────────────────────────────────────────────── registration accuracy ──
 # The anchor stage the staged QC reports deltas against (see docs/registration_qc.md).
 REG_QC_ANCHOR = "rigid"
@@ -69,7 +90,7 @@ def harvest_registration_qc(results_root, run_plan_csv) -> pd.DataFrame:
     plan = pd.read_csv(run_plan_csv)
     rows = []
     for run_id in plan["run_id"]:
-        for j in (root / str(run_id) / "out").rglob("*_seg_qc.json"):
+        for j in _run_out(root, run_id).rglob("*_seg_qc.json"):
             try:
                 d = json.loads(j.read_text())
             except Exception:
@@ -156,7 +177,7 @@ def harvest_valis_rtre(results_root, run_plan_csv) -> pd.DataFrame:
     plan = pd.read_csv(run_plan_csv)
     frames = []
     for run_id in plan["run_id"]:
-        out = root / str(run_id) / "out"
+        out = _run_out(root, run_id)
         # VALIS summaries are published under .../registered/summary/ (conf/modules.config REGISTER).
         csvs = [
             c
@@ -226,7 +247,7 @@ def harvest_segmentation_counts(
     plan = pd.read_csv(run_plan_csv)
     rows = []
     for run_id in plan["run_id"]:
-        masks = _cell_masks(root / str(run_id) / "out")
+        masks = _cell_masks(_run_out(root, run_id))
         counts = [c for c in (_n_cells(m, reader) for m in masks) if c is not None]
         if not counts:
             continue
@@ -303,7 +324,7 @@ def segmentation_agreement(results_root, run_plan_csv, reader=None) -> pd.DataFr
         for _, r in (
             g.groupby("seg_method").head(1).iterrows()
         ):  # one run per method at this cell
-            masks = _cell_masks(root / str(r["run_id"]) / "out")
+            masks = _cell_masks(_run_out(root, r["run_id"]))
             if masks:
                 by_method[r["seg_method"]] = masks[0]
         methods = sorted(by_method)

@@ -28,9 +28,11 @@ images cannot imitate.
 Defined in `benchmarks/configs/arms.yaml`. They are **factored, not crossed** —
 registration is the expensive half, so it is paid for once.
 
-At the shipped settings that is **81 launches**: 1 shared preprocessing, 18
+At the shipped settings that is **90 launches**: 1 shared preprocessing, 18
 registration arms (9 VALIS + 9 STARE), 54 QC instrument crosses (which **resume**
-their base arm and re-run only the QC chain — see §2), 4 external (ASHLAR), 3
+their base arm and re-run only the QC chain — see §2), 9 solver crosses (the STARE
+arms with the `robust` SOLVE stage, `arm_kind=registration_solver`; they resume
+their base too but re-run the tiled stages — see §1c), 4 external (ASHLAR), 3
 segmentation, 1 compute profile. **All but the compute profile launch the whole
 cohort**, so the launch count is not the run count — for a 6-patient cohort,
 80 × 6 = 480 patient-runs plus the compute launch, of which 54 × 6 are QC-only.
@@ -106,6 +108,38 @@ over `[1024, 2048, 4096]`; `[1024, 4096]` brackets that range at both ends.
 against `micro` to quantify what non-rigid buys: ASHLAR attempts no non-rigid
 warp at all, so reporting only the second overstates VALIS's advantage.
 
+**It has a cost row too.** Because it is not a Nextflow run, nothing wrote a
+trace for it, and ASHLAR sat in the accuracy table with no entry in
+`measurements.csv` / `run_cost` / `resource_stats`. `run_ashlar_arm.sh` now runs
+each heavy step through `benchmarks/trace_step.py`, which records wall-clock,
+peak RSS, CPU time and exit status as Nextflow-format rows in the same
+`<root>/<arm>/trace/trace.txt` every other arm has (processes `ASHLAR_RETILE`,
+`ASHLAR_SOLVE`, `ASHLAR_SEG_QC`, tag = patient) plus the step's input size in
+`size_logs/input_sizes.csv`, so the analysis reads it with no ASHLAR-specific
+path. A root built before this change lacks those rows; collect them once with
+`make arm-rerun ONLY='ashlar.*'` — nothing depends on an external arm, so that
+re-runs the four ASHLAR arms and nothing else (see "Re-running a subset").
+
+### 1c. The SOLVE-stage cross — **9 runs**
+
+`reg_tiled_solver` selects STARE's SOLVE stage: `legacy` (gates + median filter,
+byte-identical to every manifest produced before 2026-09-12) or `robust`
+(neighbour-consistency rejection, in-fill of dropped tiles, Tikhonov smoothing,
+invertibility check — `stare.solve`, `docs/parallel_registration_design.md` §6b).
+The pipeline default is `robust`; the 9 STARE base arms are pinned to `legacy` in
+`arms.yaml`'s baseline because they were launched before the solver existed and
+*are* that path, so their results stay valid. `robust` enters as a **solver cross**
+(`solver_cross`, `arm_kind=registration_solver`): one row per STARE base arm, named
+`<base>_solver_robust`, resuming the base arm's launch directory. Unlike the QC
+crosses of §2 it changes the registration, not how it is measured, so it is a third
+kind rather than a `registration_qc` row, and the VALIS-vs-STARE draw count stays 9
+against 9.
+
+Cost: the tile modules reference `params` in their script blocks, so under
+`-resume` the tiled stages re-run — a solver cross is one full STARE registration,
+not a QC-only resume. Nine launches, never a cohort. After any change to
+`stare.solve`, `--changed solve` selects exactly these nine (see "Re-running a subset after a code change").
+
 ### 2. QC instrument crosses — *does the verdict depend on how it was measured?*
 
 The arm ranking reads the staged seg-overlap QC (`reg_qc = 2`): `subworkflows/local/seg_qc.nf`
@@ -173,6 +207,9 @@ make arm-plan   INPUT=real_input.csv ROOT=arm_results          # seconds, local
 make arm-run    INPUT=real_input.csv ROOT=arm_results          # hours-days, cluster
 make arm-tables ROOT=arm_results                               # minutes, local
 make arm-pull   ROOT=arm_results IHC=../ihc_method             # seconds
+
+# after a code change confined to one component -- see "Re-running a subset"
+make arm-rerun  CHANGED=tiled INPUT=real_input.csv ROOT=arm_results
 ```
 
 Then knit the four pages in `ihc_method` (step 5 below). The Make targets write
@@ -384,6 +421,105 @@ the figure. So a partial pull gives a partial page, never a broken build.
 | `run_resources` | what one run of the cohort cost, per process, against input size |
 
 ---
+
+## Re-running a subset after a code change
+
+A change confined to one component does not move every arm, and a real WSI arm
+is days of cluster time. The harness can re-run **only what the change
+affects** and have `make arm-tables` produce exactly what a full re-run would.
+The rule is in code, not here: `benchmarks/impact.py`, guarded by
+`benchmarks/tests/test_subset_rerun_equivalence.py`, which builds a synthetic
+results root in the real arm layout, replaces only the affected arms' files, and
+asserts every table is byte-identical to a full re-run's.
+
+### Which components map to which arms
+
+`build_arm_plan.py --changed <component>` (repeatable) seeds the selection with
+every row its predicate matches, then takes the **transitive closure** over the
+plan's dependency columns: a row that `resume_run`s an affected arm is affected
+(a QC cross re-scores the re-run base — left out, it would keep the OLD score
+from the OLD session beside the base's new one), a row whose `from_arm` is
+affected is affected (it resumes that arm's checkpoint), and an external row
+whose `ext_from_arm` is affected is affected (it scores on that arm's nuclei).
+Nothing else is.
+
+| `--changed` | seeds | closure adds | at the shipped `arms.yaml` |
+|---|---|---|---|
+| `solve` | the STARE rows that run the `robust` SOLVE stage — the 9 solver crosses. The 9 STARE base arms are the `legacy` solver, pinned byte-identical to the code that produced them, so a change to `stare.solve` does not reach them | nothing resumes a solver cross | **9 of 90** — this is the re-run after a SOLVE change |
+| `tiled` / `stare` | every row at `registration_method=tiled` — the 9 bases, their 27 QC crosses and their 9 solver crosses, which all carry the backend column | (the crosses would be added by closure if they did not) | 9 + 27 + 9 = **45 of 90**; no VALIS arm, no preprocessing, no segmentation arm, no ASHLAR arm (all scored on the VALIS reference) |
+| `valis` | every VALIS arm | their crosses, the segmentation arms (`from_arm`), the ASHLAR arms (`ext_from_arm`), the compute profile (baseline backend) | 44 of 90 |
+| `seg:<method>` | every row whose `seg_method` is that backend — the segmentation arm *and* every `_seg<method>` cross, since `SEG_QC_SEGMENT` is `SEGMENT` under an alias | — | `seg:stardist`: 19 of 90 |
+| `ashlar` | the external arms | nothing depends on them | 4 of 90 |
+| `qc` | every row that runs the `reg_qc` scorer, ASHLAR included | — | 89 of 90 (all but `preprocess_shared`) |
+| `preprocess` | `preprocess_shared` and the compute profile | everything resumes from it | 90 of 90 |
+| `--only <regex>` | rows whose `arm`/`run_id` matches (`re.search`) | the same closure | `--only 'ashlar.*'` → the 4 external arms |
+
+The subset plan's rows are **byte-identical lines of the full plan** — same
+`run_id`, same `arm`, same params, same `resume_run`, under the full plan's
+header — so a re-run lands in the same `<root>/<arm>` directories the full run
+wrote. `test_subset_plan_is_a_row_identical_subset_under_the_full_header`
+asserts it.
+
+### The three commands
+
+```bash
+make arm-plan-subset CHANGED=tiled INPUT=real_input.csv ROOT=arm_results   # -> arm_results_plan.subset.csv
+make arm-rerun       CHANGED=tiled INPUT=real_input.csv ROOT=arm_results   # = ARMS_REPLACE=1 run_arms.sh <subset plan> ...
+make arm-tables      ROOT=arm_results                                      # reads arm_results_plan.csv -- the FULL plan
+```
+
+or, driven directly / on SLURM:
+
+```bash
+python benchmarks/build_arm_plan.py --arms benchmarks/configs/arms.yaml \
+    --input real_input.csv --out arm_plan.subset.csv --results-root arm_results --changed tiled
+ARMS_REPLACE=1 ARMS_PROFILE="singularity,ieo" \
+    benchmarks/run_arms.sh arm_plan.subset.csv real_input.csv arm_results -c conf/ieo.config
+# or: CHANGED=tiled ARMS_REPLACE=1 sbatch benchmarks/submit_arms.sh   (writes arm_plan.subset.csv beside the full plan)
+```
+
+`ARMS_REPLACE=1` is opt-in. For each row of the plan it **moves** the previous
+`<root>/<arm>` output directory and, for a base arm, its `<root>/.launch/<run_id>`
+launch directory (work dir, cache, history) to `<root>/.replaced/<timestamp>/…`
+before launching — never deletes: the old result is what you compare the new
+one against, and `.replaced/` is yours to remove once you have. A cross arm has
+no launch directory of its own; when its base is *not* in the plan, only its
+run-name line is freed from the base's history (a copy is kept under
+`.replaced/`). Without `ARMS_REPLACE`, `run_arms.sh` keeps refusing a run name
+its launch directory already holds, naming the remedy.
+
+**The refusal.** `run_arms.sh` refuses to replace a base arm whose QC crosses
+the plan does not carry, naming them — the launch directory's history is the
+ground truth of which runs resumed that base. A plan built with `--changed` /
+`--only` cannot hit this (the closure adds them); a hand-filtered CSV can.
+
+### Why `arms.csv` is untouched
+
+`arms.csv` is the consumer's label manifest, and `registration_arms.R` labels
+every arm it finds under `<root>` from it. A subset re-run leaves the unaffected
+arms' results in place, so the manifest must still name them: `build_arm_plan.py`
+writes `arms.csv` **from the full plan** on every build, subset or not, and a
+subset build's `arms.csv` is byte-identical to a full build's
+(`test_subset_plan_is_a_row_identical_subset_under_the_full_header`). The tables
+likewise read the **full** plan — `make arm-tables` reads `<ROOT>_plan.csv`, and
+the subset is written to `<ROOT>_plan.subset.csv` precisely so it never
+overwrites it — and `load_runs` / the QC harvesters take the union of whatever
+each arm directory holds.
+
+### The sweep: accuracy columns, not resource curves
+
+`build_run_plan.py --only-method tiled` (or `--changed` / `--only <regex>` on
+`run_id`, `config_id`, `varied_axis`) writes the same row-identical subset of the
+synthetic sweep (9 of 98 runs at the shipped `sweep.yaml`), and `run_sweep.sh`
+takes `SWEEP_REPLACE=1` to move a run directory aside to
+`<root>/.replaced/<timestamp>/<run_id>` before relaunching (it otherwise skips a
+run whose name its directory already holds). But be clear about **what a
+SOLVE-only change can move there**: the resource/scaling curves are dominated by
+`TILED_COARSE` / `TILED_REG_TILE` / `TILED_STITCH` and `REGISTER`'s peak RSS, and
+a different solver moves `TILED_SOLVE`'s peak by kilobytes. The sweep's tiled rows need re-running for the
+**accuracy columns** (`registration_accuracy.csv`, `param_matrix.csv`'s
+`reg_*`), not for the resource curves, which will come back within replicate
+noise of the old ones. Do not read a moved scaling fit as a solver effect.
 
 ## Three traps the consumer already guards, and why the producer respects them
 

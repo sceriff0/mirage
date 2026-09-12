@@ -317,7 +317,8 @@ are the sweep's fits applied to one run. See `docs/benchmarks_real.md` §3b.
 | `make_figures` (optional) | results + run plan | `measurements.csv` + `resource_models.csv` + `resource_stats.csv` + `scaling_*.pdf/svg` + `modules.optimized.config` |
 | `build_arm_plan.py` | `arms.yaml` + real `input.csv` | `arm_plan.csv` + `arms.csv` (label manifest) |
 | `run_arms.sh` | arm plan + real `input.csv` | per-arm `<root>/<arm>/<patient>/qc/registration/*_seg_qc.json` |
-| `run_ashlar_arm.sh` | preprocessed CSV + a registration arm's QC nuclei | the ashlar external baseline, in that SAME tree |
+| `run_ashlar_arm.sh` | preprocessed CSV + a registration arm's QC nuclei | the ashlar external baseline, in that SAME tree, plus a Nextflow-format `trace/trace.txt` via `trace_step.py` |
+| `build_arm_plan.py --changed <component>` / `build_run_plan.py --only-method <m>` | a plan + a changed component | the row-identical SUBSET a code change requires re-running (`benchmarks/impact.py`; see `docs/benchmarks_real.md`, "Re-running a subset after a code change") |
 
 The last three are the real-sample arm sweep — see `docs/benchmarks_real.md`. The rows for
 `prepare_pairs.py` / `run_registration.sh` / `aggregate_eval` were removed: those scripts

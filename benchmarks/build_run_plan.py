@@ -7,6 +7,15 @@ import csv
 import itertools
 from pathlib import Path
 
+try:
+    from benchmarks import impact
+except ModuleNotFoundError:
+    # Run as a plain script (python benchmarks/build_run_plan.py, which is how the
+    # Makefile and submit_arms.sh call it) the repo root is not on sys.path, only
+    # benchmarks/ is, so the package-qualified import fails. Same fallback as
+    # generate_matrix.py's for build_run_plan.
+    import impact  # type: ignore[no-redef]
+
 
 def _configs(sweep: dict) -> list[tuple[dict, str]]:
     """Build the distinct (params, varied_axis) configurations for a sweep,
@@ -161,6 +170,29 @@ def build_run_plan(sweep: dict, repeats: int = 1) -> list[dict]:
     return rows
 
 
+def select_runs(plan: list[dict], changed=(), only: str | None = None) -> list[dict]:
+    """The sweep's subset rule: impact.affected_rows over the expanded plan.
+
+    Sweep runs are independent launches (no resume_run/from_arm), so the closure
+    is the seed set. The `only` regex is matched against run_id, config_id and
+    varied_axis -- a sweep row has no `arm`, and varied_axis is how an operator
+    names a block of it ("registration_method_grid:tiled")."""
+    rows = impact.affected_rows(plan, changed, None)
+    if only:
+        import re
+
+        rx = re.compile(only)
+        keep = {id(r) for r in rows}
+        for r in plan:
+            if any(
+                rx.search(str(r.get(k, "")))
+                for k in ("run_id", "config_id", "varied_axis")
+            ):
+                keep.add(id(r))
+        rows = [r for r in plan if id(r) in keep]
+    return rows
+
+
 def main():
     import yaml
 
@@ -173,6 +205,31 @@ def main():
         default=3,
         help="Replicate runs per config (>=3 gives a per-config variance "
         "estimate; timing especially is noisy at n=1). Default: 3.",
+    )
+    # SUBSET SELECTION, applied AFTER full expansion so run_id/config_id are the full
+    # plan's (they are assigned by enumeration; filtering first would renumber them
+    # and the re-run would land in different directories). See benchmarks/impact.py.
+    ap.add_argument(
+        "--changed",
+        action="append",
+        default=[],
+        metavar="COMPONENT",
+        help="write only the runs a change to this component affects (repeatable). "
+        f"Vocabulary: {sorted(impact.COMPONENTS)} and seg:<method>.",
+    )
+    ap.add_argument(
+        "--only-method",
+        default=None,
+        metavar="METHOD",
+        help="shorthand for --changed <registration method>: only runs at "
+        "registration_method=METHOD (valis | tiled).",
+    )
+    ap.add_argument(
+        "--only",
+        default=None,
+        metavar="REGEX",
+        help="write only the runs whose run_id, config_id or varied_axis matches "
+        "this regex (re.search). Combines with --changed (union).",
     )
     a = ap.parse_args()
     sweep = yaml.safe_load(a.sweep.read_text())
@@ -188,14 +245,36 @@ def main():
         for k in r:
             if k not in fields:
                 fields.append(k)
+    changed = list(a.changed) + ([a.only_method] if a.only_method else [])
+    subset = bool(changed) or a.only is not None
+    rows = select_runs(plan, changed, a.only) if subset else plan
+    if subset and not rows:
+        raise SystemExit(
+            f"--changed {changed} / --only {a.only!r} selects no run of the "
+            f"{len(plan)}-run plan; nothing to write."
+        )
     with open(a.out, "w", newline="") as fh:
         # lineterminator='\n' (not csv's default '\r\n') so run_sweep.sh's bash column
         # parsing doesn't see a trailing '\r' on the last field of each row.
+        # The header is the FULL plan's even for a subset, so subset rows are
+        # byte-identical lines of the full plan.
         w = csv.DictWriter(fh, fieldnames=fields, lineterminator="\n", restval="")
         w.writeheader()
-        w.writerows(plan)
-    n_cfg = len({r["config_id"] for r in plan})
-    print(f"Wrote {len(plan)} runs ({n_cfg} configs x {a.repeats} repeats) to {a.out}")
+        w.writerows(rows)
+    n_cfg = len({r["config_id"] for r in rows})
+    if subset:
+        print(
+            f"Wrote {len(rows)} of {len(plan)} runs ({n_cfg} configs) to {a.out} "
+            f"-- SUBSET for --changed {changed} --only {a.only!r}"
+        )
+        print(
+            "NOTE: point make_tables/make_figures at the FULL plan, not this subset; "
+            "the tables must cover every run in the results root."
+        )
+    else:
+        print(
+            f"Wrote {len(plan)} runs ({n_cfg} configs x {a.repeats} repeats) to {a.out}"
+        )
 
 
 if __name__ == "__main__":
