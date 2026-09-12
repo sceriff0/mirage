@@ -1,10 +1,10 @@
 """No LIVE reference to a ground-truth harness that exists on no branch.
 
 Two harnesses occupied the ground-truth slot and both were deleted:
-`benchmarks/registration_eval/` (ANHIR/ACROBAT expert landmarks) and
-`benchmarks/stare_bench/` (a synthetic displacement field). What survived was
-not prose. `make_figures.run()` REQUIRED a `reg_eval_csv` argument, and the
-marker file its opt-out wrote told the operator to go run
+`benchmarks/registration_eval/` (ANHIR/ACROBAT expert landmarks, 61e26ec) and
+`benchmarks/stare_bench/` (a synthetic displacement field, cacc850). What
+survived was not prose. `make_figures.run()` REQUIRED a `reg_eval_csv`
+argument, and the marker file its opt-out wrote told the operator to go run
 `benchmarks/registration_eval/run_registration.sh` and `aggregate_eval.py` --
 two scripts that exist nowhere. A dangling instruction in an output file is
 worse than a missing feature: it reads as a step somebody forgot to take.
@@ -12,19 +12,27 @@ worse than a missing feature: it reads as a step somebody forgot to take.
 SCOPE IS `git ls-files`, the TRACKED tree, deliberately -- not Path.rglob, which
 ignores .gitignore and would sweep in .venv, .nf-test work dirs and
 docs/superpowers/ (this guard's own plan among them). Same choice, same reason,
-as tests/test_no_legacy_frontends.py.
+as tests/test_no_legacy_frontends.py. The corollary: a NEW file is invisible to
+this guard until it is `git add`-ed, so run it after staging, not before.
 
-NARROW, in one specific way: `acrobat` is NOT forbidden as a bare word.
-`bin/utils/coarse_align.py` describes DISK+LightGlue as "the learned matcher
-VALIS and the ACROBAT winners use" -- correct provenance for the front-end that
-actually ships, and CHANGELOG.md repeats it. What IS forbidden: a PATH into a
-deleted harness; the two dataset names as a source of data; and, WIDENED from a
-path-only check, a bare (word-bounded) reference to either harness by name
-(`registration_eval`, `stare_bench`) or to `registration_eval`'s own tools
-(`aggregate_eval`, `prepare_pairs.py`, `run_registration.sh`) -- a prose sentence
-naming one of these without the `benchmarks/` path prefix used to slip past the
-path-only PATTERN, which is exactly how a LIVE instruction ("registration_eval
-reads the registered slides...") survived in benchmarks/configs/sweep.yaml.
+NARROWED 2026-09-12, because the premise moved. `benchmarks/anhir/` is a live
+ANHIR landmark harness again -- it drives the PIPELINE (`--start registration
+--stop registration`) and warps landmarks through the transform each backend
+publishes, so it does not depend on the deleted single-task scripts. The bare
+`anhir` and `ANHIR/ACROBAT` clauses that used to sit in PATTERN would have
+forbidden the harness's own name; they are gone. What this guard still forbids
+is what is still absent: a PATH into either deleted harness, a bare
+(word-bounded) reference to either by name (`registration_eval`, `stare_bench`),
+and `registration_eval`'s own tools (`aggregate_eval`, `prepare_pairs.py`,
+`run_registration.sh`) -- a prose sentence naming one of these without the
+`benchmarks/` prefix used to slip past a path-only check, which is exactly how a
+LIVE instruction survived in benchmarks/configs/sweep.yaml. `acrobat` was never
+forbidden as a bare word (`bin/utils/coarse_align.py` cites it as the provenance
+of the DISK+LightGlue front-end that ships) and still is not.
+
+The claiming-context rule for FIGURES ("evaluated on ANHIR") lives in
+tests/test_figures_have_no_retired_names.py and is unchanged: no figure may claim
+an ANHIR result until a run has produced one.
 """
 
 import re
@@ -33,9 +41,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
-# A path into a deleted harness, a bare reference to either deleted harness or
-# its scripts (aggregate_eval.py, prepare_pairs.py, run_registration.sh --
-# registration_eval's own tools), or a dataset named as a data source.
+# A path into a deleted harness, a bare reference to either deleted harness, or
+# one of registration_eval's own scripts (aggregate_eval.py, prepare_pairs.py,
+# run_registration.sh). The dataset names themselves are NOT here: see the
+# module docstring's 2026-09-12 note.
 PATTERN = re.compile(
     r"benchmarks/registration_eval"
     r"|benchmarks/stare_bench"
@@ -43,9 +52,7 @@ PATTERN = re.compile(
     r"|\bstare_bench\b"
     r"|\baggregate_eval\b"
     r"|\bprepare_pairs\.py"
-    r"|\brun_registration\.sh"
-    r"|(?<![A-Za-z0-9])anhir(?![A-Za-z0-9])"
-    r"|(?:ANHIR\s*/\s*ACROBAT)",
+    r"|\brun_registration\.sh",
     re.I,
 )
 

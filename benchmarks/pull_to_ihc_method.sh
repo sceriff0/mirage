@@ -8,6 +8,7 @@
 #   --sweep-plan <csv>   its run plan   (default: <sweep>_plan.csv, then <sweep>/run_plan.csv)
 #   --arm-plan <csv>     the arm plan   (default: <arm_root>_plan.csv)
 #   --run <dir>          the full run published as data/mirage/ (default: auto-detect)
+#   --anhir <dir>        benchmarks/anhir evaluate.py's --out (its tables -> data/benchmark/)
 #   --handoff <dir>      where built tables are staged (default: benchmarks/_handoff)
 #   --build              regenerate the tables from the roots before copying
 #   -h | --help
@@ -45,9 +46,9 @@
 # benchmarks/_handoff/ and copies only the sweep's tables to data/benchmark/.
 
 ARM_ROOT=""; IHC=""; SWEEP_ROOT=""; SWEEP_PLAN=""; ARM_PLAN=""; SRC_RUN=""; BUILD=0
-HANDOFF=""
+HANDOFF=""; ANHIR_TABLES=""
 
-usage() { sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -220,6 +221,29 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   echo "             $PY -m benchmarks.analysis.make_figures --results-root R --run-plan P --outdir $SWEEP_TABLES" >&2
 fi
 
+echo "=== 2b   ANHIR landmark tables -> data/benchmark/ ==="
+# benchmarks/anhir/evaluate.py's tables: public-landmark accuracy per (case,
+# method) and the challenge's aggregates. They carry the "anhir_" prefix, so
+# they cannot collide with the sweep's nine filenames above, and they are
+# read by analysis/benchmark_anhir.Rmd (code/anhir_plots.R) in ihc_method.
+if [[ -n "$ANHIR_TABLES" ]]; then
+  if [[ -d "$ANHIR_TABLES" ]]; then
+    copied=0
+    for want in anhir_cases.csv anhir_aggregates.csv anhir_missing.csv; do
+      if [[ -f "$ANHIR_TABLES/$want" ]]; then
+        cp "$ANHIR_TABLES/$want" "$DEST_BENCH"/ && copied=$((copied + 1))
+      else
+        echo "  WARNING: $ANHIR_TABLES/$want not present" >&2
+      fi
+    done
+    echo "  $copied ANHIR table(s) copied"
+  else
+    echo "  WARNING: --anhir $ANHIR_TABLES is not a directory -- skipped" >&2
+  fi
+else
+  echo "  no --anhir <dir> given -- skipped (see benchmarks/anhir/README.md)"
+fi
+
 echo "=== 3/5  ARM tables -> data/registration_arms/ ==="
 # registration_arms.Rmd reads the per-arm QC tree copied in step 1; these tables
 # are the same arms pre-aggregated, kept BESIDE the arms rather than in
@@ -296,6 +320,7 @@ echo "  Rscript -e 'workflowr::wflow_build(c(\"analysis/registration_arms.Rmd\",
 echo "                                       \"analysis/benchmark_pipeline.Rmd\", \\"
 echo "                                       \"analysis/benchmark_registration.Rmd\", \\"
 echo "                                       \"analysis/registration_run_qc.Rmd\", \\"
-echo "                                       \"analysis/run_resources.Rmd\"))'"
+echo "                                       \"analysis/run_resources.Rmd\", \\"
+echo "                                       \"analysis/benchmark_anhir.Rmd\"))'"
 echo
 echo "data/ is gitignored in ihc_method — nothing here is committed."

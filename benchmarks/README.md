@@ -243,57 +243,53 @@ Verify the whole harness with no data at all:
 
 ---
 
-## B. Ground-truth registration validation — REMOVED (twice). Nothing here is runnable.
+## B. Ground-truth registration validation — the ANHIR harness (`benchmarks/anhir/`)
 
-> **Historical record.** Neither harness exists on any branch. `benchmarks/registration_eval/`
-> and `benchmarks/stare_bench/` return zero paths from `git ls-tree -r benchmarking benchmarks`.
-> Nothing in this section can be run; it is kept because what was LOST is a property of the
-> current benchmark.
+> **Live since 2026-09-12.** `benchmarks/anhir/` scores the pipeline's backends on the
+> public ANHIR challenge with the challenge's own metrics (rTRE = TRE / image diagonal,
+> robustness, mean rank of per-case median rTRE) and packages the held-out cases for
+> grand-challenge.org. Its README is the run guide; the two tables it writes
+> (`anhir_cases.csv`, `anhir_aggregates.csv`) are copied into ihc_method by
+> `pull_to_ihc_method.sh --anhir <tables dir>` and rendered by
+> `analysis/benchmark_anhir.Rmd` there.
 
-Two harnesses have occupied this slot and both are gone. The section is kept because
-what was LOST is a property of the current benchmark, not history.
+**How it differs from what was here before.** Two harnesses occupied this slot and both
+were deleted; the record of each is kept because the design of the current one answers it.
 
-**1. The ANHIR/ACROBAT landmark harness** (`benchmarks/registration_eval/`) drove
-`bin/register.py` and `bin/tiled_register.py` on public challenge pairs and scored true
-landmark TRE/rTRE. It went because `bin/tiled_register.py` — the single-task STARE entry
-point — was removed when STARE became the four-stage fan-out and exists on no branch, so
-the STARE half of every pair errored. Its data was also doubly account-gated, so it never
-ran in CI.
+**1. The first landmark harness** (`benchmarks/registration_eval/`, removed at `61e26ec`)
+drove `bin/register.py` and `bin/tiled_register.py` directly on challenge pairs. It went
+because `bin/tiled_register.py` — the single-task STARE entry point — was removed when STARE
+became the four-stage fan-out and exists on no branch, so the STARE half of every pair
+errored. The current harness drives the **pipeline** (`--start registration --stop
+registration`, one patient per case, target as reference) and warps landmarks through the
+transform each backend **publishes** — `registered/manifest/*_manifest.json` via the same
+`tiled_stage_warp.make_warper` the reg_qc=2 scorer uses, or the VALIS registrar pickle —
+so it cannot drift from the production path, and a backend that publishes no transform is
+unscoreable by construction rather than by a stale script.
 
-**2. The synthetic ground-truth rung** (`benchmarks/stare_bench/`) replaced it: generated
-image pairs from a known displacement field, plus physics (photobleach, PSF, shot/read
-noise, autofluorescence, seams, focus) and an 11-point blank-fraction sweep, scored by
-exact endpoint error, landmark TRE, field quality and a gate ROC. It was frozen at
-`1.0.0` and fully tested (135 tests) — and **never run above the unit rung**: zero of its
-528 planned records were ever scored, no competitor was ever scored through it, and its
-headline claim (STARE peak RSS ≤ 8 GB at gigapixel scale) was never measured.
+**2. The synthetic ground-truth rung** (`benchmarks/stare_bench/`, removed at `cacc850`)
+generated image pairs from a known displacement field with physics (photobleach, PSF,
+noise, autofluorescence, seams, focus) and an 11-point blank-fraction sweep, scored by exact
+endpoint error, landmark TRE, field quality and a gate ROC. It was frozen at `1.0.0`, fully
+tested (135 tests) — and never run above the unit rung. It went because its numbers could
+not be ranked against the arm table (exact EPE against an injected field vs tissue Dice and
+centroid displacement, sharing no column), and because ASHLAR now runs as an arm of the
+real-sample benchmark instead.
 
-**Why it went.** Its numbers could not be ranked against the arm table. It scored exact
-EPE against an injected field; `docs/benchmarks_real.md` ranks configurations by tissue
-Dice and centroid displacement. Two metric families sharing no column, one of which had
-produced no data — and it was the ONLY consumer of the ashlar comparator, which is the
-number the manuscript actually needs. ASHLAR now runs as an arm of the real-sample
-benchmark instead (`arm_kind=external`, `benchmarks/run_ashlar_arm.sh`), scored by the
-pipeline's own `reg_qc=2` scorer into the same table as VALIS and STARE.
+**What is still lost.** The ANHIR harness restores *public-landmark* ground truth — an
+absolute error in pixels against expert correspondences — but ANHIR is cross-section
+multi-stain brightfield, a different and harder problem than same-section cyclic-IF, and
+its landmarks are for a scale the pipeline registers *at* rather than the native
+resolution. The **gate-ROC family is gone entirely** — STARE's per-tile accept/reject
+decision was scorable only against a known registrable/not-registrable label, which only
+the synthetic rung had. `Finding 1` from its freeze record (the default
+`reg_tiled_gate_tre=1.0` collapsing the mesh toward identity on sub-pixel fields) is not
+reproducible by anything remaining. Recoverable from history if wanted:
+`benchmarks/stare_bench/` at `cacc850`.
 
-**What was lost, and it is not nothing.** There is now **no ground truth of any kind** in
-this benchmark — no public landmarks, no synthetic field. Every accuracy number is a
-reference-free agreement measure on tissue: `dice_matched` and centroid displacement
-between paired nuclei, plus VALIS's self-reported rTRE. Those rank configurations against
-each other; they cannot say any of them is *correct*. Two specific consequences:
-
-- A reviewer asking "what is the absolute registration error in microns against known
-  correspondences?" has no answer here.
-- The **gate-ROC family is gone entirely** — STARE's per-tile accept/reject decision was
-  the one metric no competitor reports, and it was scorable only against a known
-  registrable/not-registrable label. `Finding 1` from the freeze record (the default
-  `reg_tiled_gate_tre=1.0` collapsing the mesh toward identity on sub-pixel fields) was
-  produced by that harness and is not reproducible by anything remaining.
-
-Recoverable from history if either is wanted again: the landmark primitives
-(`landmarks.py`, `tre.py`) and the whole generator went with the deletion --
-`benchmarks/registration_eval/` at `61e26ec`, `benchmarks/stare_bench/` at `cacc850`.
-
+**Data access.** `challenge/` is gitignored. The image archive is a split zip; the landmark
+archive is a *separate* download and only training cases carry target landmarks. Without
+the landmark archive nothing is scored locally. `benchmarks/anhir/README.md` has the layout.
 
 ## C. One real run's resource profile
 

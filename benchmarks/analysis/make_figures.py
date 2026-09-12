@@ -54,15 +54,14 @@ accuracy number in this directory is either a COST measure or a method scoring
 its own transform (valis_rtre, the STARE intrinsic TRE, the reg_qc=2
 segmentation overlap). None of them is independent.
 
-THERE IS NO GROUND-TRUTH HARNESS IN THIS REPOSITORY, and --reg-eval none is
-therefore the normal path, not an unusual one. Two harnesses have occupied that
-slot and both were deleted; benchmarks/README.md section B is the record of what
-each was and why it went. Nothing here can produce the CSV that --reg-eval takes.
-
---reg-eval <csv> is kept for an EXTERNALLY produced landmark TRE table -- one row
-per (pair_id, mode), `mode` naming the registration method, carrying at least one
-of the columns in load.GROUND_TRUTH_COLS. If you have one, pass it and this note
-is not written.
+The producer of that landmark TRE table is benchmarks/anhir/ (since
+2026-09-12): its evaluate.py writes anhir_reg_eval.csv -- one row per
+(pair_id, mode), `mode` naming the registration method, carrying
+load.GROUND_TRUTH_COLS -- from the public ANHIR landmarks. It needs the challenge download and a registration run
+per backend, so it is not part of the sweep; benchmarks/anhir/README.md is the
+run guide and benchmarks/README.md section B the history. Pass that file as
+--reg-eval and this note is not written. --reg-eval none remains the explicit
+opt-out, not the normal path.
 
 This file exists because the alternative -- a cost-only result that reads like a
 complete one -- is how the number came to be missing for so long: it sat unread

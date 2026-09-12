@@ -108,8 +108,9 @@ SWEEP ?=
 SWEEP_PLAN ?= $(SWEEP)_plan.csv
 HANDOFF ?= benchmarks/_handoff
 
-# An OPTIONAL EXTERNALLY produced landmark-TRE CSV (see load.GROUND_TRUTH_COLS).
-# This repo ships no producer for one -- see benchmarks/README.md section B.
+# An OPTIONAL landmark-TRE CSV (see load.GROUND_TRUTH_COLS). Its producer is
+# benchmarks/anhir/evaluate.py (anhir_reg_eval.csv, from the public ANHIR
+# landmarks) -- see benchmarks/README.md section B and benchmarks/anhir/README.md.
 # make_figures requires --reg-eval: it used to sit unread in that function's
 # signature, so the number reached no table and no figure at all.
 #

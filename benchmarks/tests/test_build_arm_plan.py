@@ -1301,6 +1301,8 @@ def test_run_arms_refuses_a_run_name_its_launch_dir_already_holds(tmp_path):
         assert f"rm -rf {root}/.launch/{b}" in err, err
     for c in crosses:
         # the cross shares its base's launch dir: the remedy must never be rm -rf
-        line = next(ln for ln in err.splitlines() if ln.startswith(f"[{c['run_id']}] SKIP"))
+        line = next(
+            ln for ln in err.splitlines() if ln.startswith(f"[{c['run_id']}] SKIP")
+        )
         assert "do NOT remove the directory" in line and c["resume_run"] in line, line
         assert "rm -rf" not in line, line
