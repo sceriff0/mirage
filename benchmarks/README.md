@@ -318,9 +318,10 @@ are the sweep's fits applied to one run. See `docs/benchmarks_real.md` §3b.
 ## D. Registration mosaics (arms → figure panel)
 
 `benchmarks/reg_mosaic.py <arm dir> [<arm dir> ...] --rows N -o <dir>`: before/after nuclear
-overlays, one column per arm, exactly N (round, ROI) rows, read from the arms' checkpoints
-alone. `make arm-mosaic MOSAIC_ARMS="..." MOSAIC_ROWS=N`. See `docs/benchmarks_real.md`,
-"Registration mosaics".
+overlays, one column per arm (ASHLAR included), exactly N (round, ROI) rows, cut from the
+arms' own `*_QC_RGB_fullres.tif` composites and annotated with their own seg-QC Dice and
+per-ROI displacement -- nothing re-warped. `make arm-mosaic MOSAIC_ARMS="..." MOSAIC_ROWS=N`.
+See `docs/benchmarks_real.md`, "Registration mosaics".
 
 ## Inputs -> outputs at a glance
 

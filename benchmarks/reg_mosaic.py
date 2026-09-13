@@ -2,48 +2,54 @@
 """reg_mosaic.py -- before/after registration patch mosaic across benchmark arms.
 
 Takes one or more ARM DIRECTORIES of the real-sample arm benchmark
-(``<arm_results>/<arm>``, each a mirage ``--outdir`` that stopped at registration)
-and writes, per patient, a mosaic of nuclear-channel two-colour overlays:
+(``<arm_results>/<arm>``, each a mirage ``--outdir`` that ran registration with
+its QC) and writes, per patient, a mosaic of nuclear-channel overlays:
 
     rows    = (moving round, ROI) pairs -- exactly ``--rows`` of them
     columns = Before | <arm 1> | <arm 2> ...   (one column per arm directory)
 
-Everything is read from the checkpoints the pipeline wrote, so no samplesheet
-and no raw acquisitions are needed:
+Nothing is re-registered, re-warped or re-scored. Every pixel and every number
+comes from what the arm's own registration QC wrote:
 
-    <arm>/csv/registered.csv                    registered_image per moving slide
-                                                (the reference row names the
-                                                preprocessed reference: the frame)
-    <root>/preprocess_shared/csv/preprocessed.csv   the "Before" column: every
-                                                moving slide as it entered
-                                                registration, put on the reference
-                                                canvas at the origin with no
-                                                transform (pad-or-crop, never
-                                                rescaled) -- the same "before"
-                                                mirage's own registration QC draws
+    <arm>/<patient>/qc/registration/<slide>_QC_RGB_fullres.tif
+        the pipeline's two-panel composite (bin/utils/qc.py render_before_after):
+        left = Before (red: the moving slide as it entered registration, green:
+        the reference), a blue separator, right = After (red: the registered
+        moving slide, green: the reference). Both panels sit on the reference
+        canvas, so one (y, x) is the same tissue in every panel of every arm.
+    <arm>/<patient>/qc/registration/<slide>_QC_RGB.tif
+        its downsampled preview, used to pick ROIs and to draw the locator.
+    <arm>/<patient>/qc/registration/*_seg_qc.json  and  *_reg_residuals.csv
+        the reg_qc=2 scorer's numbers: ``dice_matched`` and the paired-nucleus
+        displacement at the final stage (slide-level), and the per-nucleus
+        residual table from which each cell prints the median displacement of
+        the nuclei INSIDE its ROI.
+    <arm>/csv/registered.csv
+        which slide is which round (its channel set) and the reference.
 
-The moving slides of different arms are matched by their channel set (the
-``channels`` column), which every arm inherits from the same preprocessing run.
-Every cell of a row uses the same ROI, the same pixel scale and the same
-per-channel LUT. A per-cell metric (default: Dice of the Otsu nuclear masks; also
-residual shift by phase correlation and NCC) is printed in the corner.
+The Before column is the left panel of the first arm's composite (every arm
+draws the same Before: same native slide, same reference). Rounds are matched
+across arms by their channel set, inherited from the shared preprocessing run.
+The ASHLAR external arm writes the same composite, checkpoint and QC files
+(benchmarks/run_ashlar_arm.sh), so it is a column like any other.
+
+Per cell the corner reads ``Dice <slide dice_matched>  Δ <median residual of
+the nuclei in this ROI, µm>``; when fewer than ``--min-nuclei`` nuclei fall in
+the ROI the slide-level displacement is printed instead, marked with ``*``.
 
 Outputs in OUTDIR:
     <patient>_mosaic.png/.pdf   the figure (PDF keeps native pixels, fonts editable)
     <patient>_locator.png/.pdf  low-res reference with numbered ROI boxes
     <patient>_rois.json         ROIs (reference frame, full-res px), files,
-                                stretch limits and metrics; pass back with
-                                --rois-json to reuse identical ROIs in another run
+                                stretch limits and every cell's numbers; pass
+                                back with --rois-json to reuse identical ROIs
     <patient>_patches/          every cell as a PNG at native resolution
-                                (+ the uint16 ref/mov crops as CYX TIFFs with --save-raw)
 
 Recipes:
-    # six rows (every moving round x two ROIs), VALIS best cell vs STARE best cell
     python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \\
         --rows 6 --patient 5456 -o figs/mosaic
-    # the legacy vs robust SOLVE stage on the same tiles, checkerboard too
     python -m benchmarks.reg_mosaic arm_results/tiled_high_gate1 arm_results/tiled_high_gate1_solver_robust \\
-        --rows 4 --kinds overlay,checker -o figs/solver
+        arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker -o figs/solver
 
 Requires numpy, scipy, scikit-image, tifffile and matplotlib -- the benchmarks
 analysis stack (requirements/segeval.txt).
@@ -69,23 +75,26 @@ from skimage.filters import threshold_otsu
 log = logging.getLogger("reg_mosaic")
 
 NUCLEAR_RE = re.compile(r"DAPI|HOECHST|CELLTOX", re.I)
-DEFAULT_NUCLEAR = ("DAPI", "HOECHST", "CELLTOX")
 REGISTERED_CSV = Path("csv") / "registered.csv"
-PREPROCESSED_CSV = Path("csv") / "preprocessed.csv"
-BEFORE_ARM = (
-    "preprocess_shared"  # build_arm_plan.PREPROCESS_ARM: the shared preprocessing run
-)
+QC_SUBDIR = Path("qc") / "registration"
+FULLRES_SUFFIX = "_QC_RGB_fullres.tif"
+PREVIEW_SUFFIX = "_QC_RGB.tif"
+SEG_QC_SUFFIX = "_seg_qc.json"
+RESIDUALS_SUFFIX = "_reg_residuals.csv"
 BEFORE_LABEL = "Before"
+CH_MOVING, CH_REFERENCE, CH_SEPARATOR = 0, 1, 2  # red, green, blue in the composite
 
-# (moving colour, reference colour); additive, so overlap = sum
+# how the two colours of the composite are shown; the composite itself is red/green
 PALETTES = {
     "magenta-green": ((1.0, 0.0, 1.0), (0.0, 1.0, 0.0)),  # overlap -> white
-    "red-green": ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0)),  # overlap -> yellow (mirage QC)
+    "red-green": (
+        (1.0, 0.0, 0.0),
+        (0.0, 1.0, 0.0),
+    ),  # overlap -> yellow (as the QC file)
     "cyan-magenta": ((0.0, 1.0, 1.0), (1.0, 0.0, 1.0)),
     "cyan-red": ((0.0, 1.0, 1.0), (1.0, 0.0, 0.0)),
 }
 NICE_BARS_UM = (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
-MIN_PC_RESPONSE = 0.02  # phase-correlation peak below this = no reliable match
 
 
 # --- checkpoints --------------------------------------------------------------
@@ -97,9 +106,9 @@ class Slide:
     slide_id: str
     image: Path
     is_reference: bool
-    channels: list[str]  # the pipeline's channel list, e.g. ['DAPI', 'CD45', 'CD163']
+    channels: list[str]
     pixel_size: float | None
-    index: int = 0  # position among the patient's rows
+    index: int = 0
 
     @property
     def stains(self) -> list[str]:
@@ -114,23 +123,48 @@ class Slide:
     def label(self) -> str:
         return " / ".join(self.stains) or self.slide_id
 
+    @property
+    def stem(self) -> str:
+        """The registered file's stem the way generate_registration_qc.py names outputs."""
+        name = self.image.name
+        for suf in (".ome.tiff", ".ome.tif", ".tiff", ".tif"):
+            if name.lower().endswith(suf):
+                return name[: -len(suf)]
+        return self.image.stem
+
+    @property
+    def names(self) -> set[str]:
+        """Every name the QC scorer may have used for this slide (VALIS: file stem;
+        STARE: the channel list joined by '_', optionally patient-prefixed)."""
+        joined = "_".join(self.channels)
+        stem = self.stem
+        return {
+            stem,
+            stem.removesuffix("_registered"),
+            joined,
+            f"{self.patient}_{joined}",
+            self.slide_id,
+        }
+
 
 def _truthy(s: str) -> bool:
     return s.strip().lower() in ("true", "1", "yes", "y", "t")
 
 
-def _float_or_none(s: str) -> float | None:
+def _float_or_none(s) -> float | None:
     try:
         return float(s)
     except (TypeError, ValueError):
         return None
 
 
-def read_checkpoint(path: Path, image_col: str) -> dict[str, list[Slide]]:
+def read_checkpoint(
+    path: Path, image_col: str = "registered_image"
+) -> dict[str, list[Slide]]:
     """A mirage checkpoint (lib/Checkpoint.groovy columns) as patient -> slides."""
     if not path.is_file():
         raise SystemExit(
-            f"{path}: not found -- is this a mirage --outdir that reached registration?"
+            f"{path}: not found -- is this an arm directory that reached registration?"
         )
     with open(path, newline="") as fh:
         reader = csv.DictReader(fh)
@@ -169,38 +203,14 @@ def round_matches(sl: Slide, tokens) -> bool:
     return False
 
 
-# --- image sources ------------------------------------------------------------
-def pick_channel(
-    names: list[str], wanted: str | None = None, prefer=DEFAULT_NUCLEAR
-) -> int:
-    """Index of the nuclear channel: `wanted` (name or index) or the first of
-    `prefer` that appears in the channel names, case-insensitive."""
-    low = [n.upper() for n in names]
-    if wanted is not None:
-        if wanted.isdigit():
-            return int(wanted)
-        if wanted.upper() in low:
-            return low.index(wanted.upper())
-        hits = [i for i, n in enumerate(low) if wanted.upper() in n]
-        if len(hits) == 1:
-            return hits[0]
-        raise SystemExit(f"channel {wanted!r} not found in {names}")
-    for p in prefer:
-        for i, n in enumerate(low):
-            if p in n:
-                return i
-    raise SystemExit(f"no nuclear channel among {names}; pass --channel")
-
-
+# --- the QC composite -----------------------------------------------------------
 class TiffSource:
     """TIFF / OME-TIFF (pyramidal or not); crops decode only the tiles they touch."""
 
     def __init__(self, path: Path):
         self.path = Path(path)
         if not self.path.is_file():
-            raise SystemExit(
-                f"{self.path}: not found (checkpoint names a file that is gone)"
-            )
+            raise SystemExit(f"{self.path}: not found")
         self.tf = tifffile.TiffFile(str(self.path))
         s = self.tf.series[0]
         self.series = s
@@ -208,25 +218,11 @@ class TiffSource:
         self.levels = list(s.levels) if s.is_pyramidal else [s]
         self.nchannels = s.shape[self.axes.index("C")] if "C" in self.axes else 1
         self.shape = self._yx(s.shape, self.axes)
-        self.names = self._channel_names()
         self.px = self._pixel_size()
 
     @staticmethod
     def _yx(shape, axes):
         return int(shape[axes.index("Y")]), int(shape[axes.index("X")])
-
-    def _channel_names(self) -> list[str]:
-        names: list[str] = []
-        if self.tf.ome_metadata:
-            names = re.findall(
-                r'<Channel\b[^>]*?\bName="([^"]*)"', self.tf.ome_metadata
-            )
-        ij = self.tf.imagej_metadata or {}
-        if not names and ij.get("Labels"):
-            names = list(ij["Labels"])
-        names = names[: self.nchannels]
-        names += [f"C{i}" for i in range(len(names), self.nchannels)]
-        return names
 
     def _pixel_size(self) -> float | None:
         ome = self.tf.ome_metadata
@@ -257,7 +253,6 @@ class TiffSource:
         return None
 
     def _page_index(self, ci: int) -> int:
-        """Flat page index of the plane with channel `ci` (all other non-YX axes at 0)."""
         dims = [
             (ax, n) for ax, n in zip(self.axes, self.series.shape) if ax not in "YX"
         ]
@@ -293,7 +288,7 @@ class TiffSource:
         offsets, counts = pg.dataoffsets, pg.databytecounts
         for i in segs:
             if i >= len(offsets) or counts[i] == 0:
-                continue  # sparse / empty segment -> zeros
+                continue
             fh.seek(offsets[i])
             arr, pos, _ = kf.decode(fh.read(counts[i]), i)
             if arr is None:
@@ -315,63 +310,215 @@ class TiffSource:
     def level_shape(self, level: int) -> tuple[int, int]:
         return self._yx(self.levels[level].shape, self.axes)
 
-    def _read(self, ci, ys, xs, level=0):
-        Hl, Wl = self.level_shape(level)
+    def read(self, ci, ys, xs) -> np.ndarray:
+        Hl, Wl = self.shape
         y0, y1, sy = ys.indices(Hl)
         x0, x1, sx = xs.indices(Wl)
-        return self._read_region(level, ci, y0, y1, x0, x1)[::sy, ::sx]
+        return self._read_region(0, ci, y0, y1, x0, x1)[::sy, ::sx]
 
-    def read_patch(self, ci: int, y: int, x: int, h: int, w: int) -> np.ndarray:
-        """Crop with mirage's pad-or-crop rule: zero outside the image, never resampled."""
+    def read_patch(
+        self,
+        ci: int,
+        y: int,
+        x: int,
+        h: int,
+        w: int,
+        x_offset: int = 0,
+        x_limit: int | None = None,
+    ) -> np.ndarray:
+        """Crop with the pad-or-crop rule: zero outside [0, x_limit) x [0, H), never resampled.
+        ``x_offset`` shifts the read into the file (the After panel starts after the separator)."""
         H, W = self.shape
-        y0, x0, y1, x1 = max(y, 0), max(x, 0), min(y + h, H), min(x + w, W)
+        W = W if x_limit is None else min(W, x_offset + x_limit)
+        y0, x0, y1, x1 = max(y, 0), max(x, 0), min(y + h, H), min(x + w, W - x_offset)
         if y1 <= y0 or x1 <= x0:
-            return np.zeros((h, w), np.uint16)
-        sub = self._read(ci, slice(y0, y1), slice(x0, x1))
+            return np.zeros((h, w), np.uint8)
+        sub = self.read(ci, slice(y0, y1), slice(x0 + x_offset, x1 + x_offset))
         if (y0, x0, y1, x1) == (y, x, y + h, x + w):
             return sub
         out = np.zeros((h, w), sub.dtype)
         out[y0 - y : y1 - y, x0 - x : x1 - x] = sub
         return out
 
-    def read_lowres(self, ci, factor):
-        """Whole plane downsampled ~`factor` (from the closest pyramid level); (plane, actual factor)."""
-        H = self.shape[0]
-        best = 0
-        for i in range(len(self.levels)):
-            if H / self.level_shape(i)[0] <= factor + 1e-6:
-                best = i
-        f = H / self.level_shape(best)[0]
-        step = max(1, int(round(factor / f)))
-        return self._read(
-            ci, slice(None, None, step), slice(None, None, step), level=best
-        ), f * step
-
     def close(self):
         self.tf.close()
 
 
-# --- columns: arms, and the Before column -------------------------------------
-class Column:
-    """One column of the mosaic: a directory carrying a mirage checkpoint whose rows
-    name, per slide, the image to draw from -- ``registered_image`` for an arm
-    (the reference row names the preprocessed reference, i.e. the frame) or
-    ``preprocessed_image`` for the Before column."""
+class Composite:
+    """One registration-QC composite: the Before panel, a separator, the After panel."""
 
-    checkpoint = REGISTERED_CSV
-    image_col = "registered_image"
+    def __init__(self, path: Path, preview: Path | None = None):
+        self.src = TiffSource(path)
+        if self.src.nchannels != 3:
+            raise SystemExit(
+                f"{path.name}: expected a 3-channel RGB composite, found {self.src.nchannels} channel(s)"
+            )
+        H, Wtot = self.src.shape
+        self.height = H
+        self.before_width, self.after_offset, self.after_width = self._split(Wtot)
+        self.preview = TiffSource(preview) if preview and preview.is_file() else None
+        self.px = self.src.px
 
-    def __init__(
-        self, root: Path, label: str | None = None, channel: str | None = None
-    ):
+    def _split(self, wtot: int) -> tuple[int, int, int]:
+        """Panel geometry from the blue separator (a band of B=255 with no red/green).
+        A single-panel composite (no native panel) has no Before."""
+        y = self.height // 2
+        b = self.src.read(CH_SEPARATOR, slice(y, y + 1), slice(None))[0]
+        r = self.src.read(CH_MOVING, slice(y, y + 1), slice(None))[0]
+        g = self.src.read(CH_REFERENCE, slice(y, y + 1), slice(None))[0]
+        sep = np.flatnonzero((b == 255) & (r == 0) & (g == 0))
+        if sep.size == 0:
+            return 0, 0, wtot
+        # the separator is one contiguous band; anything else blue is not one
+        start, end = int(sep[0]), int(sep[-1]) + 1
+        if end - start != sep.size:
+            raise SystemExit(
+                f"{self.src.path.name}: cannot find one contiguous blue separator"
+            )
+        return start, end, wtot - end
+
+    @property
+    def has_before(self) -> bool:
+        return self.before_width > 0
+
+    @property
+    def canvas(self) -> tuple[int, int]:
+        return self.height, self.after_width
+
+    def crop(
+        self, panel: str, y: int, x: int, h: int, w: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """(reference, moving) uint8 crops of the Before or After panel."""
+        if panel == "before":
+            if not self.has_before:
+                raise SystemExit(f"{self.src.path.name} carries no Before panel")
+            off, lim = 0, self.before_width
+        else:
+            off, lim = self.after_offset, self.after_width
+        ref = self.src.read_patch(CH_REFERENCE, y, x, h, w, off, lim)
+        mov = self.src.read_patch(CH_MOVING, y, x, h, w, off, lim)
+        return ref, mov
+
+    def lowres_reference(self, factor_hint: int) -> tuple[np.ndarray, float]:
+        """The reference (green) plane of the After panel, downsampled: from the preview
+        when present (factor from its width), else by striding the full-res file."""
+        if self.preview is not None:
+            H, Wtot = self.preview.shape
+            pb, po, pw = Composite._split_static(self.preview, H, Wtot)
+            g = self.preview.read(CH_REFERENCE, slice(None), slice(po, po + pw))
+            return g, self.after_width / pw
+        step = max(1, factor_hint)
+        g = self.src.read(
+            CH_REFERENCE,
+            slice(None, None, step),
+            slice(self.after_offset, self.after_offset + self.after_width, step),
+        )
+        return g, float(step)
+
+    @staticmethod
+    def _split_static(src: TiffSource, H: int, wtot: int) -> tuple[int, int, int]:
+        y = H // 2
+        b = src.read(CH_SEPARATOR, slice(y, y + 1), slice(None))[0]
+        r = src.read(CH_MOVING, slice(y, y + 1), slice(None))[0]
+        g = src.read(CH_REFERENCE, slice(y, y + 1), slice(None))[0]
+        sep = np.flatnonzero((b == 255) & (r == 0) & (g == 0))
+        if sep.size == 0:
+            return 0, 0, wtot
+        return int(sep[0]), int(sep[-1]) + 1, wtot - int(sep[-1]) - 1
+
+    def close(self):
+        self.src.close()
+        if self.preview is not None:
+            self.preview.close()
+
+
+# --- the seg QC numbers ---------------------------------------------------------
+@dataclass
+class SegQC:
+    stage: str
+    dice: float | None
+    displacement_um: float | None
+    displacement_px: float | None
+    n_pairs: int | None
+    residuals: np.ndarray = field(
+        default_factory=lambda: np.zeros((0, 3))
+    )  # ref_x, ref_y, residual_px
+
+    def local_displacement_px(
+        self, y: int, x: int, h: int, w: int, min_nuclei: int
+    ) -> tuple[float | None, int]:
+        if self.residuals.size == 0:
+            return None, 0
+        rx, ry, res = self.residuals.T
+        inside = (rx >= x) & (rx < x + w) & (ry >= y) & (ry < y + h)
+        n = int(inside.sum())
+        if n < min_nuclei:
+            return None, n
+        return float(np.median(res[inside])), n
+
+
+def _read_seg_qc(path: Path) -> tuple[str, dict]:
+    d = json.loads(path.read_text())
+    stages = d.get("stages") or {}
+    order = d.get("stage_order") or list(stages)
+    final = order[-1] if order else None
+    return d.get("moving", ""), {"stage": final, "final": stages.get(final) or {}}
+
+
+def load_seg_qc(qc_dir: Path, slide: Slide) -> SegQC | None:
+    """The scorer's final-stage numbers for ``slide``, matched by the name it recorded."""
+    if not qc_dir.is_dir():
+        return None
+    for js in sorted(qc_dir.glob(f"*{SEG_QC_SUFFIX}")):
+        moving, info = _read_seg_qc(js)
+        if moving not in slide.names and not any(
+            moving.endswith(n) for n in slide.names
+        ):
+            continue
+        final = info["final"]
+        stage = info["stage"]
+        residuals = np.zeros((0, 3))
+        csv_path = js.with_name(js.name[: -len(SEG_QC_SUFFIX)] + RESIDUALS_SUFFIX)
+        if csv_path.is_file():
+            rows = []
+            with open(csv_path, newline="") as fh:
+                for row in csv.DictReader(fh):
+                    if stage and row.get("stage") not in (None, "", stage):
+                        continue
+                    try:
+                        rows.append(
+                            (
+                                float(row["ref_x"]),
+                                float(row["ref_y"]),
+                                float(row["residual_px"]),
+                            )
+                        )
+                    except (KeyError, ValueError):
+                        continue
+            if rows:
+                residuals = np.asarray(rows, dtype=float)
+        return SegQC(
+            stage=stage or "",
+            dice=_float_or_none(final.get("dice_matched")),
+            displacement_um=_float_or_none(final.get("displacement_um_p50")),
+            displacement_px=_float_or_none(final.get("displacement_px_p50")),
+            n_pairs=final.get("n_pairs"),
+            residuals=residuals,
+        )
+    return None
+
+
+# --- one arm = one column -------------------------------------------------------
+class Arm:
+    def __init__(self, root: Path, label: str | None = None):
         self.root = Path(root)
         self.name = label or self.root.name
-        self.channel = channel
-        self.per = read_checkpoint(self.root / self.checkpoint, self.image_col)
-        self._src: dict[str, TiffSource] = {}
-        self._ci: dict[str, int] = {}
+        self.per = read_checkpoint(self.root / REGISTERED_CSV)
         self.ref: Slide | None = None
         self.moving: dict[str, Slide] = {}
+        self._comp: dict[str, Composite] = {}
+        self._qc: dict[str, SegQC | None] = {}
+        self.patient = ""
 
     def patients(self) -> list[str]:
         return list(self.per)
@@ -380,105 +527,73 @@ class Column:
         rows = self.per.get(patient)
         if not rows:
             raise SystemExit(
-                f"[{self.name}] patient {patient!r} not in {self.root / self.checkpoint}"
+                f"[{self.name}] patient {patient!r} not in {self.root / REGISTERED_CSV}"
             )
         refs = [r for r in rows if r.is_reference]
         if len(refs) != 1:
             raise SystemExit(
                 f"[{self.name}] {patient}: expected one reference row, found {len(refs)}"
             )
+        self.patient = patient
         self.ref = refs[0]
         self.moving = {r.key: r for r in rows if not r.is_reference}
-        self._src, self._ci = {}, {}
-
-    def source(self, sl: Slide) -> tuple[TiffSource, int]:
-        if sl.key not in self._src:
-            src = TiffSource(sl.image)
-            names = sl.channels if len(sl.channels) == src.nchannels else src.names
-            ci = pick_channel(names, self.channel)
-            if ci >= src.nchannels:
-                raise SystemExit(
-                    f"[{self.name}] {sl.image.name}: nuclear channel index {ci} but the file has "
-                    f"{src.nchannels} channel(s); channels column says {sl.channels}"
-                )
-            self._src[sl.key], self._ci[sl.key] = src, ci
-            log.info(
-                "[%s] %s: %dx%d px, %s µm/px, nuclear channel %s",
-                self.name,
-                src.path.name,
-                *src.shape,
-                src.px,
-                names[ci],
-            )
-        return self._src[sl.key], self._ci[sl.key]
+        self._comp, self._qc = {}, {}
 
     @property
-    def frame(self) -> TiffSource:
-        assert self.ref is not None
-        return self.source(self.ref)[0]
-
-    @property
-    def px(self) -> float | None:
-        assert self.ref is not None
-        return self.ref.pixel_size or self.frame.px
+    def qc_dir(self) -> Path:
+        return self.root / self.patient / QC_SUBDIR
 
     def slide(self, key: str) -> Slide:
         if key not in self.moving:
             raise SystemExit(
-                f"[{self.name}] no moving slide with channel set {key!r}; this arm has {sorted(self.moving)}"
+                f"[{self.name}] {self.patient}: no registered slide for round {key!r}; this arm has "
+                f"{sorted(self.moving)} -- did it finish for this patient?"
             )
         return self.moving[key]
 
-    def crops(self, key: str, y, x, h, w) -> tuple[np.ndarray, np.ndarray]:
-        """(reference crop, moving crop) at the same reference-frame coordinates."""
-        rs, rc = self.source(self.ref)
-        ms, mc = self.source(self.slide(key))
-        return rs.read_patch(rc, y, x, h, w), ms.read_patch(mc, y, x, h, w)
+    def composite(self, key: str) -> Composite:
+        if key not in self._comp:
+            sl = self.slide(key)
+            full = self.qc_dir / f"{sl.stem}{FULLRES_SUFFIX}"
+            if not full.is_file():
+                raise SystemExit(
+                    f"[{self.name}] {self.patient}: no registration QC composite {full.name} in {self.qc_dir} "
+                    "-- the arm's GENERATE_REGISTRATION_QC did not run for this slide"
+                )
+            self._comp[key] = Composite(
+                full, self.qc_dir / f"{sl.stem}{PREVIEW_SUFFIX}"
+            )
+        return self._comp[key]
 
-    def lowres(self, key: str, factor) -> tuple[np.ndarray, np.ndarray]:
-        rs, rc = self.source(self.ref)
-        ms, mc = self.source(self.slide(key))
-        return rs.read_lowres(rc, factor)[0], ms.read_lowres(mc, factor)[0]
+    def seg_qc(self, key: str) -> SegQC | None:
+        if key not in self._qc:
+            self._qc[key] = load_seg_qc(self.qc_dir, self.slide(key))
+            if self._qc[key] is None:
+                log.warning(
+                    "[%s] %s: no *_seg_qc.json names round %s in %s -- cells carry no numbers",
+                    self.name,
+                    self.patient,
+                    key,
+                    self.qc_dir,
+                )
+        return self._qc[key]
 
-    def lowres_ref(self, factor):
-        rs, rc = self.source(self.ref)
-        return rs.read_lowres(rc, factor)
+    @property
+    def px(self) -> float | None:
+        assert self.ref is not None
+        return self.ref.pixel_size
 
     def files(self, keys) -> dict[str, str]:
-        assert self.ref is not None
-        out = {"__ref__": str(self.ref.image)}
-        out.update({k: str(self.moving[k].image) for k in keys if k in self.moving})
-        return out
+        return {
+            k: str(self.qc_dir / f"{self.moving[k].stem}{FULLRES_SUFFIX}")
+            for k in keys
+            if k in self.moving
+        }
 
     def close(self):
-        for s in self._src.values():
-            s.close()
-        self._src, self._ci = {}, {}
-
-
-class Before(Column):
-    """The shared preprocessing run: every slide as it entered registration."""
-
-    checkpoint = PREPROCESSED_CSV
-    image_col = "preprocessed_image"
-
-    def __init__(self, root: Path, channel: str | None = None):
-        super().__init__(root, BEFORE_LABEL, channel)
-
-
-def find_before(arm_dirs: list[Path], explicit: Path | None) -> Path:
-    """The preprocessing run the arms resumed from: --before, else <root>/preprocess_shared."""
-    if explicit is not None:
-        return explicit
-    roots = {d.resolve().parent for d in arm_dirs}
-    for root in sorted(roots):
-        cand = root / BEFORE_ARM
-        if (cand / PREPROCESSED_CSV).is_file():
-            return cand
-    raise SystemExit(
-        f"no {BEFORE_ARM}/{PREPROCESSED_CSV} beside the arm directories ({sorted(str(r) for r in roots)}); "
-        "pass --before <the --outdir of the preprocessing run the arms resumed from>"
-    )
+        for c in self._comp.values():
+            c.close()
+        self._comp = {}
 
 
 # --- rows -----------------------------------------------------------------------
@@ -487,9 +602,7 @@ def plan_rows(round_keys: list[str], n_rois: int, n_rows: int) -> list[tuple[str
 
     ROI-major so a truncated plan still shows every round at the first ROI
     before it shows any round at a second one: ``--rows 4`` over three rounds
-    gives (ROI 1 x all three rounds) + (ROI 2 x the first round), never three ROIs
-    of one round and none of the others. ``n_rois`` should be
-    ``ceil(n_rows / len(round_keys))`` when the ROIs are auto-selected.
+    gives (ROI 1 x all three rounds) + (ROI 2 x the first round).
     """
     if n_rows < 1:
         raise ValueError(f"--rows must be >= 1, got {n_rows}")
@@ -527,8 +640,7 @@ def select_rois(
     """Pick `n` patch positions on a low-res nuclear image.
 
     Score = tissue coverage (window mostly inside tissue, Otsu on the log image)
-          x local texture (std of log intensity within the tissue pixels: glands,
-            vessels, density changes -- not a uniform nuclear sheet or empty glass)
+          x local texture (std of log intensity within the tissue pixels)
           x penalty for saturated pixels (debris, folds).
     Greedy: best window first; later picks are pushed away from earlier ones
     (`spread`) and never closer than `min_sep` x image diagonal.
@@ -541,14 +653,12 @@ def select_rois(
     u8 = ((f - f.min()) * (255.0 / rng)).astype(np.uint8)
     fg = _otsu_mask(u8, 1.5).astype(np.float32)
     fg_frac = _box(fg, win)
-    # texture = std of log intensity over the TISSUE pixels of the window only, so the
-    # glass/tissue edge does not dominate and a uniform nuclear sheet scores low
     den = np.maximum(fg_frac, 1e-3)
     m1 = _box(f * fg, win) / den
     m2 = _box(f * f * fg, win) / den
     std = np.sqrt(np.maximum(m2 - m1 * m1, 0.0))
     sat = _box((img >= np.percentile(img, 99.98)).astype(np.float32), win)
-    cover = np.clip((fg_frac - 0.5) / 0.4, 0.0, 1.0)  # 0 at <=50 % tissue, 1 at >=90 %
+    cover = np.clip((fg_frac - 0.5) / 0.4, 0.0, 1.0)
     norm = float(np.percentile(std[fg > 0], 95)) if fg.any() else float(std.max())
     texture = np.clip(std / (norm + 1e-6), 0.0, 1.0)
     score = cover * texture * np.clip(1.0 - 25.0 * sat, 0.0, 1.0)
@@ -613,82 +723,38 @@ def checkerboard(mov01, ref01, tiles) -> np.ndarray:
     return np.repeat(g[..., None], 3, axis=-1)
 
 
-def nuclear_mask(img01: np.ndarray) -> np.ndarray:
-    """Otsu on the (stretched) nuclear channel after a light blur."""
-    u8 = np.round(np.clip(img01, 0, 1) * 255).astype(np.uint8)
-    if u8.max() == 0:
-        return np.zeros(u8.shape, bool)
-    return _otsu_mask(u8, 1.0)
-
-
-def dice(a: np.ndarray, b: np.ndarray) -> float:
-    s = a.sum() + b.sum()
-    return float(2.0 * np.logical_and(a, b).sum() / s) if s else float("nan")
-
-
-def residual_shift(ref, mov):
-    """(dx, dy, response): translation of `mov` relative to `ref` by phase correlation
-    with a Hann window and parabolic sub-pixel refinement. `response` is the peak of the
-    normalised cross-power spectrum (1 = identical, ~0.01 = unrelated content)."""
-    a = np.asarray(ref, np.float64)
-    b = np.asarray(mov, np.float64)
-    if a.max() == a.min() or b.max() == b.min():
-        return float("nan"), float("nan"), 0.0
-    h, w = a.shape
-    win = np.outer(np.hanning(h), np.hanning(w))
-    F = np.fft.fft2((a - a.mean()) * win)
-    G = np.fft.fft2((b - b.mean()) * win)
-    R = F * np.conj(G)
-    R /= np.abs(R) + 1e-12
-    r = np.real(np.fft.ifft2(R))
-    py, px = np.unravel_index(int(np.argmax(r)), r.shape)
-    resp = float(r[py, px])
-
-    def refine(vm, v0, vp):
-        d = vm - 2.0 * v0 + vp
-        return 0.0 if d == 0 else 0.5 * (vm - vp) / d
-
-    dy = py + refine(r[(py - 1) % h, px], r[py, px], r[(py + 1) % h, px])
-    dx = px + refine(r[py, (px - 1) % w], r[py, px], r[py, (px + 1) % w])
-    dy, dx = (dy - h if dy > h / 2 else dy), (dx - w if dx > w / 2 else dx)
-    return float(-dx), float(-dy), resp
-
-
-def ncc(ref, mov) -> float:
-    a = np.asarray(ref, np.float64).ravel()
-    b = np.asarray(mov, np.float64).ravel()
-    if a.std() == 0 or b.std() == 0:
-        return float("nan")
-    return float(np.corrcoef(a, b)[0, 1])
-
-
-def metrics(ref_raw, mov_raw, ref01, mov01, px, which) -> tuple[str, dict]:
-    """Text for the corner of a cell + numbers for the manifest."""
-    vals: dict = {}
-    parts = []
-    if "dice" in which:
-        d = dice(nuclear_mask(ref01), nuclear_mask(mov01))
-        vals["dice"] = d
-        parts.append("Dice n/a" if np.isnan(d) else f"Dice {d:.2f}")
-    if "shift" in which:
-        dx, dy, resp = residual_shift(ref_raw, mov_raw)
-        vals.update(shift_px=[dx, dy], pc_response=resp)
-        if np.isnan(dx) or resp < MIN_PC_RESPONSE:
-            parts.append("Δ n/a")
-        else:
-            d = float(np.hypot(dx, dy))
-            vals["shift_um"] = d * px if px else None
-            parts.append(f"Δ {d * px:.1f} µm" if px else f"Δ {d:.1f} px")
-    if "ncc" in which:
-        r = ncc(ref_raw, mov_raw)
-        vals["ncc"] = r
-        parts.append("r n/a" if np.isnan(r) else f"r {r:.2f}")
-    return "  ".join(parts), vals
-
-
 def auto_scalebar_um(patch_um: float) -> float:
     target = patch_um / 4.0 * 1.05
     return float(max([b for b in NICE_BARS_UM if b <= target] or [NICE_BARS_UM[0]]))
+
+
+def cell_note(
+    qc: SegQC | None, y: int, x: int, size: int, px: float | None, min_nuclei: int
+) -> tuple[str, dict]:
+    """``Dice 0.87  Δ 1.3 µm`` (+ ``*`` when the slide-level displacement stands in)."""
+    if qc is None:
+        return "", {}
+    parts, vals = (
+        [],
+        {
+            "stage": qc.stage,
+            "dice_matched": qc.dice,
+            "slide_displacement_um": qc.displacement_um,
+        },
+    )
+    if qc.dice is not None:
+        parts.append(f"Dice {qc.dice:.2f}")
+    local_px, n = qc.local_displacement_px(y, x, size, size, min_nuclei)
+    vals["n_nuclei_in_roi"] = n
+    if local_px is not None:
+        vals["roi_displacement_px"] = local_px
+        vals["roi_displacement_um"] = local_px * px if px else None
+        parts.append(f"Δ {local_px * px:.1f} µm" if px else f"Δ {local_px:.1f} px")
+    elif qc.displacement_um is not None:
+        parts.append(f"Δ {qc.displacement_um:.1f} µm*")
+    elif qc.displacement_px is not None:
+        parts.append(f"Δ {qc.displacement_px:.1f} px*")
+    return "  ".join(parts), vals
 
 
 def _mpl():
@@ -835,8 +901,6 @@ def write_png(path: Path, rgb01):
 # --- per patient --------------------------------------------------------------
 @dataclass
 class Options:
-    """Everything `process_patient` needs, decoupled from argparse for the tests."""
-
     outdir: Path
     rows: int
     rounds: list[str] | None = None
@@ -853,8 +917,8 @@ class Options:
     pmax: float = 99.7
     gamma: float = 0.8
     checker_tiles: int = 6
-    annotate: str = "dice"
     annotate_where: str = "after"
+    min_nuclei: int = 5
     scalebar_um: float | None = None
     scalebar_where: str = "last"
     cell_in: float = 1.4
@@ -862,72 +926,68 @@ class Options:
     formats: str = "png,pdf"
     pixel_size_um: float | None = None
     lowres_um: float = 5.0
-    save_raw: bool = False
 
 
-def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) -> dict:
-    columns: list[Column] = [before, *arms]
-    for col in columns:
-        col.open(pid)
-    ref = before.ref
-    assert ref is not None
-    moving = [before.moving[k] for k in before.moving]
+def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
+    for arm in arms:
+        arm.open(pid)
+    first = arms[0]
+    assert first.ref is not None
+    moving = list(first.moving.values())
     if opt.rounds:
         moving = [sl for sl in moving if round_matches(sl, opt.rounds)]
     if not moving:
         raise SystemExit(f"{pid}: no moving round matches {opt.rounds}")
     for arm in arms:
-        absent = [sl.key for sl in moving if sl.key not in arm.moving]
-        if absent:
-            raise SystemExit(
-                f"[{arm.name}] {pid}: no registered slide for round(s) {absent}; "
-                f"the arm has {sorted(arm.moving)} -- did that arm finish for this patient?"
-            )
+        for sl in moving:
+            arm.slide(sl.key)  # names the missing round, if any
+    keys = [sl.key for sl in moving]
     log.info(
         "== %s: reference %s; %d moving round(s): %s",
         pid,
-        ref.image.name,
+        first.ref.image.name,
         len(moving),
-        ", ".join(sl.key for sl in moving),
+        ", ".join(keys),
     )
 
-    frame = before.frame
-    px = opt.pixel_size_um or before.px
+    # the frame and the Before panel come from the first arm's composite of the first round
+    lead = first.composite(keys[0])
+    if not lead.has_before:
+        raise SystemExit(
+            f"[{first.name}] {pid}: its composite has no Before panel; put an arm whose QC ran with --native first"
+        )
+    H, W = lead.canvas
+    px = opt.pixel_size_um or lead.px or first.px
     if opt.patch_px:
         patch_px = opt.patch_px
     elif px:
         patch_px = int(round(opt.patch_um / px))
     else:
         raise SystemExit("pixel size unknown; pass --pixel-size-um or --patch-px")
-    H, W = frame.shape
     patch_um = patch_px * px if px else None
     log.info(
-        "reference frame %dx%d px, %s µm/px; patch %d px%s",
+        "reference canvas %dx%d px, %s µm/px; patch %d px%s",
         H,
         W,
         px,
         patch_px,
         f" = {patch_um:.0f} µm" if patch_um else "",
     )
-
     for arm in arms:
-        for sl in moving:
-            s, _ = arm.source(arm.slide(sl.key))
-            if s.shape != frame.shape:
+        for k in keys:
+            c = arm.composite(k)
+            if c.canvas != (H, W):
                 log.warning(
-                    "[%s] %s is %s but the reference frame is %s; ROI coordinates assume the registered "
-                    "output is on the reference canvas",
+                    "[%s] %s: composite canvas %s differs from %s; ROI coordinates assume one reference canvas",
                     arm.name,
-                    s.path.name,
-                    s.shape,
-                    frame.shape,
+                    k,
+                    c.canvas,
+                    (H, W),
                 )
 
-    # low-res reference for ROI selection and the locator
-    factor = max(1, int(round(opt.lowres_um / px))) if px else 16
-    low, f = before.lowres_ref(factor)
+    factor_hint = max(1, int(round(opt.lowres_um / px))) if px else 16
+    low, f = lead.lowres_reference(factor_hint)
 
-    # ROIs: reuse, manual, or auto -- enough of them for --rows over the rounds
     n_rois = max(1, math.ceil(opt.rows / len(moving)))
     if opt.rois_json:
         prev = json.loads(Path(opt.rois_json).read_text())
@@ -944,7 +1004,7 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
     if not rois:
         raise SystemExit(f"{pid}: no ROI could be selected")
     log.info("ROIs (y, x, %d px): %s", patch_px, rois)
-    plan = plan_rows([sl.key for sl in moving], len(rois), opt.rows)
+    plan = plan_rows(keys, len(rois), opt.rows)
     by_key = {sl.key: sl for sl in moving}
 
     outdir = Path(opt.outdir)
@@ -958,28 +1018,18 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
         outdir / f"{pid}_locator",
         formats,
         px,
-        f"{pid} — {ref.label} (reference)",
+        f"{pid} — {first.ref.label} (reference)",
         opt.dpi,
     )
 
-    glob_cache: dict = {}
-
-    def limits(col: Column, chan: str, key: str, crop) -> tuple[float, float]:
+    def limits(col: str, chan: str, key: str, crop) -> tuple[float, float]:
         if opt.stretch == "patch":
             return percentile_limits(crop, opt.pmin, opt.pmax)
-        ck = (col.name, chan, key if chan == "mov" else "")
-        if ck not in glob_cache:
-            plane = col.lowres(key, factor)[chan == "mov"]
-            glob_cache[ck] = percentile_limits(plane, opt.pmin, opt.pmax)
-        return glob_cache[ck]
+        # the composite is already globally min-max scaled by the QC step: keep it as is
+        return (0.0, 255.0)
 
     kinds = [k.strip() for k in opt.kinds.split(",") if k.strip()]
-    which = (
-        set()
-        if opt.annotate == "none"
-        else {a.strip() for a in opt.annotate.split(",")}
-    )
-    col_names = [c.name for c in columns]
+    col_names = [BEFORE_LABEL] + [a.name for a in arms]
     col_labels = [
         c if k == "overlay" else f"{c} (checker)" for k in kinds for c in col_names
     ]
@@ -990,19 +1040,20 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
     for key, ri in plan:
         sl = by_key[key]
         y, x = rois[ri]
-        crops = {col.name: col.crops(key, y, x, patch_px, patch_px) for col in columns}
+        crops = {
+            BEFORE_LABEL: first.composite(key).crop("before", y, x, patch_px, patch_px)
+        }
+        for arm in arms:
+            crops[arm.name] = arm.composite(key).crop("after", y, x, patch_px, patch_px)
         lim = {
-            c.name: (
-                limits(c, "ref", key, crops[c.name][0]),
-                limits(c, "mov", key, crops[c.name][1]),
-            )
-            for c in columns
+            n: (limits(n, "ref", key, rc), limits(n, "mov", key, mc))
+            for n, (rc, mc) in crops.items()
         }
         st = {
             n: (stretch(rc, lim[n][0], opt.gamma), stretch(mc, lim[n][1], opt.gamma))
             for n, (rc, mc) in crops.items()
         }
-        cells_meta = {}
+        cells_meta: dict = {}
         row_grid, row_notes = [], []
         for k in kinds:
             for n in col_names:
@@ -1014,36 +1065,27 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
                 )
                 note = ""
                 if k == "overlay":
-                    text, vals = metrics(crops[n][0], crops[n][1], r01, m01, px, which)
-                    cells_meta[n] = {
-                        "ref_limits": lim[n][0],
-                        "mov_limits": lim[n][1],
-                        **vals,
-                    }
-                    if opt.annotate_where == "all" or n != BEFORE_LABEL:
+                    if n == BEFORE_LABEL:
+                        cells_meta[n] = {
+                            "ref_limits": lim[n][0],
+                            "mov_limits": lim[n][1],
+                        }
+                    else:
+                        arm = next(a for a in arms if a.name == n)
+                        text, vals = cell_note(
+                            arm.seg_qc(key), y, x, patch_px, px, opt.min_nuclei
+                        )
+                        cells_meta[n] = {
+                            "ref_limits": lim[n][0],
+                            "mov_limits": lim[n][1],
+                            **vals,
+                        }
                         note = text
+                    if n == BEFORE_LABEL and opt.annotate_where != "all":
+                        note = ""
                 row_grid.append(img)
                 row_notes.append(note)
-                stem = f"r{sl.index:02d}_{key}_roi{ri + 1}_{n}_{k}"
-                write_png(pdir / f"{stem}.png", img)
-                if opt.save_raw and k == "overlay":
-                    raw = np.stack([np.asarray(a) for a in crops[n]])
-                    meta = {"axes": "CYX", "Labels": ["reference", "moving"]}
-                    kw = {}
-                    if px:
-                        meta["unit"] = "um"
-                        kw = {
-                            "resolution": (1.0 / px, 1.0 / px),
-                            "resolutionunit": "MICROMETER",
-                        }
-                    tifffile.imwrite(
-                        str(pdir / f"{stem}_raw.tif"),
-                        raw,
-                        imagej=True,
-                        metadata=meta,
-                        compression="zlib",
-                        **kw,
-                    )
+                write_png(pdir / f"r{sl.index:02d}_{key}_roi{ri + 1}_{n}_{k}.png", img)
         grid.append(row_grid)
         notes.append(row_notes)
         parts = ([sl.label] if len(moving) > 1 or len(rois) == 1 else []) + (
@@ -1073,7 +1115,7 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
 
     manifest = {
         "patient": pid,
-        "reference": str(ref.image),
+        "reference": str(first.ref.image),
         "pixel_size_um": px,
         "patch_px": patch_px,
         "patch_um": patch_um,
@@ -1084,12 +1126,19 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
         "pmin": opt.pmin,
         "pmax": opt.pmax,
         "gamma": opt.gamma,
-        "annotate": sorted(which),
+        "min_nuclei": opt.min_nuclei,
         "scalebar_um": scalebar and float(scalebar[1].split()[0]),
         "rois": [{"id": i, "y": y, "x": x} for i, (y, x) in enumerate(rois, 1)],
         "columns": {
-            c.name: {"dir": str(c.root), "files": c.files([sl.key for sl in moving])}
-            for c in columns
+            BEFORE_LABEL: {
+                "dir": str(first.root),
+                "files": first.files(keys),
+                "panel": "before",
+            },
+            **{
+                a.name: {"dir": str(a.root), "files": a.files(keys), "panel": "after"}
+                for a in arms
+            },
         },
         "row_plan": rows_meta,
     }
@@ -1103,8 +1152,8 @@ def process_patient(pid: str, before: Before, arms: list[Column], opt: Options) 
         sum(len(r) for r in grid),
         pdir,
     )
-    for col in columns:
-        col.close()
+    for arm in arms:
+        arm.close()
     return manifest
 
 
@@ -1128,7 +1177,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         type=Path,
         metavar="ARM_DIR",
-        help="one or more <arm_results>/<arm> directories (one column each)",
+        help="one or more <arm_results>/<arm> directories (one column each; the first one also supplies the Before column)",
     )
     ap.add_argument(
         "--rows",
@@ -1142,12 +1191,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="patient_id(s) to process (default: every patient of the first arm)",
-    )
-    ap.add_argument(
-        "--before",
-        type=Path,
-        default=None,
-        help=f"the preprocessing run's --outdir (default: <root>/{BEFORE_ARM} beside the arms)",
     )
     ap.add_argument(
         "--label",
@@ -1201,28 +1244,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--palette",
         choices=list(PALETTES),
         default="magenta-green",
-        help="moving/reference colours (red-green = mirage QC)",
+        help="moving/reference colours (red-green = as the QC file)",
     )
     g.add_argument(
         "--stretch",
         choices=("patch", "global"),
         default="patch",
-        help="percentile limits per crop and source, or per whole image and source",
+        help="re-stretch each crop per channel by percentiles, or keep the QC file's global scaling",
     )
     g.add_argument("--pmin", type=float, default=0.5)
     g.add_argument("--pmax", type=float, default=99.7)
     g.add_argument("--gamma", type=float, default=0.8)
     g.add_argument("--checker-tiles", type=int, default=6)
     g.add_argument(
-        "--annotate",
-        default="dice",
-        help="comma list of: dice (Otsu nuclear masks), shift (phase correlation, µm), ncc; or none",
-    )
-    g.add_argument(
         "--annotate-where",
         choices=("after", "all"),
         default="after",
-        help="print the metric only in the arm columns or in Before too",
+        help="numbers only in the arm columns (Before has none from the scorer)",
+    )
+    g.add_argument(
+        "--min-nuclei",
+        type=int,
+        default=5,
+        help="nuclei an ROI needs for a local displacement; below it the slide-level value is printed with *",
     )
     g.add_argument(
         "--scalebar-um",
@@ -1230,12 +1274,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="scale bar length (default auto ≈ patch/4; 0 = none)",
     )
-    g.add_argument(
-        "--scalebar-where",
-        choices=("last", "all"),
-        default="last",
-        help="one bar in the bottom-left cell, or one per row",
-    )
+    g.add_argument("--scalebar-where", choices=("last", "all"), default="last")
     g.add_argument(
         "--cell-in", type=float, default=1.4, help="cell size in inches in the figure"
     )
@@ -1243,26 +1282,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--formats", default="png,pdf")
     g = ap.add_argument_group("inputs")
     g.add_argument(
-        "--channel",
-        default=None,
-        help="nuclear channel (name or index; default first of DAPI/HOECHST/CELLTOX in the checkpoint's channels)",
-    )
-    g.add_argument(
         "--pixel-size-um",
         type=float,
         default=None,
-        help="override the pixel size of the reference",
+        help="override the pixel size (default: the QC TIFF's tag, then csv/registered.csv)",
     )
     g.add_argument(
         "--lowres-um",
         type=float,
         default=5.0,
-        help="pixel size of the low-res image used for ROI selection, the locator and --stretch global",
-    )
-    g.add_argument(
-        "--save-raw",
-        action="store_true",
-        help="also write the uint16 ref/mov crops as CYX TIFFs",
+        help="pixel size of the low-res image used for ROI selection when no preview TIFF exists",
     )
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap
@@ -1282,13 +1311,12 @@ def main(argv=None) -> int:
         raise SystemExit("--rows must be >= 1")
 
     labels = parse_labels(args.label)
-    arms = [Column(d, labels.get(d.name), args.channel) for d in args.arm]
+    arms = [Arm(d, labels.get(d.name)) for d in args.arm]
     names = [a.name for a in arms]
-    if len(set(names)) != len(names):
+    if len(set(names)) != len(names) or BEFORE_LABEL in names:
         raise SystemExit(
-            f"two arm columns would share a title {names}; pass --label ARM=Title"
+            f"column titles must be distinct and not {BEFORE_LABEL!r}: {names}; pass --label ARM=Title"
         )
-    before = Before(find_before(args.arm, args.before), args.channel)
 
     opt = Options(
         outdir=args.outdir,
@@ -1307,8 +1335,8 @@ def main(argv=None) -> int:
         pmax=args.pmax,
         gamma=args.gamma,
         checker_tiles=args.checker_tiles,
-        annotate=args.annotate,
         annotate_where=args.annotate_where,
+        min_nuclei=args.min_nuclei,
         scalebar_um=args.scalebar_um,
         scalebar_where=args.scalebar_where,
         cell_in=args.cell_in,
@@ -1316,11 +1344,10 @@ def main(argv=None) -> int:
         formats=args.formats,
         pixel_size_um=args.pixel_size_um,
         lowres_um=args.lowres_um,
-        save_raw=args.save_raw,
     )
     patients = args.patient or arms[0].patients()
     for pid in patients:
-        process_patient(pid, before, arms, opt)
+        process_patient(pid, arms, opt)
     return 0
 
 

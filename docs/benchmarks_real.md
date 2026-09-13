@@ -437,28 +437,35 @@ the figure. So a partial pull gives a partial page, never a broken build.
 `benchmarks/reg_mosaic.py` draws the before/after patch mosaic the paper shows: one
 column per arm directory, one row per (moving round, ROI) pair, every cell a
 two-colour overlay of the nuclear channel (moving in magenta, reference in green,
-overlap white) at the same ROI, scale and LUT, with the Dice of the Otsu nuclear
-masks in the corner. It reads only what the arms wrote:
+overlap white) at the same ROI, scale and LUT. **Nothing is re-registered, re-warped
+or re-scored**: every pixel and every number is the arm's own registration QC.
 
-- `<arm>/csv/registered.csv` — the registered slide per moving round; its reference
-  row names the preprocessed reference, which is the frame every column is drawn in;
-- `<root>/preprocess_shared/csv/preprocessed.csv` — the **Before** column: each moving
-  slide as it entered registration, on the reference canvas at the origin with no
-  transform (pad-or-crop, never rescaled), the same "before" the pipeline's own
-  registration QC draws.
+- `<arm>/<patient>/qc/registration/<slide>_QC_RGB_fullres.tif` — the pipeline's
+  two-panel composite (Before | blue separator | After, red = moving, green =
+  reference, both on the reference canvas). The Before column is the left panel of the
+  first arm's composite; every arm's After column is its right panel.
+- `<arm>/<patient>/qc/registration/*_seg_qc.json` and `*_reg_residuals.csv` — the
+  reg_qc=2 scorer's `dice_matched` at the final stage, and the per-nucleus residuals from
+  which each cell prints the **median displacement of the nuclei inside its ROI** (the
+  slide-level value, marked `*`, when fewer than `--min-nuclei` fall in it).
+- `<arm>/csv/registered.csv` — which slide is which round (its channel set), the
+  reference, and the pixel size.
 
-Rounds are matched across arms by their channel set, which every arm inherits from
-the shared preprocessing run, so any two arms of one launch line up.
+The ASHLAR arm writes the same three (since 2026-09-13 `run_ashlar_arm.sh` stitches each
+moving slide through ASHLAR's manifest with the pipeline's own `tiled_stitch.py`, runs
+`generate_registration_qc.py` on it, and writes `csv/registered.csv`), so it is a
+column like any other.
 
 ```bash
 # VALIS best cell against STARE best cell, six rows, one patient
 python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \
     --rows 6 --patient 5456 -o figs/mosaic
 
-# the SOLVE cross on its base arm, four rows, overlay + checkerboard, titled columns
+# legacy vs robust SOLVE and ASHLAR, four rows, overlay + checkerboard, titled columns
 python -m benchmarks.reg_mosaic arm_results/tiled_high_gate1 arm_results/tiled_high_gate1_solver_robust \
-    --rows 4 --kinds overlay,checker --label tiled_high_gate1=legacy \
-    --label tiled_high_gate1_solver_robust=robust -o figs/solver
+    arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker \
+    --label tiled_high_gate1=legacy --label tiled_high_gate1_solver_robust=robust \
+    --label ashlar_t1024_s30=ASHLAR -o figs/solver
 
 # or through make, into the arms hand-off directory
 make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_gate1" MOSAIC_ROWS=6
@@ -466,13 +473,13 @@ make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_hig
 
 `--rows N` is exact. Rows are laid out ROI-major — every round at ROI 1, then every
 round at ROI 2 — so a small N still shows each round once; the tool picks
-`ceil(N / rounds)` ROIs automatically (tissue coverage × texture, pushed apart), or
-takes yours with `--roi Y,X` / `--rois-json <a previous run's *_rois.json>` to draw
-another pair of arms at identical positions. `--rounds CD8` restricts the rounds.
-Per patient it writes `<patient>_mosaic.{png,pdf}`, `<patient>_locator.png` (the ROI
-boxes on the low-res reference), `<patient>_rois.json` (ROIs, files, limits, metrics)
-and `<patient>_patches/` with every cell at native resolution. ASHLAR arms have no
-`csv/registered.csv` and cannot be a column.
+`ceil(N / rounds)` ROIs automatically on the reference (tissue coverage × texture,
+pushed apart), or takes yours with `--roi Y,X` / `--rois-json <a previous run's
+*_rois.json>` to draw another set of arms at identical positions. `--rounds CD8`
+restricts the rounds. Per patient it writes `<patient>_mosaic.{png,pdf}`,
+`<patient>_locator.png` (the ROI boxes on the low-res reference), `<patient>_rois.json`
+(ROIs, files, limits, every cell's numbers) and `<patient>_patches/` with every cell at
+native resolution.
 
 ## Re-running a subset after a code change
 

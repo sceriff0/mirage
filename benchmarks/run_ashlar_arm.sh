@@ -82,6 +82,15 @@ col() {                          # col <name> <csv>
 C_PID=$(col patient_id "$PREPROC_CSV")
 C_IMG=$(col preprocessed_image "$PREPROC_CSV")
 C_REF=$(col is_reference "$PREPROC_CSV")
+C_CH=$(col channels "$PREPROC_CSV")
+C_PX=$(col pixel_size "$PREPROC_CSV")
+# The arm's own csv/registered.csv, in lib/Checkpoint.groovy's `registered` columns, so
+# that an ASHLAR arm is an arm like any other to every consumer that reads a checkpoint
+# (benchmarks/reg_mosaic.py among them): the reference row names the preprocessed
+# reference, each moving row the slide stitched through ASHLAR's manifest below.
+REG_CSV="$OUT/csv/registered.csv"
+mkdir -p "$OUT/csv"
+printf 'patient_id,id,registered_image,is_reference,channels,pixel_size\n' > "$REG_CSV"
 if [[ -z "$C_PID" || -z "$C_IMG" || -z "$C_REF" ]]; then
   echo "[$ARM] ERROR: $PREPROC_CSV lacks patient_id/preprocessed_image/is_reference" >&2
   exit 1
@@ -106,6 +115,10 @@ for pid in $patients; do
   fi
 
   ref_name=$(basename "$ref_img"); ref_name="${ref_name%%.*}"
+  ref_row=$(echo "$rows" | awk -F',' -v r="$C_REF" '$r=="true"{print; exit}')
+  ref_ch=$(echo "$ref_row" | cut -d',' -f"$C_CH")
+  ref_px=""; [[ -n "$C_PX" ]] && ref_px=$(echo "$ref_row" | cut -d',' -f"$C_PX")
+  printf '%s,%s,%s,true,%s,%s\n' "$pid" "$ref_name" "$ref_img" "$ref_ch" "$ref_px" >> "$REG_CSV"
   ref_gj="$gj_dir/${ref_name}.geojson"
   if [[ ! -f "$ref_gj" ]]; then
     # `ls` exits 1 on no match and this script runs under `set -o pipefail`, so the
@@ -127,8 +140,11 @@ for pid in $patients; do
       --image "$ref_img" --outdir "$ref_tiles" --cycle 0 \
       --tile-size "$TILE" --overlap "$OVERLAP"
 
-  while IFS= read -r mov_img; do
-    [[ -n "$mov_img" ]] || continue
+  while IFS= read -r mov_row; do
+    [[ -n "$mov_row" ]] || continue
+    mov_img=$(echo "$mov_row" | cut -d',' -f"$C_IMG")
+    mov_ch=$(echo "$mov_row" | cut -d',' -f"$C_CH")
+    mov_px=""; [[ -n "$C_PX" ]] && mov_px=$(echo "$mov_row" | cut -d',' -f"$C_PX")
     # Slide names are DERIVED from the filenames, never hardcoded: warp_seg_qc looks the
     # moving slide up BY NAME in the manifest, and a name that does not match yields an
     # empty transform that scores as a perfect identity — a silent pass, not an error.
@@ -163,6 +179,33 @@ for pid in $patients; do
         --maximum-shift "$MAXSHIFT" \
         --out-manifest "$d/manifest.json" --out-tre "$d/tre.json"
 
+    # The registered slide and the pipeline's own before/after QC composite, so an
+    # ASHLAR arm carries the same <pid>/registered/ and <pid>/qc/registration/ artifacts
+    # as a VALIS or STARE arm: benchmarks/reg_mosaic.py draws its column from these
+    # files and re-warps nothing. tiled_stitch.py is the pipeline's TILED_STITCH (the
+    # manifest is STARE's format, which is the whole point of benchmarks/ashlar/solve.py);
+    # generate_registration_qc.py is GENERATE_REGISTRATION_QC. Both run in the tiled
+    # image (QC_EXEC), which carries the stare package and the QC dependencies.
+    reg_dir="$OUT/$pid/registered/registered"
+    mkdir -p "$reg_dir"
+    reg_img="$reg_dir/${mov_name}_registered.ome.tiff"
+    px_flag=()
+    [[ "$mov_px" =~ ^[0-9.]+$ ]] && px_flag=(--pixel-size "$mov_px")
+    # shellcheck disable=SC2086
+    step ASHLAR_STITCH "$pid" --input "$mov_img" -- \
+        $QC_EXEC python3 "$REPO/bin/tiled_stitch.py" \
+        --moving "$mov_img" --manifest "$d/manifest.json" \
+        --moving-name "$mov_name" --out "$reg_img" "${px_flag[@]}" \
+      || { echo "[$ARM/$pid] FAILED stitching $mov_name" >&2; rc=1; }
+    qc_px_flag=()
+    [[ "$mov_px" =~ ^[0-9.]+$ ]] && qc_px_flag=(--pixel-size-um "$mov_px")
+    # shellcheck disable=SC2086
+    step ASHLAR_REG_QC "$pid" --input "$ref_img" --input "$reg_img" --input "$mov_img" -- \
+        $QC_EXEC python3 "$REPO/bin/generate_registration_qc.py" \
+        --reference "$ref_img" --registered "$reg_img" --native "$mov_img" \
+        --output "$qc_out" "${qc_px_flag[@]}" \
+      || { echo "[$ARM/$pid] FAILED registration QC for $mov_name" >&2; rc=1; }
+    printf '%s,%s,%s,false,%s,%s\n' "$pid" "${mov_name}_registered" "$reg_img" "$mov_ch" "$mov_px" >> "$REG_CSV"
     # --method tiled is the ONLY backend flag the manifest path needs
     # (lib/WarpBackends.groovy's tiled entry) — no --micro-reg, no --checkpoint-dir,
     # no --jvm-heap-gb. ashlar's terminal stage is `refined`, the same name STARE's is,
@@ -180,7 +223,7 @@ for pid in $patients; do
         --output "$qc_out/${pid}_${mov_name}_seg_qc.json" \
         --per-cell-csv "$qc_out/${pid}_${mov_name}_reg_residuals.csv" \
       || { echo "[$ARM/$pid] FAILED scoring $mov_name" >&2; rc=1; }
-  done < <(echo "$rows" | awk -F',' -v r="$C_REF" -v i="$C_IMG" '$r!="true"{print $i}')
+  done < <(echo "$rows" | awk -F',' -v r="$C_REF" '$r!="true"{print}')
 done
 
 exit "$rc"

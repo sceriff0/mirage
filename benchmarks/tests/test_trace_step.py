@@ -126,7 +126,13 @@ def test_run_ashlar_arm_routes_every_heavy_invocation_through_the_wrapper():
         for ln in (BENCH / "run_ashlar_arm.sh").read_text().splitlines()
         if not ln.lstrip().startswith("#")
     )
-    for proc in ("ASHLAR_RETILE", "ASHLAR_SOLVE", "ASHLAR_SEG_QC"):
+    for proc in (
+        "ASHLAR_RETILE",
+        "ASHLAR_SOLVE",
+        "ASHLAR_STITCH",
+        "ASHLAR_REG_QC",
+        "ASHLAR_SEG_QC",
+    ):
         assert re.search(rf"^\s*step {proc} ", code, re.M), f"{proc} is not wrapped"
     # no bare $ASHLAR_EXEC / $QC_EXEC invocation survives outside a `step ... -- \` line
     for ln in code.splitlines():
