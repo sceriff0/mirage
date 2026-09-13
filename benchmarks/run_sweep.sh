@@ -229,9 +229,13 @@ while IFS=',' read -r -a vals; do
   run_params="$run_dir/params.json"
   # A resumed run keeps the interrupted attempt's params file verbatim: a regenerated file
   # with any changed entry re-hashes every task whose script reads `params` (see run_arms.sh).
-  if (( resuming )) && [[ -f "$run_params" ]]; then
+  # SWEEP_RESUME_PARAMS=regenerate opts into the re-hash (see run_arms.sh).
+  if (( resuming )) && [[ -f "$run_params" && "${SWEEP_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
     echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
   else
+    if (( resuming )) && [[ -f "$run_params" ]]; then
+      echo "[$run_id] params REGENERATED for the resumed run (SWEEP_RESUME_PARAMS=regenerate): tasks whose script reads params re-run"
+    fi
     if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
             ${pairs[@]+"${pairs[@]}"}); then
       echo "ERROR: $run_id — could not type its parameters against nextflow_schema.json; SKIPPING" >&2

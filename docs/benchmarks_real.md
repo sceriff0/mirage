@@ -331,6 +331,13 @@ entry would re-hash those tasks and the resume would recompute them. (Consequenc
 runs launched before the launchers pinned `cleanup_work=false`: they resume under their
 original params, finish, and then delete their `work/` as the pipeline default does; their
 QC crosses re-run the registration instead of only the QC chain. Correct, more expensive.)
+`ARMS_RESUME_PARAMS=regenerate` (`SWEEP_RESUME_PARAMS=regenerate`) opts into the re-hash
+on purpose: the resumed run gets a fresh params file, today with `cleanup_work=false`, so
+its `work/` survives completion and its crosses resume it instead of re-registering. The
+price is every task of `REGISTER` and of the four STARE stages, which all read `params`:
+pay it while an arm is young, never late — a base arm that finishes under the old params
+deletes its `work/`, and each of its crosses then re-runs the registration (for the
+shipped plan: 63 crosses x 11 patients).
 A resumed QC cross continues its **own** session (which already carries its base's cache);
 a cross launched fresh after its base was resumed resumes the base's **latest** session.
 

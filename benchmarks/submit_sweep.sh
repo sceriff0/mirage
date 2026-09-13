@@ -48,6 +48,7 @@
 # interrupted or failed ones continue from their Nextflow cache under a new run name
 # (bench_<run_id>-rN). SWEEP_REPLACE=1 instead moves a run aside and starts it over.
 # Plain `sbatch` refuses interrupted runs and names both switches.
+# SWEEP_RESUME_PARAMS=regenerate gives a resumed run a fresh params file (see submit_arms.sh).
 #
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
 BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"

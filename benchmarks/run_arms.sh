@@ -192,9 +192,17 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # reality" 4), so a params file regenerated with one extra or changed entry -- even one
   # no task reads -- would re-hash every such task and the resume would recompute them.
   # A run launched before a launcher change therefore resumes under its ORIGINAL params.
-  if (( resuming )) && [[ -f "$run_params" ]]; then
+  # ARMS_RESUME_PARAMS=regenerate opts into the re-hash on purpose: the resumed run gets
+  # a fresh params file (today: + cleanup_work=false, so its work/ survives completion and
+  # its QC crosses resume it instead of re-registering). Every task of REGISTER and of the
+  # four STARE stages then re-runs -- pay it while the arm is young, never late.
+  if (( resuming )) && [[ -f "$run_params" && "${ARMS_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
     echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
   else
+    if (( resuming )) && [[ -f "$run_params" ]]; then
+      echo "[$run_id] params REGENERATED for the resumed run (ARMS_RESUME_PARAMS=regenerate): every task whose" \
+           "script reads params -- REGISTER and the STARE stages among them -- re-hashes and re-runs"
+    fi
     if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
             ${run_pairs[@]+"${run_pairs[@]}"}); then
       echo "[$run_id] SKIP: could not type its parameters against nextflow_schema.json" >&2

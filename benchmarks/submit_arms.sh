@@ -82,6 +82,10 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # every interrupted or failed one is continued from its Nextflow cache under a
 # new run name (arms-<run_id>-rN), so only the unfinished tasks run. Plain
 # `sbatch` without the switch refuses interrupted runs and names both switches.
+# ARMS_RESUME_PARAMS=regenerate gives a resumed run a FRESH params file (cleanup_work=false
+# among them) at the price of re-running every task whose script reads params (REGISTER,
+# the STARE stages): the right call for an arm launched before the cleanup_work pin, while
+# it is young -- otherwise it deletes work/ on completion and its crosses re-register.
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 # -------------------------------------------------------------------------------
