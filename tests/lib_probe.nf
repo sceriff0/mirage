@@ -613,7 +613,18 @@ def checkParamValidators() {
     println 'LIB PROBE: checkParamValidators passed'
 }
 
-workflow {
+/**
+ * Layout's checkpoint-path rules and MarkerUtils' nuclear-marker rule.
+ *
+ * A TOP-LEVEL FUNCTION, not inline in `workflow {}`, for a mechanical reason: the
+ * whole `workflow {}` body compiles to ONE JVM method, and a method's bytecode is
+ * capped at 64 KB. On `dev` the block carries add_cycle's probes on top of every
+ * probe `main` has, and measured 65514 bytes with these sections inline -- 22 bytes
+ * under the cap, i.e. one more comment line away from `Method too large`. Moving a
+ * self-contained section out buys ~1.9 KB of headroom and costs one call line.
+ * Do the same to the next section rather than deleting probes.
+ */
+def checkLayoutAndMarkers() {
 
     // ------------------------------------------------------------------ //
     // Layout - checkpoint paths
@@ -662,8 +673,10 @@ workflow {
 
     assert MarkerUtils.hasNuclear(['CD3', 'DAPI'], ['DAPI'])
     assert !MarkerUtils.hasNuclear(['CD3', 'CD8'], ['DAPI'])
+}
 
-
+workflow {
+    checkLayoutAndMarkers()
     // ------------------------------------------------------------------ //
     // CsvUtils.resolveKeptChannelsPerSlide - THE keep-set rule
     // ------------------------------------------------------------------ //

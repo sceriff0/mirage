@@ -33,7 +33,18 @@ from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_bl
 # Empty is the goal state, and the dict is kept rather than deleted so that a
 # future entry re-arms test_known_gaps_only_shrink; shrink-only is enforced by
 # review (nothing here can tell a new entry from a re-added old one).
-KNOWN_GAPS = {}
+KNOWN_GAPS = {
+    # dev only. EXTRACT_MASK_SERIES is add_cycle's process, and add_cycle lives on
+    # `dev` (CLAUDE.md, "Branch model"), so the 2026-09-10 audit and build-out --
+    # which ran on `main` -- never saw it. It has no module-level nf-test of its
+    # own; tests/subworkflows/add_cycle.nf.test asserts it RUNS inside ADD_CYCLE
+    # (`trace.tasks().findAll { it.name.contains('EXTRACT_MASK_SERIES') }.size() == 1`)
+    # but names no `process` directive, which is what this guard counts. Not
+    # tunable: its withName: block sets no ext.args and its script reads no
+    # params., so only the first rule bites. Listed 2026-09-13 as the honest
+    # state, not waived -- closing it means adding tests/modules/extract_mask_series.nf.test.
+    "EXTRACT_MASK_SERIES": "no module test (dev-only process, add_cycle)",
+}
 
 
 def _ext_args_processes() -> set:

@@ -806,4 +806,37 @@
 # This floor is branch-specific: main 2061 (this measurement), dev 1976 and benchmarking 2060
 # pre-fix-wave / 2063 post-fix-wave (CLAUDE.md's "Branch model"; the `benchmarking` and `dev`
 # files are untouched by this change and keep their own committed values).
-2061
+#
+# RE-MEASURED 2026-09-13 on `dev`, rebuilt as main d668c811 PLUS the add_cycle feature
+# (user ruling; CLAUDE.md's "Branch model"). dev was fast-forwarded to main and 9587b72a
+# -- the add_cycle removal -- was reverted on top, so this branch carries main's whole
+# test-suite build-out AND add_cycle's tests. The floor is branch-specific, so main's
+# 2061 above does not hold here and this paragraph does not replace it: main keeps 2061,
+# benchmarking keeps its own, and this is dev's.
+#
+# `MIRAGE_STRICT_SKIPS=1 pytest -q tests/ --ignore=tests/testdata --ignore=tests/modules
+# --ignore=tests/subworkflows --ignore=tests/integration` gives 2062 passed, 17 skipped,
+# 0 xfailed -- 2062 + 17 = 2079, confirmed by `pytest --collect-only -q` ("2079 tests
+# collected").
+#
+# THE ARITHMETIC, VERIFIED RATHER THAN COMPUTED. `pytest --collect-only -q ... | grep
+# '::' | sort` was run in both worktrees -- this one and the read-only `main` worktree at
+# d668c811 -- and the two sorted node-id lists were `comm -3`'d. The diff is exactly 18
+# lines, ALL present only here and NONE only on main (i.e. the restoration lost nothing
+# main had):
+#
+#   tests/test_add_cycle_writes_what_it_requires.py                     3 cases
+#   tests/test_extract_mask_series.py                                   3 cases
+#   tests/test_mask_series_write_contract.py                            3 cases
+#   tests/test_slide_io_seam.py               [bin/extract_mask_series.py]   3 params
+#   tests/test_tiff_writer_layout.py          (its own case + the tile-constant param)  2
+#   tests/test_cleanup_validation.py::test_add_cycle_at_a_cleaning_level_is_refused   1
+#   tests/test_bin_entrypoint_idiom.py        [bin/extract_mask_series.py]        1 param
+#   tests/test_ome_io_is_the_only_writer.py   [extract_mask_series.py]           1 param
+#   tests/test_process_nf_test_coverage.py    [EXTRACT_MASK_SERIES]             1 param
+#
+# 2061 + 18 = 2079, with no unexplained remainder. The last of those is a NEW parametrised
+# case rather than a restored one: the process-coverage guard was written on main, which
+# has no EXTRACT_MASK_SERIES, so the process arrives here already carrying a KNOWN_GAPS
+# entry (no module-level nf-test of its own; add_cycle.nf.test asserts only that it runs).
+2079
