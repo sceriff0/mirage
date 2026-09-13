@@ -1380,4 +1380,31 @@ nextflow_pipeline {
         }
     }
 
+    // The fixture repeats BOTH DAPI (nuclear, legal) and PANCK (not nuclear, illegal)
+    // across P001's two slides, so a refusal here cannot be the trivial "any repeated
+    // name is rejected". The `trace.tasks().size() == 0` assertion is the real subject:
+    // the rule must fire in samplesheet validation, before a single process is
+    // instantiated, not later inside registration where one of the two acquisitions
+    // would already have been silently dropped by the keep-set.
+    test("Should refuse a non-nuclear channel shared by two slides of one patient, before any process runs") {
+        tag "stub"
+        options "-stub"
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_duplicate_channel.csv"
+                outdir = "$outputDir"
+                start = "preprocessing"
+            }
+        }
+        then {
+            assert workflow.failed
+            def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
+            assert report.contains('PANCK') : "the refusal must name the offending channel: " + report
+            assert report.contains('P001') : "the refusal must name the patient: " + report
+            assert report.contains('nuclear_markers') : "the refusal must name the remedy: " + report
+            assert workflow.trace.tasks().size() == 0 : "the refusal is at LAUNCH: no process may have been instantiated"
+            assert !report.contains('Error executing process') : "the run must not have reached a process: " + report
+        }
+    }
+
 }

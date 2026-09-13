@@ -1651,6 +1651,19 @@ with open(OUT_DIR / "invalid_is_reference_yes.csv", "w") as f:
     f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,no,DAPI|PANCK|SMA\n")
 print("  Created invalid_is_reference_yes.csv")
 
+# ── invalid_duplicate_channel.csv: two slides of one patient carrying the same
+# NON-NUCLEAR marker (PANCK). DAPI repeats too and must stay legal -- it is the
+# registration fiducial -- so this fixture proves the refusal discriminates rather
+# than rejecting every repeated name. CsvUtils.validateInputSemantics refuses it at
+# launch, before any process is instantiated; tests/main.nf.test asserts exactly that
+# (no task in the trace), because the alternative is a silent drop of one of the two
+# acquisitions decided by samplesheet order.
+with open(OUT_DIR / "invalid_duplicate_channel.csv", "w") as f:
+    f.write("patient_id,path_to_file,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,false,DAPI|PANCK|CD3\n")
+print("  Created invalid_duplicate_channel.csv")
+
 
 print("\n" + "=" * 70)
 print("All test data generation complete!")

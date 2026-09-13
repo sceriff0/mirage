@@ -539,6 +539,96 @@ P1,/x/a.tiff,true,DAPI|CD3
         'unknownColumns must tolerate an empty file rather than throwing over it'
 }
 
+// CsvUtils.validateInputSemantics -- the duplicate-channel refusal.
+//
+// A NON-NUCLEAR marker carried by two slides of one patient is a samplesheet
+// mistake with no safe interpretation: resolveKeptChannelsPerSlide keeps exactly
+// one copy per marker name per patient, and which slide's copy survives is decided
+// by reference-first/samplesheet order rather than by anything the author meant.
+// So it is refused at launch, in samplesheet validation, before any process is
+// instantiated. NUCLEAR markers are the deliberate exception -- DAPI is the
+// registration fiducial and legitimately repeats on every slide.
+//
+// Out-of-band like the other check*() functions above, for the same DSL2
+// string-constant-ceiling reason noted at the file header.
+def checkDuplicateChannelRefusal() {
+
+    // validateInputSemantics also checks that each row's image EXISTS, so the two
+    // slides need real files; their contents are never read.
+    def dupDir = File.createTempDir()
+    ['P001_ref.ome.tiff', 'P001_mov1.ome.tiff'].each { name ->
+        new File(dupDir, name).text = 'not an image; only its existence is validated'
+    }
+
+    // One two-slide P001 sheet per case, returning its path.
+    def sheetFor = { String tag, String refChannels, String movChannels ->
+        def f = new File(dupDir, "dup_${tag}.csv")
+        f.text = 'patient_id,path_to_file,is_reference,channels\n' +
+                 "P001,${dupDir.path}/P001_ref.ome.tiff,true,${refChannels}\n" +
+                 "P001,${dupDir.path}/P001_mov1.ome.tiff,false,${movChannels}\n"
+        return f.path
+    }
+
+    // The refusal message, or null when the sheet was accepted.
+    def refusalFor = { String sheetPath, def markers ->
+        def message = null
+        try { CsvUtils.validateInputSemantics(sheetPath, 'preprocessing', false, markers) }
+        catch (IllegalArgumentException e) { message = e.message }
+        return message
+    }
+
+    def nuclear = ['DAPI', 'CELLTOX']
+
+    // (a) DAPI on both slides is the ORDINARY cyclic-IF sheet: accepted.
+    CsvUtils.validateInputSemantics(
+        sheetFor.call('nuclear', 'DAPI|PANCK|SMA', 'DAPI|CD3|CD8'), 'preprocessing', false, nuclear)
+
+    // (b) PANCK on both slides is refused, naming the patient, the channel and BOTH rows.
+    def panck = refusalFor.call(
+        sheetFor.call('panck', 'DAPI|PANCK|SMA', 'DAPI|PANCK|CD3'), nuclear)
+    assert panck != null : 'a non-nuclear channel on two slides of one patient must be refused'
+    assert panck.contains('P001') : "the refusal must name the patient: ${panck}"
+    assert panck.contains('PANCK') : "the refusal must name the channel: ${panck}"
+    assert panck.contains('row 2') && panck.contains('row 3') :
+        "the refusal must name both offending rows: ${panck}"
+    assert panck.contains('P001_ref.ome.tiff') && panck.contains('P001_mov1.ome.tiff') :
+        "the refusal must name both slides: ${panck}"
+    assert panck.contains('nuclear_markers') : "the refusal must name the remedy: ${panck}"
+
+    // (c) Case and surrounding whitespace must not hide the duplicate: the comparison
+    // is trimmed and upper-cased, exactly as resolveKeptChannelsPerSlide's keep-set is.
+    def cased = refusalFor.call(
+        sheetFor.call('cased', 'DAPI| panck |SMA', 'DAPI|PANCK|CD3'), nuclear)
+    assert cased != null : 'a case/whitespace variant of the same channel is still a duplicate'
+    assert cased.contains('P001') && cased.contains('panck') :
+        "the refusal names the channel as WRITTEN on its first slide: ${cased}"
+
+    // (d) A scalar params.nuclear_markers (the only shape a command line can supply)
+    // still classifies DAPI as nuclear -- MarkerUtils.markerList normalises it, so the
+    // sheet is accepted rather than refused on a String iterated as characters.
+    CsvUtils.validateInputSemantics(
+        sheetFor.call('scalar', 'DAPI|PANCK|SMA', 'DAPI|CD3|CD8'), 'preprocessing', false, 'DAPI')
+
+    // (e) A name repeated WITHIN one slide's own channels cell is refused whatever it
+    // is -- nuclear or not. validateMetadata checks for blank names and for the
+    // PRESENCE of a nuclear marker, but never for a repeat, so this rule lives here.
+    def within = refusalFor.call(
+        sheetFor.call('within', 'DAPI|PANCK|PANCK', 'DAPI|CD3'), nuclear)
+    assert within != null : 'a channel repeated within one slide must be refused'
+    assert within.contains('PANCK') && within.contains('row 2') :
+        "the within-slide refusal must name the channel and its row: ${within}"
+    def withinNuclear = refusalFor.call(
+        sheetFor.call('withinnuc', 'DAPI|DAPI|PANCK', 'DAPI|CD3'), nuclear)
+    assert withinNuclear != null : 'the within-slide rule does not exempt a nuclear marker'
+
+    // The temp tree is this function's own: delete it rather than leaving two images
+    // and six CSVs in /tmp per probe run, the way the createTempFile cases above do
+    // not have to (a single file each, cleaned by the OS).
+    dupDir.deleteDir()
+
+    println 'LIB PROBE: checkDuplicateChannelRefusal passed'
+}
+
 // Direct cases for four cross-parameter/CSV/layout validators that otherwise have
 // no unit-test surface: ParamUtils.validatePixelSize, ParamUtils.validateCleanup,
 // ParamUtils.isEntryPoint, CsvUtils.parseIsReference, and Layout's private
@@ -615,6 +705,11 @@ def checkParamValidators() {
     }
     assert Layout.publishedPath('/out/', 'P001', 'geojson', geojsonFile) ==
            Layout.publishedPath('/out', 'P001', 'geojson', geojsonFile) : 'a trailing slash is stripped'
+
+    // The duplicate-channel refusal, called from here rather than from workflow{}:
+    // that block has ~33 bytes of headroom against the JVM's 65535-byte String
+    // constant ceiling (see the file header), and a call line would spend them.
+    checkDuplicateChannelRefusal()
 
     println 'LIB PROBE: checkParamValidators passed'
 }
