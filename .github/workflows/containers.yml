@@ -270,14 +270,30 @@ jobs:
         run: |
           {
             echo 'yaml<<PATHS_FILTER_EOF'
-            # `any` is the non-vacuity probe, not a build target: it matches every path
-            # that could possibly select an image. If it is true and the per-image
-            # filters below select nothing, the generator is broken -- see the check
-            # in the matrix step.
+            # `any` is the non-vacuity probe, not a build target. It must be EXACTLY the
+            # union of the per-image globs below -- never a superset such as
+            # 'containers/**' or 'requirements/**'. With a superset, a change that no
+            # image installs (containers/README.md, requirements/lint.txt) makes `any`
+            # true while every per-image filter is false, and the matrix step then
+            # reports "the generator has lost an image" for a docs edit. Measured
+            # 2026-09-13 on dev (CI run 34758861254): the add_cycle restore touched
+            # containers/README.md and the job went red with no image affected.
+            # dorny/paths-filter unions the per-commit changes of a push, so a file
+            # touched and restored within one push still counts.
+            nl=$'\n'
+            per_image_globs=""
+            for dir in $(jq -r '.[].dir' containers/images.json); do
+              per_image_globs="${per_image_globs}${nl}containers/${dir}/**"
+              # Every requirements/ file this image's Dockerfile actually COPYs.
+              while read -r req; do
+                per_image_globs="${per_image_globs}${nl}${req}"
+              done < <(grep -oE 'requirements/[A-Za-z0-9._-]+\.txt' "containers/${dir}/Dockerfile" | sort -u)
+            done
             echo "any:"
-            echo "  - 'containers/**'"
-            echo "  - 'requirements/**'"
+            echo "  - 'containers/images.json'"
             echo "  - '.github/workflows/containers.yml'"
+            printf '%s\n' "${per_image_globs}" | sed '/^$/d' | sort -u \
+              | while read -r glob; do echo "  - '${glob}'"; done
             for dir in $(jq -r '.[].dir' containers/images.json); do
               echo "${dir}:"
               echo "  - 'containers/${dir}/**'"
