@@ -302,6 +302,35 @@ To enable CSE on the segmentation arms, publish the `segeval` image once
   ... arm_results -params-file params/seg_quality_eval.json
 ```
 
+### 2b. Stopping and resuming
+
+Both head jobs can be stopped and continued. To stop: `scancel` the head job and its
+process jobs (`scancel -u $USER -n mirage_arms` / `-n mirage_bench` for the heads, then
+the pipeline's own jobs). Every run that was in flight is left in its launch directory's
+`.nextflow/history` with status `-` (Nextflow writes `OK`/`ERR` only at completion), its
+`work/` intact — the launches pin `cleanup_work=false` for exactly this reason.
+
+To continue, resubmit the same script with the resume switch:
+
+```bash
+ARMS_RESUME=1  sbatch ~/pipelines/mirage/benchmarks/submit_arms.sh
+SWEEP_RESUME=1 sbatch ~/pipelines/mirage/benchmarks/submit_sweep.sh
+```
+
+The launcher walks the same plan and decides per run from its last attempt:
+
+| last attempt in the history | plain relaunch | with `*_RESUME=1` | with `*_REPLACE=1` |
+|---|---|---|---|
+| `OK` | skipped as **DONE** | skipped as DONE | moved aside, started over |
+| `-` (interrupted) or `ERR` | **refused**, naming both switches | continued as `<name>-rN` with `-resume <its last session>`: cached tasks are served from `work/`, only the rest run | moved aside, started over |
+| absent | launched | launched | launched |
+
+A resumed QC cross continues its **own** session (which already carries its base's cache);
+a cross launched fresh after its base was resumed resumes the base's **latest** session.
+The passes keep their order, so an interrupted preprocessing run is continued before any
+registration arm is considered. `benchmarks/tests/test_launch_resume.py` pins all of this
+against a stub Nextflow.
+
 ### 3. Emit the paper tables
 
 Unchanged from the synthetic sweep — the same readers, pointed at the arm results:

@@ -75,6 +75,13 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # and ARMS_REPLACE=1 makes run_arms.sh move those arms' previous results aside to
 # $RESULTS/.replaced/<timestamp>/ before launching (never deleted). Typical:
 #   CHANGED=tiled ARMS_REPLACE=1 sbatch benchmarks/submit_arms.sh
+#
+# RESUME after an interruption (scancel of this head job and its process jobs):
+#   ARMS_RESUME=1 sbatch benchmarks/submit_arms.sh
+# Every arm whose last attempt finished (OK in its .nextflow/history) is skipped;
+# every interrupted or failed one is continued from its Nextflow cache under a
+# new run name (arms-<run_id>-rN), so only the unfinished tasks run. Plain
+# `sbatch` without the switch refuses interrupted runs and names both switches.
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 # -------------------------------------------------------------------------------
@@ -212,6 +219,7 @@ echo "Input:      $INPUT"
 echo "Results:    $RESULTS"
 echo "Profiles:   $PROFILES   Concurrency: $CONCURRENCY   CSE: $ENABLE_CSE"
 [ -n "$CHANGED$ONLY" ] && echo "Subset:     CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}'"
+[ -n "${ARMS_RESUME:-}" ] && echo "Resume:     ARMS_RESUME=$ARMS_RESUME (finished arms skipped, interrupted ones continued from cache)"
 echo "=================================================="
 
 # 1. Expand arms.yaml -> arm_plan.csv + the consumer's arms.csv (seconds, local).

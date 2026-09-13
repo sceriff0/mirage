@@ -132,15 +132,35 @@ while IFS=',' read -r -a vals; do
   # what a subset re-run (build_run_plan.py --only-method / --only) compares against.
   # Sweep runs are independent launches (no resume between them), so there is no
   # cross-of-a-base refusal to mirror here.
-  if [[ -f "$run_dir/.nextflow/history" ]] &&
-     awk -F'\t' -v n="bench_${run_id}" '$3 == n { f = 1 } END { exit !f }' "$run_dir/.nextflow/history"; then
+  # Previous attempts of this run (bench_<run_id> and its resumptions bench_<run_id>-rN);
+  # the LAST one's status decides, exactly as run_arms.sh does:
+  #   SWEEP_REPLACE=1 -> move the run dir aside and start over (whatever the status)
+  #   OK              -> finished; nothing to do
+  #   else            -> interrupted or failed: SWEEP_RESUME=1 continues it as
+  #                      bench_<run_id>-r<N+1> with -resume <its last session>; otherwise refused
+  run_name="bench_${run_id}"; resume_args=()
+  hist="$run_dir/.nextflow/history"; attempts=0; prev_name=""; prev_status=""; prev_sid=""
+  if [[ -f "$hist" ]]; then
+    read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="bench_${run_id}" \
+      '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
+  fi
+  if (( attempts > 0 )); then
     if [[ "${SWEEP_REPLACE:-0}" == "1" ]]; then
       replaced="$ROOT/.replaced/$REPLACE_TS"
       mkdir -p "$replaced" && mv "$run_dir" "$replaced/$run_id"
       echo "[$run_id] replaced: previous run dir moved to $replaced/$run_id (kept, not deleted)"
+    elif [[ "$prev_status" == "OK" ]]; then
+      echo "[$run_id] DONE: $prev_name completed (OK in $hist); nothing to do -- SWEEP_REPLACE=1 redoes it from scratch"
+      continue
+    elif [[ "${SWEEP_RESUME:-0}" == "1" ]]; then
+      run_name="bench_${run_id}-r$((attempts + 1))"
+      if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
+      echo "[$run_id] RESUME: $prev_name ended with status '${prev_status:--}' (attempt $attempts);" \
+           "continuing as $run_name from session ${prev_sid:-latest}"
     else
-      echo "SKIP: $run_id already ran in $run_dir (bench_${run_id} is in its .nextflow/history);" \
-           "relaunch with SWEEP_REPLACE=1 to move it aside to $ROOT/.replaced/<timestamp>/$run_id, or rm -rf $run_dir" >&2
+      echo "SKIP: $run_id: $prev_name is in $hist with status '${prev_status:--}' (interrupted or failed, not OK);" \
+           "relaunch with SWEEP_RESUME=1 to continue it from its cache, or SWEEP_REPLACE=1 to move it aside to" \
+           "$ROOT/.replaced/<timestamp>/$run_id and start over" >&2
       continue
     fi
   fi
@@ -203,6 +223,9 @@ while IFS=',' read -r -a vals; do
     [[ -z "${vals[$i]:-}" ]] && continue
     pairs+=("${k}=${vals[$i]}")
   done
+  # KEEP work/ (the pipeline's cleanup_work default deletes it after success): an
+  # interrupted run can only be resumed from it. The trace lives under --trace_dir.
+  pairs+=("cleanup_work=false")
   run_params="$run_dir/params.json"
   if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
           ${pairs[@]+"${pairs[@]}"}); then
@@ -217,7 +240,8 @@ while IFS=',' read -r -a vals; do
   (
     cd "$run_dir" && nextflow -log nextflow.log run "$PIPELINE_DIR" -profile "$PROFILE" \
       -c "$PIPELINE_DIR/benchmarks/configs/benchmark.config" \
-      -work-dir work -name "bench_${run_id}" \
+      -work-dir work -name "$run_name" \
+      "${resume_args[@]+"${resume_args[@]}"}" \
       -params-file "$run_params" \
       --input "$sheet" --outdir out --trace_dir trace \
       ${EXTRA_ABS[@]+"${EXTRA_ABS[@]}"} \

@@ -1261,14 +1261,18 @@ def test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session(tmp_
         )
 
 
-def test_run_arms_refuses_a_run_name_its_launch_dir_already_holds(tmp_path):
+def test_run_arms_relaunch_reaches_nextflow_for_nothing_it_already_holds(tmp_path):
     """Behavioural: a second launch against the same results root must not call
     nextflow at all. Every run_id has a fixed `-name arms-<run_id>` (the crosses look
     their base's session up by it), and Nextflow refuses a name already in the launch
     directory's history -- INCLUDING one written by a launch refused at
     validateFrozenConfig before any task ran (measured 2026-09-11, job 6740866). A bare
     resubmission would then fail on "Run name has been already used" behind the same
-    25-line log dump; run_arms.sh says which directory (or history line) to remove."""
+    25-line log dump. run_arms.sh reads the history first: a run whose last attempt is
+    OK is DONE (and the line names ARMS_REPLACE=1 as the way to redo it); an
+    interrupted one is refused naming ARMS_RESUME=1 / ARMS_REPLACE=1 -- and NEVER a
+    `rm -rf`, because a cross shares its base's launch dir and the old remedy would
+    have destroyed the base. Resumption itself: benchmarks/tests/test_launch_resume.py."""
     import os
     import subprocess
 
@@ -1296,6 +1300,8 @@ def test_run_arms_refuses_a_run_name_its_launch_dir_already_holds(tmp_path):
         PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}",
         ARMS_CONCURRENCY="2",
     )
+    env.pop("ARMS_RESUME", None)
+    env.pop("ARMS_REPLACE", None)
     cmd = ["bash", str(BENCH / "run_arms.sh"), str(plan_csv), str(sheet), str(root)]
     first = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
     assert first.returncode == 0, first.stdout + first.stderr
@@ -1306,20 +1312,38 @@ def test_run_arms_refuses_a_run_name_its_launch_dir_already_holds(tmp_path):
     assert log.read_text().splitlines() == launched, (
         "the relaunch reached nextflow with a run name the launch dir already holds"
     )
-    err = second.stderr
-    resumed = ("registration_qc", "registration_solver")
-    bases = [p["run_id"] for p in plan if p["arm_kind"] not in resumed]
-    crosses = [p for p in plan if p["arm_kind"] in resumed]
-    assert bases and crosses
-    for b in bases:
-        assert f"[{b}] SKIP: a run named arms-{b} already exists" in err, err
-        assert f"rm -rf {root}/.launch/{b}" in err, err
-    for c in crosses:
-        # the cross shares its base's launch dir: the remedy must never be rm -rf
+    for p in plan:
         line = next(
-            ln for ln in err.splitlines() if ln.startswith(f"[{c['run_id']}] SKIP")
+            ln
+            for ln in second.stdout.splitlines()
+            if ln.startswith(f"[{p['run_id']}] DONE")
         )
-        assert "do NOT remove the directory" in line and c["resume_run"] in line, line
+        assert "ARMS_REPLACE=1" in line, line
+    assert "rm -rf" not in second.stdout + second.stderr
+
+    # interrupt one base and one of its crosses: scancel leaves status '-'
+    resumed = ("registration_qc", "registration_solver")
+    base = next(p for p in plan if p["arm_kind"] == "registration")["run_id"]
+    cross = next(
+        p for p in plan if p["arm_kind"] in resumed and p["resume_run"] == base
+    )["run_id"]
+    hist = root / ".launch" / base / ".nextflow" / "history"
+    lines = []
+    for ln in hist.read_text().splitlines():
+        f = ln.split("\t")
+        if f[2] in (f"arms-{base}", f"arms-{cross}"):
+            f[1], f[3] = "-", "-"
+        lines.append("\t".join(f))
+    hist.write_text("\n".join(lines) + "\n")
+    third = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+    assert log.read_text().splitlines() == launched, (
+        "an interrupted run was relaunched without the switch"
+    )
+    for run_id in (base, cross):
+        line = next(
+            ln for ln in third.stderr.splitlines() if ln.startswith(f"[{run_id}] SKIP")
+        )
+        assert "ARMS_RESUME=1" in line and "ARMS_REPLACE=1" in line, line
         assert "rm -rf" not in line, line
 
 

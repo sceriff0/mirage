@@ -136,7 +136,8 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
     local sid=""
     if [[ -f "$rundir/.nextflow/history" ]]; then
       # history columns: timestamp, duration, run name, status, revision, SESSION ID, command
-      sid=$(awk -F'\t' -v n="arms-$RESUME_RUN" '$3 == n { s = $6 } END { print s }' "$rundir/.nextflow/history")
+      # The base's LAST attempt: arms-<base> or a resumption arms-<base>-rN (see below).
+      sid=$(awk -F'\t' -v n="arms-$RESUME_RUN" '$3 == n || index($3, n "-r") == 1 { s = $6 } END { print s }' "$rundir/.nextflow/history")
     fi
     if [[ -n "$sid" ]]; then resume_args=(-resume "$sid"); else resume_args=(-resume); fi
     echo "[$run_id] resumes base arm $RESUME_RUN (session ${sid:-latest}); only the QC chain should run"
@@ -148,17 +149,38 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # `arms-preprocess_shared<TAB>-` to history, and a bare resubmission would have died
   # on "Run name has been already used" with the same 79-arm SKIP cascade behind it.
   # Say which directory to remove instead of surfacing that after a 25-line log dump.
-  if [[ -f "$rundir/.nextflow/history" ]] &&
-     awk -F'\t' -v n="arms-$run_id" '$3 == n { found = 1 } END { exit !found }' "$rundir/.nextflow/history"; then
-    local remedy="rm -rf $rundir  (the whole launch dir: its work/ and cache/ belong to that attempt)"
-    if [[ -n "${RESUME_RUN:-}" ]]; then
-      # The cross arm shares its BASE arm's launch dir; removing it would destroy the base.
-      remedy="delete the arms-$run_id line from $rundir/.nextflow/history -- do NOT remove the directory, base arm $RESUME_RUN lives there"
+  # PREVIOUS ATTEMPTS of this run, from the launch dir's history. A run name is fixed per
+  # run_id (arms-<run_id>) and every resumption adds -rN; the LAST attempt's status decides:
+  #   OK            -> the run finished; nothing to do (a relaunch of a plan is idempotent)
+  #   anything else -> it was interrupted (scancel leaves '-') or failed (ERR):
+  #                    ARMS_RESUME=1 continues it as arms-<run_id>-r<N+1> with
+  #                    -resume <its last session>, so every task Nextflow already cached
+  #                    is served from work/ and only the rest runs; without the switch the
+  #                    launch is refused and names both ways out.
+  # A cross resumes ITS OWN last session, not its base's: that session already carries the
+  # base's cache (it was started with -resume <base session>) plus whatever QC it finished.
+  local hist="$rundir/.nextflow/history" attempts=0 prev_name="" prev_status="" prev_sid=""
+  local run_name="arms-$run_id"
+  if [[ -f "$hist" ]]; then
+    read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="arms-$run_id" \
+      '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
+  fi
+  if (( attempts > 0 )); then
+    if [[ "$prev_status" == "OK" ]]; then
+      echo "[$run_id] DONE: $prev_name completed (OK in $hist); nothing to do -- ARMS_REPLACE=1 redoes it from scratch"
+      return 0
     fi
-    echo "[$run_id] SKIP: a run named arms-$run_id already exists in $rundir/.nextflow/history;" \
-         "Nextflow refuses to reuse a run name. Remove the previous attempt first: $remedy" \
-         "-- or relaunch this plan with ARMS_REPLACE=1 to move every previous result it names aside" >&2
-    return 1
+    if [[ "${ARMS_RESUME:-0}" == "1" ]]; then
+      run_name="arms-$run_id-r$((attempts + 1))"
+      if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
+      echo "[$run_id] RESUME: $prev_name ended with status '${prev_status:--}' (attempt $attempts);" \
+           "continuing as $run_name from session ${prev_sid:-latest} -- cached tasks are reused, the rest re-run"
+    else
+      echo "[$run_id] SKIP: $prev_name is in $hist with status '${prev_status:--}' (interrupted or failed, not OK)." \
+           "Relaunch this plan with ARMS_RESUME=1 to continue it from its cache (only unfinished tasks run)," \
+           "or with ARMS_REPLACE=1 to move every previous result it names aside and start it over." >&2
+      return 1
+    fi
   fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
   # Typed params as JSON — see the add_param comment above for why this cannot be
@@ -177,7 +199,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
       -profile "$PROFILE" \
       -c "$BENCH_CONF" \
       -work-dir "$rundir/work" \
-      -name "arms-$run_id" \
+      -name "$run_name" \
       "${resume_args[@]+"${resume_args[@]}"}" \
       -params-file "$run_params" \
       --input "$in_csv" \
@@ -259,6 +281,7 @@ replace_previous_results() {
     [[ -f "$hist" ]] || continue
     while IFS= read -r name; do
       name="${name#arms-}"
+      name="${name%-r[0-9]*}"          # a resumption's -rN suffix names the same run
       [[ -n "$name" && "$name" != "$base" ]] || continue
       [[ "$plan_ids" == *" $name "* ]] || missing+=("$base: its cross $name resumed its session and is not in the plan")
     done < <(awk -F'\t' '{ print $3 }' "$hist" | sort -u)
@@ -292,10 +315,10 @@ replace_previous_results() {
     fi
     # Base NOT in the plan (its launch dir is still here): free the cross's run name only.
     hist="$ROOT/.launch/$base/.nextflow/history"
-    if [[ -f "$hist" ]] && awk -F'\t' -v n="arms-$cross" '$3 == n { f = 1 } END { exit !f }' "$hist"; then
+    if [[ -f "$hist" ]] && awk -F'\t' -v n="arms-$cross" '$3 == n || index($3, n "-r") == 1 { f = 1 } END { exit !f }' "$hist"; then
       mkdir -p "$dest/.launch/$base/.nextflow"
       cp "$hist" "$dest/.launch/$base/.nextflow/history.before-$cross"
-      awk -F'\t' -v n="arms-$cross" '$3 != n' "$hist" > "$hist.tmp" && mv "$hist.tmp" "$hist"
+      awk -F'\t' -v n="arms-$cross" '$3 != n && index($3, n "-r") != 1' "$hist" > "$hist.tmp" && mv "$hist.tmp" "$hist"
       echo "[$cross] replaced: its run name freed in base $base's history (copy kept under $dest/.launch/$base/.nextflow/)"
     fi
   done
@@ -397,6 +420,11 @@ launch_row() {
     add_param reg_tiled_gate_tre   "$(col_val reg_tiled_gate_tre "${vals[@]}")"
     add_param reg_tiled_solver     "$(col_val reg_tiled_solver "${vals[@]}")"
     add_param seg_qc_pairing       "$(col_val seg_qc_pairing "${vals[@]}")"
+    # KEEP work/. The pipeline's cleanup_work default deletes it after a successful run,
+    # which would leave a completed base arm with nothing for its crosses to -resume from
+    # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
+    # published artifact live under --outdir, so nothing the analysis reads is lost.
+    PAIRS+=("cleanup_work=false")      # a literal, not a plan column (the plan guard reads add_param names)
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
     # all three. The external ashlar baseline is an arm_kind='external' row instead, and

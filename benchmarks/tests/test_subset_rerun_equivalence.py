@@ -759,7 +759,8 @@ def test_without_arms_replace_a_subset_relaunch_is_refused_and_names_the_switch(
     sub = impact.affected_rows(plan, ["tiled"])
     r, names = run(sub)
     assert names == [], "the relaunch reached nextflow"
-    assert "ARMS_REPLACE=1" in r.stderr
+    # finished runs are DONE (stdout) and the line names the switch that redoes them
+    assert "ARMS_REPLACE=1" in r.stdout + r.stderr
     assert not (root / ".replaced").exists()
 
 

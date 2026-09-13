@@ -42,6 +42,13 @@
 #          tail -f logs/bench_<jobid>.out
 # ============================================================================
 
+# RESUME after an interruption (scancel of this head job and its process jobs):
+#   SWEEP_RESUME=1 sbatch benchmarks/submit_sweep.sh
+# Runs whose last attempt finished (OK in <run>/.nextflow/history) are skipped; the
+# interrupted or failed ones continue from their Nextflow cache under a new run name
+# (bench_<run_id>-rN). SWEEP_REPLACE=1 instead moves a run aside and starts it over.
+# Plain `sbatch` refuses interrupted runs and names both switches.
+#
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
 BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"   # the checkout. NOTE: unquoted $HOME, never "~/..."
@@ -104,6 +111,7 @@ check_head_memory "$CONCURRENCY" "$NXF_OPTS" || exit 1
 echo "=================================================="
 echo "Head job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}"
 echo "Start: $(date)   Profiles: $PROFILES   Results: $RESULTS"
+[ -n "${SWEEP_RESUME:-}" ] && echo "Resume: SWEEP_RESUME=$SWEEP_RESUME (finished runs skipped, interrupted ones continued from cache)"
 echo "=================================================="
 
 # 1. Expand sweep.yaml -> bench_run_plan.csv (seconds). Built here rather than by
