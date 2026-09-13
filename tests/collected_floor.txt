@@ -776,14 +776,34 @@
 # `MIRAGE_STRICT_SKIPS=1 pytest -q tests/ --ignore=tests/testdata --ignore=tests/modules
 # --ignore=tests/subworkflows --ignore=tests/integration` gives 2044 passed, 17 skipped, 0
 # xfailed -- 2044 + 17 = 2061, confirmed by `pytest --collect-only -q` ("2061 tests
-# collected"). The +101 over the previous `main` floor of 1960 (CLAUDE.md, before this round)
-# is the test-suite build-out's new Python tests -- nfmodel's `nf_test_cases` cases,
-# tests/test_process_nf_test_coverage.py, tests/test_helper_edge_cases.py,
-# tests/test_preflight_scale_inprocess.py, the cluster-options slurm cases, and the
-# fixture-guard case -- the same set the `benchmarking`-branch paragraph above attributed its
-# own +98 (over 1962, `benchmarking`'s own pre-round baseline) to.
+# collected").
+#
+# THE ARITHMETIC, RECONCILED (an earlier version of this paragraph attributed main's delta to
+# "the same set" benchmarking's own +98 covered and left a 3-test gap unexplained): 1960 (the
+# previous `main` floor, CLAUDE.md, before this round) + 98 (the test-suite build-out's plan
+# tests -- nfmodel's `nf_test_cases` cases, tests/test_process_nf_test_coverage.py,
+# tests/test_helper_edge_cases.py, tests/test_preflight_scale_inprocess.py, the
+# cluster-options slurm cases, and the fixture-guard case; the same set the
+# `benchmarking`-branch paragraph above measured against ITS OWN pre-round baseline of 1962)
+# + 3 (a final-review fix-wave round that landed on `test/suite-buildout` AFTER benchmarking's
+# 2060 was measured at 829b01a4 -- three new probe cases in tests/test_nfmodel.py: the
+# `-stub-run`, single-quote, and `reads_command_sh` probes) = 2061.
+#
+# The `benchmarking`-branch entry's 2060 is therefore PRE-fix-wave; the fix wave brought that
+# branch to 2063 (per its own fix-wave report), not 2060, and 2063 is the number this
+# reconciles against, not 2060 directly. Verified rather than assumed: `pytest
+# --collect-only -q ... | grep '::' | sort` was run in both worktrees (this branch, and
+# `test/suite-buildout` -- the benchmarking-based branch, at 6212874d, read-only) and the two
+# sorted node-id lists were `comm -3`'d. The diff is exactly two lines, both present ONLY on
+# the benchmarking-based tree and nothing else:
+#
+#   tests/test_release_workflow_graph.py::test_every_gate_aggregator_reads_every_job_it_needs[benchmarks.yml]
+#   tests/test_release_workflow_graph.py::test_no_gate_aggregator_treats_skipped_as_a_pass[benchmarks.yml]
+#
+# i.e. 2063 - 2 (the benchmarks.yml-only parametrisations, unchanged from every earlier entry
+# above) = 2061, matching this measurement exactly with no unexplained remainder.
 #
 # This floor is branch-specific: main 2061 (this measurement), dev 1976 and benchmarking 2060
-# before this round (CLAUDE.md's "Branch model"; the `benchmarking` and `dev` files are
-# untouched by this change and keep their own committed values).
+# pre-fix-wave / 2063 post-fix-wave (CLAUDE.md's "Branch model"; the `benchmarking` and `dev`
+# files are untouched by this change and keep their own committed values).
 2061
