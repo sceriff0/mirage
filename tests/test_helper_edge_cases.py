@@ -77,18 +77,13 @@ def test_unit_to_um_is_none_for_an_unknown_unit():
 
 # ── quantify._safe_mean ─────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING: bin/quantify.py:_safe_mean's docstring says 'Element-wise sums / "
-        "counts, NaN where counts is 0' (bin/quantify.py:46), but np.divide only "
-        "yields NaN for the 0/0 case. A nonzero sum over a zero count (sums[2]=5.0, "
-        "counts[2]=0) yields +inf, not NaN, contradicting the docstring's own 'NaN, "
-        "not 0.0' framing for an unmeasured compartment. bin/ is read-only for this "
-        "task; not fixed here."
-    ),
-)
 def test_safe_mean_is_nan_where_the_count_is_zero_and_a_ratio_elsewhere():
+    """bin/quantify.py:_safe_mean's docstring says 'Element-wise sums / counts, NaN
+
+    where counts is 0' (bin/quantify.py:46). A nonzero sum over a zero count
+    (sums[2]=5.0, counts[2]=0) must yield NaN, not +inf, matching the docstring's
+    own 'NaN, not 0.0' framing for an unmeasured compartment.
+    """
     from quantify import _safe_mean
 
     sums = np.array([10.0, 0.0, 5.0])

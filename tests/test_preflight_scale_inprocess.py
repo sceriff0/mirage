@@ -7,22 +7,12 @@ process, so the lines are counted, and they add the boundaries the subprocess
 file does not reach: the parser's own rejections and the warn-on-heterogeneity
 clustering.
 
-FINDING: `_parse_pixel_size`'s docstring (bin/preflight_scale.py:55-59) promises
-"Raises ValueError for anything that is neither" a positive number nor 'auto' --
-but "nan" and "inf" are neither rejected here. `float("nan") <= 0` and
-`float("inf") <= 0` are both False (NaN compares false to everything, and
-+inf is not <= 0), so the `value <= 0` guard silently lets both through:
-`_parse_pixel_size("nan")` returns `nan`, `_parse_pixel_size("inf")` returns
-`inf`, and an infinite or NaN pixel size would be written into the report
-JSON as if it were a valid, positive scale. bin/ is read-only for this task,
-so `test_parse_pixel_size_rejects_nan_and_inf` below asserts the CONTRACT --
-`pytest.raises(ValueError)` -- under `@pytest.mark.xfail(strict=True)`. That
-way the test never pins the defect as correct behaviour (a test asserting the
-nan/inf return value would turn RED when the bug is fixed, punishing the fix),
-and `strict=True` makes it fail loudly the moment `_parse_pixel_size` starts
-rejecting them, so the marker cannot outlive the defect. Same shape as the
-`_safe_mean` finding in tests/test_helper_edge_cases.py. See
-task-14-15-report.md for the full write-up.
+`_parse_pixel_size`'s docstring (bin/preflight_scale.py:55-59) promises "Raises
+ValueError for anything that is neither" a positive number nor 'auto' -- which
+includes "nan" and "inf": neither is a positive number of micrometres per
+pixel, so the guard must reject both (`math.isfinite`, alongside the existing
+`value <= 0` check), and `test_parse_pixel_size_rejects_nan_and_inf` below
+asserts exactly that contract directly.
 """
 
 from __future__ import annotations
@@ -56,18 +46,6 @@ def test_parse_pixel_size_rejects_non_positive_and_non_numeric(raw):
         preflight_scale._parse_pixel_size(raw)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        'FINDING: bin/preflight_scale.py:57 promises "Raises ValueError for anything '
-        "that is neither\" a positive number nor 'auto', but `value <= 0` is False for "
-        "both NaN and +inf (NaN compares false to everything; +inf is not <= 0), so "
-        "both pass straight through and would be written into the report JSON as a "
-        "valid scale. bin/ is read-only for this task. This case asserts the CONTRACT, "
-        "so it xfails today and turns green -- loudly, because strict=True makes an "
-        "unexpected pass a failure -- the moment the guard is fixed."
-    ),
-)
 @pytest.mark.parametrize("raw", ["nan", "inf"])
 def test_parse_pixel_size_rejects_nan_and_inf(raw):
     with pytest.raises(ValueError):
