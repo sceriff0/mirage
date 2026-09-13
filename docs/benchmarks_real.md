@@ -432,6 +432,48 @@ the figure. So a partial pull gives a partial page, never a broken build.
 
 ---
 
+## Registration mosaics — the figure panel
+
+`benchmarks/reg_mosaic.py` draws the before/after patch mosaic the paper shows: one
+column per arm directory, one row per (moving round, ROI) pair, every cell a
+two-colour overlay of the nuclear channel (moving in magenta, reference in green,
+overlap white) at the same ROI, scale and LUT, with the Dice of the Otsu nuclear
+masks in the corner. It reads only what the arms wrote:
+
+- `<arm>/csv/registered.csv` — the registered slide per moving round; its reference
+  row names the preprocessed reference, which is the frame every column is drawn in;
+- `<root>/preprocess_shared/csv/preprocessed.csv` — the **Before** column: each moving
+  slide as it entered registration, on the reference canvas at the origin with no
+  transform (pad-or-crop, never rescaled), the same "before" the pipeline's own
+  registration QC draws.
+
+Rounds are matched across arms by their channel set, which every arm inherits from
+the shared preprocessing run, so any two arms of one launch line up.
+
+```bash
+# VALIS best cell against STARE best cell, six rows, one patient
+python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \
+    --rows 6 --patient 5456 -o figs/mosaic
+
+# the SOLVE cross on its base arm, four rows, overlay + checkerboard, titled columns
+python -m benchmarks.reg_mosaic arm_results/tiled_high_gate1 arm_results/tiled_high_gate1_solver_robust \
+    --rows 4 --kinds overlay,checker --label tiled_high_gate1=legacy \
+    --label tiled_high_gate1_solver_robust=robust -o figs/solver
+
+# or through make, into the arms hand-off directory
+make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_gate1" MOSAIC_ROWS=6
+```
+
+`--rows N` is exact. Rows are laid out ROI-major — every round at ROI 1, then every
+round at ROI 2 — so a small N still shows each round once; the tool picks
+`ceil(N / rounds)` ROIs automatically (tissue coverage × texture, pushed apart), or
+takes yours with `--roi Y,X` / `--rois-json <a previous run's *_rois.json>` to draw
+another pair of arms at identical positions. `--rounds CD8` restricts the rounds.
+Per patient it writes `<patient>_mosaic.{png,pdf}`, `<patient>_locator.png` (the ROI
+boxes on the low-res reference), `<patient>_rois.json` (ROIs, files, limits, metrics)
+and `<patient>_patches/` with every cell at native resolution. ASHLAR arms have no
+`csv/registered.csv` and cannot be a column.
+
 ## Re-running a subset after a code change
 
 A change confined to one component does not move every arm, and a real WSI arm

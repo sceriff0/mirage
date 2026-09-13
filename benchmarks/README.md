@@ -315,6 +315,13 @@ It reuses `bin/generate_resource_report.py`'s parsers (the same code that render
 `qc/mirage_resource_report.html`) and the sweep's `regress.fit_memory_model`, so its fits
 are the sweep's fits applied to one run. See `docs/benchmarks_real.md` §3b.
 
+## D. Registration mosaics (arms → figure panel)
+
+`benchmarks/reg_mosaic.py <arm dir> [<arm dir> ...] --rows N -o <dir>`: before/after nuclear
+overlays, one column per arm, exactly N (round, ROI) rows, read from the arms' checkpoints
+alone. `make arm-mosaic MOSAIC_ARMS="..." MOSAIC_ROWS=N`. See `docs/benchmarks_real.md`,
+"Registration mosaics".
+
 ## Inputs -> outputs at a glance
 
 | Step | You provide | You get |

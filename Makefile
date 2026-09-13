@@ -12,7 +12,7 @@
 #   Docker running (for real/integration tests)
 
 .PHONY: testdata test test-stub test-real test-integration test-python test-validation test-lint test-all clean-test help \
-        arm-plan arm-run arm-plan-subset arm-rerun arm-tables sweep-tables arm-pull run-resources
+        arm-plan arm-run arm-plan-subset arm-rerun arm-tables sweep-tables arm-pull run-resources arm-mosaic
 
 # Default target
 test: test-stub test-python
@@ -172,6 +172,20 @@ sweep-tables:
 	python -m benchmarks.analysis.make_figures \
 	    --results-root $(SWEEP) --run-plan $(SWEEP_PLAN) --reg-eval $(REG_EVAL) \
 	    --outdir $(HANDOFF)/sweep
+
+# Before/after registration patch mosaic across ARMS -- the figure panel, not a
+# table. One column per arm directory, exactly MOSAIC_ROWS (round, ROI) rows,
+# read from the arms' csv/registered.csv and preprocess_shared/csv/preprocessed.csv.
+#   make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_gate1" MOSAIC_ROWS=6
+# Extra flags (--patient, --rounds, --kinds overlay,checker, --label ARM=Title ...)
+# go in MOSAIC_ARGS. See docs/benchmarks_real.md, "Registration mosaics".
+MOSAIC_ARMS ?=
+MOSAIC_ROWS ?= 6
+MOSAIC_ARGS ?=
+arm-mosaic:
+	@[ -n "$(MOSAIC_ARMS)" ] || { echo "set MOSAIC_ARMS='<arm dir> [<arm dir> ...]'"; exit 1; }
+	python -m benchmarks.reg_mosaic $(MOSAIC_ARMS) --rows $(MOSAIC_ROWS) \
+	    -o $(HANDOFF)/arms/mosaic $(MOSAIC_ARGS)
 
 arm-pull:
 	benchmarks/pull_to_ihc_method.sh $(ROOT) $(IHC) --handoff $(HANDOFF) \
