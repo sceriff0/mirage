@@ -17,13 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `shipped_defaults_test` stub run covers the new default. The benchmark sweep's
   `baseline:` follows (`benchmarking` branch), and its `skip_preprocessing: [false, true]`
   axis still prices the whole stage — it now varies OFF a skipping baseline.
-- **The incremental cyclic-IF mode (`add_cycle`) now lives on the `dev` branch only.**
-  This branch carries no `--mode add_cycle`, no `prior_outdir`, no `EXTRACT_MASK_SERIES`
-  and no `docs/add_cycle.md`; `mode` stays as a parameter with the single value
-  `standard` so `qc/run_summary.json`'s `run.mode` field is unchanged. `embed_masks` is
-  unaffected. The shared plumbing add_cycle was built on (`REGISTER_PATIENT`,
-  `QUANTIFY_MARKERS`, `ASSEMBLE_EXPORT`, `POSTPROCESSED_CHECKPOINT`) stays, and the
-  comments that explain *why* it is shared still name add_cycle as the reason.
 - **`cleanup_level` defaults to `'none'`** (it was `'final'` since 2026-08-25). A run's
   output is re-enterable by `--start` without opting in; `'final'` is now the opt-in
   cleaning level, with the same publish gates. `conf/test.config` keeps its explicit

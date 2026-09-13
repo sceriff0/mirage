@@ -1,7 +1,7 @@
 """lib/RegBackends.groovy is the one place a registration backend is named.
 
 Five places used to decide it independently: nextflow_schema.json's
-registration_method enum, workflows/mirage.nf's add_cycle allowlist (dev branch),
+registration_method enum, workflows/mirage.nf's add_cycle allowlist,
 subworkflows/local/register_patient.nf's adapter dispatch,
 subworkflows/local/seg_qc.nf's join-shape branch, and lib/WarpBackends.groovy's
 own two-key map. lib_probe.nf covers the Groovy side (the table's own accessors,
@@ -51,7 +51,7 @@ SCHEMA_PATH = ROOT / "nextflow_schema.json"
 MIGRATED_CALL_SITES = (
     "subworkflows/local/register_patient.nf",
     "subworkflows/local/seg_qc.nf",
-    # workflows/mirage.nf's add_cycle allowlist is the third site on the dev branch.
+    "workflows/mirage.nf",
 )
 
 #: The exact call each migrated site must make, one needle per site -- not a bare
@@ -62,6 +62,7 @@ MIGRATED_CALL_SITES = (
 CALL_SITE_NEEDLES = {
     "subworkflows/local/register_patient.nf": "RegBackends.of(method).adapter",
     "subworkflows/local/seg_qc.nf": "RegBackends.segQcJoin(method)",
+    "workflows/mirage.nf": "RegBackends.supportsMode(",
 }
 
 _BACKENDS_BLOCK = re.compile(
@@ -166,7 +167,7 @@ def test_the_literal_comparison_regex_actually_matches_one():
     # ... and it must not fire on the table's own field values, which are legitimate.
     assert not _LITERAL_COMPARISON.search("warp: 'valis'],")
     assert not _LITERAL_COMPARISON.search("adapter: 'TILED_ADAPTER',")
-    assert not _LITERAL_COMPARISON.search("supportedModes: ['linear'],")
+    assert not _LITERAL_COMPARISON.search("supportedModes: ['linear', 'add_cycle'],")
 
 
 def test_schema_enum_matches_the_backend_table():
