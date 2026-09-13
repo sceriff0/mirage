@@ -280,6 +280,21 @@ class CsvUtils {
      * under-count/ABORT scenario that claim cited is unreachable. The decision stands on
      * determinism and on one clean invariant; do not restate the unreachable one.
      *
+     * WITHIN ONE SHEET, THE ONLY DUPLICATES THAT STILL REACH THIS WALK ARE NUCLEAR ONES.
+     * validateInputSemantics (the launch-time samplesheet validator, called once from
+     * workflows/mirage.nf before any process is instantiated) now REFUSES a samplesheet
+     * in which two slides of one patient carry the same NON-NUCLEAR channel, precisely
+     * because the drop above is silent and its winner is decided by row order. So the
+     * "two slides sharing a marker" case this method is built to resolve deterministically
+     * is, for a same-sheet run, the DAPI/CELLTOX case -- the fiducial, repeated on every
+     * slide by design. NOTHING HERE CHANGES BECAUSE OF THAT: the rule stays
+     * nuclear-blind, the walk stays the one definition of the keep-set, and this method
+     * must keep working when it is handed channels the validator never saw -- which is
+     * exactly what `preClaimed` below is (on the `dev` branch, add_cycle seeds it with a
+     * PRIOR RUN's channels, from a different sheet that this sheet's validation never
+     * compared against, so a non-nuclear name can still collide there and must still be
+     * deduplicated deterministically rather than refused).
+     *
      * `preClaimed` seeds the claimed set per patient. add_cycle passes the prior run's
      * reference channels, so a re-stained DAPI is dropped as redundant while a genuinely
      * new nuclear marker survives.
@@ -867,9 +882,12 @@ class CsvUtils {
      * checks that otherwise only fire later during channel construction.
      *
      * Validates, for every data row: is_reference format, channel list /
-     * nuclear-marker presence, and existence of the step's image file. Validates, per
-     * patient: exactly one reference image (zero allowed only for mode=add_cycle,
-     * whose reference is the prior run's; more than one is always ambiguous).
+     * nuclear-marker presence, no channel name repeated within the row's own slide,
+     * and existence of the step's image file. Validates, per patient: exactly one
+     * reference image (zero allowed only for mode=add_cycle, whose reference is the
+     * prior run's; more than one is always ambiguous), and that no NON-NUCLEAR channel
+     * is carried by two different slides -- see the comment at that check for why a
+     * duplicate has no correct downstream interpretation.
      *
      * @param csv                  path to the input samplesheet
      * @param step                 pipeline start step (selects the path column)
@@ -904,6 +922,12 @@ class CsvUtils {
         def refCounts = [:].withDefault { 0 }
         def rowCounts = [:].withDefault { 0 }
 
+        // patient_id -> UPPER-CASED channel name -> the rows that carry it, each as
+        // [name: the name AS WRITTEN, where: 'row N (<path>)']. Filled during the row
+        // walk below and read in the per-patient pass, which is where the cross-slide
+        // duplicate rule lives (a duplicate is a property of a PATIENT, not of a row).
+        def channelOccurrences = [:]
+
         lines.drop(1).eachWithIndex { line, i ->
             def cols = parseCsvLine(line)
             if (cols.every { it == null || it.trim().isEmpty() }) return  // skip blank lines
@@ -928,11 +952,58 @@ class CsvUtils {
                     throw new FileNotFoundException("Input file does not exist: ${p} (patient ${row.patient_id}, ${ctx})")
             }
 
+            // Where this row is, for any message built below: the row number the
+            // author sees in a spreadsheet, plus the image it names when there is one.
+            def rowPath = (pathIdx >= 0 && pathIdx < cols.size()) ? cols[pathIdx].trim() : null
+            def where   = rowPath ? "row ${i + 2} (${rowPath})" : "row ${i + 2}"
+
+            // A channel name may not repeat WITHIN one slide's own list, nuclear or
+            // not: SPLIT_CHANNELS emits one file per name, so a second copy is either a
+            // copy-paste typo or a marker that was never acquired, and every
+            // channels_count derived from the cell disagrees with the files that
+            // arrive. validateMetadata (called through parseMetadata above) checks for
+            // a blank name and for the PRESENCE of a nuclear marker, never for a
+            // repeat, so the rule lives here rather than there -- it is the samplesheet
+            // that is wrong, and this is the samplesheet validator.
+            def seenInRow = [:]
+            parsed.channels.each { ch ->
+                def key = ch.trim().toUpperCase()
+                if (seenInRow.containsKey(key))
+                    throw new IllegalArgumentException("Channel '${ch}' is listed more than once on the same slide, in ${ctx} (patient ${row.patient_id}, channels: ${parsed.channels.join('|')}). A channel name may appear at most once per slide -- nuclear markers included -- because the slide emits exactly one image per name. Remove the repeat, or rename one of the two if they really are different stains.")
+                seenInRow[key] = ch
+
+                def perPatient = channelOccurrences[row.patient_id]
+                if (perPatient == null) {
+                    perPatient = [:]
+                    channelOccurrences[row.patient_id] = perPatient
+                }
+                if (perPatient[key] == null) perPatient[key] = []
+                perPatient[key] << [name: ch, where: where]
+            }
+
             rowCounts[row.patient_id]++
             if (parsed.is_reference) refCounts[row.patient_id]++  // reuse parsed value (no re-parse)
         }
 
         rowCounts.each { patientId, _n ->
+
+            // A NON-NUCLEAR channel carried by two slides of one patient is refused
+            // here, at launch, rather than surviving into registration. The reason is
+            // that there is no correct answer downstream: resolveKeptChannelsPerSlide
+            // keeps each marker name exactly ONCE per patient (reference first, then
+            // samplesheet order), so one of the two acquisitions is silently dropped
+            // and which one wins is a property of row order, not of anything the author
+            // can express. A NUCLEAR marker is the deliberate exception: it is the
+            // registration fiducial and is expected on every slide, which is exactly
+            // why the keep-set drops the repeats without complaint.
+            //
+            // Comparison is trimmed and upper-cased, the same normalisation the
+            // keep-set uses, so 'panck' and ' PANCK ' are one channel here too.
+            (channelOccurrences[patientId] ?: [:]).each { _key, occurrences ->
+                if (occurrences.size() > 1 && !MarkerUtils.isNuclear(occurrences[0].name, nuclearMarkers))
+                    throw new IllegalArgumentException("Channel '${occurrences[0].name}' appears on ${occurrences.size()} different slides of patient ${patientId} (${occurrences.collect { it.where }.join('; ')}), and it is not one of the nuclear markers (${MarkerUtils.markerList(nuclearMarkers).join(', ')}). Only a nuclear/fiducial channel may repeat across a patient's slides: every other marker is kept exactly once per patient, so one of these acquisitions would be dropped and which one survives is decided by samplesheet order rather than by you. Rename the channel on one of the slides if they are genuinely different acquisitions (e.g. PANCK_cycle1 / PANCK_cycle2), or add it to --nuclear_markers if it really is a nuclear stain.")
+            }
+
             def refs = refCounts[patientId]
             if (refs > 1)
                 throw new IllegalStateException("Multiple reference images found for patient ${patientId} (${refs} found). Exactly one image per patient may set is_reference=true.")

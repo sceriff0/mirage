@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A samplesheet that gives one patient the same non-nuclear channel on two slides is
+  now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
+  samplesheet validator, called from `workflows/mirage.nf` before any process is
+  instantiated) rejects it naming the patient, the channel, both rows with their image
+  paths, and the remedy. The reason it cannot be left to run: `resolveKeptChannelsPerSlide`
+  keeps each marker name exactly once per patient, so one of the two acquisitions was
+  silently dropped and which one survived was decided by reference-first samplesheet
+  order. **Nuclear markers are the deliberate exception** — `DAPI`/`CELLTOX` are the
+  registration fiducial and are expected on every slide — so the check consults
+  `MarkerUtils.isNuclear` and only fires for the rest. A name repeated *within* one
+  slide's own `channels` cell is refused too, nuclear or not, which nothing checked
+  before. Comparison is trimmed and case-insensitive, the same normalisation the
+  keep-set uses. Covered by `tests/lib_probe.nf`'s `checkDuplicateChannelRefusal()` and
+  a `tests/main.nf.test` case that asserts zero tasks entered the trace.
+
 ### Changed
 
 - **`skip_preprocessing` defaults to `true`**: a default run converts every slide to the
