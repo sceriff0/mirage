@@ -1,0 +1,14 @@
+{
+    "Should emit one report and one run-level size log - stub": {
+        "content": [
+            [
+                "versions.yml:md5,19037a31cb64eed17571e1e93627c549"
+            ]
+        ],
+        "timestamp": "2026-09-10T17:23:32.494387",
+        "meta": {
+            "nf-test": "0.9.5",
+            "nextflow": "25.04.7"
+        }
+    }
+}

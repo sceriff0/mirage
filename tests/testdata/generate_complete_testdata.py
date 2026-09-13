@@ -1012,6 +1012,42 @@ with open(OUT_DIR / "sample_reg_residuals.csv", "w") as f:
         f.write(f"P001_mov1.ome.tiff,{x},{y},{d},micro\n")
 print("  Created sample_reg_residuals.csv")
 
+# Pyramidal OME-TIFF for EXPORT_SPATIALDATA's --include-image/--pyramid branch
+# (spatialdata_include_image=true). tests/modules/export_spatialdata.nf.test is
+# the only consumer. Reuses P001's own anatomy (defined in section 1 above) so
+# the fixture is patient-consistent, and carries PhysicalSizeX/Y=0.325um to
+# match every other P001 checkpoint row's pixel_size. Two levels via subIFDs,
+# same subIFD construction as fmt_pyramid.ome.tiff (section 11a) below -- but
+# its own dedicated RNG stream, NOT _img_rng: this block sits between an
+# earlier _img_rng consumer and the P900 shipped-defaults fixtures further
+# down (section 9), which also draw from _img_rng, so reusing it here would
+# shift every later _img_rng draw and rewrite fixtures this block has nothing
+# to do with. Same reasoning as _seg_rng's own comment below.
+_p001_pyramid_rng = np.random.default_rng(102)
+_p001_pyramid = np.stack(
+    [
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 1.0, _p001_pyramid_rng, True),
+        _render_channel(p001_anatomy, (128, 128), (0, 0), 0.5, _p001_pyramid_rng, True),
+    ],
+    axis=0,
+)
+with tifffile.TiffWriter(OUT_DIR / "P001_pyramid.ome.tiff", ome=True) as _tw:
+    _tw.write(
+        _p001_pyramid,
+        subifds=1,
+        photometric="minisblack",
+        metadata={
+            "axes": "CYX",
+            "Channel": {"Name": ["DAPI", "PANCK"]},
+            "PhysicalSizeX": 0.325,
+            "PhysicalSizeXUnit": "µm",
+            "PhysicalSizeY": 0.325,
+            "PhysicalSizeYUnit": "µm",
+        },
+    )
+    _tw.write(_p001_pyramid[:, ::2, ::2], subfiletype=1, photometric="minisblack")
+print("  Created P001_pyramid.ome.tiff (2 levels: 128x128 -> 64x64)")
+
 # =============================================================================
 # 8. Golden reference files in tests/testdata/expected/
 # =============================================================================
@@ -1545,6 +1581,41 @@ with open(OUT_DIR / "relative_paths_input.csv", "w") as f:
     f.write(f"P001,{TESTDATA_REL}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
     f.write(f"P001,{TESTDATA_REL}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8\n")
 print("  Created relative_paths_input.csv (paths relative to the repo root)")
+
+# ── tiled_m0.json: the coarse-stage output TILED_REG_TILE consumes ─────────────
+# Same content tiled_coarse.nf's stub block writes: an identity 3x3 matrix and
+# the reference geometry. Used by tests/modules/tiled_reg_tile.nf.test.
+(OUT_DIR / "tiled_m0.json").write_text(
+    json.dumps(
+        {"M0": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "ref_h": 16, "ref_w": 16,
+         "ref_name": "ref", "coarse_tre": 0, "n_inliers": 0}
+    )
+    + "\n"
+)
+print("  Created tiled_m0.json")
+
+# ── invalid_checkpoint_dangling_path.csv: a registration checkpoint whose file
+# no longer exists. Used by tests/main.nf.test to prove --start registration
+# refuses a stale prior run instead of failing inside CONVERT/REGISTER later.
+# The path is deliberately OUTSIDE tests/testdata (/nonexistent/prior_run/..., same
+# style as invalid_file_not_found.csv above) rather than under TESTDATA_ABS: The
+# producer guard (tests/test_fixtures_have_a_producer.py) treats ANY "tests/
+# testdata/<name>" substring it finds inside a fixture CSV as a reference that
+# must exist on disk, with no allowance for a row whose entire point is that the
+# file does NOT exist. Keeping the basename (P001_deleted_after_the_run.ome.tiff)
+# unchanged is what matters -- tests/main.nf.test's refusal assertion greps the
+# error report for that basename, not the directory it once lived in.
+with open(OUT_DIR / "invalid_checkpoint_dangling_path.csv", "w") as f:
+    f.write("patient_id,preprocessed_image,is_reference,channels\n")
+    f.write("P001,/nonexistent/prior_run/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
+print("  Created invalid_checkpoint_dangling_path.csv")
+
+# ── invalid_is_reference_yes.csv: is_reference must be literally true/false.
+with open(OUT_DIR / "invalid_is_reference_yes.csv", "w") as f:
+    f.write("patient_id,path_to_file,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,yes,DAPI|PANCK|SMA\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,no,DAPI|PANCK|SMA\n")
+print("  Created invalid_is_reference_yes.csv")
 
 
 print("\n" + "=" * 70)

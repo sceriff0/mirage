@@ -139,6 +139,8 @@ tests/testdata/invalid_dapi_position.csv
 tests/testdata/invalid_no_dapi.csv
 tests/testdata/invalid_checkpoint_missing_col.csv
 tests/testdata/invalid_checkpoint_bad_ref.csv
+tests/testdata/invalid_checkpoint_dangling_path.csv
+tests/testdata/invalid_is_reference_yes.csv
 tests/testdata/invalid_file_not_found.csv
 tests/testdata/tiles_12_rows.csv
 tests/testdata/tiles_12_rows_trailing_blank.csv
@@ -212,6 +214,7 @@ tests/testdata/extra_column_input.csv
 tests/testdata/relative_paths_input.csv
 tests/testdata/P001_ünïcode.ome.tiff
 tests/testdata/with space/
+tests/testdata/tiled_m0.json
 .superpowers/
 
 # Internal architecture/audit reviews published as Claude Artifacts, not repo docs.

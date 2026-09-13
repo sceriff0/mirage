@@ -51,4 +51,109 @@ nextflow_process {
         }
     }
 
+    test("Should render the meta pixel size and the default --max-pixels - rendered command") {
+
+        // No options "-stub". seg_quality_eval.py needs the segeval container; read
+        // the command only. ext.when gates on skip_seg_quality_eval, which ships true.
+        tag "stub"
+
+        when {
+            params {
+                skip_seg_quality_eval = false
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true, pixel_size: 0.325],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('seg_quality_eval.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--pixel-size-um 0.325') },
+                    "meta.pixel_size is the scale when cse_pixel_size_um is null: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--max-pixels 50000000') },
+                    "cse_max_pixels ships as 50000000 and reaches the command via ext.args: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--id P001') && it.contains('--out P001_seg_eval.json') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should let cse_pixel_size_um override the meta scale and a null cse_max_pixels drop the flag - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                skip_seg_quality_eval = false
+                cse_pixel_size_um = 0.5
+                cse_max_pixels = null
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true, pixel_size: 0.325],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('seg_quality_eval.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--pixel-size-um 0.5') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--pixel-size-um 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--max-pixels') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should refuse a meta without pixel_size when no override is set - failure") {
+
+        // The script: block throws IllegalStateException: "a null value here is an
+        // upstream bug to fix, not a flag to omit". Under -stub the throw would never
+        // run, so this case carries no -stub option.
+        tag "stub"
+
+        when {
+            params {
+                skip_seg_quality_eval = false
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], is_reference: true],
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P002_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.failed
+            def report = (process.stdout + process.stderr).join('\n') + (process.errorReport ?: '')
+            assert report.contains('SEG_QUALITY_EVAL(P001)') : report
+            assert report.contains('--cse_pixel_size_um') : "the error must name the override flag: " + report
+        }
+    }
+
 }

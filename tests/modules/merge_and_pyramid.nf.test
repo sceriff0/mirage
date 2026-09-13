@@ -183,6 +183,109 @@ nextflow_process {
         }
     }
 
+    test("Should render the five pyramid tunables and no --masks-dir - rendered command") {
+
+        // No options "-stub": stub mode never evaluates script:, so this is the only
+        // tag-"stub" case that reaches the rendered command. Uses this file's own
+        // three-channel stub input, with masks empty.
+        tag "stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 8
+                pyramid_scale = 2
+                tilex = 512
+                compression = 'zstd'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    []
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('merge_channels_pyramid.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--physical-size-x 0.325') && it.contains('--physical-size-y 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--pyramid-resolutions 8') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--pyramid-scale 2') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--tile-size 512') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--compression zstd') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--input-dir channels') && it.contains('--output pyramid.ome.tiff') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--masks-dir') }, "no masks in -> no --masks-dir: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --masks-dir when a mask file is staged - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                pixel_size = 0.325
+                pyramid_resolutions = 8
+                pyramid_scale = 2
+                tilex = 512
+                compression = 'zstd'
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_PANCK.tif', checkIfExists: true),
+                        file('$projectDir/tests/testdata/sample_SMA.tif', checkIfExists: true)
+                    ],
+                    [
+                        file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('merge_channels_pyramid.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--masks-dir masks') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should create pyramidal OME-TIFF from 3 channels - real") {
 
         tag "real"

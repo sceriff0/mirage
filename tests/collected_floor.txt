@@ -754,4 +754,11 @@
 # RE-MEASURED 2026-09-09 on benchmarking after merging main@9de83bb8: the add_cycle feature
 # and its tests now live on dev only (-16, see main's note), so this branch follows main's
 # floor plus its two benchmarks.yml parametrisations. 1978 - 16 = 1962.
-1962
+#
+# RE-MEASURED 2026-09-13 ON `benchmarking` after merging main d668c811 (the test-suite
+# build-out: docs/superpowers/plans/2026-09-10-test-suite-buildout.md, plus the _safe_mean /
+# _parse_pixel_size fixes) on top of 2d02e299 (the sweep delta grids): 2068 passed + 16 skipped
+# = 2084 collected, 0 failed. main measured 2061 on the same suite; the +23 are this branch's
+# own benchmarks/tests/ cases (the harness lives only here) and the two benchmarks.yml
+# parametrisations. Branch-specific, like every entry above.
+2084

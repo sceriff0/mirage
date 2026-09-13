@@ -52,8 +52,8 @@ def _safe_mean(sums: NDArray, counts: NDArray) -> NDArray:
     valid JSON); this makes the producer agree with that policy.
     Guarded by tests/test_absent_compartment_is_nan.py.
     """
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.divide(sums, counts)
+    out = np.full_like(sums, np.nan, dtype=np.float64)
+    return np.divide(sums, counts, out=out, where=counts > 0)
 
 
 def _median_per_label_from_sorted(vals_sorted, labs_sorted, valid_labels):

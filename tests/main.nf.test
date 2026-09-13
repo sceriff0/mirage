@@ -1227,4 +1227,85 @@ nextflow_pipeline {
         }
     }
 
+    test("Should refuse --start registration when a checkpoint path no longer exists") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_checkpoint_dangling_path.csv"
+                outdir = "$outputDir"
+                start = "registration"
+            }
+        }
+
+        then {
+            assert workflow.failed
+            def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
+            assert report.contains('P001_deleted_after_the_run.ome.tiff') : "the refusal must name the missing file: " + report
+        }
+    }
+
+    test("Should reject a samplesheet whose is_reference is yes/no rather than true/false") {
+        tag "stub"
+        options "-stub"
+        when {
+            params {
+                input = "$projectDir/tests/testdata/invalid_is_reference_yes.csv"
+                outdir = "$outputDir"
+                start = "preprocessing"
+            }
+        }
+        then {
+            assert workflow.failed
+            def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
+            assert report.contains("Must be 'true' or 'false'") : report
+            assert report.contains("'yes'") : "the offending value is named: " + report
+        }
+    }
+
+    test("Should publish the segmented checkpoint and geojson when starting at segmentation - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_postprocessing.csv"
+                outdir = "$outputDir"
+                start = "segmentation"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert new File("$outputDir/csv/segmented.csv").exists() : "segmented.csv is the step's checkpoint"
+            assert new File("$outputDir/csv/postprocessed.csv").exists() : "the run continued to the end"
+            assert new File("$outputDir/P001/geojson").isDirectory()
+        }
+    }
+
+    test("Should publish quantification, geojson and the zarr when starting at postprocessing - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                input = "$projectDir/tests/testdata/valid_checkpoint_segmented.csv"
+                outdir = "$outputDir"
+                start = "postprocessing"
+            }
+        }
+
+        then {
+            assert workflow.success
+            assert new File("$outputDir/P001/quantification").isDirectory()
+            assert new File("$outputDir/P001/geojson").isDirectory()
+            assert new File("$outputDir/P001/spatialdata/P001.zarr").isDirectory()
+            assert !new File("$outputDir/csv/registered.csv").exists() : "no registration ran, so no registration checkpoint may be written"
+        }
+    }
+
 }

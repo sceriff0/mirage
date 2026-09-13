@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -67,7 +68,7 @@ def _parse_pixel_size(raw: str) -> Optional[float]:
         raise ValueError(
             f"--pixel-size {raw!r} is neither a positive number nor '{AUTO}'."
         ) from None
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         raise ValueError(
             f"--pixel-size must be a positive number of micrometres per pixel, got {value}."
         )

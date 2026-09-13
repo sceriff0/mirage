@@ -16,10 +16,12 @@ from ._lex import (
 )
 from ._model import (
     REPO_ROOT,
+    NfTestCase,
     Process,
     WithNameBlock,
     include_aliases,
     nf_files,
+    nf_test_cases,
     nf_test_files,
     param_refs,
     processes,
@@ -30,11 +32,13 @@ from ._model import (
 
 __all__ = [
     "REPO_ROOT",
+    "NfTestCase",
     "Process",
     "WithNameBlock",
     "block_extent",
     "include_aliases",
     "nf_files",
+    "nf_test_cases",
     "nf_test_files",
     "param_refs",
     "processes",

@@ -63,11 +63,12 @@ Every reader is installed in the `mirage-convert` image; the dispatch happens in
 | `.ndpi`, `.ndpis` | `tifffile` |
 | `.h5`, `.hdf5` | `hdf5` |
 
-Everything above is exercised on synthetic fixtures in CI on every push. The five
-vendor formats that cannot be synthesised (`.czi`, `.nd2`, `.lif`, real scanner
-`.ndpi` bytes, `.svs`) need a cluster run against real vendor files, and as of
-this release none has been recorded yet — the current state, tracked format by
-format, is in
+The TIFF, HDF5 and synthesised Hamamatsu rows are exercised on synthetic fixtures
+in CI on every push; the Bio-Formats row has no synthetic fixture and is
+validated only by the cluster kit. The five vendor formats that cannot be
+synthesised (`.czi`, `.nd2`, `.lif`, real scanner `.ndpi` bytes, `.svs`) need a
+cluster run against real vendor files, and as of this release none has been
+recorded yet — the current state, tracked format by format, is in
 [`docs/validation/format_validation.md`](docs/validation/format_validation.md).
 
 ## Quick Start

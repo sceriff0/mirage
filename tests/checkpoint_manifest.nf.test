@@ -76,11 +76,13 @@ nextflow_pipeline {
                 // output subdirectory into the published path.
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Every case in this file asserts on a checkpoint MANIFEST. A
+                // manifest is written at the default --cleanup_level=none (since
+                // 2026-09-10); this case pins it explicitly so the profile does not
+                // move with the default. At --cleanup_level=final the artifacts a
+                // manifest's rows would name are not published, so every path
+                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
+                // own case at the end of this file.
                 cleanup_level = 'none'
             }
         }
@@ -164,11 +166,13 @@ nextflow_pipeline {
                 // <pid>/registered/ — that directory is not created at all.
                 input  = "$projectDir/tests/testdata/single_sample.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Every case in this file asserts on a checkpoint MANIFEST. A
+                // manifest is written at the default --cleanup_level=none (since
+                // 2026-09-10); this case pins it explicitly so the profile does not
+                // move with the default. At --cleanup_level=final the artifacts a
+                // manifest's rows would name are not published, so every path
+                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
+                // own case at the end of this file.
                 cleanup_level = 'none'
             }
         }
@@ -253,11 +257,13 @@ nextflow_pipeline {
                 // moving slide.
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Every case in this file asserts on a checkpoint MANIFEST. A
+                // manifest is written at the default --cleanup_level=none (since
+                // 2026-09-10); this case pins it explicitly so the profile does not
+                // move with the default. At --cleanup_level=final the artifacts a
+                // manifest's rows would name are not published, so every path
+                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
+                // own case at the end of this file.
                 cleanup_level = 'none'
                 registration_method = 'tiled'
             }
@@ -342,11 +348,13 @@ nextflow_pipeline {
                 // to either producer's output layout fails here.
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Every case in this file asserts on a checkpoint MANIFEST. A
+                // manifest is written at the default --cleanup_level=none (since
+                // 2026-09-10); this case pins it explicitly so the profile does not
+                // move with the default. At --cleanup_level=final the artifacts a
+                // manifest's rows would name are not published, so every path
+                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
+                // own case at the end of this file.
                 cleanup_level = 'none'
                 registration_method = 'tiled'
             }
@@ -440,11 +448,13 @@ nextflow_pipeline {
                 // found ("--start postprocessing against that file fails").
                 input  = "$projectDir/tests/testdata/valid_checkpoint_postprocessing.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Every case in this file asserts on a checkpoint MANIFEST. A
+                // manifest is written at the default --cleanup_level=none (since
+                // 2026-09-10); this case pins it explicitly so the profile does not
+                // move with the default. At --cleanup_level=final the artifacts a
+                // manifest's rows would name are not published, so every path
+                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
+                // own case at the end of this file.
                 cleanup_level = 'none'
                 start  = 'segmentation'
             }
@@ -587,14 +597,14 @@ nextflow_pipeline {
         }
     }
 
-    test("no checkpoint manifest at the DEFAULT --cleanup_level=final") {
+    test("no checkpoint manifest at --cleanup_level=final") {
         tag "stub"
         options "-stub"
 
         // The other side of the invariant, and the reason every case above had to
         // name --cleanup_level=none explicitly.
         //
-        // At the default level the intermediates are not published, so a manifest
+        // At the opt-in 'final' level the intermediates are not published, so a manifest
         // written anyway would record paths that do not exist -- turning the
         // invariant above red for a DESIGNED reason, which is the worst possible
         // outcome for a guard. Checkpoint.writesAtLevel makes the writers
@@ -610,8 +620,9 @@ nextflow_pipeline {
             params {
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
-                // The shipped default, written out rather than relied on, so this
-                // case still means what it says if the default ever moves.
+                // 'final' is the OPT-IN cleaning level, not the shipped default
+                // (nextflow.config:485 has been 'none' since 2026-09-10), so this
+                // case has to name it and would be testing nothing without it.
                 cleanup_level = 'final'
             }
         }

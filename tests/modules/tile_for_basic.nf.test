@@ -68,6 +68,12 @@ nextflow_process {
             params {
                 preproc_tile_size = 64
                 nuclear_markers = ['DAPI', 'CELLTOX']
+                // false here, deliberately different from nextflow.config's shipped
+                // default (true) -- this case now demonstrates the OFF branch of
+                // `params.preproc_skip_nuclear ? '--skip_nuclear' : ''`. The ON branch
+                // (the previously-implicit default) has its own explicitly-named case
+                // right below, "...when preproc_skip_nuclear is set - rendered command".
+                preproc_skip_nuclear = false
             }
             process {
                 """
@@ -96,12 +102,57 @@ nextflow_process {
                     "no rendered TILE_FOR_BASIC .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--nuclear-markers DAPI CELLTOX') },
                     "rendered command missing --nuclear-markers: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--skip_nuclear') },
-                    "rendered command missing --skip_nuclear: " + rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--skip_nuclear') },
+                    "rendered command still contains --skip_nuclear despite preproc_skip_nuclear=false: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--fov_size 64') },
                     "rendered command missing --fov_size: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--sidecar') },
                     "rendered command writes no positions sidecar: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --skip_nuclear when preproc_skip_nuclear is set - rendered command") {
+
+        // Copy of the case above, with `preproc_skip_nuclear` explicitly named and set
+        // to `true` -- matching nextflow.config's shipped default (see that case's
+        // comment for why it now pins `false` instead), so this case pins the ON
+        // branch of the ternary explicitly rather than leaving it implicit.
+        tag "stub"
+
+        when {
+            params {
+                preproc_tile_size = 64
+                nuclear_markers = ['DAPI', 'CELLTOX']
+                preproc_skip_nuclear = true
+            }
+            process {
+                """
+                input[0] = [
+                    [
+                        patient_id: 'P001',
+                        is_reference: true,
+                        channels: ['DAPI', 'PANCK', 'SMA']
+                    ],
+                    file('${projectDir}/tests/testdata/P001_ref.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tile_for_basic.py')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered TILE_FOR_BASIC .command.sh found under the task work dir" },
+                { assert rendered.every { it.contains('--skip_nuclear') },
+                    "rendered command missing --skip_nuclear despite preproc_skip_nuclear=true: " + rendered.join(' --- ') }
             )
         }
     }

@@ -39,6 +39,82 @@ nextflow_process {
         }
     }
 
+    test("Should render the quoted channel name and the compartments/expanded toggles - rendered command") {
+
+        // No options "-stub": stub mode never evaluates script:, so this is the only
+        // tag-"stub" case that reaches the rendered command.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], id: 'P001_DAPI', channel_name: 'DAPI'],
+                    file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('quantify.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                // The brief pinned channel_name 'PANCK', but the copied input tuple
+                // (this file's own first stub case) carries channel_name: 'DAPI' --
+                // substituted per the brief's own fallback instruction.
+                { assert rendered.every { it.contains("--channel-name 'DAPI'") },
+                    "single-quoted, so a marker with a space or parenthesis survives the shell: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nuclei_mask_file') }, "quantify_compartments defaults true: " + rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--expanded') }, "expanded_quantification defaults false: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('_quant.csv') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should drop --nuclei_mask_file and add --expanded when the toggles flip - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                quantify_compartments = false
+                expanded_quantification = true
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001', channels: ['DAPI', 'PANCK', 'SMA'], id: 'P001_DAPI', channel_name: 'DAPI'],
+                    file('$projectDir/tests/testdata/sample_DAPI.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.npy', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('quantify.py'))
+                    rendered << f.text
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { !it.contains('--nuclei_mask_file') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--expanded') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should produce CSV with expected columns - real") {
 
         tag "real"

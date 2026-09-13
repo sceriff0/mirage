@@ -12,6 +12,7 @@ from tests.nfmodel import (
     block_extent,
     include_aliases,
     nf_files,
+    nf_test_cases,
     param_refs,
     processes,
     script_bodies,
@@ -626,3 +627,132 @@ def test_no_guard_parses_nextflow_source_privately():
         if private.search(text):
             offenders.append(f"{rel}: hand-rolled block-comment regex")
     assert not offenders, "\n".join(offenders)
+
+
+def _write_nf_test(tmp_path, name, text):
+    d = tmp_path / "tests" / "modules"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(text)
+
+
+def test_nf_test_cases_preamble_tag_applies_to_every_case(tmp_path):
+    _write_nf_test(tmp_path, "a.nf.test", '''
+nextflow_process {
+    process "FOO"
+    tag "stub"
+    test("one") { options "-stub" }
+    test("two") { }
+}
+''')
+    cases = nf_test_cases(root=tmp_path)
+    assert [c.name for c in cases] == ["one", "two"]
+    assert all("stub" in c.tags for c in cases)
+    assert [c.stub_option for c in cases] == [True, False]
+    assert {c.process for c in cases} == {"FOO"}
+
+
+def test_nf_test_cases_ignores_a_tag_that_lives_only_in_a_comment(tmp_path):
+    _write_nf_test(tmp_path, "b.nf.test", '''
+nextflow_process {
+    process "FOO"
+    // tag "stub"
+    test("one") { /* tag "stub" */ }
+}
+''')
+    (case,) = nf_test_cases(root=tmp_path)
+    assert "stub" not in case.tags
+
+
+def test_nf_test_cases_sees_stub_among_other_options(tmp_path):
+    _write_nf_test(tmp_path, "c.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("one") { tag "stub"
+        options "-stub -resume" }
+    test("two") { tag "stub"
+        options "-resume" }
+}
+''')
+    one, two = nf_test_cases(root=tmp_path)
+    assert one.stub_option is True
+    assert two.stub_option is False
+
+
+def test_nf_test_cases_sees_the_stub_run_spelling_and_single_quotes(tmp_path):
+    """`-stub-run` is Nextflow's documented primary spelling (`-stub` is the
+    alias), and nf-test accepts single-quoted option strings. A case written
+    either way used to parse as `stub_option=False`, i.e. as a RENDERED case --
+    which is how a stub-only case could satisfy the rendered-coverage rule in
+    test_process_nf_test_coverage.py while rendering nothing."""
+    _write_nf_test(tmp_path, "e.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("stub-run") { tag "stub"
+        options "-stub-run" }
+    test("single-quoted") { tag "stub"
+        options '-stub' }
+    test("stub-run with another flag") { tag "stub"
+        options "-stub-run -resume" }
+    test("really rendered") { tag "stub"
+        options "-resume" }
+}
+''')
+    cases = {c.name: c for c in nf_test_cases(root=tmp_path)}
+    assert cases["stub-run"].stub_option is True
+    assert cases["single-quoted"].stub_option is True
+    assert cases["stub-run with another flag"].stub_option is True
+    assert cases["really rendered"].stub_option is False
+
+
+def test_nf_test_cases_sees_a_single_quoted_case_name(tmp_path):
+    """`test('...')` is legal nf-test; a parser that only matched `test("...")`
+    dropped the case silently, so its tags and options were never modelled."""
+    _write_nf_test(tmp_path, "f.nf.test", """
+nextflow_process {
+    process 'FOO'
+    test('single-quoted name') { tag 'stub' }
+}
+""")
+    (case,) = nf_test_cases(root=tmp_path)
+    assert case.name == "single-quoted name"
+    assert case.process == "FOO"
+    assert case.tags == frozenset({"stub"})
+
+
+def test_nf_test_cases_records_whether_the_body_reads_command_sh(tmp_path):
+    """A case with no `options "-stub"` is not automatically a rendered-command
+    case: a pure failure case asserts `process.failed` and never looks at the
+    command. `reads_command_sh` is what separates the two."""
+    _write_nf_test(tmp_path, "g.nf.test", '''
+nextflow_process {
+    process "FOO"
+    test("renders") { tag "stub"
+        then { def cmd = new File("${workDir}/x/.command.sh").text
+               assert cmd.contains("--flag") } }
+    test("just fails") { tag "stub"
+        then { assert process.failed } }
+}
+''')
+    renders, fails = nf_test_cases(root=tmp_path)
+    assert renders.reads_command_sh is True
+    assert fails.reads_command_sh is False
+
+
+def test_nf_test_cases_workflow_file_has_no_process(tmp_path):
+    _write_nf_test(tmp_path, "d.nf.test", '''
+nextflow_workflow {
+    workflow "BAR"
+    test("one") { tag "stub" }
+}
+''')
+    (case,) = nf_test_cases(root=tmp_path)
+    assert case.process is None
+    assert case.tags == frozenset({"stub"})
+
+
+def test_nf_test_cases_covers_the_real_tree():
+    cases = nf_test_cases()
+    assert len(cases) >= 261, "the audit counted 261 cases on 2026-09-10; a drop means the parser lost files"
+    assert any(c.process == "SEG_QC_GEOJSON" and not c.stub_option and "stub" in c.tags for c in cases), (
+        "seg_qc_geojson.nf.test's rendered-command case is the precedent; the parser must see it"
+    )

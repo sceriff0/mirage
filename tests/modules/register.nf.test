@@ -277,6 +277,58 @@ nextflow_process {
         }
     }
 
+    test("Should render reg_max_image_dim and reg_micro_reg_fraction - rendered command") {
+
+        // Copy of "Should omit the VALIS override flags when none are set", but naming
+        // the two knobs that render UNCONDITIONALLY on every REGISTER invocation
+        // (register.nf:53-54, `--micro-reg-fraction`/`--max-image-dim` on lines
+        // 143-144) rather than the memory_mode=custom-gated override flags that case
+        // exercises. `stub` tag but NO `options "-stub"` -- `-stub` never evaluates a
+        // script: block.
+        tag "stub"
+
+        when {
+            params {
+                reg_max_image_dim = 1234
+                reg_micro_reg_fraction = 0.33
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001'],
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('register.py')) {
+                    rendered << f.text
+                }
+            }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered REGISTER .command.sh found under the task work dir" },
+                { assert rendered.every { it.contains('--max-image-dim 1234') },
+                    "reg_max_image_dim did not reach register.py: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--micro-reg-fraction 0.33') },
+                    "reg_micro_reg_fraction did not reach register.py: " + rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should render a VALIS override under memory_mode=custom - rendered command") {
 
         tag "stub"

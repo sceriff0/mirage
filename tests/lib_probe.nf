@@ -35,6 +35,19 @@
     amount of prose goes in its own top-level `def checkX() { ... }` function
     below, called as ONE statement from inside workflow{}; only add assertions
     directly inline in workflow{} if they are genuinely a one- or two-liner.
+
+    AND THE CEILING IS COUNTED IN BYTES, NOT CHARACTERS. The javac/Groovy error
+    message talks about "Unicode code units", but the thing that actually
+    overflows is the class file's CONSTANT_Utf8_info entry, whose `length` field
+    is a u2: at most 65535 BYTES of modified UTF-8. ASCII is 1 byte per
+    character, so for an ASCII block the two counts coincide -- but an em-dash
+    costs 3 bytes and 1 code unit, so a block that looks 500 characters clear can
+    already be over. The workflow{} block was converted to ASCII-only on
+    2026-09-11 (its em-dashes became `--`) and measured 65502 bytes, i.e. 33
+    bytes of headroom. KEEP IT ASCII: a single pasted em-dash, curly quote or
+    non-breaking space now costs 2-3 bytes of that 33 and the failure surfaces
+    as a compile error with no line number. Prose with punctuation belongs in a
+    top-level `def` or in this header, neither of which counts.
 ========================================================================================
 */
 
@@ -518,10 +531,90 @@ P1,/x/a.tiff,true,DAPI|CD3
         'unknownColumns must tolerate an empty file rather than throwing over it'
 }
 
+// Direct cases for four cross-parameter/CSV/layout validators that otherwise have
+// no unit-test surface: ParamUtils.validatePixelSize, ParamUtils.validateCleanup,
+// ParamUtils.isEntryPoint, CsvUtils.parseIsReference, and Layout's private
+// requireOutdir guard (reached here through the public publishedPath()). Out-of-band
+// like the other check*() functions above, for the same DSL2 string-constant-ceiling
+// reason noted at the file header.
+def checkParamValidators() {
+
+    // ------------------------------------------------------------------ //
+    // ParamUtils.validatePixelSize: 'auto' in any case, or a positive number.
+    // ------------------------------------------------------------------ //
+    ['auto', 'AUTO', ' Auto ', '0.5', ' 0.325 ', 0.325, 1].each { v ->
+        ParamUtils.validatePixelSize([pixel_size: v])
+    }
+    [null, '', '   ', '0', '-1', '-0.5', 'abc', '0.5um'].each { v ->
+        def rejected = false
+        try { ParamUtils.validatePixelSize([pixel_size: v]) }
+        catch (IllegalArgumentException e) { rejected = e.message.contains('--pixel_size') }
+        assert rejected : "validatePixelSize must reject ${v.inspect()} and name --pixel_size"
+    }
+
+    // ------------------------------------------------------------------ //
+    // ParamUtils.validateCleanup: exactly Layout.CLEANUP_LEVELS, case-sensitive.
+    // ------------------------------------------------------------------ //
+    Layout.CLEANUP_LEVELS.each { level ->
+        ParamUtils.validateCleanup([cleanup_level: level])
+    }
+    ['FINAL', 'None', 'garbage', '', null].each { v ->
+        def rejected = false
+        try { ParamUtils.validateCleanup([cleanup_level: v]) }
+        catch (IllegalArgumentException e) {
+            rejected = Layout.CLEANUP_LEVELS.every { e.message.contains(it) }
+        }
+        assert rejected : "validateCleanup must reject ${v.inspect()} and list every valid level"
+    }
+
+    // ------------------------------------------------------------------ //
+    // ParamUtils.isEntryPoint: true for params.start only.
+    // ------------------------------------------------------------------ //
+    ParamUtils.STEP_ORDER.each { step ->
+        assert ParamUtils.isEntryPoint([start: step], step) : "isEntryPoint must be true for its own step ${step}"
+        ParamUtils.STEP_ORDER.findAll { it != step }.each { other ->
+            assert !ParamUtils.isEntryPoint([start: step], other) : "isEntryPoint(${step}) must be false for ${other}"
+        }
+    }
+
+    // ------------------------------------------------------------------ //
+    // CsvUtils.parseIsReference: trimmed, lower-cased, then exactly true/false.
+    // ------------------------------------------------------------------ //
+    assert CsvUtils.parseIsReference('true', 'row 1')   == true
+    assert CsvUtils.parseIsReference('false', 'row 1')  == false
+    assert CsvUtils.parseIsReference(' TRUE ', 'row 1') == true  : 'the parser trims and lower-cases'
+    assert CsvUtils.parseIsReference('False', 'row 1')  == false
+    // No 'TRUE ' here: it trims to a valid value and is ACCEPTED above.
+    ['yes', 'no', '1', '0', 'y', '', null, 'reference'].each { v ->
+        def rejected = false
+        try { CsvUtils.parseIsReference(v, 'samplesheet.csv row 3') }
+        catch (IllegalArgumentException e) {
+            rejected = e.message.contains("Must be 'true' or 'false'") && e.message.contains('samplesheet.csv row 3')
+        }
+        assert rejected : "parseIsReference must reject ${v.inspect()} naming the context"
+    }
+
+    // ------------------------------------------------------------------ //
+    // Layout.requireOutdir is private; every public path builder goes through it.
+    // ------------------------------------------------------------------ //
+    // A real Path, not a bare String: producerSubdir/basename read .parent/.name.
+    def geojsonFile = file('cells.geojson')
+    [null, '', '   '].each { v ->
+        def rejected = false
+        try { Layout.publishedPath(v, 'P001', 'geojson', geojsonFile) }
+        catch (IllegalArgumentException e) { rejected = e.message.contains('output directory') }
+        assert rejected : "Layout must refuse an outdir of ${v.inspect()}"
+    }
+    assert Layout.publishedPath('/out/', 'P001', 'geojson', geojsonFile) ==
+           Layout.publishedPath('/out', 'P001', 'geojson', geojsonFile) : 'a trailing slash is stripped'
+
+    println 'LIB PROBE: checkParamValidators passed'
+}
+
 workflow {
 
     // ------------------------------------------------------------------ //
-    // Layout — checkpoint paths
+    // Layout - checkpoint paths
     // ------------------------------------------------------------------ //
     assert Layout.checkpointDir('/out')                              == '/out/csv'
     assert Layout.checkpointDir('/out/')                             == '/out/csv'
@@ -543,7 +636,7 @@ workflow {
     assert badOutdir : 'Layout.checkpointDir must reject a blank outdir'
 
     // ------------------------------------------------------------------ //
-    // MarkerUtils — the nuclear-marker rule
+    // MarkerUtils - the nuclear-marker rule
     // ------------------------------------------------------------------ //
     // markerList normalises three incompatible shapes. The bare-String case is the
     // dangerous one: iterated as a List it yields CHARACTERS, so 'PANCK' would match
@@ -570,7 +663,7 @@ workflow {
 
 
     // ------------------------------------------------------------------ //
-    // CsvUtils.resolveKeptChannelsPerSlide — THE keep-set rule
+    // CsvUtils.resolveKeptChannelsPerSlide - THE keep-set rule
     // ------------------------------------------------------------------ //
     // Each marker name is claimed exactly once per patient, reference first then
     // samplesheet order. That single invariant does two things. It makes the winner of a
@@ -616,7 +709,7 @@ P2,ref.tiff,DAPI|KI67,true
     assert lateRef['P2'][Meta.identityFor('P2', 'cyc2.tiff', 0, [:])] == ['CD8']   // DAPI already claimed by the reference
     keepLateRef.delete()
 
-    // preClaimed seeds the claimed set — add_cycle passes the prior run's reference
+    // preClaimed seeds the claimed set - add_cycle passes the prior run's reference
     // channels, so a re-stained DAPI is redundant but a NEW nuclear marker survives.
     def keepPrior = File.createTempFile('keepprior', '.csv')
     keepPrior.text = '''patient_id,image,channels,is_reference
@@ -785,7 +878,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     dupWithinRowCsv.delete()
 
     // ------------------------------------------------------------------ //
-    // ParamUtils — the step vocabulary
+    // ParamUtils - the step vocabulary
     // ------------------------------------------------------------------ //
     assert ParamUtils.STEP_ORDER == ['preprocessing', 'registration', 'segmentation', 'postprocessing']
     assert ParamUtils.entryColumnForStep('registration')      == 'preprocessed_image'
@@ -812,7 +905,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     }
 
     // ------------------------------------------------------------------ //
-    // Checkpoint — filename AND columns, one owner
+    // Checkpoint - filename AND columns, one owner
     // ------------------------------------------------------------------ //
     assert Checkpoint.columns(Layout.PREPROCESSED) ==
         ['patient_id', 'id', 'preprocessed_image', 'is_reference', 'channels', 'pixel_size']
@@ -822,7 +915,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
         ['patient_id', 'id', 'cell_csv', 'cell_geojson', 'merged_csv', 'cell_mask', 'pyramid', 'pixel_size']
 
     // The header IS the seed: string the three writers pass to collectFile. These
-    // three literals are the published contract — Group A must not change them.
+    // three literals are the published contract - Group A must not change them.
     // RULING R17 (Task 4.3) added 'id'; this task appended 'pixel_size' LAST.
     assert Checkpoint.header(Layout.PREPROCESSED)  == 'patient_id,id,preprocessed_image,is_reference,channels,pixel_size'
     assert Checkpoint.header(Layout.REGISTERED)    == 'patient_id,id,registered_image,is_reference,channels,pixel_size'
@@ -867,7 +960,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
         is_reference: false, channels: 'DAPI|CD3', pixel_size: 0.325,
     ]) == 'P001,P001_x,,false,DAPI|CD3,0.325'
 
-    // A missing column must throw, not silently emit an empty field — an empty field
+    // A missing column must throw, not silently emit an empty field - an empty field
     // is a checkpoint row naming a path that does not exist, which is exactly the
     // failure csv/postprocessed.csv shipped with for two releases.
     def missingCol = false
@@ -954,9 +1047,9 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert Checkpoint.header(Layout.SEGMENTED) ==
         'patient_id,id,registered_image,is_reference,channels,cell_mask,nuclei_mask,contours,nucleus_contours,pixel_size'
 
-    // Empty string means "artifact not produced" — nucleus_contours is empty when
+    // Empty string means "artifact not produced" - nucleus_contours is empty when
     // --quantify_compartments is false (nuclei_mask is NOT similarly gated: SEGMENT
-    // always produces it — see Checkpoint's EMPTY VALUES note). row() must accept ''
+    // always produces it - see Checkpoint's EMPTY VALUES note). row() must accept ''
     // (it is a value, not a missing key) and emit it as an empty field regardless of
     // which column carries it.
     assert Checkpoint.row(Layout.SEGMENTED, [
@@ -973,7 +1066,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert ParamUtils.entryColumnForStep('segmentation') == 'registered_image'
 
     // ------------------------------------------------------------------ //
-    // Layout.isUnderTaskDir / publishedOrAsIs — the fix for Critical 1
+    // Layout.isUnderTaskDir / publishedOrAsIs - the fix for Critical 1
     // (--start segmentation recording paths that do not exist). A one-level
     // isTaskDir(path.parent) check cannot tell a FRESH one-level-nested output
     // (REGISTER's registered_slides/) from an ALREADY-PUBLISHED path with the
@@ -1100,7 +1193,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
         // expected
     }
 
-    // validateRegPresets — COARSE's 256 px floor. 0/negatives are DANGEROUS, not
+    // validateRegPresets - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
     // merely invalid: decimation_factor reads <=0 as "no decimation" (full-res
     // plane into a U-Net) and the memory closure squares the value, so both ask
     // for the 4 GB floor for the largest possible job. Rationale: ParamUtils.
@@ -1117,7 +1210,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     }
 
     // ------------------------------------------------------------------ //
-    // Layout — the published-kind vocabulary
+    // Layout - the published-kind vocabulary
     // ------------------------------------------------------------------ //
     assert Layout.requireKind('segmentation') == 'segmentation'
     assert Layout.PUBLISHED_KINDS.contains(Layout.REGISTERED)
@@ -1128,14 +1221,14 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     catch (IllegalArgumentException ignored) { badKind = true }
     assert badKind : 'Layout.requireKind must reject an unknown kind'
 
-    // patientDir must reject it too — that is the call site the typo reaches from.
+    // patientDir must reject it too - that is the call site the typo reaches from.
     def badPatientKind = false
     try { Layout.patientDir('/out', 'P001', 'segmentaton') }
     catch (IllegalArgumentException ignored) { badPatientKind = true }
     assert badPatientKind : 'Layout.patientDir must reject an unknown kind'
 
     // ------------------------------------------------------------------ //
-    // ProcessEnvelope — the versions.yml envelope
+    // ProcessEnvelope - the versions.yml envelope
     // ------------------------------------------------------------------ //
     def envVersions     = ProcessEnvelope.versions('TEST:PROC', ['numpy', 'skimage'])
     def envVersionsStub = ProcessEnvelope.versionsStub('TEST:PROC', ['numpy', 'skimage'])
@@ -1171,7 +1264,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert keysOf.call(envVersions) == ['python', 'numpy', 'scikit-image'].toSet()
 
     // ------------------------------------------------------------------ //
-    // SegBackends — the segmentation seam's versions.yml tool lists
+    // SegBackends - the segmentation seam's versions.yml tool lists
     // ------------------------------------------------------------------ //
     // Declared as BARE MODULE NAMES, not rendered YAML. That is what lets
     // modules/local/segment.nf hand the SAME list to ProcessEnvelope.versions()
@@ -1210,7 +1303,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     }
 
     // ------------------------------------------------------------------ //
-    // WarpBackends — one seam for the reg_qc=2 warp
+    // WarpBackends - one seam for the reg_qc=2 warp
     // ------------------------------------------------------------------ //
     assert WarpBackends.methods().toSorted() == ['tiled', 'valis']
     // Digest-pinned (ruling R6): no tag, see tests/test_base_images_are_digest_pinned.py.
@@ -1239,7 +1332,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert badMethod : 'WarpBackends.of must reject an unknown method'
 
     // ------------------------------------------------------------------ //
-    // Meta — the one constructor for every meta map (Task 4.1)
+    // Meta - the one constructor for every meta map (Task 4.1)
     // ------------------------------------------------------------------ //
     assert Meta.REQUIRED_KEYS.containsAll([
         'patient_id', 'id', 'is_reference', 'channels',
@@ -1525,32 +1618,34 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert blankStep : 'Meta.fromCheckpointRow must reject a blank step'
 
     // ------------------------------------------------------------------ //
-    // ResourceReport — see checkResourceReport() above workflow{}; kept out of
+    // ResourceReport - see checkResourceReport() above workflow{}; kept out of
     // this block because it is close to the JVM class-file string-constant
     // ceiling (see the file header note above).
     // ------------------------------------------------------------------ //
     checkResourceReport()
 
-    // ProcessEnvelope — size-log row + container identity in versions.yml.
+    // ProcessEnvelope - size-log row + container identity in versions.yml.
     // See checkProcessEnvelope() above the workflow block, and the header
     // comment's "HARD SIZE CEILING" note for why it lives outside this block.
     checkProcessEnvelope()
 
-    // RegisteredMatch — pairing VALIS's outputs back to their slide metas.
+    // RegisteredMatch - pairing VALIS's outputs back to their slide metas.
     // See checkRegisteredMatch() above the workflow block.
     checkRegisteredMatch()
 
-    // Checkpoint.requireColumns — the drift guard three readers copied.
+    // Checkpoint.requireColumns - the drift guard three readers copied.
     // See checkCheckpoint() above the workflow block.
     checkCheckpoint()
 
-    // RegBackends — the registration backend's identity, in one table.
+    // RegBackends - the registration backend's identity, in one table.
     // See checkRegBackends() above the workflow block.
     checkRegBackends()
 
-    // CsvUtils.unknownColumns — report, never reject.
+    // CsvUtils.unknownColumns - report, never reject.
     // See checkCsvUtilsUnknownColumns() above the workflow block.
     checkCsvUtilsUnknownColumns()
+
+    checkParamValidators()
 
     // println, NOT log.info: nf-test's underlying `nextflow ... -quiet` run
     // suppresses log.info from stdout entirely (observed directly: a log.info
