@@ -755,13 +755,35 @@
 # and its tests now live on dev only (-16, see main's note), so this branch follows main's
 # floor plus its two benchmarks.yml parametrisations. 1978 - 16 = 1962.
 #
-# RE-MEASURED 2026-09-11 on `test/suite-buildout` (branched from `benchmarking` @ ae2d7f8a)
-# after the test-suite build-out (docs/superpowers/plans/2026-09-10-test-suite-buildout.md):
+# RE-MEASURED 2026-09-13 on `test/suite-buildout-main` (branched from `main`, with the
+# test-suite build-out commits from `test/suite-buildout` --
+# docs/superpowers/plans/2026-09-10-test-suite-buildout.md -- cherry-picked on top). The
+# cherry-pick carried `benchmarking`'s 2060 entry and its 2026-09-11 measurement paragraph
+# verbatim, but `main` is not `benchmarking`: it lacks the two benchmarks.yml-only
+# parametrisations in tests/test_release_workflow_graph.py
+# (test_no_gate_aggregator_treats_skipped_as_a_pass[benchmarks.yml] and
+# test_every_gate_aggregator_reads_every_job_it_needs[benchmarks.yml]), so the number that
+# paragraph measured does not hold here and needed re-measuring on this branch directly.
+#
+# This round also fixed the two xfail-pinned defects the build-out had left open --
+# bin/quantify.py's `_safe_mean` now returns NaN (not +inf) for a nonzero sum over a zero
+# count, and bin/preflight_scale.py's `_parse_pixel_size` now rejects non-finite input -- and
+# deleted both tests' `@pytest.mark.xfail(strict=True)` markers so they assert the contract
+# directly instead of xfailing. That is a wash for the collected count (an xfailed case is
+# still a collected case; deleting the marker does not remove the test), but it does zero
+# out the "1 xfailed" component the prior paragraph carried.
+#
 # `MIRAGE_STRICT_SKIPS=1 pytest -q tests/ --ignore=tests/testdata --ignore=tests/modules
-# --ignore=tests/subworkflows --ignore=tests/integration` gives 2042 passed, 17 skipped,
-# 1 xfailed -- 2042 + 17 + 1 = 2060. The +98 over 1962 are the new Python tests from that
-# plan: nfmodel's `nf_test_cases` cases, tests/test_process_nf_test_coverage.py,
-# tests/test_helper_edge_cases.py, tests/test_preflight_scale_inprocess.py, the
-# cluster-options slurm cases, and the fixture-guard case. This floor is branch-specific
-# (CLAUDE.md: main 1960, dev 1976 before this round of work).
-2060
+# --ignore=tests/subworkflows --ignore=tests/integration` gives 2044 passed, 17 skipped, 0
+# xfailed -- 2044 + 17 = 2061, confirmed by `pytest --collect-only -q` ("2061 tests
+# collected"). The +101 over the previous `main` floor of 1960 (CLAUDE.md, before this round)
+# is the test-suite build-out's new Python tests -- nfmodel's `nf_test_cases` cases,
+# tests/test_process_nf_test_coverage.py, tests/test_helper_edge_cases.py,
+# tests/test_preflight_scale_inprocess.py, the cluster-options slurm cases, and the
+# fixture-guard case -- the same set the `benchmarking`-branch paragraph above attributed its
+# own +98 (over 1962, `benchmarking`'s own pre-round baseline) to.
+#
+# This floor is branch-specific: main 2061 (this measurement), dev 1976 and benchmarking 2060
+# before this round (CLAUDE.md's "Branch model"; the `benchmarking` and `dev` files are
+# untouched by this change and keep their own committed values).
+2061
