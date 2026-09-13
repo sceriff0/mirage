@@ -123,6 +123,7 @@ tests/testdata/P001_cell_mask.tif
 tests/testdata/P001_nuclei_mask.tif
 tests/testdata/P001_image.tiff
 tests/testdata/P001_pyramid.ome.tiff
+tests/testdata/P001_prior_pyramid.ome.tiff
 tests/testdata/P001_merged_quant.csv
 tests/testdata/P002_cell_mask.npy
 tests/testdata/P002_cell_mask.tif

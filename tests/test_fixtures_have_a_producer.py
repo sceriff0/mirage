@@ -178,11 +178,14 @@ def _referenced():
         if TESTDATA in path.parents and path.suffix != ".csv":
             continue
         # A GENERATED CHECKPOINT CSV IS A REFERENCE. tests/testdata/prior_run/csv/
-        # postprocessed.csv names P001_pyramid.ome.tiff in its `pyramid` column and
-        # ADD_CYCLE stages that path into EXTRACT_MASK_SERIES and SPLIT_PRIOR_PYRAMID.
-        # Nothing else in tests/ mentions that fixture, so with tests/testdata/
-        # excluded wholesale this guard could never have seen the one fixture whose
-        # emptiness had no other witness.
+        # postprocessed.csv names P001_prior_pyramid.ome.tiff in its `pyramid` column
+        # and ADD_CYCLE stages that path into EXTRACT_MASK_SERIES and
+        # SPLIT_PRIOR_PYRAMID. Nothing else in tests/ mentions that fixture, so with
+        # tests/testdata/ excluded wholesale this guard could never have seen the one
+        # fixture whose emptiness had no other witness. (It was called
+        # P001_pyramid.ome.tiff until 2026-09-13, when a second producer of that name
+        # arrived from `main` and silently overwrote it -- see the generator's own
+        # note. `_prior_` is what keeps the two apart.)
         #
         # Comments blanked, STRINGS INTACT. A fixture named in a `//` comment --
         # this repo's tests explain their fixtures constantly -- is not a

@@ -9,8 +9,11 @@ its channel wiring and nothing about the flags it passes. CI's gate is
 `nf-test test --tag stub`, so a rendered case tagged only `real` runs in
 nightly.yml on the default branch and nowhere else. The 2026-09-10 audit
 found 5 processes with no module test and 11 tunable processes with no gated
-rendered case; the 2026-09-10 build-out closed all sixteen, so KNOWN_GAPS is
-empty and the list can only shrink.
+rendered case; the 2026-09-10 build-out closed all sixteen, so KNOWN_GAPS was
+left empty and the list can only shrink. On `dev` it is not empty: it holds the
+dev-only EXTRACT_MASK_SERIES, which add_cycle owns and the build-out -- run on
+`main`, which carries neither -- never saw, until
+tests/modules/extract_mask_series.nf.test exists.
 
 All parsing goes through tests.nfmodel (test_nfmodel.py forbids a private one).
 Tunables are read off `strip_comments(raw)` views. `ext.args` is an identifier,

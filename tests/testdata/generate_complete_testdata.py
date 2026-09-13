@@ -416,18 +416,30 @@ with open(PRIOR_DIR / "postprocessed.csv", "w") as f:
     f.write(
         f"P001,P001,{TESTDATA_ABS}/P001_merged_quant.csv,{TESTDATA_ABS}/sample_contours.json,"
         f"{TESTDATA_ABS}/P001_merged_quant.csv,{TESTDATA_ABS}/P001_cell_mask.tif,"
-        f"{TESTDATA_ABS}/P001_pyramid.ome.tiff\n"
+        f"{TESTDATA_ABS}/P001_prior_pyramid.ome.tiff\n"
     )
 print("  Created prior_run/csv/{registered,postprocessed}.csv")
 
 # 3d-bis. The prior run's two IMAGE fixtures, named by the two checkpoint CSVs above.
 #
-#   P001_image.tiff       -- the prior run's registered reference. registered.csv
-#                            declares it DAPI|PANCK, so it carries exactly those two.
-#   P001_pyramid.ome.tiff -- the prior run's combined pyramid, WITH the mask series.
-#                            bin/extract_mask_series.py exits non-zero unless series 1
-#                            is a (2, H, W) unsigned-integer [cell, nuclei] stack, and
-#                            add_cycle.nf reads the prior channel names off series 0.
+#   P001_image.tiff             -- the prior run's registered reference.
+#                                  registered.csv declares it DAPI|PANCK, so it
+#                                  carries exactly those two.
+#   P001_prior_pyramid.ome.tiff -- the prior run's combined pyramid, WITH the mask
+#                                  series. bin/extract_mask_series.py exits non-zero
+#                                  unless series 1 is a (2, H, W) unsigned-integer
+#                                  [cell, nuclei] stack, and add_cycle.nf reads the
+#                                  prior channel names off series 0.
+#
+# `_prior_` IS LOAD-BEARING, not decoration. This fixture was called
+# P001_pyramid.ome.tiff until 2026-09-13, and section 7's EXPORT_SPATIALDATA fixture
+# -- added on `main`, where add_cycle does not exist, so nothing there collided --
+# writes that SAME name further down this append-only file. Later write wins: the
+# generated P001_pyramid.ome.tiff had ONE series, two sub-resolution levels, no masks
+# and bigtiff off, while postprocessed.csv's `pyramid` column and this comment both
+# still promised a mask series. Nothing caught it, because every consumer of
+# prior_run/ runs under `-stub` and never opens the file. Two fixtures with different
+# CONTRACTS need two names; do not re-merge them.
 #
 # A DEDICATED Generator, like the keep-set fixtures above: drawing from _img_rng here
 # would shift the stream that renders every image written before this point.
@@ -464,7 +476,7 @@ _prior_masks = np.stack(
     ]
 )
 with tifffile.TiffWriter(
-    OUT_DIR / "P001_pyramid.ome.tiff", ome=True, bigtiff=True
+    OUT_DIR / "P001_prior_pyramid.ome.tiff", ome=True, bigtiff=True
 ) as _tif:
     # subifds=1 reserves one sub-resolution level, exactly as
     # bin/merge_channels_pyramid.py does; the next write with subfiletype=1 fills it.
@@ -482,7 +494,7 @@ with tifffile.TiffWriter(
         metadata={"axes": "CYX", "Channel": {"Name": ["cell_mask", "nuclei_mask"]}},
     )
 print(
-    f"  Created P001_pyramid.ome.tiff - 2 series (image {_prior_planes.shape} + masks {_prior_masks.shape})"
+    f"  Created P001_prior_pyramid.ome.tiff - 2 series (image {_prior_planes.shape} + masks {_prior_masks.shape})"
 )
 
 # 3e. The NEW-CYCLE samplesheet that goes with prior_run/ — i.e. what a real
@@ -714,7 +726,8 @@ print("  Created sample_merged_quant.csv (20 cells)")
 # prior_run/csv/postprocessed.csv's `cell_csv` and `merged_csv` columns.
 #
 # TWO markers, not three. The prior run has exactly one slide, declared DAPI|PANCK
-# in prior_run/csv/registered.csv, and Task 3's P001_pyramid.ome.tiff carries those
+# in prior_run/csv/registered.csv, and Task 3's P001_prior_pyramid.ome.tiff carries
+# those
 # two channels. Reusing sample_merged_quant.csv here (three markers, SMA included)
 # would hand ADD_CYCLE's MERGE_QUANT_CSVS a prior marker that appears in no prior
 # image.

@@ -158,8 +158,11 @@ class ParamUtils {
      *     --prior_outdir internally inconsistent and unrecoverable.
      *  3. Every checkpoint in Layout.ADD_CYCLE_CHECKPOINTS must already exist under
      *     --prior_outdir. Absence means either the prior run did not reach
-     *     postprocessing, or it ran at the default --cleanup_level, which does not
-     *     publish the intermediates add_cycle re-enters from.
+     *     postprocessing, or it ran at --cleanup_level=final, which does not publish
+     *     the intermediates add_cycle re-enters from. NOT the default: 'none' is the
+     *     default since 2026-09-10 and publishes everything, so the common case is a
+     *     prior run that opted IN to cleaning. Same statement as the thrown message
+     *     below; keep the two in step.
      *
      * Which checkpoints those are, and where they live, is Layout's to say --
      * add_cycle.nf reads the very same files.
