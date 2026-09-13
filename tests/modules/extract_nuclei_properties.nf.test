@@ -40,7 +40,9 @@ nextflow_process {
     test("Should render the nuclei mask, the reference cell mask and both ext.args tunables - rendered command") {
 
         // No options "-stub": the point is the rendered script. extract_cell_properties.py
-        // is skimage-only and runs under -profile test, so success is asserted too.
+        // needs pandas and skimage, which CI's nf-test job does not install (only numpy and
+        // tifffile from requirements/testdata.txt), so process.success is NOT asserted: the
+        // assertions read .command.sh only (measured 2026-09-13, CI run 34754762338).
         tag "stub"
 
         when {
@@ -63,7 +65,6 @@ nextflow_process {
                 }
             }
             assertAll(
-                { assert process.success },
                 { assert rendered.size() >= 1, "no rendered EXTRACT_NUCLEI_PROPERTIES .command.sh found" },
                 { assert rendered.every { it.contains('--mask_file P001_nuclei_mask.tif') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--reference_mask P001_cell_mask.tif') }, rendered.join(' --- ') },
