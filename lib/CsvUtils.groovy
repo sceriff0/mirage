@@ -879,7 +879,8 @@ class CsvUtils {
      *                             it only suppresses the error.
      * @param nuclearMarkers       params.nuclear_markers — required, never defaulted here
      */
-    static void validateInputSemantics(def csv, String step, boolean allowNoReference, def nuclearMarkers) {
+    static void validateInputSemantics(def csv, String step, boolean allowNoReference, def nuclearMarkers,
+                                       boolean requireUniqueChannelSets = false) {
 
         // ParamUtils.STEPS is the single source of truth for "what is a step?"
         // (name / requiredColumns / entryColumn / qcKinds) -- see its header
@@ -903,6 +904,14 @@ class CsvUtils {
 
         def refCounts = [:].withDefault { 0 }
         def rowCounts = [:].withDefault { 0 }
+        // patient -> signature -> [row contexts]. Only consulted when
+        // requireUniqueChannelSets: the caller says whether the registration backend
+        // about to run pairs its outputs by channel set (RegBackends'
+        // pairsOutputsBySignature), which is the only reason two slides of one patient
+        // may not share one. The rule is RegisteredMatch.signature's -- lower-cased,
+        // sorted -- so 'CD8|dapi|CD3' and 'DAPI|CD3|CD8' are the same set here exactly
+        // as they are at pairing time.
+        def sigRows   = [:].withDefault { [:].withDefault { [] } }
 
         lines.drop(1).eachWithIndex { line, i ->
             def cols = parseCsvLine(line)
@@ -930,6 +939,22 @@ class CsvUtils {
 
             rowCounts[row.patient_id]++
             if (parsed.is_reference) refCounts[row.patient_id]++  // reuse parsed value (no re-parse)
+            if (requireUniqueChannelSets)
+                sigRows[row.patient_id][RegisteredMatch.signature(parsed.channels as List)] << ctx
+        }
+
+        if (requireUniqueChannelSets) {
+            sigRows.each { patientId, bySig ->
+                bySig.findAll { _sig, rows -> rows.size() > 1 }.each { sig, rows ->
+                    throw new IllegalStateException(
+                        "Two slides of patient ${patientId} share the same channel set (${sig}): " +
+                        "${rows.join(' and ')}. The registration backend pairs its registered " +
+                        "outputs back to their slides by channel set, so these two cannot be told " +
+                        "apart after registration -- the run would abort at that point, after the " +
+                        "whole group had been registered. Drop one of the two rows, or give the " +
+                        "repeat its own patient_id.")
+                }
+            }
         }
 
         rowCounts.each { patientId, _n ->

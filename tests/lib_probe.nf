@@ -437,6 +437,14 @@ def checkRegBackends() {
     assert !RegBackends.of('tiled').hasStageCheckpoint
     assert RegBackends.of('tiled').hasIntrinsicTre
 
+    // Which backend pairs its registered outputs back to metas by channel SET
+    // (RegisteredMatch), and so cannot accept two slides of one patient with the same
+    // set. VALIS renames its outputs; the tiled adapter carries the meta itself.
+    assert RegBackends.of('valis').pairsOutputsBySignature :
+        'VALIS pairs by signature -- that is what RegisteredMatch exists for'
+    assert !RegBackends.of('tiled').pairsOutputsBySignature :
+        'the tiled adapter keeps meta through its fan-out and never pairs by signature'
+
     // Which run modes each backend supports. Only 'linear' exists on this branch
     // (the dev branch adds 'add_cycle', VALIS-only).
     assert RegBackends.supportsMode('valis', 'linear') :
@@ -611,8 +619,53 @@ def checkParamValidators() {
     println 'LIB PROBE: checkParamValidators passed'
 }
 
-workflow {
+// CsvUtils.validateInputSemantics with requireUniqueChannelSets — the VALIS
+// channel-set rule at launch. Same rows through the same function: refused only
+// when the caller says the backend pairs by signature, and the message names
+// patient, signature (lower-cased, sorted) and both rows.
+def checkUniqueChannelSets() {
+    def ref  = File.createTempFile('dupsig_ref', '.tiff'); ref.text = 'x'
+    def mov1 = File.createTempFile('dupsig_mov1', '.tiff'); mov1.text = 'x'
+    def mov2 = File.createTempFile('dupsig_mov2', '.tiff'); mov2.text = 'x'
+    def csv = File.createTempFile('dupsig', '.csv')
+    csv.text = """patient_id,path_to_file,is_reference,channels
+P7,${ref.path},true,DAPI|PANCK|SMA
+P7,${mov1.path},false,DAPI|CD3|CD8
+P7,${mov2.path},false,CD8|dapi|CD3
+"""
+    // default (false) and explicit false: the sheet is fine for a backend that keeps meta
+    CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI')
+    CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', false)
 
+    def refused = false
+    def msg = ''
+    try { CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', true) }
+    catch (IllegalStateException e) { refused = true; msg = e.message }
+    assert refused : 'two slides of one patient with one channel set must be refused when the backend pairs by signature'
+    assert msg.contains('patient P7')      : "must name the patient: ${msg}"
+    assert msg.contains('cd3|cd8|dapi')    : "must name the signature as RegisteredMatch computes it: ${msg}"
+    assert msg.contains('row 3') && msg.contains('row 4') : "must name both rows: ${msg}"
+    assert !msg.contains('row 2')          : "the reference has a different set and must not be named: ${msg}"
+
+    // a second patient with its own copy of the set is not a collision across patients
+    def csv2 = File.createTempFile('dupsig_two_patients', '.csv')
+    csv2.text = """patient_id,path_to_file,is_reference,channels
+P7,${ref.path},true,DAPI|CD3|CD8
+P8,${mov1.path},true,DAPI|CD3|CD8
+"""
+    CsvUtils.validateInputSemantics(csv2.path, 'preprocessing', false, 'DAPI', true)
+    [ref, mov1, mov2, csv, csv2]*.delete()
+}
+
+// The two sections below used to sit inline in the workflow {} block. They were
+// moved out on 2026-09-13 because the LEGACY (Nextflow 25) parser stores a workflow
+// body's source as ONE Java string constant, capped at 65,535 code units -- and the
+// block had reached 65,513. Adding three lines to it broke the probe on the
+// `NF 25.04.0 stub` leg only ("String too long"), while Nextflow 26 parsed it fine.
+// tests/test_lib_probe_parses_on_nf26.py now pins the block under the cap. New
+// checks go in a `def checkX()` above the block, never inline.
+
+def checkLayoutAndMarkerUtils() {
     // ------------------------------------------------------------------ //
     // Layout - checkpoint paths
     // ------------------------------------------------------------------ //
@@ -662,6 +715,9 @@ workflow {
     assert !MarkerUtils.hasNuclear(['CD3', 'CD8'], ['DAPI'])
 
 
+}
+
+def checkKeepSetRule() {
     // ------------------------------------------------------------------ //
     // CsvUtils.resolveKeptChannelsPerSlide - THE keep-set rule
     // ------------------------------------------------------------------ //
@@ -876,6 +932,15 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert dupWithinRowCounts['P9'] == dupWithinRowFlat.size()          // == emitted TIFF count (pyramid)
     assert dupWithinRowCounts['P9'] == dupWithinRowFlat.toSet().size()  // == distinct names     (quant)
     dupWithinRowCsv.delete()
+
+}
+
+workflow {
+
+    // Layout checkpoint paths + MarkerUtils, and CsvUtils.resolveKeptChannelsPerSlide.
+    // See the two functions above the workflow block (and why they are there).
+    checkLayoutAndMarkerUtils()
+    checkKeepSetRule()
 
     // ------------------------------------------------------------------ //
     // ParamUtils - the step vocabulary
@@ -1646,6 +1711,10 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     checkCsvUtilsUnknownColumns()
 
     checkParamValidators()
+
+    // CsvUtils.validateInputSemantics(..., requireUniqueChannelSets).
+    // See checkUniqueChannelSets() above the workflow block.
+    checkUniqueChannelSets()
 
     // println, NOT log.info: nf-test's underlying `nextflow ... -quiet` run
     // suppresses log.info from stdout entirely (observed directly: a log.info

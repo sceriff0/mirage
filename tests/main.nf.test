@@ -378,6 +378,78 @@ nextflow_pipeline {
         }
     }
 
+    test("VALIS refuses, at launch, a patient whose two slides share one channel set") {
+        tag "stub"
+        tag "channel_set"
+
+        // RegisteredMatch pairs VALIS's renamed outputs back to their metas by channel
+        // SET, so two slides with the same set are indistinguishable after REGISTER.
+        // That was discovered by RegisteredMatch.pair -- after REGISTER had run the
+        // whole 12-slide group (head_neck patient 046, 2026-09-11). dry_run proves the
+        // refusal now happens in CsvUtils.validateInputSemantics, before any task.
+        when {
+            params {
+                input = "$projectDir/tests/testdata/duplicate_channel_set.csv"
+                outdir = "$outputDir"
+                start = "preprocessing"
+                registration_method = "valis"
+                dry_run = true
+            }
+        }
+
+        then {
+            assert workflow.failed
+            def log = new File("${launchDir}/meta/nextflow.log").text
+            assert log.contains("share the same channel set")
+            assert log.contains("cd3|cd8|dapi")     // the signature, lower-cased and sorted
+            assert log.contains("patient P001")
+            assert log.contains("row 3") && log.contains("row 4")
+        }
+    }
+
+    test("the tiled backend accepts the same duplicate-channel-set sheet") {
+        tag "stub"
+        tag "channel_set"
+
+        // The constraint is VALIS's, not the pipeline's: the tiled adapter keeps each
+        // slide's meta through its fan-out and never pairs by signature
+        // (RegBackends.of('tiled').pairsOutputsBySignature is false).
+        when {
+            params {
+                input = "$projectDir/tests/testdata/duplicate_channel_set.csv"
+                outdir = "$outputDir"
+                start = "preprocessing"
+                registration_method = "tiled"
+                dry_run = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
+    test("a segmentation re-entry never applies the VALIS channel-set rule") {
+        tag "stub"
+        tag "channel_set"
+
+        // --start segmentation reads a registered.csv this pipeline wrote; REGISTER does
+        // not run, so the rule has nothing to protect and must not refuse the sheet.
+        when {
+            params {
+                input = "$projectDir/tests/testdata/duplicate_channel_set_registered.csv"
+                outdir = "$outputDir"
+                start = "segmentation"
+                registration_method = "valis"
+                dry_run = true
+            }
+        }
+
+        then {
+            assert workflow.success
+        }
+    }
+
     test("Should reject a samplesheet that marks no reference") {
         tag "stub"
 

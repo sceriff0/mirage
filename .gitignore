@@ -135,6 +135,8 @@ tests/testdata/segmented.csv
 tests/testdata/valid_checkpoint_postprocessing.csv
 tests/testdata/invalid_multi_ref.csv
 tests/testdata/invalid_no_ref.csv
+tests/testdata/duplicate_channel_set.csv
+tests/testdata/duplicate_channel_set_registered.csv
 tests/testdata/invalid_dapi_position.csv
 tests/testdata/invalid_no_dapi.csv
 tests/testdata/invalid_checkpoint_missing_col.csv
