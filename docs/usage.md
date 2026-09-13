@@ -186,7 +186,12 @@ independently and in parallel.
       per patient and which slide's copy that is would be decided by row order;
       rename one of them (`PANCK_cycle1` / `PANCK_cycle2`) or, if it really is a
       nuclear stain, add it to `nuclear_markers`. Comparison is case-insensitive
-      and ignores surrounding spaces.
+      and ignores surrounding spaces. The check runs at **every `--start`**,
+      checkpoint CSVs included: a `csv/preprocessed.csv`, `registered.csv` or
+      `segmented.csv` written before this rule existed that now trips it was
+      already dropping one of the two acquisitions silently, so the fix is to
+      re-run the earlier step from a corrected samplesheet rather than to edit the
+      checkpoint.
     - The image column depends on `--start`.
 
 The required columns change with the entry point, because each stage consumes a

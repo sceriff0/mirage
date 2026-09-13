@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before. Comparison is trimmed and case-insensitive, the same normalisation the
   keep-set uses. Covered by `tests/lib_probe.nf`'s `checkDuplicateChannelRefusal()` and
   a `tests/main.nf.test` case that asserts zero tasks entered the trace.
+  **The check applies at every `--start`, checkpoint CSVs included** — a
+  `csv/preprocessed.csv` / `registered.csv` / `segmented.csv` written before this rule
+  that now trips it was already dropping one of the two acquisitions silently, and the
+  fix is to re-run the earlier step from a corrected samplesheet, not to edit the
+  checkpoint.
 
 ### Changed
 
