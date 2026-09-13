@@ -183,6 +183,23 @@ def test_replace_still_recognises_a_resumed_cross_by_its_base_name(arms):
     assert f"arms-{base}" in launches and f"arms-{cross}" in launches
 
 
+def test_a_resumed_arm_keeps_the_params_file_of_the_attempt_it_continues(arms):
+    """A params file regenerated with any changed entry re-hashes every task whose
+    script reads `params`, and the resume would recompute them: the interrupted
+    attempt's file is reused byte-for-byte, and a marker planted in it survives."""
+    plan, root, run = arms
+    base = "valis_high_micro2"
+    params = root / ".launch" / base / f"params.{base}.json"
+    marked = json.loads(params.read_text())
+    marked["__marker__"] = "from the interrupted attempt"
+    params.write_text(json.dumps(marked))
+    _interrupt(root / ".launch" / base / ".nextflow" / "history", f"arms-{base}")
+    r, launches = run(ARMS_RESUME="1")
+    assert set(launches) == {f"arms-{base}-r2"}
+    assert json.loads(params.read_text()) == marked
+    assert "params reused verbatim" in r.stdout
+
+
 def test_every_arm_launch_keeps_its_work_directory(arms):
     plan, root, run = arms
     for p in plan:
@@ -248,7 +265,12 @@ def test_sweep_skips_finished_runs_and_resumes_interrupted_ones(sweep):
     sid = _interrupt(root / "run0000" / ".nextflow" / "history", "bench_run0000")
     r, launches = run()
     assert launches == {} and "SWEEP_RESUME=1" in r.stderr
+    params_file = root / "run0000" / "params.json"
+    marked = json.loads(params_file.read_text())
+    assert marked.get("cleanup_work") is False
+    marked["__marker__"] = "from the interrupted attempt"
+    params_file.write_text(json.dumps(marked))
     r, launches = run(SWEEP_RESUME="1")
     assert launches == {"bench_run0000-r2": sid}, (launches, r.stderr)
-    params = json.loads((root / "run0000" / "params.json").read_text())
-    assert params.get("cleanup_work") is False
+    assert json.loads(params_file.read_text()) == marked
+    assert "params reused verbatim" in r.stdout

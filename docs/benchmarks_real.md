@@ -325,8 +325,20 @@ The launcher walks the same plan and decides per run from its last attempt:
 | `-` (interrupted) or `ERR` | **refused**, naming both switches | continued as `<name>-rN` with `-resume <its last session>`: cached tasks are served from `work/`, only the rest run | moved aside, started over |
 | absent | launched | launched | launched |
 
+A resumed run reuses the interrupted attempt's **params file verbatim**: any process
+whose script reads `params` hashes the whole map, so a regenerated file with one changed
+entry would re-hash those tasks and the resume would recompute them. (Consequence for
+runs launched before the launchers pinned `cleanup_work=false`: they resume under their
+original params, finish, and then delete their `work/` as the pipeline default does; their
+QC crosses re-run the registration instead of only the QC chain. Correct, more expensive.)
 A resumed QC cross continues its **own** session (which already carries its base's cache);
 a cross launched fresh after its base was resumed resumes the base's **latest** session.
+
+Measured with the real Nextflow (26.04.6) on the stub pipeline, 2026-09-13: a run
+killed with SIGTERM (what `scancel` sends) is left as `ERR` in the history with its
+session id; `nextflow run -resume <that session> -name <name>-r2` served the 3 tasks that
+had completed from the cache and re-submitted the other 32, and finished `OK`. A SIGKILL
+leaves `-` instead; both are "not OK" to the launcher.
 The passes keep their order, so an interrupted preprocessing run is continued before any
 registration arm is considered. `benchmarks/tests/test_launch_resume.py` pins all of this
 against a stub Nextflow.

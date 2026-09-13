@@ -138,7 +138,7 @@ while IFS=',' read -r -a vals; do
   #   OK              -> finished; nothing to do
   #   else            -> interrupted or failed: SWEEP_RESUME=1 continues it as
   #                      bench_<run_id>-r<N+1> with -resume <its last session>; otherwise refused
-  run_name="bench_${run_id}"; resume_args=()
+  run_name="bench_${run_id}"; resume_args=(); resuming=0
   hist="$run_dir/.nextflow/history"; attempts=0; prev_name=""; prev_status=""; prev_sid=""
   if [[ -f "$hist" ]]; then
     read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="bench_${run_id}" \
@@ -153,7 +153,7 @@ while IFS=',' read -r -a vals; do
       echo "[$run_id] DONE: $prev_name completed (OK in $hist); nothing to do -- SWEEP_REPLACE=1 redoes it from scratch"
       continue
     elif [[ "${SWEEP_RESUME:-0}" == "1" ]]; then
-      run_name="bench_${run_id}-r$((attempts + 1))"
+      run_name="bench_${run_id}-r$((attempts + 1))"; resuming=1
       if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
       echo "[$run_id] RESUME: $prev_name ended with status '${prev_status:--}' (attempt $attempts);" \
            "continuing as $run_name from session ${prev_sid:-latest}"
@@ -227,10 +227,16 @@ while IFS=',' read -r -a vals; do
   # interrupted run can only be resumed from it. The trace lives under --trace_dir.
   pairs+=("cleanup_work=false")
   run_params="$run_dir/params.json"
-  if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
-          ${pairs[@]+"${pairs[@]}"}); then
-    echo "ERROR: $run_id — could not type its parameters against nextflow_schema.json; SKIPPING" >&2
-    continue
+  # A resumed run keeps the interrupted attempt's params file verbatim: a regenerated file
+  # with any changed entry re-hashes every task whose script reads `params` (see run_arms.sh).
+  if (( resuming )) && [[ -f "$run_params" ]]; then
+    echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
+  else
+    if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
+            ${pairs[@]+"${pairs[@]}"}); then
+      echo "ERROR: $run_id — could not type its parameters against nextflow_schema.json; SKIPPING" >&2
+      continue
+    fi
   fi
 
   echo ">>> $run_id (varied=${varied_axis}, cell=$cell_id)"

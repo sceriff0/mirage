@@ -160,7 +160,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # A cross resumes ITS OWN last session, not its base's: that session already carries the
   # base's cache (it was started with -resume <base session>) plus whatever QC it finished.
   local hist="$rundir/.nextflow/history" attempts=0 prev_name="" prev_status="" prev_sid=""
-  local run_name="arms-$run_id"
+  local run_name="arms-$run_id" resuming=0
   if [[ -f "$hist" ]]; then
     read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="arms-$run_id" \
       '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
@@ -171,7 +171,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
       return 0
     fi
     if [[ "${ARMS_RESUME:-0}" == "1" ]]; then
-      run_name="arms-$run_id-r$((attempts + 1))"
+      run_name="arms-$run_id-r$((attempts + 1))"; resuming=1
       if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
       echo "[$run_id] RESUME: $prev_name ended with status '${prev_status:--}' (attempt $attempts);" \
            "continuing as $run_name from session ${prev_sid:-latest} -- cached tasks are reused, the rest re-run"
@@ -187,10 +187,19 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
   # shares its base arm's launch directory and must not overwrite the base's file.
   local run_params="$rundir/params.${run_id}.json"
-  if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
-          ${run_pairs[@]+"${run_pairs[@]}"}); then
-    echo "[$run_id] SKIP: could not type its parameters against nextflow_schema.json" >&2
-    return 1
+  # A RESUMED run keeps the params file of the attempt it continues, verbatim. Any process
+  # whose script block reads `params` hashes the WHOLE map (CLAUDE.md, "Verification
+  # reality" 4), so a params file regenerated with one extra or changed entry -- even one
+  # no task reads -- would re-hash every such task and the resume would recompute them.
+  # A run launched before a launcher change therefore resumes under its ORIGINAL params.
+  if (( resuming )) && [[ -f "$run_params" ]]; then
+    echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
+  else
+    if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
+            ${run_pairs[@]+"${run_pairs[@]}"}); then
+      echo "[$run_id] SKIP: could not type its parameters against nextflow_schema.json" >&2
+      return 1
+    fi
   fi
   echo "[$run_id] arm=$arm -> $outdir"
   (
