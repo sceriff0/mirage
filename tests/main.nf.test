@@ -407,13 +407,14 @@ nextflow_pipeline {
         }
     }
 
-    test("the tiled backend accepts the same duplicate-channel-set sheet") {
+    test("the tiled backend refuses the duplicate-channel-set sheet too: shared non-nuclear channels are refused at launch on every backend") {
         tag "stub"
         tag "channel_set"
 
-        // The constraint is VALIS's, not the pipeline's: the tiled adapter keeps each
-        // slide's meta through its fan-out and never pairs by signature
-        // (RegBackends.of('tiled').pairsOutputsBySignature is false).
+        // The VALIS-only signature rule (Rule B, RegBackends.of('tiled').pairsOutputsBySignature
+        // is false) does not apply to tiled -- but rows 3 and 4 of this sheet also share the
+        // non-nuclear channels CD3 and CD8, and CsvUtils.validateInputSemantics's unconditional
+        // cross-slide rule (Rule A) refuses that regardless of backend or requireUniqueChannelSets.
         when {
             params {
                 input = "$projectDir/tests/testdata/duplicate_channel_set.csv"
@@ -425,16 +426,24 @@ nextflow_pipeline {
         }
 
         then {
-            assert workflow.success
+            assert workflow.failed
+            def report = new File("${launchDir}/meta/nextflow.log").text
+            assert report.contains("appears on 2 different slides")
+            assert report.contains("patient P001")
+            assert report.contains("row 3") && report.contains("row 4")
+            assert !report.contains("share the same channel set")
         }
     }
 
-    test("a segmentation re-entry never applies the VALIS channel-set rule") {
+    test("a segmentation re-entry still refuses the shared non-nuclear channels: Rule A applies at every --start") {
         tag "stub"
         tag "channel_set"
 
-        // --start segmentation reads a registered.csv this pipeline wrote; REGISTER does
-        // not run, so the rule has nothing to protect and must not refuse the sheet.
+        // --start segmentation reads a registered.csv this pipeline wrote; REGISTER does not
+        // run, so the VALIS-only signature rule (Rule B) has nothing to protect and is skipped
+        // on re-entry (the negative assertion below still proves that). But the unconditional
+        // cross-slide rule (Rule A) is not backend- or entry-point-gated: rows 3 and 4 share
+        // the non-nuclear channels CD3 and CD8, so it refuses this checkpoint sheet too.
         when {
             params {
                 input = "$projectDir/tests/testdata/duplicate_channel_set_registered.csv"
@@ -446,7 +455,11 @@ nextflow_pipeline {
         }
 
         then {
-            assert workflow.success
+            assert workflow.failed
+            def report = new File("${launchDir}/meta/nextflow.log").text
+            assert report.contains("appears on 2 different slides")
+            assert report.contains("patient P001")
+            assert !report.contains("share the same channel set")
         }
     }
 

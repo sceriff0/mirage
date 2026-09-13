@@ -715,9 +715,16 @@ def checkParamValidators() {
 }
 
 // CsvUtils.validateInputSemantics with requireUniqueChannelSets — the VALIS
-// channel-set rule at launch. Same rows through the same function: refused only
-// when the caller says the backend pairs by signature, and the message names
-// patient, signature (lower-cased, sorted) and both rows.
+// channel-set rule at launch, alongside the cross-slide duplicate-channel rule
+// (Rule A, unconditional -- a NON-nuclear channel shared by two slides of one
+// patient is refused in the per-patient pass regardless of
+// requireUniqueChannelSets) that runs AFTER it (Rule B, opt-in via
+// requireUniqueChannelSets -- two slides sharing one whole channel SET, refused
+// before the per-patient pass). This sheet's rows 3 and 4 share both CD3 and
+// CD8 (non-nuclear) AND the same overall signature, so Rule A already refuses
+// it under `false` -- there is no longer an accepted case here for the VALIS
+// rule alone to distinguish; `true` still gets its own IllegalStateException
+// and message because Rule B runs first and wins.
 def checkUniqueChannelSets() {
     def ref  = File.createTempFile('dupsig_ref', '.tiff'); ref.text = 'x'
     def mov1 = File.createTempFile('dupsig_mov1', '.tiff'); mov1.text = 'x'
@@ -728,9 +735,25 @@ P7,${ref.path},true,DAPI|PANCK|SMA
 P7,${mov1.path},false,DAPI|CD3|CD8
 P7,${mov2.path},false,CD8|dapi|CD3
 """
-    // default (false) and explicit false: the sheet is fine for a backend that keeps meta
-    CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI')
-    CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', false)
+    // default (false) and explicit false: Rule B (signature pairing) is not asked
+    // for here, but Rule A still fires -- CD3 is the first non-nuclear channel
+    // that repeats across a patient's slides in declaration order (DAPI repeats
+    // too, but it is the nuclear marker passed below, so it is the deliberate
+    // exception and is skipped).
+    [null, false].each { arg ->
+        def refusedA = false
+        def msgA = ''
+        try {
+            arg == null ? CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI')
+                        : CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', arg)
+        }
+        catch (IllegalArgumentException e) { refusedA = true; msgA = e.message }
+        assert refusedA : "Rule A must refuse shared non-nuclear channels even when requireUniqueChannelSets is ${arg.inspect()}"
+        assert msgA.contains("Channel 'CD3'")            : "must name CD3, the first non-nuclear repeat in declaration order: ${msgA}"
+        assert msgA.contains('patient P7')               : "must name the patient: ${msgA}"
+        assert msgA.contains('appears on 2 different slides') : "must use Rule A's wording: ${msgA}"
+        assert msgA.contains('row 3') && msgA.contains('row 4') : "must name both rows: ${msgA}"
+    }
 
     def refused = false
     def msg = ''

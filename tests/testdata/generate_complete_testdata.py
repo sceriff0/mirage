@@ -419,11 +419,16 @@ with open(OUT_DIR / "invalid_no_ref.csv", "w") as f:
     f.write(f"P001,{TESTDATA_ABS}/P001_mov2.ome.tiff,false,DAPI|VIMENTIN|CD45\n")
 print("  Created invalid_no_ref.csv (no reference)")
 
-# 4b'. Two slides of one patient with the SAME channel set. Legal for the tiled
-# backend (meta rides along its fan-out), fatal for VALIS, which pairs its renamed
-# outputs back to metas by channel signature (lib/RegisteredMatch.groovy) -- and
-# used to discover that only AFTER REGISTER had run the whole group (2026-09-11,
-# patient 046 of the head_neck arm launch: 12 slides registered, then aborted).
+# 4b'. Two slides of one patient with the SAME channel set. Originally legal for
+# the tiled backend (meta rides along its fan-out) and fatal only for VALIS, which
+# pairs its renamed outputs back to metas by channel signature
+# (lib/RegisteredMatch.groovy) -- and used to discover that only AFTER REGISTER had
+# run the whole group (2026-09-11, patient 046 of the head_neck arm launch: 12
+# slides registered, then aborted). Since 2026-09-13 the sheet is refused on EVERY
+# backend anyway: rows 3 and 4 also share the non-nuclear channels CD3 and CD8, and
+# CsvUtils.validateInputSemantics's unconditional cross-slide rule (Rule A) refuses
+# that regardless of requireUniqueChannelSets. The VALIS-only signature rule (Rule
+# B) still fires first under VALIS and still has its own message.
 with open(OUT_DIR / "duplicate_channel_set.csv", "w") as f:
     f.write("patient_id,path_to_file,is_reference,channels\n")
     f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
@@ -433,7 +438,9 @@ with open(OUT_DIR / "duplicate_channel_set.csv", "w") as f:
     )  # same SET as mov1
 print("  Created duplicate_channel_set.csv (two slides, one channel set)")
 # The same duplicate, as the registered.csv checkpoint a --start segmentation
-# re-entry reads. REGISTER does not run from there, so the VALIS rule must not fire.
+# re-entry reads. REGISTER does not run from there, so the VALIS-only signature
+# rule (Rule B) must not fire on this path -- but the unconditional cross-slide
+# rule (Rule A) still does, at every --start, so this sheet is refused here too.
 with open(OUT_DIR / "duplicate_channel_set_registered.csv", "w") as f:
     f.write("patient_id,registered_image,is_reference,channels\n")
     f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
