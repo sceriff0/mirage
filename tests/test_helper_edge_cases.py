@@ -23,6 +23,7 @@ from tre_report import _pct  # noqa: E402
 
 # ── tile_grid._edges ────────────────────────────────────────────────────────────
 
+
 def test_edges_exact_multiple_ends_on_size():
     assert _edges(8, 4) == [0, 4, 8]
 
@@ -55,6 +56,7 @@ def test_tile_grid_read_window_is_clamped_at_the_image_edge():
 
 # ── pixel_size._to_um / unit_to_um ──────────────────────────────────────────────
 
+
 @pytest.mark.parametrize("raw", [None, "", "abc", "0", "-0.5"])
 def test_to_um_returns_none_for_an_untrustworthy_value(raw):
     assert _to_um(raw, "µm") is None
@@ -77,6 +79,7 @@ def test_unit_to_um_is_none_for_an_unknown_unit():
 
 # ── quantify._safe_mean ─────────────────────────────────────────────────────────
 
+
 def test_safe_mean_is_nan_where_the_count_is_zero_and_a_ratio_elsewhere():
     """bin/quantify.py:_safe_mean's docstring says 'Element-wise sums / counts, NaN
 
@@ -90,10 +93,13 @@ def test_safe_mean_is_nan_where_the_count_is_zero_and_a_ratio_elsewhere():
     counts = np.array([2, 0, 0])
     out = _safe_mean(sums, counts)
     assert out[0] == pytest.approx(5.0)
-    assert np.isnan(out[1]) and np.isnan(out[2]), "an unmeasured compartment is NaN, never 0.0"
+    assert np.isnan(out[1]) and np.isnan(out[2]), (
+        "an unmeasured compartment is NaN, never 0.0"
+    )
 
 
 # ── tre_report._pct ─────────────────────────────────────────────────────────────
+
 
 def test_pct_of_nothing_is_all_none():
     assert _pct([]) == {"mean": None, "p50": None, "p90": None, "max": None}
@@ -111,12 +117,15 @@ def test_pct_accepts_a_generator():
 
 # ── merge_quant_csvs._load_intensity_csvs ───────────────────────────────────────
 
+
 def test_load_intensity_csvs_explicit_list_wins_over_directory(tmp_path):
     from merge_quant_csvs import _load_intensity_csvs
 
     (tmp_path / "b_quant.csv").write_text("cell_id\n1\n")
     (tmp_path / "a_quant.csv").write_text("cell_id\n1\n")
-    explicit = _load_intensity_csvs(csvs_dir=tmp_path, csv_files_list=[str(tmp_path / "b_quant.csv")])
+    explicit = _load_intensity_csvs(
+        csvs_dir=tmp_path, csv_files_list=[str(tmp_path / "b_quant.csv")]
+    )
     assert [p.name for p in explicit] == ["b_quant.csv"]
 
 
@@ -126,7 +135,10 @@ def test_load_intensity_csvs_directory_glob_is_sorted(tmp_path):
     (tmp_path / "b_quant.csv").write_text("cell_id\n1\n")
     (tmp_path / "a_quant.csv").write_text("cell_id\n1\n")
     (tmp_path / "ignored.csv").write_text("cell_id\n1\n")
-    assert [p.name for p in _load_intensity_csvs(csvs_dir=tmp_path)] == ["a_quant.csv", "b_quant.csv"]
+    assert [p.name for p in _load_intensity_csvs(csvs_dir=tmp_path)] == [
+        "a_quant.csv",
+        "b_quant.csv",
+    ]
 
 
 def test_load_intensity_csvs_with_an_empty_directory_raises_system_exit(tmp_path):

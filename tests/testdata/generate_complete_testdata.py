@@ -1710,8 +1710,14 @@ print("  Created relative_paths_input.csv (paths relative to the repo root)")
 # the reference geometry. Used by tests/modules/tiled_reg_tile.nf.test.
 (OUT_DIR / "tiled_m0.json").write_text(
     json.dumps(
-        {"M0": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "ref_h": 16, "ref_w": 16,
-         "ref_name": "ref", "coarse_tre": 0, "n_inliers": 0}
+        {
+            "M0": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            "ref_h": 16,
+            "ref_w": 16,
+            "ref_name": "ref",
+            "coarse_tre": 0,
+            "n_inliers": 0,
+        }
     )
     + "\n"
 )
@@ -1730,7 +1736,9 @@ print("  Created tiled_m0.json")
 # error report for that basename, not the directory it once lived in.
 with open(OUT_DIR / "invalid_checkpoint_dangling_path.csv", "w") as f:
     f.write("patient_id,preprocessed_image,is_reference,channels\n")
-    f.write("P001,/nonexistent/prior_run/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n")
+    f.write(
+        "P001,/nonexistent/prior_run/P001_deleted_after_the_run.ome.tiff,true,DAPI|PANCK|SMA\n"
+    )
 print("  Created invalid_checkpoint_dangling_path.csv")
 
 # ── invalid_is_reference_yes.csv: is_reference must be literally true/false.

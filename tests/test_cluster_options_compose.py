@@ -168,9 +168,7 @@ _SLURM_SITE_PARAM_CONSUMERS = {
 }
 
 
-@pytest.mark.parametrize(
-    "param,consumer", sorted(_SLURM_SITE_PARAM_CONSUMERS.items())
-)
+@pytest.mark.parametrize("param,consumer", sorted(_SLURM_SITE_PARAM_CONSUMERS.items()))
 def test_slurm_site_param_is_named_and_reaches_its_consumer(param, consumer):
     """`slurm_partition` and `slurm_qos` must each have a declared default in
     nextflow.config's top-level params block, be offered as a site knob in
