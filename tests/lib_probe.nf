@@ -613,6 +613,11 @@ def checkDuplicateChannelRefusal() {
         sheetFor.call('withinnuc', 'DAPI|DAPI|PANCK', 'DAPI|CD3'), nuclear)
     assert withinNuclear != null : 'the within-slide rule does not exempt a nuclear marker'
 
+    // The temp tree is this function's own: delete it rather than leaving two images
+    // and six CSVs in /tmp per probe run, the way the createTempFile cases above do
+    // not have to (a single file each, cleaned by the OS).
+    dupDir.deleteDir()
+
     println 'LIB PROBE: checkDuplicateChannelRefusal passed'
 }
 
