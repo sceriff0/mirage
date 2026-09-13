@@ -231,13 +231,16 @@ class NfTestCase:
 # way used to model as `stub_option=False`, i.e. as a RENDERED case, which is
 # how a stub-only case could satisfy the rendered-coverage rule in
 # test_process_nf_test_coverage.py while rendering nothing.
-_NF_TEST_CASE_RE = re.compile(r"""\btest\s*\(\s*(?P<q>["'])(?P<name>.*?)(?P=q)\s*\)\s*\{""")
+_NF_TEST_CASE_RE = re.compile(
+    r"""\btest\s*\(\s*(?P<q>["'])(?P<name>.*?)(?P=q)\s*\)\s*\{"""
+)
 _NF_TEST_TAG_RE = re.compile(r"""^\s*tag\s+(?P<q>["'])(?P<val>[^"']+)(?P=q)""", re.M)
 _NF_TEST_PROCESS_RE = re.compile(
     r"""^\s*process\s+(?P<q>["'])(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P=q)""", re.M
 )
 _NF_TEST_STUB_OPTION_RE = re.compile(
-    r"""^\s*options\s+(?P<q>["'])[^"']*(?<![\w-])-stub(?:-run)?(?![\w-])[^"']*(?P=q)""", re.M
+    r"""^\s*options\s+(?P<q>["'])[^"']*(?<![\w-])-stub(?:-run)?(?![\w-])[^"']*(?P=q)""",
+    re.M,
 )
 
 

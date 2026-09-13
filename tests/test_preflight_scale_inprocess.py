@@ -56,7 +56,9 @@ def test_main_auto_writes_a_report_naming_each_image(tmp_path):
     a = _write_with_scale(tmp_path, "a.ome.tiff", 0.5)
     b = _write_with_scale(tmp_path, "b.ome.tiff", 0.5)
     out = tmp_path / "report.json"
-    rc = preflight_scale.main(["--images", str(a), str(b), "--pixel-size", "auto", "--output", str(out)])
+    rc = preflight_scale.main(
+        ["--images", str(a), str(b), "--pixel-size", "auto", "--output", str(out)]
+    )
     assert rc == 0
     report = json.loads(out.read_text())
     text = out.read_text()
@@ -64,11 +66,15 @@ def test_main_auto_writes_a_report_naming_each_image(tmp_path):
     assert isinstance(report, dict)
 
 
-def test_main_auto_with_no_metadata_returns_nonzero_and_names_the_offender(tmp_path, caplog):
+def test_main_auto_with_no_metadata_returns_nonzero_and_names_the_offender(
+    tmp_path, caplog
+):
     a = _write_no_scale(tmp_path, "blank.ome.tiff")
     out = tmp_path / "report.json"
     with caplog.at_level(logging.ERROR):
-        rc = preflight_scale.main(["--images", str(a), "--pixel-size", "auto", "--output", str(out)])
+        rc = preflight_scale.main(
+            ["--images", str(a), "--pixel-size", "auto", "--output", str(out)]
+        )
     assert rc != 0
     # `assert A if cond else B` parses as `assert (A if cond else B)`, which reads
     # as a precedence bug even when it is not one. Two plain asserts instead.
@@ -82,9 +88,13 @@ def test_main_number_disagreeing_with_metadata_warns_but_succeeds(tmp_path, capl
     a = _write_with_scale(tmp_path, "a.ome.tiff", 0.5)
     out = tmp_path / "report.json"
     with caplog.at_level(logging.WARNING):
-        rc = preflight_scale.main(["--images", str(a), "--pixel-size", "0.25", "--output", str(out)])
+        rc = preflight_scale.main(
+            ["--images", str(a), "--pixel-size", "0.25", "--output", str(out)]
+        )
     assert rc == 0
-    assert "0.25" in caplog.text or "0.5" in caplog.text, "the disagreement must be logged"
+    assert "0.25" in caplog.text or "0.5" in caplog.text, (
+        "the disagreement must be logged"
+    )
 
 
 def test_main_with_a_space_in_the_filename(tmp_path):
@@ -92,7 +102,9 @@ def test_main_with_a_space_in_the_filename(tmp_path):
     d.mkdir()
     a = _write_with_scale(d, "P001 ref.ome.tiff", 0.5)
     out = tmp_path / "report.json"
-    rc = preflight_scale.main(["--images", str(a), "--pixel-size", "auto", "--output", str(out)])
+    rc = preflight_scale.main(
+        ["--images", str(a), "--pixel-size", "auto", "--output", str(out)]
+    )
     assert rc == 0
     assert "P001 ref.ome.tiff" in out.read_text()
 
@@ -119,6 +131,12 @@ def test_warn_on_heterogeneous_scales_warns_on_two_clusters(tmp_path, caplog):
     b = _write_with_scale(tmp_path, "b.ome.tiff", 0.5)
     out = tmp_path / "report.json"
     with caplog.at_level(logging.WARNING):
-        rc = preflight_scale.main(["--images", str(a), str(b), "--pixel-size", "auto", "--output", str(out)])
+        rc = preflight_scale.main(
+            ["--images", str(a), str(b), "--pixel-size", "auto", "--output", str(out)]
+        )
     assert rc == 0
-    assert "heterogeneous" in caplog.text.lower() or "cluster" in caplog.text.lower() or "0.25" in caplog.text
+    assert (
+        "heterogeneous" in caplog.text.lower()
+        or "cluster" in caplog.text.lower()
+        or "0.25" in caplog.text
+    )

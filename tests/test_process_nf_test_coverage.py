@@ -81,14 +81,21 @@ def test_process_is_covered_or_is_listed_debt(name):
     reason = _gap_reason(name)
     if reason is None:
         return
-    assert name in KNOWN_GAPS, f"{name}: {reason}. Add a module test (and a rendered case if tunable)."
+    assert name in KNOWN_GAPS, (
+        f"{name}: {reason}. Add a module test (and a rendered case if tunable)."
+    )
 
 
 def test_known_gaps_only_shrink():
-    stale = [f"{n}: listed as {r!r} but is no longer a gap -- delete the entry"
-             for n, r in KNOWN_GAPS.items() if _gap_reason(n) is None]
+    stale = [
+        f"{n}: listed as {r!r} but is no longer a gap -- delete the entry"
+        for n, r in KNOWN_GAPS.items()
+        if _gap_reason(n) is None
+    ]
     missing = [n for n in KNOWN_GAPS if n not in processes()]
-    assert not stale and not missing, "\n".join(stale + [f"{n}: no such process" for n in missing])
+    assert not stale and not missing, "\n".join(
+        stale + [f"{n}: no such process" for n in missing]
+    )
 
 
 def test_the_scan_actually_finds_tunables():
@@ -96,5 +103,9 @@ def test_the_scan_actually_finds_tunables():
     of each kind so a regex slip is loud."""
     ext = _ext_args_processes()
     assert {"SEGMENT", "QUANTIFY", "EXPORT_GEOJSON"} <= ext, ext
-    script_params = {n for n, p in processes().items() if "params." in strip_comments(p.script_body)}
-    assert {"REGISTER", "PREFLIGHT_SCALE", "MERGE_AND_PYRAMID"} <= script_params, script_params
+    script_params = {
+        n for n, p in processes().items() if "params." in strip_comments(p.script_body)
+    }
+    assert {"REGISTER", "PREFLIGHT_SCALE", "MERGE_AND_PYRAMID"} <= script_params, (
+        script_params
+    )
