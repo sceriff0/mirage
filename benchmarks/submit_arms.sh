@@ -3,8 +3,10 @@
 #SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/arms_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/arms_%j.err
 #SBATCH --time=168:00:00
-#SBATCH --cpus-per-task=4    # headroom for CONCURRENCY Nextflow heads (they poll SLURM, not compute)
-#SBATCH --mem=64G            # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below)
+#SBATCH --cpus-per-task=8    # headroom for CONCURRENCY Nextflow heads (they poll SLURM, not compute)
+#SBATCH --mem=128G           # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below).
+                             # 32 heads x (2 GB heap + 0.75 GB overhead) = 88 GB. head_sizing.sh
+                             # refuses the launch at runtime if CONCURRENCY x heap outgrows this.
 #SBATCH --partition=normal
 #
 # ============================================================================
@@ -51,11 +53,14 @@ ARMS_YAML="$SRC_DIR/benchmarks/configs/arms.yaml"
 PROFILES="${PROFILES:-singularity,ieo}"        # OVERRIDES run_arms.sh's default -profile docker
 SITE_CONFIG="$SRC_DIR/conf/ieo.config"    # gitignored: executor=slurm + cacheDir + paths
 CONDA_ENV="nf-env"
-CONCURRENCY="${ARMS_CONCURRENCY:-8}"      # arms launched AT ONCE. Each is one Nextflow head.
-                                          # 4 heads x 3 GB heap = 12 GB < --mem=32G. RAISE --mem
-                                          # BEFORE raising this: N heads x -Xmx must fit, and the
-                                          # default NXF_JVM_ARGS people copy from the normal
-                                          # launcher (-Xmx32g) would blow a 32 GB job at N=2.
+CONCURRENCY="${ARMS_CONCURRENCY:-32}"     # arms launched AT ONCE. Each is one Nextflow head.
+                                          # 32 = every registration arm (18) at once, then 32 of
+                                          # the 63 resumed crosses. Heads share --mem: N x (-Xmx +
+                                          # 0.75 GB) must fit it, and benchmarks/head_sizing.sh
+                                          # REFUSES the launch when it does not (the -Xmx32g people
+                                          # copy from the single-run launcher would blow the job
+                                          # at N=4). More heads = more process jobs in the SLURM
+                                          # queue, never more memory per job; see QUEUE_SIZE.
 ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms with CSE.
                                           # Needs bolt3x/mirage-segeval:${segeval_tag} published
                                           # (1.0.1 is live as of 2026-08-21).
@@ -132,7 +137,10 @@ export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-$SINGULARITY_CACHED
 # Cap EACH concurrent head's heap so CONCURRENCY x heap stays under --mem.
 # This is NOT the -Xmx32g of a single-run launcher: that sizes ONE head, and here
 # there are CONCURRENCY of them sharing one allocation.
-export NXF_OPTS="${NXF_OPTS:--Xms512m -Xmx3g}"
+export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx2g}"
+# shellcheck disable=SC1091
+source "$SRC_DIR/benchmarks/head_sizing.sh"
+check_head_memory "$CONCURRENCY" "$NXF_OPTS" || exit 1
 
 # Concurrency is passed on the COMMAND LINE, not via benchmark.config. Every
 # per-process cap in conf/modules.config is Math.min(own, params.max_forks), evaluated
@@ -149,7 +157,12 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # binding resource is node memory, not the SLURM job count. Peak in-flight is
 # CONCURRENCY x QUEUE_SIZE = 4 x 50 = 200; SLURM will queue what does not fit, but a much
 # larger number just buries your own queue behind jobs that cannot start.
-QUEUE_SIZE="${QUEUE_SIZE:-50}"
+# Derived from a TOTAL target rather than fixed per head, so raising the head count
+# does not multiply the cluster load: 32 heads -> 25 per head (floored at max_forks so a
+# head can still fill its own per-process clamps). Set QUEUE_SIZE to pin it, or
+# PEAK_JOBS_TARGET to move the total.
+PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-800}"
+QUEUE_SIZE="${QUEUE_SIZE:-$(derive_queue_size "$CONCURRENCY" "$MAX_FORKS" "$PEAK_JOBS_TARGET")}"
 
 PEAK_JOBS=$(( CONCURRENCY * QUEUE_SIZE ))
 MAXSUBMIT=$(sacctmgr -n show assoc user="$USER" format=maxsubmit 2>/dev/null | tr -d ' \n' | head -c 16)

@@ -3,8 +3,10 @@
 #SBATCH --output=/hpcnfs/home/ieo7660/logs/bench_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/logs/bench_%j.err
 #SBATCH --time=72:00:00
-#SBATCH --cpus-per-task=8   # headroom for CONCURRENCY Nextflow JVMs (they mostly poll SLURM, not compute)
-#SBATCH --mem=64G           # all CONCURRENCY heads share this; NXF_OPTS -Xmx caps each head's heap (below)
+#SBATCH --cpus-per-task=12  # headroom for CONCURRENCY Nextflow JVMs (they mostly poll SLURM, not compute)
+#SBATCH --mem=128G          # all CONCURRENCY heads share this; NXF_OPTS -Xmx caps each head's heap (below).
+                            # 40 heads x (2 GB heap + 0.75 GB overhead) = 110 GB. head_sizing.sh
+                            # refuses the launch at runtime if CONCURRENCY x heap outgrows this.
 # #SBATCH --partition=<your_partition>     # uncomment + set if your site needs it
 # #SBATCH --mail-type=END,FAIL
 # #SBATCH --mail-user=you@ieo.it
@@ -52,13 +54,13 @@ CONDA_ENV="nf-env"                        # env that has nextflow + python
 REPEATS="${SWEEP_REPEATS:-3}"             # replicate runs per config. 135 configs -> 405 runs at 3,
                                           # 135 at 1. Timing at n=1 is noisy (cache state, node
                                           # contention), so 3 is the default; drop to 1 for a first pass.
-CONCURRENCY="${SWEEP_CONCURRENCY:-16}"   # pipeline runs launched AT ONCE (each = 1 Nextflow head that
-                                          # submits its OWN SLURM process jobs). 16 heads x ~3 GB heap
-                                          # (NXF_OPTS below) fit in --mem=64G; each head runs up to
-                                          # queueSize=100 process jobs (benchmark.config), so peak in-flight
-                                          # SLURM jobs ~ CONCURRENCY x 100 (~1600). Raise CONCURRENCY only
-                                          # alongside --mem (~4 GB/head incl. overhead) and mind your
-                                          # per-user SLURM job cap (sacctmgr ... format=maxsubmit).
+CONCURRENCY="${SWEEP_CONCURRENCY:-40}"   # pipeline runs launched AT ONCE (each = 1 Nextflow head that
+                                          # submits its OWN SLURM process jobs). Heads share --mem:
+                                          # N x (-Xmx + 0.75 GB) must fit, and benchmarks/head_sizing.sh
+                                          # REFUSES the launch when it does not. The per-head queueSize
+                                          # is DERIVED from PEAK_JOBS_TARGET (below) so the total
+                                          # in-flight SLURM jobs stay ~1600 whatever the head count;
+                                          # mind your per-user cap (sacctmgr ... format=maxsubmit).
 # -------------------------------------------------------------------------------
 
 cd "$BENCH_DIR"
@@ -94,7 +96,10 @@ echo "Using python: $PYTHON ($("$PYTHON" --version 2>&1))"
 export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-/hpcnfs/scratch/P_DIMA_ATTEND/users/vfassi/docker_images}"
 # Cap EACH concurrent Nextflow head's JVM heap so CONCURRENCY x heap stays under --mem
 # (16 x 3 GB = 48 GB < 64 GB, leaving room for JVM/OS overhead). Raise -Xmx only if a head OOMs.
-export NXF_OPTS="${NXF_OPTS:--Xms512m -Xmx3g}"
+export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx2g}"
+# shellcheck disable=SC1091
+source "$SRC_DIR/benchmarks/head_sizing.sh"
+check_head_memory "$CONCURRENCY" "$NXF_OPTS" || exit 1
 
 echo "=================================================="
 echo "Head job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}"
@@ -142,7 +147,11 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # is roughly CONCURRENCY x QUEUE_SIZE (16 x 100 = 1600 here). The lower of
 # (max_forks, queue_size) binds per process, so these must be raised together -- at the old
 # 5/20 pair, max_forks was the binding constraint and the cluster sat idle.
-QUEUE_SIZE="${QUEUE_SIZE:-100}"
+# Derived from a TOTAL target rather than fixed per head, so raising the head count
+# does not multiply the cluster load: 40 heads -> 40 per head (floored at max_forks).
+# Set QUEUE_SIZE to pin it, or PEAK_JOBS_TARGET to move the total.
+PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-1600}"
+QUEUE_SIZE="${QUEUE_SIZE:-$(derive_queue_size "$CONCURRENCY" "$MAX_FORKS" "$PEAK_JOBS_TARGET")}"
 
 # Pre-flight: print the SLURM per-user submit cap next to what this run will actually ask for,
 # so a mismatch shows up in the log BEFORE 1600 submissions start failing. Not a hard gate --

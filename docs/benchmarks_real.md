@@ -280,10 +280,20 @@ it is not timed under contention from the QC arms.
 !!! warning "`ARMS_CONCURRENCY` is heads, and heads share the head job's memory"
     Each concurrent arm is one Nextflow JVM. The `-Xmx32g` that suits a
     single-run launcher would blow a 32 GB head job at two arms; `submit_arms.sh`
-    sets `-Xmx3g` per head instead. Raise `--mem` before raising concurrency.
+    sets `-Xmx2g` per head instead. `benchmarks/head_sizing.sh` (sourced by both
+    submitters) **refuses the launch** when `heads × (heap + 0.75 GB)` exceeds the
+    `#SBATCH --mem` allocation, naming the number to raise it to.
 
-`ARMS_CONCURRENCY` is how many Nextflow heads run at once; each still submits its
-own SLURM jobs, so measurements stay clean.
+`ARMS_CONCURRENCY` (default 32: every registration arm at once, then 32 of the 63
+resumed crosses) is how many Nextflow heads run at once; each still submits its own
+SLURM jobs, so measurements stay clean. Heads are the only lever that raises
+cluster-wide throughput: the per-process clamps (`REGISTER` 10, `TILED_*` 20) are
+**per head**. Raising heads does not raise memory per process job — those are sized
+per task in `conf/modules.config` and scheduled by SLURM against node memory — so the
+only OOM more heads can cause is the head job's own, which the check above closes.
+The per-head `queueSize` is derived from `PEAK_JOBS_TARGET` (800 in-flight jobs for
+the arms, 1600 for the sweep, floored at `max_forks`), so the total cluster load stays
+put when you change the head count; set `QUEUE_SIZE` to pin it explicitly.
 
 To enable CSE on the segmentation arms, publish the `segeval` image once
 (Actions → *Build & Push Container Images* → Run workflow) and append:
