@@ -291,9 +291,22 @@ cluster-wide throughput: the per-process clamps (`REGISTER` 10, `TILED_*` 20) ar
 **per head**. Raising heads does not raise memory per process job — those are sized
 per task in `conf/modules.config` and scheduled by SLURM against node memory — so the
 only OOM more heads can cause is the head job's own, which the check above closes.
-The per-head `queueSize` is derived from `PEAK_JOBS_TARGET` (800 in-flight jobs for
-the arms, 1600 for the sweep, floored at `max_forks`), so the total cluster load stays
-put when you change the head count; set `QUEUE_SIZE` to pin it explicitly.
+The per-head `queueSize` is derived from `PEAK_JOBS_TARGET`, a **ceiling** on in-flight
+SLURM process jobs across all heads of one submitter (800 for the arms, 1600 for the sweep),
+and `max_forks` is lowered to it, so the total cluster load stays put when you change the
+head count; set `QUEUE_SIZE` to pin the per-head queue explicitly. A head count above the
+target is refused, because every head runs at least one job.
+
+**Low load (weekdays).** Ten process jobs in total, on two heads of five:
+
+```bash
+ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch ~/pipelines/mirage/benchmarks/submit_arms.sh
+```
+
+The ceiling is per submitter: the arms and the sweep running at once add up, so give each
+half (`PEAK_JOBS_TARGET=5`) if ten is the budget for everything. It caps jobs, not memory: a
+`REGISTER` asks 300 GB on its first attempt, so ten of them can still hold a large share of
+the node pool. The ASHLAR arms' steps run inside the head job itself, not as SLURM jobs.
 
 To enable CSE on the segmentation arms, publish the `segeval` image once
 (Actions → *Build & Push Container Images* → Run workflow) and append:
@@ -325,19 +338,17 @@ The launcher walks the same plan and decides per run from its last attempt:
 | `-` (interrupted) or `ERR` | **refused**, naming both switches | continued as `<name>-rN` with `-resume <its last session>`: cached tasks are served from `work/`, only the rest run | moved aside, started over |
 | absent | launched | launched | launched |
 
-A resumed run reuses the interrupted attempt's **params file verbatim**: any process
-whose script reads `params` hashes the whole map, so a regenerated file with one changed
-entry would re-hash those tasks and the resume would recompute them. (Consequence for
-runs launched before the launchers pinned `cleanup_work=false`: they resume under their
-original params, finish, and then delete their `work/` as the pipeline default does; their
-QC crosses re-run the registration instead of only the QC chain. Correct, more expensive.)
-`ARMS_RESUME_PARAMS=regenerate` (`SWEEP_RESUME_PARAMS=regenerate`) opts into the re-hash
-on purpose: the resumed run gets a fresh params file, today with `cleanup_work=false`, so
-its `work/` survives completion and its crosses resume it instead of re-registering. The
-price is every task of `REGISTER` and of the four STARE stages, which all read `params`:
-pay it while an arm is young, never late — a base arm that finishes under the old params
-deletes its `work/`, and each of its crosses then re-runs the registration (for the
-shipped plan: 63 crosses x 11 patients).
+A resumed run reuses the interrupted attempt's **params file**, with one change:
+`cleanup_work` is pinned `false` in it, so an arm launched before the launchers pinned it
+still keeps `work/` when it finishes and its crosses resume it instead of re-registering.
+That change re-hashes nothing. Nextflow hashes the params a process script references —
+`params.foo` is itemised, and only a script that references the bare `params` object hashes
+the whole map — and no process script here reads `cleanup_work`, the concurrency params or
+the bare map (`tests/test_resume_param_hash_neutrality.py`). Everything else in the file
+stays as launched, so an `arms.yaml` edit made after the launch cannot quietly change what a
+half-finished arm is. `ARMS_RESUME_PARAMS=regenerate` (`SWEEP_RESUME_PARAMS=regenerate`)
+rebuilds the file from the current plan instead; tasks then re-run only where a param they
+read changed value.
 A resumed QC cross continues its **own** session (which already carries its base's cache);
 a cross launched fresh after its base was resumed resumes the base's **latest** session.
 
@@ -346,6 +357,13 @@ killed with SIGTERM (what `scancel` sends) is left as `ERR` in the history with 
 session id; `nextflow run -resume <that session> -name <name>-r2` served the 3 tasks that
 had completed from the cache and re-submitted the other 32, and finished `OK`. A SIGKILL
 leaves `-` instead; both are "not OK" to the launcher.
+
+Measured on Nextflow 25.04.7 (the version the launchers pin), non-stub, 2026-09-14, with one
+process reading `params.a` and one interpolating the whole `params` map: changing `b` and
+`cleanup_work` on resume left the first cached and re-ran the second; changing `a` re-ran
+both. Changing `max_forks` and `queue_size` on a stub resume kept every cacheable task
+cached, so the head count and the job ceiling can be lowered or raised between a stop and a
+resume for free.
 The passes keep their order, so an interrupted preprocessing run is continued before any
 registration arm is considered. `benchmarks/tests/test_launch_resume.py` pins all of this
 against a stub Nextflow.

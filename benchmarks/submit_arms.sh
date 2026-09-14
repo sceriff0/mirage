@@ -82,10 +82,11 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # every interrupted or failed one is continued from its Nextflow cache under a
 # new run name (arms-<run_id>-rN), so only the unfinished tasks run. Plain
 # `sbatch` without the switch refuses interrupted runs and names both switches.
-# ARMS_RESUME_PARAMS=regenerate gives a resumed run a FRESH params file (cleanup_work=false
-# among them) at the price of re-running every task whose script reads params (REGISTER,
-# the STARE stages): the right call for an arm launched before the cleanup_work pin, while
-# it is young -- otherwise it deletes work/ on completion and its crosses re-register.
+# A resumed run keeps its params file with cleanup_work pinned false (no task reads it, so
+# nothing re-hashes); ARMS_RESUME_PARAMS=regenerate rebuilds the file from the CURRENT plan
+# instead, and tasks then re-run only where a param they read changed value. The head count
+# and PEAK_JOBS_TARGET can change between a stop and a resume without re-running anything:
+#   ARMS_RESUME=1 ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_arms.sh
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 # -------------------------------------------------------------------------------
@@ -168,12 +169,18 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # binding resource is node memory, not the SLURM job count. Peak in-flight is
 # CONCURRENCY x QUEUE_SIZE = 4 x 50 = 200; SLURM will queue what does not fit, but a much
 # larger number just buries your own queue behind jobs that cannot start.
-# Derived from a TOTAL target rather than fixed per head, so raising the head count
-# does not multiply the cluster load: 32 heads -> 25 per head (floored at max_forks so a
-# head can still fill its own per-process clamps). Set QUEUE_SIZE to pin it, or
-# PEAK_JOBS_TARGET to move the total.
+# Derived from a TOTAL target rather than fixed per head, so the head count does not
+# multiply the cluster load: PEAK_JOBS_TARGET is a CEILING on in-flight SLURM process jobs
+# across all heads of this submitter (32 heads -> 25 per head). Set QUEUE_SIZE to pin the
+# per-head queue instead. LOW LOAD, e.g. weekdays -- ten process jobs in total:
+#   ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_arms.sh
 PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-800}"
-QUEUE_SIZE="${QUEUE_SIZE:-$(derive_queue_size "$CONCURRENCY" "$MAX_FORKS" "$PEAK_JOBS_TARGET")}"
+if [[ -z "${QUEUE_SIZE:-}" ]]; then
+  QUEUE_SIZE=$(derive_queue_size "$CONCURRENCY" "$PEAK_JOBS_TARGET") || exit 1
+fi
+# The lower of (max_forks, queue_size) binds within a head, so lower max_forks to the queue:
+# the numbers echoed below are then the load that actually runs.
+if (( MAX_FORKS > QUEUE_SIZE )); then MAX_FORKS="$QUEUE_SIZE"; fi
 
 PEAK_JOBS=$(( CONCURRENCY * QUEUE_SIZE ))
 MAXSUBMIT=$(sacctmgr -n show assoc user="$USER" format=maxsubmit 2>/dev/null | tr -d ' \n' | head -c 16)

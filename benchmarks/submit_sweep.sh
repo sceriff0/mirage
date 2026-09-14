@@ -48,7 +48,8 @@
 # interrupted or failed ones continue from their Nextflow cache under a new run name
 # (bench_<run_id>-rN). SWEEP_REPLACE=1 instead moves a run aside and starts it over.
 # Plain `sbatch` refuses interrupted runs and names both switches.
-# SWEEP_RESUME_PARAMS=regenerate gives a resumed run a fresh params file (see submit_arms.sh).
+# A resumed run keeps its params file with cleanup_work pinned false (hash-neutral);
+# SWEEP_RESUME_PARAMS=regenerate rebuilds it from the current plan (see submit_arms.sh).
 #
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
 BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"
@@ -156,11 +157,18 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # is roughly CONCURRENCY x QUEUE_SIZE (16 x 100 = 1600 here). The lower of
 # (max_forks, queue_size) binds per process, so these must be raised together -- at the old
 # 5/20 pair, max_forks was the binding constraint and the cluster sat idle.
-# Derived from a TOTAL target rather than fixed per head, so raising the head count
-# does not multiply the cluster load: 40 heads -> 40 per head (floored at max_forks).
-# Set QUEUE_SIZE to pin it, or PEAK_JOBS_TARGET to move the total.
+# Derived from a TOTAL target rather than fixed per head, so the head count does not
+# multiply the cluster load: PEAK_JOBS_TARGET is a CEILING on in-flight SLURM process jobs
+# across all heads of this submitter (40 heads -> 40 per head). Set QUEUE_SIZE to pin the
+# per-head queue instead. LOW LOAD, e.g. weekdays -- ten process jobs in total:
+#   SWEEP_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_sweep.sh
 PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-1600}"
-QUEUE_SIZE="${QUEUE_SIZE:-$(derive_queue_size "$CONCURRENCY" "$MAX_FORKS" "$PEAK_JOBS_TARGET")}"
+if [[ -z "${QUEUE_SIZE:-}" ]]; then
+  QUEUE_SIZE=$(derive_queue_size "$CONCURRENCY" "$PEAK_JOBS_TARGET") || exit 1
+fi
+# The lower of (max_forks, queue_size) binds within a head, so lower max_forks to the queue:
+# the numbers echoed below are then the load that actually runs.
+if (( MAX_FORKS > QUEUE_SIZE )); then MAX_FORKS="$QUEUE_SIZE"; fi
 
 # Pre-flight: print the SLURM per-user submit cap next to what this run will actually ask for,
 # so a mismatch shows up in the log BEFORE 1600 submissions start failing. Not a hard gate --

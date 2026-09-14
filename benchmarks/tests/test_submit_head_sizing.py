@@ -154,11 +154,54 @@ def test_guard_is_advisory_outside_slurm():
     assert r.returncode == 0 and "not checked" in r.stdout
 
 
-def test_queue_size_keeps_the_total_in_flight_at_the_target_floored_at_max_forks():
-    assert _run("derive_queue_size 32 20 800").stdout.strip() == "25"
-    assert _run("derive_queue_size 40 20 1600").stdout.strip() == "40"
-    assert _run("derive_queue_size 80 20 800").stdout.strip() == "20"  # floor, not 10
-    assert _run("derive_queue_size 1 20 800").stdout.strip() == "800"
+def test_queue_size_keeps_the_total_in_flight_at_or_under_the_target():
+    assert _run("derive_queue_size 32 800").stdout.strip() == "25"
+    assert _run("derive_queue_size 40 1600").stdout.strip() == "40"
+    assert _run("derive_queue_size 2 10").stdout.strip() == "5"
+    assert _run("derive_queue_size 3 10").stdout.strip() == "3"  # 9 jobs, never 12
+    assert _run("derive_queue_size 1 800").stdout.strip() == "800"
+    r = _run("derive_queue_size 12 10")
+    assert r.returncode == 1 and "each head runs at least one job" in r.stderr
+
+
+def _concurrency_block(script: str) -> str:
+    """The submitter's own derivation, from MAX_FORKS= up to the PEAK_JOBS line: executed
+    as written, so the test sees the code the head job runs, not a paraphrase of it."""
+    text = (BENCH / script).read_text()
+    start = text.index('MAX_FORKS="${MAX_FORKS:-20}"')
+    end = text.index("PEAK_JOBS=$(( CONCURRENCY * QUEUE_SIZE ))")
+    return text[start:end]
+
+
+def _derive(script: str, **env) -> subprocess.CompletedProcess:
+    snippet = (
+        f'source "{BENCH / "head_sizing.sh"}"\n'
+        f"{_concurrency_block(script)}\n"
+        'echo "$QUEUE_SIZE $MAX_FORKS $(( CONCURRENCY * QUEUE_SIZE ))"'
+    )
+    return subprocess.run(
+        ["bash", "-c", snippet],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", **env},
+    )
+
+
+@pytest.mark.parametrize("script", sorted(SUBMITTERS))
+def test_a_low_load_request_runs_exactly_that_many_jobs(script):
+    r = _derive(script, CONCURRENCY="2", PEAK_JOBS_TARGET="10")
+    assert r.returncode == 0, r.stderr
+    queue, max_forks, total = r.stdout.split()
+    assert (queue, max_forks, total) == ("5", "5", "10")
+
+
+@pytest.mark.parametrize("script", sorted(SUBMITTERS))
+def test_a_pinned_queue_lowers_max_forks_and_too_many_heads_are_refused(script):
+    r = _derive(script, CONCURRENCY="3", QUEUE_SIZE="4")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["4", "4", "12"]
+    r = _derive(script, CONCURRENCY="12", PEAK_JOBS_TARGET="10")
+    assert r.returncode == 1 and "each head runs at least one job" in r.stderr
 
 
 def test_heap_parser_accepts_megabytes_and_last_xmx_wins():

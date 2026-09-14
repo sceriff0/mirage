@@ -187,21 +187,34 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
   # shares its base arm's launch directory and must not overwrite the base's file.
   local run_params="$rundir/params.${run_id}.json"
-  # A RESUMED run keeps the params file of the attempt it continues, verbatim. Any process
-  # whose script block reads `params` hashes the WHOLE map (CLAUDE.md, "Verification
-  # reality" 4), so a params file regenerated with one extra or changed entry -- even one
-  # no task reads -- would re-hash every such task and the resume would recompute them.
-  # A run launched before a launcher change therefore resumes under its ORIGINAL params.
-  # ARMS_RESUME_PARAMS=regenerate opts into the re-hash on purpose: the resumed run gets
-  # a fresh params file (today: + cleanup_work=false, so its work/ survives completion and
-  # its QC crosses resume it instead of re-registering). Every task of REGISTER and of the
-  # four STARE stages then re-runs -- pay it while the arm is young, never late.
+  # A RESUMED run keeps the params file of the attempt it continues, with ONE change:
+  # cleanup_work is pinned false in it, so the run keeps work/ when it finishes and its QC
+  # crosses resume it rather than re-registering. That edit is hash-neutral, as is any
+  # change to a param no task reads: Nextflow hashes the params a script block references
+  # (params.foo is itemised) and only a script referencing the bare `params` object hashes
+  # the whole map. No process script reads cleanup_work, the concurrency params or the bare
+  # map (tests/test_resume_param_hash_neutrality.py). Measured on Nextflow 25.04.7, non-stub,
+  # 2026-09-14: changing an unread param left every task cached; changing a read one re-ran
+  # exactly the processes that read it.
+  # Everything else stays as launched, so an arms.yaml edit made after the launch cannot
+  # quietly change what a half-finished arm IS. ARMS_RESUME_PARAMS=regenerate rebuilds the
+  # file from the current plan instead: tasks re-run only where a param they read changed.
   if (( resuming )) && [[ -f "$run_params" && "${ARMS_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
-    echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
+    if ! python3 - "$run_params" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["cleanup_work"] = False
+json.dump(d, open(p, "w"), indent=2)
+PY
+    then
+      echo "[$run_id] SKIP: could not pin cleanup_work in $run_params" >&2
+      return 1
+    fi
+    echo "[$run_id] params reused from the interrupted attempt ($run_params), cleanup_work pinned false (no task reads it: nothing re-hashes)"
   else
     if (( resuming )) && [[ -f "$run_params" ]]; then
-      echo "[$run_id] params REGENERATED for the resumed run (ARMS_RESUME_PARAMS=regenerate): every task whose" \
-           "script reads params -- REGISTER and the STARE stages among them -- re-hashes and re-runs"
+      echo "[$run_id] params REGENERATED from the current plan (ARMS_RESUME_PARAMS=regenerate): tasks re-run only where a param they read changed value"
     fi
     if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
             ${run_pairs[@]+"${run_pairs[@]}"}); then

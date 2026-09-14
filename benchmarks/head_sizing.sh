@@ -12,11 +12,11 @@
 #
 #   check_head_memory  CONCURRENCY x (-Xmx + JVM/OS overhead) must fit --mem.
 #                      Refuses the launch, naming the two knobs, when it does not.
-#   derive_queue_size  keep the TOTAL in-flight SLURM jobs at a target while the
-#                      head count changes: per-head queueSize = target / heads,
-#                      floored at max_forks so one head can still fill its own
-#                      per-process clamps (REGISTER 10, TILED_* 20 -- see
-#                      nextflow.config's Concurrency block).
+#   derive_queue_size  keep the TOTAL in-flight SLURM jobs at or under a target while
+#                      the head count changes: per-head queueSize = target / heads,
+#                      and the submitter lowers max_forks to it. The target is a
+#                      ceiling that is never exceeded -- it used to be floored at
+#                      max_forks, which silently turned "10 jobs on 2 heads" into 40.
 #
 # Guarded by benchmarks/tests/test_submit_head_sizing.py, which runs these
 # functions with a fake SLURM_MEM_PER_NODE and parses both submitters' defaults.
@@ -76,12 +76,16 @@ check_head_memory() {
   echo "head sizing: $heads heads x (${heap} GB heap + ${overhead} GB overhead) = ${need} GB of ${alloc} GB -- fits"
 }
 
-# derive_queue_size <concurrency> <max_forks> <peak_jobs_target>
-# Per-head executor.queueSize so that heads x queueSize ~= peak target, never
-# below max_forks (a head must be able to fill its own per-process clamps).
+# derive_queue_size <concurrency> <peak_jobs_target>
+# Per-head executor.queueSize so that heads x queueSize <= the TOTAL target. Refuses
+# (exit 1, message on stderr) when there are more heads than the target: every head runs
+# at least one job, so N heads can never stay under a target below N.
 derive_queue_size() {
-  local heads="$1" max_forks="$2" target="$3" q
-  q=$(( target / heads ))
-  (( q < max_forks )) && q="$max_forks"
-  echo "$q"
+  local heads="$1" target="$2"
+  if (( heads > target )); then
+    echo "ERROR: $heads heads cannot stay under PEAK_JOBS_TARGET=$target: each head runs at least one job." >&2
+    echo "       Lower the head count (ARMS_CONCURRENCY / SWEEP_CONCURRENCY) to $target or less, or raise PEAK_JOBS_TARGET." >&2
+    return 1
+  fi
+  echo $(( target / heads ))
 }

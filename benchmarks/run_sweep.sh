@@ -227,14 +227,25 @@ while IFS=',' read -r -a vals; do
   # interrupted run can only be resumed from it. The trace lives under --trace_dir.
   pairs+=("cleanup_work=false")
   run_params="$run_dir/params.json"
-  # A resumed run keeps the interrupted attempt's params file verbatim: a regenerated file
-  # with any changed entry re-hashes every task whose script reads `params` (see run_arms.sh).
-  # SWEEP_RESUME_PARAMS=regenerate opts into the re-hash (see run_arms.sh).
+  # A resumed run keeps the interrupted attempt's params file, with cleanup_work pinned false
+  # in it (hash-neutral: no task reads it; see run_arms.sh for the rule and the measurement).
+  # SWEEP_RESUME_PARAMS=regenerate rebuilds it from the current plan instead.
   if (( resuming )) && [[ -f "$run_params" && "${SWEEP_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
-    echo "[$run_id] params reused verbatim from the interrupted attempt ($run_params)"
+    if ! python3 - "$run_params" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["cleanup_work"] = False
+json.dump(d, open(p, "w"), indent=2)
+PY
+    then
+      echo "ERROR: $run_id — could not pin cleanup_work in $run_params; SKIPPING" >&2
+      continue
+    fi
+    echo "[$run_id] params reused from the interrupted attempt ($run_params), cleanup_work pinned false (no task reads it: nothing re-hashes)"
   else
     if (( resuming )) && [[ -f "$run_params" ]]; then
-      echo "[$run_id] params REGENERATED for the resumed run (SWEEP_RESUME_PARAMS=regenerate): tasks whose script reads params re-run"
+      echo "[$run_id] params REGENERATED from the current plan (SWEEP_RESUME_PARAMS=regenerate): tasks re-run only where a param they read changed value"
     fi
     if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
             ${pairs[@]+"${pairs[@]}"}); then

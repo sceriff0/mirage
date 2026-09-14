@@ -183,21 +183,23 @@ def test_replace_still_recognises_a_resumed_cross_by_its_base_name(arms):
     assert f"arms-{base}" in launches and f"arms-{cross}" in launches
 
 
-def test_a_resumed_arm_keeps_the_params_file_of_the_attempt_it_continues(arms):
-    """A params file regenerated with any changed entry re-hashes every task whose
-    script reads `params`, and the resume would recompute them: the interrupted
-    attempt's file is reused byte-for-byte, and a marker planted in it survives."""
+def test_a_resumed_arm_keeps_its_params_file_and_only_pins_cleanup_work(arms):
+    """The interrupted attempt's params file is reused -- an arms.yaml edit made after the
+    launch must not change what a half-finished arm IS -- with one hash-neutral change:
+    cleanup_work=false (no process script reads it; tests/test_resume_param_hash_neutrality.py),
+    so an arm launched before the launchers pinned it keeps work/ for its crosses."""
     plan, root, run = arms
     base = "valis_high_micro2"
     params = root / ".launch" / base / f"params.{base}.json"
     marked = json.loads(params.read_text())
+    marked.pop("cleanup_work", None)  # as a launch from before the pin wrote it
     marked["__marker__"] = "from the interrupted attempt"
     params.write_text(json.dumps(marked))
     _interrupt(root / ".launch" / base / ".nextflow" / "history", f"arms-{base}")
     r, launches = run(ARMS_RESUME="1")
     assert set(launches) == {f"arms-{base}-r2"}
-    assert json.loads(params.read_text()) == marked
-    assert "params reused verbatim" in r.stdout
+    assert json.loads(params.read_text()) == {**marked, "cleanup_work": False}
+    assert "cleanup_work pinned false" in r.stdout
 
 
 def test_resume_params_regenerate_replaces_the_file_and_says_what_it_costs(arms):
@@ -213,7 +215,8 @@ def test_resume_params_regenerate_replaces_the_file_and_says_what_it_costs(arms)
     assert set(launches) == {f"arms-{base}-r2"}
     fresh = json.loads(params.read_text())
     assert "__marker__" not in fresh and fresh.get("cleanup_work") is False
-    assert "params REGENERATED" in r.stdout and "re-hashes" in r.stdout
+    assert "params REGENERATED" in r.stdout
+    assert "re-run only where a param they read changed" in r.stdout
 
 
 def test_every_arm_launch_keeps_its_work_directory(arms):
@@ -284,9 +287,10 @@ def test_sweep_skips_finished_runs_and_resumes_interrupted_ones(sweep):
     params_file = root / "run0000" / "params.json"
     marked = json.loads(params_file.read_text())
     assert marked.get("cleanup_work") is False
+    marked.pop("cleanup_work")  # as a launch from before the pin wrote it
     marked["__marker__"] = "from the interrupted attempt"
     params_file.write_text(json.dumps(marked))
     r, launches = run(SWEEP_RESUME="1")
     assert launches == {"bench_run0000-r2": sid}, (launches, r.stderr)
-    assert json.loads(params_file.read_text()) == marked
-    assert "params reused verbatim" in r.stdout
+    assert json.loads(params_file.read_text()) == {**marked, "cleanup_work": False}
+    assert "cleanup_work pinned false" in r.stdout
