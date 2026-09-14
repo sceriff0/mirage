@@ -1139,14 +1139,20 @@ def test_base_arms_carry_the_baseline_instruments(cfg, plan):
 
 
 def test_qc_pass_runs_after_registration_and_before_the_rest():
+    """registration_qc after registration: a cross resumes its base's finished session.
+    external (ASHLAR) right after registration and BEFORE the QC pass (2026-09-14): it
+    needs only its reference arm's published nuclei, and behind the 63-cross QC pass it
+    waited days at a low job ceiling. Both before segmentation and the timed compute arm."""
     script = (BENCH / "run_arms.sh").read_text()
     m = re.search(r"for kind in ([\w ]+); do", script)
     order = m.group(1).split()
     assert (
         order.index("registration")
-        < order.index("registration_qc")
         < order.index("external")
-    )
+        < order.index("registration_qc")
+        < order.index("segmentation")
+        < order.index("compute")
+    ), order
     for flag in ("seg_qc_pairing", "reg_tiled_gate_tre"):
         assert f"add_param {flag} " in script, f"run_arms.sh does not forward --{flag}"
 

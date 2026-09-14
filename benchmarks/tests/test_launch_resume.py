@@ -294,3 +294,101 @@ def test_sweep_skips_finished_runs_and_resumes_interrupted_ones(sweep):
     assert launches == {"bench_run0000-r2": sid}, (launches, r.stderr)
     assert json.loads(params_file.read_text()) == {**marked, "cleanup_work": False}
     assert "cleanup_work pinned false" in r.stdout
+
+
+def test_a_cross_never_starts_on_an_unfinished_base(arms):
+    """Measured on the cluster 2026-09-14 (job 6812701): with its base arms refused as
+    interrupted, the QC pass still launched their crosses, each resuming a half-finished
+    session and so re-running the registration. A cross now waits for its base."""
+    plan, root, run = arms
+    base, cross = "valis_high_micro2", "valis_high_micro2_segcellsam"
+    hist = root / ".launch" / base / ".nextflow" / "history"
+    _interrupt(hist, f"arms-{base}")
+    kept = [
+        ln
+        for ln in hist.read_text().splitlines()
+        if ln.split("\t")[2] != f"arms-{cross}"
+    ]
+    hist.write_text("\n".join(kept) + "\n")
+    r, launches = run()
+    assert launches == {}, launches
+    line = next(ln for ln in r.stderr.splitlines() if ln.startswith(f"[{cross}] SKIP"))
+    assert "has not finished" in line and "ARMS_RESUME=1" in line, line
+    # with the switch the base resumes in the registration pass, and only then the cross starts
+    r, launches = run(ARMS_RESUME="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert set(launches) == {f"arms-{base}-r2", f"arms-{cross}"}, launches
+
+
+def _external_root(tmp_path, reference_status):
+    from benchmarks.tests.test_build_arm_plan import _plan_csv as plan_csv
+
+    cfg = _launch_cfg()
+    cfg["external_baseline"]["ashlar"]["enabled"] = True
+    plan = [p for p in build_arm_plan(cfg) if p["arm_kind"] == "external"]
+    assert plan, "no external rows planned"
+    root = tmp_path / "arm_results"
+    (root / "preprocess_shared" / "csv").mkdir(parents=True)
+    (root / "preprocess_shared" / "csv" / "preprocessed.csv").write_text("patient_id\n")
+    ref = plan[0]["ext_from_arm"]
+    (root / ref).mkdir()
+    hist = root / ".launch" / ref / ".nextflow" / "history"
+    hist.parent.mkdir(parents=True)
+    hist.write_text(f"now\t1s\tarms-{ref}\t{reference_status}\t-\tsess\tnextflow run\n")
+    plan_file = tmp_path / "plan.csv"
+    plan_file.write_text(plan_csv(plan))
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,is_reference,channels\nP1,/x/a.tif,true,DAPI\n"
+    )
+
+    def run():
+        env = dict(os.environ, ARMS_CONCURRENCY="4")
+        return subprocess.run(
+            ["bash", str(BENCH / "run_arms.sh"), str(plan_file), str(sheet), str(root)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    return plan, root, run
+
+
+def test_ashlar_waits_for_the_arm_whose_nuclei_it_scores_against(tmp_path):
+    plan, root, run = _external_root(tmp_path, "-")
+    r = run()
+    for p in plan:
+        line = next(
+            ln for ln in r.stderr.splitlines() if ln.startswith(f"[{p['run_id']}] SKIP")
+        )
+        assert "has not finished" in line and p["ext_from_arm"] in line, line
+        assert not (root / p["arm"] / "ashlar.stdout.log").exists(), (
+            "ASHLAR was started"
+        )
+
+
+def test_a_finished_ashlar_arm_is_done_and_not_rerun(tmp_path):
+    plan, root, run = _external_root(tmp_path, "OK")
+    for p in plan:
+        (root / p["arm"]).mkdir(parents=True, exist_ok=True)
+        (root / p["arm"] / ".external_done").write_text("2026-09-14T12:00:00\n")
+    r = run()
+    for p in plan:
+        assert f"[{p['run_id']}] DONE" in r.stdout, r.stdout + r.stderr
+        assert not (root / p["arm"] / "ashlar.stdout.log").exists(), (
+            "ASHLAR was started"
+        )
+
+
+def test_the_ashlar_pass_runs_right_after_registration():
+    import re
+
+    code = "\n".join(
+        ln
+        for ln in (BENCH / "run_arms.sh").read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    order = re.search(r"^for kind in ([a-z_ ]+); do", code, re.M).group(1).split()
+    assert order.index("registration") + 1 == order.index("external"), order
+    assert order.index("external") < order.index("registration_qc"), order

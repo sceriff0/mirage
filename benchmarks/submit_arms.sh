@@ -154,6 +154,22 @@ export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx2g}"
 source "$SRC_DIR/benchmarks/head_sizing.sh"
 check_head_memory "$CONCURRENCY" "$NXF_OPTS" || exit 1
 
+# ASHLAR (arm_kind=external) runs OUTSIDE Nextflow, inside this head job, so its steps need
+# their containers spelled out: retile, stitch and seg QC in the pipeline's tiled image, the
+# registration QC composite in the regqc image, the alignment solve in ASHLAR's own image.
+# Nextflow's autoMounts do not apply here, so the data filesystems are bound explicitly, and
+# an image is taken from Nextflow's singularity cache when the pipeline already pulled it.
+# Each is overridable by exporting ASHLAR_EXEC / QC_EXEC / REGQC_EXEC before sbatch.
+SING_BINDS="${SING_BINDS:---bind /beegfs --bind /hpcnfs}"
+sif_or_docker() {                  # sif_or_docker <registry/name:tag>
+  local ref="$1" f
+  f="$NXF_SINGULARITY_CACHEDIR/$(printf '%s' "$ref" | tr '/:' '--').img"
+  if [[ -f "$f" ]]; then printf '%s' "$f"; else printf 'docker://%s' "$ref"; fi
+}
+export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(sif_or_docker labsyspharm/ashlar:1.20.0)}"
+export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-tiled:1.0.0)}"
+export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-regqc:1.0.0)}"
+
 # Concurrency is passed on the COMMAND LINE, not via benchmark.config. Every
 # per-process cap in conf/modules.config is Math.min(own, params.max_forks), evaluated
 # EAGERLY when that file is parsed -- which happens before a -c file is merged, so a -c
@@ -231,6 +247,9 @@ echo "Results:    $RESULTS"
 echo "Profiles:   $PROFILES   Concurrency: $CONCURRENCY   CSE: $ENABLE_CSE"
 [ -n "$CHANGED$ONLY" ] && echo "Subset:     CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}'"
 [ -n "${ARMS_RESUME:-}" ] && echo "Resume:     ARMS_RESUME=$ARMS_RESUME (finished arms skipped, interrupted ones continued from cache)"
+echo "ASHLAR:     solve via: $ASHLAR_EXEC"
+echo "            retile/stitch/seg QC via: $QC_EXEC"
+echo "            registration QC via: $REGQC_EXEC"
 echo "=================================================="
 
 # 1. Expand arms.yaml -> arm_plan.csv + the consumer's arms.csv (seconds, local).

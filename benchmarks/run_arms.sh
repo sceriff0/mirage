@@ -129,6 +129,17 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   local resume_args=()
   if [[ -n "${RESUME_RUN:-}" ]]; then
     rundir="$ROOT/.launch/$RESUME_RUN"
+    # A cross resumes its base's registration and only adds the QC chain, so it may start
+    # only once that registration FINISHED. Measured on the cluster 2026-09-14 (job 6812701):
+    # with every base refused as interrupted, the QC pass still launched their crosses, each
+    # resuming a half-finished session and so re-running the registration itself.
+    local base_status
+    base_status=$(awk -F'\t' -v n="arms-$RESUME_RUN" '$3 == n || index($3, n "-r") == 1 { st = $4 } END { print st }' "$rundir/.nextflow/history" 2>/dev/null)
+    if [[ "$base_status" != "OK" ]]; then
+      echo "[$run_id] SKIP: base arm '$RESUME_RUN' has not finished (last attempt status '${base_status:-none}'); its crosses wait for it." \
+           "Resume the base with ARMS_RESUME=1, or restart it with ARMS_REPLACE=1." >&2
+      return 1
+    fi
     if [[ ! -d "$rundir/work" ]]; then
       echo "[$run_id] SKIP: base arm '$RESUME_RUN' has no work dir at $rundir/work" >&2
       return 1
@@ -425,6 +436,20 @@ launch_row() {
         echo "[$run_id] SKIP: $ROOT/$ext_from_arm missing — no QC nuclei to score against" >&2
         return 1
       fi
+      # ASHLAR scores against that arm's PUBLISHED QC nuclei, which exist only once it finished.
+      local ext_status
+      ext_status=$(awk -F'\t' -v n="arms-$ext_from_arm" '$3 == n || index($3, n "-r") == 1 { st = $4 } END { print st }' "$ROOT/.launch/$ext_from_arm/.nextflow/history" 2>/dev/null)
+      if [[ "$ext_status" != "OK" ]]; then
+        echo "[$run_id] SKIP: '$ext_from_arm' has not finished (last attempt status '${ext_status:-none}'); ASHLAR scores against its published QC nuclei." \
+             "Resume it with ARMS_RESUME=1." >&2
+        return 1
+      fi
+      # An external arm has no Nextflow history to say it finished, so run_arms leaves a marker
+      # on success; ARMS_REPLACE=1 moves the arm directory, marker included, aside.
+      if [[ -f "$ROOT/$arm/.external_done" ]]; then
+        echo "[$run_id] DONE: $ROOT/$arm/.external_done exists; nothing to do -- ARMS_REPLACE=1 redoes it from scratch"
+        return 0
+      fi
       mkdir -p "$ROOT/$arm"
       if ! "$PIPELINE_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$ext_from_arm" "$preproc_csv" \
             "$ext_tile" "$ext_overlap" "$ext_shift" \
@@ -433,6 +458,7 @@ launch_row() {
         tail -n 25 "$ROOT/$arm/ashlar.stderr.log" >&2 2>/dev/null
         return 1
       fi
+      date '+%Y-%m-%dT%H:%M:%S' > "$ROOT/$arm/.external_done"
       return 0
     fi
 
@@ -548,11 +574,12 @@ run_qc_pass() {
 }
 
 # preprocess FIRST: every registration arm resumes from its csv/preprocessed.csv.
-# external AFTER registration (it reuses a registration arm's published QC nuclei) and
-# BEFORE compute (which is being timed and must not contend for nodes).
-# registration_qc AFTER registration: each QC cross arm resumes its base arm's session,
-# so the base must have finished. The barrier below is what guarantees that.
-for kind in preprocess registration registration_qc external segmentation compute; do
+# external (ASHLAR) straight AFTER registration: it needs only preprocess_shared and its
+# reference arm's published QC nuclei (and waits for that arm to be OK), and behind the
+# 63-cross QC pass it waited days at a low job ceiling. BEFORE compute, which is timed.
+# registration_qc AFTER registration: each QC cross resumes its base arm's session, so the
+# base must have finished -- the barrier below, and launch()'s base-status check, ensure it.
+for kind in preprocess registration external registration_qc segmentation compute; do
   echo "=== pass: $kind ==="
   run_pass "$kind"
   # Barrier between passes: segmentation needs registration's checkpoint, and the

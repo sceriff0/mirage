@@ -31,13 +31,15 @@
 #                     <tile_size> <overlap_fraction> <max_shift_um>
 #
 # Environment:
-#   ASHLAR_EXEC   command prefix for the retile/solve steps (they need the ashlar
-#                 package: labsyspharm/ashlar:1.20.0, amd64-only).
-#                 e.g. ASHLAR_EXEC="singularity exec ashlar_1.20.0.sif"
-#   QC_EXEC       command prefix for warp_seg_qc.py (needs the pipeline's tiled
-#                 image: bolt3x/mirage-tiled:1.0.0 — see lib/WarpBackends.groovy).
-#                 e.g. QC_EXEC="singularity exec mirage-tiled_1.0.0.sif"
-#   Both default to empty, i.e. run bare against whatever is on PATH.
+#   ASHLAR_EXEC   command prefix for the alignment solve (needs the ashlar package:
+#                 labsyspharm/ashlar:1.20.0, amd64-only).
+#   QC_EXEC       command prefix for retile, the stitch and warp_seg_qc.py (the pipeline's
+#                 tiled image, bolt3x/mirage-tiled:1.0.0 -- TILED_STITCH's and the tiled
+#                 WARP_SEG_QC's container).
+#   REGQC_EXEC    command prefix for generate_registration_qc.py (bolt3x/mirage-regqc:1.0.0,
+#                 GENERATE_REGISTRATION_QC's container).
+#   All default to empty, i.e. run bare against whatever is on PATH; submit_arms.sh sets
+#   them to `singularity exec --bind /beegfs --bind /hpcnfs <image>`.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -53,6 +55,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 ASHLAR_EXEC="${ASHLAR_EXEC:-}"
 QC_EXEC="${QC_EXEC:-}"
+REGQC_EXEC="${REGQC_EXEC:-}"
+# The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
+# the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
+# and the package source on the path, and hand the same value into the containers:
+# Singularity and Apptainer set SINGULARITYENV_X / APPTAINERENV_X as X inside.
+STEP_PYTHONPATH="$REPO:$REPO/packages/stare/src"
+export PYTHONPATH="$STEP_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
+export SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH" APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"
 
 OUT="$ROOT/$ARM"
 WORK="$ROOT/.launch/$ARM"
@@ -136,7 +146,7 @@ for pid in $patients; do
   mkdir -p "$ref_tiles"
   # shellcheck disable=SC2086
   step ASHLAR_RETILE "$pid" --input "$ref_img" -- \
-      $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
+      $QC_EXEC python3 -m benchmarks.ashlar.retile \
       --image "$ref_img" --outdir "$ref_tiles" --cycle 0 \
       --tile-size "$TILE" --overlap "$OVERLAP"
 
@@ -168,7 +178,7 @@ for pid in $patients; do
     echo "[$ARM/$pid] $ref_name -> $mov_name (tile=$TILE shift=${MAXSHIFT}um)"
     # shellcheck disable=SC2086
     step ASHLAR_RETILE "$pid" --input "$mov_img" -- \
-        $ASHLAR_EXEC python3 -m benchmarks.ashlar.retile \
+        $QC_EXEC python3 -m benchmarks.ashlar.retile \
         --image "$mov_img" --outdir "$d/mov" --cycle 1 \
         --tile-size "$TILE" --overlap "$OVERLAP"
     # shellcheck disable=SC2086
@@ -184,8 +194,9 @@ for pid in $patients; do
     # as a VALIS or STARE arm: benchmarks/reg_mosaic.py draws its column from these
     # files and re-warps nothing. tiled_stitch.py is the pipeline's TILED_STITCH (the
     # manifest is STARE's format, which is the whole point of benchmarks/ashlar/solve.py);
-    # generate_registration_qc.py is GENERATE_REGISTRATION_QC. Both run in the tiled
-    # image (QC_EXEC), which carries the stare package and the QC dependencies.
+    # generate_registration_qc.py is GENERATE_REGISTRATION_QC. Each runs in its pipeline
+    # process's own image: the stitch in the tiled image (QC_EXEC), the QC composite in the
+    # regqc image (REGQC_EXEC).
     reg_dir="$OUT/$pid/registered/registered"
     mkdir -p "$reg_dir"
     reg_img="$reg_dir/${mov_name}_registered.ome.tiff"
@@ -201,7 +212,7 @@ for pid in $patients; do
     [[ "$mov_px" =~ ^[0-9.]+$ ]] && qc_px_flag=(--pixel-size-um "$mov_px")
     # shellcheck disable=SC2086
     step ASHLAR_REG_QC "$pid" --input "$ref_img" --input "$reg_img" --input "$mov_img" -- \
-        $QC_EXEC python3 "$REPO/bin/generate_registration_qc.py" \
+        $REGQC_EXEC python3 "$REPO/bin/generate_registration_qc.py" \
         --reference "$ref_img" --registered "$reg_img" --native "$mov_img" \
         --output "$qc_out" "${qc_px_flag[@]}" \
       || { echo "[$ARM/$pid] FAILED registration QC for $mov_name" >&2; rc=1; }

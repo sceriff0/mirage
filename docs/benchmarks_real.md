@@ -120,6 +120,27 @@ path. A root built before this change lacks those rows; collect them once with
 `make arm-rerun ONLY='ashlar.*'` — nothing depends on an external arm, so that
 re-runs the four ASHLAR arms and nothing else (see "Re-running a subset").
 
+#### How the ASHLAR arms run
+
+They are not Nextflow runs: `run_arms.sh` calls `benchmarks/run_ashlar_arm.sh` inside the
+head job, in the pass **straight after registration**, and only once their reference arm
+(`valis_high_micro2`) has finished, because they score against its published QC nuclei
+(`<pid>/qc/registration/geojson`). Each step runs in the image of the pipeline process it
+stands in for, via `singularity exec --bind /beegfs --bind /hpcnfs`, taking the image from
+Nextflow's singularity cache when the pipeline already pulled it:
+
+| step | image | overridable with |
+|---|---|---|
+| retile, stitch, seg QC | `bolt3x/mirage-tiled:1.0.0` | `QC_EXEC` |
+| registration QC composite | `bolt3x/mirage-regqc:1.0.0` | `REGQC_EXEC` |
+| alignment solve | `labsyspharm/ashlar:1.20.0` | `ASHLAR_EXEC` |
+
+The repo and `packages/stare/src` are put on `PYTHONPATH` inside every container, because
+the `bin/utils` shims import `stare` and the ASHLAR image does not install it. A finished
+ASHLAR arm leaves `<arm>/.external_done`, so a relaunch reports it DONE instead of redoing
+it; `ARMS_REPLACE=1` moves the arm, marker included, aside. Its steps share the head job's
+memory with the Nextflow heads, so keep the head count low while they run.
+
 ### 1c. The SOLVE-stage cross — **9 runs**
 
 `reg_tiled_solver` selects STARE's SOLVE stage: `legacy` (gates + median filter,

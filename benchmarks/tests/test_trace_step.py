@@ -136,11 +136,11 @@ def test_run_ashlar_arm_routes_every_heavy_invocation_through_the_wrapper():
         assert re.search(rf"^\s*step {proc} ", code, re.M), f"{proc} is not wrapped"
     # no bare $ASHLAR_EXEC / $QC_EXEC invocation survives outside a `step ... -- \` line
     for ln in code.splitlines():
-        if "$ASHLAR_EXEC python3" in ln or "$QC_EXEC python3" in ln:
+        if any(f"${e} python3" in ln for e in ("ASHLAR_EXEC", "QC_EXEC", "REGQC_EXEC")):
             assert ln.strip().startswith("$"), ln
     joined = code.replace("\\\n", " ")
     for ln in joined.splitlines():
-        if "$ASHLAR_EXEC python3" in ln or "$QC_EXEC python3" in ln:
+        if any(f"${e} python3" in ln for e in ("ASHLAR_EXEC", "QC_EXEC", "REGQC_EXEC")):
             assert re.match(r"^\s*step ASHLAR_\w+ ", ln), (
                 f"unwrapped: {ln.strip()[:80]}"
             )
