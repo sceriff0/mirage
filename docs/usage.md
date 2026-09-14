@@ -561,6 +561,23 @@ key grammar is a cross-repository contract — see
     Pre-pull them once with the list in
     [Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
 
+??? failure "Singularity pull: `mksquashfs command failed: signal: killed`"
+    That error means the image was converted inside the Nextflow **head** job:
+    `mksquashfs` sizes its cache from 25% of the node's *physical* memory, not
+    from the job's limit, and is killed on a large node. Raising
+    `singularity.pullTimeout` does not help. The `singularity` profile sets
+    `singularity.ociAutoPull = true`, so each task converts its own image on the
+    compute node, inside its own allocation, and the head never pulls. If you
+    still see this, check that nothing sets `ociAutoPull = false`.
+
+    Converted images are cached by Apptainer/Singularity itself, not under
+    `singularity.cacheDir`, so point that cache at a shared, writable path before
+    launching (tasks inherit it from the launch environment):
+    ```bash
+    export APPTAINER_CACHEDIR=/shared/writable/apptainer_cache
+    export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
+    ```
+
 ??? failure "Singularity: `FATAL: ... permission denied`"
     The cache isn't writable. Point it at a path you own:
     ```bash
