@@ -103,6 +103,17 @@ echo "Using python: $PYTHON ($("$PYTHON" --version 2>&1))"
 }
 # Keep Singularity image cache off read-only $HOME (matches conf/ieo.config's cacheDir).
 export NXF_SINGULARITY_CACHEDIR="${NXF_SINGULARITY_CACHEDIR:-/hpcnfs/scratch/P_DIMA_ATTEND/users/vfassi/docker_images}"
+# Every head pulls its missing images itself (the singularity profile has no ociAutoPull),
+# and CONCURRENCY heads share this job and this cacheDir, so two heads can pull the same
+# image, or two images sharing base layers, at once. Apptainer's download cache is not safe
+# for that ("conveyor failed to get: unexpected end of JSON input", head_neck 2026-09-15).
+# With it disabled each pull unpacks into its own folder under APPTAINER_TMPDIR; Nextflow
+# still keeps the finished .img in NXF_SINGULARITY_CACHEDIR, so later runs pull nothing.
+export APPTAINER_DISABLE_CACHE="${APPTAINER_DISABLE_CACHE:-true}"
+export SINGULARITY_DISABLE_CACHE="${SINGULARITY_DISABLE_CACHE:-$APPTAINER_DISABLE_CACHE}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$NXF_SINGULARITY_CACHEDIR/.pull_tmp}"
+export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}"
+mkdir -p "$APPTAINER_TMPDIR"
 # Cap EACH concurrent Nextflow head's JVM heap so CONCURRENCY x heap stays under --mem
 # (16 x 3 GB = 48 GB < 64 GB, leaving room for JVM/OS overhead). Raise -Xmx only if a head OOMs.
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx2g}"
