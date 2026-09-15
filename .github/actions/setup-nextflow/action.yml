@@ -128,7 +128,7 @@ runs:
   using: composite
   steps:
     - name: Cache Nextflow
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         # ~/.nextflow ONLY: the launcher plus the framework jars for one
         # version. nf-core/setup-nf-test caches ~/.nf-test itself -- see the
@@ -139,13 +139,13 @@ runs:
         key: ${{ runner.os }}-${{ runner.arch }}-nextflow-${{ inputs.nextflow-version }}
 
     - name: Install Nextflow
-      uses: nf-core/setup-nextflow@v2
+      uses: nf-core/setup-nextflow@v3
       with:
         version: ${{ inputs.nextflow-version }}
 
     - name: Cache Nextflow plugins
       if: inputs.plugins == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         # Matches the NXF_PLUGINS_DIR the calling workflow sets at `env:` level,
         # so nf-schema is downloaded once per repository rather than once per
