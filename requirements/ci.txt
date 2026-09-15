@@ -7,7 +7,7 @@
 # image takes its version FROM that image's own file, never from a second copy written
 # here. The `-r` lines below are how, and the two exceptions are named and explained.
 #
-# TWO VERSION STRINGS BELOW: `anndata<0.12` and `h5py==3.11.0`, and each reason is spelled
+# TWO VERSION STRINGS BELOW: `anndata<0.12` and `h5py==3.16.0`, and each reason is spelled
 # out where it sits. Everything else is either constrained by constraints.txt or comes from
 # a production image's own file.
 #
@@ -59,7 +59,7 @@ dask[array]
 # forbids constraining a package fewer than two images install. 3.11.0 matches
 # containers/convert/Dockerfile's own pin, taken by hand rather than round-tripped
 # through constraints.txt.
-h5py==3.11.0
+h5py==3.16.0
 
 # opencv, as the HEADLESS build — the runners have no display libs. bin/utils/qc.py imports
 # cv2 at module scope, and tests/test_merge_pyramid_streaming.py and

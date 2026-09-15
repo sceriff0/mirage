@@ -38,7 +38,7 @@
 # imports spatialdata, anndata, geopandas, shapely, zarr, dask and tifffile by name.
 spatialdata==0.8.0
 zarr==3.3.0            # NOT the 2.18 the tiled image pins; spatialdata >= 0.8.0 needs 3.x
-ome-zarr==0.19.1
+ome-zarr==0.19.2
 anndata==0.13.3.post0
 
 # Shapes are GeoParquet-backed GeoDataFrames; GEOS comes from libgeos-c1v5 in the image.
@@ -50,10 +50,10 @@ pyarrow==25.0.1         # GeoParquet writer for shapes/, and Parquet for any poi
 # THE `[array]` EXTRA IS LOAD-BEARING and `pip freeze` drops it: bin/export_spatialdata.py
 # reads through dask.array, which the bare distribution does not pull in.
 dask[array]==2026.8.0
-tifffile==2026.8.23
+tifffile==2026.9.9
 imagecodecs==2026.8.16     # zstd/LZW codecs used by MERGE_AND_PYRAMID's OME-TIFF
 
 # cKDTree for the QC-residual -> cell_mask spatial join.
 scipy==1.18.1
 pandas==3.0.5
-numpy==2.4.6
+numpy==2.5.3
