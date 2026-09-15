@@ -326,7 +326,7 @@ ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch ~/pipelines/mirage/benchmarks/subm
 
 The ceiling is per submitter: the arms and the sweep running at once add up, so give each
 half (`PEAK_JOBS_TARGET=5`) if ten is the budget for everything. It caps jobs, not memory: a
-`REGISTER` asks 300 GB on its first attempt, so ten of them can still hold a large share of
+`REGISTER` asks 64 GB on its first attempt and up to 512 GB on its fourth, so ten of them can still hold a large share of
 the node pool. The ASHLAR arms' steps run inside the head job itself, not as SLURM jobs.
 
 To enable CSE on the segmentation arms, publish the `segeval` image once

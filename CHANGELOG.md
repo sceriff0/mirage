@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`REGISTER` memory now starts at 64 GB and doubles per attempt, for at most four
+  attempts: 64 → 128 → 256 → 512 GB** (was `300 GB × attempt` with the retry count
+  inherited). `maxRetries = 3` is pinned in the process's own `withName:` block, so a
+  profile's generic `maxRetries` no longer changes the ramp. Each rung is clamped by
+  `process.resourceLimits` (`params.max_memory`), so a site ceiling below 512 GB caps
+  the later attempts. The `tma` profile's `64 GB × attempt` override is unchanged.
+
 - **`skip_preprocessing` defaults to `true`**: a default run converts every slide to the
   standardised OME-TIFF and goes straight to registration; BaSiC illumination correction is
   now opt-in (`"skip_preprocessing": false` in a params file or profile — never on the CLI).

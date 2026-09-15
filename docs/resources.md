@@ -112,10 +112,12 @@ real slide. Changing either number changes an unguarded figure, so change it her
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `REGISTER` | `8` | `300 GB × attempt` | `24.h × attempt` | `withName` |
+| `REGISTER` | `8` | `64 GB × 2^(attempt − 1)` (64 → 128 → 256 → 512 GB) | `24.h × attempt` | `withName` |
+
+`REGISTER` pins its own retry budget (at most four attempts, so the ramp stops at its 512 GB rung) rather than inheriting a profile's, and every rung is still clamped by `max_memory`.
 
 The `tma` profile overrides only `REGISTER`'s memory, to `64 GB × attempt`: tissue-microarray
-cores are ~2800 px on a side, and the 300 GB request is sized for whole slides. Cpus and time
+cores are ~2800 px on a side, and the doubling ramp's upper rungs are sized for whole slides. Cpus and time
 stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`)
 instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a small
 request. `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
