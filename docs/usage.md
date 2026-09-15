@@ -561,22 +561,41 @@ key grammar is a cross-repository contract — see
     Pre-pull them once with the list in
     [Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
 
-??? failure "Singularity pull: `mksquashfs command failed: signal: killed`"
-    That error means the image was converted inside the Nextflow **head** job:
-    `mksquashfs` sizes its cache from 25% of the node's *physical* memory, not
-    from the job's limit, and is killed on a large node. Raising
-    `singularity.pullTimeout` does not help. The `singularity` profile sets
-    `singularity.ociAutoPull = true`, so each task converts its own image on the
-    compute node, inside its own allocation, and the head never pulls. If you
-    still see this, check that nothing sets `ociAutoPull = false`.
+??? failure "Singularity: `conveyor failed to get: unexpected end of JSON input`"
+    Two Apptainer processes wrote the same download into its shared cache at the same
+    time, and one read a file the other was still writing. The task dies before its
+    script runs. Apptainer's cache is not built for parallel use.
 
-    Converted images are cached by Apptainer/Singularity itself, not under
-    `singularity.cacheDir`, so point that cache at a shared, writable path before
-    launching (tasks inherit it from the launch environment):
+    The usual cause is `ociAutoPull = true`, which makes every task convert its own
+    image: dozens of tasks starting together on a cold cache collide. The `singularity`
+    profile leaves it off, like nf-core's, so the Nextflow head pulls each image once
+    into `singularity.cacheDir` (or `NXF_SINGULARITY_CACHEDIR`) and tasks only read the
+    finished file. Check that no site or `-c` config turns it on.
+
+    Head pulls can still overlap, less often: one head pulls *different* images at the
+    same time, and some images share base layers (`mirage-quantify` and `mirage-regqc`
+    do); several Nextflow runs started at once against the same `cacheDir` can also
+    pull the same image together. To rule that out, launch Nextflow with Apptainer's
+    cache disabled. Each pull then unpacks into its own temporary folder, and Nextflow
+    still keeps the finished image in `cacheDir`, so later runs download nothing:
     ```bash
-    export APPTAINER_CACHEDIR=/shared/writable/apptainer_cache
-    export SINGULARITY_CACHEDIR=$APPTAINER_CACHEDIR
+    export APPTAINER_DISABLE_CACHE=true SINGULARITY_DISABLE_CACHE=true
+    # unpacked layers go here during a pull (tens of GB for the CUDA images)
+    export APPTAINER_TMPDIR=/shared/scratch/apptainer_tmp SINGULARITY_TMPDIR=$APPTAINER_TMPDIR
     ```
+    After a failure, clear the damaged entries with `singularity cache clean`, then
+    `-resume`.
+
+??? failure "Singularity pull: `mksquashfs command failed: signal: killed`"
+    The Nextflow head converts every image that is not yet in `singularity.cacheDir`,
+    and it converts different images at the same time. `mksquashfs` sizes its memory
+    from the node's *physical* RAM, not from the job's limit, so on a cold cache a
+    head job with a small memory grant can be killed. This costs memory on the first
+    run only: once the images are in the cache, no later run converts anything. Give
+    the head job more memory (or run it where it is not memory-capped) for that first
+    run. A cluster administrator can also cap the tool with `mksquashfs mem` in
+    `apptainer.conf`. Raising `singularity.pullTimeout` does not help. Do not set
+    `ociAutoPull = true` to avoid this; it trades this failure for the one above.
 
 ??? failure "Singularity: `FATAL: ... permission denied`"
     The cache isn't writable. Point it at a path you own:
