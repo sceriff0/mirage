@@ -93,9 +93,9 @@ def test_the_profile_is_documented_where_operators_look():
 
 
 def test_the_tma_profile_sizes_register_for_cores_not_slides():
-    """conf/modules.config reserves a flat 300 GB x attempt for REGISTER, sized for
-    whole slides. Five ~2800 px cores need a small fraction of that, and on SLURM a
-    300 GB request is what the run waits in the queue for. The profile overrides the
+    """conf/modules.config ramps REGISTER 64 -> 128 -> 256 -> 512 GB, sized for
+    whole slides. Five ~2800 px cores need a small fraction of the upper rungs, and on
+    SLURM those requests are what the run waits in the queue for. The profile overrides the
     one process, keeps the retry ramp, and leaves cpus/time alone; the JVM heap is
     pinned flat by the profile (JVM_HEAP_GB above), not derived from task.memory."""
     body = _profile_body("tma")
