@@ -215,7 +215,7 @@ def valis_registration(
     max_non_rigid_dim: Optional[int] = None,
     micro_reg_fraction: float = 0.125,
     max_image_dim_px: int = 4000,
-    micro_reg: int = 1,
+    micro_reg: int = 2,
     interp_method: str = "bicubic",
     jvm_heap_gb: Optional[int] = None,
     stage_checkpoint_dir: Optional[str] = None,
@@ -251,8 +251,8 @@ def valis_registration(
     micro_reg : int, optional
         Micro-registration depth (nested ordinal). 0 = neither micro pass;
         1 = micro-rigid only (``MicroRigidRegistrar`` refines ``slide.M`` inside
-        ``register()``, the default — matches the pipeline's ``reg_micro_reg``
-        default); 2 = also the micro non-rigid pass (``register_micro()``). VALIS
+        ``register()``); 2 = also the micro non-rigid pass (``register_micro()``),
+        the default — matches the pipeline's ``reg_micro_reg`` default. VALIS
         controls the two independently, so this ordinal is the single knob that gates both.
     stage_checkpoint_dir : str, optional
         Where to snapshot each slide's forward displacement field after the non-rigid stage
@@ -1135,10 +1135,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--micro-reg",
         type=int,
-        default=1,
+        default=2,
         choices=[0, 1, 2],
         help="Micro-registration depth (nested): 0=none, 1=micro-rigid only "
-        "(refines slide.M) [default], 2=+micro non-rigid (register_micro)",
+        "(refines slide.M), 2=+micro non-rigid (register_micro) [default]",
     )
 
     # Advanced registration options

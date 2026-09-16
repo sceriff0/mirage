@@ -103,7 +103,7 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
 | `reg_valis_max_keypoints` | `null` | Keypoints kept per image for SuperPoint detection and SuperGlue matching. `null` = VALIS's own 20000, what every run has used. SuperGlue's cost is quadratic in it; the `tma` profile pins 2000. **Lowering it changes which matches exist**, so registrations at different values are not comparable. Legal under any `memory_mode`. |
 | `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
 | `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
-| `reg_micro_reg` | `1` | Micro-registration depth (nested, default `1`): `0` = none, `1` = micro-rigid only (refines `slide.M`) — default, `2` = + micro non-rigid (`register_micro`). At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
+| `reg_micro_reg` | `2` | Micro-registration depth (nested, default `2`): `0` = none, `1` = micro-rigid only (refines `slide.M`), `2` = + micro non-rigid (`register_micro`) — default. At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
 | `reg_jvm_heap_gb` | `null` | Explicit JVM heap (GB) for VALIS. `null` auto-estimates from input size. |
 | `reg_qc` | `2` | Registration QC depth: `0` = none, `1` = the [before/after DAPI overlay](registration_qc.md#the-reg_qc-1-overlay-is-a-beforeafter-pair) only, `2` = that overlay + [staged segmentation-overlap metrics](registration_qc.md). |
 

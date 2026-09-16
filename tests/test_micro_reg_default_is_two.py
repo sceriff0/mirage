@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-r"""Guard that the shipped `reg_micro_reg` default is `1`, everywhere it lives.
+r"""Guard that the shipped `reg_micro_reg` default is `2`, everywhere it lives.
+
+2026-09-16: the default moved 1 -> 2 (micro-rigid + micro non-rigid) by user ruling, on
+main, dev and benchmarking together. This file was test_micro_reg_default_is_one.py; every
+home below moved with it. The prose check changed direction: "the default is the maximum"
+is TRUE again, so what is now forbidden is prose calling micro-rigid-only (1) the default,
+or describing the micro non-rigid pass as off / opt-in at the shipped defaults. The
+history below is what the homes are and how each was found, written when the default was 1.
+
 
 `reg_micro_reg` has TEN homes. NINE were enumerated by the 2026-08-30 spec
 (Task 5 of the registration-backend-surface plan); the tenth --
@@ -95,7 +103,7 @@ from tests.nfmodel import strip_comments as _strip_comments
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# The nine homes that must all read the shipped default, `1`.
+# The nine homes that must all read the shipped default, `2`.
 NEXTFLOW_CONFIG = ROOT / "nextflow.config"
 SCHEMA = ROOT / "nextflow_schema.json"
 PARAMETERS_MD = ROOT / "docs" / "parameters.md"
@@ -134,30 +142,26 @@ _MICRO_REG_BADGE_RE = re.compile(r"<span>micro_reg <b>(\S+?)</b></span>")
 # Deliberately NOT one of the nine homes -- see module docstring.
 TEST_CONFIG = ROOT / "conf" / "test.config"
 
-# The four prose homes making the now-false "default is the max" claim, and
-# both spellings it can take.
+# Prose homes. The claim that is now FALSE is the one the default-1 era wrote: micro-rigid
+# depth / reg_micro_reg=1 is what ships, and the micro non-rigid pass is off or opt-in.
 PROSE_HOMES = [
     NEXTFLOW_CONFIG,
     SCHEMA,
     PARAMETERS_MD,
+    PIPELINE_MD,
     PIPELINE_SCHEMATIC,
     PARAM_UTILS,
-    # Added 2026-09-01. It had been left out on the grounds that spec Phase 6 owns
-    # rewriting this figure -- but Phase 6 owns the REWRITE, not a licence to keep a
-    # false default in the meantime, and the exclusion was what let `:559` ("the
-    # shipped default (depth 2 = maximum)") stand. Watched fail on that exact line
-    # before the prose was fixed. Phase 6's rewrite now inherits this constraint,
-    # which is the right way round: a figure may be rewritten freely, but not back
-    # into claiming 2 is the shipped depth.
     REGISTRATION_SCHEMATIC,
 ]
-# Not `default\s+max` -- see the module docstring: requiring adjacency let two live
-# sentences through. Up to 60 non-"." characters may sit between the two words, in
-# either order. The `\b` after `max(?:imum|imal)?` is load-bearing: it is what keeps
-# `max_memory` / `max_cpus` / `maxRetries` out of the match.
-MAX_DEFAULT_PATTERN = re.compile(
-    r"\bdefaults?\b[^.]{0,60}?\bmax(?:imum|imal)?\b"
-    r"|\bmax(?:imum|imal)?\b[^.]{0,60}?\bdefaults?\b",
+# `1(?![.\d])`, not `1\b`: registration-schematic.html states STARE's gate as "default 1.0 px",
+# and `\b` sits between the 1 and the dot.
+STALE_ONE_IS_DEFAULT = re.compile(
+    r"micro-rigid (?:only )?(?:depth )?(?:\(default\)|\[default\]|by default|—\s*default)"
+    r"|default 1(?![.\d])|\(default 1\)|reg_micro_reg=1</code>\)?[^.]{0,40}?default"
+    r"|micro-rigid depth</b> by default|micro-rigid depth by default"
+    r"|micro_reg = 2 · NOT the default|does not run at the shipped\s+defaults|what ships\)"
+    r"|`?1`?\s*=\s*micro-rigid[^,;|]{0,60}?(?:\[default\]|—\s*default)"
+    r"|at micro-rigid depth|shipped default is 1(?![.\d])",
     re.IGNORECASE,
 )
 
@@ -198,17 +202,17 @@ def _parse_top_level_params_block(config_text: str) -> dict[str, str]:
     return declared
 
 
-def test_nextflow_config_default_is_one():
+def test_nextflow_config_default_is_two():
     declared = _parse_top_level_params_block(_read(NEXTFLOW_CONFIG))
     assert "reg_micro_reg" in declared, (
         "reg_micro_reg not declared in nextflow.config's params {}"
     )
-    assert declared["reg_micro_reg"] == "1", (
-        f"nextflow.config's reg_micro_reg default is {declared['reg_micro_reg']!r}, expected '1'"
+    assert declared["reg_micro_reg"] == "2", (
+        f"nextflow.config's reg_micro_reg default is {declared['reg_micro_reg']!r}, expected '2'"
     )
 
 
-def test_schema_default_is_one():
+def test_schema_default_is_two():
     schema = json.loads(_read(SCHEMA))
 
     def _find(node):
@@ -223,32 +227,32 @@ def test_schema_default_is_one():
 
     prop = _find(schema)
     assert prop is not None, "reg_micro_reg property not found in nextflow_schema.json"
-    assert prop.get("default") == 1, (
-        f"nextflow_schema.json's reg_micro_reg default is {prop.get('default')!r}, expected 1"
+    assert prop.get("default") == 2, (
+        f"nextflow_schema.json's reg_micro_reg default is {prop.get('default')!r}, expected 2"
     )
 
 
-def test_parameters_md_table_default_is_one():
+def test_parameters_md_table_default_is_two():
     text = _read(PARAMETERS_MD)
     match = re.search(r"^\|\s*`reg_micro_reg`\s*\|\s*`(\S+)`\s*\|", text, re.MULTILINE)
     assert match, "reg_micro_reg row not found in docs/parameters.md"
-    assert match.group(1) == "1", (
-        f"docs/parameters.md's reg_micro_reg table default is {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"docs/parameters.md's reg_micro_reg table default is {match.group(1)!r}, expected '2'"
     )
 
 
-def test_pipeline_schematic_value_is_one():
+def test_pipeline_schematic_value_is_two():
     text = _read(PIPELINE_SCHEMATIC)
     match = re.search(
         r'<td class="k">reg_micro_reg</td><td class="v">(\S+?)</td>', text
     )
     assert match, "reg_micro_reg row not found in docs/figures/pipeline-schematic.html"
-    assert match.group(1) == "1", (
-        f"pipeline-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"pipeline-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '2'"
     )
 
 
-def test_pipeline_schematic_badge_is_one():
+def test_pipeline_schematic_badge_is_two():
     """The step-summary badge, not the parameter row -- a SECOND copy in the
     same file, which `test_pipeline_schematic_value_is_one` above does not
     reach. It read `2` for the whole of this branch."""
@@ -258,13 +262,13 @@ def test_pipeline_schematic_badge_is_one():
         "micro_reg summary badge not found in docs/figures/pipeline-schematic.html "
         "-- this check would pass vacuously"
     )
-    assert match.group(1) == "1", (
+    assert match.group(1) == "2", (
         f"pipeline-schematic.html's micro_reg BADGE reads {match.group(1)!r}, expected "
-        "'1' (its parameter-table row is checked separately -- both are homes)"
+        "'2' (its parameter-table row is checked separately -- both are homes)"
     )
 
 
-def test_pipeline_md_badge_is_one():
+def test_pipeline_md_badge_is_two():
     """docs/pipeline.md embeds the same step-summary badge."""
     text = _read(PIPELINE_MD)
     match = _MICRO_REG_BADGE_RE.search(text)
@@ -272,23 +276,23 @@ def test_pipeline_md_badge_is_one():
         "micro_reg summary badge not found in docs/pipeline.md -- this check would "
         "pass vacuously"
     )
-    assert match.group(1) == "1", (
-        f"docs/pipeline.md's micro_reg badge reads {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"docs/pipeline.md's micro_reg badge reads {match.group(1)!r}, expected '2'"
     )
 
 
-def test_qc_schematic_value_is_one():
+def test_qc_schematic_value_is_two():
     text = _read(QC_SCHEMATIC)
     match = re.search(
         r'<td class="k">reg_micro_reg</td><td class="v">(\S+?)</td>', text
     )
     assert match, "reg_micro_reg row not found in docs/figures/qc-schematic.html"
-    assert match.group(1) == "1", (
-        f"qc-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"qc-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '2'"
     )
 
 
-def test_registration_schematic_value_is_one():
+def test_registration_schematic_value_is_two():
     text = _read(REGISTRATION_SCHEMATIC)
     match = re.search(
         r'<td class="k">reg_micro_reg</td><td class="val">(\S+?)</td>', text
@@ -296,82 +300,80 @@ def test_registration_schematic_value_is_one():
     assert match, (
         "reg_micro_reg row not found in docs/figures/registration-schematic.html"
     )
-    assert match.group(1) == "1", (
-        f"registration-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"registration-schematic.html's reg_micro_reg value is {match.group(1)!r}, expected '2'"
     )
 
 
-def test_full_pipeline_params_default_is_one():
+def test_full_pipeline_params_default_is_two():
     params = json.loads(_read(FULL_PIPELINE_PARAMS))
     assert "reg_micro_reg" in params, (
         "reg_micro_reg not present in params/full_pipeline.json"
     )
-    assert params["reg_micro_reg"] == 1, (
-        f"params/full_pipeline.json's reg_micro_reg is {params['reg_micro_reg']!r}, expected 1"
+    assert params["reg_micro_reg"] == 2, (
+        f"params/full_pipeline.json's reg_micro_reg is {params['reg_micro_reg']!r}, expected 2"
     )
 
 
-def test_registration_only_params_default_is_one():
+def test_registration_only_params_default_is_two():
     params = json.loads(_read(REGISTRATION_ONLY_PARAMS))
     assert "reg_micro_reg" in params, (
         "reg_micro_reg not present in params/registration_only.json"
     )
-    assert params["reg_micro_reg"] == 1, (
-        f"params/registration_only.json's reg_micro_reg is {params['reg_micro_reg']!r}, expected 1"
+    assert params["reg_micro_reg"] == 2, (
+        f"params/registration_only.json's reg_micro_reg is {params['reg_micro_reg']!r}, expected 2"
     )
 
 
-def test_register_py_docstring_does_not_call_two_the_default():
+def test_register_py_docstring_calls_two_the_default():
     text = _read(REGISTER_PY)
     match = re.search(
         r"micro_reg\s*:\s*int, optional\n(?:.*\n)*?    (?:stage_checkpoint_dir|Returns)",
         text,
     )
     assert match, "micro_reg docstring block not found in bin/register.py"
-    # Collapse whitespace first: docstring prose re-wraps across physical
-    # lines whenever the surrounding text is edited, so a check anchored to
-    # exact line breaks is one word-wrap away from a false negative.
+    # Collapse whitespace first: docstring prose re-wraps across physical lines.
     normalized = re.sub(r"\s+", " ", match.group(0))
     assert "matches the pipeline's ``reg_micro_reg`` default" in normalized, (
         "bin/register.py's cross-reference to the pipeline default is missing entirely "
-        "-- expected wording to be reworded onto 1, not deleted"
+        "-- expected wording to be reworded onto 2, not deleted"
     )
-    # The sentence must now be anchored on "1 = micro-rigid only", not on
-    # "2 = also the micro non-rigid pass" -- the old prose put "the default"
-    # right after describing value 2.
-    two_clause_match = re.search(r"2\s*=.*?\bthe default\b", normalized, re.IGNORECASE)
-    assert two_clause_match is None, (
-        "bin/register.py still describes micro_reg=2 as 'the default': "
-        f"{two_clause_match.group(0) if two_clause_match else None!r}"
+    one_clause = re.search(r"1\s*=[^;]*?\bthe default\b", normalized, re.IGNORECASE)
+    assert one_clause is None, (
+        "bin/register.py still describes micro_reg=1 as 'the default': "
+        f"{one_clause.group(0) if one_clause else None!r}"
+    )
+    assert re.search(r"2\s*=.*?\bthe default\b", normalized, re.IGNORECASE), (
+        "bin/register.py's micro_reg docstring does not call 2 the default"
     )
 
 
-def test_register_py_function_signature_default_is_one():
+def test_register_py_function_signature_default_is_two():
     """`valis_registration()`'s own Python default -- a direct import (not
     the pipeline, which always passes --micro-reg explicitly: register.nf)
     silently gets whatever this says."""
     text = _read(REGISTER_PY)
     match = re.search(r"^\s*micro_reg:\s*int\s*=\s*(\S+?),", text, re.MULTILINE)
     assert match, "micro_reg: int = ... signature default not found in bin/register.py"
-    assert match.group(1) == "1", (
+    assert match.group(1) == "2", (
         f"bin/register.py's valis_registration() signature default is "
-        f"{match.group(1)!r}, expected '1'"
+        f"{match.group(1)!r}, expected '2'"
     )
 
 
-def test_register_py_argparse_default_is_one():
+def test_register_py_argparse_default_is_two():
     """The `--micro-reg` CLI flag's own default -- a hand invocation without
     the flag silently gets whatever this says, independent of the pipeline
     (which always passes --micro-reg explicitly: register.nf)."""
     text = _read(REGISTER_PY)
     match = re.search(r'"--micro-reg",\s*\n\s*type=int,\s*\n\s*default=(\S+?),', text)
     assert match, "--micro-reg argparse block not found in bin/register.py"
-    assert match.group(1) == "1", (
-        f"bin/register.py's --micro-reg argparse default is {match.group(1)!r}, expected '1'"
+    assert match.group(1) == "2", (
+        f"bin/register.py's --micro-reg argparse default is {match.group(1)!r}, expected '2'"
     )
 
 
-def test_register_py_help_text_marks_one_not_two_as_default():
+def test_register_py_help_text_marks_two_not_one_as_default():
     """The --micro-reg --help string's own '[default]' marker -- must sit on
     the '1=...' clause, not '2=...', or --help visibly lies to an operator
     about which value is shipped."""
@@ -383,14 +385,14 @@ def test_register_py_help_text_marks_one_not_two_as_default():
     )
     assert match, "--micro-reg help text not found in bin/register.py"
     normalized = re.sub(r"\s+", " ", match.group(0))
-    one_clause_match = re.search(r"1\s*=.*?\[default\]", normalized)
-    assert one_clause_match, (
-        f"bin/register.py's --micro-reg help text does not mark the '1=...' "
+    two_clause_match = re.search(r"2\s*=[^,]*?\[default\]", normalized)
+    assert two_clause_match, (
+        f"bin/register.py's --micro-reg help text does not mark the '2=...' "
         f"clause as [default]: {normalized!r}"
     )
-    two_clause_match = re.search(r"2\s*=.*?\[default\]", normalized)
-    assert two_clause_match is None, (
-        f"bin/register.py's --micro-reg help text still marks the '2=...' "
+    one_clause_match = re.search(r"1\s*=[^,]*?\[default\]", normalized)
+    assert one_clause_match is None, (
+        f"bin/register.py's --micro-reg help text still marks the '1=...' "
         f"clause as [default]: {normalized!r}"
     )
 
@@ -449,7 +451,7 @@ def _doc_comment_above(text: str, signature_fragment: str) -> str:
     return re.sub(r"\s+", " ", " ".join(reversed(out)))
 
 
-def test_param_utils_doc_comment_does_not_call_two_the_default():
+def test_param_utils_doc_comment_calls_two_the_default():
     """`microRegLevelOf`'s javadoc is a tenth home, and this branch falsified it.
 
     It read "Default 2 (max: micro-rigid + micro non-rigid), matching
@@ -468,14 +470,14 @@ def test_param_utils_doc_comment_does_not_call_two_the_default():
     # normalises whitespace before matching, as the bin/register.py checks above do.
     doc = _doc_comment_above(_read(PARAM_UTILS), "static int microRegLevelOf(")
 
-    offender = re.search(r"[Dd]efault\s+(?:is\s+|of\s+)?2\b", doc)
+    offender = re.search(r"[Dd]efault\s+(?:is\s+|of\s+)?1\b", doc)
     assert offender is None, (
-        "lib/ParamUtils.groovy's microRegLevelOf javadoc still calls 2 the "
-        f"default: {offender.group(0)!r} -- nextflow.config ships 1"
+        "lib/ParamUtils.groovy's microRegLevelOf javadoc still calls 1 the "
+        f"default: {offender.group(0)!r} -- nextflow.config ships 2"
     )
-    assert re.search(r"[Dd]efault\s+(?:is\s+)?1\b", doc), (
+    assert re.search(r"[Dd]efault\s+(?:is\s+)?2\b", doc), (
         "lib/ParamUtils.groovy's microRegLevelOf javadoc no longer names the "
-        "shipped default at all -- expected it reworded onto 1, not deleted"
+        "shipped default at all -- expected it reworded onto 2, not deleted"
     )
     assert "nextflow.config" in doc, (
         "microRegLevelOf's javadoc dropped its cross-reference to the single "
@@ -484,20 +486,15 @@ def test_param_utils_doc_comment_does_not_call_two_the_default():
     )
 
 
-def test_no_prose_home_still_claims_the_default_is_the_maximum():
-    """'default MAX' / 'MAX default' becomes false once the default is 1,
-    the minimum non-zero value, not the maximum of {0, 1, 2}. Checked in
-    both word orders, case-insensitively, across all four prose homes."""
+def test_no_prose_home_still_calls_micro_rigid_only_the_default():
+    """Every sentence the default-1 era wrote about what ships is false at 2. Matched on
+    whitespace-collapsed text, because figure prose wraps mid-phrase."""
     offenders = []
     for path in PROSE_HOMES:
-        text = _read(path)
-        for match in MAX_DEFAULT_PATTERN.finditer(text):
-            # Report the matched text, not just the filename: the two words are not
-            # adjacent, so a bare path sends the reader hunting for a phrase that
-            # does not exist as written.
-            quoted = re.sub(r"\s+", " ", match.group(0))
-            offenders.append(f"{path.relative_to(ROOT)}: {quoted!r}")
+        text = re.sub(r"\s+", " ", _read(path))
+        for match in STALE_ONE_IS_DEFAULT.finditer(text):
+            offenders.append(f"{path.relative_to(ROOT)}: {match.group(0)!r}")
     assert not offenders, (
-        "these still claim the reg_micro_reg default is the maximum value "
-        f"(it is 1, the minimum non-zero value of {{0, 1, 2}}): {offenders}"
+        "these still describe reg_micro_reg=1 (micro-rigid only) as the shipped default, "
+        f"or the micro non-rigid pass as opt-in; the default is 2: {offenders}"
     )

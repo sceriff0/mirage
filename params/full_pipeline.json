@@ -25,7 +25,7 @@
     "memory_mode": "high",
     "reg_micro_reg_fraction": 0.125,
     "reg_max_image_dim": 4000,
-    "reg_micro_reg": 1,
+    "reg_micro_reg": 2,
 
     "_comment_seg": "=== Segmentation ===",
     "_comment_seg_method": "instantseg is nextflow.config's default and the only backend that runs on a fresh clone -- it needs no trained model and its weights are Apache-2.0. To run StarDist instead, set seg_method to 'stardist' AND supply segmentation_model_dir (a path to a trained model directory) plus segmentation_model (its name); the StarDist knobs are seg_pmin, seg_pmax, seg_prob_thresh, seg_n_tiles_x and seg_n_tiles_y, and every one of them is silently discarded while seg_method is anything else.",

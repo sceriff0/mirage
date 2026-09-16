@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
+  (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
+  with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every
+  restatement moved together (`nextflow_schema.json`, `docs/parameters.md`, the
+  `params/*.json` presets, `bin/register.py`'s signature/argparse/help, the figures),
+  held by `tests/test_micro_reg_default_is_two.py`. `conf/test.config` keeps its `0` pin.
 - **`REGISTER` memory now starts at 64 GB and doubles per attempt, for at most four
   attempts: 64 → 128 → 256 → 512 GB** (was `300 GB × attempt` with the retry count
   inherited). `maxRetries = 3` is pinned in the process's own `withName:` block, so a

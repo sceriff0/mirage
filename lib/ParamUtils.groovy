@@ -198,14 +198,13 @@ class ParamUtils {
      * 2 = micro-rigid + micro non-rigid (register_micro). VALIS controls the two passes
      * independently — micro_rigid_registrar_cls for the rigid refinement, the register_micro()
      * call for the non-rigid one — and this ordinal nests them (0 ⊂ 1 ⊂ 2), which forbids the
-     * odd "micro non-rigid without micro-rigid" combination. The shipped default is 1
-     * (micro-rigid only), declared in nextflow.config -- the single source of truth for it --
-     * and restated in nextflow_schema.json; tests/test_micro_reg_default_is_one.py holds every
-     * home to that number, this comment included. The `null` fallback below returns 2 and is
-     * UNREACHABLE on the pipeline path: the schema declares reg_micro_reg non-nullable with its
-     * own default, so validateParameters() has filled it in before any caller reaches here. It
-     * is kept as the pre-v1.0.0 behaviour a direct Groovy caller used to get, not as a claim
-     * about what ships. Single source of truth for register.nf / warp_seg_qc.nf so the QC can
+     * odd "micro non-rigid without micro-rigid" combination. The shipped default is 2
+     * (micro-rigid + micro non-rigid, since 2026-09-16), declared in nextflow.config -- the
+     * single source of truth for it -- and restated in nextflow_schema.json;
+     * tests/test_micro_reg_default_is_two.py holds every home to that number, this comment
+     * included. The `null` fallback below also returns 2, and is UNREACHABLE on the pipeline
+     * path: the schema declares reg_micro_reg non-nullable with its own default, so
+     * validateParameters() has filled it in before any caller reaches here. Single source of truth for register.nf / warp_seg_qc.nf so the QC can
      * honestly say what the 'rigid' stage means for a given run.
      */
     static int microRegLevelOf(def regMicroReg) {
