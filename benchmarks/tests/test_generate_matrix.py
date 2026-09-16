@@ -257,11 +257,14 @@ def test_derive_from_sweep_matches_repo_sweep():
 
     d = derive_from_sweep(Path(__file__).parents[1] / "configs" / "sweep.yaml")
     assert d["n_moving"] == 7 and d["paired"] is True
-    # input-scale cells come from the scaling_grid; 90000 is the largest benchmarked size.
-    # channels {2, 4} (1 not benchmarked). 131072 is not benchmarked (~69 GB/cell).
+    # Input-scale cells come from the scaling_grid: 65536 is the largest benchmarked
+    # size (131072 is not, at ~69 GB/cell) and 4096 the smallest, because VALIS refuses
+    # a slide no larger than its 2048 px non-rigid size. Channels are 2-4; 1 channel
+    # does not exercise the multi-channel path and is not benchmarked.
     assert max(d["target_px"]) == 65536
     assert 131072 not in d["target_px"]
-    assert d["n_channels"] == [2, 4]
+    assert min(d["target_px"]) == 4096
+    assert d["n_channels"] == [2, 3, 4]
 
 
 def test_derive_moving_map_matches_registration_grid():
@@ -271,11 +274,18 @@ def test_derive_moving_map_matches_registration_grid():
 
     d = derive_from_sweep(Path(__file__).parents[1] / "configs" / "sweep.yaml")
     mm = d["n_moving_map"]
-    # The registration grid runs N=8 at EVERY size and at BOTH 2 and 4 channels, so every
-    # 2- and 4-channel cell must carry 7 moving panels (N=8 => 7 moving slides) — including
-    # the big ones now that they're registered with more than 2 rounds.
-    for t in (2048, 4096, 8192, 16384, 32768, 65536):
-        for c in (2, 4):
+    # The registration grid runs N=8 at EVERY size and at EVERY channel count it lists, so
+    # each of its cells must carry 7 moving panels (N=8 => 7 moving slides) — including the
+    # big ones, now that they're registered with more than 2 rounds. Read from the shipped
+    # grid rather than a second copy of its values, which is how this drifted before.
+    import yaml
+
+    rg = yaml.safe_load(
+        (Path(__file__).parents[1] / "configs" / "sweep.yaml").read_text()
+    )["registration_grid"]
+    assert rg["target_px"] and rg["n_channels"], "registration_grid lost its cells"
+    for t in rg["target_px"]:
+        for c in rg["n_channels"]:
             assert mm[(t, c)] == 7, f"{c}-ch cell {t} should carry 7 panels"
 
 

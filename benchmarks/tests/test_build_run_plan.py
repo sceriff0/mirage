@@ -720,10 +720,20 @@ def test_project_sweep_caps_and_grids():
     assert (
         max(sg["target_px"]) == 65536
     )  # largest benchmarked size (see sweep.yaml scaling_grid)
-    assert sg["n_channels"] == [2, 4]  # 1 not benchmarked, max 4
+    # Smallest benchmarked size. 4096 and not 2048 because VALIS refuses any slide no
+    # larger than its non-rigid size, which the shipped tier sets at 2048; the sibling
+    # guard test_no_valis_run_is_refused_for_being_too_small derives that from the
+    # pipeline's own table, this one pins the floor the grid was re-cut to.
+    assert min(sg["target_px"]) == 4096
+    assert sg["n_channels"] == [2, 3, 4]  # 1 not benchmarked, max 4
     # registration is measured ACROSS sizes, not only at baseline
     rg = sweep["registration_grid"]
     assert max(rg["target_px"]) == 65536
+    assert min(rg["target_px"]) == 4096
+    assert rg["n_channels"] == sg["n_channels"], (
+        "the two input-scaling grids must span the same channel range, or the "
+        "round-count curve and the size curve are not comparable"
+    )
     assert rg["n_register_images"] == [4, 8]
     # input-scaling dimensions are owned by the grids, not double-covered as OFAT axes
     for k in ("target_px", "n_channels", "n_register_images"):
@@ -1054,4 +1064,74 @@ def test_baseline_membership_does_not_count_as_coverage():
     )
     assert not (baseline_only & axes), (
         f"declared-only params leaked into the axis set: {sorted(baseline_only & axes)}"
+    )
+
+
+def valis_non_rigid_dims() -> dict:
+    """{tier: non-rigid registration size}, parsed out of bin/utils/valis_config.py.
+
+    Parsed rather than imported: valis_config imports the `valis` package at module
+    scope, which exists only inside the registration container.
+    """
+    text = (REPO_ROOT / "bin" / "utils" / "valis_config.py").read_text()
+    start = text.index("MEMORY_PRESETS = {")
+    body = text[start : text.index("\n}\n", start)]
+    dims = {
+        tier: int(dim)
+        for tier, dim in re.findall(
+            r'"(high|medium|low)":.*?"max_non_rigid_registration_dim_px":\s*(\d+)',
+            body,
+            re.S,
+        )
+    }
+    assert set(dims) == {"high", "medium", "low"}, (
+        f"MEMORY_PRESETS no longer parses into three tiers: {dims}"
+    )
+    return dims
+
+
+def test_no_valis_run_is_refused_for_being_too_small():
+    """No VALIS run may be emitted at an image size its own tier cannot register.
+
+    VALIS 1.0.0-1.2.0 reads pyramid level -1 for a slide whose full resolution is no
+    larger than the non-rigid registration size, so bin/utils/valis_preflight.py refuses
+    that input at the start of REGISTER -- `dim <= non_rigid_dim`, equality included.
+    Such a run cannot succeed on any retry: run_sweep.sh logs it failed, moves on, and
+    every later SWEEP_RESUME=1 retries it forever. Measured 2026-09-16 on the shipped
+    sweep: the 2048 px cells of scaling_grid and registration_grid made 18 of 321 runs
+    permanently red (run0000 was the first, and the cluster log is what found it).
+
+    The tier sizes come from the pipeline's own table, so lowering the tier without
+    lowering the grid floor fails here rather than on the cluster.
+    """
+    import yaml
+
+    sweep = yaml.safe_load(
+        (Path(__file__).parents[1] / "configs" / "sweep.yaml").read_text()
+    )
+    dims = valis_non_rigid_dims()
+    offenders = []
+    for run in build_run_plan(sweep, repeats=1):
+        if (run.get("registration_method") or "valis") != "valis":
+            continue
+        size = int(run.get("target_px") or 0)
+        override = str(run.get("reg_valis_max_non_rigid_dim") or "").strip()
+        mode = (run.get("memory_mode") or "high").strip()
+        # 'custom' means "start from high and keep what you did not set"
+        non_rigid = (
+            int(override)
+            if override.isdigit()
+            else dims["high" if mode == "custom" else mode]
+        )
+        if size and size <= non_rigid:
+            offenders.append((run["run_id"], run.get("varied_axis"), size, non_rigid))
+    assert not offenders, (
+        "these VALIS runs would be refused by REGISTER's preflight before a single tile "
+        "is read, and no retry or resume can fix them:\n  "
+        + "\n  ".join(
+            f"{rid} ({axis}): {size} px image vs {nr} px non-rigid size"
+            for rid, axis, size, nr in offenders
+        )
+        + "\nRaise the grid's smallest target_px above the tier's non-rigid size, or move "
+        "those cells to a tier that fits (medium 1024, low 512)."
     )

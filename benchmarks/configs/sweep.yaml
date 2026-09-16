@@ -42,9 +42,21 @@ strategy: ofat
 # exercise the multi-channel merge/registration path, so it is not benchmarked.
 # generate_matrix.py --sweep builds exactly these cells; build_run_plan.py expands
 # them into runs (labelled varied_axis=scaling_grid, plus the baseline cell).
+#
+# THE SMALLEST CELL IS 4096 px, AND NOT SMALLER, BECAUSE VALIS CANNOT RUN BELOW IT.
+# VALIS 1.0.0-1.2.0 reads pyramid level -1 for any slide whose full resolution is no
+# larger than its non-rigid registration size, so REGISTER refuses such input at start
+# (bin/utils/valis_preflight.py). The shipped `high` tier registers at 2048 px, so a
+# 2048 px cell is refused -- EQUAL counts as too small. Measured 2026-09-16: the
+# 2048 px cells made 18 of 321 runs permanently red, run0000 among them, and a resume
+# retried them forever. 4096 is the next rung and clears the tier with a 2x margin,
+# which is also what VALIS's tissue-mask term needs (the source size it asks for is
+# the processed size x non-rigid size / mask extent). Guarded by
+# benchmarks/tests/test_build_run_plan.py::test_no_valis_run_is_refused_for_being_too_small.
+# Lowering the floor means lowering the tier with it (medium = 1024, low = 512).
 scaling_grid:
-  target_px:  [2048, 4096, 8192, 16384, 32768, 65536]  
-  n_channels: [2, 4]                                     # 1 channel not benchmarked
+  target_px:  [4096, 8192, 16384, 32768, 65536]
+  n_channels: [2, 3, 4]                                  # 1 channel not benchmarked
 
 # Registration-scaling grid: size x number-of-registered-rounds, at a FIXED channel
 # count. n_register_images is a THIRD input-scaling dimension — REGISTER's input is
@@ -55,9 +67,9 @@ scaling_grid:
 # These runs are labelled varied_axis=registration_grid and DO feed the memory
 # regression (input genuinely varies with round count).
 registration_grid:
-  target_px:         [2048, 4096, 8192, 16384, 32768, 65536]
+  target_px:         [4096, 8192, 16384, 32768, 65536]   # 2048 is refused by VALIS; see scaling_grid
   n_register_images: [4, 8]
-  n_channels:        [2, 4]     # benchmark N-image registration at BOTH 2 and 4 channels
+  n_channels:        [2, 3, 4]  # benchmark N-image registration across the channel range
 
 # Baseline = the fixed point for ofat (one value per axis). Also the (4096, 2)
 # cell of the scaling grid, so it is emitted once (labelled baseline).
@@ -79,7 +91,10 @@ baseline:
                                       # varies memory_mode itself, and pinning custom to reach this knob would
                                       # collapse that axis. Recorded, deliberately unswept.
   reg_valis_max_non_rigid_dim: null   # VALIS non-rigid registration size (px). null = from memory_mode
-                                      # (high -> 4096). Same custom-only rule as above.
+                                      # (high -> 2048, medium -> 1024, low -> 512; the '4096' this
+                                      # comment used to claim was never a row of MEMORY_PRESETS).
+                                      # Same custom-only rule as above. This is the number the
+                                      # scaling grid's 4096 px floor clears -- see that grid.
   reg_micro_reg: 1                    # pipeline default: micro-registration DEPTH (0=none | 1=micro-rigid |
                                       # 2=+micro non-rigid). nextflow.config ships 1 (micro-rigid only) as of
                                       # :wrench: 25a232e; it shipped 2 before that, and this baseline shipped
