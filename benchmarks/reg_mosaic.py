@@ -1190,11 +1190,13 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
                     )
                     qc = (
                         None
-                        if opt.numbers == "image"
+                        if opt.numbers in ("image", "none")
                         else arm.seg_qc(key, warn=opt.numbers == "scorer")
                     )
                     meta = {"ref_limits": lim[n][0], "mov_limits": lim[n][1]}
-                    if qc is None and opt.numbers != "scorer":
+                    if opt.numbers == "none":
+                        note, vals = "", {}
+                    elif qc is None and opt.numbers != "scorer":
                         # no scorer output (reg_qc < 2) or --numbers image: from the crop
                         note, vals = image_note(rc, mc, px)
                         sources.add("image")
@@ -1412,11 +1414,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     g.add_argument(
         "--numbers",
-        choices=("auto", "scorer", "image"),
+        choices=("auto", "scorer", "image", "none"),
         default="auto",
         help="where Dice/Δ come from: scorer = the reg_qc=2 *_seg_qc.json (WARP_SEG_QC); "
         "image = computed from the crop (Otsu-mask Dice, phase-correlation shift), for a run "
-        "without WARP_SEG_QC; auto = scorer when its JSON exists, else image",
+        "without WARP_SEG_QC; auto = scorer when its JSON exists, else image; none = no "
+        "numbers in the cells (a prototype whose numbers come later from reg_qc=2)",
     )
     g.add_argument(
         "--stretch",

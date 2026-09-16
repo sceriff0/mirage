@@ -604,3 +604,23 @@ def test_rounds_are_columns_by_default_and_methods_read_down_each_column(
     assert column0[0].startswith("Dice = 0.46")  # Before
     assert column0[1].startswith("Dice = 0.92") and column0[2].startswith("Dice = 0.74")
     assert seen["where"] == "first"  # the bar still sits in the top-left cell
+
+
+def test_numbers_none_leaves_every_cell_blank(arm_root, tmp_path, monkeypatch):
+    """The fast prototype prints no Dice/Δ at all: the numbers come later, from reg_qc=2."""
+    seen = {}
+    real = rm.assemble_figure
+
+    def spy(grid, notes, *a, **k):
+        seen.update(notes=notes, footer=k.get("footer", ""))
+        return real(grid, notes, *a, **k)
+
+    monkeypatch.setattr(rm, "assemble_figure", spy)
+    m = _run(arm_root, tmp_path / "figs", "--numbers", "none")
+    assert all(note == "" for row in seen["notes"] for note in row)
+    assert m["number_sources"] == []
+    assert "Dice" not in seen["footer"] and "magenta" in seen["footer"]
+    cells = m["row_plan"][0]["cells"]
+    assert all(
+        "dice_matched" not in c and "dice_pixel" not in c for c in cells.values()
+    )

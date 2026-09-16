@@ -318,10 +318,32 @@ are the sweep's fits applied to one run. See `docs/benchmarks_real.md` §3b.
 ## D. Registration mosaics (arms → figure panel)
 
 `benchmarks/reg_mosaic.py <arm dir> [<arm dir> ...] --rows N -o <dir>`: before/after nuclear
-overlays, one column per arm (ASHLAR included), exactly N (round, ROI) rows, cut from the
-arms' own `*_QC_RGB_fullres.tif` composites and annotated with their own seg-QC Dice and
-per-ROI displacement -- nothing re-warped. `make arm-mosaic MOSAIC_ARMS="..." MOSAIC_ROWS=N`.
-See `docs/benchmarks_real.md`, "Registration mosaics".
+overlays cut from the arms' own `*_QC_RGB_fullres.tif` composites -- nothing re-warped. One
+column per (round, ROI), one row per Before + arm (`--orient rounds-as-rows` transposes),
+magenta = moving / cyan = reference, a µm scale bar in the top-left cell. `--numbers` sets
+what each cell prints: the reg_qc=2 scorer's Dice and displacement (`scorer`), values computed
+from the crop (`image`), `auto` (scorer when present), or `none`.
+`make arm-mosaic MOSAIC_ARMS="..." MOSAIC_ROWS=N`. See `docs/benchmarks_real.md`,
+"Registration mosaics". `benchmarks/reg_overlay.py <run dir> -o <dir>` draws one larger crop of
+one registration as separate Before and After images, in the same style.
+
+**Fast prototypes on the cluster, outside the arm benchmark.** Both write into the directory
+you submit from and take your samplesheet:
+
+```bash
+mkdir -p /hpcnfs/home/ieo7660/pipelines/logs
+# VALIS high (micro 2) vs STARE high vs ASHLAR on one samplesheet -> mosaic/<patient>_mosaic.png
+mkdir -p /beegfs/scratch/ieo7660/ihc_method/mosaic_033 && cd /beegfs/scratch/ieo7660/ihc_method/mosaic_033
+sbatch ~/pipelines/mirage/benchmarks/submit_mosaic.sh /path/to/input.csv
+# two slides of one patient -> <pair>/overlay/<patient>_<round>_before.png / _after.png
+mkdir -p /beegfs/scratch/ieo7660/ihc_method/overlay_033 && cd /beegfs/scratch/ieo7660/ihc_method/overlay_033
+sbatch ~/pipelines/mirage/benchmarks/submit_overlay.sh /path/to/two_slides.csv
+```
+
+They run registration QC at reg_qc=1 (no WARP_SEG_QC) and print **no** Dice/Δ;
+`sbatch --export=ALL,SEG_QC=1 ...` runs reg_qc=2 and prints the scorer's values. Pixel size is
+0.325 µm/px (`PIXEL_SIZE`). Re-submitting from the same directory skips finished runs and
+only redraws. Every option is listed in each script's header.
 
 ## Inputs -> outputs at a glance
 
