@@ -44,7 +44,9 @@
 # Re-submitting from the same directory CONTINUES: the finished registration is skipped
 # (.done, Nextflow -resume), so a re-submit with another crop only redraws.
 # ============================================================================
-set -uo pipefail
+# No `set -u` / `set -o pipefail`, like submit_arms.sh: this job sources ~/.bashrc and runs
+# `conda activate`, whose scripts read variables a batch job leaves unset, so `set -u` kills
+# the job there with "unbound variable". Failures are checked explicitly below instead.
 
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"

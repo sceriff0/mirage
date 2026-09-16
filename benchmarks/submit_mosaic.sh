@@ -40,7 +40,9 @@
 # skipped (Nextflow runs -resume), so a re-submit with other mosaic options only redraws.
 # Watch:  squeue -u $USER ; tail -f /hpcnfs/home/ieo7660/pipelines/logs/mosaic_<jobid>.out
 # ============================================================================
-set -uo pipefail
+# No `set -u` / `set -o pipefail`, like submit_arms.sh: this job sources ~/.bashrc and runs
+# `conda activate`, whose scripts read variables a batch job leaves unset, so `set -u` kills
+# the job there with "unbound variable". Failures are checked explicitly below instead.
 
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
 SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
