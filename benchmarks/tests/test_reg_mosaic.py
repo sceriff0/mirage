@@ -449,3 +449,38 @@ def test_a_missing_composite_or_round_is_named(arm_root, tmp_path):
                 "50",
             ]
         )
+
+
+def test_a_pipeline_arm_is_read_from_the_layout_the_pipeline_publishes(
+    arm_root, tmp_path
+):
+    """A NEXTFLOW arm does not publish what run_ashlar_arm.sh writes. conf/modules.config's
+    GENERATE_REGISTRATION_QC publishDir pattern is "qc/*_QC_RGB_fullres.tif", and a
+    pattern keeps its relative path, so the composite lands in
+    <patient>/qc/registration/qc/ -- one level below the seg QC json. WARP_SEG_QC's
+    publishDir names *_seg_qc.json only, so *_reg_residuals.csv is not published at all.
+    Measured 2026-09-16 on a stub run of `--start registration --stop registration`.
+    Before this, every VALIS/STARE column died on "no registration QC composite"; only
+    the ASHLAR arm, which writes flat, could be drawn."""
+    import shutil
+
+    pipe = tmp_path / "pipe"
+    shutil.copytree(arm_root / "armB", pipe)
+    qc = pipe / "P1" / "qc" / "registration"
+    (qc / "qc").mkdir()
+    for f in qc.glob("*_QC_RGB*"):
+        f.rename(qc / "qc" / f.name)
+    for f in qc.glob("*_reg_residuals.csv"):
+        f.unlink()
+
+    out = tmp_path / "figs"
+    argv = [str(arm_root / "armA"), str(pipe), "--rows", "3", "-o", str(out)]
+    argv += ["--patch-px", "64", "--formats", "png", "--dpi", "50"]
+    assert rm.main(argv) == 0
+    m = json.loads((out / "P1_rois.json").read_text())
+    cell = m["row_plan"][0]["cells"]["pipe"]
+    assert cell["dice_matched"] == pytest.approx(0.74)
+    # no residuals published -> the slide-level number, flagged, never a fabricated local one
+    assert "roi_displacement_um" not in cell
+    assert cell["slide_displacement_um"] == pytest.approx(1.5)
+    assert "/qc/registration/qc/" in m["columns"]["pipe"]["files"]["CD3"]

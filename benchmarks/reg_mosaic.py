@@ -77,6 +77,7 @@ log = logging.getLogger("reg_mosaic")
 NUCLEAR_RE = re.compile(r"DAPI|HOECHST|CELLTOX", re.I)
 REGISTERED_CSV = Path("csv") / "registered.csv"
 QC_SUBDIR = Path("qc") / "registration"
+COMPOSITE_SUBDIR = "qc"  # a Nextflow arm publishes the composites under <QC_SUBDIR>/qc/
 FULLRES_SUFFIX = "_QC_RGB_fullres.tif"
 PREVIEW_SUFFIX = "_QC_RGB.tif"
 SEG_QC_SUFFIX = "_seg_qc.json"
@@ -551,18 +552,30 @@ class Arm:
             )
         return self.moving[key]
 
+    def composite_path(self, key: str) -> Path | None:
+        """The slide's full-res composite, in whichever of the two layouts holds it.
+
+        A Nextflow arm publishes it one level down, <qc_dir>/qc/: GENERATE_REGISTRATION_QC's
+        publishDir pattern is "qc/*_QC_RGB_fullres.tif" and a pattern keeps its relative
+        path. run_ashlar_arm.sh writes it flat into <qc_dir>. The preview sits beside it.
+        """
+        name = f"{self.slide(key).stem}{FULLRES_SUFFIX}"
+        for d in (self.qc_dir, self.qc_dir / COMPOSITE_SUBDIR):
+            if (d / name).is_file():
+                return d / name
+        return None
+
     def composite(self, key: str) -> Composite:
         if key not in self._comp:
-            sl = self.slide(key)
-            full = self.qc_dir / f"{sl.stem}{FULLRES_SUFFIX}"
-            if not full.is_file():
+            full = self.composite_path(key)
+            if full is None:
+                name = f"{self.slide(key).stem}{FULLRES_SUFFIX}"
                 raise SystemExit(
-                    f"[{self.name}] {self.patient}: no registration QC composite {full.name} in {self.qc_dir} "
-                    "-- the arm's GENERATE_REGISTRATION_QC did not run for this slide"
+                    f"[{self.name}] {self.patient}: no registration QC composite {name} in {self.qc_dir} "
+                    f"or {self.qc_dir / COMPOSITE_SUBDIR} -- the arm's GENERATE_REGISTRATION_QC did not run for this slide"
                 )
-            self._comp[key] = Composite(
-                full, self.qc_dir / f"{sl.stem}{PREVIEW_SUFFIX}"
-            )
+            preview = full.with_name(full.name[: -len(FULLRES_SUFFIX)] + PREVIEW_SUFFIX)
+            self._comp[key] = Composite(full, preview)
         return self._comp[key]
 
     def seg_qc(self, key: str) -> SegQC | None:
@@ -585,7 +598,10 @@ class Arm:
 
     def files(self, keys) -> dict[str, str]:
         return {
-            k: str(self.qc_dir / f"{self.moving[k].stem}{FULLRES_SUFFIX}")
+            k: str(
+                self.composite_path(k)
+                or self.qc_dir / f"{self.moving[k].stem}{FULLRES_SUFFIX}"
+            )
             for k in keys
             if k in self.moving
         }
