@@ -40,6 +40,11 @@
 #                 GENERATE_REGISTRATION_QC's container).
 #   All default to empty, i.e. run bare against whatever is on PATH; submit_arms.sh sets
 #   them to `singularity exec --bind /beegfs --bind /hpcnfs <image>`.
+#   ASHLAR_SEG_QC 1 (default) scores the arm with warp_seg_qc.py on <geojson_from_arm>'s QC
+#                 nuclei, which need that arm to have run reg_qc=2. 0 skips the scoring and
+#                 the geojson requirement: the arm still retiles, solves, stitches and writes
+#                 its registered slide, registered.csv and QC composite (the fast path of a
+#                 run without WARP_SEG_QC; <geojson_from_arm> is then ignored).
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -56,6 +61,7 @@ REPO="$(cd "$HERE/.." && pwd)"
 ASHLAR_EXEC="${ASHLAR_EXEC:-}"
 QC_EXEC="${QC_EXEC:-}"
 REGQC_EXEC="${REGQC_EXEC:-}"
+SEG_QC="${ASHLAR_SEG_QC:-1}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
 # the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
 # and the package source on the path, and hand the same value into the containers:
@@ -118,7 +124,7 @@ for pid in $patients; do
   fi
 
   gj_dir="$ROOT/$FROM_ARM/$pid/qc/registration/geojson"
-  if [[ ! -d "$gj_dir" ]]; then
+  if [[ "$SEG_QC" == "1" && ! -d "$gj_dir" ]]; then
     # Not fatal for the other patients: one arm's QC failing should not lose the rest.
     echo "[$ARM/$pid] SKIP: $gj_dir missing — arm '$FROM_ARM' produced no QC nuclei" >&2
     rc=1; continue
@@ -130,13 +136,13 @@ for pid in $patients; do
   ref_px=""; [[ -n "$C_PX" ]] && ref_px=$(echo "$ref_row" | cut -d',' -f"$C_PX")
   printf '%s,%s,%s,true,%s,%s\n' "$pid" "$ref_name" "$ref_img" "$ref_ch" "$ref_px" >> "$REG_CSV"
   ref_gj="$gj_dir/${ref_name}.geojson"
-  if [[ ! -f "$ref_gj" ]]; then
+  if [[ "$SEG_QC" == "1" && ! -f "$ref_gj" ]]; then
     # `ls` exits 1 on no match and this script runs under `set -o pipefail`, so the
     # no-match case has to be written as the ASSIGNMENT it is. Nothing is swallowed:
     # the emptiness is asserted immediately below.
     ref_gj=$(ls "$gj_dir"/*"${ref_name}"*.geojson 2>/dev/null | head -1) || ref_gj=""
   fi
-  if [[ -z "$ref_gj" ]]; then
+  if [[ "$SEG_QC" == "1" && -z "$ref_gj" ]]; then
     echo "[$ARM/$pid] SKIP: no reference geojson matching '$ref_name' in $gj_dir" >&2
     rc=1; continue
   fi
@@ -160,13 +166,13 @@ for pid in $patients; do
     # empty transform that scores as a perfect identity — a silent pass, not an error.
     mov_name=$(basename "$mov_img"); mov_name="${mov_name%%.*}"
     mov_gj="$gj_dir/${mov_name}.geojson"
-    if [[ ! -f "$mov_gj" ]]; then
+    if [[ "$SEG_QC" == "1" && ! -f "$mov_gj" ]]; then
       # `ls` exits 1 on no match and this script runs under `set -o pipefail`, so the
       # no-match case has to be written as the ASSIGNMENT it is. Nothing is swallowed:
       # the emptiness is asserted immediately below.
       mov_gj=$(ls "$gj_dir"/*"${mov_name}"*.geojson 2>/dev/null | head -1) || mov_gj=""
     fi
-    if [[ -z "$mov_gj" ]]; then
+    if [[ "$SEG_QC" == "1" && -z "$mov_gj" ]]; then
       echo "[$ARM/$pid] SKIP $mov_name: no geojson in $gj_dir" >&2; rc=1; continue
     fi
 
@@ -221,6 +227,7 @@ for pid in $patients; do
     # (lib/WarpBackends.groovy's tiled entry) — no --micro-reg, no --checkpoint-dir,
     # no --jvm-heap-gb. ashlar's terminal stage is `refined`, the same name STARE's is,
     # which is what lets the analysis layer's _STAGE_RANK reduce both without a case.
+    [[ "$SEG_QC" == "1" ]] || continue
     # shellcheck disable=SC2086
     step ASHLAR_SEG_QC "$pid" --input "$ref_gj" --input "$mov_gj" -- \
         $QC_EXEC python3 "$REPO/bin/warp_seg_qc.py" \

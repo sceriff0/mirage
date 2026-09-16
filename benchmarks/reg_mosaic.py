@@ -5,8 +5,9 @@ Takes one or more ARM DIRECTORIES of the real-sample arm benchmark
 (``<arm_results>/<arm>``, each a mirage ``--outdir`` that ran registration with
 its QC) and writes, per patient, a mosaic of nuclear-channel overlays:
 
-    rows    = (moving round, ROI) pairs -- exactly ``--rows`` of them
-    columns = Before | <arm 1> | <arm 2> ...   (one column per arm directory)
+    columns = (moving round, ROI) pairs -- exactly ``--rows`` of them
+    rows    = Before | <arm 1> | <arm 2> ...   (one row per arm directory)
+    (--orient rounds-as-rows transposes it; "--rows" counts the (round, ROI) pairs either way)
 
 Nothing is re-registered, re-warped or re-scored. Every pixel and every number
 comes from what the arm's own registration QC wrote:
@@ -75,6 +76,7 @@ import numpy as np
 import tifffile
 from scipy import ndimage
 from skimage.filters import threshold_otsu
+from skimage.registration import phase_cross_correlation
 
 log = logging.getLogger("reg_mosaic")
 
@@ -92,6 +94,10 @@ CH_MOVING, CH_REFERENCE, CH_SEPARATOR = 0, 1, 2  # red, green, blue in the compo
 
 # how the two colours of the composite are shown; the composite itself is red/green
 PALETTES = {
+    "magenta-cyan": (
+        (1.0, 0.0, 1.0),
+        (0.0, 1.0, 1.0),
+    ),  # overlap -> white (the default)
     "magenta-green": ((1.0, 0.0, 1.0), (0.0, 1.0, 0.0)),  # overlap -> white
     "red-green": (
         (1.0, 0.0, 0.0),
@@ -100,6 +106,21 @@ PALETTES = {
     "cyan-magenta": ((0.0, 1.0, 1.0), (1.0, 0.0, 1.0)),
     "cyan-red": ((0.0, 1.0, 1.0), (1.0, 0.0, 0.0)),
 }
+PALETTE_LEGEND = {
+    "magenta-cyan": "magenta = moving, cyan = reference, white = overlap",
+    "magenta-green": "magenta = moving, green = reference, white = overlap",
+    "red-green": "red = moving, green = reference, yellow = overlap",
+    "cyan-magenta": "cyan = moving, magenta = reference, white = overlap",
+    "cyan-red": "cyan = moving, red = reference, white = overlap",
+}
+FOOTER_SCORER = (
+    "Dice = matched-nucleus Dice, Δ = median nucleus displacement in the ROI "
+    "(* slide-level), from the pipeline's reg_qc=2 scorer"
+)
+FOOTER_IMAGE = (
+    "Dice = overlap of Otsu nuclear masks in the crop, Δ = residual shift by phase "
+    "correlation; computed from the QC image, no segmentation"
+)
 NICE_BARS_UM = (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
 
 
@@ -591,10 +612,10 @@ class Arm:
             self._comp[key] = Composite(full, preview)
         return self._comp[key]
 
-    def seg_qc(self, key: str) -> SegQC | None:
+    def seg_qc(self, key: str, warn: bool = True) -> SegQC | None:
         if key not in self._qc:
             self._qc[key] = load_seg_qc(self.qc_dir, self.slide(key))
-            if self._qc[key] is None:
+            if self._qc[key] is None and warn:
                 log.warning(
                     "[%s] %s: no *_seg_qc.json names round %s in %s -- cells carry no numbers",
                     self.name,
@@ -657,6 +678,49 @@ def _box(img: np.ndarray, win: int) -> np.ndarray:
     return ndimage.uniform_filter(np.asarray(img, np.float32), size=win, mode="reflect")
 
 
+def image_metrics(
+    ref: np.ndarray, mov: np.ndarray, sigma: float = 1.0
+) -> tuple[float | None, float | None]:
+    """(Dice, residual shift in px) of one crop pair, from the pixels alone.
+
+    The fast stand-in for the reg_qc=2 scorer when WARP_SEG_QC did not run. Dice is the
+    overlap of the two Otsu nuclear masks (a PIXEL Dice, not the scorer's matched-nucleus
+    Dice, so the two are not interchangeable in a table); the shift is the translation
+    phase correlation still finds between the crops -- 0 for a perfect registration.
+    """
+    r = ndimage.gaussian_filter(np.asarray(ref, np.float32), sigma)
+    m = ndimage.gaussian_filter(np.asarray(mov, np.float32), sigma)
+    if r.max() == r.min() or m.max() == m.min():
+        return None, None
+    a, b = r > threshold_otsu(r), m > threshold_otsu(m)
+    den = int(a.sum() + b.sum())
+    dice = 2.0 * float((a & b).sum()) / den if den else None
+    # Plain (not phase-normalised) cross-correlation of mean-free, Hann-windowed crops. The
+    # phase-normalised default locks onto the crop's own hard edges -- a small window is not
+    # periodic -- and reports ~0 for a 15 px misalignment (measured on the test fixture).
+    win = np.outer(np.hanning(r.shape[0]), np.hanning(r.shape[1]))
+    shift, _err, _phase = phase_cross_correlation(
+        (r - r.mean()) * win,
+        (m - m.mean()) * win,
+        upsample_factor=10,
+        normalization=None,
+    )
+    return dice, float(np.hypot(*shift))
+
+
+def image_note(ref, mov, px: float | None) -> tuple[str, dict]:
+    """``Dice = 0.81  Δ = 0.4 µm`` computed from the crop (see image_metrics)."""
+    dice, shift_px = image_metrics(ref, mov)
+    vals = {"source": "image", "dice_pixel": dice, "shift_px": shift_px}
+    parts = []
+    if dice is not None:
+        parts.append(f"Dice = {dice:.2f}")
+    if shift_px is not None:
+        vals["shift_um"] = shift_px * px if px else None
+        parts.append(f"Δ = {shift_px * px:.1f} µm" if px else f"Δ = {shift_px:.1f} px")
+    return "  ".join(parts), vals
+
+
 def select_rois(
     low: np.ndarray,
     factor: float,
@@ -665,6 +729,7 @@ def select_rois(
     min_sep: float,
     spread: float,
     full_shape,
+    exclude=(),
 ) -> list[tuple[int, int]]:
     """Pick `n` patch positions on a low-res nuclear image.
 
@@ -695,6 +760,14 @@ def select_rois(
     ok = np.zeros(score.shape, bool)
     ok[half : score.shape[0] - half, half : score.shape[1] - half] = True
     score[~ok] = 0.0
+    # exclude = [(y, x, size_px), ...] full-res boxes (e.g. another figure's ROIs): no
+    # window centred here may overlap one, so the two figures show different tissue.
+    for ey, ex, esize in exclude:
+        cy, cx = (ey + esize / 2) / factor, (ex + esize / 2) / factor
+        hy = (patch_px + esize) / 2 / factor
+        y0, y1 = max(int(cy - hy), 0), min(int(np.ceil(cy + hy)) + 1, score.shape[0])
+        x0, x1 = max(int(cx - hy), 0), min(int(np.ceil(cx + hy)) + 1, score.shape[1])
+        score[y0:y1, x0:x1] = 0.0
     yy, xx = np.indices(score.shape)
     diag = float(np.hypot(*score.shape))
     sep = max(win, int(round(min_sep * diag)))
@@ -840,6 +913,7 @@ def assemble_figure(
     scalebar,
     scalebar_where,
     font=8.0,
+    footer: str = "",
 ):
     plt = _mpl()
     nr, nc = len(grid), len(grid[0])
@@ -865,13 +939,14 @@ def assemble_figure(
                 )
             if notes[r][c]:
                 _outline(
+                    # top-right: the bottom-left corner holds the scale bar
                     ax.text(
                         0.97,
-                        0.04,
+                        0.96,
                         notes[r][c],
                         transform=ax.transAxes,
                         ha="right",
-                        va="bottom",
+                        va="top",
                         fontsize=font * 0.8,
                         color="white",
                     )
@@ -887,6 +962,8 @@ def assemble_figure(
             ):
                 h, w = grid[r][c].shape[:2]
                 draw_scalebar(ax, h, w, scalebar[0], scalebar[1], font * 0.8)
+    if footer:
+        fig.text(0.0, -0.004, footer, ha="left", va="top", fontsize=font * 0.72)
     for fmt in formats:
         fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
@@ -948,7 +1025,9 @@ class Options:
     min_sep: float = 0.15
     spread: float = 1.0
     kinds: str = "overlay"
-    palette: str = "magenta-green"
+    palette: str = "magenta-cyan"
+    numbers: str = "auto"
+    orient: str = "rounds-as-columns"
     stretch: str = "patch"
     pmin: float = 0.5
     pmax: float = 99.7
@@ -1074,6 +1153,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     pdir.mkdir(exist_ok=True)
 
     grid, notes, row_labels, rows_meta = [], [], [], []
+    sources: set[str] = set()
     for key, ri in plan:
         sl = by_key[key]
         y, x = rois[ri]
@@ -1102,34 +1182,44 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
                 )
                 note = ""
                 if k == "overlay":
-                    if n == BEFORE_LABEL:
+                    rc, mc = crops[n]
+                    arm = (
+                        first
+                        if n == BEFORE_LABEL
+                        else next(a for a in arms if a.name == n)
+                    )
+                    qc = (
+                        None
+                        if opt.numbers == "image"
+                        else arm.seg_qc(key, warn=opt.numbers == "scorer")
+                    )
+                    meta = {"ref_limits": lim[n][0], "mov_limits": lim[n][1]}
+                    if qc is None and opt.numbers != "scorer":
+                        # no scorer output (reg_qc < 2) or --numbers image: from the crop
+                        note, vals = image_note(rc, mc, px)
+                        sources.add("image")
+                    elif n == BEFORE_LABEL:
                         # The Before image is the first arm's composite, so its number is the
                         # first arm's scorer on the untransformed pair (the native stage). It
                         # can differ by a hair between arms: each pairs nuclei at its own
                         # anchor stage.
-                        qc0 = first.seg_qc(key)
-                        native = qc0.native_dice if qc0 else None
-                        cells_meta[n] = {
-                            "ref_limits": lim[n][0],
-                            "mov_limits": lim[n][1],
-                            **(
-                                {"stage": NATIVE_STAGE, "dice_matched": native}
-                                if native is not None
-                                else {}
-                            ),
-                        }
-                        note = f"Dice = {native:.2f}" if native is not None else ""
-                    else:
-                        arm = next(a for a in arms if a.name == n)
-                        text, vals = cell_note(
-                            arm.seg_qc(key), y, x, patch_px, px, opt.min_nuclei
+                        native = qc.native_dice if qc else None
+                        vals = (
+                            {
+                                "source": "scorer",
+                                "stage": NATIVE_STAGE,
+                                "dice_matched": native,
+                            }
+                            if native is not None
+                            else {}
                         )
-                        cells_meta[n] = {
-                            "ref_limits": lim[n][0],
-                            "mov_limits": lim[n][1],
-                            **vals,
-                        }
-                        note = text
+                        note = f"Dice = {native:.2f}" if native is not None else ""
+                        sources.add("scorer")
+                    else:
+                        note, vals = cell_note(qc, y, x, patch_px, px, opt.min_nuclei)
+                        vals = {"source": "scorer", **vals} if vals else vals
+                        sources.add("scorer")
+                    cells_meta[n] = {**meta, **vals}
                     if n == BEFORE_LABEL and opt.annotate_where == "after":
                         note = ""
                 row_grid.append(img)
@@ -1149,6 +1239,16 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     if px and opt.scalebar_um != 0:
         bar_um = opt.scalebar_um or auto_scalebar_um(patch_um)
         scalebar = (bar_um / px, f"{bar_um:g} µm")
+    if opt.orient == "rounds-as-columns":
+        # One column per (round, ROI), one row per Before + arm: reading DOWN a column
+        # compares the methods on the same tissue. Transposing the finished grid keeps every
+        # cell, note and patch PNG identical; only the titles swap sides.
+        grid = [list(col) for col in zip(*grid)]
+        notes = [list(col) for col in zip(*notes)]
+        row_labels, col_labels = (
+            col_labels,
+            [lab.replace("\n", "  ") for lab in row_labels],
+        )
     assemble_figure(
         grid,
         notes,
@@ -1160,6 +1260,11 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         opt.dpi,
         scalebar,
         opt.scalebar_where,
+        footer="\n".join(
+            [PALETTE_LEGEND.get(opt.palette, "")]
+            + [FOOTER_SCORER] * ("scorer" in sources)
+            + [FOOTER_IMAGE] * ("image" in sources)
+        ),
     )
 
     manifest = {
@@ -1170,6 +1275,9 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         "patch_um": patch_um,
         "rows": opt.rows,
         "palette": opt.palette,
+        "numbers": opt.numbers,
+        "orient": opt.orient,
+        "number_sources": sorted(sources),
         "kinds": kinds,
         "stretch": opt.stretch,
         "pmin": opt.pmin,
@@ -1288,12 +1396,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="weight pushing later ROIs away from earlier ones (0 = pure quality score)",
     )
     g = ap.add_argument_group("look")
+    g.add_argument(
+        "--orient",
+        choices=("rounds-as-columns", "rounds-as-rows"),
+        default="rounds-as-columns",
+        help="rounds-as-columns: one column per (round, ROI), rows Before + one per arm "
+        "(landscape; compare methods down a column); rounds-as-rows: the transpose",
+    )
     g.add_argument("--kinds", default="overlay", help="comma list of: overlay, checker")
     g.add_argument(
         "--palette",
         choices=list(PALETTES),
-        default="magenta-green",
+        default="magenta-cyan",
         help="moving/reference colours (red-green = as the QC file)",
+    )
+    g.add_argument(
+        "--numbers",
+        choices=("auto", "scorer", "image"),
+        default="auto",
+        help="where Dice/Δ come from: scorer = the reg_qc=2 *_seg_qc.json (WARP_SEG_QC); "
+        "image = computed from the crop (Otsu-mask Dice, phase-correlation shift), for a run "
+        "without WARP_SEG_QC; auto = scorer when its JSON exists, else image",
     )
     g.add_argument(
         "--stretch",
@@ -1386,6 +1509,8 @@ def main(argv=None) -> int:
         spread=args.spread,
         kinds=args.kinds,
         palette=args.palette,
+        numbers=args.numbers,
+        orient=args.orient,
         stretch=args.stretch,
         pmin=args.pmin,
         pmax=args.pmax,

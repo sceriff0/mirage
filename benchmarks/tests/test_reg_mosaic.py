@@ -512,6 +512,7 @@ def test_every_cell_reads_dice_equals_and_the_scale_bar_sits_in_the_top_left_cel
                 ax.get_subplotspec().rowspan.start,
                 ax.get_subplotspec().colspan.start,
                 label,
+                bar_px,
             )
         )
 
@@ -519,7 +520,7 @@ def test_every_cell_reads_dice_equals_and_the_scale_bar_sits_in_the_top_left_cel
     monkeypatch.setattr(rm, "draw_scalebar", spy_bar)
     # the locator draws its own bar with the same helper; this test is about the mosaic
     monkeypatch.setattr(rm, "save_locator", lambda *a, **k: None)
-    _run(arm_root, tmp_path / "figs")
+    _run(arm_root, tmp_path / "figs", "--orient", "rounds-as-rows")
     first_row = drawn["notes"][0]
     assert first_row[0].startswith("Dice = 0.46")  # Before: native stage
     assert first_row[1].startswith("Dice = 0.92") and first_row[2].startswith(
@@ -527,5 +528,79 @@ def test_every_cell_reads_dice_equals_and_the_scale_bar_sits_in_the_top_left_cel
     )
     assert "Δ = " in first_row[1]
     assert len(drawn["bars"]) == 1
-    row, col, label = drawn["bars"][0]
+    row, col, label, bar_px = drawn["bars"][0]
     assert (row, col) == (0, 0) and label.endswith("µm")
+    # the bar is as long as it says: label µm / pixel size, in the crop's own pixels
+    assert bar_px == pytest.approx(float(label.split()[0]) / PX)
+
+
+# --- numbers without WARP_SEG_QC (reg_qc=1) ----------------------------------------
+def test_image_metrics_read_alignment_off_the_pixels():
+    rng = np.random.default_rng(7)
+    ref, _ = _tissue(rng)
+    ref = _u8(ref)[60:188, 60:188]
+    dice, shift = rm.image_metrics(ref, ref)
+    assert dice == pytest.approx(1.0) and shift == pytest.approx(0.0, abs=0.05)
+    moved = np.roll(np.roll(ref, 3, axis=0), 4, axis=1)
+    dice_off, shift_off = rm.image_metrics(ref, moved)
+    assert shift_off == pytest.approx(5.0, abs=0.3)  # sqrt(3^2 + 4^2)
+    assert dice_off < dice
+
+
+def test_numbers_image_computes_every_cell_from_the_crop(arm_root, tmp_path):
+    m = _run(arm_root, tmp_path / "figs", "--numbers", "image")
+    assert m["number_sources"] == ["image"] and m["palette"] == "magenta-cyan"
+    for row in m["row_plan"]:
+        before, a, b = (row["cells"][c] for c in ("Before", "armA", "armB"))
+        assert {before["source"], a["source"], b["source"]} == {"image"}
+        assert a["shift_px"] == pytest.approx(0.0, abs=0.2)  # armA is perfect
+        assert b["shift_px"] == pytest.approx(3.0, abs=0.3)  # armB is 3 px off
+        # native: 12 down, 9 left = 15 px; np.roll wraps nuclei across the crop border,
+        # which costs the estimate a little
+        assert before["shift_px"] == pytest.approx(15.0, abs=1.0)
+        assert a["dice_pixel"] > b["dice_pixel"] > before["dice_pixel"]
+
+
+def test_auto_falls_back_to_the_image_when_warp_seg_qc_did_not_run(arm_root, tmp_path):
+    import shutil
+
+    for arm in ("armA", "armB"):
+        shutil.copytree(arm_root / arm, tmp_path / arm)
+        for f in (tmp_path / arm).rglob("*_seg_qc.json"):
+            f.unlink()
+    m = _run(tmp_path, tmp_path / "figs")  # --numbers auto is the default
+    assert m["number_sources"] == ["image"]
+    assert m["row_plan"][0]["cells"]["armB"]["shift_um"] == pytest.approx(1.5, abs=0.15)
+
+
+def test_select_rois_keeps_clear_of_excluded_boxes():
+    rng = np.random.default_rng(5)
+    low, _ = _tissue(rng)
+    first = rm.select_rois(low, 1.0, 48, 1, 0.15, 1.0, low.shape)
+    (y0, x0), size = first[0], 48
+    again = rm.select_rois(
+        low, 1.0, 48, 3, 0.15, 1.0, low.shape, exclude=[(y0, x0, size)]
+    )
+    for y, x in again:
+        assert abs(y - y0) >= size or abs(x - x0) >= size
+
+
+def test_rounds_are_columns_by_default_and_methods_read_down_each_column(
+    arm_root, tmp_path, monkeypatch
+):
+    seen = {}
+    real = rm.assemble_figure
+
+    def spy(grid, notes, row_labels, col_labels, *a, **k):
+        seen.update(notes=notes, rows=row_labels, cols=col_labels, bar=a[4], where=a[5])
+        return real(grid, notes, row_labels, col_labels, *a, **k)
+
+    monkeypatch.setattr(rm, "assemble_figure", spy)
+    m = _run(arm_root, tmp_path / "figs")
+    assert m["orient"] == "rounds-as-columns"
+    assert seen["rows"] == ["Before", "armA", "armB"]
+    assert len(seen["cols"]) == 3 and "CD3" in seen["cols"][0]
+    column0 = [seen["notes"][r][0] for r in range(3)]
+    assert column0[0].startswith("Dice = 0.46")  # Before
+    assert column0[1].startswith("Dice = 0.92") and column0[2].startswith("Dice = 0.74")
+    assert seen["where"] == "first"  # the bar still sits in the top-left cell

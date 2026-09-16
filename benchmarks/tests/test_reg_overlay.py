@@ -1,0 +1,120 @@
+"""reg_overlay: one registration dir in, a Before and an After image of the same crop out.
+
+Reuses test_reg_mosaic's miniature arm root (armA perfect, armB 3 px off, native 12 px
+down / 9 px left), so the two tools are exercised on identical composites.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from benchmarks import reg_mosaic as rm
+from benchmarks import reg_overlay as ro
+from benchmarks.tests import test_reg_mosaic as tm
+
+PX, _run = tm.PX, tm._run
+
+
+@pytest.fixture(scope="module")
+def arm_root(tmp_path_factory):
+    return tm.arm_root.__wrapped__(tmp_path_factory)
+
+
+def _overlay(arm_dir, out, *extra):
+    argv = [str(arm_dir), "-o", str(out), "--field-px", "96", "--rounds", "CD3"]
+    argv += ["--formats", "png", "--dpi", "50", *extra]
+    assert ro.main(argv) == 0
+    return json.loads((out / "P1_CD3_overlay.json").read_text())
+
+
+def test_before_and_after_images_of_one_crop_with_numbers_and_a_scale_bar(
+    arm_root, tmp_path
+):
+    out = tmp_path / "ov"
+    m = _overlay(arm_root / "armB", out, "--numbers", "image")
+    for name in ("before", "after", "locator"):
+        assert (out / f"P1_CD3_{name}.png").is_file()
+    assert m["palette"] == "magenta-cyan" and m["pixel_size_um"] == pytest.approx(PX)
+    assert m["crop"]["size_px"] == 96 and m["scalebar_um"] > 0
+    before, after = m["numbers"]["before"], m["numbers"]["after"]
+    assert before["source"] == after["source"] == "image"
+    assert after["shift_px"] == pytest.approx(3.0, abs=0.3)  # armB's residual
+    assert before["shift_px"] > after["shift_px"] + 8  # native is ~15 px off
+
+
+def test_the_scorer_numbers_are_used_when_warp_seg_qc_ran(arm_root, tmp_path):
+    m = _overlay(arm_root / "armB", tmp_path / "ov")  # --numbers auto
+    assert m["numbers"]["after"]["dice_matched"] == pytest.approx(0.74)
+    assert m["numbers"]["before"]["dice_matched"] == pytest.approx(0.37)  # native stage
+
+
+def test_the_crop_keeps_clear_of_the_mosaics_rois(arm_root, tmp_path):
+    """Exclude exactly the box the tool would otherwise pick: it has to move. (Excluding a
+    real mosaic's ROIs cannot fail on this fixture -- they happen not to overlap.)"""
+    first = _overlay(arm_root / "armB", tmp_path / "free")
+    free, m_ref = first["crop"], first["reference"]
+    rois_json = tmp_path / "P1_rois.json"
+    rois_json.write_text(
+        json.dumps(
+            {
+                "reference": m_ref,
+                "patch_px": free["size_px"],
+                "rois": [{"id": 1, "y": free["y"], "x": free["x"]}],
+            }
+        )
+    )
+    c = _overlay(
+        arm_root / "armB", tmp_path / "ov", "--avoid-rois-json", str(rois_json)
+    )["crop"]
+    s = free["size_px"]
+    assert not (abs(c["y"] - free["y"]) < s and abs(c["x"] - free["x"]) < s), (c, free)
+    mosaic = _run(
+        arm_root, tmp_path / "mosaic"
+    )  # and the real mosaic ROIs load and apply
+    m = _overlay(
+        arm_root / "armB",
+        tmp_path / "ov2",
+        "--avoid-rois-json",
+        str(tmp_path / "mosaic" / "P1_rois.json"),
+    )
+    assert m["avoided_rois_from"].endswith("P1_rois.json") and mosaic["rois"]
+
+
+def test_a_manual_roi_is_honoured(arm_root, tmp_path):
+    m = _overlay(arm_root / "armA", tmp_path / "ov", "--roi", "20,30")
+    assert (m["crop"]["y"], m["crop"]["x"]) == (20, 30)
+
+
+def test_scale_bar_and_palette_reach_the_drawn_panels(arm_root, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        ro,
+        "draw_panel",
+        lambda img, title, note, bar, *a, **k: seen.append((title, note, bar)),
+    )
+    _overlay(arm_root / "armB", tmp_path / "ov", "--numbers", "image")
+    assert [t for t, _, _ in seen] == ["Before", "After (armB)"]
+    assert all(bar and bar[1].endswith("µm") for _, _, bar in seen)
+    assert all(note.startswith("Dice = ") and "Δ = " in note for _, note, _ in seen)
+    assert rm.PALETTES["magenta-cyan"] == ((1.0, 0.0, 1.0), (0.0, 1.0, 1.0))
+
+
+def test_a_mosaic_on_another_reference_is_not_avoided(arm_root, tmp_path):
+    """Coordinates of another reference's frame name other tissue: ignored, not applied."""
+    free = _overlay(arm_root / "armB", tmp_path / "free")["crop"]
+    rois_json = tmp_path / "P1_rois.json"
+    rois_json.write_text(
+        json.dumps(
+            {
+                "reference": "/elsewhere/P1_other_reference.ome.tif",
+                "patch_px": free["size_px"],
+                "rois": [{"id": 1, "y": free["y"], "x": free["x"]}],
+            }
+        )
+    )
+    c = _overlay(
+        arm_root / "armB", tmp_path / "ov", "--avoid-rois-json", str(rois_json)
+    )
+    assert (c["crop"]["y"], c["crop"]["x"]) == (free["y"], free["x"])
