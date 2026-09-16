@@ -98,6 +98,12 @@ def _write_seg_qc(
     residual_px: float,
 ) -> None:
     stages = {
+        "native": {
+            "dice_matched": dice * 0.5,
+            "displacement_px_p50": disp_px + 9,
+            "displacement_um_p50": (disp_px + 9) * PX,
+            "n_pairs": len(centres),
+        },
         "rigid": {
             "dice_matched": dice * 0.9,
             "displacement_px_p50": disp_px + 2,
@@ -328,7 +334,9 @@ def test_cells_carry_the_scorers_numbers_not_recomputed_ones(arm_root, tmp_path)
         assert a["n_nuclei_in_roi"] >= 5
         assert a["roi_displacement_um"] == pytest.approx(0.0)
         assert b["roi_displacement_um"] == pytest.approx(3.0 * PX)
-        assert "dice_matched" not in row["cells"]["Before"]
+        # Before is the first arm's composite, so it carries the first arm's NATIVE stage
+        assert row["cells"]["Before"]["dice_matched"] == pytest.approx(0.46)
+        assert row["cells"]["Before"]["stage"] == "native"
 
 
 def test_a_sparse_roi_falls_back_to_the_slide_level_displacement(arm_root, tmp_path):
@@ -484,3 +492,40 @@ def test_a_pipeline_arm_is_read_from_the_layout_the_pipeline_publishes(
     assert "roi_displacement_um" not in cell
     assert cell["slide_displacement_um"] == pytest.approx(1.5)
     assert "/qc/registration/qc/" in m["columns"]["pipe"]["files"]["CD3"]
+
+
+def test_every_cell_reads_dice_equals_and_the_scale_bar_sits_in_the_top_left_cell(
+    arm_root, tmp_path, monkeypatch
+):
+    """Each cell is labelled `Dice = X` -- the Before cell with the native stage -- and the
+    scale bar is drawn once, in row 0 / column 0, the convention of an IF figure panel."""
+    drawn = {"notes": None, "bars": []}
+    real_assemble = rm.assemble_figure
+
+    def spy_assemble(grid, notes, *a, **k):
+        drawn["notes"] = notes
+        return real_assemble(grid, notes, *a, **k)
+
+    def spy_bar(ax, h, w, bar_px, label, font, **k):
+        drawn["bars"].append(
+            (
+                ax.get_subplotspec().rowspan.start,
+                ax.get_subplotspec().colspan.start,
+                label,
+            )
+        )
+
+    monkeypatch.setattr(rm, "assemble_figure", spy_assemble)
+    monkeypatch.setattr(rm, "draw_scalebar", spy_bar)
+    # the locator draws its own bar with the same helper; this test is about the mosaic
+    monkeypatch.setattr(rm, "save_locator", lambda *a, **k: None)
+    _run(arm_root, tmp_path / "figs")
+    first_row = drawn["notes"][0]
+    assert first_row[0].startswith("Dice = 0.46")  # Before: native stage
+    assert first_row[1].startswith("Dice = 0.92") and first_row[2].startswith(
+        "Dice = 0.74"
+    )
+    assert "Δ = " in first_row[1]
+    assert len(drawn["bars"]) == 1
+    row, col, label = drawn["bars"][0]
+    assert (row, col) == (0, 0) and label.endswith("µm")

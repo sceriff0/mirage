@@ -33,9 +33,13 @@ across arms by their channel set, inherited from the shared preprocessing run.
 The ASHLAR external arm writes the same composite, checkpoint and QC files
 (benchmarks/run_ashlar_arm.sh), so it is a column like any other.
 
-Per cell the corner reads ``Dice <slide dice_matched>  Δ <median residual of
+Per cell the corner reads ``Dice = <slide dice_matched>  Δ = <median residual of
 the nuclei in this ROI, µm>``; when fewer than ``--min-nuclei`` nuclei fall in
-the ROI the slide-level displacement is printed instead, marked with ``*``.
+the ROI (or no *_reg_residuals.csv was published, as for a Nextflow arm) the
+slide-level displacement is printed instead, marked with ``*``. The Before cell
+reads ``Dice = <the first arm's native-stage dice_matched>``: the scorer's own
+number for the untransformed pair. A scale bar with its length in µm sits in the
+top-left cell (``--scalebar-where``).
 
 Outputs in OUTDIR:
     <patient>_mosaic.png/.pdf   the figure (PDF keeps native pixels, fonts editable)
@@ -83,6 +87,7 @@ PREVIEW_SUFFIX = "_QC_RGB.tif"
 SEG_QC_SUFFIX = "_seg_qc.json"
 RESIDUALS_SUFFIX = "_reg_residuals.csv"
 BEFORE_LABEL = "Before"
+NATIVE_STAGE = "native"  # warp_seg_qc.py scores the untransformed pair under this stage
 CH_MOVING, CH_REFERENCE, CH_SEPARATOR = 0, 1, 2  # red, green, blue in the composite
 
 # how the two colours of the composite are shown; the composite itself is red/green
@@ -441,6 +446,9 @@ class SegQC:
     displacement_um: float | None
     displacement_px: float | None
     n_pairs: int | None
+    native_dice: float | None = (
+        None  # the "native" stage: the pair before any transform
+    )
     residuals: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 3))
     )  # ref_x, ref_y, residual_px
@@ -463,7 +471,11 @@ def _read_seg_qc(path: Path) -> tuple[str, dict]:
     stages = d.get("stages") or {}
     order = d.get("stage_order") or list(stages)
     final = order[-1] if order else None
-    return d.get("moving", ""), {"stage": final, "final": stages.get(final) or {}}
+    return d.get("moving", ""), {
+        "stage": final,
+        "final": stages.get(final) or {},
+        "native": stages.get(NATIVE_STAGE) or {},
+    }
 
 
 def load_seg_qc(qc_dir: Path, slide: Slide) -> SegQC | None:
@@ -504,6 +516,7 @@ def load_seg_qc(qc_dir: Path, slide: Slide) -> SegQC | None:
             displacement_um=_float_or_none(final.get("displacement_um_p50")),
             displacement_px=_float_or_none(final.get("displacement_px_p50")),
             n_pairs=final.get("n_pairs"),
+            native_dice=_float_or_none(info["native"].get("dice_matched")),
             residuals=residuals,
         )
     return None
@@ -747,7 +760,7 @@ def auto_scalebar_um(patch_um: float) -> float:
 def cell_note(
     qc: SegQC | None, y: int, x: int, size: int, px: float | None, min_nuclei: int
 ) -> tuple[str, dict]:
-    """``Dice 0.87  Δ 1.3 µm`` (+ ``*`` when the slide-level displacement stands in)."""
+    """``Dice = 0.87  Δ = 1.3 µm`` (+ ``*`` when the slide-level displacement stands in)."""
     if qc is None:
         return "", {}
     parts, vals = (
@@ -759,17 +772,17 @@ def cell_note(
         },
     )
     if qc.dice is not None:
-        parts.append(f"Dice {qc.dice:.2f}")
+        parts.append(f"Dice = {qc.dice:.2f}")
     local_px, n = qc.local_displacement_px(y, x, size, size, min_nuclei)
     vals["n_nuclei_in_roi"] = n
     if local_px is not None:
         vals["roi_displacement_px"] = local_px
         vals["roi_displacement_um"] = local_px * px if px else None
-        parts.append(f"Δ {local_px * px:.1f} µm" if px else f"Δ {local_px:.1f} px")
+        parts.append(f"Δ = {local_px * px:.1f} µm" if px else f"Δ = {local_px:.1f} px")
     elif qc.displacement_um is not None:
-        parts.append(f"Δ {qc.displacement_um:.1f} µm*")
+        parts.append(f"Δ = {qc.displacement_um:.1f} µm*")
     elif qc.displacement_px is not None:
-        parts.append(f"Δ {qc.displacement_px:.1f} px*")
+        parts.append(f"Δ = {qc.displacement_px:.1f} px*")
     return "  ".join(parts), vals
 
 
@@ -863,7 +876,15 @@ def assemble_figure(
                         color="white",
                     )
                 )
-            if scalebar and c == 0 and (scalebar_where == "all" or r == nr - 1):
+            if (
+                scalebar
+                and c == 0
+                and (
+                    scalebar_where == "all"
+                    or (scalebar_where == "first" and r == 0)
+                    or (scalebar_where == "last" and r == nr - 1)
+                )
+            ):
                 h, w = grid[r][c].shape[:2]
                 draw_scalebar(ax, h, w, scalebar[0], scalebar[1], font * 0.8)
     for fmt in formats:
@@ -933,10 +954,10 @@ class Options:
     pmax: float = 99.7
     gamma: float = 0.8
     checker_tiles: int = 6
-    annotate_where: str = "after"
+    annotate_where: str = "all"
     min_nuclei: int = 5
     scalebar_um: float | None = None
-    scalebar_where: str = "last"
+    scalebar_where: str = "first"
     cell_in: float = 1.4
     dpi: int = 300
     formats: str = "png,pdf"
@@ -1082,10 +1103,22 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
                 note = ""
                 if k == "overlay":
                     if n == BEFORE_LABEL:
+                        # The Before image is the first arm's composite, so its number is the
+                        # first arm's scorer on the untransformed pair (the native stage). It
+                        # can differ by a hair between arms: each pairs nuclei at its own
+                        # anchor stage.
+                        qc0 = first.seg_qc(key)
+                        native = qc0.native_dice if qc0 else None
                         cells_meta[n] = {
                             "ref_limits": lim[n][0],
                             "mov_limits": lim[n][1],
+                            **(
+                                {"stage": NATIVE_STAGE, "dice_matched": native}
+                                if native is not None
+                                else {}
+                            ),
                         }
+                        note = f"Dice = {native:.2f}" if native is not None else ""
                     else:
                         arm = next(a for a in arms if a.name == n)
                         text, vals = cell_note(
@@ -1097,7 +1130,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
                             **vals,
                         }
                         note = text
-                    if n == BEFORE_LABEL and opt.annotate_where != "all":
+                    if n == BEFORE_LABEL and opt.annotate_where == "after":
                         note = ""
                 row_grid.append(img)
                 row_notes.append(note)
@@ -1275,8 +1308,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument(
         "--annotate-where",
         choices=("after", "all"),
-        default="after",
-        help="numbers only in the arm columns (Before has none from the scorer)",
+        default="all",
+        help="all = every cell, Before included (its scorer's native-stage Dice); "
+        "after = the arm columns only",
     )
     g.add_argument(
         "--min-nuclei",
@@ -1290,7 +1324,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="scale bar length (default auto ≈ patch/4; 0 = none)",
     )
-    g.add_argument("--scalebar-where", choices=("last", "all"), default="last")
+    g.add_argument(
+        "--scalebar-where",
+        choices=("first", "last", "all"),
+        default="first",
+        help="first = the top-left cell only (IF panel convention); last = the bottom-left one; "
+        "all = every row's Before cell",
+    )
     g.add_argument(
         "--cell-in", type=float, default=1.4, help="cell size in inches in the figure"
     )
