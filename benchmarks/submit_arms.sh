@@ -38,7 +38,7 @@
 #   git -C ~/pipelines/mirage checkout benchmarking
 #   git -C ~/pipelines/mirage pull
 #
-# Submit:  cd /beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark
+# Submit:  cd /beegfs/scratch/ieo7660/ihc_method/benchmark
 #          mkdir -p logs && sbatch ~/pipelines/mirage/benchmarks/submit_arms.sh
 # Watch:   squeue -u $USER                 # 1 head job + N child jobs
 #          tail -f logs/arms_<jobid>.out

@@ -36,7 +36,7 @@
 #   python $SRC_DIR/benchmarks/generate_matrix.py --source <one-real-slide>.ome.tif \
 #       --outdir $BENCH_DIR/bench_matrix --sweep $SRC_DIR/benchmarks/configs/sweep.yaml
 #
-# Submit:  cd /beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark
+# Submit:  cd /beegfs/scratch/ieo7660/ihc_method/benchmark
 #          mkdir -p logs && sbatch ~/pipelines/mirage/benchmarks/submit_sweep.sh
 # Watch:   squeue -u $USER        # 1 head job + N child jobs
 #          tail -f logs/bench_<jobid>.out

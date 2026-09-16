@@ -279,7 +279,7 @@ On SLURM, use the submitter — it sets the profile, the JVM heap per head, the
 Singularity cache and the CellSAM token check for you:
 
 ```bash
-cd /beegfs/scratch/$USER/analysis_runs/method_paper/benchmark
+cd /beegfs/scratch/$USER/ihc_method/benchmark
 mkdir -p logs && sbatch mirage/benchmarks/submit_arms.sh
 ```
 

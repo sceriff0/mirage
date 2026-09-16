@@ -55,7 +55,7 @@
 #       python=3.11 numpy pandas scikit-learn matplotlib tifffile pyyaml pyvips pip
 #   conda activate mirage-bench && pip install bioio bioio-nd2
 #
-# Submit:  cd /beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark
+# Submit:  cd /beegfs/scratch/ieo7660/ihc_method/benchmark
 #          mkdir -p logs && sbatch ~/pipelines/mirage/benchmarks/submit_matrix.sh
 # Watch:   tail -f logs/matrix_<jobid>.out
 #
@@ -63,7 +63,12 @@
 # ============================================================================
 
 # ---- EDIT THESE FOR YOUR SITE --------------------------------------------------
-BENCH_DIR="/beegfs/scratch/ieo7660/analysis_runs/method_paper/benchmark"
+# Overridable and IDENTICAL to submit_arms.sh / submit_sweep.sh: all three read and
+# write one benchmark directory (bench_matrix, arm_results, bench_results, logs).
+# It was a hardcoded path that no longer exists, so job 6831427 died on `cd` in
+# under a second (2026-09-16). Pinned to the other two by
+# benchmarks/tests/test_submitters_agree_on_bench_dir.py.
+BENCH_DIR="${BENCH_DIR:-/beegfs/scratch/ieo7660/ihc_method/benchmark}"
 SRC_DIR="$HOME/pipelines/mirage"          # the checkout. NOTE: unquoted $HOME, never "~/..."
 SOURCE="/hpcnfs/techunits/imaging/PublicData/ImagingU/cborriero/nd2_images_2/24086/24086_DAPI_SMA_PANCK.nd2"
 MATRIX_DIR="$BENCH_DIR/bench_matrix"      # where the generated cells land
