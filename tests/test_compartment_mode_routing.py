@@ -342,7 +342,11 @@ ALLOWED_LINES = {
         # Composition: 1225 + 25 + 24 + 1 = 1275. Re-pinned directly from the file,
         # not computed:
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1275
-        1275: (
+        # 1275 -> 1281 (2026-09-16): the REGISTER withName block grew six lines when its
+        # memory became 64 GB doubling with maxRetries pinned (:wrench: "REGISTER memory
+        # starts at 64 GB and doubles"), which did not re-pin this entry.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1281
+        1281: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."
