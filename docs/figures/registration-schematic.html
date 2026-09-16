@@ -554,16 +554,16 @@
 
       <div class="step">
         <div class="sh"><span class="k">step 2b</span><span class="ttl">Micro non-rigid — a second field on a crop, composed in</span>
-          <span class="who">register_micro() · micro_reg = 2 · NOT the default</span></div>
+          <span class="who">register_micro() · micro_reg = 2 · the default</span></div>
         <div class="sb">
           <p>A <b>separate method call</b> after <code>register()</code> returns. It re-estimates the non-rigid field
             at higher effective resolution on a crop of <code>floor(min_max_size × <b>0.125</b>)</code>, then
             <b>adds</b> that residual into each slide's existing field:
-            <code>fwd_dxdy ← fwd_dxdy + micro_residual</code>. <b>This pass does not run at the shipped
-            defaults.</b> <code>reg_micro_reg</code> is <b>1</b> of a legal <code>0 | 1 | 2</code>: <code>0</code>
+            <code>fwd_dxdy ← fwd_dxdy + micro_residual</code>. <b>This pass runs at the shipped
+            defaults.</b> <code>reg_micro_reg</code> is <b>2</b> of a legal <code>0 | 1 | 2</code>: <code>0</code>
             is no micro-registration at all, <code>1</code> is micro-<i>rigid</i> only (it refines
-            <code>slide.M</code>, and is what ships), and only <code>2</code> adds this second field. Everything
-            below therefore describes a stage you must opt into with <code>--reg_micro_reg 2</code>.</p>
+            <code>slide.M</code>), and <code>2</code>, which ships, adds this second field. Opt out of it
+            with <code>reg_micro_reg = 1</code>.</p>
           <div class="warnbox"><span class="wl">why a checkpoint must be taken before it</span>The composition is
             <b>destructive</b> — afterwards there is no attribute anywhere in the registrar that still holds the
             pre-micro field, and <code>register_micro()</code> also overwrites <code>{name}_summary.csv</code> with
@@ -972,7 +972,7 @@
         <table class="pr">
           <tr><td class="k">memory_mode</td><td class="val">high</td><td class="d">high | medium | low | custom preset</td></tr>
           <tr><td class="k">reg_max_image_dim</td><td class="val">4000</td><td class="d">max_image_dim_px — cached image cap</td></tr>
-          <tr><td class="k">reg_micro_reg</td><td class="val">1</td><td class="d">0 none · 1 micro-rigid (default) · 2 +micro non-rigid</td></tr>
+          <tr><td class="k">reg_micro_reg</td><td class="val">2</td><td class="d">0 none · 1 micro-rigid · 2 +micro non-rigid (default)</td></tr>
           <tr><td class="k">reg_micro_reg_fraction</td><td class="val">0.125</td><td class="d">micro non-rigid crop fraction</td></tr>
           <tr><td class="k">reg_jvm_heap_gb</td><td class="val nul">null</td><td class="d">null → 32 + 16·attempt, capped at task.memory − 4</td></tr>
         </table>

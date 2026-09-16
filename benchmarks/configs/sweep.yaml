@@ -95,9 +95,10 @@ baseline:
                                       # comment used to claim was never a row of MEMORY_PRESETS).
                                       # Same custom-only rule as above. This is the number the
                                       # scaling grid's 4096 px floor clears -- see that grid.
-  reg_micro_reg: 1                    # pipeline default: micro-registration DEPTH (0=none | 1=micro-rigid |
-                                      # 2=+micro non-rigid). nextflow.config ships 1 (micro-rigid only) as of
-                                      # :wrench: 25a232e; it shipped 2 before that, and this baseline shipped
+  reg_micro_reg: 2                    # pipeline default: micro-registration DEPTH (0=none | 1=micro-rigid |
+                                      # 2=+micro non-rigid). nextflow.config ships 2 again since 2026-09-16;
+                                      # it shipped 1 (micro-rigid only) from :wrench: 25a232e, 2 before that,
+                                      # and this baseline shipped
                                       # 0 before THAT -- which made the 'baseline' run cheaper AND less
                                       # accurate than the shipped config. The baseline must BE the shipped
                                       # config, so this tracks nextflow.config and nothing else.

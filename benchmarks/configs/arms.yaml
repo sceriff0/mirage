@@ -44,11 +44,12 @@ baseline:
                                # An arm at reg_qc<2 produces no accuracy row at all.
   seg_method: instantseg       # pipeline default; the QC segmenter unless crossed below
   memory_mode: high
-  reg_micro_reg: 1             # tracks nextflow.config (:wrench: 25a232e moved the shipped
-                               # default 2 -> 1, micro-rigid only). The registration arms
+  reg_micro_reg: 2             # tracks nextflow.config (2026-09-16 moved the shipped default
+                               # back 1 -> 2, micro-rigid + micro non-rigid; :wrench: 25a232e
+                               # had moved it 2 -> 1). The registration arms
                                # VARY this over [0,1,2] so it barely matters there -- but the
                                # segmentation and compute-profile arms inherit the baseline,
-                               # and at 2 they were costing and scoring a config nobody ships.
+                               # and off the shipped value they cost and score a config nobody ships.
                                # Guarded by test_arms_baseline_values_match_the_pipeline_defaults.
   registration_method: valis
   seg_qc_pairing: lsa          # pipeline default; the QC nucleus-pairing rule unless crossed
