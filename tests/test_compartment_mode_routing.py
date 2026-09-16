@@ -340,7 +340,11 @@ ALLOWED_LINES = {
         # 1249 -> 1225 (2026-09-10): the dead SPLIT_PRIOR_PYRAMID withName block was
         # dropped (its alias exists only on dev), -24 lines above this one.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1225
-        1225: (
+        # 1225 -> 1231 (2026-09-16): the REGISTER withName block grew six lines when its
+        # memory became 64 GB doubling with maxRetries pinned (:wrench: "REGISTER memory
+        # starts at 64 GB and doubles"), which did not re-pin this entry.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1231
+        1231: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."
