@@ -371,15 +371,15 @@
             <div class="bh">fork — registration_method</div>
             <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
               <div class="ox">Feature-based rigid + non-rigid warp (JVM/Bio-Formats), resolving all slides into a
-                shared space. Micro-registration at <b>micro-rigid depth</b> by default
-                (<code>reg_micro_reg=1</code> of a legal <code>0 | 1 | 2</code> — the shallowest non-zero setting;
-                <code>2</code> adds the micro non-rigid pass). <b>Tiered</b> like STARE and with the
+                shared space. <b>Full micro-registration</b> by default
+                (<code>reg_micro_reg=2</code> of a legal <code>0 | 1 | 2</code> — micro-rigid, then the micro
+                non-rigid pass; <code>1</code> stops after micro-rigid). <b>Tiered</b> like STARE and with the
                 same four-word vocabulary — <code>high | medium | low | custom</code> — where <code>custom</code>
                 means "start from high, apply whichever knobs you overrode"; a per-knob override under any other
                 tier is refused, so a run cannot report a tier it is not using. VALIS's table lives in
                 <code>bin/utils/valis_config.py</code> rather than <code>lib/RegPresets.groovy</code> because its
                 rows hold Python objects (feature detector, matcher), not integers.</div>
-              <div class="pp" style="margin-top:6px"><span>memory_mode <b>high</b></span><span>proc_dim <b>2048</b></span><span>nonrigid_dim <b>4096</b></span><span>micro_reg <b>1</b></span><span>max_dim <b>4000</b></span></div></div>
+              <div class="pp" style="margin-top:6px"><span>memory_mode <b>high</b></span><span>proc_dim <b>2048</b></span><span>nonrigid_dim <b>4096</b></span><span>micro_reg <b>2</b></span><span>max_dim <b>4000</b></span></div></div>
             <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
               <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial = channel 0.
                 <b>Not</b> laptop-sized at the shipped tier — COARSE asks 48 GB at
@@ -790,7 +790,7 @@
         <table class="pr">
           <tr><td class="k">registration_method</td><td class="v">valis</td><td class="d">valis | tiled (STARE)</td></tr>
           <tr><td class="k">reg_qc</td><td class="v">2</td><td class="d">0 none · 1 overlay · 2 +seg</td></tr>
-          <tr><td class="k">reg_micro_reg</td><td class="v">1</td><td class="d">micro-reg depth (default 1)</td></tr>
+          <tr><td class="k">reg_micro_reg</td><td class="v">2</td><td class="d">micro-reg depth (default 2)</td></tr>
           <tr><td class="k">memory_mode</td><td class="v">high</td><td class="d">VALIS tier: high | medium | low | custom</td></tr>
           <tr><td class="k">reg_max_image_dim</td><td class="v">4000</td><td class="d">VALIS working max dim</td></tr>
           <tr><td class="k">reg_jvm_heap_gb</td><td class="v nul">null</td><td class="d">null → derive from task.memory</td></tr>
@@ -851,8 +851,8 @@
     writing a resumable checkpoint. <b>(c)</b> Preprocessing standardizes and illumination-corrects images;
     registration aligns each moving slide to the reference through one of two interchangeable backends behind a
     single adapter seam — VALIS or the JVM-free tiled/STARE backend —
-    with staged registration QC on by default and micro-registration at micro-rigid depth
-    (<code>reg_micro_reg=1</code> of <code>0 | 1 | 2</code>); segmentation
+    with staged registration QC on by default and full micro-registration
+    (<code>reg_micro_reg=2</code> of <code>0 | 1 | 2</code>); segmentation
     detects every cell on the reference and extracts morphology and contours once per mask; postprocessing
     quantifies each marker per compartment and exports. <b>(d)</b> The three
     segmentation backends compared on what they read, how the whole-cell mask is produced, what each requires

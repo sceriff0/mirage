@@ -223,8 +223,8 @@
                 },
                 "reg_micro_reg": {
                     "type": "integer",
-                    "description": "Micro-registration depth (nested, default 1): 0=none, 1=micro-rigid only (refines slide.M) [default], 2=+micro non-rigid (register_micro).",
-                    "default": 1,
+                    "description": "Micro-registration depth (nested, default 2): 0=none, 1=micro-rigid only (refines slide.M), 2=+micro non-rigid (register_micro) [default].",
+                    "default": 2,
                     "enum": [
                         0,
                         1,

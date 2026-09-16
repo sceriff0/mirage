@@ -15,7 +15,7 @@
     "memory_mode": "high",
     "reg_micro_reg_fraction": 0.125,
     "reg_max_image_dim": 4000,
-    "reg_micro_reg": 1,
+    "reg_micro_reg": 2,
 
     "_comment_output": "=== Image Output / Pyramid ===",
     "tilex": 512,
