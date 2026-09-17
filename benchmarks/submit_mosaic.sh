@@ -121,8 +121,9 @@ ensure_sif() {                     # ensure_sif <registry/name:tag> -> prints th
 export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(ensure_sif labsyspharm/ashlar:1.20.0)}"
 export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-tiled:1.0.0)}"
 export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-regqc:1.0.0)}"
-# reg_mosaic.py needs matplotlib + scikit-image + tifffile: the segeval image carries all three.
-MOSAIC_EXEC="${MOSAIC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-segeval:1.0.0)}"
+# The figures need matplotlib + scikit-image + tifffile AND imagecodecs: the slides are LZW,
+# and the segeval image cannot decode them (job 6844142). The quantify image carries all four.
+MOSAIC_EXEC="${MOSAIC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-quantify:1.0.0)}"
 
 echo "=================================================="
 echo "Mosaic job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(date)"

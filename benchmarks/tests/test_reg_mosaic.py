@@ -854,3 +854,49 @@ def test_an_arm_without_a_qc_composite_is_drawn_from_its_slides(
         "cells"
     ]
     assert cells["armX"]["pixels"] == "originals"
+
+
+def test_lzw_compressed_slides_are_read(originals_root, tmp_path):
+    """The real registered slides are LZW (job 6844142); decoding them needs imagecodecs."""
+    pytest.importorskip("imagecodecs")
+    import shutil
+
+    shutil.copytree(originals_root, tmp_path / "root")
+    reg = (
+        tmp_path
+        / "root"
+        / "armR"
+        / "P1"
+        / "registered"
+        / "registered_slides"
+        / "P1_cd3_registered.ome.tiff"
+    )
+    data = tifffile.imread(str(reg))
+    tifffile.imwrite(
+        str(reg),
+        data,
+        ome=True,
+        tile=(128, 128),
+        compression="lzw",
+        metadata={"axes": "CYX", "Channel": {"Name": ["DAPI", "CD3"]}},
+    )
+    m = _mosaic(tmp_path / "root" / "armR", tmp_path / "out")
+    assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "originals"
+
+
+def test_an_undecodable_slide_falls_back_to_the_composite_instead_of_crashing(
+    originals_root, tmp_path, monkeypatch, caplog
+):
+    def no_codec(self, *a, **k):
+        raise ValueError("<COMPRESSION.LZW: 5> requires the 'imagecodecs' package")
+
+    monkeypatch.setattr(rm.TiffSource, "read_patch", no_codec)
+    monkeypatch.setattr(
+        rm.Composite,
+        "crop",
+        lambda self, panel, y, x, h, w: (np.zeros((h, w), np.uint8),) * 2,
+    )
+    with caplog.at_level("WARNING"):
+        m = _mosaic(originals_root / "armR", tmp_path / "out")
+    assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "composite"
+    assert "imagecodecs" in caplog.text

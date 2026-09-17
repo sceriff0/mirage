@@ -739,12 +739,29 @@ class Arm:
             ref, mov = self.composite(key).crop(panel, y, x, h, w)
             return ref, mov, "composite"
         rsrc, ri, gsrc, gi, nsrc, ni = orig
-        ref = rsrc.read_patch(ri, y, x, h, w)
-        mov = (
-            gsrc.read_patch(gi, y, x, h, w)
-            if panel == "after"
-            else nsrc.read_patch(ni, y, x, h, w)
-        )
+        try:
+            ref = rsrc.read_patch(ri, y, x, h, w)
+            mov = (
+                gsrc.read_patch(gi, y, x, h, w)
+                if panel == "after"
+                else nsrc.read_patch(ni, y, x, h, w)
+            )
+        except (ValueError, OSError, RuntimeError) as exc:
+            # typically a compression this environment cannot decode: the pipeline's slides
+            # are LZW, which tifffile decodes only with imagecodecs (job 6844142 ran in an
+            # image without it). One warning per round, then the composite.
+            if self.source == "originals":
+                raise SystemExit(f"[{self.name}] {self.patient} {key}: {exc}") from exc
+            log.warning(
+                "[%s] %s %s: cannot decode the original slides (%s); using the 8-bit QC "
+                "composite. Run in an image with imagecodecs (bolt3x/mirage-quantify).",
+                self.name,
+                self.patient,
+                key,
+                exc,
+            )
+            self._orig[key] = None
+            return self.crop(key, panel, y, x, h, w)
         return ref, mov, "originals"
 
     def seg_qc(self, key: str, warn: bool = True) -> SegQC | None:

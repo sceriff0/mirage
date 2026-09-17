@@ -137,8 +137,9 @@ ensure_sif() {                     # ensure_sif <registry/name:tag> -> prints th
   fi
   printf '%s' "$f"
 }
-# reg_overlay.py needs matplotlib + scikit-image + tifffile: the segeval image carries all three.
-RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-segeval:1.0.0)}"
+# The figures need matplotlib + scikit-image + tifffile AND imagecodecs: the slides are LZW,
+# and the segeval image cannot decode them (job 6844142). The quantify image carries all four.
+RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-quantify:1.0.0)}"
 
 echo "=================================================="
 echo "Overlay job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(date)"
