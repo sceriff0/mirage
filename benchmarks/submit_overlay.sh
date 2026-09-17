@@ -63,6 +63,7 @@ REF_ROW="${REF_ROW:-1}"              # which row is the reference when neither r
 FIELD_UM="${FIELD_UM:-500}"          # crop side in µm
 ROI="${ROI:-}"                       # "Y,X" top-left in the reference frame (full-res px); empty = auto
 AVOID_ROIS_JSON="${AVOID_ROIS_JSON:-}" # a mosaic's <pid>_rois.json to keep the crop clear of
+OVERLAY_ARGS="${OVERLAY_ARGS:-}"     # extra reg_overlay.py flags, e.g. "--palette red-green --pmin 2"
 # -------------------------------------------------------------------------------
 
 [[ -n "$INPUT_CSV" ]] || { echo "usage: sbatch submit_overlay.sh <two_slides.csv>  (or --export=ALL,INPUT=...)" >&2; exit 1; }
@@ -201,7 +202,7 @@ fi
     $RENDER_EXEC python3 -m benchmarks.reg_overlay "$RUN" --patient "$PATIENT" \
       --field-um "$FIELD_UM" --palette magenta-cyan --numbers "$NUMBERS" --title "$LABEL" \
       "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
-      -o "$ROOT/overlay" "${EXTRA[@]+"${EXTRA[@]}"}"
+      -o "$ROOT/overlay" "${EXTRA[@]+"${EXTRA[@]}"}" $OVERLAY_ARGS
 ) || { echo "[overlay] FAILED" >&2; exit 1; }
 
 echo "=================================================="
