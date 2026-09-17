@@ -115,13 +115,30 @@ export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$NXF_SINGULARITY_CACHEDIR/.pull_tmp
 export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}"
 mkdir -p "$APPTAINER_TMPDIR"
 SING_BINDS="${SING_BINDS:---bind /beegfs --bind /hpcnfs}"
-sif_or_docker() {
-  local ref="$1" f
+# Each step runs `singularity exec <image>`. Given docker://..., Apptainer re-downloads and
+# re-converts the image on EVERY call (its cache is disabled above) -- ~10 min per step on a
+# real run (job 6831633). So each image is pulled ONCE, up front, into the cache under the file
+# name Nextflow itself uses (registry/name:tag -> registry-name-tag.img), which also spares
+# the pipeline runs their own pull. Written to a temporary name and moved into place, so a
+# concurrent reader never sees half an image.
+ensure_sif() {                     # ensure_sif <registry/name:tag> -> prints the local image path
+  local ref="$1" f tmp
   f="$NXF_SINGULARITY_CACHEDIR/$(printf '%s' "$ref" | tr '/:' '--').img"
-  if [[ -f "$f" ]]; then printf '%s' "$f"; else printf 'docker://%s' "$ref"; fi
+  if [[ ! -s "$f" ]]; then
+    tmp="$f.partial.$$"
+    echo "[images] pulling docker://$ref -> $f" >&2
+    if singularity pull "$tmp" "docker://$ref" >&2 && mv -f "$tmp" "$f"; then
+      :
+    else
+      rm -f "$tmp"
+      echo "[images] WARNING: could not pull $ref; steps will fetch docker://$ref each time" >&2
+      printf 'docker://%s' "$ref"; return
+    fi
+  fi
+  printf '%s' "$f"
 }
 # reg_overlay.py needs matplotlib + scikit-image + tifffile: the segeval image carries all three.
-RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-segeval:1.0.0)}"
+RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-segeval:1.0.0)}"
 
 echo "=================================================="
 echo "Overlay job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(date)"
@@ -169,6 +186,7 @@ fi
 
 # ---- 2. the Before / After overlay ---------------------------------------------
 EXTRA=()
+PX_ARGS=(); [[ "$PIXEL_SIZE" != auto ]] && PX_ARGS=(--pixel-size-um "$PIXEL_SIZE")
 if [[ -n "$AVOID_ROIS_JSON" ]]; then
   [[ "$AVOID_ROIS_JSON" = /* ]] || AVOID_ROIS_JSON="$SUBMIT_DIR/$AVOID_ROIS_JSON"
   [[ -f "$AVOID_ROIS_JSON" ]] || { echo "AVOID_ROIS_JSON $AVOID_ROIS_JSON not found" >&2; exit 1; }
@@ -181,6 +199,7 @@ fi
   SINGULARITYENV_PYTHONPATH="$SRC_DIR" APPTAINERENV_PYTHONPATH="$SRC_DIR" PYTHONPATH="$SRC_DIR" \
     $RENDER_EXEC python3 -m benchmarks.reg_overlay "$RUN" --patient "$PATIENT" \
       --field-um "$FIELD_UM" --palette magenta-cyan --numbers "$NUMBERS" --title "$LABEL" \
+      "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
       -o "$ROOT/overlay" "${EXTRA[@]+"${EXTRA[@]}"}"
 ) || { echo "[overlay] FAILED" >&2; exit 1; }
 

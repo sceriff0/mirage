@@ -77,6 +77,12 @@ def test_seg_qc_off_registers_and_writes_qc_without_any_nuclei(tmp_path):
     ):
         assert step in calls, step
     assert "warp_seg_qc.py" not in calls
+    # every retile shares one canvas (all the patient's slides) at the run's pixel size
+    retiles = [ln for ln in calls.splitlines() if "benchmarks.ashlar.retile" in ln]
+    assert len(retiles) == 2
+    for ln in retiles:
+        assert "--pixel-size-um 0.325" in ln
+        assert "--canvas-like" in ln and "033_a.ome.tif" in ln and "033_b.ome.tif" in ln
     rows = (out / "csv" / "registered.csv").read_text().splitlines()
     assert len(rows) == 3 and rows[2].startswith("033,033_b_registered,")
 

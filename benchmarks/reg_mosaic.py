@@ -1230,6 +1230,14 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     )
     for arm in arms:
         for k in keys:
+            if (
+                arm is not first
+                and arm.source != "composite"
+                and arm.composite_path(k) is None
+            ):
+                # no QC composite (e.g. an external arm whose QC step failed): fine as long as
+                # its original slides are usable, which crop() checks and falls back from
+                continue
             c = arm.composite(k)
             if c.canvas != (H, W):
                 log.warning(

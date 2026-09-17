@@ -96,16 +96,33 @@ export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$NXF_SINGULARITY_CACHEDIR/.pull_tmp
 export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}"
 mkdir -p "$APPTAINER_TMPDIR"
 SING_BINDS="${SING_BINDS:---bind /beegfs --bind /hpcnfs}"
-sif_or_docker() {                  # sif_or_docker <registry/name:tag>
-  local ref="$1" f
+# Each step runs `singularity exec <image>`. Given docker://..., Apptainer re-downloads and
+# re-converts the image on EVERY call (its cache is disabled above) -- ~10 min per step on a
+# real run (job 6831633). So each image is pulled ONCE, up front, into the cache under the file
+# name Nextflow itself uses (registry/name:tag -> registry-name-tag.img), which also spares
+# the pipeline runs their own pull. Written to a temporary name and moved into place, so a
+# concurrent reader never sees half an image.
+ensure_sif() {                     # ensure_sif <registry/name:tag> -> prints the local image path
+  local ref="$1" f tmp
   f="$NXF_SINGULARITY_CACHEDIR/$(printf '%s' "$ref" | tr '/:' '--').img"
-  if [[ -f "$f" ]]; then printf '%s' "$f"; else printf 'docker://%s' "$ref"; fi
+  if [[ ! -s "$f" ]]; then
+    tmp="$f.partial.$$"
+    echo "[images] pulling docker://$ref -> $f" >&2
+    if singularity pull "$tmp" "docker://$ref" >&2 && mv -f "$tmp" "$f"; then
+      :
+    else
+      rm -f "$tmp"
+      echo "[images] WARNING: could not pull $ref; steps will fetch docker://$ref each time" >&2
+      printf 'docker://%s' "$ref"; return
+    fi
+  fi
+  printf '%s' "$f"
 }
-export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(sif_or_docker labsyspharm/ashlar:1.20.0)}"
-export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-tiled:1.0.0)}"
-export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-regqc:1.0.0)}"
+export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(ensure_sif labsyspharm/ashlar:1.20.0)}"
+export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-tiled:1.0.0)}"
+export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-regqc:1.0.0)}"
 # reg_mosaic.py needs matplotlib + scikit-image + tifffile: the segeval image carries all three.
-MOSAIC_EXEC="${MOSAIC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-segeval:1.0.0)}"
+MOSAIC_EXEC="${MOSAIC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-segeval:1.0.0)}"
 
 echo "=================================================="
 echo "Mosaic job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(date)"
@@ -162,6 +179,8 @@ PREPROC_CSV="$ROOT/preprocess_shared/csv/preprocessed.csv"
 # ---- 2. VALIS high (micro 2), STARE high and ASHLAR ---------------------------
 REG_QC=1; [[ "$SEG_QC" == "1" ]] && REG_QC=2
 export ASHLAR_SEG_QC="$SEG_QC"
+# every ASHLAR step at the run's pixel size, not the slide header's (0.3453 on the ND2 slides)
+[[ "$PIXEL_SIZE" != auto ]] && export ASHLAR_PIXEL_SIZE_UM="$PIXEL_SIZE"
 REG_COMMON=(start=registration stop=registration "reg_qc=$REG_QC")
 ASHLAR_ARM="ashlar_t${ASHLAR_TILE}_s${ASHLAR_SHIFT_UM}"
 
@@ -205,11 +224,27 @@ fi
 ARM_DIRS=(); LABELS=()
 (( rc_valis  == 0 )) && { ARM_DIRS+=("$ROOT/valis_high_micro2"); LABELS+=(--label "valis_high_micro2=VALIS high"); }
 (( rc_stare  == 0 )) && { ARM_DIRS+=("$ROOT/stare_high");        LABELS+=(--label "stare_high=STARE high"); }
-(( rc_ashlar == 0 )) && { ARM_DIRS+=("$ROOT/$ASHLAR_ARM");       LABELS+=(--label "$ASHLAR_ARM=ASHLAR"); }
+# ASHLAR's column needs its registered slides, not a clean exit: its last per-round step (the QC
+# composite, sized >=100 GB in the pipeline) can fail in this head job after every slide was
+# stitched, and the mosaic reads the stitched slides themselves.
+ashlar_slides_ok() {
+  local csv="$ROOT/$ASHLAR_ARM/csv/registered.csv" n=0 img
+  [[ -s "$csv" ]] || return 1
+  while IFS= read -r img; do
+    [[ -s "$img" ]] || { echo "[mosaic] ASHLAR slide missing: $img" >&2; return 1; }
+    n=$((n + 1))
+  done < <(tail -n +2 "$csv" | awk -F, '$4 != "true" { print $3 }')
+  (( n > 0 ))
+}
+if (( rc_ashlar == 0 )) || ashlar_slides_ok; then
+  (( rc_ashlar == 0 )) || echo "[mosaic] ASHLAR exited non-zero but every round was stitched; drawing its column" >&2
+  ARM_DIRS+=("$ROOT/$ASHLAR_ARM"); LABELS+=(--label "$ASHLAR_ARM=ASHLAR")
+fi
 if (( ${#ARM_DIRS[@]} == 0 )); then
   echo "no arm finished; no mosaic" >&2; exit 1
 fi
 PATIENT_ARGS=(); [[ -n "$PATIENT" ]] && PATIENT_ARGS=(--patient "$PATIENT")
+PX_ARGS=(); [[ "$PIXEL_SIZE" != auto ]] && PX_ARGS=(--pixel-size-um "$PIXEL_SIZE")
 echo "[mosaic] columns: ${ARM_DIRS[*]}"
 # shellcheck disable=SC2086
 (
@@ -217,7 +252,8 @@ echo "[mosaic] columns: ${ARM_DIRS[*]}"
   SINGULARITYENV_PYTHONPATH="$SRC_DIR" APPTAINERENV_PYTHONPATH="$SRC_DIR" PYTHONPATH="$SRC_DIR" \
     $MOSAIC_EXEC python3 -m benchmarks.reg_mosaic "${ARM_DIRS[@]}" \
       "${PATIENT_ARGS[@]+"${PATIENT_ARGS[@]}"}" --rows "$ROWS" -o "$ROOT/mosaic" \
-      --numbers "$NUMBERS" --palette magenta-cyan "${LABELS[@]}" $MOSAIC_ARGS
+      --numbers "$NUMBERS" --palette magenta-cyan "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
+      "${LABELS[@]}" $MOSAIC_ARGS
 ) || { echo "[mosaic] FAILED" >&2; exit 1; }
 
 echo "=================================================="

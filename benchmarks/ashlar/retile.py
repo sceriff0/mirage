@@ -204,12 +204,42 @@ def _region(arr, n_channels, t, tile_size, dtype):
     return out
 
 
-def write_tiles(image_path, outdir, tile_size, overlap_fraction, cycle=0):
+def _yx_shape(image_path) -> tuple[int, int]:
+    """(height, width) of a TIFF's first series, from its tags -- no pixels decoded."""
+    import tifffile
+
+    with tifffile.TiffFile(str(image_path)) as tif:
+        s = tif.series[0]
+        return int(s.shape[s.axes.index("Y")]), int(s.shape[s.axes.index("X")])
+
+
+def write_tiles(
+    image_path,
+    outdir,
+    tile_size,
+    overlap_fraction,
+    cycle=0,
+    canvas_like=(),
+    pixel_size_um=None,
+):
     """Cut ``image_path`` into a uniform padded tile grid + ``grid.json``. Returns its path.
 
     Streams via ``tiled_io.open_lazy``, whose zarr view fetches only the OME-TIFF tiles a
     region touches, so peak memory is one output tile rather than the whole slide --
     ``load_channels`` would pull a 60k x 40k plane into RAM.
+
+    ``canvas_like``: the grid is laid on the largest height and width among these images
+    (and this one), the image anchored at the origin and zero-padded right and bottom. Pass
+    EVERY slide of a patient, reference included, to every call: LayerAligner matches tiles
+    one-for-one, so all cycles must share n_rows x n_cols. Retiled on their own extents,
+    two slides of different size give different grids and ASHLAR_SOLVE refuses the pair
+    ("grids disagree on n_rows (35 vs 31)", real run 2026-09-16). ``orig_shape`` stays the
+    image's REAL shape -- the solve sizes the stitched output from the reference's -- and
+    ``canvas_shape`` records the padded one.
+
+    ``pixel_size_um``: the run's pixel size. When given it wins over the file's OME header,
+    which can carry the scanner's own calibration (0.3453 on a real ND2 run given 0.325);
+    it is what ASHLAR converts --maximum-shift by.
     """
     import tifffile
     from tiled_io import open_lazy
@@ -218,11 +248,19 @@ def write_tiles(image_path, outdir, tile_size, overlap_fraction, cycle=0):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    pixel_size_um = _pixel_size_um(image_path)
+    if pixel_size_um is None:
+        pixel_size_um = _pixel_size_um(image_path)
     arr, dtype, close = open_lazy(image_path)
     try:
         n_channels, height, width = arr.shape
-        tiles = tile_grid(width, height, tile_size, overlap_fraction)
+        shapes = [(height, width)] + [_yx_shape(p) for p in canvas_like]
+        canvas_h, canvas_w = max(h for h, _ in shapes), max(w for _, w in shapes)
+        tiles = [
+            t._replace(
+                w=max(0, min(t.w, width - t.x)), h=max(0, min(t.h, height - t.y))
+            )
+            for t in tile_grid(canvas_w, canvas_h, tile_size, overlap_fraction)
+        ]
         for t in tiles:
             tile = _region(arr, n_channels, t, tile_size, dtype)
             name = TILE_PATTERN.format(row=t.row, col=t.col)
@@ -230,7 +268,7 @@ def write_tiles(image_path, outdir, tile_size, overlap_fraction, cycle=0):
     finally:
         close()
 
-    n_rows, n_cols = grid_shape(width, height, tile_size, overlap_fraction)
+    n_rows, n_cols = grid_shape(canvas_w, canvas_h, tile_size, overlap_fraction)
     grid = {
         "cycle": cycle,
         "pattern": TILE_PATTERN,
@@ -242,6 +280,7 @@ def write_tiles(image_path, outdir, tile_size, overlap_fraction, cycle=0):
         "pixel_size_um": pixel_size_um,
         "n_channels": int(n_channels),
         "orig_shape": [int(height), int(width)],
+        "canvas_shape": [int(canvas_h), int(canvas_w)],
         "source": image_path.name,
         # Valid (unpadded) extent per tile, row-major, so nothing downstream reads padding
         # as signal.
@@ -263,11 +302,30 @@ def main(argv=None):
     )
     ap.add_argument("--tile-size", type=int, required=True)
     ap.add_argument("--overlap", type=float, required=True, dest="overlap_fraction")
+    ap.add_argument(
+        "--canvas-like",
+        nargs="*",
+        default=[],
+        help="every slide of the patient: the grid covers the largest of them, so all "
+        "cycles share one grid (ASHLAR matches tiles one-for-one)",
+    )
+    ap.add_argument(
+        "--pixel-size-um",
+        type=float,
+        default=None,
+        help="the run's pixel size; wins over the OME header",
+    )
     a = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     grid_path = write_tiles(
-        a.image, a.outdir, a.tile_size, a.overlap_fraction, cycle=a.cycle
+        a.image,
+        a.outdir,
+        a.tile_size,
+        a.overlap_fraction,
+        cycle=a.cycle,
+        canvas_like=a.canvas_like,
+        pixel_size_um=a.pixel_size_um,
     )
     grid = json.loads(Path(grid_path).read_text())
     logger.info(

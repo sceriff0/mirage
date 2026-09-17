@@ -821,3 +821,36 @@ def test_each_cell_is_drawn_at_one_image_pixel_per_output_pixel(
     assert seen["cell_in"] * seen["dpi"] == pytest.approx(
         96
     )  # the patch, not resampled
+
+
+def test_an_arm_without_a_qc_composite_is_drawn_from_its_slides(
+    originals_root, tmp_path
+):
+    """An external arm whose QC-composite step failed still has its stitched slides."""
+    import shutil
+
+    shutil.copytree(originals_root, tmp_path / "root")
+    ext = tmp_path / "root" / "armX"
+    shutil.copytree(tmp_path / "root" / "armR", ext)
+    shutil.rmtree(ext / "P1" / "qc")
+    argv = [
+        str(tmp_path / "root" / "armR"),
+        str(ext),
+        "--rows",
+        "1",
+        "-o",
+        str(tmp_path / "out"),
+        "--patch-px",
+        "96",
+        "--formats",
+        "png",
+        "--dpi",
+        "50",
+        "--numbers",
+        "none",
+    ]
+    assert rm.main(argv) == 0
+    cells = json.loads((tmp_path / "out" / "P1_rois.json").read_text())["row_plan"][0][
+        "cells"
+    ]
+    assert cells["armX"]["pixels"] == "originals"

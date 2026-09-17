@@ -45,6 +45,9 @@
 #                 the geojson requirement: the arm still retiles, solves, stitches and writes
 #                 its registered slide, registered.csv and QC composite (the fast path of a
 #                 run without WARP_SEG_QC; <geojson_from_arm> is then ignored).
+#   ASHLAR_PIXEL_SIZE_UM  the pixel size (µm) every step uses. Default: the preprocessed.csv
+#                 pixel_size column, i.e. the run's --pixel_size -- NOT the slide's OME header,
+#                 which can carry the scanner's own value (0.3453 on a real ND2 run at 0.325).
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -62,6 +65,7 @@ ASHLAR_EXEC="${ASHLAR_EXEC:-}"
 QC_EXEC="${QC_EXEC:-}"
 REGQC_EXEC="${REGQC_EXEC:-}"
 SEG_QC="${ASHLAR_SEG_QC:-1}"
+PIXEL_SIZE_OVERRIDE="${ASHLAR_PIXEL_SIZE_UM:-}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
 # the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
 # and the package source on the path, and hand the same value into the containers:
@@ -134,6 +138,15 @@ for pid in $patients; do
   ref_row=$(echo "$rows" | awk -F',' -v r="$C_REF" '$r=="true"{print; exit}')
   ref_ch=$(echo "$ref_row" | cut -d',' -f"$C_CH")
   ref_px=""; [[ -n "$C_PX" ]] && ref_px=$(echo "$ref_row" | cut -d',' -f"$C_PX")
+  [[ -n "$PIXEL_SIZE_OVERRIDE" ]] && ref_px="$PIXEL_SIZE_OVERRIDE"
+  # ONE tile grid for every slide of the patient. ASHLAR matches tiles one-for-one, so the
+  # reference and each moving slide are laid on the largest extent among ALL of them (zero-
+  # padded right/bottom); retiled on their own extents, slides of different size get different
+  # grids and the solve refuses them ("grids disagree on n_rows (35 vs 31)", 2026-09-16).
+  canvas=()
+  while IFS= read -r img; do [[ -n "$img" ]] && canvas+=("$img"); done \
+    < <(echo "$rows" | cut -d',' -f"$C_IMG")
+  px_arg=(); [[ "$ref_px" =~ ^[0-9.]+$ ]] && px_arg=(--pixel-size-um "$ref_px")
   printf '%s,%s,%s,true,%s,%s\n' "$pid" "$ref_name" "$ref_img" "$ref_ch" "$ref_px" >> "$REG_CSV"
   ref_gj="$gj_dir/${ref_name}.geojson"
   if [[ "$SEG_QC" == "1" && ! -f "$ref_gj" ]]; then
@@ -154,13 +167,14 @@ for pid in $patients; do
   step ASHLAR_RETILE "$pid" --input "$ref_img" -- \
       $QC_EXEC python3 -m benchmarks.ashlar.retile \
       --image "$ref_img" --outdir "$ref_tiles" --cycle 0 \
-      --tile-size "$TILE" --overlap "$OVERLAP"
+      --tile-size "$TILE" --overlap "$OVERLAP" "${px_arg[@]}" --canvas-like "${canvas[@]}"
 
   while IFS= read -r mov_row; do
     [[ -n "$mov_row" ]] || continue
     mov_img=$(echo "$mov_row" | cut -d',' -f"$C_IMG")
     mov_ch=$(echo "$mov_row" | cut -d',' -f"$C_CH")
     mov_px=""; [[ -n "$C_PX" ]] && mov_px=$(echo "$mov_row" | cut -d',' -f"$C_PX")
+    [[ -n "$PIXEL_SIZE_OVERRIDE" ]] && mov_px="$PIXEL_SIZE_OVERRIDE"
     # Slide names are DERIVED from the filenames, never hardcoded: warp_seg_qc looks the
     # moving slide up BY NAME in the manifest, and a name that does not match yields an
     # empty transform that scores as a perfect identity — a silent pass, not an error.
@@ -186,7 +200,7 @@ for pid in $patients; do
     step ASHLAR_RETILE "$pid" --input "$mov_img" -- \
         $QC_EXEC python3 -m benchmarks.ashlar.retile \
         --image "$mov_img" --outdir "$d/mov" --cycle 1 \
-        --tile-size "$TILE" --overlap "$OVERLAP"
+        --tile-size "$TILE" --overlap "$OVERLAP" "${px_arg[@]}" --canvas-like "${canvas[@]}"
     # shellcheck disable=SC2086
     step ASHLAR_SOLVE "$pid" --input "$ref_tiles" --input "$d/mov" -- \
         $ASHLAR_EXEC python3 -m benchmarks.ashlar.solve \
