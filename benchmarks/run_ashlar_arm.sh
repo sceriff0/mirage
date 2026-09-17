@@ -45,6 +45,10 @@
 #                 the geojson requirement: the arm still retiles, solves, stitches and writes
 #                 its registered slide, registered.csv and QC composite (the fast path of a
 #                 run without WARP_SEG_QC; <geojson_from_arm> is then ignored).
+#   ASHLAR_REG_QC 1 (default) writes the pipeline's Before/After QC composite per round.
+#                 0 skips it: it is an 8-bit preview (>=100 GB in the pipeline's own sizing,
+#                 and it runs INSIDE this job), and reg_mosaic/reg_overlay read the stitched
+#                 slide itself. The registered slide and registered.csv are written either way.
 #   ASHLAR_PIXEL_SIZE_UM  the pixel size (µm) every step uses. Default: the preprocessed.csv
 #                 pixel_size column, i.e. the run's --pixel_size -- NOT the slide's OME header,
 #                 which can carry the scanner's own value (0.3453 on a real ND2 run at 0.325).
@@ -65,6 +69,7 @@ ASHLAR_EXEC="${ASHLAR_EXEC:-}"
 QC_EXEC="${QC_EXEC:-}"
 REGQC_EXEC="${REGQC_EXEC:-}"
 SEG_QC="${ASHLAR_SEG_QC:-1}"
+REG_QC="${ASHLAR_REG_QC:-1}"
 PIXEL_SIZE_OVERRIDE="${ASHLAR_PIXEL_SIZE_UM:-}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
 # the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
@@ -230,12 +235,14 @@ for pid in $patients; do
       || { echo "[$ARM/$pid] FAILED stitching $mov_name" >&2; rc=1; }
     qc_px_flag=()
     [[ "$mov_px" =~ ^[0-9.]+$ ]] && qc_px_flag=(--pixel-size-um "$mov_px")
+    if [[ "$REG_QC" == "1" ]]; then
     # shellcheck disable=SC2086
     step ASHLAR_REG_QC "$pid" --input "$ref_img" --input "$reg_img" --input "$mov_img" -- \
         $REGQC_EXEC python3 "$REPO/bin/generate_registration_qc.py" \
         --reference "$ref_img" --registered "$reg_img" --native "$mov_img" \
         --output "$qc_out" "${qc_px_flag[@]}" \
       || { echo "[$ARM/$pid] FAILED registration QC for $mov_name" >&2; rc=1; }
+    fi
     printf '%s,%s,%s,false,%s,%s\n' "$pid" "${mov_name}_registered" "$reg_img" "$mov_ch" "$mov_px" >> "$REG_CSV"
     # --method tiled is the ONLY backend flag the manifest path needs
     # (lib/WarpBackends.groovy's tiled entry) — no --micro-reg, no --checkpoint-dir,

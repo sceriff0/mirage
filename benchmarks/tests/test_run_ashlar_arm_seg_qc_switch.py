@@ -45,6 +45,7 @@ def _arm(tmp_path: Path, seg_qc: str):
         "QC_EXEC": str(fake),
         "REGQC_EXEC": str(fake),
         "ASHLAR_SEG_QC": seg_qc,
+        "ASHLAR_REG_QC": os.environ.get("_TEST_REG_QC", "1"),
     }
     proc = subprocess.run(
         [
@@ -91,3 +92,14 @@ def test_seg_qc_on_still_refuses_to_run_without_the_nuclei(tmp_path):
     proc, calls, _ = _arm(tmp_path, "1")
     assert proc.returncode == 1 and "produced no QC nuclei" in proc.stderr
     assert "benchmarks.ashlar.solve" not in calls
+
+
+def test_reg_qc_off_skips_the_composite_but_still_stitches(tmp_path, monkeypatch):
+    """ASHLAR's QC composite is an 8-bit preview the figures do not read, and it failed inside
+    the head job on a real run; ASHLAR_REG_QC=0 skips it, the slide is still written."""
+    monkeypatch.setenv("_TEST_REG_QC", "0")
+    proc, calls, out = _arm(tmp_path, "0")
+    assert proc.returncode == 0, proc.stderr
+    assert "generate_registration_qc.py" not in calls
+    assert "tiled_stitch.py" in calls and "benchmarks.ashlar.solve" in calls
+    assert len((out / "csv" / "registered.csv").read_text().splitlines()) == 3

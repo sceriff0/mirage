@@ -294,13 +294,21 @@ def _check(edge, layer, max_discard_fraction, warnings_seen):
 
     identity = np.arange(n)
     off_diagonal = int((np.asarray(layer.reference_idx, dtype=int) != identity).sum())
+    offset_yx = np.asarray(getattr(layer, "cycle_offset", (0.0, 0.0)), dtype=float)
     if off_diagonal:
+        # ASHLAR matches each moving tile to the NEAREST reference tile after its coarse
+        # cycle offset, so a drift of more than a tile stride makes most tiles match a
+        # neighbour. That is the offset, not the grid: retiling pads every cycle onto one
+        # canvas (retile.py --canvas-like), and the solve refuses incongruent grids outright.
         logger.warning(
-            "%d/%d moving tiles matched a non-corresponding reference tile. The two grids "
-            "should be congruent; a large count means the cycles were not padded to a "
-            "common canvas.",
+            "%d/%d moving tiles matched a neighbouring reference tile; the coarse cycle "
+            "offset is (y, x) = (%.0f, %.0f) px. Expected when the cycles are more than a "
+            "tile apart -- but that drift is also what --maximum-shift has to cover, so "
+            "raise it if tiles are being discarded below.",
             off_diagonal,
             n,
+            offset_yx[0],
+            offset_yx[1],
         )
 
     if fraction > max_discard_fraction:

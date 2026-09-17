@@ -57,7 +57,16 @@ SEG_QC="${SEG_QC:-0}"                # 0 = reg_qc=1, no WARP_SEG_QC, no numbers;
 NUMBERS="${NUMBERS:-}"               # empty = none at SEG_QC=0, scorer values (auto) at SEG_QC=1
 ASHLAR_TILE="${ASHLAR_TILE:-1024}"
 ASHLAR_OVERLAP="${ASHLAR_OVERLAP:-0.1}"
-ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-30}"
+ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-500}"   # ASHLAR's budget for the cross-cycle drift. NOT the
+                                     # arm benchmark's 30/60 (a fairness axis against STARE's swept
+                                     # range): a budget below the real drift is not a fair baseline,
+                                     # it is a crippled one -- ASHLAR replaces out-of-range tiles
+                                     # with model predictions instead of erroring. Measured on 033:
+                                     # the cycles sit ~1187 px = 386 um apart, and at 30 um it
+                                     # discarded 30-57% of tiles.
+ASHLAR_REG_QC="${ASHLAR_REG_QC:-0}"  # 1 also writes ASHLAR's 8-bit Before/After composite (the
+                                     # figures read the stitched slide itself; that step is sized
+                                     # >=100 GB in the pipeline and runs inside this job)
 PATIENT="${PATIENT:-}"               # empty = one mosaic per patient in the samplesheet
 ROWS="${ROWS:-}"                     # (round, ROI) cells per mosaic; empty = the moving rounds
                                      # of the first patient (one ROI each)
@@ -179,7 +188,7 @@ PREPROC_CSV="$ROOT/preprocess_shared/csv/preprocessed.csv"
 
 # ---- 2. VALIS high (micro 2), STARE high and ASHLAR ---------------------------
 REG_QC=1; [[ "$SEG_QC" == "1" ]] && REG_QC=2
-export ASHLAR_SEG_QC="$SEG_QC"
+export ASHLAR_SEG_QC="$SEG_QC" ASHLAR_REG_QC
 # every ASHLAR step at the run's pixel size, not the slide header's (0.3453 on the ND2 slides)
 [[ "$PIXEL_SIZE" != auto ]] && export ASHLAR_PIXEL_SIZE_UM="$PIXEL_SIZE"
 REG_COMMON=(start=registration stop=registration "reg_qc=$REG_QC")

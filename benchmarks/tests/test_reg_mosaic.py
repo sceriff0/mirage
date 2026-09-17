@@ -417,7 +417,9 @@ def test_rounds_filter_and_reused_rois(arm_root, tmp_path):
     assert second["rois"] == first["rois"]
 
 
-def test_a_missing_composite_or_round_is_named(arm_root, tmp_path):
+def test_a_missing_composite_is_named(arm_root, tmp_path):
+    """(a missing ROUND is skipped instead -- see
+    test_a_round_one_arm_never_produced_is_skipped_not_fatal)"""
     d = tmp_path / "armC"
     rows = list(csv.DictReader(open(arm_root / "armA" / "csv" / "registered.csv")))
     _checkpoint(d / "csv" / "registered.csv", rows)  # the checkpoint, but no QC files
@@ -435,26 +437,8 @@ def test_a_missing_composite_or_round_is_named(arm_root, tmp_path):
                 "png",
                 "--dpi",
                 "50",
-            ]
-        )
-    _checkpoint(
-        d / "csv" / "registered.csv", [r for r in rows if "CD8" not in r["channels"]]
-    )
-    with pytest.raises(SystemExit, match="no registered slide for round 'CD8'"):
-        rm.main(
-            [
-                str(arm_root / "armA"),
-                str(d),
-                "--rows",
-                "2",
-                "-o",
-                str(tmp_path / "x"),
-                "--patch-px",
-                "64",
-                "--formats",
-                "png",
-                "--dpi",
-                "50",
+                "--source",
+                "composite",
             ]
         )
 
@@ -1039,3 +1023,85 @@ def test_overlay_of_a_big_field_is_read_strided_with_a_correct_bar(
     assert bar[0] == pytest.approx(
         m["scalebar_um"] / (PX * 4)
     )  # bar in displayed pixels
+
+
+def test_a_round_one_arm_never_produced_is_skipped_not_fatal(
+    arm_root, tmp_path, caplog
+):
+    """ASHLAR refused FSP1 (57% of tiles discarded) on a real run and the whole mosaic died
+    with "no registered slide for round 'FSP1'", though 6 rounds and 2 arms were complete."""
+    import shutil
+
+    partial = tmp_path / "armP"
+    shutil.copytree(arm_root / "armB", partial)
+    rows = [
+        r
+        for r in csv.DictReader(open(partial / "csv" / "registered.csv"))
+        if "CD8" not in r["channels"]
+    ]
+    _checkpoint(partial / "csv" / "registered.csv", rows)  # this arm has CD3 only
+    out = tmp_path / "figs"
+    with caplog.at_level("WARNING"):
+        argv = [str(arm_root / "armA"), str(partial), "--rows", "1", "-o", str(out)]
+        argv += [
+            "--patch-px",
+            "64",
+            "--formats",
+            "png",
+            "--dpi",
+            "50",
+            "--numbers",
+            "none",
+        ]
+        assert rm.main(argv) == 0
+    m = json.loads((out / "P1_rois.json").read_text())
+    assert [r["round"] for r in m["row_plan"]] == ["CD3"]
+    assert m["rounds_skipped"] == {"CD8": ["armP"]}
+    assert "CD8" in caplog.text and "armP" in caplog.text
+
+
+def test_when_no_round_survives_it_still_fails(arm_root, tmp_path):
+    import shutil
+
+    empty = tmp_path / "armE"
+    shutil.copytree(arm_root / "armB", empty)
+    rows = [
+        r
+        for r in csv.DictReader(open(empty / "csv" / "registered.csv"))
+        if r["is_reference"] == "true"
+    ]
+    _checkpoint(empty / "csv" / "registered.csv", rows)
+    with pytest.raises(SystemExit, match="no round is present in every arm"):
+        rm.main(
+            [
+                str(arm_root / "armA"),
+                str(empty),
+                "--rows",
+                "1",
+                "-o",
+                str(tmp_path / "x"),
+                "--patch-px",
+                "64",
+                "--formats",
+                "png",
+                "--dpi",
+                "50",
+                "--numbers",
+                "none",
+            ]
+        )
+
+
+def test_a_crop_as_large_as_the_slide_is_centred_not_refused():
+    """A whole-slide field leaves no room to choose a window: the scorer returned nothing and
+    the overlay died ("no tissue crop of 24166 px", job 6847261). It must centre instead."""
+    rng = np.random.default_rng(4)
+    low, _ = _tissue(rng)
+    assert rm.select_rois(low, 1.0, SIZE, 1, 0.15, 1.0, (SIZE, SIZE)) == [(0, 0)]
+    # larger than the image: clamped to the origin, the pad-or-crop rule fills the rest
+    assert rm.select_rois(low, 1.0, SIZE * 2, 1, 0.15, 1.0, (SIZE, SIZE)) == [(0, 0)]
+    # a field that still leaves room is chosen on tissue as before, not centred
+    assert rm.select_rois(low, 1.0, 64, 1, 0.15, 1.0, (SIZE, SIZE))[0] != (
+        (SIZE - 64) // 2,
+        (SIZE - 64) // 2,
+    )

@@ -94,3 +94,30 @@ def test_register_mode_keeps_ashlars_own_edge_registration(fake_ashlar):
             "r", {}, "m", {}, 0, 30.0, 0.325, reference_edges="register"
         )
     assert _FakeEdge.runs == 1
+
+
+class _Layer:
+    def __init__(self, n=945, off=918, discard=0.3, cycle=(1186.95, 211.45)):
+        self.positions = np.zeros((n, 2))
+        self.reference_idx = np.roll(np.arange(n), 1) if off else np.arange(n)
+        self.discard = np.zeros(n, bool)
+        self.discard[: int(discard * n)] = True
+        self.cycle_offset = np.array(cycle)
+        self.shifts = np.zeros((n, 2))
+        self.errors = np.zeros(n)
+
+
+def test_the_tile_mismatch_warning_names_the_cycle_offset_not_the_canvas(caplog):
+    """With congruent grids (the canvas fix) a large cycle offset is what makes each moving
+    tile match another reference tile -- a real run warned "not padded to a common canvas"
+    while both grids were 35x27 and the cycles were 1187 px apart."""
+    with caplog.at_level("WARNING"):
+        solve._check(object(), _Layer(), 0.5, [])
+    assert "canvas" not in caplog.text
+    assert "cycle offset" in caplog.text and "1187" in caplog.text.replace(",", "")
+    assert "maximum-shift" in caplog.text  # what to raise when the drift is the cause
+
+
+def test_discarding_past_the_budget_still_refuses(caplog):
+    with pytest.raises(SystemExit, match="maximum-shift"):
+        solve._check(object(), _Layer(discard=0.57), 0.5, [])

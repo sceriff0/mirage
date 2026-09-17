@@ -970,6 +970,10 @@ def select_rois(
     (`spread`) and never closer than `min_sep` x image diagonal.
     """
     H, W = full_shape
+    if patch_px >= H or patch_px >= W:
+        # a field as large as the slide leaves no window to choose between: centre it (and
+        # clamp to the origin when it is larger, where pad-or-crop fills the rest)
+        return [(max((H - patch_px) // 2, 0), max((W - patch_px) // 2, 0))]
     win = max(3, int(round(patch_px / factor)))
     img = np.asarray(low, np.float32)
     f = np.log1p(np.maximum(img - float(np.percentile(img, 1.0)), 0.0))
@@ -1330,9 +1334,25 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         moving = [sl for sl in moving if round_matches(sl, opt.rounds)]
     if not moving:
         raise SystemExit(f"{pid}: no moving round matches {opt.rounds}")
-    for arm in arms:
-        for sl in moving:
-            arm.slide(sl.key)  # names the missing round, if any
+    # A round one arm never produced (e.g. ASHLAR refusing a slide: too many tiles discarded)
+    # is dropped from the figure, naming it, rather than losing every other round and arm.
+    skipped: dict[str, list[str]] = {}
+    for sl in list(moving):
+        absent = [a.name for a in arms if sl.key not in a.moving]
+        if absent:
+            skipped[sl.key] = absent
+            moving.remove(sl)
+    if skipped:
+        log.warning(
+            "skipping %d round(s) no arm pair shares: %s",
+            len(skipped),
+            "; ".join(f"{k} (missing from {', '.join(v)})" for k, v in skipped.items()),
+        )
+    if not moving:
+        raise SystemExit(
+            f"{pid}: no round is present in every arm; missing "
+            + "; ".join(f"{k} from {', '.join(v)}" for k, v in skipped.items())
+        )
     keys = [sl.key for sl in moving]
     log.info(
         "== %s: reference %s; %d moving round(s): %s",
@@ -1570,6 +1590,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         "patch_px": patch_px,
         "patch_um": patch_um,
         "rows": opt.rows,
+        "rounds_skipped": skipped,
         "palette": opt.palette,
         "numbers": opt.numbers,
         "orient": opt.orient,
