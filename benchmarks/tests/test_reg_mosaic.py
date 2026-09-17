@@ -900,3 +900,25 @@ def test_an_undecodable_slide_falls_back_to_the_composite_instead_of_crashing(
         m = _mosaic(originals_root / "armR", tmp_path / "out")
     assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "composite"
     assert "imagecodecs" in caplog.text
+
+
+def test_overlap_is_neutral_white_not_lavender():
+    """magenta (1,0,1) + cyan (0,1,1) share the blue channel. ADDED, blue clips first and
+    equal overlap renders lavender, background purple -- the washed look of the first real
+    overlay (mean blue 0.53 vs red/green 0.30). Combined by per-channel maximum, equal
+    overlap is grey/white and each colour alone is unchanged."""
+    half = np.full((1, 1), 0.5, np.float32)
+    zero = np.zeros((1, 1), np.float32)
+    np.testing.assert_allclose(
+        rm.overlay(half, half, "magenta-cyan")[0, 0], [0.5, 0.5, 0.5]
+    )
+    np.testing.assert_allclose(
+        rm.overlay(half, zero, "magenta-cyan")[0, 0], [0.5, 0.0, 0.5]
+    )
+    np.testing.assert_allclose(
+        rm.overlay(zero, half, "magenta-cyan")[0, 0], [0.0, 0.5, 0.5]
+    )
+    # palettes whose colours share no channel are unchanged
+    np.testing.assert_allclose(
+        rm.overlay(half, half, "red-green")[0, 0], [0.5, 0.5, 0.0]
+    )

@@ -194,10 +194,51 @@ def _reader(tile_dir, grid, pixel_size):
     )
 
 
+def _exact_reference_aligner(reg, reader, channel, max_shift_um):
+    """An EdgeAligner holding the reference grid's NOMINAL positions, never registered.
+
+    retile.py cuts every tile from one already-stitched slide, so the reference positions
+    are exact by construction -- there is nothing for EdgeAligner to find -- and adjacent
+    tiles overlap on IDENTICAL pixels. Registering those anyway trips ashlar.utils.nccw,
+    which raises when correlation exceeds total amplitude by more than an ABSOLUTE 1e-5,
+    as identical bright overlaps do through float rounding (job 6844139: "correlation >
+    total_amplitude (diff=1.1444091796875e-05)", tile pair 627/628).
+
+    LayerAligner reads from its reference aligner: ``reader`` (with the thumbnail),
+    ``channel``, ``metadata``, ``positions``, ``lr`` (constrain_positions predicts with it)
+    and ``centers``; fit_model would also set ``origin``. All are filled here as EdgeAligner
+    itself would for a perfect alignment: identity model, origin (0, 0).
+    """
+    import sklearn.linear_model
+
+    edge = reg.EdgeAligner(
+        reader, channel=channel, max_shift=max_shift_um, verbose=False
+    )
+    edge.make_thumbnail()
+    positions = np.asarray(edge.metadata.positions, dtype=float).copy()
+    edge.positions = positions
+    edge.lr = sklearn.linear_model.LinearRegression().fit(positions, positions)
+    edge.lr.coef_, edge.lr.intercept_ = np.eye(2), np.zeros(2)  # exactly the identity
+    edge.origin = np.zeros(2)
+    edge.centers = positions + np.asarray(edge.metadata.size, dtype=float) / 2
+    return edge
+
+
 def _run_aligners(
-    ref_dir, ref_grid, mov_dir, mov_grid, channel, max_shift_um, pixel_size
+    ref_dir,
+    ref_grid,
+    mov_dir,
+    mov_grid,
+    channel,
+    max_shift_um,
+    pixel_size,
+    reference_edges="exact",
 ):
-    """Run EdgeAligner on the reference then LayerAligner on the moving cycle.
+    """Place the reference cycle, then run LayerAligner on the moving cycle.
+
+    ``reference_edges='exact'`` (default) places the reference tiles at their known positions
+    (see _exact_reference_aligner); ``'register'`` runs ASHLAR's EdgeAligner on them, as for
+    raw microscope tiles.
 
     ``DataWarning`` is captured rather than printed: ``EdgeAligner.fit_model`` warns
     "Could not align enough edges, proceeding anyway with original stage positions" and
@@ -209,13 +250,18 @@ def _run_aligners(
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        edge = reg.EdgeAligner(
-            _reader(ref_dir, ref_grid, pixel_size),
-            channel=channel,
-            max_shift=max_shift_um,
-            verbose=False,
-        )
-        edge.run()
+        if reference_edges == "exact":
+            edge = _exact_reference_aligner(
+                reg, _reader(ref_dir, ref_grid, pixel_size), channel, max_shift_um
+            )
+        else:
+            edge = reg.EdgeAligner(
+                _reader(ref_dir, ref_grid, pixel_size),
+                channel=channel,
+                max_shift=max_shift_um,
+                verbose=False,
+            )
+            edge.run()
         layer = reg.LayerAligner(
             _reader(mov_dir, mov_grid, pixel_size),
             edge,
@@ -318,6 +364,14 @@ def main(argv=None):
     ap.add_argument(
         "--max-discard-fraction", type=float, default=DEFAULT_MAX_DISCARD_FRACTION
     )
+    ap.add_argument(
+        "--reference-edges",
+        choices=("exact", "register"),
+        default="exact",
+        help="exact: the reference tiles keep the positions they were cut at (they come from "
+        "one stitched slide); register: ASHLAR's EdgeAligner re-registers them, as for raw "
+        "microscope tiles",
+    )
     ap.add_argument("--out-manifest", required=True)
     ap.add_argument("--out-tre", required=True)
     a = ap.parse_args(argv)
@@ -346,6 +400,7 @@ def main(argv=None):
         a.nuclear_index,
         a.max_shift_um,
         pixel_size,
+        reference_edges=a.reference_edges,
     )
     diagnostics, discard = _check(edge, layer, a.max_discard_fraction, warned)
 

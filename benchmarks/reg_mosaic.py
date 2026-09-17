@@ -967,8 +967,16 @@ def stretch(img, limits, gamma=1.0) -> np.ndarray:
 
 
 def overlay(mov01, ref01, palette) -> np.ndarray:
+    """Per-channel MAXIMUM of the two coloured planes, not their sum.
+
+    magenta (1,0,1) and cyan (0,1,1) share blue. Added, blue clips before red and green, so
+    equal overlap renders lavender and the background purple (a real overlay measured mean
+    blue 0.53 against 0.30 red/green). With the maximum, equal overlap is neutral grey/white
+    and each colour alone is unchanged; for palettes sharing no channel (red-green) the two
+    rules are identical.
+    """
     cm, cr = (np.asarray(c, np.float32) for c in PALETTES[palette])
-    return np.clip(mov01[..., None] * cm + ref01[..., None] * cr, 0.0, 1.0)
+    return np.clip(np.maximum(mov01[..., None] * cm, ref01[..., None] * cr), 0.0, 1.0)
 
 
 def checkerboard(mov01, ref01, tiles) -> np.ndarray:
