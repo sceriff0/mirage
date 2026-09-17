@@ -331,12 +331,18 @@ class Layout {
      *   supplied by a `--start registration` samplesheet -> already an absolute
      *                                       path to an existing file; record it as is
      *
-     * A thin, PREPROCESSED-pinned wrapper over {@link #publishedOrAsIs} -- this
-     * predates it and is kept as the named entry point every existing caller uses,
-     * not because the logic differs.
+     * WHICH directory depends on whether the correction ran. With
+     * `skip_preprocessing` (the shipped default since 2026-09-10) the slide is
+     * CONVERT_IMAGE's output, published under `<pid>/converted/`; only the BaSiC
+     * branch's APPLY_PROFILES publishes under `<pid>/preprocessed/`. This used to be
+     * pinned to PREPROCESSED, so at the default every single-slide patient's and
+     * every STARE reference's row named a file that does not exist (a real run,
+     * 2026-09-17) -- invisible to tests/checkpoint_manifest.nf.test until it gained
+     * skip_preprocessing=true cases, because conf/test.config pins it false. The
+     * same branch subworkflows/local/preprocess.nf takes for preprocessed.csv.
      */
-    static String passthroughPath(def outdir, def patientId, def file) {
-        return publishedOrAsIs(outdir, patientId, PREPROCESSED, file)
+    static String passthroughPath(def outdir, def patientId, def file, boolean skipPreprocessing) {
+        return publishedOrAsIs(outdir, patientId, skipPreprocessing ? 'converted' : PREPROCESSED, file)
     }
 
     /**

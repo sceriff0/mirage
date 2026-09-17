@@ -706,6 +706,24 @@ def checkParamValidators() {
     println 'LIB PROBE: checkParamValidators passed'
 }
 
+def checkPassthroughPath() {
+    // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
+    // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
+    // default) left CONVERT_IMAGE's output as the slide. Pinned to PREPROCESSED, it named a
+    // file that did not exist for every single-slide patient and STARE reference at the
+    // default (2026-09-17). A function, not inline: the workflow body is at Nextflow 25's
+    // 65,535-byte string-constant limit (tests/test_lib_probe_parses_on_nf26.py).
+    def fresh = file("/work/ab/${'c' * 30}/P001_ref.ome.tif")
+    assert Layout.passthroughPath('/out', 'P001', fresh, false) ==
+        Layout.publishedOrAsIs('/out', 'P001', Layout.PREPROCESSED, fresh)
+    assert Layout.passthroughPath('/out', 'P001', fresh, false) == '/out/P001/preprocessed/P001_ref.ome.tif'
+    assert Layout.passthroughPath('/out', 'P001', fresh, true) == '/out/P001/converted/P001_ref.ome.tif'
+    // an already-published path (a --start samplesheet) is recorded as is, whatever the kind
+    def prior = file('/prior/P002/preprocessed/P002_ref_corrected.ome.tif')
+    assert Layout.passthroughPath('/out', 'P002', prior, true) == prior.toString()
+    println "LIB PROBE: checkPassthroughPath passed"
+}
+
 workflow {
 
     // ------------------------------------------------------------------ //
@@ -1224,12 +1242,8 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert Layout.publishedOrAsIs('/out', 'P001', 'cell_properties', freshNuclei) ==
         '/out/P001/cell_properties/nuclei/contours.json'
 
-    // passthroughPath now delegates to publishedOrAsIs pinned to PREPROCESSED --
-    // assert the delegation is behaviourally identical, not just present.
-    assert Layout.passthroughPath('/out', 'P001', freshFlat) ==
-        Layout.publishedOrAsIs('/out', 'P001', Layout.PREPROCESSED, freshFlat)
-    assert Layout.passthroughPath('/out', 'P002', publishedPassthrough) ==
-        Layout.publishedOrAsIs('/out', 'P002', Layout.PREPROCESSED, publishedPassthrough)
+    // Layout.passthroughPath -- see checkPassthroughPath() above the workflow block.
+    checkPassthroughPath()
 
     // ------------------------------------------------------------------ //
     // ParamUtils.compartmentMode / validateCompartmentQuant -- the
