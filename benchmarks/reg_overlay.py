@@ -39,15 +39,17 @@ log = logging.getLogger("reg_overlay")
 
 
 def draw_panel(
-    img, title, note, scalebar, out_stem: Path, formats, dpi, legend, size_in=5.0
+    img, title, note, scalebar, out_stem: Path, formats, dpi, legend, size_in=None
 ):
     plt = rm._mpl()
     h, w = img.shape[:2]
+    # one image pixel per output pixel unless a size is forced: a smaller figure downsamples
+    size_in = size_in or w / dpi
     fig, ax = plt.subplots(figsize=(size_in, size_in * h / w))
     fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     ax.imshow(img, interpolation="none")
     ax.set_axis_off()
-    font = 11.0
+    font = max(11.0, size_in * 2.2)
     rm._outline(
         ax.text(
             0.03,
@@ -155,8 +157,8 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         px,
     )
 
-    ref_a, mov_a = comp.crop("after", y, x, field_px, field_px)
-    ref_b, mov_b = comp.crop("before", y, x, field_px, field_px)
+    ref_a, mov_a, used_a = arm.crop(key, "after", y, x, field_px, field_px)
+    ref_b, mov_b, used_b = arm.crop(key, "before", y, x, field_px, field_px)
     # one stretch for the reference (it is the same pixels in both panels); the moving
     # channel is stretched per panel, since the two crops cover different tissue
     lim_ref = rm.percentile_limits(ref_a, opt.pmin, opt.pmax)
@@ -240,6 +242,8 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         },
         "avoided_rois_from": str(opt.avoid_rois_json) if opt.avoid_rois_json else None,
         "palette": opt.palette,
+        "pixels": {"before": used_b, "after": used_a},
+        "stretch": {"pmin": opt.pmin, "pmax": opt.pmax, "gamma": opt.gamma},
         "scalebar_um": scalebar and float(scalebar[1].split()[0]),
         "numbers": {k: v[2] for k, v in panels.items()},
     }
@@ -294,9 +298,16 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--numbers", choices=("auto", "scorer", "image", "none"), default="auto"
     )
-    ap.add_argument("--pmin", type=float, default=0.5)
-    ap.add_argument("--pmax", type=float, default=99.7)
-    ap.add_argument("--gamma", type=float, default=0.8)
+    ap.add_argument("--pmin", type=float, default=1.0)
+    ap.add_argument("--pmax", type=float, default=99.8)
+    ap.add_argument("--gamma", type=float, default=1.0, help="<1 lifts the background")
+    ap.add_argument(
+        "--source",
+        choices=("auto", "originals", "composite"),
+        default="auto",
+        help="pixels from the original 16-bit slides or the 8-bit QC composite (see reg_mosaic)",
+    )
+    ap.add_argument("--native-csv", type=Path, default=None)
     ap.add_argument(
         "--scalebar-um",
         type=float,
@@ -318,7 +329,7 @@ def main(argv=None) -> int:
     )
     for noisy in ("fontTools", "matplotlib", "PIL"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
-    arm = rm.Arm(opt.arm)
+    arm = rm.Arm(opt.arm, source=opt.source, native_csv=opt.native_csv)
     patients = arm.patients()
     pid = opt.patient or (patients[0] if len(patients) == 1 else None)
     if pid is None:

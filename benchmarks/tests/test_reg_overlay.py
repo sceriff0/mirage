@@ -118,3 +118,31 @@ def test_a_mosaic_on_another_reference_is_not_avoided(arm_root, tmp_path):
         arm_root / "armB", tmp_path / "ov", "--avoid-rois-json", str(rois_json)
     )
     assert (c["crop"]["y"], c["crop"]["x"]) == (free["y"], free["x"])
+
+
+@pytest.fixture(scope="module")
+def originals_root(tmp_path_factory):
+    return tm.originals_root.__wrapped__(tmp_path_factory)
+
+
+def test_overlay_reads_the_original_slides_at_one_pixel_per_pixel(
+    originals_root, tmp_path, monkeypatch
+):
+    sizes = []
+    real = ro.draw_panel
+
+    def spy(img, title, note, bar, out_stem, formats, dpi, legend, size_in=None):
+        sizes.append((img.shape[1], dpi))
+        return real(img, title, note, bar, out_stem, formats, dpi, legend, size_in)
+
+    monkeypatch.setattr(ro, "draw_panel", spy)
+    m = _overlay(originals_root / "armR", tmp_path / "ov", "--numbers", "image")
+    assert m["pixels"] == {"before": "originals", "after": "originals"}
+    assert m["numbers"]["after"]["shift_px"] == pytest.approx(3.0, abs=0.3)
+    assert m["numbers"]["before"]["shift_px"] == pytest.approx(15.0, abs=1.0)
+    png = tmp_path / "ov" / "P1_CD3_after.png"
+    import matplotlib.image
+
+    assert (
+        matplotlib.image.imread(str(png)).shape[1] >= 96
+    )  # never smaller than the crop

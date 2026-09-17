@@ -624,3 +624,200 @@ def test_numbers_none_leaves_every_cell_blank(arm_root, tmp_path, monkeypatch):
     assert all(
         "dice_matched" not in c and "dice_pixel" not in c for c in cells.values()
     )
+
+
+# --- pixels from the original 16-bit slides, not the 8-bit composite ---------------
+def _ome(path: Path, planes, names):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(
+        str(path),
+        np.stack(planes).astype(np.uint16),
+        ome=True,
+        tile=(128, 128),
+        compression="zlib",
+        metadata={
+            "axes": "CYX",
+            "Channel": {"Name": names},
+            "PhysicalSizeX": PX,
+            "PhysicalSizeY": PX,
+        },
+    )
+
+
+@pytest.fixture(scope="module")
+def originals_root(tmp_path_factory):
+    """One run as a Nextflow arm publishes it, WITH the slides behind its QC composite.
+
+    The registered slide carries a few saturated pixels (65535) the way a resampled slide
+    can. The composite is built from it by the pipeline's own rule -- min-max over the WHOLE
+    plane to uint8 (bin/utils/qc.py autoscale_for_display) -- which puts all real tissue in
+    2-3 grey levels: the flat, speckled mosaic cells seen on a real run, 2026-09-17.
+    """
+    root = tmp_path_factory.mktemp("orig")
+    rng = np.random.default_rng(11)
+    ref16, _ = _tissue(rng)
+    ref16 = (ref16 * 0.25).astype(np.uint16) + 100  # DAPI far below 16-bit full scale
+    native16 = np.roll(np.roll(ref16, 12, axis=0), -9, axis=1)
+    reg16 = np.roll(ref16, 3, axis=1)
+    reg16[5:8, 5:8] = 65535  # a few extreme pixels
+    other = (rng.random(ref16.shape) * 500).astype(np.uint16)
+
+    pre = root / "preprocess_shared" / "P1" / "preprocessed"
+    _ome(pre / "P1_ref.ome.tif", [ref16, other], ["DAPI", "PANCK"])
+    _ome(pre / "P1_cd3.ome.tif", [other, native16], ["CD3", "DAPI"])  # DAPI not first
+    _csv(
+        root / "preprocess_shared" / "csv" / "preprocessed.csv",
+        [
+            {
+                "patient_id": "P1",
+                "id": "P1_ref",
+                "preprocessed_image": str(pre / "P1_ref.ome.tif"),
+                "is_reference": "true",
+                "channels": "DAPI|PANCK",
+                "pixel_size": PX,
+            },
+            {
+                "patient_id": "P1",
+                "id": "P1_cd3",
+                "preprocessed_image": str(pre / "P1_cd3.ome.tif"),
+                "is_reference": "false",
+                "channels": "DAPI|CD3",
+                "pixel_size": PX,
+            },
+        ],
+    )
+    arm = root / "armR"
+    reg = arm / "P1" / "registered" / "registered_slides"
+    _ome(reg / "P1_ref_registered.ome.tiff", [ref16, other], ["DAPI", "PANCK"])
+    _ome(reg / "P1_cd3_registered.ome.tiff", [reg16, other], ["DAPI", "CD3"])
+
+    def minmax(a):
+        a = a.astype(np.float64)
+        return np.round((a - a.min()) * 255 / (a.max() - a.min())).astype(np.uint8)
+
+    qc = arm / "P1" / "qc" / "registration" / "qc"  # where a Nextflow arm publishes it
+    sep = np.zeros((3, SIZE, GAP), np.uint8)
+    sep[2] = 255
+    before = np.stack([minmax(native16), minmax(ref16), np.zeros_like(ref16, np.uint8)])
+    after = np.stack([minmax(reg16), minmax(ref16), np.zeros_like(ref16, np.uint8)])
+    _write_qc(qc, "P1_cd3_registered", np.concatenate([before, sep, after], axis=2))
+    _checkpoint(
+        arm / "csv" / "registered.csv",
+        [
+            {
+                "patient_id": "P1",
+                "id": "P1_ref",
+                "registered_image": str(reg / "P1_ref_registered.ome.tiff"),
+                "is_reference": "true",
+                "channels": "DAPI|PANCK",
+                "pixel_size": PX,
+            },
+            {
+                "patient_id": "P1",
+                "id": "P1_cd3_registered",
+                "registered_image": str(reg / "P1_cd3_registered.ome.tiff"),
+                "is_reference": "false",
+                "channels": "DAPI|CD3",
+                "pixel_size": PX,
+            },
+        ],
+    )
+    return root
+
+
+def _csv(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+
+def _mosaic(arm_dir, out, *extra):
+    argv = [
+        str(arm_dir),
+        "--rows",
+        "1",
+        "-o",
+        str(out),
+        "--patch-px",
+        "96",
+        "--formats",
+        "png",
+        "--dpi",
+        "50",
+        "--numbers",
+        "image",
+        *extra,
+    ]
+    assert rm.main(argv) == 0
+    return json.loads((out / "P1_rois.json").read_text())
+
+
+def test_the_8bit_composite_crushes_a_slide_with_outliers_the_originals_do_not(
+    originals_root, tmp_path
+):
+    crushed = _mosaic(originals_root / "armR", tmp_path / "c", "--source", "composite")
+    cell = crushed["row_plan"][0]["cells"]["armR"]
+    assert (
+        cell["pixels"] == "composite" and cell["mov_limits"][1] <= 3
+    )  # the bug, reproduced
+
+    good = _mosaic(originals_root / "armR", tmp_path / "o")  # --source auto
+    after, before = (
+        good["row_plan"][0]["cells"]["armR"],
+        good["row_plan"][0]["cells"]["Before"],
+    )
+    assert after["pixels"] == before["pixels"] == "originals"
+    assert (
+        after["mov_limits"][1]
+        > 100 * crushed["row_plan"][0]["cells"]["armR"]["mov_limits"][1]
+    )
+    assert after["shift_px"] == pytest.approx(3.0, abs=0.3)  # the registered slide
+    assert before["shift_px"] == pytest.approx(
+        15.0, abs=1.0
+    )  # the NATIVE slide, DAPI found by name
+
+
+def test_without_the_native_slides_it_falls_back_to_the_composite(
+    originals_root, tmp_path, caplog
+):
+    import shutil
+
+    shutil.copytree(
+        originals_root / "armR", tmp_path / "armR"
+    )  # no sibling preprocess_shared/
+    with caplog.at_level("WARNING"):
+        m = _mosaic(tmp_path / "armR", tmp_path / "out")
+    assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "composite"
+    assert "original slides unusable" in caplog.text
+
+
+def test_each_cell_is_drawn_at_one_image_pixel_per_output_pixel(
+    originals_root, tmp_path, monkeypatch
+):
+    seen = {}
+    real = rm.assemble_figure
+
+    def spy(
+        grid, notes, row_labels, col_labels, out_stem, formats, cell_in, dpi, *a, **k
+    ):
+        seen.update(cell_in=cell_in, dpi=dpi)
+        return real(
+            grid,
+            notes,
+            row_labels,
+            col_labels,
+            out_stem,
+            formats,
+            cell_in,
+            dpi,
+            *a,
+            **k,
+        )
+
+    monkeypatch.setattr(rm, "assemble_figure", spy)
+    _mosaic(originals_root / "armR", tmp_path / "o")
+    assert seen["cell_in"] * seen["dpi"] == pytest.approx(
+        96
+    )  # the patch, not resampled

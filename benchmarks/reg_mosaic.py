@@ -9,15 +9,29 @@ its QC) and writes, per patient, a mosaic of nuclear-channel overlays:
     rows    = Before | <arm 1> | <arm 2> ...   (one row per arm directory)
     (--orient rounds-as-rows transposes it; "--rows" counts the (round, ROI) pairs either way)
 
-Nothing is re-registered, re-warped or re-scored. Every pixel and every number
-comes from what the arm's own registration QC wrote:
+Nothing is re-registered, re-warped or re-scored. The PIXELS come from the arm's
+own slides, at full 16-bit depth (``--source auto``, the default):
 
-    <arm>/<patient>/qc/registration/<slide>_QC_RGB_fullres.tif
+    <arm>/csv/registered.csv                         the registered slides + reference
+    <arm>/csv/preprocessed.csv  or  <arm>/../preprocess_shared/csv/preprocessed.csv
+                                                     the native slides as they entered registration
+
+each nuclear channel found by its OME channel name, the native slide pad-or-cropped
+onto the reference canvas at the origin exactly as the QC composite does. The 8-bit
+QC composite is the per-round FALLBACK when a slide is missing: it is min-max scaled
+over the whole slide, so a few extreme pixels squash all real tissue into 2-3 grey
+levels, and a crop of that re-stretched is a flat speckled field with a contour edge
+(5 of 9 rounds of a real mosaic, 2026-09-17). Each cell is drawn one image pixel per
+output pixel (--cell-in defaults to patch px / dpi). What else the QC wrote:
+
+    <arm>/<patient>/qc/registration[/qc]/<slide>_QC_RGB_fullres.tif
         the pipeline's two-panel composite (bin/utils/qc.py render_before_after):
         left = Before (red: the moving slide as it entered registration, green:
         the reference), a blue separator, right = After (red: the registered
         moving slide, green: the reference). Both panels sit on the reference
         canvas, so one (y, x) is the same tissue in every panel of every arm.
+        Its full-res plane is the fallback pixel source; its reference plane
+        picks the ROIs.
     <arm>/<patient>/qc/registration/<slide>_QC_RGB.tif
         its downsampled preview, used to pick ROIs and to draw the locator.
     <arm>/<patient>/qc/registration/*_seg_qc.json  and  *_reg_residuals.csv
@@ -246,6 +260,20 @@ class TiffSource:
         self.nchannels = s.shape[self.axes.index("C")] if "C" in self.axes else 1
         self.shape = self._yx(s.shape, self.axes)
         self.px = self._pixel_size()
+        self.channel_names = (
+            re.findall(r'<Channel[^>]*\bName="([^"]*)"', self.tf.ome_metadata)
+            if self.tf.ome_metadata
+            else []
+        )
+
+    def nuclear_index(self) -> int | None:
+        """The DAPI/Hoechst/CellTox channel, by the file's OME channel names; None if unnamed."""
+        if self.nchannels == 1:
+            return 0
+        for i, name in enumerate(self.channel_names):
+            if NUCLEAR_RE.search(name):
+                return i
+        return None
 
     @staticmethod
     def _yx(shape, axes):
@@ -359,7 +387,7 @@ class TiffSource:
         W = W if x_limit is None else min(W, x_offset + x_limit)
         y0, x0, y1, x1 = max(y, 0), max(x, 0), min(y + h, H), min(x + w, W - x_offset)
         if y1 <= y0 or x1 <= x0:
-            return np.zeros((h, w), np.uint8)
+            return np.zeros((h, w), self.series.dtype)
         sub = self.read(ci, slice(y0, y1), slice(x0 + x_offset, x1 + x_offset))
         if (y0, x0, y1, x1) == (y, x, y + h, x + w):
             return sub
@@ -545,7 +573,25 @@ def load_seg_qc(qc_dir: Path, slide: Slide) -> SegQC | None:
 
 # --- one arm = one column -------------------------------------------------------
 class Arm:
-    def __init__(self, root: Path, label: str | None = None):
+    """One registration output directory: one column of the mosaic.
+
+    PIXELS COME FROM THE ORIGINAL 16-BIT SLIDES by default (``source='auto'``): the
+    registered moving slide (csv/registered.csv), the native moving slide as it entered
+    registration (csv/preprocessed.csv of this run or of a sibling preprocess_shared/), and
+    the reference. The 8-bit QC composite is only the fallback. It is min-max scaled over
+    the WHOLE slide, so a handful of extreme pixels in a registered slide pushes all the
+    real tissue into 2-3 grey levels, and re-stretching a crop of that gives a flat,
+    speckled field with a hard contour edge -- observed on 5 of 9 rounds of a real mosaic
+    (2026-09-17), identical for VALIS and STARE, while the native slide was fine.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        label: str | None = None,
+        source: str = "auto",
+        native_csv: Path | None = None,
+    ):
         self.root = Path(root)
         self.name = label or self.root.name
         self.per = read_checkpoint(self.root / REGISTERED_CSV)
@@ -553,7 +599,26 @@ class Arm:
         self.moving: dict[str, Slide] = {}
         self._comp: dict[str, Composite] = {}
         self._qc: dict[str, SegQC | None] = {}
+        self._src: dict[Path, TiffSource] = {}
+        self._orig: dict[str, tuple | None] = {}
+        self.source = source
         self.patient = ""
+        self.native_csv = native_csv or next(
+            (
+                c
+                for c in (
+                    self.root / "csv" / "preprocessed.csv",
+                    self.root.parent / "preprocess_shared" / "csv" / "preprocessed.csv",
+                )
+                if c.is_file()
+            ),
+            None,
+        )
+        self.native_per = (
+            read_checkpoint(self.native_csv, image_col="preprocessed_image")
+            if self.native_csv
+            else {}
+        )
 
     def patients(self) -> list[str]:
         return list(self.per)
@@ -572,7 +637,7 @@ class Arm:
         self.patient = patient
         self.ref = refs[0]
         self.moving = {r.key: r for r in rows if not r.is_reference}
-        self._comp, self._qc = {}, {}
+        self._comp, self._qc, self._orig = {}, {}, {}
 
     @property
     def qc_dir(self) -> Path:
@@ -612,6 +677,76 @@ class Arm:
             self._comp[key] = Composite(full, preview)
         return self._comp[key]
 
+    def _open(self, path: Path) -> TiffSource:
+        if path not in self._src:
+            self._src[path] = TiffSource(path)
+        return self._src[path]
+
+    def originals(self, key: str):
+        """(reference, ref channel, registered, reg channel, native, native channel) for a
+        round, or None -- with the reason logged -- when any of them cannot be used."""
+        if key in self._orig:
+            return self._orig[key]
+        sl, ref = self.slide(key), self.ref
+        natives = {
+            r.key: r
+            for r in self.native_per.get(self.patient, [])
+            if not r.is_reference
+        }
+        why, got = None, None
+        if key not in natives:
+            why = f"round {key!r} not in {self.native_csv or 'any preprocessed.csv'}"
+        else:
+            paths = (ref.image, sl.image, natives[key].image)
+            missing = [str(p) for p in paths if not Path(p).is_file()]
+            if missing:
+                why = f"missing {missing}"
+            else:
+                srcs = [self._open(Path(p)) for p in paths]
+                idx = [src.nuclear_index() for src in srcs]
+                if None in idx:
+                    why = (
+                        "no DAPI/Hoechst/CellTox among the OME channel names of "
+                        + ", ".join(
+                            src.path.name for src, i in zip(srcs, idx) if i is None
+                        )
+                    )
+                else:
+                    got = (srcs[0], idx[0], srcs[1], idx[1], srcs[2], idx[2])
+        if got is None:
+            log.warning(
+                "[%s] %s %s: original slides unusable (%s); using the 8-bit QC composite",
+                self.name,
+                self.patient,
+                key,
+                why,
+            )
+        self._orig[key] = got
+        return got
+
+    def crop(self, key: str, panel: str, y: int, x: int, h: int, w: int):
+        """(reference, moving, source) for one panel on the reference canvas.
+
+        before = the native moving slide pad-or-cropped at the origin (bin/utils/qc.py's
+        compose_on_reference_canvas); after = the registered slide, already on the canvas.
+        """
+        orig = None if self.source == "composite" else self.originals(key)
+        if orig is None:
+            if self.source == "originals":
+                raise SystemExit(
+                    f"[{self.name}] {self.patient} {key}: --source originals unusable"
+                )
+            ref, mov = self.composite(key).crop(panel, y, x, h, w)
+            return ref, mov, "composite"
+        rsrc, ri, gsrc, gi, nsrc, ni = orig
+        ref = rsrc.read_patch(ri, y, x, h, w)
+        mov = (
+            gsrc.read_patch(gi, y, x, h, w)
+            if panel == "after"
+            else nsrc.read_patch(ni, y, x, h, w)
+        )
+        return ref, mov, "originals"
+
     def seg_qc(self, key: str, warn: bool = True) -> SegQC | None:
         if key not in self._qc:
             self._qc[key] = load_seg_qc(self.qc_dir, self.slide(key))
@@ -643,7 +778,9 @@ class Arm:
     def close(self):
         for c in self._comp.values():
             c.close()
-        self._comp = {}
+        for src in self._src.values():
+            src.close()
+        self._comp, self._src, self._orig = {}, {}, {}
 
 
 # --- rows -----------------------------------------------------------------------
@@ -1029,15 +1166,17 @@ class Options:
     numbers: str = "auto"
     orient: str = "rounds-as-columns"
     stretch: str = "patch"
-    pmin: float = 0.5
-    pmax: float = 99.7
-    gamma: float = 0.8
+    pmin: float = 1.0
+    pmax: float = 99.8
+    gamma: float = 1.0
     checker_tiles: int = 6
     annotate_where: str = "all"
     min_nuclei: int = 5
     scalebar_um: float | None = None
     scalebar_where: str = "first"
-    cell_in: float = 1.4
+    cell_in: float | None = None
+    source: str = "auto"
+    native_csv: Path | None = None
     dpi: int = 300
     formats: str = "png,pdf"
     pixel_size_um: float | None = None
@@ -1141,8 +1280,11 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     def limits(col: str, chan: str, key: str, crop) -> tuple[float, float]:
         if opt.stretch == "patch":
             return percentile_limits(crop, opt.pmin, opt.pmax)
-        # the composite is already globally min-max scaled by the QC step: keep it as is
-        return (0.0, 255.0)
+        # no re-stretch: the composite's own 8-bit scaling, or the originals' full dtype range
+        return (
+            0.0,
+            float(np.iinfo(crop.dtype).max if crop.dtype.kind in "ui" else 1.0),
+        )
 
     kinds = [k.strip() for k in opt.kinds.split(",") if k.strip()]
     col_names = [BEFORE_LABEL] + [a.name for a in arms]
@@ -1157,11 +1299,14 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     for key, ri in plan:
         sl = by_key[key]
         y, x = rois[ri]
-        crops = {
-            BEFORE_LABEL: first.composite(key).crop("before", y, x, patch_px, patch_px)
-        }
+        crops, used = {}, {}
+        *crops[BEFORE_LABEL], used[BEFORE_LABEL] = first.crop(
+            key, "before", y, x, patch_px, patch_px
+        )
         for arm in arms:
-            crops[arm.name] = arm.composite(key).crop("after", y, x, patch_px, patch_px)
+            *crops[arm.name], used[arm.name] = arm.crop(
+                key, "after", y, x, patch_px, patch_px
+            )
         lim = {
             n: (limits(n, "ref", key, rc), limits(n, "mov", key, mc))
             for n, (rc, mc) in crops.items()
@@ -1193,7 +1338,11 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
                         if opt.numbers in ("image", "none")
                         else arm.seg_qc(key, warn=opt.numbers == "scorer")
                     )
-                    meta = {"ref_limits": lim[n][0], "mov_limits": lim[n][1]}
+                    meta = {
+                        "ref_limits": lim[n][0],
+                        "mov_limits": lim[n][1],
+                        "pixels": used[n],
+                    }
                     if opt.numbers == "none":
                         note, vals = "", {}
                     elif qc is None and opt.numbers != "scorer":
@@ -1258,7 +1407,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         col_labels,
         outdir / f"{pid}_mosaic",
         formats,
-        opt.cell_in,
+        opt.cell_in or patch_px / opt.dpi,
         opt.dpi,
         scalebar,
         opt.scalebar_where,
@@ -1285,6 +1434,10 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         "pmin": opt.pmin,
         "pmax": opt.pmax,
         "gamma": opt.gamma,
+        "source": opt.source,
+        "pixels": sorted(
+            {c.get("pixels") for r in rows_meta for c in r["cells"].values()} - {None}
+        ),
         "min_nuclei": opt.min_nuclei,
         "scalebar_um": scalebar and float(scalebar[1].split()[0]),
         "rois": [{"id": i, "y": y, "x": x} for i, (y, x) in enumerate(rois, 1)],
@@ -1427,9 +1580,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="patch",
         help="re-stretch each crop per channel by percentiles, or keep the QC file's global scaling",
     )
-    g.add_argument("--pmin", type=float, default=0.5)
-    g.add_argument("--pmax", type=float, default=99.7)
-    g.add_argument("--gamma", type=float, default=0.8)
+    g.add_argument("--pmin", type=float, default=1.0)
+    g.add_argument("--pmax", type=float, default=99.8)
+    g.add_argument(
+        "--gamma",
+        type=float,
+        default=1.0,
+        help="display gamma (<1 lifts the background)",
+    )
     g.add_argument("--checker-tiles", type=int, default=6)
     g.add_argument(
         "--annotate-where",
@@ -1458,7 +1616,11 @@ def build_parser() -> argparse.ArgumentParser:
         "all = every row's Before cell",
     )
     g.add_argument(
-        "--cell-in", type=float, default=1.4, help="cell size in inches in the figure"
+        "--cell-in",
+        type=float,
+        default=None,
+        help="cell size in inches; default = patch px / dpi, i.e. one image pixel per output "
+        "pixel (a smaller cell downsamples every crop)",
     )
     g.add_argument("--dpi", type=int, default=300)
     g.add_argument("--formats", default="png,pdf")
@@ -1474,6 +1636,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=5.0,
         help="pixel size of the low-res image used for ROI selection when no preview TIFF exists",
+    )
+    g.add_argument(
+        "--source",
+        choices=("auto", "originals", "composite"),
+        default="auto",
+        help="pixels from the original 16-bit slides (registered, native, reference) or the "
+        "8-bit QC composite; auto = originals, falling back per round to the composite",
+    )
+    g.add_argument(
+        "--native-csv",
+        type=Path,
+        default=None,
+        help="preprocessed.csv naming the native slides (default: <arm>/csv/ or "
+        "<arm>/../preprocess_shared/csv/)",
     )
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap
@@ -1493,7 +1669,7 @@ def main(argv=None) -> int:
         raise SystemExit("--rows must be >= 1")
 
     labels = parse_labels(args.label)
-    arms = [Arm(d, labels.get(d.name)) for d in args.arm]
+    arms = [Arm(d, labels.get(d.name), args.source, args.native_csv) for d in args.arm]
     names = [a.name for a in arms]
     if len(set(names)) != len(names) or BEFORE_LABEL in names:
         raise SystemExit(
@@ -1524,6 +1700,8 @@ def main(argv=None) -> int:
         scalebar_um=args.scalebar_um,
         scalebar_where=args.scalebar_where,
         cell_in=args.cell_in,
+        source=args.source,
+        native_csv=args.native_csv,
         dpi=args.dpi,
         formats=args.formats,
         pixel_size_um=args.pixel_size_um,
