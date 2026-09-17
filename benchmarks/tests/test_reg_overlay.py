@@ -146,3 +146,27 @@ def test_overlay_reads_the_original_slides_at_one_pixel_per_pixel(
     assert (
         matplotlib.image.imread(str(png)).shape[1] >= 96
     )  # never smaller than the crop
+
+
+def test_the_channel_names_are_drawn_in_their_colours(arm_root, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        ro.rm, "draw_legend", lambda ax, entries, font, **k: seen.append(entries)
+    )
+    _overlay(arm_root / "armB", tmp_path / "ov", "--numbers", "none")
+    assert seen and all(
+        e == [("reference DAPI", (0.0, 1.0, 1.0)), ("moving DAPI", (1.0, 0.0, 1.0))]
+        for e in seen
+    )
+
+
+def test_a_run_without_qc_composites_is_drawn_from_its_slides(originals_root, tmp_path):
+    import shutil
+
+    shutil.copytree(originals_root, tmp_path / "root")
+    shutil.rmtree(tmp_path / "root" / "armR" / "P1" / "qc")
+    m = _overlay(tmp_path / "root" / "armR", tmp_path / "ov", "--numbers", "none")
+    assert m["composite"] is None and m["pixels"] == {
+        "before": "originals",
+        "after": "originals",
+    }

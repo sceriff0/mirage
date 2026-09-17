@@ -894,7 +894,7 @@ def test_an_undecodable_slide_falls_back_to_the_composite_instead_of_crashing(
     monkeypatch.setattr(
         rm.Composite,
         "crop",
-        lambda self, panel, y, x, h, w: (np.zeros((h, w), np.uint8),) * 2,
+        lambda self, panel, y, x, h, w, step=1: (np.zeros((h, w), np.uint8),) * 2,
     )
     with caplog.at_level("WARNING"):
         m = _mosaic(originals_root / "armR", tmp_path / "out")
@@ -922,3 +922,120 @@ def test_overlap_is_neutral_white_not_lavender():
     np.testing.assert_allclose(
         rm.overlay(half, half, "red-green")[0, 0], [0.5, 0.5, 0.0]
     )
+
+
+# --- scale bars in mm, channel legends -------------------------------------------
+@pytest.mark.parametrize(
+    "um, label",
+    [
+        (50, "50 µm"),
+        (500, "500 µm"),
+        (999, "999 µm"),
+        (1000, "1 mm"),
+        (2000, "2 mm"),
+        (2500, "2.5 mm"),
+    ],
+)
+def test_the_bar_reads_mm_from_one_millimetre(um, label):
+    assert rm.scalebar_label(um) == label
+
+
+def test_a_10_mm_field_gets_a_millimetre_bar():
+    assert rm.auto_scalebar_um(10000) == 2000  # about a quarter of the field
+    assert rm.scalebar_label(rm.auto_scalebar_um(10000)) == "2 mm"
+    assert rm.auto_scalebar_um(4000) == 1000
+    assert rm.scalebar_label(rm.auto_scalebar_um(500)) == "100 µm"
+
+
+def test_the_legend_writes_each_name_in_its_colour_bottom_right():
+    plt = rm._mpl()
+    fig, ax = plt.subplots()
+    ax.imshow(np.zeros((10, 10, 3)))
+    texts = rm.draw_legend(
+        ax, [("reference DAPI", (0, 1, 1)), ("moving DAPI", (1, 0, 1))], 10
+    )
+    assert [t.get_text() for t in texts] == ["reference DAPI", "moving DAPI"]
+    assert [tuple(t.get_color()) for t in texts] == [(0, 1, 1), (1, 0, 1)]
+    xs, ys = [t.get_position()[0] for t in texts], [t.get_position()[1] for t in texts]
+    assert (
+        all(x > 0.9 for x in xs) and ys[0] > ys[1] and all(y < 0.3 for y in ys)
+    )  # stacked, lower right
+    assert all(t.get_ha() == "right" for t in texts)
+    plt.close(fig)
+
+
+# --- big fields: strided reads -----------------------------------------------------
+def test_a_strided_read_equals_the_full_crop_subsampled(tmp_path):
+    rng = np.random.default_rng(2)
+    data = (rng.random((2, 700, 900)) * 60000).astype(np.uint16)
+    p = tmp_path / "big.ome.tif"
+    tifffile.imwrite(
+        str(p),
+        data,
+        ome=True,
+        tile=(128, 128),
+        compression="zlib",
+        metadata={"axes": "CYX", "Channel": {"Name": ["DAPI", "X"]}},
+    )
+    src = rm.TiffSource(p)
+    for y, x, h, w, step in [
+        (0, 0, 700, 900, 4),
+        (100, 50, 333, 401, 3),
+        (-20, 850, 100, 120, 5),
+        (650, -10, 90, 60, 1),
+    ]:
+        full = src.read_patch(0, y, x, h, w)
+        got = src.read_patch(0, y, x, h, w, step=step)
+        np.testing.assert_array_equal(got, full[::step, ::step])
+    # the composite's offset/limit path strides the same way
+    np.testing.assert_array_equal(
+        src.read_patch(1, 10, 20, 200, 200, x_offset=400, x_limit=300, step=7),
+        src.read_patch(1, 10, 20, 200, 200, x_offset=400, x_limit=300)[::7, ::7],
+    )
+    low, factor = src.overview(0, 250)
+    assert 250 / 1.5 <= max(low.shape) <= 250 * 1.5 and factor == pytest.approx(
+        900 / low.shape[1]
+    )
+    np.testing.assert_array_equal(low, data[0, :: int(factor), :: int(factor)])
+
+
+def test_overlay_of_a_big_field_is_read_strided_with_a_correct_bar(
+    arm_root, tmp_path, monkeypatch
+):
+    from benchmarks import reg_overlay as ro
+
+    bars = []
+    real = ro.draw_panel
+
+    def spy(img, title, note, bar, *a, **k):
+        bars.append((img.shape, bar))
+        return real(img, title, note, bar, *a, **k)
+
+    monkeypatch.setattr(ro, "draw_panel", spy)
+    argv = [
+        str(arm_root / "armB"),
+        "-o",
+        str(tmp_path / "ov"),
+        "--field-px",
+        "320",
+        "--max-px",
+        "80",
+        "--roi",
+        "0,0",
+        "--rounds",
+        "CD3",
+        "--formats",
+        "png",
+        "--dpi",
+        "50",
+        "--numbers",
+        "none",
+    ]
+    assert ro.main(argv) == 0
+    m = json.loads((tmp_path / "ov" / "P1_CD3_overlay.json").read_text())
+    assert m["crop"]["step"] == 4
+    (shape, bar), _ = bars
+    assert shape[:2] == (80, 80)
+    assert bar[0] == pytest.approx(
+        m["scalebar_um"] / (PX * 4)
+    )  # bar in displayed pixels

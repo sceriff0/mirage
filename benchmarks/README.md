@@ -340,6 +340,11 @@ mkdir -p /beegfs/scratch/ieo7660/ihc_method/overlay_033 && cd /beegfs/scratch/ie
 sbatch ~/pipelines/mirage/benchmarks/submit_overlay.sh /path/to/two_slides.csv
 ```
 
+`benchmarks/submit_zoom.sh <input.csv>` (or `FROM_REGISTERED=<run>/csv/registered.csv`) runs the
+pipeline to segmentation (StarDist, from `conf/ieo.config`) and `benchmarks/reg_zoom.py` draws the
+reference slide's whole-slide DAPI with a zoom on its segmented cells (outline colour/width
+settable). Scale bars read µm, and mm from 1 mm up.
+
 They run registration QC at reg_qc=1 (no WARP_SEG_QC) and print **no** Dice/Δ;
 `sbatch --export=ALL,SEG_QC=1 ...` runs reg_qc=2 and prints the scorer's values. Pixel size is
 0.325 µm/px (`PIXEL_SIZE`). Re-submitting from the same directory skips finished runs and

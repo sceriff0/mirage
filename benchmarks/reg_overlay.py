@@ -67,19 +67,21 @@ def draw_panel(
         rm._outline(
             ax.text(
                 0.97,
-                0.03,
+                0.97,
                 note,
                 transform=ax.transAxes,
                 ha="right",
-                va="bottom",
+                va="top",
                 fontsize=font * 0.85,
                 color="white",
             )
         )
     if scalebar:
         rm.draw_scalebar(ax, h, w, scalebar[0], scalebar[1], font * 0.85, thick=0.01)
-    if legend:
-        fig.text(0.0, -0.004, legend, ha="left", va="top", fontsize=font * 0.6)
+    if (
+        legend
+    ):  # channel names in their colours, lower right (the numbers sit top right)
+        rm.draw_legend(ax, legend, font * 1.1)
     for fmt in formats:
         fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
@@ -111,13 +113,25 @@ def load_avoid(path: Path | None, reference: Path) -> list[tuple[int, int, int]]
 
 def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
     sl = arm.slide(key)
-    comp = arm.composite(key)
-    if not comp.has_before:
-        raise SystemExit(
-            f"{comp.src.path.name}: no Before panel (QC ran without --native)"
-        )
-    H, W = comp.canvas
-    px = opt.pixel_size_um or comp.px or arm.px
+    # The canvas, the crop choice and the locator come from the reference: from the QC
+    # composite when the run wrote one, else from the original reference slide itself.
+    orig = None if opt.source == "composite" else arm.originals(key)
+    comp = None
+    if arm.composite_path(key) is not None or orig is None:
+        comp = arm.composite(key)
+        if not comp.has_before:
+            raise SystemExit(
+                f"{comp.src.path.name}: no Before panel (QC ran without --native)"
+            )
+    ref_src, ref_ci = (orig[0], orig[1]) if orig else (None, None)
+    H, W = comp.canvas if comp else ref_src.shape
+    px = opt.pixel_size_um or (comp.px if comp else ref_src.px) or arm.px
+
+    def lowres(hint_um):
+        if comp is not None:
+            return comp.lowres_reference(max(1, int(round(hint_um / px))) if px else 16)
+        return ref_src.overview(ref_ci, 2400)
+
     if opt.field_px:
         field_px = opt.field_px
     elif px:
@@ -129,8 +143,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
     if opt.roi:
         y, x = (int(v) for v in opt.roi.split(",")[:2])
     else:
-        factor_hint = max(1, int(round(opt.lowres_um / px))) if px else 16
-        low, f = comp.lowres_reference(factor_hint)
+        low, f = lowres(opt.lowres_um)
         picks = rm.select_rois(
             low,
             f,
@@ -157,8 +170,10 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         px,
     )
 
-    ref_a, mov_a, used_a = arm.crop(key, "after", y, x, field_px, field_px)
-    ref_b, mov_b, used_b = arm.crop(key, "before", y, x, field_px, field_px)
+    # a big field (e.g. 10 mm = ~31k px) is read strided to at most --max-px per side
+    step = max(1, -(-field_px // opt.max_px))
+    ref_a, mov_a, used_a = arm.crop(key, "after", y, x, field_px, field_px, step)
+    ref_b, mov_b, used_b = arm.crop(key, "before", y, x, field_px, field_px, step)
     # one stretch for the reference (it is the same pixels in both panels); the moving
     # channel is stretched per panel, since the two crops cover different tissue
     lim_ref = rm.percentile_limits(ref_a, opt.pmin, opt.pmax)
@@ -178,7 +193,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         if opt.numbers == "none":
             note, vals = "", {}
         elif qc is None:
-            note, vals = rm.image_note(ref, mov, px)
+            note, vals = rm.image_note(ref, mov, px * step if px else px)
         elif name == "before":
             vals = {
                 "source": "scorer",
@@ -194,12 +209,13 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
     scalebar = None
     if px and opt.scalebar_um != 0:
         bar_um = opt.scalebar_um or rm.auto_scalebar_um(field_px * px)
-        scalebar = (bar_um / px, f"{bar_um:g} µm")
+        scalebar = (bar_um / (px * step), rm.scalebar_label(bar_um), bar_um)
     formats = [s.strip() for s in opt.formats.split(",") if s.strip()]
     outdir = Path(opt.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     stem = f"{arm.patient}_{key}"
-    legend = rm.PALETTE_LEGEND.get(opt.palette, "")
+    moving_rgb, reference_rgb = rm.PALETTES[opt.palette]
+    legend = [("reference DAPI", reference_rgb), ("moving DAPI", moving_rgb)]
     for name, title in (
         ("before", "Before"),
         ("after", f"After ({opt.title or arm.name})"),
@@ -215,7 +231,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
             opt.dpi,
             legend,
         )
-    low, f = comp.lowres_reference(max(1, int(round(opt.lowres_um / px))) if px else 16)
+    low, f = lowres(opt.lowres_um)
     rm.save_locator(
         low,
         f,
@@ -232,9 +248,10 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         "round": key,
         "moving": str(sl.image),
         "reference": str(arm.ref.image),
-        "composite": str(comp.src.path),
+        "composite": str(comp.src.path) if comp else None,
         "pixel_size_um": px,
         "crop": {
+            "step": step,
             "y": y,
             "x": x,
             "size_px": field_px,
@@ -244,7 +261,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
         "palette": opt.palette,
         "pixels": {"before": used_b, "after": used_a},
         "stretch": {"pmin": opt.pmin, "pmax": opt.pmax, "gamma": opt.gamma},
-        "scalebar_um": scalebar and float(scalebar[1].split()[0]),
+        "scalebar_um": scalebar and float(scalebar[2]),
         "numbers": {k: v[2] for k, v in panels.items()},
     }
     (outdir / f"{stem}_overlay.json").write_text(json.dumps(manifest, indent=2))
@@ -281,6 +298,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="crop side in px (overrides --field-um)",
+    )
+    ap.add_argument(
+        "--max-px",
+        type=int,
+        default=4096,
+        help="largest image side drawn; a bigger field is read with a stride (a 10 mm field "
+        "at 0.325 um/px is ~31k px), so memory stays bounded and the scale bar stays exact",
     )
     ap.add_argument(
         "--roi",

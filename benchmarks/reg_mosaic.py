@@ -135,7 +135,8 @@ FOOTER_IMAGE = (
     "Dice = overlap of Otsu nuclear masks in the crop, Δ = residual shift by phase "
     "correlation; computed from the QC image, no segmentation"
 )
-NICE_BARS_UM = (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
+# above 1 mm only whole millimetres (1, 2, 5, 10, 20): cleaner on an overview than 2.5 mm
+NICE_BARS_UM = (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000)
 
 
 # --- checkpoints --------------------------------------------------------------
@@ -380,9 +381,14 @@ class TiffSource:
         w: int,
         x_offset: int = 0,
         x_limit: int | None = None,
+        step: int = 1,
     ) -> np.ndarray:
         """Crop with the pad-or-crop rule: zero outside [0, x_limit) x [0, H), never resampled.
-        ``x_offset`` shifts the read into the file (the After panel starts after the separator)."""
+        ``x_offset`` shifts the read into the file (the After panel starts after the separator).
+        ``step`` > 1 returns every step-th pixel (== the full crop[::step, ::step]), read in
+        bands so a whole-slide-sized field never sits in memory at full resolution."""
+        if step > 1:
+            return self._read_patch_strided(ci, y, x, h, w, x_offset, x_limit, step)
         H, W = self.shape
         W = W if x_limit is None else min(W, x_offset + x_limit)
         y0, x0, y1, x1 = max(y, 0), max(x, 0), min(y + h, H), min(x + w, W - x_offset)
@@ -394,6 +400,50 @@ class TiffSource:
         out = np.zeros((h, w), sub.dtype)
         out[y0 - y : y1 - y, x0 - x : x1 - x] = sub
         return out
+
+    def _read_patch_strided(
+        self, ci, y, x, h, w, x_offset, x_limit, step, band_rows=4096
+    ):
+        H, W = self.shape
+        W = W if x_limit is None else min(W, x_offset + x_limit)
+        ys, xs = np.arange(y, y + h, step), np.arange(x, x + w, step)
+        out = np.zeros((len(ys), len(xs)), self.series.dtype)
+        iy = np.flatnonzero((ys >= 0) & (ys < H))
+        ix = np.flatnonzero((xs >= 0) & (xs < W - x_offset))
+        if not iy.size or not ix.size:
+            return out
+        xa, xb = int(xs[ix[0]]) + x_offset, int(xs[ix[-1]]) + 1 + x_offset
+        per_band = max(1, band_rows // step)
+        for k in range(0, iy.size, per_band):
+            rows = iy[k : k + per_band]
+            ya, yb = int(ys[rows[0]]), int(ys[rows[-1]]) + 1
+            region = self._read_region(0, ci, ya, yb, xa, xb)
+            out[np.ix_(rows, ix)] = region[::step, ::step]
+        return out
+
+    def overview(self, ci: int, max_px: int) -> tuple[np.ndarray, float]:
+        """The whole plane at about ``max_px`` on its long side, plus full-res px per output px.
+
+        Read from the smallest pyramid level still at least ``max_px`` long (a whole-slide
+        pyramid has one), then strided -- never the full-resolution plane in memory.
+        """
+        H, W = self.shape
+        level = 0
+        for lv in range(len(self.levels)):
+            if max(self.level_shape(lv)) >= max_px:
+                level = lv
+        h, w = self.level_shape(level)
+        # rounded, not ceiled: a pyramid level of 3250 px and max_px 2400 would otherwise
+        # halve to 1625; this keeps the overview within ~1.5x of max_px either way
+        step = max(1, round(max(h, w) / max_px))
+        ys = range(0, h, step)
+        rows, per_band = [], max(1, 4096 // step)
+        ys = list(ys)
+        for k in range(0, len(ys), per_band):
+            ya, yb = ys[k], ys[min(k + per_band, len(ys)) - 1] + 1
+            rows.append(self._read_region(level, ci, ya, yb, 0, w)[::step, ::step])
+        low = np.concatenate(rows, axis=0)
+        return low, W / low.shape[1]
 
     def close(self):
         self.tf.close()
@@ -441,7 +491,7 @@ class Composite:
         return self.height, self.after_width
 
     def crop(
-        self, panel: str, y: int, x: int, h: int, w: int
+        self, panel: str, y: int, x: int, h: int, w: int, step: int = 1
     ) -> tuple[np.ndarray, np.ndarray]:
         """(reference, moving) uint8 crops of the Before or After panel."""
         if panel == "before":
@@ -450,8 +500,8 @@ class Composite:
             off, lim = 0, self.before_width
         else:
             off, lim = self.after_offset, self.after_width
-        ref = self.src.read_patch(CH_REFERENCE, y, x, h, w, off, lim)
-        mov = self.src.read_patch(CH_MOVING, y, x, h, w, off, lim)
+        ref = self.src.read_patch(CH_REFERENCE, y, x, h, w, off, lim, step)
+        mov = self.src.read_patch(CH_MOVING, y, x, h, w, off, lim, step)
         return ref, mov
 
     def lowres_reference(self, factor_hint: int) -> tuple[np.ndarray, float]:
@@ -724,7 +774,7 @@ class Arm:
         self._orig[key] = got
         return got
 
-    def crop(self, key: str, panel: str, y: int, x: int, h: int, w: int):
+    def crop(self, key: str, panel: str, y: int, x: int, h: int, w: int, step: int = 1):
         """(reference, moving, source) for one panel on the reference canvas.
 
         before = the native moving slide pad-or-cropped at the origin (bin/utils/qc.py's
@@ -736,15 +786,15 @@ class Arm:
                 raise SystemExit(
                     f"[{self.name}] {self.patient} {key}: --source originals unusable"
                 )
-            ref, mov = self.composite(key).crop(panel, y, x, h, w)
+            ref, mov = self.composite(key).crop(panel, y, x, h, w, step)
             return ref, mov, "composite"
         rsrc, ri, gsrc, gi, nsrc, ni = orig
         try:
-            ref = rsrc.read_patch(ri, y, x, h, w)
+            ref = rsrc.read_patch(ri, y, x, h, w, step=step)
             mov = (
-                gsrc.read_patch(gi, y, x, h, w)
+                gsrc.read_patch(gi, y, x, h, w, step=step)
                 if panel == "after"
-                else nsrc.read_patch(ni, y, x, h, w)
+                else nsrc.read_patch(ni, y, x, h, w, step=step)
             )
         except (ValueError, OSError, RuntimeError) as exc:
             # typically a compression this environment cannot decode: the pipeline's slides
@@ -761,7 +811,7 @@ class Arm:
                 exc,
             )
             self._orig[key] = None
-            return self.crop(key, panel, y, x, h, w)
+            return self.crop(key, panel, y, x, h, w, step)
         return ref, mov, "originals"
 
     def seg_qc(self, key: str, warn: bool = True) -> SegQC | None:
@@ -987,6 +1037,42 @@ def checkerboard(mov01, ref01, tiles) -> np.ndarray:
     return np.repeat(g[..., None], 3, axis=-1)
 
 
+def scalebar_label(um: float) -> str:
+    """``500 µm`` below a millimetre, ``1 mm`` / ``2.5 mm`` from one millimetre up.
+
+    The bar is about a quarter of the field, so fields from ~4 mm get a mm label -- the unit
+    of whole-slide overviews -- while a 200-500 µm crop keeps µm.
+    """
+    return f"{um / 1000:g} mm" if um >= 1000 else f"{um:g} µm"
+
+
+def draw_legend(ax, entries, font, x=0.97, y=0.03, spacing=1.25):
+    """Channel names in their own colours, stacked and right-aligned in the lower right
+    (the first entry on top), each with a thin dark outline for legibility."""
+    texts = []
+    n = len(entries)
+    for i, (name, color) in enumerate(entries):
+        t = ax.text(
+            x,
+            y
+            + (n - 1 - i)
+            * spacing
+            * font
+            / 72.0
+            / ax.figure.get_size_inches()[1]
+            / max(ax.get_position().height, 1e-6),
+            name,
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=font,
+            color=color,
+        )
+        _outline(t)
+        texts.append(t)
+    return texts
+
+
 def auto_scalebar_um(patch_um: float) -> float:
     target = patch_um / 4.0 * 1.05
     return float(max([b for b in NICE_BARS_UM if b <= target] or [NICE_BARS_UM[0]]))
@@ -1045,17 +1131,17 @@ def _outline(t):
     t.set_path_effects([patheffects.withStroke(linewidth=1.6, foreground="black")])
 
 
-def draw_scalebar(ax, h, w, bar_px, label, font, thick=0.014):
+def draw_scalebar(ax, h, w, bar_px, label, font, thick=0.014, color="white"):
     from matplotlib.patches import Rectangle
 
     x0, y0 = 0.05 * w, 0.92 * h
-    ax.add_patch(Rectangle((x0, y0), bar_px, max(1.0, thick * h), color="white", lw=0))
+    ax.add_patch(Rectangle((x0, y0), bar_px, max(1.0, thick * h), color=color, lw=0))
     _outline(
         ax.text(
             x0 + bar_px / 2,
             y0 - 0.012 * h,
             label,
-            color="white",
+            color=color,
             ha="center",
             va="bottom",
             fontsize=font,
@@ -1159,7 +1245,7 @@ def save_locator(low, factor, rois, patch_px, out_stem: Path, formats, px, title
     if px:
         bar_um = auto_scalebar_um(w * factor * px)
         draw_scalebar(
-            ax, h, w, bar_um / (px * factor), f"{bar_um:g} µm", 7, thick=0.006
+            ax, h, w, bar_um / (px * factor), scalebar_label(bar_um), 7, thick=0.006
         )
     ax.set_axis_off()
     ax.set_title(title, fontsize=9)
@@ -1422,7 +1508,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     scalebar = None
     if px and opt.scalebar_um != 0:
         bar_um = opt.scalebar_um or auto_scalebar_um(patch_um)
-        scalebar = (bar_um / px, f"{bar_um:g} µm")
+        scalebar = (bar_um / px, scalebar_label(bar_um), bar_um)
     if opt.orient == "rounds-as-columns":
         # One column per (round, ROI), one row per Before + arm: reading DOWN a column
         # compares the methods on the same tissue. Transposing the finished grid keeps every
@@ -1472,7 +1558,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
             {c.get("pixels") for r in rows_meta for c in r["cells"].values()} - {None}
         ),
         "min_nuclei": opt.min_nuclei,
-        "scalebar_um": scalebar and float(scalebar[1].split()[0]),
+        "scalebar_um": scalebar and float(scalebar[2]),
         "rois": [{"id": i, "y": y, "x": x} for i, (y, x) in enumerate(rois, 1)],
         "columns": {
             BEFORE_LABEL: {
