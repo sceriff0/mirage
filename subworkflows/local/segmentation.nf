@@ -119,13 +119,14 @@ workflow SEGMENTATION {
     // register_patient.nf and tiled_adapter.nf do), so the passthrough branch could
     // never fire for it. publishedOrAsIs's isUnderTaskDir check tells "fresh, needs
     // publishedPath" from "already published elsewhere, use as-is" correctly in both
-    // cases, including passthrough's own producer ambiguity: the kind argument
-    // (PREPROCESSED for a passthrough slide, REGISTERED otherwise) only matters in
-    // the fresh branch, since the as-is branch returns the file's own path unchanged.
+    // cases, including passthrough's own producer ambiguity: the kind (for a passthrough
+    // slide Layout.passthroughPath's -- 'converted' under skip_preprocessing, else
+    // PREPROCESSED; REGISTERED otherwise) only matters in the fresh branch, since the
+    // as-is branch returns the file's own path unchanged.
     ch_registered_for_ckpt = ch_registered
         .map { meta, file ->
             def published_path = meta.is_passthrough
-                ? Layout.publishedOrAsIs(params.outdir, meta.patient_id, Layout.PREPROCESSED, file)
+                ? Layout.passthroughPath(params.outdir, meta.patient_id, file, params.skip_preprocessing as boolean)
                 : Layout.publishedOrAsIs(params.outdir, meta.patient_id, Layout.REGISTERED, file)
             [meta.patient_id, meta, published_path]
         }

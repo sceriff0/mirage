@@ -174,7 +174,7 @@ workflow REGISTER_PATIENT {
             // published it and <pid>/registered/ may not even exist; Layout.passthroughPath
             // records where it actually is instead.
             def published_path = meta.is_passthrough
-                ? Layout.passthroughPath(params.outdir, meta.patient_id, file)
+                ? Layout.passthroughPath(params.outdir, meta.patient_id, file, params.skip_preprocessing as boolean)
                 : Layout.publishedPath(params.outdir, meta.patient_id, Layout.REGISTERED, file)
             [
                 patient_id      : meta.patient_id,
