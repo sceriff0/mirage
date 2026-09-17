@@ -100,7 +100,7 @@ def render(opt) -> dict:
     rows = read_segmented(opt.segmented_csv or run / "csv" / "segmented.csv")
     row = reference_row(rows, opt.patient)
     pid = row["patient_id"]
-    image = Path(row["registered_image"])
+    image = rm.published_file(row["registered_image"])
     mask = Path(row["cell_mask" if opt.mask == "cell" else "nuclei_mask"])
     src, msrc = rm.TiffSource(image), rm.TiffSource(mask)
     ci = src.nuclear_index()

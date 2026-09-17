@@ -233,6 +233,30 @@ def read_checkpoint(
     return per
 
 
+def published_file(path) -> Path:
+    """The file a checkpoint row names -- or, for a row written before the passthrough fix,
+    where it really is.
+
+    Until 2026-09-17 the pipeline recorded a slide that skipped registration (a single-slide
+    patient; every STARE reference) under ``<pid>/preprocessed/`` even when
+    skip_preprocessing -- the shipped default -- had published it under ``<pid>/converted/``.
+    Runs written then keep that dangling path; this reads the converted file instead, and
+    says so.
+    """
+    path = Path(path)
+    if not path.is_file() and path.parent.name == "preprocessed":
+        converted = path.parent.parent / "converted" / path.name
+        if converted.is_file():
+            log.warning(
+                "%s does not exist; using %s (a checkpoint written before the passthrough "
+                "path fix)",
+                path,
+                converted,
+            )
+            return converted
+    return path
+
+
 def round_matches(sl: Slide, tokens) -> bool:
     for tok in tokens:
         t = tok.lower()
@@ -747,7 +771,9 @@ class Arm:
         if key not in natives:
             why = f"round {key!r} not in {self.native_csv or 'any preprocessed.csv'}"
         else:
-            paths = (ref.image, sl.image, natives[key].image)
+            paths = tuple(
+                published_file(p) for p in (ref.image, sl.image, natives[key].image)
+            )
             missing = [str(p) for p in paths if not Path(p).is_file()]
             if missing:
                 why = f"missing {missing}"

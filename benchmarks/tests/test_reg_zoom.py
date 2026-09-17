@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -156,3 +157,31 @@ def test_a_zoom_too_large_to_show_cells_is_refused(seg_run, tmp_path):
     arm, _ = seg_run
     with pytest.raises(SystemExit, match="max-zoom-px"):
         _zoom(arm, tmp_path / "z", "--max-zoom-px", "50")
+
+
+def test_a_checkpoint_naming_preprocessed_for_a_converted_slide_still_draws(
+    seg_run, tmp_path, caplog
+):
+    """A run written before the passthrough fix records <pid>/preprocessed/<name> for a
+    slide published under <pid>/converted/<name> (job 6847276)."""
+    arm, _ = seg_run
+    import shutil
+
+    shutil.copytree(arm, tmp_path / "arm")
+    csv_path = tmp_path / "arm" / "csv" / "segmented.csv"
+    rows = list(csv.DictReader(open(csv_path)))
+    real = Path(rows[0]["registered_image"])
+    converted = tmp_path / "arm" / "P1" / "converted" / "P1_ref.ome.tif"
+    converted.parent.mkdir(parents=True)
+    shutil.copy(real, converted)
+    rows[0]["registered_image"] = str(
+        tmp_path / "arm" / "P1" / "preprocessed" / "P1_ref.ome.tif"
+    )
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    with caplog.at_level("WARNING"):
+        m = _zoom(tmp_path / "arm", tmp_path / "z")
+    assert m["image"] == str(converted)
+    assert "does not exist; using" in caplog.text
