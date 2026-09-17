@@ -244,6 +244,100 @@ nextflow_pipeline {
         }
     }
 
+    test("every path in every checkpoint CSV exists — single-slide patient, skip_preprocessing=true (the shipped default)") {
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                // conf/test.config pins skip_preprocessing=false, so every other case here
+                // runs the BaSiC branch, where an unregistered reference is published under
+                // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
+                // the slide and it is published under <pid>/converted/ -- and the passthrough
+                // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
+                // real single-slide run, 2026-09-17; the STARE reference is passed through the
+                // same way for every patient).
+                input               = "$projectDir/tests/testdata/single_sample.csv"
+                outdir              = "$outputDir"
+                registration_method = "valis"
+                skip_preprocessing  = true
+                cleanup_level       = 'none'
+            }
+        }
+
+        then {
+            assert workflow.success
+            def csvDir = new File("${outputDir}/csv".toString())
+            assert csvDir.isDirectory() : "no csv/ directory was published"
+            def work = new File("${workDir}".toString()).absolutePath
+            def problems = []
+            def checked  = 0
+            (csvDir.listFiles() ?: []).findAll { it.name.endsWith('.csv') }.sort { it.name }.each { csv ->
+                csv.readLines().drop(1).findAll { it.trim() }.each { line ->
+                    csvFields(line).each { field ->
+                        if (field.startsWith('/')) {
+                            checked++
+                            if (new File(field).absolutePath.startsWith(work + File.separator))
+                                problems << "${csv.name}: inside the work directory -> ${field}"
+                            else if (!new File(field).exists())
+                                problems << "${csv.name}: does not exist -> ${field}"
+                        }
+                    }
+                }
+            }
+            assert checked > 0 : "no recorded paths were examined"
+            assert problems.isEmpty() :
+                "checkpoint manifest has ${problems.size()} bad path(s):\n  " + problems.join("\n  ")
+        }
+    }
+
+    test("every path in every checkpoint CSV exists — tiled (STARE) reference, skip_preprocessing=true (the shipped default)") {
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                // conf/test.config pins skip_preprocessing=false, so every other case here
+                // runs the BaSiC branch, where an unregistered reference is published under
+                // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
+                // the slide and it is published under <pid>/converted/ -- and the passthrough
+                // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
+                // real single-slide run, 2026-09-17; the STARE reference is passed through the
+                // same way for every patient).
+                input               = "$projectDir/tests/testdata/test_input.csv"
+                outdir              = "$outputDir"
+                registration_method = "tiled"
+                skip_preprocessing  = true
+                cleanup_level       = 'none'
+            }
+        }
+
+        then {
+            assert workflow.success
+            def csvDir = new File("${outputDir}/csv".toString())
+            assert csvDir.isDirectory() : "no csv/ directory was published"
+            def work = new File("${workDir}".toString()).absolutePath
+            def problems = []
+            def checked  = 0
+            (csvDir.listFiles() ?: []).findAll { it.name.endsWith('.csv') }.sort { it.name }.each { csv ->
+                csv.readLines().drop(1).findAll { it.trim() }.each { line ->
+                    csvFields(line).each { field ->
+                        if (field.startsWith('/')) {
+                            checked++
+                            if (new File(field).absolutePath.startsWith(work + File.separator))
+                                problems << "${csv.name}: inside the work directory -> ${field}"
+                            else if (!new File(field).exists())
+                                problems << "${csv.name}: does not exist -> ${field}"
+                        }
+                    }
+                }
+            }
+            assert checked > 0 : "no recorded paths were examined"
+            assert problems.isEmpty() :
+                "checkpoint manifest has ${problems.size()} bad path(s):\n  " + problems.join("\n  ")
+        }
+    }
+
     test("every path in every checkpoint CSV exists — tiled (STARE) method") {
         tag "stub"
         options "-stub"
