@@ -1111,7 +1111,7 @@ def scalebar_label(um: float) -> str:
     return f"{um / 1000:g} mm" if um >= 1000 else f"{um:g} µm"
 
 
-def draw_legend(ax, entries, font, x=0.97, y=0.03, spacing=1.25):
+def draw_legend(ax, entries, font, x=0.97, y=0.03, spacing=1.25, ha="right"):
     """Channel names in their own colours, stacked and right-aligned in the lower right
     (the first entry on top), each with a thin dark outline for legibility."""
     texts = []
@@ -1128,7 +1128,7 @@ def draw_legend(ax, entries, font, x=0.97, y=0.03, spacing=1.25):
             / max(ax.get_position().height, 1e-6),
             name,
             transform=ax.transAxes,
-            ha="right",
+            ha=ha,
             va="bottom",
             fontsize=font,
             color=color,
@@ -1212,6 +1212,149 @@ def draw_scalebar(ax, h, w, bar_px, label, font, thick=0.014, color="white"):
             fontsize=font,
         )
     )
+
+
+BAR_GREY = (0.8, 0.8, 0.8)
+
+
+def draw_overview_zoom(
+    over,
+    zoom,
+    box,
+    factor: float,
+    px: float,
+    out_stem: Path,
+    formats,
+    dpi: int = 300,
+    zoom_fraction: float = 0.62,
+    funnel_alpha: float = 0.18,
+    legend=(),
+    title: str = "",
+    note: str = "",
+    frame_color="white",
+    bar_color=BAR_GREY,
+    facecolor="black",
+    bar_over_um: float | None = None,
+    bar_zoom_um: float | None = None,
+) -> dict:
+    """Overview left, framed zoom top right, funnel between, legend bottom right.
+
+    THE one implementation of that layout: reg_zoom draws its segmentation figure with it
+    and reg_overlay draws each Before/After panel with it, so the two figures cannot drift
+    apart in style. ``box`` is (y, x, size) in the OVERVIEW's full-resolution frame and
+    ``factor`` the overview's pixels-per-displayed-pixel, exactly as select_rois reports
+    them; both scale bars are chosen for what their own panel actually shows.
+    """
+    plt = _mpl()
+    from matplotlib.patches import Polygon, Rectangle
+
+    ho, wo = over.shape[:2]
+    z = zoom.shape[0]
+    zoom_disp = int(zoom_fraction * ho)
+    # the gap is the figure's margin around the zoom, so it scales with what is DRAWN, not
+    # with the zoom's source pixel count: a 60 µm zoom is only ~180 px of source but is
+    # drawn as big as a 900 px one, and 0.06 x 180 left no room for the legend (it was
+    # clipped against the right edge of the 2 mm overlay example, 2026-09-18)
+    gap = max(8, int(0.05 * zoom_disp))
+    fig_w, fig_h = (
+        wo + gap + zoom_disp + gap,
+        max(ho, zoom_disp + int(0.35 * zoom_disp)),
+    )
+    fig = plt.figure(figsize=(fig_w / dpi, fig_h / dpi), dpi=dpi, facecolor=facecolor)
+
+    ax_o = fig.add_axes([0, (fig_h - ho) / fig_h, wo / fig_w, ho / fig_h])
+    ax_o.imshow(over, interpolation="none")
+    ax_o.set_axis_off()
+    zx = (wo + gap) / fig_w
+    zy = (fig_h - gap * 0.5 - zoom_disp) / fig_h
+    ax_z = fig.add_axes([zx, zy, zoom_disp / fig_w, zoom_disp / fig_h])
+    ax_z.imshow(zoom, interpolation="none")
+    ax_z.set_xticks([])
+    ax_z.set_yticks([])
+    for spine in ax_z.spines.values():
+        spine.set_edgecolor(frame_color)
+        spine.set_linewidth(max(1.5, zoom_disp / 400))
+
+    y, x, size = box
+    bx, by, bs = x / factor, y / factor, size / factor
+    ax_o.add_patch(
+        Rectangle((bx, by), bs, bs, fill=False, ec=frame_color, lw=max(1.5, ho / 800))
+    )
+    # funnel: the box's corners to the zoom frame's left corners, in figure coordinates
+    to_fig = fig.transFigure.inverted()
+    tl = to_fig.transform(ax_o.transData.transform((bx, by)))
+    bl = to_fig.transform(ax_o.transData.transform((bx, by + bs)))
+    tr = to_fig.transform(ax_o.transData.transform((bx + bs, by)))
+    br = to_fig.transform(ax_o.transData.transform((bx + bs, by + bs)))
+    fig.patches.append(
+        Polygon(
+            [tl, tr, (zx, zy + zoom_disp / fig_h), (zx, zy), br, bl],
+            closed=True,
+            transform=fig.transFigure,
+            facecolor=(1, 1, 1, funnel_alpha),
+            edgecolor="none",
+            zorder=0.5,
+        )
+    )
+
+    font = max(10.0, fig_h / dpi * 3.2)
+    if title:
+        _outline(
+            ax_o.text(
+                0.02,
+                0.98,
+                title,
+                transform=ax_o.transAxes,
+                ha="left",
+                va="top",
+                fontsize=font * 1.1,
+                color="white",
+                fontweight="bold",
+            )
+        )
+    if note:
+        _outline(
+            ax_o.text(
+                0.98,
+                0.98,
+                note,
+                transform=ax_o.transAxes,
+                ha="right",
+                va="top",
+                fontsize=font * 0.95,
+                color="white",
+            )
+        )
+    bar_over = bar_over_um or auto_scalebar_um(wo * factor * px)
+    draw_scalebar(
+        ax_o,
+        ho,
+        wo,
+        bar_over / (factor * px),
+        scalebar_label(bar_over),
+        font * 0.8,
+        thick=0.006,
+        color=bar_color,
+    )
+    bar_zoom = bar_zoom_um or auto_scalebar_um(z * px)
+    draw_scalebar(
+        ax_z,
+        z,
+        z,
+        bar_zoom / px,
+        scalebar_label(bar_zoom),
+        font * 0.6,
+        thick=0.008,
+        color=bar_color,
+    )
+    if legend:
+        legend_ax = fig.add_axes([zx, 0.0, zoom_disp / fig_w, max(0.02, zy - 0.02)])
+        legend_ax.set_axis_off()
+        draw_legend(legend_ax, list(legend), font * 1.3, x=1.0, y=0.05)
+    for fmt in formats:
+        fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, facecolor=facecolor)
+    plt.close(fig)
+    return {"overview_um": bar_over, "zoom_um": bar_zoom}
 
 
 def assemble_figure(

@@ -131,9 +131,11 @@ def test_overlay_reads_the_original_slides_at_one_pixel_per_pixel(
     sizes = []
     real = ro.draw_panel
 
-    def spy(img, title, note, bar, out_stem, formats, dpi, legend, size_in=None):
+    def spy(img, title, note, bar, out_stem, formats, dpi, legend, size_in=None, **kw):
         sizes.append((img.shape[1], dpi))
-        return real(img, title, note, bar, out_stem, formats, dpi, legend, size_in)
+        return real(
+            img, title, note, bar, out_stem, formats, dpi, legend, size_in, **kw
+        )
 
     monkeypatch.setattr(ro, "draw_panel", spy)
     m = _overlay(originals_root / "armR", tmp_path / "ov", "--numbers", "image")
@@ -267,3 +269,119 @@ def test_running_out_of_tissue_keeps_the_variants_already_drawn(
     drawn = sorted(out.glob("P1_CD3_v*_after.png"))
     assert 1 <= len(drawn) < 10
     assert "stopping at" in caplog.text
+
+
+# --- the zoom inset ---------------------------------------------------------------
+def test_no_inset_unless_asked(arm_root, tmp_path):
+    assert (
+        _overlay(arm_root / "armB", tmp_path / "ov", "--numbers", "none")["zoom"]
+        is None
+    )
+
+
+def test_the_zoom_is_inside_the_crop_and_read_at_full_resolution(
+    originals_root, tmp_path, monkeypatch
+):
+    """The panel of a wide field is strided down; the zoom is not, which is the point --
+    it is what makes individual cells visible."""
+    seen = []
+    real = ro.draw_panel
+
+    def spy(*a, **kw):
+        seen.append(kw.get("zoom"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ro, "draw_panel", spy)
+    m = _overlay(
+        originals_root / "armR",
+        tmp_path / "ov",
+        "--numbers",
+        "none",
+        "--zoom-um",
+        str(24 * PX),  # 24 px
+        "--max-px",
+        "48",  # forces the panel to a stride of 2
+    )
+    z, c = m["zoom"], m["crop"]
+    assert z["size_px"] == 24 and z["step"] == 1 and c["step"] == 2
+    assert c["y"] <= z["y"] <= c["y"] + c["size_px"] - z["size_px"]
+    assert c["x"] <= z["x"] <= c["x"] + c["size_px"] - z["size_px"]
+    assert len(seen) == 2 and all(p is not None for p in seen)
+    for panel in seen:
+        # full-res pixels, and a box in full-res units that the layout divides by `factor`
+        assert panel["img"].shape[:2] == (24, 24)
+        assert panel["factor"] == 2 and panel["box"][2] == 24
+        assert panel["box"][0] == z["y"] - c["y"] and panel["box"][1] == z["x"] - c["x"]
+
+
+def test_a_manual_zoom_roi_is_honoured_and_clamped_into_the_crop(arm_root, tmp_path):
+    m = _overlay(
+        arm_root / "armB",
+        tmp_path / "ov",
+        "--numbers",
+        "none",
+        "--roi",
+        "40,40",
+        "--zoom-um",
+        str(16 * PX),
+        "--zoom-roi",
+        "60,64",
+    )
+    assert (m["zoom"]["y"], m["zoom"]["x"]) == (60, 64)
+    far = _overlay(
+        arm_root / "armB",
+        tmp_path / "ov2",
+        "--numbers",
+        "none",
+        "--roi",
+        "40,40",
+        "--zoom-um",
+        str(16 * PX),
+        "--zoom-roi",
+        "9000,9000",  # outside the crop: clamped to its far corner, never read off-slide
+    )["zoom"]
+    assert (far["y"], far["x"]) == (40 + 96 - 16, 40 + 96 - 16)
+
+
+def test_an_inset_as_big_as_the_crop_is_clamped_not_drawn_as_a_copy(
+    arm_root, tmp_path, caplog
+):
+    with caplog.at_level("WARNING"):
+        m = _overlay(
+            arm_root / "armB",
+            tmp_path / "ov",
+            "--numbers",
+            "none",
+            "--zoom-um",
+            str(96 * PX),
+        )
+    assert m["zoom"]["size_px"] == 24  # a quarter of the 96 px crop
+    assert "clamping" in caplog.text
+
+
+def test_the_zoom_panel_is_drawn_in_reg_zooms_layout(arm_root, tmp_path, monkeypatch):
+    """One shared implementation draws reg_zoom's figure and this one, so the channel names
+    stay bottom right under the zoom and the two figures cannot drift apart in style."""
+    calls = []
+    real = rm.draw_overview_zoom
+    monkeypatch.setattr(
+        rm,
+        "draw_overview_zoom",
+        lambda *a, **k: (calls.append((a, k)), real(*a, **k))[1],
+    )
+    _overlay(
+        arm_root / "armB",
+        tmp_path / "ov",
+        "--numbers",
+        "none",
+        "--zoom-um",
+        str(16 * PX),
+    )
+    assert len(calls) == 2  # Before and After
+    for _a, k in calls:
+        assert k["legend"] == [
+            ("reference DAPI", (0.0, 1.0, 1.0)),
+            ("moving DAPI", (1.0, 0.0, 1.0)),
+        ]
+        assert k["title"] in ("Before", "After (armB)")
+        assert k["zoom_fraction"] == 0.62 and k["frame_color"] == "white"

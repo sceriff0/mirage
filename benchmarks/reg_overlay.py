@@ -24,6 +24,13 @@ show different tissue. ``--variants N`` draws N pairs per round instead of one -
 that happens to read badly is not the only output. (N = 1, the default, keeps the names
 above.)
 
+THE ZOOM. ``--zoom-um N`` draws each panel beside a framed zoom of an N µm region, READ AT
+FULL RESOLUTION, so individual cells stay visible in a field too wide to resolve them (a
+2 mm panel is strided down to --max-px; the zoom is not). The layout is reg_zoom's, from
+the one shared implementation (reg_mosaic.draw_overview_zoom): crop left, zoom top right,
+white box and funnel between, channel names bottom right, a scale bar on each. The region
+is the most textured window inside the crop unless --zoom-roi names one.
+
     python -m benchmarks.reg_overlay results/valis_high_micro2 --patient 033 \\
         --field-um 500 --avoid-rois-json mosaic/033_rois.json -o figs/overlay
 """
@@ -42,8 +49,41 @@ log = logging.getLogger("reg_overlay")
 
 
 def draw_panel(
-    img, title, note, scalebar, out_stem: Path, formats, dpi, legend, size_in=None
+    img,
+    title,
+    note,
+    scalebar,
+    out_stem: Path,
+    formats,
+    dpi,
+    legend,
+    size_in=None,
+    zoom=None,
 ):
+    """One panel: the crop, or -- with ``zoom`` -- the crop beside a framed zoom of it.
+
+    The zoom layout is reg_mosaic.draw_overview_zoom, the same function reg_zoom draws its
+    segmentation figure with, so the two look like one family: image left, framed zoom top
+    right, funnel between, channel names bottom right under the zoom.
+    """
+    if zoom is not None:
+        return rm.draw_overview_zoom(
+            img,
+            zoom["img"],
+            zoom["box"],
+            zoom["factor"],
+            zoom["px"],
+            out_stem,
+            formats,
+            dpi=dpi,
+            zoom_fraction=zoom["fraction"],
+            funnel_alpha=zoom["funnel_alpha"],
+            legend=legend,
+            title=title,
+            note=note,
+            frame_color=zoom["color"],
+            bar_over_um=scalebar[2] if scalebar else None,
+        )
     plt = rm._mpl()
     h, w = img.shape[:2]
     # one image pixel per output pixel unless a size is forced: a smaller figure downsamples
@@ -112,6 +152,66 @@ def load_avoid(path: Path | None, reference: Path) -> list[tuple[int, int, int]]
         return []
     size = int(d["patch_px"])
     return [(int(r["y"]), int(r["x"]), size) for r in d["rois"]]
+
+
+def zoom_region(arm: rm.Arm, key: str, opt, crop, ref_panel, step: int, px):
+    """The inset's region and its FULL-resolution pixels, or None when --zoom-um is off.
+
+    The region is chosen inside the crop by the same tissue x texture score that picked the
+    crop itself (on the panel already in memory, so no extra read), unless --zoom-roi names
+    it. Both panels are read at step 1: the point of the inset is to show cells the strided
+    panel cannot resolve.
+    """
+    if not opt.zoom_um:
+        return None
+    y, x, field_px = crop
+    if not px:
+        raise SystemExit("--zoom-um needs a pixel size; pass --pixel-size-um")
+    size = int(round(opt.zoom_um / px))
+    if size < 8:
+        raise SystemExit(f"--zoom-um {opt.zoom_um} is {size} px: too small to see")
+    if size >= field_px:
+        log.warning(
+            "--zoom-um %g is %d px, the whole %d px crop: clamping to a quarter of it",
+            opt.zoom_um,
+            size,
+            field_px,
+        )
+        size = max(8, field_px // 4)
+    if opt.zoom_roi:
+        zy, zx = (int(v) for v in opt.zoom_roi.split(",")[:2])
+    else:
+        picks = rm.select_rois(ref_panel, step, size, 1, 0.0, 0.0, (field_px, field_px))
+        dy, dx = picks[0] if picks else ((field_px - size) // 2,) * 2
+        zy, zx = y + dy, x + dx
+    zy = min(max(zy, y), y + field_px - size)
+    zx = min(max(zx, x), x + field_px - size)
+    crops = {}
+    for panel in ("after", "before"):
+        zr, zm, _ = arm.crop(key, panel, zy, zx, size, size, 1)
+        crops[panel] = (zr, zm)
+    bar = None
+    if opt.scalebar_um != 0:
+        bar_um = rm.auto_scalebar_um(size * px)
+        bar = (bar_um / px, rm.scalebar_label(bar_um), bar_um)
+    log.info(
+        "%s %s: zoom y=%d x=%d size=%d px = %g µm (full resolution)",
+        arm.patient,
+        key,
+        zy,
+        zx,
+        size,
+        size * px,
+    )
+    return {
+        "y": zy,
+        "x": zx,
+        "size_px": size,
+        "size_um": size * px,
+        "crops": crops,
+        "scalebar": bar,
+        "panel": {},
+    }
 
 
 def render(
@@ -184,9 +284,19 @@ def render(
     step = max(1, -(-field_px // opt.max_px))
     ref_a, mov_a, used_a = arm.crop(key, "after", y, x, field_px, field_px, step)
     ref_b, mov_b, used_b = arm.crop(key, "before", y, x, field_px, field_px, step)
+
+    # --zoom-um: a small inset read at FULL resolution (step 1), so individual nuclei are
+    # visible even when the panel itself is strided down from a millimetre-scale field
+    zoom = zoom_region(arm, key, opt, (y, x, field_px), ref_a, step, px)
     # one stretch for the reference (it is the same pixels in both panels); the moving
     # channel is stretched per panel, since the two crops cover different tissue
     lim_ref = rm.percentile_limits(ref_a, opt.pmin, opt.pmax)
+    # the inset is a different (full-resolution) read, so it gets its own reference limits
+    lim_ref_zoom = (
+        rm.percentile_limits(zoom["crops"]["after"][0], opt.pmin, opt.pmax)
+        if zoom is not None
+        else None
+    )
     panels = {}
     qc = (
         None
@@ -200,6 +310,26 @@ def render(
             rm.stretch(ref, lim_ref, opt.gamma),
             opt.palette,
         )
+        if zoom is not None:
+            zr, zm = zoom["crops"][name]
+            # box and factor in the drawn panel's frame: the panel is strided by `step`,
+            # so draw_overview_zoom divides the full-res box by it exactly as it does for
+            # reg_zoom's downsampled overview
+            zoom["panel"][name] = {
+                "img": rm.overlay(
+                    rm.stretch(
+                        zm, rm.percentile_limits(zm, opt.pmin, opt.pmax), opt.gamma
+                    ),
+                    rm.stretch(zr, lim_ref_zoom, opt.gamma),
+                    opt.palette,
+                ),
+                "box": (zoom["y"] - y, zoom["x"] - x, zoom["size_px"]),
+                "factor": step,
+                "px": px,
+                "fraction": opt.zoom_frac,
+                "funnel_alpha": opt.funnel_alpha,
+                "color": opt.zoom_color,
+            }
         if opt.numbers == "none":
             note, vals = "", {}
         elif qc is None:
@@ -240,6 +370,7 @@ def render(
             formats,
             opt.dpi,
             legend,
+            zoom=zoom["panel"][name] if zoom is not None else None,
         )
     low, f = lowres(opt.lowres_um)
     rm.save_locator(
@@ -267,6 +398,17 @@ def render(
             "x": x,
             "size_px": field_px,
             "size_um": field_px * px if px else None,
+        },
+        "zoom": None
+        if zoom is None
+        else {
+            "y": zoom["y"],
+            "x": zoom["x"],
+            "size_px": zoom["size_px"],
+            "size_um": zoom["size_um"],
+            "step": 1,
+            "fraction": opt.zoom_frac,
+            "color": opt.zoom_color,
         },
         "avoided_rois_from": str(opt.avoid_rois_json) if opt.avoid_rois_json else None,
         "palette": opt.palette,
@@ -311,6 +453,38 @@ def build_parser() -> argparse.ArgumentParser:
         "<pid>_<round>_v1_before, _v2_... (default 1: the current names). Each variant "
         "avoids every earlier one's crop, so they are alternatives to choose between. "
         "Ignored with --roi, which fixes the crop.",
+    )
+    ap.add_argument(
+        "--zoom-um",
+        type=float,
+        default=0.0,
+        help="draw each panel beside a framed zoom of this many µm, READ AT FULL "
+        "RESOLUTION, in reg_zoom's layout: crop left, zoom top right, funnel between, "
+        "channel names bottom right -- to see individual cells in a field too wide to "
+        "resolve them (0 = no zoom, the default). E.g. --field-um 2000 --zoom-um 60.",
+    )
+    ap.add_argument(
+        "--zoom-roi",
+        default=None,
+        help='"Y,X" top-left of the inset in the REFERENCE frame (full-res px); '
+        "default: the most textured window inside the crop",
+    )
+    ap.add_argument(
+        "--zoom-frac",
+        type=float,
+        default=0.62,
+        help="zoom panel height as a fraction of the crop's (default 0.62, as reg_zoom)",
+    )
+    ap.add_argument(
+        "--funnel-alpha",
+        type=float,
+        default=0.18,
+        help="opacity of the funnel joining the box to the zoom (default 0.18)",
+    )
+    ap.add_argument(
+        "--zoom-color",
+        default="white",
+        help="colour of the zoom frame and of its box on the crop (default white)",
     )
     ap.add_argument("--field-um", type=float, default=500.0, help="crop side in µm")
     ap.add_argument(

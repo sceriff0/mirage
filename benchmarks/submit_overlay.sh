@@ -64,6 +64,8 @@ FIELD_UM="${FIELD_UM:-500}"          # crop side in µm
 ROI="${ROI:-}"                       # "Y,X" top-left in the reference frame (full-res px); empty = auto
 AVOID_ROIS_JSON="${AVOID_ROIS_JSON:-}" # a mosaic's <pid>_rois.json to keep the crop clear of
 VARIANTS="${VARIANTS:-1}"             # draw N crops per round on different tissue, pick the best
+ZOOM_UM="${ZOOM_UM:-0}"              # draw each panel beside a framed N µm zoom read at full
+                                     # resolution (reg_zoom's layout); 0 = no zoom
 OVERLAY_ARGS="${OVERLAY_ARGS:-}"     # extra reg_overlay.py flags, e.g. "--palette red-green --pmin 2"
 # -------------------------------------------------------------------------------
 
@@ -203,7 +205,8 @@ fi
     $RENDER_EXEC python3 -m benchmarks.reg_overlay "$RUN" --patient "$PATIENT" \
       --field-um "$FIELD_UM" --palette magenta-cyan --numbers "$NUMBERS" --title "$LABEL" \
       "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
-      -o "$ROOT/overlay" --variants "$VARIANTS" "${EXTRA[@]+"${EXTRA[@]}"}" $OVERLAY_ARGS
+      -o "$ROOT/overlay" --variants "$VARIANTS" --zoom-um "$ZOOM_UM" \
+      "${EXTRA[@]+"${EXTRA[@]}"}" $OVERLAY_ARGS
 ) || { echo "[overlay] FAILED" >&2; exit 1; }
 
 echo "=================================================="

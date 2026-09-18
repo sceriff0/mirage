@@ -38,7 +38,7 @@ from benchmarks import reg_mosaic as rm
 
 log = logging.getLogger("reg_zoom")
 
-BAR_GREY = (0.8, 0.8, 0.8)
+BAR_GREY = rm.BAR_GREY  # one definition; the layout lives in reg_mosaic
 DAPI_WHITE = (1.0, 1.0, 1.0)
 
 
@@ -181,94 +181,25 @@ def _rgb(color) -> tuple[float, float, float]:
 
 
 def draw_figure(over, factor, zoom, box, px, opt, stem: Path, formats) -> dict:
-    """Overview left, framed zoom top right, funnel between, legend bottom right."""
-    plt = rm._mpl()
-    from matplotlib.patches import Polygon, Rectangle
+    """Overview left, framed zoom top right, funnel between, legend bottom right.
 
-    ho, wo = over.shape[:2]
-    z = zoom.shape[0]
-    gap = int(0.06 * z)
-    # the zoom panel's size in the figure: a fraction of the overview's height, as in a
-    # classic overview/zoom panel; drawn with nearest-neighbour, so outlines stay crisp
-    zoom_disp = int(opt.zoom_fraction * ho)
-    fig_w, fig_h = (
-        wo + gap + zoom_disp + gap,
-        max(ho, zoom_disp + int(0.35 * zoom_disp)),
+    The layout itself is reg_mosaic.draw_overview_zoom, shared with reg_overlay's --zoom-um
+    panels so the two figures keep one style; this supplies the segmentation figure's own
+    legend (DAPI + the outlined cells).
+    """
+    return rm.draw_overview_zoom(
+        over,
+        zoom,
+        box,
+        factor,
+        px,
+        stem,
+        formats,
+        dpi=opt.dpi,
+        zoom_fraction=opt.zoom_fraction,
+        funnel_alpha=opt.funnel_alpha,
+        legend=[("DAPI", DAPI_WHITE), (opt.cells_label, _rgb(opt.outline_color))],
     )
-    dpi = opt.dpi
-    fig = plt.figure(figsize=(fig_w / dpi, fig_h / dpi), dpi=dpi, facecolor="black")
-
-    ax_o = fig.add_axes([0, (fig_h - ho) / fig_h, wo / fig_w, ho / fig_h])
-    ax_o.imshow(over, interpolation="none")
-    ax_o.set_axis_off()
-    zx = (wo + gap) / fig_w
-    zy = (fig_h - gap * 0.5 - zoom_disp) / fig_h
-    ax_z = fig.add_axes([zx, zy, zoom_disp / fig_w, zoom_disp / fig_h])
-    ax_z.imshow(zoom, interpolation="none")
-    ax_z.set_xticks([])
-    ax_z.set_yticks([])
-    for spine in ax_z.spines.values():
-        spine.set_edgecolor("white")
-        spine.set_linewidth(max(1.5, zoom_disp / 400))
-
-    y, x, size = box
-    bx, by, bs = x / factor, y / factor, size / factor
-    ax_o.add_patch(
-        Rectangle((bx, by), bs, bs, fill=False, ec="white", lw=max(1.5, ho / 800))
-    )
-    # funnel: the box's left corners to the zoom frame's left corners, in figure coordinates
-    to_fig = fig.transFigure.inverted()
-    tl = to_fig.transform(ax_o.transData.transform((bx, by)))
-    bl = to_fig.transform(ax_o.transData.transform((bx, by + bs)))
-    tr = to_fig.transform(ax_o.transData.transform((bx + bs, by)))
-    br = to_fig.transform(ax_o.transData.transform((bx + bs, by + bs)))
-    fig.patches.append(
-        Polygon(
-            [tl, tr, (zx, zy + zoom_disp / fig_h), (zx, zy), br, bl],
-            closed=True,
-            transform=fig.transFigure,
-            facecolor=(1, 1, 1, opt.funnel_alpha),
-            edgecolor="none",
-            zorder=0.5,
-        )
-    )
-
-    font = max(10.0, fig_h / dpi * 3.2)
-    bar_over = rm.auto_scalebar_um(wo * factor * px)
-    rm.draw_scalebar(
-        ax_o,
-        ho,
-        wo,
-        bar_over / (factor * px),
-        rm.scalebar_label(bar_over),
-        font * 0.8,
-        thick=0.006,
-        color=BAR_GREY,
-    )
-    bar_zoom = rm.auto_scalebar_um(z * px)
-    rm.draw_scalebar(
-        ax_z,
-        z,
-        z,
-        bar_zoom / px,
-        rm.scalebar_label(bar_zoom),
-        font * 0.6,
-        thick=0.008,
-        color=BAR_GREY,
-    )
-    legend_ax = fig.add_axes([zx, 0.0, zoom_disp / fig_w, max(0.02, zy - 0.02)])
-    legend_ax.set_axis_off()
-    rm.draw_legend(
-        legend_ax,
-        [("DAPI", DAPI_WHITE), (opt.cells_label, _rgb(opt.outline_color))],
-        font * 1.3,
-        x=1.0,
-        y=0.05,
-    )
-    for fmt in formats:
-        fig.savefig(f"{stem}.{fmt}", dpi=dpi, facecolor="black")
-    plt.close(fig)
-    return {"overview_um": bar_over, "zoom_um": bar_zoom}
 
 
 def build_parser() -> argparse.ArgumentParser:
