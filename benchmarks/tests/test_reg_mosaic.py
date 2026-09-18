@@ -1105,3 +1105,41 @@ def test_a_crop_as_large_as_the_slide_is_centred_not_refused():
         (SIZE - 64) // 2,
         (SIZE - 64) // 2,
     )
+
+
+# --- a slide with no channel names of its own -------------------------------------
+def _anonymous_ome(path: Path, planes):
+    """As tiled_stitch.py writes without --channel-names: no Channel Name in the header."""
+    tifffile.imwrite(
+        str(path),
+        np.stack(planes).astype(np.uint16),
+        ome=True,
+        tile=(128, 128),
+        compression="zlib",
+        metadata={"axes": "CYX", "PhysicalSizeX": PX, "PhysicalSizeY": PX},
+    )
+
+
+def test_an_anonymous_slide_falls_back_to_the_checkpoint_channels(
+    originals_root, tmp_path, caplog
+):
+    """Every ASHLAR slide stitched before 2026-09-18 carries no channel names (the arm did not
+    pass --channel-names): job 6848995 fell through to a QC composite that was not written and
+    the mosaic died. The checkpoint row names the same channels in the same order."""
+    import shutil
+
+    shutil.copytree(originals_root, tmp_path / "root")
+    root = tmp_path / "root"
+    reg = root / "armR" / "P1" / "registered" / "registered_slides"
+    ref16 = tifffile.imread(str(reg / "P1_cd3_registered.ome.tiff"))
+    _anonymous_ome(reg / "P1_cd3_registered.ome.tiff", list(ref16))
+    src = rm.TiffSource(reg / "P1_cd3_registered.ome.tiff")
+    assert src.channel_names == [] and src.nuclear_index() is None
+    assert src.nuclear_index(["DAPI", "CD3"]) == 0
+    assert src.nuclear_index(["DAPI"]) is None  # one name for two planes: never guess
+    src.tf.close()
+
+    with caplog.at_level("WARNING"):
+        m = _mosaic(root / "armR", tmp_path / "out")
+    assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "originals"
+    assert "unusable" not in caplog.text

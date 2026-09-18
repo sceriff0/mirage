@@ -227,11 +227,18 @@ for pid in $patients; do
     reg_img="$reg_dir/${mov_name}_registered.ome.tiff"
     px_flag=()
     [[ "$mov_px" =~ ^[0-9.]+$ ]] && px_flag=(--pixel-size "$mov_px")
+    # The channel names TILED_STITCH writes (modules/local/tiled_stitch.nf passes
+    # meta.channels): without them the stitched slide's OME header is anonymous, and every
+    # reader that picks a nuclear plane by name -- reg_mosaic.py, reg_overlay.py,
+    # reg_zoom.py, SPLIT_CHANNELS -- cannot tell which plane is DAPI.
+    ch_flag=()
+    IFS='|' read -r -a ch_names <<< "$mov_ch"
+    [[ ${#ch_names[@]} -gt 0 ]] && ch_flag=(--channel-names "${ch_names[@]}")
     # shellcheck disable=SC2086
     step ASHLAR_STITCH "$pid" --input "$mov_img" -- \
         $QC_EXEC python3 "$REPO/bin/tiled_stitch.py" \
         --moving "$mov_img" --manifest "$d/manifest.json" \
-        --moving-name "$mov_name" --out "$reg_img" "${px_flag[@]}" \
+        --moving-name "$mov_name" --out "$reg_img" "${px_flag[@]}" "${ch_flag[@]}" \
       || { echo "[$ARM/$pid] FAILED stitching $mov_name" >&2; rc=1; }
     qc_px_flag=()
     [[ "$mov_px" =~ ^[0-9.]+$ ]] && qc_px_flag=(--pixel-size-um "$mov_px")

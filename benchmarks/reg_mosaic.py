@@ -291,13 +291,25 @@ class TiffSource:
             else []
         )
 
-    def nuclear_index(self) -> int | None:
-        """The DAPI/Hoechst/CellTox channel, by the file's OME channel names; None if unnamed."""
+    def nuclear_index(self, names=()) -> int | None:
+        """The DAPI/Hoechst/CellTox channel.
+
+        By the file's own OME channel names; failing those, by ``names`` -- the checkpoint
+        CSV's ``channels`` column for this slide, which is the same order -- when it has one
+        entry per channel. A stitched slide can legitimately carry no names at all:
+        benchmarks/run_ashlar_arm.sh did not pass tiled_stitch.py's --channel-names before
+        2026-09-18, so every ASHLAR slide stitched until then is anonymous.
+        """
         if self.nchannels == 1:
             return 0
         for i, name in enumerate(self.channel_names):
             if NUCLEAR_RE.search(name):
                 return i
+        names = [str(n) for n in names]
+        if len(names) == self.nchannels:
+            for i, name in enumerate(names):
+                if NUCLEAR_RE.search(name):
+                    return i
         return None
 
     @staticmethod
@@ -771,18 +783,19 @@ class Arm:
         if key not in natives:
             why = f"round {key!r} not in {self.native_csv or 'any preprocessed.csv'}"
         else:
-            paths = tuple(
-                published_file(p) for p in (ref.image, sl.image, natives[key].image)
-            )
+            trio = (ref, sl, natives[key])
+            paths = tuple(published_file(s.image) for s in trio)
             missing = [str(p) for p in paths if not Path(p).is_file()]
             if missing:
                 why = f"missing {missing}"
             else:
                 srcs = [self._open(Path(p)) for p in paths]
-                idx = [src.nuclear_index() for src in srcs]
+                # the checkpoint row's channels are the fallback when the file itself is
+                # anonymous (see TiffSource.nuclear_index)
+                idx = [src.nuclear_index(s.channels) for src, s in zip(srcs, trio)]
                 if None in idx:
                     why = (
-                        "no DAPI/Hoechst/CellTox among the OME channel names of "
+                        "no DAPI/Hoechst/CellTox among the channel names of "
                         + ", ".join(
                             src.path.name for src, i in zip(srcs, idx) if i is None
                         )

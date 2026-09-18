@@ -103,3 +103,13 @@ def test_reg_qc_off_skips_the_composite_but_still_stitches(tmp_path, monkeypatch
     assert "generate_registration_qc.py" not in calls
     assert "tiled_stitch.py" in calls and "benchmarks.ashlar.solve" in calls
     assert len((out / "csv" / "registered.csv").read_text().splitlines()) == 3
+
+
+def test_the_stitch_names_the_channels_like_tiled_stitch_does(tmp_path):
+    """Without --channel-names the stitched slide's OME header is anonymous, and every reader
+    that picks the nuclear plane by name is left guessing (mosaic job 6848995)."""
+    proc, calls, _ = _arm(tmp_path, "0")
+    assert proc.returncode == 0, proc.stderr
+    stitch = [ln for ln in calls.splitlines() if "tiled_stitch.py" in ln]
+    assert len(stitch) == 1
+    assert "--channel-names CD3 DAPI" in stitch[0]

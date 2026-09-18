@@ -103,10 +103,12 @@ def render(opt) -> dict:
     image = rm.published_file(row["registered_image"])
     mask = Path(row["cell_mask" if opt.mask == "cell" else "nuclei_mask"])
     src, msrc = rm.TiffSource(image), rm.TiffSource(mask)
-    ci = src.nuclear_index()
+    csv_channels = [c for c in (row.get("channels") or "").split("|") if c]
+    ci = src.nuclear_index(csv_channels)
     if ci is None:
         raise SystemExit(
-            f"{image.name}: no DAPI/Hoechst/CellTox among {src.channel_names}"
+            f"{image.name}: no DAPI/Hoechst/CellTox among "
+            f"{src.channel_names or csv_channels}"
         )
     if msrc.shape != src.shape:
         raise SystemExit(
@@ -154,6 +156,10 @@ def render(opt) -> dict:
         "image": str(image),
         "mask": str(mask),
         "mask_kind": opt.mask,
+        # which plane was drawn, and where its name came from: the slide's own OME header, or
+        # segmented.csv when the slide is anonymous (TiffSource.nuclear_index)
+        "channel_index": ci,
+        "channel_names_from": "ome" if src.channel_names else "checkpoint",
         "pixel_size_um": px,
         "zoom": {"y": y, "x": x, "size_px": field_px, "size_um": field_px * px},
         "overview_px_per_output_px": factor,

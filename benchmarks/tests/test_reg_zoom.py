@@ -185,3 +185,21 @@ def test_a_checkpoint_naming_preprocessed_for_a_converted_slide_still_draws(
         m = _zoom(tmp_path / "arm", tmp_path / "z")
     assert m["image"] == str(converted)
     assert "does not exist; using" in caplog.text
+
+
+def test_an_anonymous_reference_falls_back_to_the_checkpoint_channels(
+    seg_run, tmp_path
+):
+    """A slide stitched without --channel-names has no names of its own; segmented.csv's
+    channels column is the same order (see test_reg_mosaic's anonymous-slide case)."""
+    import shutil
+
+    arm, _ = seg_run
+    dst = tmp_path / "armR"
+    shutil.copytree(arm, dst)
+    reg = dst / "P1" / "registered" / "registered_slides" / "P1_ref_registered.ome.tiff"
+    tm._anonymous_ome(reg, list(tifffile.imread(str(reg))))
+    for path in (dst / "csv" / "segmented.csv",):
+        path.write_text(path.read_text().replace(str(arm), str(dst)))
+    m = _zoom(dst, tmp_path / "out")
+    assert m["channel_index"] == 0 and m["channel_names_from"] == "checkpoint"
