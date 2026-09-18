@@ -19,7 +19,10 @@ from the crop (reg_mosaic.image_metrics; --numbers).
 THE CROP. Chosen on the reference DAPI by the same tissue x texture score as the mosaic
 (reg_mosaic.select_rois), or given with --roi Y,X. --avoid-rois-json takes a mosaic's
 <patient>_rois.json and keeps this crop clear of every mosaic ROI, so the two figures
-show different tissue.
+show different tissue. ``--variants N`` draws N pairs per round instead of one --
+<patient>_<round>_v1_before, _v2_... -- each on tissue no earlier variant used, so a crop
+that happens to read badly is not the only output. (N = 1, the default, keeps the names
+above.)
 
     python -m benchmarks.reg_overlay results/valis_high_micro2 --patient 033 \\
         --field-um 500 --avoid-rois-json mosaic/033_rois.json -o figs/overlay
@@ -111,7 +114,14 @@ def load_avoid(path: Path | None, reference: Path) -> list[tuple[int, int, int]]
     return [(int(r["y"]), int(r["x"]), size) for r in d["rois"]]
 
 
-def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
+def render(
+    arm: rm.Arm, key: str, opt: argparse.Namespace, exclude=(), tag: str = ""
+) -> dict:
+    """One Before/After pair for one round.
+
+    ``exclude`` is [(y, x, size_px), ...] an earlier variant already drew (on top of
+    --avoid-rois-json), ``tag`` is appended to every output name (``_v2``).
+    """
     sl = arm.slide(key)
     # The canvas, the crop choice and the locator come from the reference: from the QC
     # composite when the run wrote one, else from the original reference slide itself.
@@ -152,7 +162,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
             0.0,
             0.0,
             (H, W),
-            exclude=load_avoid(opt.avoid_rois_json, arm.ref.image),
+            exclude=[*load_avoid(opt.avoid_rois_json, arm.ref.image), *exclude],
         )
         if not picks:
             raise SystemExit(
@@ -213,7 +223,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
     formats = [s.strip() for s in opt.formats.split(",") if s.strip()]
     outdir = Path(opt.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    stem = f"{arm.patient}_{key}"
+    stem = f"{arm.patient}_{key}{tag}"
     moving_rgb, reference_rgb = rm.PALETTES[opt.palette]
     legend = [("reference DAPI", reference_rgb), ("moving DAPI", moving_rgb)]
     for name, title in (
@@ -246,6 +256,7 @@ def render(arm: rm.Arm, key: str, opt: argparse.Namespace) -> dict:
     manifest = {
         "patient": arm.patient,
         "round": key,
+        "variant": int(tag[2:]) if tag else 1,
         "moving": str(sl.image),
         "reference": str(arm.ref.image),
         "composite": str(comp.src.path) if comp else None,
@@ -291,6 +302,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--title",
         default=None,
         help="method name in the After title (default: the dir name)",
+    )
+    ap.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        help="draw N Before/After pairs per round on different tissue, "
+        "<pid>_<round>_v1_before, _v2_... (default 1: the current names). Each variant "
+        "avoids every earlier one's crop, so they are alternatives to choose between. "
+        "Ignored with --roi, which fixes the crop.",
     )
     ap.add_argument("--field-um", type=float, default=500.0, help="crop side in µm")
     ap.add_argument(
@@ -368,10 +388,31 @@ def main(argv=None) -> int:
     ]
     if not keys:
         raise SystemExit(f"{pid}: no moving round matches {opt.rounds}")
+    n = rm.variant_count(opt)
+    drawn = 0
     for key in keys:
-        render(arm, key, opt)
+        # variant 2 avoids variant 1's crop, and so on: N alternatives, not N copies
+        exclude: list[tuple[int, int, int]] = []
+        for v in range(1, n + 1):
+            try:
+                m = render(
+                    arm, key, opt, exclude=exclude, tag="" if n == 1 else f"_v{v}"
+                )
+            except SystemExit as exc:
+                # the slide ran out of tissue no earlier variant used: keep what was drawn
+                if v == 1:
+                    raise
+                log.warning(
+                    "%s %s: stopping at %d variant(s) (%s)", pid, key, v - 1, exc
+                )
+                drawn += v - 1
+                break
+            c = m["crop"]
+            exclude.append((c["y"], c["x"], c["size_px"]))
+        else:
+            drawn += n
     arm.close()
-    log.info("wrote %d before/after pair(s) in %s", len(keys), opt.outdir)
+    log.info("wrote %d before/after pair(s) in %s", drawn, opt.outdir)
     return 0
 
 

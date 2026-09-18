@@ -299,7 +299,8 @@ def _run(arm_root, out, *extra):
         *extra,
     ]
     assert rm.main(argv) == 0
-    return json.loads((out / "P1_rois.json").read_text())
+    manifest = out / "P1_rois.json"  # --variants tags each one: <pid>_v1_rois.json
+    return json.loads(manifest.read_text()) if manifest.exists() else None
 
 
 def test_mosaic_has_exactly_the_requested_rows_and_one_column_per_arm(
@@ -735,7 +736,8 @@ def _mosaic(arm_dir, out, *extra):
         *extra,
     ]
     assert rm.main(argv) == 0
-    return json.loads((out / "P1_rois.json").read_text())
+    manifest = out / "P1_rois.json"  # --variants tags each one: <pid>_v1_rois.json
+    return json.loads(manifest.read_text()) if manifest.exists() else None
 
 
 def test_the_8bit_composite_crushes_a_slide_with_outliers_the_originals_do_not(
@@ -1143,3 +1145,73 @@ def test_an_anonymous_slide_falls_back_to_the_checkpoint_channels(
         m = _mosaic(root / "armR", tmp_path / "out")
     assert m["row_plan"][0]["cells"]["armR"]["pixels"] == "originals"
     assert "unusable" not in caplog.text
+
+
+# --- N alternatives to choose between ---------------------------------------------
+def test_variants_draw_alternative_mosaics_on_different_tissue(arm_root, tmp_path):
+    """--variants N writes N complete mosaics, each on tissue no earlier variant used."""
+    out = tmp_path / "vars"
+    _run(arm_root, out, "--numbers", "none", "--variants", "3")
+    seen = []
+    for v in (1, 2, 3):
+        for name in (f"P1_v{v}_mosaic.png", f"P1_v{v}_locator.png"):
+            assert (out / name).is_file(), name
+        assert (out / f"P1_v{v}_patches").is_dir()
+        m = json.loads((out / f"P1_v{v}_rois.json").read_text())
+        assert m["variant"] == v
+        seen.append([(r["y"], r["x"]) for r in m["rois"]])
+    assert not (out / "P1_mosaic.png").exists()
+    flat = [r for rois in seen for r in rois]
+    patch = json.loads((out / "P1_v1_rois.json").read_text())["patch_px"]
+    for i, (y, x) in enumerate(flat):
+        for y2, x2 in flat[i + 1 :]:
+            assert abs(y - y2) >= patch or abs(x - x2) >= patch, flat
+
+
+def test_one_variant_keeps_the_untagged_names(arm_root, tmp_path):
+    out = tmp_path / "one"
+    _run(arm_root, out, "--numbers", "none", "--variants", "1")
+    assert (out / "P1_mosaic.png").is_file() and (out / "P1_rois.json").is_file()
+
+
+def test_variants_are_ignored_when_the_rois_are_pinned(arm_root, tmp_path, caplog):
+    out = tmp_path / "pin"
+    with caplog.at_level("WARNING"):
+        _run(
+            arm_root,
+            out,
+            "--numbers",
+            "none",
+            "--variants",
+            "3",
+            "--roi",
+            "40,40",
+            "--roi",
+            "200,200",
+        )
+    assert (out / "P1_mosaic.png").is_file()
+    assert not (out / "P1_v2_rois.json").exists()
+    assert "--variants is ignored" in caplog.text
+
+
+def test_a_mosaic_variant_that_does_not_fit_keeps_the_earlier_ones(
+    arm_root, tmp_path, caplog
+):
+    """More variants than the slide has distinct tissue for: the ones already drawn stay."""
+    out = tmp_path / "many"
+    with caplog.at_level("WARNING"):
+        _run(
+            arm_root,
+            out,
+            "--numbers",
+            "none",
+            "--variants",
+            "8",
+            "--rows",
+            "2",
+            "--patch-px",
+            "120",
+        )
+    drawn = sorted(out.glob("P1_v*_mosaic.png"))
+    assert 1 <= len(drawn) < 8
+    assert "stopping at" in caplog.text

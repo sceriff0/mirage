@@ -70,6 +70,7 @@ ASHLAR_REG_QC="${ASHLAR_REG_QC:-0}"  # 1 also writes ASHLAR's 8-bit Before/After
 PATIENT="${PATIENT:-}"               # empty = one mosaic per patient in the samplesheet
 ROWS="${ROWS:-}"                     # (round, ROI) cells per mosaic; empty = the moving rounds
                                      # of the first patient (one ROI each)
+VARIANTS="${VARIANTS:-1}"             # draw N mosaics on different tissue and pick the best
 MOSAIC_ARGS="${MOSAIC_ARGS:-}"       # extra reg_mosaic.py flags, e.g. "--orient rounds-as-rows"
 # -------------------------------------------------------------------------------
 
@@ -263,11 +264,15 @@ echo "[mosaic] columns: ${ARM_DIRS[*]}"
     $MOSAIC_EXEC python3 -m benchmarks.reg_mosaic "${ARM_DIRS[@]}" \
       "${PATIENT_ARGS[@]+"${PATIENT_ARGS[@]}"}" --rows "$ROWS" -o "$ROOT/mosaic" \
       --numbers "$NUMBERS" --palette magenta-cyan "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
-      "${LABELS[@]}" $MOSAIC_ARGS
+      --variants "$VARIANTS" "${LABELS[@]}" $MOSAIC_ARGS
 ) || { echo "[mosaic] FAILED" >&2; exit 1; }
 
 echo "=================================================="
-echo "Done $(date). Mosaic: $ROOT/mosaic/<patient>_mosaic.{png,pdf}"
+if (( VARIANTS > 1 )); then
+  echo "Done $(date). Mosaics: $ROOT/mosaic/<patient>_v1..v${VARIANTS}_mosaic.{png,pdf} -- pick one"
+else
+  echo "Done $(date). Mosaic: $ROOT/mosaic/<patient>_mosaic.{png,pdf}"
+fi
 echo "Exit status: valis=$rc_valis stare=$rc_stare ashlar=$rc_ashlar"
 echo "=================================================="
 (( rc_valis == 0 && rc_stare == 0 && rc_ashlar == 0 ))

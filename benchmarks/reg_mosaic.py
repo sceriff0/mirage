@@ -64,6 +64,11 @@ Outputs in OUTDIR:
                                 back with --rois-json to reuse identical ROIs
     <patient>_patches/          every cell as a PNG at native resolution
 
+``--variants N`` draws N of everything above on DIFFERENT tissue -- <patient>_v1_mosaic,
+<patient>_v2_mosaic ... -- each variant excluding every earlier one's ROIs. One crop is
+one roll of the dice; N gives something to choose between. (N = 1, the default, keeps the
+untagged names.)
+
 Recipes:
     python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \\
         --rows 6 --patient 5456 -o figs/mosaic
@@ -909,6 +914,23 @@ def plan_rows(round_keys: list[str], n_rois: int, n_rows: int) -> list[tuple[str
     return plan[:n_rows]
 
 
+def _ordinal(n: int) -> str:
+    return {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+
+
+def variant_count(opt) -> int:
+    """How many figures to draw: --variants, unless the ROIs are pinned by hand.
+
+    With --roi or --rois-json every variant would select the same windows, so N figures
+    would be N copies. Say so once and draw one.
+    """
+    n = max(1, int(getattr(opt, "variants", 1) or 1))
+    if n > 1 and (getattr(opt, "roi", None) or getattr(opt, "rois_json", None)):
+        log.warning("--variants is ignored: --roi/--rois-json fix the ROIs")
+        return 1
+    return n
+
+
 # --- ROI selection ------------------------------------------------------------
 def _otsu_mask(u8: np.ndarray, sigma: float) -> np.ndarray:
     blurred = ndimage.gaussian_filter(u8.astype(np.float32), sigma)
@@ -1335,9 +1357,18 @@ class Options:
     formats: str = "png,pdf"
     pixel_size_um: float | None = None
     lowres_um: float = 5.0
+    variants: int = 1
 
 
-def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
+def process_patient(
+    pid: str, arms: list[Arm], opt: Options, exclude=(), tag: str = ""
+) -> dict:
+    """One mosaic for one patient.
+
+    ``exclude`` is [(y, x, size_px), ...] of tissue an earlier variant already drew, so
+    --variants gives genuinely different regions rather than the same best window again;
+    ``tag`` is appended to every output name (``_v2`` -> ``<pid>_v2_mosaic.png``).
+    """
     for arm in arms:
         arm.open(pid)
     first = arms[0]
@@ -1433,22 +1464,32 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     elif opt.roi:
         rois = [tuple(int(v) for v in r.split(","))[:2] for r in opt.roi]
     else:
-        rois = select_rois(low, f, patch_px, n_rois, opt.min_sep, opt.spread, (H, W))
+        rois = select_rois(
+            low, f, patch_px, n_rois, opt.min_sep, opt.spread, (H, W), exclude=exclude
+        )
     if not rois:
-        raise SystemExit(f"{pid}: no ROI could be selected")
+        raise SystemExit(
+            f"{pid}: no ROI could be selected"
+            + (
+                " clear of the earlier variants; ask for fewer --variants"
+                if exclude
+                else ""
+            )
+        )
     log.info("ROIs (y, x, %d px): %s", patch_px, rois)
     plan = plan_rows(keys, len(rois), opt.rows)
     by_key = {sl.key: sl for sl in moving}
 
     outdir = Path(opt.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    stem = f"{pid}{tag}"
     formats = [x.strip() for x in opt.formats.split(",") if x.strip()]
     save_locator(
         low,
         f,
         rois,
         patch_px,
-        outdir / f"{pid}_locator",
+        outdir / f"{stem}_locator",
         formats,
         px,
         f"{pid} — {first.ref.label} (reference)",
@@ -1469,7 +1510,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
     col_labels = [
         c if k == "overlay" else f"{c} (checker)" for k in kinds for c in col_names
     ]
-    pdir = outdir / f"{pid}_patches"
+    pdir = outdir / f"{stem}_patches"
     pdir.mkdir(exist_ok=True)
 
     grid, notes, row_labels, rows_meta = [], [], [], []
@@ -1583,7 +1624,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         notes,
         row_labels,
         col_labels,
-        outdir / f"{pid}_mosaic",
+        outdir / f"{stem}_mosaic",
         formats,
         opt.cell_in or patch_px / opt.dpi,
         opt.dpi,
@@ -1598,6 +1639,7 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
 
     manifest = {
         "patient": pid,
+        "variant": int(tag[2:]) if tag else 1,
         "reference": str(first.ref.image),
         "pixel_size_um": px,
         "patch_px": patch_px,
@@ -1633,13 +1675,13 @@ def process_patient(pid: str, arms: list[Arm], opt: Options) -> dict:
         },
         "row_plan": rows_meta,
     }
-    (outdir / f"{pid}_rois.json").write_text(json.dumps(manifest, indent=2))
+    (outdir / f"{stem}_rois.json").write_text(json.dumps(manifest, indent=2))
     log.info(
         "wrote %s_mosaic.{%s}, %s_locator.*, %s_rois.json and %d cell PNGs in %s",
-        pid,
+        stem,
         ",".join(formats),
-        pid,
-        pid,
+        stem,
+        stem,
         sum(len(r) for r in grid),
         pdir,
     )
@@ -1675,6 +1717,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="number of rows: (moving round, ROI) pairs, ROI-major",
+    )
+    ap.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        help="draw N mosaics of the SAME rounds on different tissue, <pid>_v1_..., "
+        "<pid>_v2_... (default 1: one figure, named <pid>_mosaic). Each variant excludes "
+        "every earlier variant's ROIs, so they never show the same region; pick the one "
+        "that reads best. Ignored with --roi / --rois-json, which fix the ROIs.",
     )
     ap.add_argument("-o", "--outdir", type=Path, required=True)
     ap.add_argument(
@@ -1885,10 +1936,33 @@ def main(argv=None) -> int:
         formats=args.formats,
         pixel_size_um=args.pixel_size_um,
         lowres_um=args.lowres_um,
+        variants=args.variants,
     )
     patients = args.patient or arms[0].patients()
+    n = variant_count(opt)
     for pid in patients:
-        process_patient(pid, arms, opt)
+        # each variant avoids every earlier one's tissue, so the N figures are alternatives
+        # to choose between rather than the same best window drawn N times
+        exclude: list[tuple[int, int, int]] = []
+        for v in range(1, n + 1):
+            try:
+                m = process_patient(
+                    pid, arms, opt, exclude=exclude, tag="" if n == 1 else f"_v{v}"
+                )
+            except (SystemExit, ValueError) as exc:
+                # a slide only has so much distinct tissue: keep the variants already drawn
+                # rather than losing them to the first one that cannot be placed
+                if v == 1:
+                    raise
+                log.warning(
+                    "%s: stopping at %d variant(s), no room for a %s one (%s)",
+                    pid,
+                    v - 1,
+                    _ordinal(v),
+                    exc,
+                )
+                break
+            exclude.extend((r["y"], r["x"], m["patch_px"]) for r in m["rois"])
     return 0
 
 

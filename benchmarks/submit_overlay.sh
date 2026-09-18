@@ -63,6 +63,7 @@ REF_ROW="${REF_ROW:-1}"              # which row is the reference when neither r
 FIELD_UM="${FIELD_UM:-500}"          # crop side in µm
 ROI="${ROI:-}"                       # "Y,X" top-left in the reference frame (full-res px); empty = auto
 AVOID_ROIS_JSON="${AVOID_ROIS_JSON:-}" # a mosaic's <pid>_rois.json to keep the crop clear of
+VARIANTS="${VARIANTS:-1}"             # draw N crops per round on different tissue, pick the best
 OVERLAY_ARGS="${OVERLAY_ARGS:-}"     # extra reg_overlay.py flags, e.g. "--palette red-green --pmin 2"
 # -------------------------------------------------------------------------------
 
@@ -202,9 +203,13 @@ fi
     $RENDER_EXEC python3 -m benchmarks.reg_overlay "$RUN" --patient "$PATIENT" \
       --field-um "$FIELD_UM" --palette magenta-cyan --numbers "$NUMBERS" --title "$LABEL" \
       "${PX_ARGS[@]+"${PX_ARGS[@]}"}" \
-      -o "$ROOT/overlay" "${EXTRA[@]+"${EXTRA[@]}"}" $OVERLAY_ARGS
+      -o "$ROOT/overlay" --variants "$VARIANTS" "${EXTRA[@]+"${EXTRA[@]}"}" $OVERLAY_ARGS
 ) || { echo "[overlay] FAILED" >&2; exit 1; }
 
 echo "=================================================="
-echo "Done $(date). Images in $ROOT/overlay/: ${PATIENT}_<round>_before/after/locator.{png,pdf}"
+if (( VARIANTS > 1 )); then
+  echo "Done $(date). Images in $ROOT/overlay/: ${PATIENT}_<round>_v1..v${VARIANTS}_before/after/locator.{png,pdf} -- pick one"
+else
+  echo "Done $(date). Images in $ROOT/overlay/: ${PATIENT}_<round>_before/after/locator.{png,pdf}"
+fi
 echo "=================================================="

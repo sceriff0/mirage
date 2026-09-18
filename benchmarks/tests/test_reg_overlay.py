@@ -170,3 +170,100 @@ def test_a_run_without_qc_composites_is_drawn_from_its_slides(originals_root, tm
         "before": "originals",
         "after": "originals",
     }
+
+
+def test_variants_draw_alternative_crops_to_choose_between(arm_root, tmp_path):
+    """One crop is one roll of the dice: --variants N gives N pairs, each on tissue no
+    earlier variant used, so a bad-looking crop is not the only output."""
+    out = tmp_path / "ov3"
+    assert (
+        ro.main(
+            [
+                str(arm_root / "armB"),
+                "-o",
+                str(out),
+                "--field-px",
+                "96",
+                "--rounds",
+                "CD3",
+                "--formats",
+                "png",
+                "--dpi",
+                "50",
+                "--variants",
+                "3",
+                "--numbers",
+                "none",
+            ]
+        )
+        == 0
+    )
+    crops = []
+    for v in (1, 2, 3):
+        for name in ("before", "after", "locator"):
+            assert (out / f"P1_CD3_v{v}_{name}.png").is_file(), (v, name)
+        m = json.loads((out / f"P1_CD3_v{v}_overlay.json").read_text())
+        assert m["variant"] == v
+        crops.append((m["crop"]["y"], m["crop"]["x"]))
+    assert not (out / "P1_CD3_before.png").exists()  # tagged, so nothing is overwritten
+    for i, (y, x) in enumerate(crops):
+        for y2, x2 in crops[i + 1 :]:
+            assert abs(y - y2) >= 96 or abs(x - x2) >= 96, crops  # no overlap at all
+
+
+def test_one_variant_keeps_the_untagged_names(arm_root, tmp_path):
+    out = tmp_path / "ov1"
+    _overlay(arm_root / "armB", out, "--numbers", "none", "--variants", "1")
+    assert (out / "P1_CD3_before.png").is_file()
+
+
+def test_variants_are_ignored_when_the_crop_is_pinned(arm_root, tmp_path, caplog):
+    out = tmp_path / "ovpin"
+    with caplog.at_level("WARNING"):
+        m = _overlay(
+            arm_root / "armB",
+            out,
+            "--numbers",
+            "none",
+            "--variants",
+            "4",
+            "--roi",
+            "40,40",
+        )
+    assert m["crop"]["y"] == 40 and m["crop"]["x"] == 40
+    assert "--variants is ignored" in caplog.text
+    assert not (out / "P1_CD3_v2_overlay.json").exists()
+
+
+def test_running_out_of_tissue_keeps_the_variants_already_drawn(
+    arm_root, tmp_path, caplog
+):
+    """A slide has only so much distinct tissue. Asking for more variants than fit must not
+    throw away the ones that did."""
+    out = tmp_path / "ovmany"
+    with caplog.at_level("WARNING"):
+        assert (
+            ro.main(
+                [
+                    str(arm_root / "armB"),
+                    "-o",
+                    str(out),
+                    "--field-px",
+                    "150",  # nearly half the 320 px fixture: two fit, ten do not
+                    "--rounds",
+                    "CD3",
+                    "--formats",
+                    "png",
+                    "--dpi",
+                    "50",
+                    "--variants",
+                    "10",
+                    "--numbers",
+                    "none",
+                ]
+            )
+            == 0
+        )
+    drawn = sorted(out.glob("P1_CD3_v*_after.png"))
+    assert 1 <= len(drawn) < 10
+    assert "stopping at" in caplog.text
