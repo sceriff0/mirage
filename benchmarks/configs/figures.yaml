@@ -13,74 +13,88 @@
 #     python3 -m benchmarks.build_figure_plan --count
 #     python3 -m benchmarks.build_figure_plan --config my_figures.yaml
 #
-# WHAT IS EXPENSIVE. Only two things: one REGISTRATION per arm (hours, hundreds of
-# GB — REGISTER has been measured at 483 GB) and one SEGMENTATION per method. Every
-# field size, patch size, output size, mask, variant and channel below is a
-# re-render of a run that already exists — seconds each, off slides already on disk.
-# So `arms` and `segmentation.methods` are the axes to keep short, and the size axes
-# are free to cross. The launcher orders the work that way and marks each stage
-# .done, so a re-submit redraws without recomputing.
+# WHAT IS EXPENSIVE. Two things: one REGISTRATION per arm (hours, hundreds of GB —
+# REGISTER has been measured at 483 GB) and one SEGMENTATION per method. Every other
+# axis here — field size, patch size, output size, mask, ROI, overlay/checker,
+# contrast mode, variant, channel, patient — is a re-render of slides already on
+# disk, seconds each. So keep `arms` and `segmentation.methods` short and cross the
+# rest freely. Each stage is .done-marked: a re-submit redraws without recomputing.
 #
-# ONE ROI MAKES THEM COMPARABLE. Every registered slide of a patient sits on the
-# same reference canvas, so `roi` (when set) names the SAME tissue in every arm,
-# method, size and channel — which is the only way a size comparison means
-# anything. Left empty, each figure picks its own best window and they show
-# different places. Run once with it empty, read the y,x out of the manifest of the
-# one you liked, then pin it here and re-submit: everything redraws on that spot.
+# THIS FILE DRAWS PICTURES; configs/arms.yaml PRODUCES THE NUMBERS. If the question
+# is "which configuration wins", run the arms benchmark — it scores at reg_qc=2 and
+# writes the tree ihc_method reads. Then point `arms:` below at those directories:
+# nothing is re-registered and their QC is already on disk.
 # =============================================================================
 
 # ---- the expensive axes -----------------------------------------------------
-# Registration arms for the mosaic and the overlays. These are the three the
-# mosaic launcher knows how to build; drop any you do not want compared.
+# Either a name this grid knows how to BUILD (valis_high_micro2 | stare_high |
+# ashlar), or {name: <label>, dir: <an existing run>} to draw from one you already
+# have. A reused arm is never re-registered, and if it ran at reg_qc=2 its
+# *_seg_qc.json is already there, so `numbers: scorer` costs nothing.
 arms:
-  - valis_high_micro2        # VALIS, memory_mode high, micro-registration 2 (the shipped default)
+  - valis_high_micro2        # VALIS, memory_mode high, micro-registration 2 (shipped default)
   - stare_high               # STARE tiled, high preset
-  - ashlar                   # the external comparator (tile 1024, shift 500 um — see options)
+  - ashlar                   # the external comparator (tile/shift in options below)
+  # - {name: valis_m0, dir: /beegfs/scratch/ieo7660/arms/valis_high_micro0}
 
-# Which arm everything downstream resumes from: segmentation, the channel crops,
-# and the overlay when `overlay.arms` is not given. Pick the one you ship.
+# What everything downstream resumes from: segmentation, the channel crops, and the
+# overlays when `overlay.arms` is not given. Pick the one you ship.
 reference_arm: valis_high_micro2
 
 segmentation:
-  # One pipeline run each. stardist is what conf/ieo.config pins (with its model);
-  # instantseg is the pipeline default and needs no assets. cellsam is also accepted.
-  methods:
-    - stardist
+  methods:                   # one pipeline run each; the zoom and crops show the difference
+    - stardist               # what conf/ieo.config pins, with its model
+    - instantseg             # the pipeline default; needs no extra assets
+    - cellsam
 
 # ---- the free axes ----------------------------------------------------------
 figures:
   mosaic:
-    patch_um: [200]          # ~600 px at 0.325 um/px: nuclei are resolvable and a
-                             # 9-round x 3-arm grid still fits on a page
+    patch_um: [200]          # ~600 px at 0.325 um/px: nuclei resolvable, and a 9-round
+                             # x 3-arm grid still fits on a page
     variants: 2              # two ROI sets to choose between; the picker is good, not psychic
+    kinds: [overlay, checker]  # the magenta/cyan overlay AND the checkerboard: a sub-pixel
+                             # shift the overlay blends away is a visible seam in the checker
+    numbers: [image]         # auto | scorer | image | none. `image` computes Dice and the
+                             # shift FROM THE CROP, so cells carry numbers with no reg_qc=2
+                             # run; use `scorer` for arms that already ran at reg_qc=2
 
   overlay:
-    field_um: [500, 2000]    # 500 um reads as tissue; 2000 um shows how far the
-                             # registration holds across a section
+    field_um: [500, 2000]    # 500 um reads as tissue; 2000 um shows how far registration
+                             # holds across a section
     zoom_um: [60]            # the inset that keeps single cells visible at 2000 um
-                             # (0 = no zoom). Drawn for every field above.
+                             # (0 = none); drawn for every field above
     variants: 3              # one crop is one roll of the dice
 
   zoom:                      # whole-slide overview + segmented cells
-    field_um: [150, 300]     # 150 um = cells fill the panel; 300 um = a bit of context
-    masks: [both]            # cell | nuclei | both (both: cells yellow, nuclei cyan)
+    field_um: [150, 300]     # 150 um = cells fill the panel; 300 um = some context
+    masks: [both]            # cell | nuclei | both (cells yellow, nuclei cyan)
     crop: also               # none | also | only — `also` writes the crop beside the figure
 
   crop:                      # the segmented crop alone, for your own panels
-    crop_px: [1024]          # output size; the tissue covered is zoom.field_um above
+    crop_px: [1024]          # output size; the tissue it covers is zoom.field_um above
 
-  channels:                  # one named channel each, clean auto-contrast
+  channels:                  # one named channel each
     names: [DAPI]            # must be in the samplesheet's `channels` for some slide
     colors: [white]          # cycled if shorter than `names`
     field_um: [150]
     crop_px: [1024]
+    autoscale: [clean, percentile]   # draws the contrast comparison side by side rather
+                             # than asking you to take `clean` on trust
 
 # ---- shared settings --------------------------------------------------------
 options:
-  roi: ""                    # "Y,X" in the reference frame; empty = auto per figure
-  patient: ""                # empty = the only patient in the samplesheet
-  seg_qc: 0                  # 1 runs WARP_SEG_QC so the mosaic prints real Dice/delta
-                             # (reg_qc=2, much slower); 0 leaves the cells unnumbered
+  # A LIST of "Y,X" draws every figure above at each region — free, and it stops one
+  # unlucky window from deciding the whole set. Empty = each figure picks its own,
+  # which makes the sizes NOT comparable (every registered slide is on one canvas, so
+  # a pinned ROI is the same tissue everywhere). Run once empty, read y,x out of the
+  # manifest of the one you liked, paste it here, re-submit.
+  roi: []
+  patient: []                # a list draws each; empty = whatever the run holds
+  seg_qc: 0                  # ONLY for arms this grid BUILDS: 1 runs them at reg_qc=2 so
+                             # WARP_SEG_QC writes the Dice the mosaic can print. If the
+                             # arms benchmark already ran, do NOT set this — point `arms:`
+                             # at those directories and use `numbers: scorer` instead.
   ashlar_tile: 1024
   ashlar_shift_um: 500       # ASHLAR's drift budget. Patient 033 measured ~386 um apart;
                              # below the real drift ASHLAR silently discards tiles.
@@ -88,9 +102,7 @@ options:
   nuclei_color: "#00e5ff"    # nuclear outlines under mask: both
   outline_width: 2
   channel_label: DAPI        # the grey channel's legend name on the segmentation crops
-  autoscale: clean           # clean (background below black, as QuPath) | percentile
-  sat: 0.35                  # percent of the SIGNAL allowed to saturate
+  sat: 0.35                  # percent of the SIGNAL allowed to saturate (clean autoscale)
   bg_k: 3.0                  # black point = background median + k robust sigmas
-  title: ""                  # method name on the channel crops; empty = none
   formats: png,pdf
   dpi: 100

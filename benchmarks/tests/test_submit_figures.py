@@ -41,9 +41,10 @@ figures:
     colors: [white, "#00e5ff"]
     field_um: [150]
     crop_px: [1024]
+    autoscale: [clean]
 options:
-  roi: "100,200"
-  patient: P1
+  roi: ["100,200"]
+  patient: [P1]
   outline_color: "#ffd400"
   nuclei_color: "#00e5ff"
   outline_width: 2
@@ -130,7 +131,9 @@ def test_the_outputs_are_laid_out_by_what_varies(full):
     assert (root / "overlay" / "stare_high" / "f2000_z60").is_dir()
     assert (root / "zoom" / "stardist" / "f150_both").is_dir()
     assert (root / "crops" / "stardist" / "f150_p1024_both").is_dir()
-    assert (root / "crops" / "channels" / "f150_p1024").is_dir()
+    assert (
+        root / "crops" / "channels" / "f150_p1024_clean"
+    ).is_dir()  # contrast mode too
 
 
 def test_the_shared_options_reach_every_tool(full):
@@ -206,7 +209,7 @@ def test_a_failing_render_is_named_and_the_rest_still_run(tmp_path):
         text=True,
         cwd=str(tmp_path),
     )
-    assert "FAILED: overlay valis_high_micro2 field=500" in proc.stderr
+    assert "FAILED: overlay overlay/valis_high_micro2/f500_z0" in proc.stderr
     assert "--field-um 2000" in log.read_text()  # the rest were still drawn
     assert "(1 failed)" in proc.stdout and proc.returncode != 0
 
@@ -243,3 +246,25 @@ def test_a_missing_reference_run_is_named_not_guessed(tmp_path):
     )
     assert proc.returncode != 0
     assert "did phase 1 run?" in proc.stderr
+
+
+def test_an_existing_arm_is_read_where_it_lives_and_never_rebuilt(tmp_path):
+    """{name, dir} points at a run you already have -- an arm of the arms benchmark, say.
+    Nothing is re-registered, and the figures read it in place."""
+    external = tmp_path / "elsewhere" / "valis_high_micro0"
+    (external / "csv").mkdir(parents=True)
+    (external / "csv" / "registered.csv").write_text("patient_id\nP1\n")
+    cfg = (
+        "arms:\n"
+        "  - valis_high_micro2\n"
+        f"  - {{name: arms_m0, dir: {external}}}\n"
+        "reference_arm: valis_high_micro2\n"
+        "segmentation:\n  methods: []\n"
+        "figures:\n  overlay:\n    field_um: [500]\n"
+    )
+    proc, calls, root = _run(tmp_path, cfg)
+    assert proc.returncode == 0, proc.stderr
+    assert "1 reused" in proc.stdout
+    lines = [ln for ln in calls.splitlines() if "reg_overlay" in ln]
+    assert any(str(external) in ln for ln in lines)  # read in place
+    assert not (root / "arms_m0").exists()  # and not copied or rebuilt under the root

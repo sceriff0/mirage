@@ -32,6 +32,17 @@ def _kinds(rows):
     return out
 
 
+def _args(row):
+    import shlex
+
+    return shlex.split(row[3])
+
+
+def _flag(row, name):
+    args = _args(row)
+    return args[args.index(name) + 1] if name in args else None
+
+
 # --- the size axes are crossed, the expensive ones are not -------------------------
 def test_overlay_crosses_arm_field_and_zoom():
     rows = bfp.plan(
@@ -44,12 +55,12 @@ def test_overlay_crosses_arm_field_and_zoom():
     )
     over = [r for r in rows if r[0] == "overlay"]
     assert len(over) == 2 * 2 * 2
-    assert all(r[4] == 3 for r in over)  # variants ride along, they are not an axis
-    assert {(r[2], r[3]) for r in over} == {
-        (500.0, 0.0),
-        (500.0, 60.0),
-        (2000.0, 0.0),
-        (2000.0, 60.0),
+    assert all(_flag(r, "--variants") == "3" for r in over)  # rides along, not an axis
+    assert {(_flag(r, "--field-um"), _flag(r, "--zoom-um")) for r in over} == {
+        ("500", None),
+        ("500", "60"),
+        ("2000", None),
+        ("2000", "60"),
     }
 
 
@@ -72,9 +83,115 @@ def test_zoom_and_crop_cross_method_field_and_mask():
     assert k["crop"] == k["zoom"] * 2  # x output size
 
 
+def test_the_mosaic_crosses_overlay_and_checker_and_the_numbers_source():
+    rows = bfp.plan(
+        _cfg(
+            figures={
+                "mosaic": {
+                    "patch_um": [200],
+                    "kinds": ["overlay", "checker"],
+                    "numbers": ["image", "none"],
+                }
+            }
+        )
+    )
+    mosaic = [r for r in rows if r[0] == "mosaic"]
+    assert len(mosaic) == 4
+    assert {(_flag(r, "--kinds"), _flag(r, "--numbers")) for r in mosaic} == {
+        ("overlay", "image"),
+        ("overlay", "none"),
+        ("checker", "image"),
+        ("checker", "none"),
+    }
+
+
+def test_channel_crops_cross_the_contrast_modes():
+    """The comparison is drawn, not asserted in prose."""
+    rows = bfp.plan(
+        _cfg(
+            figures={
+                "channels": {
+                    "names": ["DAPI"],
+                    "field_um": [150],
+                    "crop_px": [1024],
+                    "autoscale": ["clean", "percentile"],
+                }
+            }
+        )
+    )
+    chan = [r for r in rows if r[0] == "channel"]
+    assert {_flag(r, "--autoscale") for r in chan} == {"clean", "percentile"}
+    assert {r[2] for r in chan} == {
+        "crops/channels/f150_p1024_clean",
+        "crops/channels/f150_p1024_percentile",
+    }
+
+
+def test_several_rois_multiply_every_figure_and_land_in_their_own_directories():
+    one = bfp.plan(
+        _cfg(
+            figures={
+                "overlay": {"field_um": [500]},
+                "channels": {"names": ["DAPI"], "field_um": [150], "crop_px": [512]},
+            },
+            options={"roi": ["100,200"]},
+        )
+    )
+    three = bfp.plan(
+        _cfg(
+            figures={
+                "overlay": {"field_um": [500]},
+                "channels": {"names": ["DAPI"], "field_um": [150], "crop_px": [512]},
+            },
+            options={"roi": ["100,200", "300,400", "500,600"]},
+        )
+    )
+    assert len(three) == 3 * len(one)
+    assert all(_flag(r, "--roi") for r in three)
+    assert {r[2].rsplit("_r", 1)[-1] for r in three} == {"1", "2", "3"}
+    # a single ROI does not get a suffix: the directory stays the one you already have
+    assert all("_r" not in r[2] for r in one)
+
+
+def test_several_patients_draw_each_but_the_mosaic_takes_them_together():
+    rows = bfp.plan(
+        _cfg(
+            figures={
+                "mosaic": {"patch_um": [200]},
+                "overlay": {"field_um": [500]},
+            },
+            options={"patient": ["033", "045"]},
+        )
+    )
+    mosaic = [r for r in rows if r[0] == "mosaic"]
+    over = [r for r in rows if r[0] == "overlay"]
+    assert len(mosaic) == 1 and _args(mosaic[0]).count("--patient") == 2
+    assert len(over) == 2 and {_flag(r, "--patient") for r in over} == {"033", "045"}
+
+
+def test_the_drawing_options_are_decided_in_the_plan_not_the_shell():
+    rows = bfp.plan(
+        _cfg(
+            figures={
+                "zoom": {"field_um": [150], "masks": ["both"]},
+                "channels": {"names": ["DAPI"], "field_um": [150], "crop_px": [512]},
+            },
+            options={
+                "outline_color": "#ff0000",
+                "outline_width": 3,
+                "sat": 1.5,
+                "bg_k": 4,
+            },
+        )
+    )
+    zoom = next(r for r in rows if r[0] == "zoom")
+    assert _flag(zoom, "--outline-color") == "#ff0000"
+    assert _flag(zoom, "--outline-width") == "3"
+    chan = next(r for r in rows if r[0] == "channel")
+    assert _flag(chan, "--sat") == "1.5" and _flag(chan, "--bg-k") == "4"
+
+
 def test_channel_crops_are_drawn_once_off_the_reference_arm():
-    """A channel crop needs no segmentation and no second arm: crossing it over either would
-    draw the same picture again."""
     rows = bfp.plan(
         _cfg(
             arms=["valis_high_micro2", "stare_high"],
@@ -91,31 +208,43 @@ def test_channel_crops_are_drawn_once_off_the_reference_arm():
     )
     chan = [r for r in rows if r[0] == "channel"]
     assert len(chan) == 2
-    assert {r[1] for r in chan} == {"valis_high_micro2"}
-    assert [r[5] for r in chan] == ["white", "#00e5ff"]
+    assert {r[1] for r in chan} == {"arm:valis_high_micro2"}
+    assert [_flag(r, "--colors") for r in chan] == ["white", "#00e5ff"]
 
 
-def test_one_mosaic_row_per_patch_size_covering_every_arm():
-    rows = bfp.plan(
-        _cfg(
-            arms=["valis_high_micro2", "stare_high", "ashlar"],
-            figures={"mosaic": {"patch_um": [200, 400], "variants": 2}},
-        )
+def test_an_arm_that_already_exists_is_reused_not_rebuilt():
+    cfg = _cfg(
+        arms=[
+            "valis_high_micro2",
+            {"name": "arms_valis_m0", "dir": "/results/arms/valis_high_micro0"},
+        ],
+        figures={"overlay": {"field_um": [500]}},
     )
-    mosaic = [r for r in rows if r[0] == "mosaic"]
-    assert [(r[1], r[2]) for r in mosaic] == [(200.0, 2), (400.0, 2)]
+    rows = bfp.plan(cfg)
+    assert bfp.arm_dirs(cfg) == {"arms_valis_m0": "/results/arms/valis_high_micro0"}
+    assert {r[1] for r in rows if r[0] == "overlay"} == {
+        "arm:valis_high_micro2",
+        "arm:arms_valis_m0",
+    }
+    assert "1 registration arm(s) to build, 1 reused" in bfp.summary(cfg, rows)
+
+
+def test_a_figure_with_no_arm_behind_it_is_titled_NA_not_blank():
+    """A blank corner reads as an oversight; NA reads as a fact."""
+    assert bfp.title_of("") == "NA"
+    assert bfp.title_of(None) == "NA"
+    assert bfp.title_of("  ") == "NA"
+    assert bfp.title_of(" valis_high ") == "valis_high"
 
 
 def test_rows_are_ordered_by_what_they_depend_on():
-    """The launcher registers, then segments, then draws: a row must never come before the
-    run it reads."""
     rows = bfp.plan(
         _cfg(
             segmentation={"methods": ["stardist", "instantseg"]},
             figures={
                 "mosaic": {"patch_um": [200]},
-                "overlay": {"field_um": [500], "zoom_um": [0]},
-                "zoom": {"field_um": [150], "masks": ["cell"], "crop": "none"},
+                "overlay": {"field_um": [500]},
+                "zoom": {"field_um": [150], "masks": ["cell"]},
                 "channels": {"names": ["DAPI"], "field_um": [150], "crop_px": [512]},
             },
         )
@@ -183,7 +312,7 @@ def test_nonsense_axes_are_refused():
 
 def test_a_zoom_um_of_zero_is_allowed_it_means_no_inset():
     rows = bfp.plan(_cfg(figures={"overlay": {"field_um": [500], "zoom_um": [0]}}))
-    assert [r[3] for r in rows] == [0.0]
+    assert len(rows) == 1 and _flag(rows[0], "--zoom-um") is None
 
 
 # --- the shipped config ------------------------------------------------------------
@@ -193,20 +322,32 @@ def test_the_shipped_config_expands_to_every_kind():
 
 
 def test_the_shipped_plan_is_tsv_the_shell_can_read():
+    import shlex
+
     text = bfp.format_rows(bfp.plan(bfp.load(SHIPPED)))
     for line in text.splitlines():
         fields = line.split("\t")
-        assert fields[0] in ("mosaic", "overlay", "zoom", "crop", "channel")
-        assert all(f != "" for f in fields)
-    assert "\t150\t" in text and ".0\t" not in text  # plain numbers, not 150.0
+        assert len(fields) == 4, fields  # kind, run key, outdir, arguments
+        kind, run, out, args = fields
+        assert kind in ("mosaic", "overlay", "zoom", "crop", "channel")
+        assert run == "arms:all" or run.startswith(("arm:", "seg:"))
+        assert out and " " not in out  # a directory the shell can mkdir unquoted
+        assert shlex.split(args)  # and arguments it can eval back
+    # sizes survive as plain numbers, not 150.0 or 1.5e+02
+    assert "--field-um 150 " in text
 
 
-def test_the_shipped_config_names_only_settings_the_launcher_reads():
-    """An option nobody reads is a setting that silently does nothing."""
+def test_every_shipped_option_is_read_by_the_plan_or_the_launcher():
+    """An option nobody reads is a setting that silently does nothing. Each one is consumed
+    either by the plan (it ends up in a figure's arguments) or by the shell (it drives a
+    phase), and this checks that every one of them is claimed by exactly one of the two."""
     cfg = yaml.safe_load(SHIPPED.read_text())
     launcher = (REPO / "benchmarks" / "submit_figures.sh").read_text()
+    planner = (REPO / "benchmarks" / "build_figure_plan.py").read_text()
     for key in cfg.get("options") or {}:
-        assert f"read_opt options.{key} " in launcher, key
+        by_shell = f"read_opt options.{key} " in launcher
+        by_plan = f'"{key}"' in planner
+        assert by_shell or by_plan, key
 
 
 def test_the_summary_names_the_expensive_axes():

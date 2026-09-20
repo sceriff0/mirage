@@ -113,19 +113,11 @@ for key in sys.argv[2].split('.'):
     node = (node or {}).get(key) if isinstance(node, dict) else None
 print(sys.argv[3] if node is None or node == '' else node)
 " "$CONFIG" "$1" "$2"); }
-ROI=$(read_opt options.roi "")
+# the ROI, the patients and every drawing option are decided in the plan, not here
 PATIENT=$(read_opt options.patient "")
 SEG_QC=$(read_opt options.seg_qc 0)
 ASHLAR_TILE=$(read_opt options.ashlar_tile 1024)
 ASHLAR_SHIFT_UM=$(read_opt options.ashlar_shift_um 500)
-OUTLINE_COLOR=$(read_opt options.outline_color "#ffd400")
-NUCLEI_COLOR=$(read_opt options.nuclei_color "#00e5ff")
-OUTLINE_WIDTH=$(read_opt options.outline_width 2)
-CHANNEL_LABEL=$(read_opt options.channel_label DAPI)
-AUTOSCALE=$(read_opt options.autoscale clean)
-SAT=$(read_opt options.sat 0.35)
-BG_K=$(read_opt options.bg_k 3.0)
-TITLE=$(read_opt options.title "")
 FORMATS=$(read_opt options.formats png,pdf)
 DPI=$(read_opt options.dpi 100)
 REF_ARM=$(read_opt reference_arm valis_high_micro2)
@@ -137,43 +129,70 @@ echo "Figures job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(da
 echo "Input:    $INPUT"
 echo "Config:   $CONFIG"
 echo "Plan:     $SUMMARY"
-echo "Root:     $ROOT   pixel size: $PIXEL_SIZE   roi: ${ROI:-auto}   seg QC: $SEG_QC"
+echo "Root:     $ROOT   pixel size: $PIXEL_SIZE   seg QC: $SEG_QC"
 echo "Checkout: $SRC_DIR @ $(git -C "$SRC_DIR" rev-parse --short HEAD) ($(git -C "$SRC_DIR" rev-parse --abbrev-ref HEAD))"
 echo "=================================================="
 
-# ---- 1. registration arms + the mosaic ------------------------------------------
-# submit_mosaic.sh already builds VALIS, STARE and ASHLAR from a samplesheet, skips what
-# is .done, and draws the mosaic over whichever arms finished. Called, not duplicated.
+# ---- 1. registration: build the arms that are not already on disk -----------------
+# An arm given in the YAML as {name, dir} already exists (an arms-benchmark run, say):
+# it is listed here and never rebuilt. The rest are built by submit_mosaic.sh, which
+# already knows how -- called, not duplicated -- and which draws the mosaic over them.
+# bash 3.2 (macOS) has no associative arrays and no mapfile, and this script is read on
+# both: the reused arms live in a two-column file and are looked up with awk.
+ARM_DIRS="$ROOT/.launch/arm_dirs.tsv"
+(cd "$SRC_DIR" && python3 -c "
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+for e in cfg.get('arms') or []:
+    if isinstance(e, dict) and e.get('dir'):
+        print(e['name'], e['dir'], sep='\t')
+" "$CONFIG") > "$ARM_DIRS"
+REUSED=$(wc -l < "$ARM_DIRS" | tr -d ' ')
+BUILD=$(cd "$SRC_DIR" && python3 -c "
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+for e in cfg.get('arms') or []:
+    if not isinstance(e, dict):
+        print(e)
+" "$CONFIG")
+
+resolve() {                        # resolve <run key> -> a directory
+  local label existing
+  case "$1" in
+    seg:*)  printf '%s' "$ROOT/seg_${1#seg:}" ;;
+    arm:*)  label="${1#arm:}"
+            existing=$(awk -F'\t' -v l="$label" '$1 == l { print $2; exit }' "$ARM_DIRS")
+            if [[ -n "$existing" ]]; then printf '%s' "$existing"
+            elif [[ "$label" == ashlar ]]; then printf '%s' "$ROOT/$ASHLAR_DIR"
+            else printf '%s' "$ROOT/$label"; fi ;;
+    *)      printf '%s' "$ROOT" ;;
+  esac
+}
+
 mosaic_rows=$(awk -F'\t' '$1 == "mosaic"' "$PLAN")
-if [[ "$SKIP_REGISTRATION" == "1" ]]; then
-  echo "[phase 1] SKIP_REGISTRATION=1: using the runs already under $ROOT"
+if [[ "$SKIP_REGISTRATION" == "1" || -z "$BUILD" ]]; then
+  echo "[phase 1] nothing to build ($REUSED arm(s) reused, SKIP_REGISTRATION=$SKIP_REGISTRATION)"
 else
-  while IFS=$'\t' read -r _kind patch variants; do
-    [[ -n "$patch" ]] || continue
-    echo "[phase 1] registration + mosaic (patch ${patch} um, ${variants} variant(s))"
-    mosaic_sh="$SRC_DIR/benchmarks/submit_mosaic.sh"
-    mosaic_args="--patch-um $patch"
-    [[ -n "$ROI" ]] && mosaic_args="$mosaic_args --roi $ROI"
-    env ROOT="$ROOT" SRC_DIR="$SRC_DIR" PROFILES="$PROFILES" SITE_CONFIG="$SITE_CONFIG" \
-        CONDA_ENV="$CONDA_ENV" PIXEL_SIZE="$PIXEL_SIZE" SEG_QC="$SEG_QC" PATIENT="$PATIENT" \
-        ASHLAR_TILE="$ASHLAR_TILE" ASHLAR_SHIFT_UM="$ASHLAR_SHIFT_UM" VARIANTS="$variants" \
-        MOSAIC_ARGS="$mosaic_args" \
-        bash "$mosaic_sh" "$INPUT" \
-      || { echo "[phase 1] FAILED" >&2; exit 1; }
-  done <<< "$mosaic_rows"
-  if [[ -z "$mosaic_rows" ]]; then
-    echo "[phase 1] no mosaic row: registration must already exist under $ROOT" >&2
-  fi
+  echo "[phase 1] building: $(echo "$BUILD" | tr '\n' ' ')"
+  # one call is enough: it builds every arm it knows and draws the first mosaic. The
+  # remaining mosaic rows (other patch sizes, checker, ROIs) are drawn in phase 3.
+  first_patch=$(echo "$mosaic_rows" | head -1 | awk -F'\t' '{print $3}' | sed 's/.*--patch-um \([0-9.]*\).*/\1/')
+  mosaic_sh="$SRC_DIR/benchmarks/submit_mosaic.sh"
+  env ROOT="$ROOT" SRC_DIR="$SRC_DIR" PROFILES="$PROFILES" SITE_CONFIG="$SITE_CONFIG" \
+      CONDA_ENV="$CONDA_ENV" PIXEL_SIZE="$PIXEL_SIZE" SEG_QC="$SEG_QC" PATIENT="$PATIENT" \
+      ASHLAR_TILE="$ASHLAR_TILE" ASHLAR_SHIFT_UM="$ASHLAR_SHIFT_UM" VARIANTS=1 \
+      MOSAIC_ARGS="${first_patch:+--patch-um $first_patch}" \
+      bash "$mosaic_sh" "$INPUT" \
+    || { echo "[phase 1] FAILED" >&2; exit 1; }
 fi
 
 common=(--formats "$FORMATS" --dpi "$DPI")
 [[ "$PIXEL_SIZE" != auto ]] && common+=(--pixel-size-um "$PIXEL_SIZE")
-[[ -n "$PATIENT" ]] && common+=(--patient "$PATIENT")
 
 # ---- 2. one segmentation per method, resuming from the reference arm --------------
 segment() {                        # segment <method>
   local method="$1" run rundir rc=0 px=() ref
-  ref="$ROOT/$(arm_dir "$REF_ARM")/csv/registered.csv"
+  ref="$(resolve "arm:$REF_ARM")/csv/registered.csv"
   run="$ROOT/seg_$method"; rundir="$ROOT/.launch/seg_$method"
   if [[ -f "$run/.done" ]]; then echo "[seg:$method] DONE already, skipping"; return 0; fi
   [[ -s "$ref" ]] || { echo "[seg:$method] no $ref -- did phase 1 run?" >&2; return 1; }
@@ -202,61 +221,58 @@ segment() {                        # segment <method>
   date '+%F %T' > "$run/.done"
   echo "[seg:$method] OK"
 }
-methods=$(awk -F'\t' '$1 == "zoom" || $1 == "crop" { print $2 }' "$PLAN" | awk '!seen[$0]++')
+methods=$(awk -F'\t' '$2 ~ /^seg:/ { sub(/^seg:/, "", $2); print $2 }' "$PLAN" | awk '!seen[$0]++')
 for m in $methods; do segment "$m" || { echo "[phase 2] segmentation failed" >&2; exit 1; }; done
 
-# ---- 3. every remaining figure ----------------------------------------------------
+# ---- 3. every figure in the plan --------------------------------------------------
+# The plan carries the tool's whole argument list, shell-quoted: this loop resolves the
+# run directory, makes the output directory and runs it. No figure logic lives here.
+tool_for() {                       # tool_for <kind> -> the module to run
+  case "$1" in
+    mosaic)  printf 'benchmarks.reg_mosaic' ;;
+    overlay) printf 'benchmarks.reg_overlay' ;;
+    zoom|crop) printf 'benchmarks.reg_zoom' ;;
+    channel) printf 'benchmarks.reg_crop' ;;
+    *)       printf '' ;;
+  esac
+}
+arm_args() {                       # every arm directory that has slides, for the mosaic
+  local label dir
+  for label in $BUILD $(awk -F'\t' '{print $1}' "$ARM_DIRS"); do
+    [[ -n "$label" ]] || continue
+    dir=$(resolve "arm:$label")
+    [[ -s "$dir/csv/registered.csv" ]] || continue
+    printf '%s\n--label\n%s\n' "$dir" "$(basename "$dir")=$label"
+  done
+}
+
 n=0; failed=0
-render() {                         # render <tool> <run> <outdir> <args...>
-  local tool="$1" run="$2" out="$3"; shift 3
-  mkdir -p "$out"
+while IFS=$'\t' read -r kind run out args; do
+  [[ -n "$kind" ]] || continue
+  tool=$(tool_for "$kind")
+  [[ -n "$tool" ]] || { echo "[figures] unknown row kind: $kind" >&2; continue; }
+  eval "set -- $args"
+  outdir="$ROOT/$out"
+  mkdir -p "$outdir"
+  inputs=()
+  if [[ "$run" == "arms:all" ]]; then
+    while IFS= read -r line; do inputs+=("$line"); done < <(arm_args)
+    (( ${#inputs[@]} > 0 )) || { echo "[figures] no arm has registered slides; no mosaic" >&2; failed=$((failed+1)); continue; }
+  else
+    inputs=("$(resolve "$run")")
+    [[ -d "${inputs[0]}" ]] || { echo "[figures] FAILED: $kind -- no run at ${inputs[0]}" >&2; failed=$((failed+1)); continue; }
+  fi
   # shellcheck disable=SC2086
   if (
     cd "$SRC_DIR" || exit 1
     SINGULARITYENV_PYTHONPATH="$SRC_DIR" APPTAINERENV_PYTHONPATH="$SRC_DIR" PYTHONPATH="$SRC_DIR" \
-      $RENDER_EXEC python3 -m "$tool" "$run" -o "$out" "$@"
-  ); then n=$((n + 1)); return 0; fi
-  failed=$((failed + 1)); return 1
-}
-
-while IFS=$'\t' read -r kind a b c d e; do
-  case "$kind" in
-    overlay)                       # a=arm b=field_um c=zoom_um d=variants
-      dir=$(arm_dir "$a")
-      args=(--field-um "$b" --variants "$d" --title "$a" "${common[@]}")
-      [[ "$c" != 0 ]] && args+=(--zoom-um "$c")
-      [[ -n "$ROI" ]] && args+=(--roi "$ROI")
-      render benchmarks.reg_overlay "$ROOT/$dir" "$ROOT/overlay/$dir/f${b}_z${c}" "${args[@]}" \
-        || echo "[figures] FAILED: overlay $a field=$b zoom=$c" >&2
-      ;;
-    zoom|crop)                     # a=method b=field_um c=mask d=crop|crop_px
-      args=(--mask "$c" --field-um "$b" --outline-color "$OUTLINE_COLOR"
-            --nuclei-color "$NUCLEI_COLOR" --outline-width "$OUTLINE_WIDTH"
-            --channel-label "$CHANNEL_LABEL" --title "$a" "${common[@]}")
-      [[ -n "$ROI" ]] && args+=(--roi "$ROI")
-      if [[ "$kind" == zoom ]]; then
-        [[ "$d" == none ]] && args+=(--crop none) || args+=(--crop "$d")
-        out="$ROOT/zoom/$a/f${b}_${c}"
-      else
-        args+=(--crop only --crop-px "$d")
-        out="$ROOT/crops/$a/f${b}_p${d}_${c}"
-      fi
-      render benchmarks.reg_zoom "$ROOT/seg_$a" "$out" "${args[@]}" \
-        || echo "[figures] FAILED: $kind $a field=$b $c $d" >&2
-      ;;
-    channel)                       # a=arm b=field_um c=crop_px d=channel e=color
-      args=(--channel "$d" --colors "$e" --field-um "$b" --crop-px "$c"
-            --autoscale "$AUTOSCALE" --sat "$SAT" --bg-k "$BG_K" --title "$TITLE"
-            "${common[@]}")
-      [[ -n "$ROI" ]] && args+=(--roi "$ROI")
-      render benchmarks.reg_crop "$ROOT/$(arm_dir "$a")" \
-        "$ROOT/crops/channels/f${b}_p${c}" "${args[@]}" \
-        || echo "[figures] FAILED: channel $d field=$b px=$c" >&2
-      ;;
-    mosaic) ;;                     # drawn in phase 1
-    "") ;;
-    *) echo "[figures] unknown plan row: $kind" >&2 ;;
-  esac
+      $RENDER_EXEC python3 -m "$tool" "${inputs[@]}" -o "$outdir" "$@" "${common[@]}"
+  ); then
+    n=$((n + 1))
+  else
+    echo "[figures] FAILED: $kind $out" >&2
+    failed=$((failed + 1))
+  fi
 done < "$PLAN"
 
 echo "=================================================="
