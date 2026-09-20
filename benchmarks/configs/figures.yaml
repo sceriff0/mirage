@@ -1,0 +1,96 @@
+# =============================================================================
+# figures.yaml — EVERY figure, from one samplesheet, in one job.
+#
+#   mosaic    rounds x arms, small patches           benchmarks/reg_mosaic.py
+#   overlay   one pair, large field, optional zoom   benchmarks/reg_overlay.py
+#   zoom      whole slide + segmented cells          benchmarks/reg_zoom.py
+#   crop      the segmented crop alone               benchmarks/reg_zoom.py --crop only
+#   channel   one named channel, clean contrast      benchmarks/reg_crop.py
+#
+# Expanded by benchmarks/build_figure_plan.py, run by benchmarks/submit_figures.sh.
+# Check what it expands to before you submit — it costs nothing:
+#
+#     python3 -m benchmarks.build_figure_plan --count
+#     python3 -m benchmarks.build_figure_plan --config my_figures.yaml
+#
+# WHAT IS EXPENSIVE. Only two things: one REGISTRATION per arm (hours, hundreds of
+# GB — REGISTER has been measured at 483 GB) and one SEGMENTATION per method. Every
+# field size, patch size, output size, mask, variant and channel below is a
+# re-render of a run that already exists — seconds each, off slides already on disk.
+# So `arms` and `segmentation.methods` are the axes to keep short, and the size axes
+# are free to cross. The launcher orders the work that way and marks each stage
+# .done, so a re-submit redraws without recomputing.
+#
+# ONE ROI MAKES THEM COMPARABLE. Every registered slide of a patient sits on the
+# same reference canvas, so `roi` (when set) names the SAME tissue in every arm,
+# method, size and channel — which is the only way a size comparison means
+# anything. Left empty, each figure picks its own best window and they show
+# different places. Run once with it empty, read the y,x out of the manifest of the
+# one you liked, then pin it here and re-submit: everything redraws on that spot.
+# =============================================================================
+
+# ---- the expensive axes -----------------------------------------------------
+# Registration arms for the mosaic and the overlays. These are the three the
+# mosaic launcher knows how to build; drop any you do not want compared.
+arms:
+  - valis_high_micro2        # VALIS, memory_mode high, micro-registration 2 (the shipped default)
+  - stare_high               # STARE tiled, high preset
+  - ashlar                   # the external comparator (tile 1024, shift 500 um — see options)
+
+# Which arm everything downstream resumes from: segmentation, the channel crops,
+# and the overlay when `overlay.arms` is not given. Pick the one you ship.
+reference_arm: valis_high_micro2
+
+segmentation:
+  # One pipeline run each. stardist is what conf/ieo.config pins (with its model);
+  # instantseg is the pipeline default and needs no assets. cellsam is also accepted.
+  methods:
+    - stardist
+
+# ---- the free axes ----------------------------------------------------------
+figures:
+  mosaic:
+    patch_um: [200]          # ~600 px at 0.325 um/px: nuclei are resolvable and a
+                             # 9-round x 3-arm grid still fits on a page
+    variants: 2              # two ROI sets to choose between; the picker is good, not psychic
+
+  overlay:
+    field_um: [500, 2000]    # 500 um reads as tissue; 2000 um shows how far the
+                             # registration holds across a section
+    zoom_um: [60]            # the inset that keeps single cells visible at 2000 um
+                             # (0 = no zoom). Drawn for every field above.
+    variants: 3              # one crop is one roll of the dice
+
+  zoom:                      # whole-slide overview + segmented cells
+    field_um: [150, 300]     # 150 um = cells fill the panel; 300 um = a bit of context
+    masks: [both]            # cell | nuclei | both (both: cells yellow, nuclei cyan)
+    crop: also               # none | also | only — `also` writes the crop beside the figure
+
+  crop:                      # the segmented crop alone, for your own panels
+    crop_px: [1024]          # output size; the tissue covered is zoom.field_um above
+
+  channels:                  # one named channel each, clean auto-contrast
+    names: [DAPI]            # must be in the samplesheet's `channels` for some slide
+    colors: [white]          # cycled if shorter than `names`
+    field_um: [150]
+    crop_px: [1024]
+
+# ---- shared settings --------------------------------------------------------
+options:
+  roi: ""                    # "Y,X" in the reference frame; empty = auto per figure
+  patient: ""                # empty = the only patient in the samplesheet
+  seg_qc: 0                  # 1 runs WARP_SEG_QC so the mosaic prints real Dice/delta
+                             # (reg_qc=2, much slower); 0 leaves the cells unnumbered
+  ashlar_tile: 1024
+  ashlar_shift_um: 500       # ASHLAR's drift budget. Patient 033 measured ~386 um apart;
+                             # below the real drift ASHLAR silently discards tiles.
+  outline_color: "#ffd400"   # cell outlines
+  nuclei_color: "#00e5ff"    # nuclear outlines under mask: both
+  outline_width: 2
+  channel_label: DAPI        # the grey channel's legend name on the segmentation crops
+  autoscale: clean           # clean (background below black, as QuPath) | percentile
+  sat: 0.35                  # percent of the SIGNAL allowed to saturate
+  bg_k: 3.0                  # black point = background median + k robust sigmas
+  title: ""                  # method name on the channel crops; empty = none
+  formats: png,pdf
+  dpi: 100

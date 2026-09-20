@@ -317,6 +317,22 @@ class TiffSource:
                     return i
         return None
 
+    def channel_index(self, name: str, names=()) -> int | None:
+        """The plane called ``name``, by the file's OME names or the checkpoint's list.
+
+        Exact (case-insensitive) first, then a unique substring, so "CD3" finds "CD3" but
+        refuses to guess between "CD3" and "CD31" unless one matches exactly.
+        """
+        pool = self.channel_names or [str(n) for n in names]
+        if len(pool) != self.nchannels and self.channel_names:
+            pool = self.channel_names
+        want = name.strip().lower()
+        for i, have in enumerate(pool):
+            if have.strip().lower() == want:
+                return i
+        hits = [i for i, have in enumerate(pool) if want in have.strip().lower()]
+        return hits[0] if len(hits) == 1 else None
+
     @staticmethod
     def _yx(shape, axes):
         return int(shape[axes.index("Y")]), int(shape[axes.index("X")])
@@ -939,6 +955,56 @@ def _otsu_mask(u8: np.ndarray, sigma: float) -> np.ndarray:
     return blurred > threshold_otsu(blurred)
 
 
+def clean_limits(
+    plane, sat: float = 0.35, k: float = 3.0, floor: float = 10.0
+) -> tuple[float, float]:
+    """Display limits that keep BACKGROUND black -- QuPath's auto contrast, in one function.
+
+    A plain percentile pair (``--pmin/--pmax``) puts the black point INSIDE the background
+    distribution, so the camera offset and its noise survive the stretch and the field reads
+    as grey, or as a wash of the channel's colour. This estimates the background population
+    instead:
+
+      * split background from signal with Otsu on the log image (the rule select_rois
+        already uses to find tissue),
+      * black point = median(background) + ``k`` x its robust sigma (1.4826 x MAD), so the
+        noise sits below black rather than on it,
+      * white point = the (100 - ``sat``) percentile of the FOREGROUND pixels only, so a
+        little of the brightest signal saturates and the mid-range keeps the dynamic range.
+
+    Falls back to a global percentile pair when Otsu separates nothing (a blank or uniform
+    crop), and always returns hi > lo.
+    """
+    img = np.asarray(plane, np.float32)
+    finite = img[np.isfinite(img)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    lo_p, hi_p = (float(v) for v in np.percentile(finite, (1.0, 100.0 - sat)))
+    f = np.log1p(np.maximum(img - float(np.percentile(finite, 1.0)), 0.0))
+    rng = float(f.max() - f.min())
+    if rng <= 0:
+        return (lo_p, hi_p) if hi_p > lo_p else (lo_p, lo_p + 1.0)
+    u8 = ((f - f.min()) * (255.0 / rng)).astype(np.uint8)
+    fg = _otsu_mask(u8, 1.0)
+    bg_px, fg_px = img[~fg], img[fg]
+    if bg_px.size < 16 or fg_px.size < 16:
+        lo, hi = lo_p, hi_p
+    else:
+        med = float(np.median(bg_px))
+        sigma = 1.4826 * float(np.median(np.abs(bg_px - med)))
+        lo = med + k * sigma
+        hi = float(np.percentile(fg_px, 100.0 - sat))
+        # a channel with no real signal (an empty round, a marker this tissue does not carry)
+        # would otherwise have its own noise stretched to full scale and glow in its colour --
+        # the "coloured background" this mode exists to avoid. Otsu always splits SOMETHING,
+        # so the guard is on separation, not on whether a foreground was found: keep the white
+        # point a clear margin above the noise floor and such a crop renders black.
+        hi = max(hi, lo + floor * sigma)
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        lo, hi = lo_p, max(hi_p, lo_p + 1.0)
+    return float(lo), float(hi)
+
+
 def _box(img: np.ndarray, win: int) -> np.ndarray:
     return ndimage.uniform_filter(np.asarray(img, np.float32), size=win, mode="reflect")
 
@@ -1215,6 +1281,85 @@ def draw_scalebar(ax, h, w, bar_px, label, font, thick=0.014, color="white"):
 
 
 BAR_GREY = (0.8, 0.8, 0.8)
+
+
+def write_crop(
+    img,
+    px: float,
+    out_stem: Path,
+    formats,
+    dpi: int,
+    size_px=None,
+    scalebar=True,
+    legend=(),
+    title: str = "",
+    bar_color=BAR_GREY,
+    facecolor="black",
+) -> int:
+    """The outlined crop ALONE, at an exact output size -- no overview, no funnel.
+
+    For a figure that supplies its own layout: the file is exactly ``size_px`` square (the
+    crop's own pixels when it is not given), drawn nearest-neighbour so a one-pixel outline
+    stays one pixel. It is annotated the way every other figure here is -- the method top
+    left, the channel and the outlined objects in their colours bottom right, a scale bar --
+    so a crop lifted into a panel still says what it shows. ``--crop-plain`` drops all of it.
+    Returns the side actually written.
+    """
+    plt = _mpl()
+    n = int(size_px or img.shape[0])
+    fig = plt.figure(figsize=(n / dpi, n / dpi), dpi=dpi, facecolor=facecolor)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(img, interpolation="nearest")
+    ax.set_axis_off()
+    font = max(8.0, n / dpi * 3.0)
+    if title:
+        _outline(
+            ax.text(
+                0.03,
+                0.97,
+                title,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=font * 1.15,
+                color="white",
+                fontweight="bold",
+            )
+        )
+    if legend:
+        # the crop has no margin (the axes fill the figure), so the stack starts a little
+        # higher than the default 0.03: at 1024 px the bottom entry sat on the edge
+        draw_legend(ax, list(legend), font, y=0.045)
+    if scalebar:
+        # in the IMAGE's data coordinates, not the output size: draw_scalebar places the bar
+        # at 0.05 x w of the axes' data range, so passing n instead put it off the image
+        # entirely whenever --crop-px differed from the crop (measured at 1024 px on a 461 px
+        # crop, 2026-09-20). Matplotlib scales it to the output for us.
+        h, w = img.shape[:2]
+        bar_um = auto_scalebar_um(h * px)
+        draw_scalebar(
+            ax,
+            h,
+            w,
+            bar_um / px,
+            scalebar_label(bar_um),
+            font,
+            thick=0.008,
+            color=bar_color,
+        )
+    for fmt in formats:
+        # bbox/pad pinned, not inherited: benchmarks/analysis/lib/plotting.py's paper theme
+        # sets savefig.bbox="tight" globally, and anything that has called it in this process
+        # would otherwise trim and pad the file -- measured 522 px for --crop-px 512.
+        fig.savefig(
+            f"{out_stem}.{fmt}",
+            dpi=dpi,
+            facecolor=facecolor,
+            bbox_inches=None,
+            pad_inches=0,
+        )
+    plt.close(fig)
+    return n
 
 
 def draw_overview_zoom(

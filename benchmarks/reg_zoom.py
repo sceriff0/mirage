@@ -51,19 +51,26 @@ BAR_GREY = rm.BAR_GREY  # one definition; the layout lives in reg_mosaic
 DAPI_WHITE = (1.0, 1.0, 1.0)
 
 
-def read_segmented(path: Path) -> list[dict]:
+SEGMENTED_COLUMNS = (
+    "patient_id",
+    "registered_image",
+    "is_reference",
+    "cell_mask",
+    "nuclei_mask",
+)
+
+
+def read_segmented(path: Path, need=SEGMENTED_COLUMNS) -> list[dict]:
+    """A checkpoint CSV, with the columns the caller needs present.
+
+    ``need`` is narrowed by reg_crop, which reads registered.csv -- the same reference row,
+    without the mask columns segmentation adds.
+    """
     if not path.is_file():
         raise SystemExit(f"{path}: not found -- did the run reach segmentation?")
     with open(path, newline="") as fh:
         rows = list(csv.DictReader(fh))
-    need = {
-        "patient_id",
-        "registered_image",
-        "is_reference",
-        "cell_mask",
-        "nuclei_mask",
-    }
-    missing = need - set(rows[0] if rows else {})
+    missing = set(need) - set(rows[0] if rows else {})
     if missing:
         raise SystemExit(f"{path}: missing column(s) {sorted(missing)}")
     return rows
@@ -188,7 +195,7 @@ def render(opt) -> dict:
     if opt.crop != "none":
         # the outlined crop on its own, for a figure that supplies its own layout -- but
         # still labelled: the method top left, the channel and the objects bottom right
-        crop_px = write_crop(
+        crop_px = rm.write_crop(
             zoom,
             px,
             outdir / f"{pid}_crop",
@@ -244,83 +251,6 @@ def _rgb(color) -> tuple[float, float, float]:
     import matplotlib.colors
 
     return tuple(float(c) for c in matplotlib.colors.to_rgb(color))
-
-
-def write_crop(
-    img,
-    px: float,
-    out_stem: Path,
-    formats,
-    dpi: int,
-    size_px=None,
-    scalebar=True,
-    legend=(),
-    title: str = "",
-) -> int:
-    """The outlined crop ALONE, at an exact output size -- no overview, no funnel.
-
-    For a figure that supplies its own layout: the file is exactly ``size_px`` square (the
-    crop's own pixels when it is not given), drawn nearest-neighbour so a one-pixel outline
-    stays one pixel. It is annotated the way every other figure here is -- the method top
-    left, the channel and the outlined objects in their colours bottom right, a scale bar --
-    so a crop lifted into a panel still says what it shows. ``--crop-plain`` drops all of it.
-    Returns the side actually written.
-    """
-    plt = rm._mpl()
-    n = int(size_px or img.shape[0])
-    fig = plt.figure(figsize=(n / dpi, n / dpi), dpi=dpi, facecolor="black")
-    ax = fig.add_axes([0, 0, 1, 1])
-    ax.imshow(img, interpolation="nearest")
-    ax.set_axis_off()
-    font = max(8.0, n / dpi * 3.0)
-    if title:
-        rm._outline(
-            ax.text(
-                0.03,
-                0.97,
-                title,
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-                fontsize=font * 1.15,
-                color="white",
-                fontweight="bold",
-            )
-        )
-    if legend:
-        # the crop has no margin (the axes fill the figure), so the stack starts a little
-        # higher than the default 0.03: at 1024 px the bottom entry sat on the edge
-        rm.draw_legend(ax, list(legend), font, y=0.045)
-    if scalebar:
-        # in the IMAGE's data coordinates, not the output size: draw_scalebar places the bar
-        # at 0.05 x w of the axes' data range, so passing n instead put it off the image
-        # entirely whenever --crop-px differed from the crop (measured at 1024 px on a 461 px
-        # crop, 2026-09-20). Matplotlib scales it to the output for us.
-        h, w = img.shape[:2]
-        bar_um = rm.auto_scalebar_um(h * px)
-        rm.draw_scalebar(
-            ax,
-            h,
-            w,
-            bar_um / px,
-            rm.scalebar_label(bar_um),
-            font,
-            thick=0.008,
-            color=BAR_GREY,
-        )
-    for fmt in formats:
-        # bbox/pad pinned, not inherited: benchmarks/analysis/lib/plotting.py's paper theme
-        # sets savefig.bbox="tight" globally, and anything that has called it in this process
-        # would otherwise trim and pad the file -- measured 522 px for --crop-px 512.
-        fig.savefig(
-            f"{out_stem}.{fmt}",
-            dpi=dpi,
-            facecolor="black",
-            bbox_inches=None,
-            pad_inches=0,
-        )
-    plt.close(fig)
-    return n
 
 
 def draw_figure(over, factor, zoom, box, px, opt, stem: Path, formats, legend) -> dict:

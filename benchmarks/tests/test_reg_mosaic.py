@@ -1215,3 +1215,47 @@ def test_a_mosaic_variant_that_does_not_fit_keeps_the_earlier_ones(
     drawn = sorted(out.glob("P1_v*_mosaic.png"))
     assert 1 <= len(drawn) < 8
     assert "stopping at" in caplog.text
+
+
+# --- display limits that keep the background black ---------------------------------
+def _field(rng, bg, noise, signal=None, shape=(256, 256)):
+    img = rng.normal(bg, noise, size=shape).astype(np.float32)
+    if signal is not None:
+        yy, xx = np.indices(shape)
+        for cy, cx in [(60, 60), (60, 190), (190, 60), (190, 190), (128, 128)]:
+            img += signal * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 9.0**2))
+    return img
+
+
+def test_clean_limits_put_a_raised_background_below_black():
+    """The complaint the mode exists for: a percentile stretch leaves the offset and its
+    noise visible, so the field reads grey -- or, once coloured, as a wash of that colour."""
+    rng = np.random.default_rng(0)
+    img = _field(rng, bg=800.0, noise=40.0, signal=3000.0)
+    p_lo, p_hi = rm.percentile_limits(img, 1.0, 99.8)
+    c_lo, c_hi = rm.clean_limits(img)
+    assert p_lo < 800.0 < c_lo  # the percentile black point sits INSIDE the background
+    # what the viewer sees: background pixels are pure black under clean, not under percentile
+    bg = img[:40, :40]
+    # nearly every background pixel is lit by the percentile stretch; none by the clean one
+    assert (rm.stretch(bg, (p_lo, p_hi)) > 0).mean() > 0.9
+    assert (rm.stretch(bg, (c_lo, c_hi)) > 0).mean() == 0.0
+    # and the signal is still there
+    assert rm.stretch(img, (c_lo, c_hi)).max() > 0.9
+
+
+def test_a_channel_with_no_signal_renders_black_rather_than_glowing():
+    """An empty round must not have its own noise stretched to full scale."""
+    rng = np.random.default_rng(1)
+    empty = _field(rng, bg=800.0, noise=40.0)
+    lo, hi = rm.clean_limits(empty)
+    shown = rm.stretch(empty, (lo, hi))
+    assert shown.mean() < 0.02 and shown.max() < 0.5
+
+
+def test_clean_limits_survive_a_blank_or_uniform_plane():
+    flat = np.full((64, 64), 7.0, np.float32)
+    lo, hi = rm.clean_limits(flat)
+    assert hi > lo and np.isfinite([lo, hi]).all()
+    lo, hi = rm.clean_limits(np.zeros((8, 8), np.float32))
+    assert hi > lo
