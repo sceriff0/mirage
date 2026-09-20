@@ -203,3 +203,239 @@ def test_an_anonymous_reference_falls_back_to_the_checkpoint_channels(
         path.write_text(path.read_text().replace(str(arm), str(dst)))
     m = _zoom(dst, tmp_path / "out")
     assert m["channel_index"] == 0 and m["channel_names_from"] == "checkpoint"
+
+
+# --- the crop on its own ----------------------------------------------------------
+def test_no_crop_file_unless_asked(seg_run, tmp_path):
+    arm, _ = seg_run
+    m = _zoom(arm, tmp_path / "out")
+    assert m["crop_only_file"] is None
+    assert not (tmp_path / "out" / "P1_crop.png").exists()
+
+
+def test_crop_also_writes_both_figures(seg_run, tmp_path):
+    arm, _ = seg_run
+    out = tmp_path / "both"
+    m = _zoom(arm, out, "--crop", "also")
+    assert (out / "P1_zoom.png").is_file() and (out / "P1_crop.png").is_file()
+    assert m["crop_only_file"]["stem"] == "P1_crop" and m["scalebars"]
+
+
+def test_crop_only_skips_the_overview_figure(seg_run, tmp_path):
+    arm, _ = seg_run
+    out = tmp_path / "only"
+    m = _zoom(arm, out, "--crop", "only")
+    assert (out / "P1_crop.png").is_file()
+    assert not (out / "P1_zoom.png").exists()
+    assert (
+        m["scalebars"] is None
+        and m["crop_only_file"]["output_px"] == m["zoom"]["size_px"]
+    )
+
+
+def test_the_crop_file_is_exactly_the_requested_size(seg_run, tmp_path):
+    import matplotlib.image
+
+    arm, _ = seg_run
+    out = tmp_path / "sized"
+    m = _zoom(arm, out, "--crop", "only", "--crop-px", "512", "--formats", "png")
+    assert m["crop_only_file"]["output_px"] == 512
+    img = matplotlib.image.imread(str(out / "P1_crop.png"))
+    assert img.shape[:2] == (512, 512)  # the file, not just the manifest
+
+
+def test_crop_plain_drops_the_scale_bar(seg_run, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rm, "draw_scalebar", lambda *a, **k: calls.append(a))
+    arm, _ = seg_run
+    _zoom(arm, tmp_path / "bare", "--crop", "only", "--crop-plain")
+    assert calls == []
+    m = _zoom(arm, tmp_path / "bar", "--crop", "only", "--crop-px", "512")
+    assert len(calls) == 1
+    # the bar is placed in the IMAGE's coordinates, not the output size, or it lands off
+    # the axes entirely when --crop-px differs from the crop
+    _ax, h, w, bar_px = calls[0][:4]
+    size = m["zoom"]["size_px"]
+    assert (h, w) == (size, size) and 0 < bar_px < size
+
+
+def test_the_log_names_only_the_files_actually_written(seg_run, tmp_path, caplog):
+    arm, _ = seg_run
+    with caplog.at_level("INFO"):
+        _zoom(arm, tmp_path / "only", "--crop", "only")
+    assert "P1_crop" in caplog.text and "P1_zoom.{" not in caplog.text
+    caplog.clear()
+    with caplog.at_level("INFO"):
+        _zoom(arm, tmp_path / "both", "--crop", "also")
+    assert "P1_zoom, P1_crop" in caplog.text
+
+
+# --- cells and nuclei in one image -------------------------------------------------
+@pytest.fixture(scope="module")
+def two_masks(seg_run, tmp_path_factory):
+    """A run whose nuclear mask is a smaller object inside each cell, as segmentation gives."""
+    import shutil
+
+    from scipy import ndimage
+
+    arm, labels = seg_run
+    dst = tmp_path_factory.mktemp("two") / "armR"
+    shutil.copytree(arm, dst)
+    nuc = np.where(ndimage.binary_erosion(labels > 0, iterations=4), labels, 0)
+    nuc_path = dst / "P1" / "segmentation" / "P1_nuclei_mask.tif"
+    tifffile.imwrite(str(nuc_path), nuc.astype(np.uint32), compression="zlib")
+    csv_path = dst / "csv" / "segmented.csv"
+    text = csv_path.read_text().replace(str(arm), str(dst))
+    rows = list(csv.DictReader(text.splitlines()))
+    rows[0]["nuclei_mask"] = str(nuc_path)
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    return dst
+
+
+def test_both_masks_are_outlined_each_in_its_own_colour(
+    two_masks, tmp_path, monkeypatch
+):
+    seen = []
+    real = rm.draw_overview_zoom
+    monkeypatch.setattr(
+        rm,
+        "draw_overview_zoom",
+        lambda *a, **k: (seen.append((a, k)), real(*a, **k))[1],
+    )
+    m = _zoom(
+        two_masks,
+        tmp_path / "both",
+        "--mask",
+        "both",
+        "--outline-color",
+        "#ffd400",
+        "--nuclei-color",
+        "#00e5ff",
+        "--cells-label",
+        "StarDist cells",
+        "--nuclei-label",
+        "StarDist nuclei",
+    )
+    assert set(m["masks"]) == {"cell", "nuclei"}
+    assert m["masks"]["cell"]["color"] == "#ffd400"
+    assert m["masks"]["nuclei"]["color"] == "#00e5ff"
+    assert m["objects_in_zoom"]["cell"] >= m["objects_in_zoom"]["nuclei"] > 0
+    legend = seen[0][1]["legend"]
+    assert [n for n, _ in legend] == ["DAPI", "StarDist cells", "StarDist nuclei"]
+    assert legend[1][1] == (1.0, 0.8313725490196079, 0.0)  # #ffd400
+    # both colours are actually painted, and neither replaced the other
+    zoom = seen[0][0][1]
+    px_cells = np.all(np.isclose(zoom, legend[1][1], atol=0.01), axis=2).sum()
+    px_nuclei = np.all(np.isclose(zoom, legend[2][1], atol=0.01), axis=2).sum()
+    assert px_cells > 0 and px_nuclei > 0
+
+
+def test_a_single_mask_still_uses_one_colour_and_one_legend_entry(
+    two_masks, tmp_path, monkeypatch
+):
+    seen = []
+    real = rm.draw_overview_zoom
+    monkeypatch.setattr(
+        rm, "draw_overview_zoom", lambda *a, **k: (seen.append(k), real(*a, **k))[1]
+    )
+    for kind, label in (("cell", "cells"), ("nuclei", "nuclei")):
+        seen.clear()
+        m = _zoom(two_masks, tmp_path / kind, "--mask", kind)
+        assert list(m["masks"]) == [kind]
+        assert [n for n, _ in seen[0]["legend"]] == ["DAPI", label]
+
+
+def test_mask_both_without_a_nuclear_mask_says_so(seg_run, tmp_path):
+    import shutil
+
+    arm, _ = seg_run
+    dst = tmp_path / "armR"
+    shutil.copytree(arm, dst)
+    csv_path = dst / "csv" / "segmented.csv"
+    rows = list(
+        csv.DictReader(csv_path.read_text().replace(str(arm), str(dst)).splitlines())
+    )
+    rows[0]["nuclei_mask"] = ""
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    with pytest.raises(SystemExit, match="no nuclei_mask"):
+        _zoom(dst, tmp_path / "out", "--mask", "both")
+
+
+def test_the_crop_carries_the_method_and_the_channel_names(
+    two_masks, tmp_path, monkeypatch
+):
+    """A crop lifted into someone else's panel must still say what it shows: the method top
+    left, the channel and the outlined objects in their colours bottom right."""
+    seen = {}
+    real_legend, real_text = rm.draw_legend, None
+    monkeypatch.setattr(
+        rm,
+        "draw_legend",
+        lambda ax, entries, font, **k: seen.update(legend=entries, kw=k),
+    )
+    m = _zoom(
+        two_masks,
+        tmp_path / "labelled",
+        "--mask",
+        "both",
+        "--crop",
+        "only",
+        "--title",
+        "StarDist",
+        "--channel-label",
+        "DAPI",
+        "--cells-label",
+        "cells",
+        "--nuclei-label",
+        "nuclei",
+    )
+    assert [n for n, _ in seen["legend"]] == ["DAPI", "cells", "nuclei"]
+    assert m["crop_only_file"]["title"] == "StarDist"
+    # the crop's axes fill the figure, so the stack has to start above the default 0.03
+    # or the bottom entry sits on the edge (seen at 1024 px)
+    assert seen["kw"]["y"] > 0.03
+    assert real_legend is rm.draw_legend or real_text is None  # monkeypatch bookkeeping
+
+
+def test_crop_plain_drops_the_labels_too(two_masks, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(rm, "draw_legend", lambda *a, **k: seen.append(a))
+    _zoom(
+        two_masks,
+        tmp_path / "bare",
+        "--crop",
+        "only",
+        "--crop-plain",
+        "--title",
+        "StarDist",
+    )
+    assert seen == []
+
+
+def test_the_crop_size_survives_a_global_tight_bbox(seg_run, tmp_path, monkeypatch):
+    """benchmarks/analysis/lib/plotting.py's paper theme sets savefig.bbox="tight" on the
+    GLOBAL rcParams, so anything that has called it in this process changes every later
+    figure: --crop-px 512 came out 512 alone and 522 in the full suite (2026-09-20).
+
+    setitem on the real rcParams, not a copy of plt.rcParams: savefig reads
+    matplotlib.rcParams, so a copy leaves the leak out of the very path under test.
+    """
+    import matplotlib
+    import matplotlib.image
+
+    from benchmarks.analysis.lib import plotting
+
+    assert plotting._THEME["savefig.bbox"] == "tight"  # where the leak comes from
+    for key, value in plotting._THEME.items():
+        monkeypatch.setitem(matplotlib.rcParams, key, value)
+    arm, _ = seg_run
+    out = tmp_path / "themed"
+    _zoom(arm, out, "--crop", "only", "--crop-px", "512", "--formats", "png")
+    img = matplotlib.image.imread(str(out / "P1_crop.png"))
+    assert img.shape[:2] == (512, 512)

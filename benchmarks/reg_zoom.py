@@ -12,11 +12,20 @@ One figure per patient, from a mirage ``--outdir`` that ran segmentation:
 
 Inputs come from the run's ``csv/segmented.csv`` (lib/Checkpoint.groovy): the reference
 row's ``registered_image`` (DAPI found by OME channel name) and ``cell_mask`` -- or
-``nuclei_mask`` with ``--mask nuclei`` -- a label image on the same reference canvas.
+``nuclei_mask`` with ``--mask nuclei``, or BOTH with ``--mask both``, which outlines the
+cells in ``--outline-color`` and the nuclei in ``--nuclei-color`` in one image (nuclei
+drawn last, so the inner outline wins where they touch). Each is a label image on the same
+reference canvas. Which backend produced them is the RUN's business, not this tool's:
+submit_zoom.sh's SEG_METHOD (stardist | instantseg | cellsam) chooses it.
 
 Outputs in OUTDIR:
     <patient>_zoom.png/.pdf   the figure
     <patient>_zoom.json       zoom region (reference frame, full-res px), files, settings
+    <patient>_crop.png/.pdf   --crop also|only: the outlined crop ALONE, no overview, no
+                              funnel, no legend, at exactly --crop-px square (default: its
+                              own pixels), for a figure that supplies its own layout.
+                              --field-um sets how much TISSUE it covers, --crop-px how big
+                              the file is; --crop-plain drops even the scale bar.
 
     python -m benchmarks.reg_zoom results/segmentation -o figs/zoom --field-um 400 \\
         --outline-color yellow --outline-width 2
@@ -101,8 +110,22 @@ def render(opt) -> dict:
     row = reference_row(rows, opt.patient)
     pid = row["patient_id"]
     image = rm.published_file(row["registered_image"])
-    mask = Path(row["cell_mask" if opt.mask == "cell" else "nuclei_mask"])
-    src, msrc = rm.TiffSource(image), rm.TiffSource(mask)
+    # --mask both outlines the cell AND the nuclear label image, each in its own colour;
+    # segmented.csv carries them side by side, both on the reference canvas
+    kinds = ("cell", "nuclei") if opt.mask == "both" else (opt.mask,)
+    masks = {}
+    for kind in kinds:
+        col = f"{'cell' if kind == 'cell' else 'nuclei'}_mask"
+        if not row.get(col):
+            raise SystemExit(
+                f"{pid}: segmented.csv has no {col} for the reference row; "
+                f"--mask {opt.mask} needs it"
+            )
+        masks[kind] = Path(row[col])
+    src = rm.TiffSource(image)
+    msrcs = {k: rm.TiffSource(v) for k, v in masks.items()}
+    mask = masks[kinds[0]]
+    msrc = msrcs[kinds[0]]
     csv_channels = [c for c in (row.get("channels") or "").split("|") if c]
     ci = src.nuclear_index(csv_channels)
     if ci is None:
@@ -110,11 +133,12 @@ def render(opt) -> dict:
             f"{image.name}: no DAPI/Hoechst/CellTox among "
             f"{src.channel_names or csv_channels}"
         )
-    if msrc.shape != src.shape:
-        raise SystemExit(
-            f"{mask.name} is {msrc.shape}, {image.name} is {src.shape}: the mask is not on the "
-            "reference canvas"
-        )
+    for kind, m in msrcs.items():
+        if m.shape != src.shape:
+            raise SystemExit(
+                f"{masks[kind].name} is {m.shape}, {image.name} is {src.shape}: the mask is "
+                "not on the reference canvas"
+            )
     H, W = src.shape
     px = opt.pixel_size_um or rm._float_or_none(row.get("pixel_size")) or src.px
     if not px:
@@ -140,22 +164,54 @@ def render(opt) -> dict:
     log.info("%s: zoom y=%d x=%d size=%d px (%s um/px)", pid, y, x, field_px, px)
 
     dapi = src.read_patch(ci, y, x, field_px, field_px)
-    labels = msrc.read_patch(0, y, x, field_px, field_px)
     zoom = white(dapi, opt.pmin, opt.pmax, opt.gamma)
-    edge = outlines(labels, opt.outline_width)
-    zoom[edge] = _rgb(opt.outline_color)
+    colors = {"cell": opt.outline_color, "nuclei": opt.nuclei_color}
+    counts, drawn = {}, {}
+    # cells first, nuclei over them: a nucleus lies inside its cell, so the inner outline
+    # must win where the two touch
+    for kind in kinds:
+        lab = msrcs[kind].read_patch(0, y, x, field_px, field_px)
+        counts[kind] = int(len(np.setdiff1d(np.unique(lab), [0])))
+        zoom[outlines(lab, opt.outline_width)] = _rgb(colors[kind])
+        drawn[kind] = {"file": str(masks[kind]), "color": colors[kind]}
     over = white(low, opt.pmin, opt.pmax, opt.gamma)
 
     outdir = Path(opt.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     stem = outdir / f"{pid}_zoom"
     formats = [f.strip() for f in opt.formats.split(",") if f.strip()]
-    bars = draw_figure(over, factor, zoom, (y, x, field_px), px, opt, stem, formats)
+    legend = [
+        (opt.cells_label if kind == "cell" else opt.nuclei_label, _rgb(colors[kind]))
+        for kind in kinds
+    ]
+    crop_px = None
+    if opt.crop != "none":
+        # the outlined crop on its own, for a figure that supplies its own layout -- but
+        # still labelled: the method top left, the channel and the objects bottom right
+        crop_px = write_crop(
+            zoom,
+            px,
+            outdir / f"{pid}_crop",
+            formats,
+            opt.dpi,
+            opt.crop_px,
+            not opt.crop_plain,
+            legend=() if opt.crop_plain else [(opt.channel_label, DAPI_WHITE), *legend],
+            title="" if opt.crop_plain else opt.title,
+        )
+    bars = (
+        None
+        if opt.crop == "only"
+        else draw_figure(
+            over, factor, zoom, (y, x, field_px), px, opt, stem, formats, legend
+        )
+    )
     manifest = {
         "patient": pid,
         "image": str(image),
         "mask": str(mask),
         "mask_kind": opt.mask,
+        "masks": drawn,
         # which plane was drawn, and where its name came from: the slide's own OME header, or
         # segmented.csv when the slide is anonymous (TiffSource.nuclear_index)
         "channel_index": ci,
@@ -164,7 +220,17 @@ def render(opt) -> dict:
         "zoom": {"y": y, "x": x, "size_px": field_px, "size_um": field_px * px},
         "overview_px_per_output_px": factor,
         "outline": {"color": opt.outline_color, "width_px": opt.outline_width},
-        "cells_in_zoom": int(len(np.setdiff1d(np.unique(labels), [0]))),
+        "cells_in_zoom": counts[kinds[0]],
+        "objects_in_zoom": counts,
+        "crop_only_file": None
+        if opt.crop == "none"
+        else {
+            "stem": f"{pid}_crop",
+            "output_px": crop_px,
+            "scalebar": not opt.crop_plain,
+            "title": "" if opt.crop_plain else opt.title,
+            "labelled": not opt.crop_plain,
+        },
         "scalebars": bars,
         "stretch": {"pmin": opt.pmin, "pmax": opt.pmax, "gamma": opt.gamma},
     }
@@ -180,7 +246,84 @@ def _rgb(color) -> tuple[float, float, float]:
     return tuple(float(c) for c in matplotlib.colors.to_rgb(color))
 
 
-def draw_figure(over, factor, zoom, box, px, opt, stem: Path, formats) -> dict:
+def write_crop(
+    img,
+    px: float,
+    out_stem: Path,
+    formats,
+    dpi: int,
+    size_px=None,
+    scalebar=True,
+    legend=(),
+    title: str = "",
+) -> int:
+    """The outlined crop ALONE, at an exact output size -- no overview, no funnel.
+
+    For a figure that supplies its own layout: the file is exactly ``size_px`` square (the
+    crop's own pixels when it is not given), drawn nearest-neighbour so a one-pixel outline
+    stays one pixel. It is annotated the way every other figure here is -- the method top
+    left, the channel and the outlined objects in their colours bottom right, a scale bar --
+    so a crop lifted into a panel still says what it shows. ``--crop-plain`` drops all of it.
+    Returns the side actually written.
+    """
+    plt = rm._mpl()
+    n = int(size_px or img.shape[0])
+    fig = plt.figure(figsize=(n / dpi, n / dpi), dpi=dpi, facecolor="black")
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.imshow(img, interpolation="nearest")
+    ax.set_axis_off()
+    font = max(8.0, n / dpi * 3.0)
+    if title:
+        rm._outline(
+            ax.text(
+                0.03,
+                0.97,
+                title,
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=font * 1.15,
+                color="white",
+                fontweight="bold",
+            )
+        )
+    if legend:
+        # the crop has no margin (the axes fill the figure), so the stack starts a little
+        # higher than the default 0.03: at 1024 px the bottom entry sat on the edge
+        rm.draw_legend(ax, list(legend), font, y=0.045)
+    if scalebar:
+        # in the IMAGE's data coordinates, not the output size: draw_scalebar places the bar
+        # at 0.05 x w of the axes' data range, so passing n instead put it off the image
+        # entirely whenever --crop-px differed from the crop (measured at 1024 px on a 461 px
+        # crop, 2026-09-20). Matplotlib scales it to the output for us.
+        h, w = img.shape[:2]
+        bar_um = rm.auto_scalebar_um(h * px)
+        rm.draw_scalebar(
+            ax,
+            h,
+            w,
+            bar_um / px,
+            rm.scalebar_label(bar_um),
+            font,
+            thick=0.008,
+            color=BAR_GREY,
+        )
+    for fmt in formats:
+        # bbox/pad pinned, not inherited: benchmarks/analysis/lib/plotting.py's paper theme
+        # sets savefig.bbox="tight" globally, and anything that has called it in this process
+        # would otherwise trim and pad the file -- measured 522 px for --crop-px 512.
+        fig.savefig(
+            f"{out_stem}.{fmt}",
+            dpi=dpi,
+            facecolor="black",
+            bbox_inches=None,
+            pad_inches=0,
+        )
+    plt.close(fig)
+    return n
+
+
+def draw_figure(over, factor, zoom, box, px, opt, stem: Path, formats, legend) -> dict:
     """Overview left, framed zoom top right, funnel between, legend bottom right.
 
     The layout itself is reg_mosaic.draw_overview_zoom, shared with reg_overlay's --zoom-um
@@ -198,7 +341,8 @@ def draw_figure(over, factor, zoom, box, px, opt, stem: Path, formats) -> dict:
         dpi=opt.dpi,
         zoom_fraction=opt.zoom_fraction,
         funnel_alpha=opt.funnel_alpha,
-        legend=[("DAPI", DAPI_WHITE), (opt.cells_label, _rgb(opt.outline_color))],
+        title=opt.title,
+        legend=[(opt.channel_label, DAPI_WHITE), *legend],
     )
 
 
@@ -222,9 +366,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--patient", default=None)
     ap.add_argument(
         "--mask",
-        choices=("cell", "nuclei"),
+        choices=("cell", "nuclei", "both"),
         default="cell",
-        help="which label image to outline",
+        help="which label image to outline: the cell mask, the nuclear one, or BOTH in one "
+        "image (cells in --outline-color, nuclei in --nuclei-color)",
     )
     ap.add_argument("--field-um", type=float, default=300.0, help="zoom side in µm")
     ap.add_argument(
@@ -246,7 +391,46 @@ def build_parser() -> argparse.ArgumentParser:
         "--outline-width", type=int, default=1, help="outline thickness in image px"
     )
     ap.add_argument(
-        "--cells-label", default="cells", help="legend name for the outlines"
+        "--cells-label", default="cells", help="legend name for the cell outlines"
+    )
+    ap.add_argument(
+        "--nuclei-color",
+        default="#00e5ff",
+        help="colour of the nuclear outlines under --mask both (default #00e5ff); with "
+        "--mask nuclei the outlines use --outline-color as before",
+    )
+    ap.add_argument(
+        "--nuclei-label", default="nuclei", help="legend name for the nuclear outlines"
+    )
+    ap.add_argument(
+        "--channel-label",
+        default="DAPI",
+        help="legend name for the grey channel (default DAPI)",
+    )
+    ap.add_argument(
+        "--title",
+        default="",
+        help="method name, drawn top left on the figure and on the crop "
+        "(submit_zoom.sh passes SEG_METHOD); empty = no title",
+    )
+    ap.add_argument(
+        "--crop",
+        choices=("none", "also", "only"),
+        default="none",
+        help="write the outlined crop ALONE as <pid>_crop.* -- 'also' beside the "
+        "overview+zoom figure, 'only' instead of it (default none)",
+    )
+    ap.add_argument(
+        "--crop-px",
+        type=int,
+        default=0,
+        help="side of that file in output px (default 0 = the crop's own pixels, 1:1); "
+        "--field-um sets how much TISSUE it covers, this sets how big the file is",
+    )
+    ap.add_argument(
+        "--crop-plain",
+        action="store_true",
+        help="no scale bar on the crop-alone file: bare pixels",
     )
     ap.add_argument("--funnel-alpha", type=float, default=0.25)
     ap.add_argument(
@@ -275,9 +459,12 @@ def main(argv=None) -> int:
     for noisy in ("fontTools", "matplotlib", "PIL"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     m = render(opt)
+    written = ([] if opt.crop == "only" else [f"{m['patient']}_zoom"]) + (
+        [] if opt.crop == "none" else [f"{m['patient']}_crop"]
+    )
     log.info(
-        "wrote %s_zoom.{%s} (%d cells in the zoom) in %s",
-        m["patient"],
+        "wrote %s.{%s} (%d cells in the zoom) in %s",
+        ", ".join(written),
         opt.formats,
         m["cells_in_zoom"],
         opt.outdir,

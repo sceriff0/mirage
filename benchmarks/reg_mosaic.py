@@ -1352,7 +1352,16 @@ def draw_overview_zoom(
         legend_ax.set_axis_off()
         draw_legend(legend_ax, list(legend), font * 1.3, x=1.0, y=0.05)
     for fmt in formats:
-        fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, facecolor=facecolor)
+        # this layout is hand-placed in figure coordinates, so the canvas must be exactly the
+        # figure: a globally-set savefig.bbox="tight" (analysis/lib/plotting.py's theme) would
+        # trim and pad it in any process that has used that theme
+        fig.savefig(
+            f"{out_stem}.{fmt}",
+            dpi=dpi,
+            facecolor=facecolor,
+            bbox_inches=None,
+            pad_inches=0,
+        )
     plt.close(fig)
     return {"overview_um": bar_over, "zoom_um": bar_zoom}
 

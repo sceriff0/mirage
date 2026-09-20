@@ -50,10 +50,19 @@ SEG_METHOD="${SEG_METHOD:-stardist}"
 PATIENT="${PATIENT:-}"               # empty = the only patient
 FIELD_UM="${FIELD_UM:-300}"          # zoom side in µm (drawn at full resolution)
 ROI="${ROI:-}"                       # "Y,X" zoom top-left in the reference frame; empty = auto
-MASK="${MASK:-cell}"                 # cell | nuclei
+MASK="${MASK:-cell}"                 # cell | nuclei | both (both = cells in OUTLINE_COLOR and
+                                     # nuclei in NUCLEI_COLOR, in one image)
 OUTLINE_COLOR="${OUTLINE_COLOR:-#ffd400}"  # any matplotlib colour: yellow, #00ff00, cyan, ...
 OUTLINE_WIDTH="${OUTLINE_WIDTH:-1}"  # outline thickness in image px
 CELLS_LABEL="${CELLS_LABEL:-StarDist cells}"
+NUCLEI_COLOR="${NUCLEI_COLOR:-#00e5ff}"    # nuclear outlines under MASK=both
+NUCLEI_LABEL="${NUCLEI_LABEL:-StarDist nuclei}"
+CHANNEL_LABEL="${CHANNEL_LABEL:-DAPI}"      # the grey channel's name in the legend
+TITLE="${TITLE:-$SEG_METHOD}"        # method, top left on the figure AND on the crop
+CROP="${CROP:-none}"                 # none | also | only -- write the outlined crop ALONE as
+                                     # <pid>_crop.*, beside the figure (also) or instead (only)
+CROP_PX="${CROP_PX:-0}"              # its side in output px (0 = the crop's own pixels, 1:1);
+                                     # FIELD_UM sets how much tissue it covers, this the file size
 ZOOM_ARGS="${ZOOM_ARGS:-}"           # extra reg_zoom.py flags, e.g. "--overview-px 3000 --pmin 2"
 # -------------------------------------------------------------------------------
 
@@ -116,7 +125,7 @@ RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mir
 echo "=================================================="
 echo "Zoom job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  $(date)"
 echo "Input:    ${FROM_REGISTERED:-$INPUT}"
-echo "Root:     $ROOT   seg: $SEG_METHOD   pixel size: $PIXEL_SIZE"
+echo "Root:     $ROOT   seg: $SEG_METHOD ($MASK mask)   pixel size: $PIXEL_SIZE"
 echo "Checkout: $SRC_DIR @ $(git -C "$SRC_DIR" rev-parse --short HEAD) ($(git -C "$SRC_DIR" rev-parse --abbrev-ref HEAD))"
 echo "=================================================="
 
@@ -159,7 +168,10 @@ fi
 
 # ---- 2. the zoom figure ------------------------------------------------------------
 ARGS=(--field-um "$FIELD_UM" --mask "$MASK" --outline-color "$OUTLINE_COLOR"
-      --outline-width "$OUTLINE_WIDTH" --cells-label "$CELLS_LABEL")
+      --outline-width "$OUTLINE_WIDTH" --cells-label "$CELLS_LABEL"
+      --nuclei-color "$NUCLEI_COLOR" --nuclei-label "$NUCLEI_LABEL"
+      --channel-label "$CHANNEL_LABEL" --title "$TITLE"
+      --crop "$CROP" --crop-px "$CROP_PX")
 [[ -n "$PATIENT" ]] && ARGS+=(--patient "$PATIENT")
 [[ -n "$ROI" ]] && ARGS+=(--roi "$ROI")
 [[ "$PIXEL_SIZE" != auto ]] && ARGS+=(--pixel-size-um "$PIXEL_SIZE")
@@ -171,5 +183,11 @@ ARGS=(--field-um "$FIELD_UM" --mask "$MASK" --outline-color "$OUTLINE_COLOR"
 ) || { echo "[zoom] FAILED" >&2; exit 1; }
 
 echo "=================================================="
-echo "Done $(date). Figure: $ROOT/zoom/<patient>_zoom.{png,pdf}"
+if [[ "$CROP" == "only" ]]; then
+  echo "Done $(date). Crop: $ROOT/zoom/<patient>_crop.{png,pdf}"
+elif [[ "$CROP" == "also" ]]; then
+  echo "Done $(date). Figure: $ROOT/zoom/<patient>_zoom.{png,pdf}  Crop: <patient>_crop.{png,pdf}"
+else
+  echo "Done $(date). Figure: $ROOT/zoom/<patient>_zoom.{png,pdf}"
+fi
 echo "=================================================="
