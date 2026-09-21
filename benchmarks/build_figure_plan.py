@@ -251,6 +251,10 @@ def plan(cfg: dict) -> list[tuple[str, str, str, str]]:
                     for suffix, roi in regions:
                         args = ["--patch-um", _num(patch), "--variants", variants]
                         args += ["--kinds", kind, "--numbers", number]
+                        # left out, reg_mosaic draws every round at one ROI -- the right
+                        # default here, since this file has no samplesheet to count rounds in
+                        if mosaic.get("rows"):
+                            args += ["--rows", _count(mosaic, "rows", "figures.mosaic")]
                         if roi:
                             args += ["--roi", roi]
                         for pid in pids:  # reg_mosaic takes --patient repeatedly

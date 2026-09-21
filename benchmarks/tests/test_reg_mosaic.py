@@ -1259,3 +1259,35 @@ def test_clean_limits_survive_a_blank_or_uniform_plane():
     assert hi > lo and np.isfinite([lo, hi]).all()
     lo, hi = rm.clean_limits(np.zeros((8, 8), np.float32))
     assert hi > lo
+
+
+def test_rows_defaults_to_every_round_at_one_roi(arm_root, tmp_path):
+    """A launcher expanding a YAML has no samplesheet to count rounds from, so --rows has to
+    have a default: without one every mosaic of job 6872763 died on 'the following arguments
+    are required: --rows'."""
+    out = tmp_path / "norows"
+    argv = [
+        str(arm_root / "armA"),
+        str(arm_root / "armB"),
+        "-o",
+        str(out),
+        "--patch-px",
+        "64",
+        "--formats",
+        "png",
+        "--dpi",
+        "50",
+        "--numbers",
+        "none",
+    ]
+    assert rm.main(argv) == 0
+    m = json.loads((out / "P1_rois.json").read_text())
+    rounds = {r["round"] for r in m["row_plan"]}
+    assert m["rows"] == len(rounds) == 2  # CD3 and CD8, one ROI each
+    assert len(m["rois"]) == 1
+    assert (out / "P1_mosaic.png").is_file()
+
+
+def test_an_explicit_rows_still_wins(arm_root, tmp_path):
+    m = _run(arm_root, tmp_path / "rows3", "--numbers", "none", "--rows", "3")
+    assert m["rows"] == 3 and len(m["row_plan"]) == 3

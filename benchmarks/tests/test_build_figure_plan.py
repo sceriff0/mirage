@@ -354,3 +354,12 @@ def test_the_summary_names_the_expensive_axes():
     cfg = bfp.load(SHIPPED)
     text = bfp.summary(cfg, bfp.plan(cfg))
     assert "registration arm(s)" in text and "segmentation run(s)" in text
+
+
+def test_the_mosaic_row_count_is_left_to_reg_mosaic_unless_asked():
+    """This file has no samplesheet, so it cannot count rounds: reg_mosaic defaults to every
+    round at one ROI. Passing --rows from here without a count is what broke job 6872763."""
+    rows = bfp.plan(_cfg(figures={"mosaic": {"patch_um": [200]}}))
+    assert _flag(rows[0], "--rows") is None
+    rows = bfp.plan(_cfg(figures={"mosaic": {"patch_um": [200], "rows": 6}}))
+    assert _flag(rows[0], "--rows") == "6"

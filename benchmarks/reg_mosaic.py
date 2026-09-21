@@ -1626,7 +1626,7 @@ def write_png(path: Path, rgb01):
 @dataclass
 class Options:
     outdir: Path
-    rows: int
+    rows: int | None = None  # None = one row per moving round
     rounds: list[str] | None = None
     patch_um: float = 200.0
     patch_px: int | None = None
@@ -1749,7 +1749,12 @@ def process_patient(
     factor_hint = max(1, int(round(opt.lowres_um / px))) if px else 16
     low, f = lead.lowres_reference(factor_hint)
 
-    n_rois = max(1, math.ceil(opt.rows / len(moving)))
+    # --rows defaults to every round at one ROI. It is computed HERE, after the rounds no
+    # arm shares have been dropped, because that is the only place the number is known: a
+    # launcher expanding a YAML has no samplesheet to count (job 6872763 passed none and
+    # every mosaic died on "the following arguments are required: --rows").
+    rows = opt.rows if opt.rows else len(moving)
+    n_rois = max(1, math.ceil(rows / len(moving)))
     if opt.rois_json:
         prev = json.loads(Path(opt.rois_json).read_text())
         rois = [(int(r["y"]), int(r["x"])) for r in prev["rois"]]
@@ -1774,7 +1779,7 @@ def process_patient(
             )
         )
     log.info("ROIs (y, x, %d px): %s", patch_px, rois)
-    plan = plan_rows(keys, len(rois), opt.rows)
+    plan = plan_rows(keys, len(rois), rows)
     by_key = {sl.key: sl for sl in moving}
 
     outdir = Path(opt.outdir)
@@ -1941,7 +1946,7 @@ def process_patient(
         "pixel_size_um": px,
         "patch_px": patch_px,
         "patch_um": patch_um,
-        "rows": opt.rows,
+        "rows": rows,
         "rounds_skipped": skipped,
         "palette": opt.palette,
         "numbers": opt.numbers,
@@ -2012,8 +2017,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--rows",
         type=int,
-        required=True,
-        help="number of rows: (moving round, ROI) pairs, ROI-major",
+        default=None,
+        help="number of rows: (moving round, ROI) pairs, ROI-major. Default: one row per "
+        "moving round the arms share, i.e. every round at one ROI -- which is what a "
+        "caller that does not know the samplesheet would have to compute anyway",
     )
     ap.add_argument(
         "--variants",
@@ -2192,7 +2199,7 @@ def main(argv=None) -> int:
     for k in [x.strip() for x in args.kinds.split(",")]:
         if k not in ("overlay", "checker"):
             raise SystemExit(f"unknown kind {k!r}")
-    if args.rows < 1:
+    if args.rows is not None and args.rows < 1:
         raise SystemExit("--rows must be >= 1")
 
     labels = parse_labels(args.label)
