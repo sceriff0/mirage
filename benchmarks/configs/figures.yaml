@@ -45,10 +45,14 @@ segmentation:
   methods:                   # one pipeline run each; the zoom and crops show the difference
     - stardist               # what conf/ieo.config pins, with its model
     - instantseg             # the pipeline default; needs no extra assets
-    # - cellsam              # NEEDS ITS WEIGHTS ON DISK: with cellsam_model_path unset it
-                             # fetches them from users.deepcell.org, which a compute node
-                             # cannot reach (ConnectTimeout, job 68633*). Pre-download on
-                             # the login node and pin the path below, then enable it.
+    # - cellsam              # NEEDS ITS WEIGHTS ON DISK. With cellsam_model_path unset,
+                             # cellSAM.get_model() fetches them from users.deepcell.org.
+                             # At IEO that host is unreachable from the compute nodes AND
+                             # from login01 (ConnectTimeout, 2026-09-21) even though
+                             # `singularity pull docker://` works, so it is that host
+                             # specifically, not egress in general. Fetch the weights on a
+                             # machine that can reach it, copy them under a bound path, and
+                             # pin cellsam_model_path below.
   params: {}                 # extra pipeline params for every segmentation run, e.g.
                              #   cellsam_model_path: /hpcnfs/.../models/cellsam/cellsam_base.pt
 
