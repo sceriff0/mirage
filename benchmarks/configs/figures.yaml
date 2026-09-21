@@ -45,7 +45,12 @@ segmentation:
   methods:                   # one pipeline run each; the zoom and crops show the difference
     - stardist               # what conf/ieo.config pins, with its model
     - instantseg             # the pipeline default; needs no extra assets
-    - cellsam
+    # - cellsam              # NEEDS ITS WEIGHTS ON DISK: with cellsam_model_path unset it
+                             # fetches them from users.deepcell.org, which a compute node
+                             # cannot reach (ConnectTimeout, job 68633*). Pre-download on
+                             # the login node and pin the path below, then enable it.
+  params: {}                 # extra pipeline params for every segmentation run, e.g.
+                             #   cellsam_model_path: /hpcnfs/.../models/cellsam/cellsam_base.pt
 
 # ---- the free axes ----------------------------------------------------------
 figures:

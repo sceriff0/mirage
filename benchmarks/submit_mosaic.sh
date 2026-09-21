@@ -70,6 +70,8 @@ ASHLAR_REG_QC="${ASHLAR_REG_QC:-0}"  # 1 also writes ASHLAR's 8-bit Before/After
 PATIENT="${PATIENT:-}"               # empty = one mosaic per patient in the samplesheet
 ROWS="${ROWS:-}"                     # (round, ROI) cells per mosaic; empty = the moving rounds
                                      # of the first patient (one ROI each)
+DRAW="${DRAW:-1}"                    # 0 = build the arms and stop (submit_figures.sh draws
+                                     # its own mosaics from the plan, so it sets this)
 VARIANTS="${VARIANTS:-1}"             # draw N mosaics on different tissue and pick the best
 MOSAIC_ARGS="${MOSAIC_ARGS:-}"       # extra reg_mosaic.py flags, e.g. "--orient rounds-as-rows"
 # -------------------------------------------------------------------------------
@@ -256,6 +258,13 @@ if (( ${#ARM_DIRS[@]} == 0 )); then
 fi
 PATIENT_ARGS=(); [[ -n "$PATIENT" ]] && PATIENT_ARGS=(--patient "$PATIENT")
 PX_ARGS=(); [[ "$PIXEL_SIZE" != auto ]] && PX_ARGS=(--pixel-size-um "$PIXEL_SIZE")
+if [[ "$DRAW" != "1" ]]; then
+  # same exit status as the drawing path below: an arm that failed must not be reported as
+  # success just because nobody asked for a picture of it
+  echo "[mosaic] DRAW=0: arms are built (${ARM_DIRS[*]}), not drawing"
+  (( rc_valis == 0 && rc_stare == 0 && rc_ashlar == 0 ))
+  exit $?
+fi
 echo "[mosaic] columns: ${ARM_DIRS[*]}"
 # shellcheck disable=SC2086
 (

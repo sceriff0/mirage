@@ -11,8 +11,9 @@
 # MIRAGE FIGURES -- every figure, from one samplesheet, in one job
 # ============================================================================
 # Driven by benchmarks/configs/figures.yaml (or CONFIG=<file>), expanded by
-# benchmarks/build_figure_plan.py. Four phases, each marked .done and skipped on a
-# re-submit, so changing only the drawing options redraws without recomputing:
+# benchmarks/build_figure_plan.py. The two EXPENSIVE phases are .done-marked and skipped
+# on a re-submit; the figures are always redrawn, which is the point -- change a size or a
+# colour, resubmit, and only the drawing happens:
 #
 #   1. preprocessing + one REGISTRATION per arm, and the mosaic over all of them
 #      (benchmarks/submit_mosaic.sh, called here -- it already knows how to build
@@ -68,6 +69,29 @@ cd "$ROOT" || exit 1
 # shellcheck disable=SC1090
 source ~/.bashrc
 conda activate "$CONDA_ENV"
+
+# CellSAM downloads its weights from users.deepcell.org unless cellsam_model_path is set,
+# and needs DEEPCELL_ACCESS_TOKEN in the ENVIRONMENT (nextflow.config's singularity
+# .envWhitelist forwards it by name into the container). Two ways it silently is not there
+# even though your interactive shell has it:
+#   * most ~/.bashrc files begin with `case $- in *i*) ;; *) return;; esac`, so the `source`
+#     above returns immediately in a batch job and sets nothing;
+#   * `DEEPCELL_ACCESS_TOKEN=...` without `export` is a shell variable, not an environment
+#     one, so it never reaches nextflow's children.
+# Cover both, and say which happened.
+ensure_deepcell_token() {
+  if [[ -n "$DEEPCELL_ACCESS_TOKEN" ]]; then export DEEPCELL_ACCESS_TOKEN; return 0; fi
+  local line
+  line=$(grep -hE '^[[:space:]]*(export[[:space:]]+)?DEEPCELL_ACCESS_TOKEN=' \
+           ~/.bashrc ~/.bash_profile ~/.profile 2>/dev/null | tail -1)
+  if [[ -n "$line" ]]; then
+    eval "${line#*export }" 2>/dev/null || eval "$line" 2>/dev/null
+    export DEEPCELL_ACCESS_TOKEN
+    echo "[token] DEEPCELL_ACCESS_TOKEN taken from a shell rc file (this batch shell is"
+    echo "        non-interactive, so sourcing ~/.bashrc can return before setting it)"
+  fi
+  [[ -n "$DEEPCELL_ACCESS_TOKEN" ]]
+}
 command -v python3 >/dev/null || { echo "python3 not on PATH (check CONDA_ENV)" >&2; exit 1; }
 [[ -f "$SRC_DIR/benchmarks/reg_crop.py" ]] \
   || { echo "$SRC_DIR has no benchmarks/reg_crop.py: git -C $SRC_DIR pull (benchmarking)" >&2; exit 1; }
@@ -121,6 +145,16 @@ ASHLAR_SHIFT_UM=$(read_opt options.ashlar_shift_um 500)
 FORMATS=$(read_opt options.formats png,pdf)
 DPI=$(read_opt options.dpi 100)
 REF_ARM=$(read_opt reference_arm valis_high_micro2)
+# segmentation.params: extra pipeline params for EVERY segmentation run, as name=value.
+# This is how a backend's assets are pinned -- cellsam_model_path being the one that
+# matters here: with it, CellSAM never reaches users.deepcell.org, which a compute node
+# cannot do anyway (job 68633*).
+SEG_PARAMS=$(cd "$SRC_DIR" && python3 -c "
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+for k, v in ((cfg.get('segmentation') or {}).get('params') or {}).items():
+    print(f'{k}={v}')
+" "$CONFIG" | tr '\n' ' ')
 ASHLAR_DIR="ashlar_t${ASHLAR_TILE}_s${ASHLAR_SHIFT_UM}"
 arm_dir() { [[ "$1" == ashlar ]] && printf '%s' "$ASHLAR_DIR" || printf '%s' "$1"; }
 
@@ -169,21 +203,22 @@ resolve() {                        # resolve <run key> -> a directory
   esac
 }
 
-mosaic_rows=$(awk -F'\t' '$1 == "mosaic"' "$PLAN")
 if [[ "$SKIP_REGISTRATION" == "1" || -z "$BUILD" ]]; then
   echo "[phase 1] nothing to build ($REUSED arm(s) reused, SKIP_REGISTRATION=$SKIP_REGISTRATION)"
 else
   echo "[phase 1] building: $(echo "$BUILD" | tr '\n' ' ')"
-  # one call is enough: it builds every arm it knows and draws the first mosaic. The
-  # remaining mosaic rows (other patch sizes, checker, ROIs) are drawn in phase 3.
-  first_patch=$(echo "$mosaic_rows" | head -1 | awk -F'\t' '{print $3}' | sed 's/.*--patch-um \([0-9.]*\).*/\1/')
+  # DRAW=0: it builds the arms and stops. Every mosaic is a plan row like any other figure
+  # and is drawn in phase 3, with its own patch size, kind, numbers, ROI and variants --
+  # letting it draw one here as well would just produce an extra, unasked-for mosaic.
   mosaic_sh="$SRC_DIR/benchmarks/submit_mosaic.sh"
   env ROOT="$ROOT" SRC_DIR="$SRC_DIR" PROFILES="$PROFILES" SITE_CONFIG="$SITE_CONFIG" \
       CONDA_ENV="$CONDA_ENV" PIXEL_SIZE="$PIXEL_SIZE" SEG_QC="$SEG_QC" PATIENT="$PATIENT" \
-      ASHLAR_TILE="$ASHLAR_TILE" ASHLAR_SHIFT_UM="$ASHLAR_SHIFT_UM" VARIANTS=1 \
-      MOSAIC_ARGS="${first_patch:+--patch-um $first_patch}" \
+      ASHLAR_TILE="$ASHLAR_TILE" ASHLAR_SHIFT_UM="$ASHLAR_SHIFT_UM" DRAW=0 \
       bash "$mosaic_sh" "$INPUT" \
-    || { echo "[phase 1] FAILED" >&2; exit 1; }
+    || echo "[phase 1] one or more arms FAILED -- drawing from the ones that finished" >&2
+  # not fatal: submit_mosaic.sh builds the arms independently, so a VALIS that died must
+  # not cost the STARE overlays, the segmentation, or the channel crops. A figure whose own
+  # arm is missing is reported by name in phase 3 and skipped.
 fi
 
 common=(--formats "$FORMATS" --dpi "$DPI")
@@ -200,9 +235,11 @@ segment() {                        # segment <method>
     || { echo "[seg:$method] nextflow not on PATH (check CONDA_ENV)" >&2; return 1; }
   mkdir -p "$run/trace" "$rundir"
   [[ "$PIXEL_SIZE" != auto ]] && px=("pixel_size=$PIXEL_SIZE")
+  # shellcheck disable=SC2086
   (cd "$SRC_DIR" && python3 -m benchmarks.params_json --out "$rundir/params.json" \
       "${px[@]+"${px[@]}"}" cleanup_level=none cleanup_work=false enable_trace=true \
-      "trace_dir=$run/trace" "seg_method=$method" start=segmentation stop=segmentation) \
+      "trace_dir=$run/trace" "seg_method=$method" start=segmentation stop=segmentation \
+      $SEG_PARAMS) \
     || { echo "[seg:$method] could not build params" >&2; return 1; }
   echo "[seg:$method] launching -> $run (from $REF_ARM)"
   (
@@ -222,7 +259,27 @@ segment() {                        # segment <method>
   echo "[seg:$method] OK"
 }
 methods=$(awk -F'\t' '$2 ~ /^seg:/ { sub(/^seg:/, "", $2); print $2 }' "$PLAN" | awk '!seen[$0]++')
-for m in $methods; do segment "$m" || { echo "[phase 2] segmentation failed" >&2; exit 1; }; done
+# A backend that cannot run here (cellsam wants users.deepcell.org, and compute nodes have no
+# outbound network) must cost its OWN figures and nothing else: the other methods segmented,
+# and every overlay, mosaic and channel crop is independent of segmentation entirely.
+SEG_FAILED=""
+case " $methods " in
+  *" cellsam "*)
+    if ensure_deepcell_token; then
+      echo "[token] DEEPCELL_ACCESS_TOKEN is set (${#DEEPCELL_ACCESS_TOKEN} chars) and exported"
+    else
+      echo "[token] WARNING: cellsam is requested but DEEPCELL_ACCESS_TOKEN is EMPTY." >&2
+      echo "        It will try users.deepcell.org, which a compute node cannot reach." >&2
+      echo "        Either export it before sbatch (--export=ALL,DEEPCELL_ACCESS_TOKEN=...)" >&2
+      echo "        or pre-download the weights and set segmentation.params.cellsam_model_path." >&2
+    fi ;;
+esac
+for m in $methods; do
+  segment "$m" || SEG_FAILED="$SEG_FAILED $m"
+done
+if [[ -n "$SEG_FAILED" ]]; then
+  echo "[phase 2] segmentation FAILED for:$SEG_FAILED -- skipping only their figures" >&2
+fi
 
 # ---- 3. every figure in the plan --------------------------------------------------
 # The plan carries the tool's whole argument list, shell-quoted: this loop resolves the
@@ -254,6 +311,13 @@ while IFS=$'\t' read -r kind run out args; do
   eval "set -- $args"
   outdir="$ROOT/$out"
   mkdir -p "$outdir"
+  case " $SEG_FAILED " in
+    *" ${run#seg:} "*)
+      if [[ "$run" == seg:* ]]; then
+        echo "[figures] SKIPPED: $kind $out (${run#seg:} did not segment)" >&2
+        failed=$((failed + 1)); continue
+      fi ;;
+  esac
   inputs=()
   if [[ "$run" == "arms:all" ]]; then
     while IFS= read -r line; do inputs+=("$line"); done < <(arm_args)
@@ -276,7 +340,8 @@ while IFS=$'\t' read -r kind run out args; do
 done < "$PLAN"
 
 echo "=================================================="
-echo "Done $(date). $n figure(s) under $ROOT ($failed failed)"
+echo "Done $(date). $n figure(s) under $ROOT ($failed failed or skipped)"
+[[ -n "$SEG_FAILED" ]] && echo "  segmentation failed for:$SEG_FAILED"
 echo "  mosaic  $ROOT/mosaic/        overlay $ROOT/overlay/<arm>/f<field>_z<zoom>/"
 echo "  zoom    $ROOT/zoom/<method>/ crops   $ROOT/crops/"
 echo "=================================================="
