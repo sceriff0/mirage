@@ -25,7 +25,7 @@
 # produce a different image than the one that generated the published results. Resolved
 # 2026-09-02; Dependabot updates the digest in place. Guarded by
 # tests/test_base_images_are_digest_pinned.py.
-FROM eclipse-temurin:21-jre-jammy@sha256:eebd356ad7358b7094758e5787a6726f332917cfd56feab6457c56dab895cdbf
+FROM eclipse-temurin:25-jre-jammy@sha256:abed22bb0186ab4554c339fa41e0a361daed337b938929c95a1f2e4a228c1935
 
 LABEL maintainer="mirage WSI pipeline"
 LABEL description="Bio-Formats CONVERT_IMAGE: bioio + bioio-bioformats with baked Bio-Formats jars"

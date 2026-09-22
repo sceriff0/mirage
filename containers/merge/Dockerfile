@@ -3,7 +3,7 @@
 # produce a different image than the one that generated the published results. Resolved
 # 2026-09-02; Dependabot updates the digest in place. Guarded by
 # tests/test_base_images_are_digest_pinned.py.
-FROM cdgatenbee/valis-wsi:1.0.0@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+FROM cdgatenbee/valis-wsi:1.2.0@sha256:4fd20b687ae0f08c47011753bc5083dca5ac65a454d3615589eddf6b14e3c419
 
 # Install required native dependencies for imagecodecs
 # procps is not optional. Nextflow's task-metrics wrapper hard-exits BEFORE the script
