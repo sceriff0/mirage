@@ -99,7 +99,7 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
 |---|---|---|
 | `memory_mode` | `high` | VALIS cost/accuracy tier: `high` \| `medium` \| `low` \| `custom` (processed / non-rigid dims): `high` = 2048/2048 px, `medium` = 1024/1024 px, `low` = 512/512 px — one size per tier, used for both stages. All three use SuperPoint + SuperGlue with 5000 features — the tier changes resolution, not the feature matcher. `custom` starts from `high` and applies the `reg_valis_*` overrides below. Source: `MEMORY_PRESETS` in `bin/utils/valis_config.py`. See [Tiers](#tiers). |
 | `reg_valis_max_processed_dim` | tier (`high`: 2048) | Feature detection/matching working size (px). **Tier-owned** — only settable under `--memory_mode custom`. |
-| `reg_valis_max_non_rigid_dim` | tier (`high`: 2048) | Non-rigid registration size (px). **Tier-owned.** Must be **smaller than the full resolution of every slide**: VALIS 1.0.0–1.2.0 reads a slide no larger than this at pyramid level −1 and kills its JVM (its own size clamp does not prevent it), so `REGISTER` refuses such input at start with the offending slides named. Lower it below the smallest slide on small-format input such as TMA cores, with a margin — or use `registration_method = 'tiled'`. |
+| `reg_valis_max_non_rigid_dim` | tier (`high`: 2048) | Non-rigid registration size (px). **Tier-owned.** May exceed a slide's full resolution: VALIS then reads that slide at full resolution and upsamples it, so a value above the smallest slide costs memory and buys no detail for it (`REGISTER` logs a notice naming such slides). VALIS 1.0.0–1.2.0 asked Bio-Formats for pyramid level −1 there and killed its JVM — also for slides somewhat *larger* than this value when the tissue mask covers part of the frame — and `bin/utils/valis_preflight.py` clamps that level to 0 at the reader. |
 | `reg_valis_max_keypoints` | `null` | Keypoints kept per image for SuperPoint detection and SuperGlue matching. `null` = VALIS's own 20000, what every run has used. SuperGlue's cost is quadratic in it; the `tma` profile pins 2000. **Lowering it changes which matches exist**, so registrations at different values are not comparable. Legal under any `memory_mode`. |
 | `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
 | `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
@@ -155,16 +155,14 @@ U-Net and 4096 px extrapolates to ~123 GB of need (~185 GB of request). See
 --reg_tiled_mode low                                   # every STARE knob from the low row
 --reg_tiled_mode custom --reg_tiled_tile 4096          # high everywhere else, tile overridden
 --memory_mode custom --reg_valis_max_non_rigid_dim 1024
--profile tma                                           # the same pair for TMA cores: custom + 1024
 ```
 
-**Tissue microarrays.** The `tma` profile pins `memory_mode = 'custom'` and
-`reg_valis_max_non_rigid_dim = 1024` (the `medium` row's size), because VALIS
-cannot register a slide whose full resolution is no larger than that size and a TMA
-core is typically 2000–3000 px on its long side. It describes the *data*, so it composes
-with a site profile: `-profile slurm,ieo,tma`. It is safe for cores of 2048 px or more
-on the long side; a CLI `--reg_valis_max_non_rigid_dim` still outranks it when your
-cores are larger and you want a finer non-rigid stage. It also lowers `REGISTER`'s
+**Tissue microarrays.** The `tma` profile sets **no tier**: TMA cores register at
+`memory_mode`'s own sizes (`high`: 2048/2048 px), and `--memory_mode` / the `reg_valis_*`
+overrides work as for any input. It describes the *data*, so it composes with a site
+profile: `-profile slurm,ieo,tma`. (It used to pin `custom` + a 1024 px non-rigid size to
+dodge VALIS's pyramid-level −1 crash; that crash depends on the tissue-mask extent, so no
+size was safe, and it is now clamped at the reader instead.) It lowers `REGISTER`'s
 memory ramp from 64 → 128 → 256 → 512 GB (doubling) to 64 GB × attempt, pins `reg_valis_max_keypoints` to 2000
 (a ~2800 px core has no use for VALIS's 20000, and SuperGlue's cost is quadratic in it)
 and pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
