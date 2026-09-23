@@ -28,14 +28,14 @@ images cannot imitate.
 Defined in `benchmarks/configs/arms.yaml`. They are **factored, not crossed** —
 registration is the expensive half, so it is paid for once.
 
-At the shipped settings that is **90 launches**: 1 shared preprocessing, 18
-registration arms (9 VALIS + 9 STARE), 54 QC instrument crosses (which **resume**
-their base arm and re-run only the QC chain — see §2), 9 solver crosses (the STARE
+At the shipped settings that is **126 launches**: 1 shared preprocessing, 18
+registration arms (9 VALIS + 9 STARE), 90 QC instrument crosses (54 one-at-a-time + 36
+joint cells; all **resume** their base arm and re-run only the QC chain — see §2), 9 solver crosses (the STARE
 arms with the `robust` SOLVE stage, `arm_kind=registration_solver`; they resume
 their base too but re-run the tiled stages — see §1c), 4 external (ASHLAR), 3
 segmentation, 1 compute profile. **All but the compute profile launch the whole
 cohort**, so the launch count is not the run count — for a 6-patient cohort,
-80 × 6 = 480 patient-runs plus the compute launch, of which 54 × 6 are QC-only.
+116 × 6 = 696 patient-runs plus the compute launch, of which 90 × 6 are QC-only.
 `build_arm_plan.py` prints this multiplier; read the arm counts below as
 per-patient multipliers.
 
@@ -184,12 +184,19 @@ pairing cross, then the aggregation), publishing into the cross arm's own direct
 Cross arms of **one base run one after another** (two runs resuming the same session
 at once fight over Nextflow's cache-DB lock); different bases run concurrently.
 
-**One instrument at a time, not a factorial.** `qc_segmenter_cross` varies the
+**One instrument at a time, then the joint cells.** `qc_segmenter_cross` varies the
 segmenter at the baseline pairing; `qc_pairing_cross` varies the pairing at the
-baseline segmenter. Per base arm that is (3 − 1) + (2 − 1) = **3 QC-only runs**; both
-blocks ship at `cross: all`, so 18 base arms give **54** cross runs and **72**
-registration-step launches per cohort. `cross: reference` restricts either block to
-`reference_arm` (18 + 2 + 1 = 21). `test_cross_all_crosses_every_arm`,
+baseline segmenter. Per base arm that is (3 − 1) + (2 − 1) = **3 QC-only runs**.
+`qc_joint_cross` (2026-09-23) adds the cells where **both** differ from the baseline —
+(3 − 1) × (2 − 1) = **2 more** (stardist + mutual_nn, cellsam + mutual_nn) — so with the
+base arm every (segmenter, pairing) pair exists once per arm and the two instruments can
+be compared against each other. It takes its value lists from the two blocks above and is
+appended after them, so no row that already ran changes. All three blocks ship at
+`cross: all`: 18 base arms give **54 + 36 = 90** cross runs and **108**
+registration-step launches per cohort. `cross: reference` restricts a block to
+`reference_arm` (18 + 2 + 1 + 2 = 23). `test_cross_all_crosses_every_arm`,
+`test_qc_crosses_are_one_at_a_time_plus_the_joint_cells`,
+`test_the_joint_cross_leaves_every_existing_row_unchanged`,
 `test_qc_cross_arms_resume_their_base_arm` and
 `test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session` carry these
 numbers and the chaining.
@@ -305,7 +312,7 @@ it is not timed under contention from the QC arms.
     submitters) **refuses the launch** when `heads × (heap + 0.75 GB)` exceeds the
     `#SBATCH --mem` allocation, naming the number to raise it to.
 
-`ARMS_CONCURRENCY` (default 32: every registration arm at once, then 32 of the 63
+`ARMS_CONCURRENCY` (default 32: every registration arm at once, then 32 of the 99
 resumed crosses) is how many Nextflow heads run at once; each still submits its own
 SLURM jobs, so measurements stay clean. Heads are the only lever that raises
 cluster-wide throughput: the per-process clamps (`REGISTER` 10, `TILED_*` 20) are
@@ -731,11 +738,12 @@ Per patient, at the shipped `arms.yaml`:
 | shared preprocessing | 1 | preprocessing only |
 | registration (9 VALIS + 9 STARE) | 18 | registration only (resumed from preprocessing) |
 | QC instrument crosses (2 segmenters + 1 pairing per arm) | 54 | QC chain only (resumes the base arm's session) |
+| QC joint cells (2 segmenters × 1 pairing per arm) | 36 | QC chain only (resumes the base arm's session) |
 | ASHLAR external baseline | 4 | ASHLAR + the pipeline's QC scorer |
 | segmentation | 3 | segmentation → export (resumed) |
 | compute profile | 1 | full pipeline |
 
-Preprocessing is paid for **once**, not eighteen times, and registration is paid for eighteen times, not seventy-two. The compute-profile arm still
+Preprocessing is paid for **once**, not eighteen times, and registration is paid for eighteen times, not a hundred and eight. The compute-profile arm still
 runs it, because it is the arm that prices every process.
 
 Real WSI runs are not sweep cells: `REGISTER` has been observed at **483 GB** and

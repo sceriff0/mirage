@@ -769,8 +769,9 @@ def test_arms_replace_moves_exactly_the_subset_aside_and_relaunches_it(launched)
     sub = impact.affected_rows(plan, ["tiled"])
     sub_ids = {r["run_id"] for r in sub}
     base = "tiled_low_gate1"
-    # the tiled base, its two segmenter crosses, its pairing cross, its solver cross
-    assert base in sub_ids and len(sub) == 5
+    # the tiled base, its two segmenter crosses, its pairing cross, its two joint
+    # cells (qc_joint_cross), its solver cross
+    assert base in sub_ids and len(sub) == 7
     untouched = [p["run_id"] for p in plan if p["run_id"] not in sub_ids]
     before = {
         u: (root / u).stat().st_mtime_ns for u in untouched if (root / u).exists()
@@ -807,12 +808,12 @@ def test_arms_replace_moves_exactly_the_subset_aside_and_relaunches_it(launched)
 
 
 def test_arms_replace_refuses_a_base_whose_crosses_are_not_in_the_plan(launched):
-    """A hand-filtered plan: the tiled base without its four crosses (three QC
-    instruments and the solver cross)."""
+    """A hand-filtered plan: the tiled base without its six crosses (three one-at-a-time
+    QC instruments, two joint QC cells and the solver cross)."""
     plan, root, run = launched
     base_only = [p for p in plan if p["run_id"] == "tiled_low_gate1"]
     crosses = [p["run_id"] for p in plan if p["resume_run"] == "tiled_low_gate1"]
-    assert len(crosses) == 4
+    assert len(crosses) == 6
     r, names = run(base_only, ARMS_REPLACE="1")
     assert r.returncode != 0
     assert names == [], "refused, yet something launched"

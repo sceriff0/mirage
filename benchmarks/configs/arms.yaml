@@ -157,13 +157,14 @@ registration_arms:
 # segmenter. Per base arm that is 2 + 1 = 3 QC-only runs; over the 18 registration arms,
 # 54 per cohort -- plus the 9 solver crosses on the STARE arms (solver_cross below), 63. The two questions -- "does WHO found the nuclei change the ranking?" and
 # "does HOW they were paired change it?" -- are answered separately, which is what a
-# robustness claim needs; the interaction would cost 5 runs per arm to answer a question
-# the paper does not ask.
+# robustness claim needs. The interaction (5 runs per arm instead of 3) is qc_joint_cross
+# below, added 2026-09-23 so segmenter and pairing can be compared against each other.
 #
 # COST GATE. `cross: reference` runs the extra instruments against ONE arm
 # (`reference_arm`): 18 + 2 + 1 = 21 registration-step launches per cohort. `cross: all`
-# crosses every arm: 18 + 36 + 18 + 9 = 81 launches, of which 54 are QC-only resumes
-# and 9 are solver crosses (a full STARE registration each).
+# crosses every arm: 18 + 36 + 18 + 36 + 9 = 117 launches, of which 90 are QC-only
+# resumes (54 one-at-a-time + 36 joint) and 9 are solver crosses (a full STARE
+# registration each).
 # Guarded by test_cross_all_crosses_every_arm, test_tiled_arms_are_tier_x_gate,
 # test_valis_arms_are_preset_x_depth_not_a_grid_of_equals and
 # test_qc_cross_arms_resume_their_base_arm.
@@ -180,6 +181,19 @@ qc_pairing_cross:
   cross: all                               # reference | all | none
   reference_arm: valis_high_micro2
   seg_qc_pairing: [lsa, mutual_nn]         # the baseline (lsa) is the base arm itself
+
+# THE JOINT CELLS (2026-09-23): segmenter x pairing, completed. The two crosses above vary
+# one instrument each, so no arm had a non-baseline segmenter at a non-baseline pairing
+# (stardist + mutual_nn, cellsam + mutual_nn). This adds exactly those cells, taking the
+# value lists from the two blocks above (never restated), so with the base arm and the
+# one-at-a-time crosses every (segmenter, pairing) pair exists once per arm: 2 x 1 = 2 more
+# QC-only resumes per arm, 36 over the 18 arms. Appended after the other crosses and built
+# from the base arms only, so no row that already ran changes (its run_id, params file and
+# history stay valid and ARMS_RESUME=1 still skips it). Each resumes its BASE arm like the
+# others: REGISTER cached, SEG_QC_SEGMENT + WARP_SEG_QC re-run.
+qc_joint_cross:
+  cross: all                               # reference | all | none
+  reference_arm: valis_high_micro2
 
 # THE SOLVE-STAGE CROSS (2026-09-12). Unlike the two QC instruments above this changes the
 # REGISTRATION, not how it is measured: `robust` replaces the legacy median filter with

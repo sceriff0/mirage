@@ -55,7 +55,7 @@ SITE_CONFIG="$SRC_DIR/conf/ieo.config"    # gitignored: executor=slurm + cacheDi
 CONDA_ENV="nf-env"
 CONCURRENCY="${ARMS_CONCURRENCY:-32}"     # arms launched AT ONCE. Each is one Nextflow head.
                                           # 32 = every registration arm (18) at once, then 32 of
-                                          # the 63 resumed crosses. Heads share --mem: N x (-Xmx +
+                                          # the 99 resumed crosses. Heads share --mem: N x (-Xmx +
                                           # 0.75 GB) must fit it, and benchmarks/head_sizing.sh
                                           # REFUSES the launch when it does not (the -Xmx32g people
                                           # copy from the single-run launcher would blow the job

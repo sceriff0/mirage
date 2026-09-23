@@ -447,11 +447,15 @@ def test_cross_all_crosses_every_arm(cfg):
     solver = [r for r in full if r["arm_kind"] == "registration_solver"]
     n_solver = len(cfg["solver_cross"]["reg_tiled_solver"]) - 1
     n_tiled = len([r for r in base if r["backend"] == "tiled"])
+    # The 36 joint cells (qc_joint_cross, 2026-09-23) complete segmenter x pairing on
+    # every arm: 18 x (n_seg - 1) x (n_pair - 1). 18 + 54 + 36 + 9 = 117.
+    joint = [r for r in qc if _is_joint(r, cfg)]
     assert len(base) == 18, len(base)
-    assert len(qc) == 18 * ((n_seg - 1) + (n_pair - 1)) == 54, len(qc)
+    assert len(qc) - len(joint) == 18 * ((n_seg - 1) + (n_pair - 1)) == 54, len(qc)
+    assert len(joint) == 18 * (n_seg - 1) * (n_pair - 1) == 36, len(joint)
     assert len(solver) == n_tiled * n_solver == 9, len(solver)
-    assert len(base) + len(qc) + len(solver) == 81, (
-        "arms.yaml's cost gate quotes 81 registration-step launches"
+    assert len(base) + len(qc) + len(solver) == 117, (
+        "arms.yaml's cost gate quotes 117 registration-step launches"
     )
 
 
@@ -1084,8 +1088,9 @@ def test_valis_arms_carry_no_gate(plan):
 
 
 def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
-    """Each cross arm names a base registration arm, differs from it in exactly ONE QC
-    instrument, and is planned as arm_kind=registration_qc (the resumed pass)."""
+    """Each cross arm names a base registration arm, differs from it in its QC
+    instruments only -- exactly ONE for a one-at-a-time cross, BOTH for a joint cell
+    (qc_joint_cross) -- and is planned as arm_kind=registration_qc (the resumed pass)."""
     by_id = {r["run_id"]: r for r in plan}
     crosses = [r for r in plan if r["arm_kind"] == "registration_qc"]
     assert crosses, "no QC cross arms planned"
@@ -1093,7 +1098,8 @@ def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
         base = by_id.get(r["resume_run"])
         assert base is not None and base["arm_kind"] == "registration", r["arm"]
         differs = [k for k in QC_INSTRUMENTS if str(r[k]) != str(base[k])]
-        assert differs and len(differs) == 1, (r["arm"], differs)
+        want = len(QC_INSTRUMENTS) if _is_joint(r, cfg) else 1
+        assert len(differs) == want, (r["arm"], differs)
         # everything that defines the REGISTRATION is identical to the base
         for k in (
             "backend",
@@ -1110,22 +1116,76 @@ def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
             assert r["resume_run"] == "", r["arm"]
 
 
-def test_qc_crosses_are_one_instrument_at_a_time(cfg, plan):
-    """Segmenters at the baseline pairing, pairings at the baseline segmenter -- no
-    factorial cell varies both."""
+def _is_joint(r: dict, cfg: dict) -> bool:
+    """A joint QC cell: BOTH instruments off the baseline (qc_joint_cross)."""
     b = cfg["baseline"]
-    for r in plan:
-        if r["arm_kind"] != "registration_qc":
-            continue
-        assert not (
-            r["seg_method"] != b["seg_method"]
-            and r["seg_qc_pairing"] != b["seg_qc_pairing"]
-        ), r["arm"]
+    return (
+        r["seg_method"] != b["seg_method"]
+        and r["seg_qc_pairing"] != b["seg_qc_pairing"]
+    )
+
+
+def test_qc_crosses_are_one_at_a_time_plus_the_joint_cells(cfg, plan):
+    """Segmenters at the baseline pairing and pairings at the baseline segmenter (the
+    one-at-a-time crosses), plus -- under qc_joint_cross -- exactly the cells where BOTH
+    differ from the baseline, so segmenter x pairing is complete and nothing is run twice."""
     n_base = sum(1 for r in plan if r["arm_kind"] == "registration")
     n_seg = len(cfg["qc_segmenter_cross"]["seg_method"]) - 1
     n_pair = len(cfg["qc_pairing_cross"]["seg_qc_pairing"]) - 1
-    n_cross = sum(1 for r in plan if r["arm_kind"] == "registration_qc")
-    assert n_cross == n_base * (n_seg + n_pair), (n_cross, n_base, n_seg, n_pair)
+    qc = [r for r in plan if r["arm_kind"] == "registration_qc"]
+    joint = [r for r in qc if _is_joint(r, cfg)]
+    assert len(qc) - len(joint) == n_base * (n_seg + n_pair), (len(qc), len(joint))
+    assert (cfg.get("qc_joint_cross") or {}).get("cross") == "all"
+    assert len(joint) == n_base * n_seg * n_pair, len(joint)
+    # together with the base arm, every (segmenter, pairing) cell exists exactly once
+    for base in (r for r in plan if r["arm_kind"] == "registration"):
+        cells = [(base["seg_method"], base["seg_qc_pairing"])] + [
+            (r["seg_method"], r["seg_qc_pairing"])
+            for r in qc
+            if r["resume_run"] == base["run_id"]
+        ]
+        want = {
+            (m, q)
+            for m in cfg["qc_segmenter_cross"]["seg_method"]
+            for q in cfg["qc_pairing_cross"]["seg_qc_pairing"]
+        }
+        assert len(cells) == len(set(cells)) and set(cells) == want, base["arm"]
+
+
+def test_the_joint_cross_leaves_every_existing_row_unchanged(cfg, plan):
+    """Adding qc_joint_cross must not touch a row that already ran: the finished arms'
+    launch dirs, params files and history are keyed on run_id, and a changed row would
+    either re-run a finished arm or resume the wrong session."""
+    without = build_arm_plan(dict(cfg, qc_joint_cross={"cross": "none"}))
+    kept = [
+        r
+        for r in plan
+        if not (r["arm_kind"] == "registration_qc" and _is_joint(r, cfg))
+    ]
+    assert kept == without
+
+
+def test_joint_cells_are_named_labelled_and_resumed_like_the_other_crosses(cfg):
+    # Its own plan: arms_manifest_rows reads a module-level label table that every
+    # build_arm_plan() call clears, so the shared fixture's labels depend on test order.
+    plan = build_arm_plan(cfg)
+    joint = [
+        r for r in plan if r["arm_kind"] == "registration_qc" and _is_joint(r, cfg)
+    ]
+    assert joint
+    labels = {r["arm_dir"]: r["label"] for r in arms_manifest_rows(plan)}
+    for r in joint:
+        base = r["resume_run"]
+        assert r["arm"] == f"{base}_seg{r['seg_method']}_pair{r['seg_qc_pairing']}"
+        assert r["run_id"] == r["arm"]
+        # the consumer tells arms apart by label only (registration_arms.R): both
+        # instruments must be in it
+        assert f"QC seg: {r['seg_method']}" in labels[r["arm"]], labels[r["arm"]]
+        assert f"QC pairing: {r['seg_qc_pairing']}" in labels[r["arm"]]
+        # run_arms.sh finds a run's attempts as `arms-<id>` or `arms-<id>-rN`; a joint
+        # name must not look like a resumption of its one-at-a-time sibling
+        sibling = f"{base}_seg{r['seg_method']}"
+        assert not f"arms-{r['run_id']}".startswith(f"arms-{sibling}-r")
 
 
 def test_base_arms_carry_the_baseline_instruments(cfg, plan):
@@ -1250,7 +1310,7 @@ def test_run_arms_chains_the_qc_crosses_of_one_base_and_resumes_its_session(tmp_
     by_name = {ln[1]: ln for ln in launches}
     bases = [p["run_id"] for p in plan if p["arm_kind"] == "registration"]
     crosses = [p for p in plan if p["arm_kind"] == "registration_qc"]
-    assert len(bases) == 2 and len(crosses) == 2 * 3, (len(bases), len(crosses))
+    assert len(bases) == 2 and len(crosses) == 2 * (3 + 2), (len(bases), len(crosses))
     for c in crosses:
         cwd, _, resume, outdir = by_name[f"arms-{c['run_id']}"]
         assert cwd.endswith(f"/.launch/{c['resume_run']}"), (c["run_id"], cwd)

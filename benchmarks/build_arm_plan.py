@@ -293,9 +293,63 @@ def _apply_qc_cross(
     return extra
 
 
+def _apply_qc_joint_cross(arms: list[dict], cfg: dict) -> list[dict]:
+    """The cells where BOTH QC instruments differ from the baseline (block `qc_joint_cross`).
+
+    The one-at-a-time crosses above give, per base arm, the segmenters at the baseline
+    pairing and the pairings at the baseline segmenter. This adds the rest of the grid --
+    every non-baseline segmenter at every non-baseline pairing -- so segmenter x pairing is
+    complete for each arm. The value lists are the two crosses' own, never restated here,
+    so the grid cannot drift from them. Appended AFTER them and applied to the BASE arms
+    only, so every row the one-at-a-time crosses emit is unchanged: arms that already ran
+    keep their run_id, params file and history (test_the_joint_cross_leaves_every_existing_row_unchanged).
+
+    Like the other QC crosses a joint cell resumes its BASE arm's session: REGISTER is
+    cached, SEG_QC_SEGMENT (a non-baseline segmenter) and WARP_SEG_QC re-run.
+    """
+    x = cfg.get("qc_joint_cross") or {}
+    mode = x.get("cross", "none")
+    if mode == "none":
+        return []
+    ref = x.get("reference_arm")
+    if mode == "reference":
+        if ref is None:
+            raise ValueError("qc_joint_cross.cross=reference needs a reference_arm")
+        targets = [a for a in arms if a["arm"] == ref]
+        if not targets:
+            raise ValueError(
+                f"qc_joint_cross.reference_arm={ref!r} is not an arm this config produces. "
+                f"Available: {sorted(a['arm'] for a in arms)}"
+            )
+    elif mode == "all":
+        targets = list(arms)
+    else:
+        raise ValueError(
+            f"qc_joint_cross.cross must be 'reference', 'all' or 'none', got {mode!r}"
+        )
+    segs = list((cfg.get("qc_segmenter_cross") or {}).get("seg_method", []))
+    pairs = list((cfg.get("qc_pairing_cross") or {}).get("seg_qc_pairing", []))
+    extra: list[dict] = []
+    for base in targets:
+        for m in segs:
+            if m == base["seg_method"]:
+                continue
+            for q in pairs:
+                if q == base["seg_qc_pairing"]:
+                    continue
+                a = dict(base)
+                a["arm"] = f"{base['arm']}_seg{m}_pair{q}"
+                a["seg_method"], a["seg_qc_pairing"] = m, q
+                a["resume_run"] = base["arm"]
+                a["label"] = f"{base['label']} [QC seg: {m}] [QC pairing: {q}]"
+                extra.append(a)
+    return extra
+
+
 def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
     """Base arms first, then the segmenter cross, then the pairing cross -- each applied
-    to the BASE arms only (one instrument varied per cross arm)."""
+    to the BASE arms only (one instrument varied per cross arm) -- then the joint cells
+    (both varied), then the solver cross."""
     # Every base arm carries BOTH baseline instruments before either cross copies it,
     # or a segmenter-cross arm would be copied without the pairing column.
     baseline = cfg.get("baseline") or {}
@@ -309,8 +363,9 @@ def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
     pair = _apply_qc_cross(
         arms, cfg, "qc_pairing_cross", "seg_qc_pairing", "pair", "QC pairing"
     )
+    joint = _apply_qc_joint_cross(arms, cfg)
     solver = _apply_solver_cross(arms, cfg)
-    return arms + seg + pair + solver
+    return arms + seg + pair + joint + solver
 
 
 def _apply_solver_cross(arms: list[dict], cfg: dict) -> list[dict]:
