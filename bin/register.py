@@ -67,7 +67,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/xdg_cache")
 
 # VALIS library imports
-from valis import registration  # noqa: E402
+from valis import registration, slide_io  # noqa: E402
 from valis import warp_tools as valis_warp_tools  # noqa: E402
 
 # AffineOptimizerMattesMI refinement is not used: it requires SimpleITK with Elastix bindings,
@@ -88,9 +88,10 @@ from valis_config import (  # noqa: E402
 # numba guard with the other valis_* imports so tests/test_numba_guard.py's
 # `^from valis` rule reads it the same way it reads valis_config.
 from valis_preflight import (  # noqa: E402
+    clamp_negative_levels,
     level0_max_dims,
-    refusal_message,
     slides_too_small_for_non_rigid,
+    upsample_notice,
 )
 
 
@@ -447,14 +448,26 @@ def valis_registration(
     )
 
     # ------------------------------------------------------------------
-    # Preflight: refuse input VALIS 1.0.0-1.2.0 cannot register, BEFORE the
-    # JVM starts and the rigid stage runs. A slide whose full resolution is no
-    # larger than max_non_rigid_registration_dim_px makes VALIS read it at
-    # pyramid level -1; Bio-Formats rejects that, the reader swallows the
-    # error, and register() kills the JVM and returns None 158 s later. VALIS's
-    # own clamp of that parameter does not prevent it. bin/utils/valis_preflight.py
-    # carries the full chain and the reproduction.
+    # VALIS 1.0.0-1.2.0 asks Bio-Formats for pyramid level -1 when a slide's full
+    # resolution is smaller than the source size the non-rigid stage needs -- which
+    # depends on the tissue-mask extent, so no size check predicts it. The clamp maps
+    # a negative level to 0 at the reader (upstream's one-line fix, applied here), so
+    # the slide is read at full resolution and upsampled instead of killing the JVM.
+    # bin/utils/valis_preflight.py carries the chain and why the clamp is safe.
     # ------------------------------------------------------------------
+    clamped = clamp_negative_levels(slide_io.BioFormatsSlideReader)
+    if clamped:
+        logger.info(
+            f"  Pyramid-level clamp applied to BioFormatsSlideReader: {clamped}"
+        )
+    elif not getattr(
+        slide_io.BioFormatsSlideReader.slide2image, "_mirage_level_clamp", False
+    ):
+        logger.warning(
+            "  Pyramid-level clamp NOT applied: BioFormatsSlideReader's slide2vips/"
+            "slide2image signatures differ from VALIS 1.0.0. A slide smaller than the "
+            "source size the non-rigid stage needs will crash VALIS again."
+        )
     slide_files = sorted(
         os.path.join(input_dir, f)
         for f in os.listdir(input_dir)
@@ -465,10 +478,7 @@ def valis_registration(
         level0_max_dims(slide_files), non_rigid_dim
     )
     if too_small:
-        raise RuntimeError(refusal_message(too_small, non_rigid_dim=non_rigid_dim))
-    logger.info(
-        f"  Preflight: every slide's full resolution exceeds the non-rigid size ({non_rigid_dim}px)"
-    )
+        logger.warning(upsample_notice(too_small, non_rigid_dim=non_rigid_dim))
 
     registrar = registration.Valis(input_dir, results_dir, **registrar_kwargs)
 
@@ -484,19 +494,14 @@ def valis_registration(
         if error_df is None:
             # Valis.register() never raises: on any exception it prints the traceback,
             # warns with the message, kills the JVM and returns (None, None, None). The
-            # real error is on stdout above this line -- if it reads "local variable
-            # 'tile' referenced before assignment", a slide was read at pyramid level -1
-            # (see bin/utils/valis_preflight.py) and the Bio-Formats exception it hides
-            # is a few lines further up.
+            # real error is on stdout above this line.
             raise RuntimeError(
                 "VALIS registration failed inside Valis.register(), which swallowed the "
                 "exception, killed the JVM and returned None. The traceback it printed "
-                "is on stdout just above. A 'local variable 'tile' referenced before "
-                "assignment' warning means a slide was read at pyramid level -1 because "
-                "its full resolution is smaller than the source size the non-rigid stage "
-                "needs (slides only slightly larger than --max-non-rigid-dim can still "
-                "hit this through the tissue-mask term); lower --max-non-rigid-dim or use "
-                "registration_method = 'tiled'."
+                "is on stdout just above. If it reads 'local variable 'tile' referenced "
+                "before assignment' next to 'Invalid resolution: -1', the pyramid-level "
+                "clamp did not reach the reader -- look for 'Pyramid-level clamp NOT "
+                "applied' earlier in this log (bin/utils/valis_preflight.py)."
             )
         logger.info("Initial registration completed")
         logger.info(f"\nRegistration errors:\n{error_df}")
@@ -849,21 +854,15 @@ def valis_registration(
             )
             logger.error("")
             logger.error(
-                "Suggested workarounds. The known cause is a slide whose full resolution"
+                "The pyramid-level -1 crash (a slide smaller than the source size the"
             )
             logger.error(
-                "is smaller than the source size the non-rigid stage needs, which VALIS"
+                "non-rigid stage needs) is clamped at the reader; if this log says the"
             )
             logger.error(
-                "then reads at pyramid level -1 (bin/utils/valis_preflight.py):"
+                "clamp was NOT applied, that is the cause (bin/utils/valis_preflight.py)."
             )
-            logger.error(
-                "  1. Lower --max-non-rigid-dim below the smallest slide, with a margin"
-            )
-            logger.error(
-                "     (pipeline: memory_mode = 'custom', reg_valis_max_non_rigid_dim = N)."
-            )
-            logger.error("  2. Use the tiled backend: registration_method = 'tiled'.")
+            logger.error("Otherwise: the tiled backend, registration_method = 'tiled'.")
             logger.error("=" * 70)
             raise RuntimeError(
                 "JVM was killed during registration. Warping cannot proceed. The exception "

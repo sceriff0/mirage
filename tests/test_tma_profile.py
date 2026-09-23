@@ -1,20 +1,17 @@
 """The `tma` profile: a data-shape profile that composes with a site profile.
 
 Tissue-microarray cores are small (a 1 mm core is ~2000-3000 px on the long side at
-typical scan resolutions), and VALIS 1.0.0-1.2.0 dies on any slide whose full
-resolution is no larger than its non-rigid registration size -- the `high` tier's
-2048 px (bin/utils/valis_preflight.py has the chain; REGISTER now refuses such input
-at start). The remedy is `memory_mode = 'custom'` with a small
-`reg_valis_max_non_rigid_dim`, and a profile is the right vehicle: it says what the
-DATA is, the way `ieo` says where the run happens, and the two compose
-(`-profile slurm,ieo,tma`). A profile pin reaches these two parameters because both
-are read late -- by ParamUtils.validateRegPresets in workflow scope and by REGISTER's
-script block at task time -- never frozen at config-parse time the way the publishDir
-gates were (tests/test_cleanup_publish_gates.py).
+typical scan resolutions). What that changes is COST: the JVM heap, the keypoint count
+and REGISTER's memory request. The profile says what the DATA is, the way `ieo` says
+where the run happens, and the two compose (`-profile slurm,ieo,tma`).
 
-1024 px is the `medium` tier's size and is safe for any core of 2048 px or
-more on its long side, with the margin VALIS's tissue-mask term needs. A CLI
-`--reg_valis_max_non_rigid_dim` still outranks the profile for larger cores.
+It deliberately sets NO registration tier. It used to pin `memory_mode = 'custom'` with
+a 1024 px non-rigid size, to stay clear of VALIS 1.0.0-1.2.0's pyramid-level -1 crash.
+That crash depends on the tissue-mask extent, not on slide size alone, so no size was
+safe: on 2026-09-22 a TMA patient at 1024 px passed the size preflight and still died.
+It is now clamped at the reader (bin/utils/valis_preflight.py), and TMA registers at
+`memory_mode`'s own sizes. Pinning a tier here again would make every TMA run report a
+tier chosen to dodge a bug that is no longer there.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ import re
 from tests.nfmodel import REPO_ROOT, strip_comments
 
 CONFIG = strip_comments((REPO_ROOT / "nextflow.config").read_text())
-NON_RIGID_PX = 1024
 
 
 def _profile_body(name: str) -> str:
@@ -43,15 +39,27 @@ JVM_HEAP_GB = 16
 TMA_KEYPOINTS = 2000
 
 
-def test_the_tma_profile_pins_exactly_the_custom_pair_and_the_jvm_heap():
+def test_the_tma_profile_pins_exactly_the_jvm_heap_and_the_keypoints():
     body = _profile_body("tma")
     assigned = dict(re.findall(r"params\.([a-z_]+)\s*=\s*([^\n]+)", body))
     assert assigned == {
-        "memory_mode": "'custom'",
-        "reg_valis_max_non_rigid_dim": str(NON_RIGID_PX),
         "reg_jvm_heap_gb": str(JVM_HEAP_GB),
         "reg_valis_max_keypoints": str(TMA_KEYPOINTS),
     }, assigned
+
+
+def test_the_tma_profile_sets_no_registration_tier():
+    """No memory_mode and no tier-owned reg_valis_* size: those were the level -1
+    workaround, which the reader clamp replaced."""
+    body = _profile_body("tma")
+    for name in (
+        "memory_mode",
+        "reg_valis_max_non_rigid_dim",
+        "reg_valis_max_processed_dim",
+    ):
+        assert not re.search(rf"params\.{name}\s*=", body), (
+            f"the tma profile pins {name} again"
+        )
 
 
 def test_the_jvm_pin_is_below_the_ramps_attempt_1_request():
@@ -59,18 +67,6 @@ def test_the_jvm_pin_is_below_the_ramps_attempt_1_request():
     is not smaller than what the ramp would have derived on attempt 1
     (min(48, REGISTER_GB - 4)), it changes nothing."""
     assert JVM_HEAP_GB < min(48, REGISTER_GB - 4)
-
-
-def test_the_tma_size_is_the_medium_tiers_non_rigid_size():
-    """Not an arbitrary number: the `medium` row's size, a value the tier table already
-    vouches for (the `tma` profile keeps `high`'s 2048 px feature matching and lowers
-    only the non-rigid stage)."""
-    presets = (REPO_ROOT / "bin" / "utils" / "valis_config.py").read_text()
-    low = re.search(r'"medium":\s*\{(.*?)\}', presets, re.S).group(1)
-    low_nr = int(
-        re.search(r'"max_non_rigid_registration_dim_px":\s*(\d+)', low).group(1)
-    )
-    assert NON_RIGID_PX == low_nr
 
 
 def test_the_profile_is_in_the_parse_sweep():
