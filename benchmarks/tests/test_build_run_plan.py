@@ -720,10 +720,10 @@ def test_project_sweep_caps_and_grids():
     assert (
         max(sg["target_px"]) == 65536
     )  # largest benchmarked size (see sweep.yaml scaling_grid)
-    # Smallest benchmarked size. 4096 and not 2048 because VALIS refuses any slide no
-    # larger than its non-rigid size, which the shipped tier sets at 2048; the sibling
-    # guard test_no_valis_run_is_refused_for_being_too_small derives that from the
-    # pipeline's own table, this one pins the floor the grid was re-cut to.
+    # Smallest benchmarked size. 4096 and not 2048 because a slide no larger than its
+    # non-rigid size (the shipped tier's 2048) registers upsampled from level 0; the
+    # sibling guard test_no_valis_run_is_emitted_at_or_below_its_non_rigid_size derives
+    # that from the pipeline's own table, this one pins the floor the grid was re-cut to.
     assert min(sg["target_px"]) == 4096
     assert sg["n_channels"] == [2, 3, 4]  # 1 not benchmarked, max 4
     # registration is measured ACROSS sizes, not only at baseline
@@ -1090,16 +1090,20 @@ def valis_non_rigid_dims() -> dict:
     return dims
 
 
-def test_no_valis_run_is_refused_for_being_too_small():
-    """No VALIS run may be emitted at an image size its own tier cannot register.
+def test_no_valis_run_is_emitted_at_or_below_its_non_rigid_size():
+    """No VALIS run may be emitted at an image size no larger than its tier's non-rigid size.
 
-    VALIS 1.0.0-1.2.0 reads pyramid level -1 for a slide whose full resolution is no
-    larger than the non-rigid registration size, so bin/utils/valis_preflight.py refuses
-    that input at the start of REGISTER -- `dim <= non_rigid_dim`, equality included.
-    Such a run cannot succeed on any retry: run_sweep.sh logs it failed, moves on, and
-    every later SWEEP_RESUME=1 retries it forever. Measured 2026-09-16 on the shipped
-    sweep: the 2048 px cells of scaling_grid and registration_grid made 18 of 321 runs
-    permanently red (run0000 was the first, and the cluster log is what found it).
+    Until 2026-09-23 such a run could not succeed: VALIS 1.0.0-1.2.0 read the slide at
+    pyramid level -1 and REGISTER's preflight refused it (`dim <= non_rigid_dim`,
+    equality included), so run_sweep.sh logged it failed and every SWEEP_RESUME=1
+    retried it forever. Measured 2026-09-16 on the shipped sweep: the 2048 px cells of
+    scaling_grid and registration_grid made 18 of 321 runs permanently red.
+
+    The level is now clamped at the reader (bin/utils/valis_preflight.py) and such a run
+    completes -- but on level 0 UPSAMPLED to the non-rigid size, so its non-rigid stage
+    costs more than the image justifies and times nothing a real image of that size would
+    run. For a scaling sweep that cell is still a defect, just a silent one; this keeps it
+    out of the plan.
 
     The tier sizes come from the pipeline's own table, so lowering the tier without
     lowering the grid floor fails here rather than on the cluster.
@@ -1126,8 +1130,8 @@ def test_no_valis_run_is_refused_for_being_too_small():
         if size and size <= non_rigid:
             offenders.append((run["run_id"], run.get("varied_axis"), size, non_rigid))
     assert not offenders, (
-        "these VALIS runs would be refused by REGISTER's preflight before a single tile "
-        "is read, and no retry or resume can fix them:\n  "
+        "these VALIS runs would register an image no larger than their non-rigid size, "
+        "i.e. time an upsampled non-rigid stage instead of the image's own:\n  "
         + "\n  ".join(
             f"{rid} ({axis}): {size} px image vs {nr} px non-rigid size"
             for rid, axis, size, nr in offenders

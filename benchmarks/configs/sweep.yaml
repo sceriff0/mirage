@@ -43,16 +43,14 @@ strategy: ofat
 # generate_matrix.py --sweep builds exactly these cells; build_run_plan.py expands
 # them into runs (labelled varied_axis=scaling_grid, plus the baseline cell).
 #
-# THE SMALLEST CELL IS 4096 px, AND NOT SMALLER, BECAUSE VALIS CANNOT RUN BELOW IT.
-# VALIS 1.0.0-1.2.0 reads pyramid level -1 for any slide whose full resolution is no
-# larger than its non-rigid registration size, so REGISTER refuses such input at start
-# (bin/utils/valis_preflight.py). The shipped `high` tier registers at 2048 px, so a
-# 2048 px cell is refused -- EQUAL counts as too small. Measured 2026-09-16: the
-# 2048 px cells made 18 of 321 runs permanently red, run0000 among them, and a resume
-# retried them forever. 4096 is the next rung and clears the tier with a 2x margin,
-# which is also what VALIS's tissue-mask term needs (the source size it asks for is
-# the processed size x non-rigid size / mask extent). Guarded by
-# benchmarks/tests/test_build_run_plan.py::test_no_valis_run_is_refused_for_being_too_small.
+# THE SMALLEST CELL IS 4096 px, ABOVE THE `high` TIER'S 2048 px NON-RIGID SIZE.
+# At or below that size VALIS registers level 0 UPSAMPLED to the non-rigid size, so a
+# 2048 px cell would time an upsampled non-rigid stage, not the image's own -- EQUAL
+# counts. (Until 2026-09-23 it was worse: VALIS 1.0.0-1.2.0 read level -1, REGISTER
+# refused the input, and the 2048 px cells made 18 of 321 runs permanently red on
+# 2026-09-16; the level is clamped at the reader now, bin/utils/valis_preflight.py.)
+# 4096 clears the tier with a 2x margin. Guarded by
+# benchmarks/tests/test_build_run_plan.py::test_no_valis_run_is_emitted_at_or_below_its_non_rigid_size.
 # Lowering the floor means lowering the tier with it (medium = 1024, low = 512).
 scaling_grid:
   target_px:  [4096, 8192, 16384, 32768, 65536]
