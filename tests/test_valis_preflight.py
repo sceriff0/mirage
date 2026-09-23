@@ -1,5 +1,5 @@
-"""bin/utils/valis_preflight.py: refuse, BEFORE the JVM starts, the input VALIS 1.0.0
-(through 1.2.0) cannot register.
+"""bin/utils/valis_preflight.py: the VALIS 1.0.0 (through 1.2.0) pyramid-level -1 defect,
+and the clamp that closes it without modifying the VALIS image.
 
 The defect, reproduced 2026-09-08 with VALIS's own geometry code on the dimensions from
 a failed TMA run: `prep_images_for_large_non_rigid_registration` picks the pyramid level
@@ -11,19 +11,19 @@ every tile thread calls Bio-Formats `setResolution(-1)`, which throws
 IllegalArgumentException. The reader swallows it (`print(e); pass`), leaves `tile`
 unbound, and `UnboundLocalError: local variable 'tile' referenced before assignment`
 propagates to `Valis.register()`'s catch-all, which kills the JVM and returns
-`(None, None, None)`. The pipeline then fails 158 s later with "JVM is not running"
-and advice about micro-registration, which is unrelated.
+`(None, None, None)`.
 
-VALIS's own clamp ("Requested size ... was 4096. However, not all images are this
-large. Setting max_non_rigid_registration_dim_px to 2720") does NOT prevent it: the
-source dimension it then needs is `processed_max * s`, and `s` is chosen so that the
-reference's processed frame (or, with `create_masks=True`, the tissue-mask bounding
-box, which is smaller) reaches the clamped value -- so the smallest slide always comes
-out at least one pixel short (2721 vs 2720, ceil) and with a mask much more (4096 vs
-2720 for a mask covering 60 % of the frame). The clamp firing is therefore a
-deterministic predictor of the crash, and it fires exactly when some slide's level-0
-largest dimension is below the requested non-rigid size. The `<=` here also covers the
-equal case, which the ceil makes fail in practice.
+The needed source dimension is `max_non_rigid_dim / (tissue-mask extent)`, so it depends
+on image CONTENT: on 2026-09-22 a TMA run at 1024 px (`-profile tma`) passed the old size
+preflight on every slide and still died, because the tissue box was a small part of the
+frame. No size check can predict that, which is why the fix is a clamp, not a refusal.
+
+`clamp_negative_levels` wraps `BioFormatsSlideReader.slide2vips` / `slide2image` so a
+negative level reaches Bio-Formats as 0 -- the upstream one-line fix
+`max(closest_img_levels[0] - 1, 0)`, applied at the reader. It is safe by construction:
+`setResolution()` rejects every negative level, so the only calls it changes are calls
+that would have crashed. VALIS's next line, `resize_img(vips_level_img, src_img_shape_rc)`,
+upsamples level 0 to the size it asked for.
 """
 
 from __future__ import annotations
@@ -35,9 +35,10 @@ import numpy as np
 import pytest
 import tifffile
 from utils.valis_preflight import (
+    clamp_negative_levels,
     level0_max_dims,
-    refusal_message,
     slides_too_small_for_non_rigid,
+    upsample_notice,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,20 +86,122 @@ def test_flagged_slides_come_smallest_first():
     assert slides_too_small_for_non_rigid(dims, 4096) == [("a", 2720), ("b", 3000)]
 
 
-def test_the_refusal_names_the_slide_the_size_and_the_two_remedies():
-    msg = refusal_message([("/x/001_003_small.ome.tif", 2720)], non_rigid_dim=4096)
+def test_the_notice_names_the_slide_the_size_and_what_happens_to_it():
+    msg = upsample_notice([("/x/001_003_small.ome.tif", 2720)], non_rigid_dim=4096)
     assert "001_003_small.ome.tif" in msg
     assert "2720" in msg and "4096" in msg
-    # remedy 1: a smaller non-rigid size, below the smallest slide
-    assert "--max-non-rigid-dim" in msg and "2719" in msg
-    # and the quantified margin, not "leave some margin": half the smallest slide
-    assert "1360" in msg and "tissue-mask extent" in msg
-    assert "memory_mode" in msg and "custom" in msg
-    # remedy 2: the other backend
-    assert "registration_method" in msg and "tiled" in msg
-    # and the truth about why, so nobody reads it as a memory problem
-    assert "setResolution(-1)" in msg
-    assert "micro" not in msg.lower()
+    # what actually happens now: level 0 is read and upsampled, no crash
+    assert "full resolution" in msg and "upsampl" in msg
+    # and it must not read as a refusal or a remedy list any more
+    assert "Refusing" not in msg and "Remedies" not in msg
+
+
+class _FakeBioFormatsReader:
+    """The two methods of VALIS 1.0.0's BioFormatsSlideReader that take a pyramid level,
+    with Bio-Formats' own rule: `setResolution(no)` throws for `no < 0`
+    (loci.formats.FormatReader). The level is the first positional parameter in both
+    (valis_lib/slide_io.py:909 and :973), and `slide2vips` reaches `slide2image`
+    positionally from its tile threads (:885)."""
+
+    def __init__(self):
+        self.seen = []
+
+    def _set_resolution(self, level):
+        if level < 0:
+            raise ValueError(f"Invalid resolution: {level}")
+        self.seen.append(level)
+
+    def slide2vips(
+        self, level, series=None, xywh=None, tile_wh=None, z=0, t=0, *args, **kwargs
+    ):
+        return self.slide2image(level, series, xywh=xywh, z=z, t=t)
+
+    def slide2image(self, level, series=None, xywh=None, z=0, t=0, *args, **kwargs):
+        self._set_resolution(level)
+        return level
+
+
+@pytest.fixture
+def reader_cls():
+    # A fresh class per test: the clamp patches the class, and tests must not share it.
+    return type("BioFormatsSlideReader", (_FakeBioFormatsReader,), {})
+
+
+def test_the_unpatched_reader_crashes_on_level_minus_one(reader_cls):
+    """The fake has teeth: without the clamp it fails exactly where VALIS fails."""
+    with pytest.raises(ValueError, match="Invalid resolution: -1"):
+        reader_cls().slide2vips(-1)
+
+
+@pytest.mark.parametrize("method", ["slide2vips", "slide2image"])
+@pytest.mark.parametrize("as_keyword", [False, True])
+def test_a_negative_level_reaches_bio_formats_as_zero(reader_cls, method, as_keyword):
+    patched = clamp_negative_levels(reader_cls)
+    assert set(patched) == {"slide2vips", "slide2image"}
+    reader = reader_cls()
+    call = getattr(reader, method)
+    got = call(level=-1) if as_keyword else call(-1)
+    assert got == 0 and reader.seen == [0]
+
+
+@pytest.mark.parametrize("level", [0, 1, 3])
+def test_a_valid_level_passes_through_unchanged(reader_cls, level):
+    """The clamp may only change calls that would have crashed."""
+    clamp_negative_levels(reader_cls)
+    reader = reader_cls()
+    assert reader.slide2vips(level) == level
+    assert reader.slide2image(level, 0, xywh=(0, 0, 5, 5)) == level
+    assert reader.seen == [level, level]
+
+
+def test_a_numpy_integer_level_is_clamped_too(reader_cls):
+    """VALIS computes the level with np.where, so it arrives as np.int64."""
+    clamp_negative_levels(reader_cls)
+    assert reader_cls().slide2vips(np.int64(-1)) == 0
+
+
+def test_the_clamp_is_idempotent(reader_cls):
+    clamp_negative_levels(reader_cls)
+    once = reader_cls.slide2vips
+    assert clamp_negative_levels(reader_cls) == []
+    assert reader_cls.slide2vips is once
+
+
+def test_a_reader_whose_first_parameter_is_not_level_is_left_alone():
+    """A VALIS upgrade that reorders the signature must not have a clamp rewriting the
+    wrong argument; it is skipped and the caller is told (an empty list)."""
+
+    class Other:
+        def slide2vips(self, xywh=None, *args, **kwargs):
+            return xywh
+
+    assert clamp_negative_levels(Other) == []
+    assert Other().slide2vips(-1) == -1
+
+
+def test_register_py_clamps_the_bio_formats_reader_before_it_builds_the_registrar():
+    src = (ROOT / "bin" / "register.py").read_text()
+    clamp = src.index("clamp_negative_levels(slide_io.BioFormatsSlideReader)")
+    build = src.index("registration.Valis(")
+    assert clamp < build, "the clamp is applied AFTER the registrar is built"
+
+
+def test_register_py_no_longer_refuses_small_slides():
+    """The old preflight raised on any slide no larger than the non-rigid size. With the
+    clamp that input registers (level 0, upsampled), so a refusal would block a run that
+    works; it is a logged notice now."""
+    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
+    fn = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
+    )
+    body = ast.unparse(fn)
+    assert "refusal_message" not in body
+    at = body.index("slides_too_small_for_non_rigid(")
+    notice = body.index("upsample_notice(", at)
+    assert "raise" not in body[at:notice], "the size check still raises"
+    assert "logger.warning(upsample_notice(" in body
 
 
 def test_register_py_runs_the_preflight_before_it_builds_the_registrar():

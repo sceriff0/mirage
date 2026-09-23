@@ -131,6 +131,14 @@ null; `MAX_KEYPOINTS` is the one home for it), so results stay comparable with e
 fixes, five ~2800 px cores were OOM-killed at 128 GB on 2026-09-10. Budget at 20000 keypoints:
 roughly 15 GB per pair in flight, `task.cpus - 1` pairs at once; at 2000, a few hundred MB.
 
+Since 2026-09-23 the profile no longer lowers the non-rigid size (the pyramid-level −1 crash it
+dodged is clamped at the reader), so TMA runs at `high`'s 2048 px. **That cost is not yet
+measured on TMA data.** VALIS sizes the non-rigid frame so that the *tissue box* reaches that
+size, and allocates float32 displacement fields for the whole frame per slide — so when tissue
+fills a small part of a core's frame, the frame is roughly 2048 ÷ (tissue fraction) px on a side
+and the fields grow with its square. If a cohort climbs `REGISTER`'s ramp, pass
+`--memory_mode custom --reg_valis_max_non_rigid_dim 1024` or lower.
+
 `REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
 concurrency block, after the profiles) and its own error strategy — see
 [Retry policy](#retry-policy) and [Execution & concurrency](#execution-concurrency).
