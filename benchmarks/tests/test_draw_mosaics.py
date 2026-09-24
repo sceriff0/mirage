@@ -52,6 +52,54 @@ def _run(tmp_path, arms=ARMS, rounds=10, **env_over):
     return proc, (log.read_text() if log.exists() else "")
 
 
+def test_a_relative_ROOT_is_made_absolute_before_anything_cds_away(tmp_path):
+    """REGRESSION, figures job 7052347. The render runs inside `(cd "$SRC_DIR" && ...)` and is
+    handed "$ROOT/..." paths. While ROOT stayed relative those re-resolved against the
+    CHECKOUT, so the arm directories pointed at nothing and the output was written into the
+    repo. The sibling submit_figures.sh failed the same way one step earlier, on
+    '.launch/seg_stardist/params.json'.
+
+    ROOT is passed here as the bare name "root" with cwd=tmp_path -- exactly the shape that
+    broke -- and every path reaching the renderer must come out absolute."""
+    root = tmp_path / "root"
+    root.mkdir()
+    for arm in ARMS:
+        csv = root / arm / "csv"
+        csv.mkdir(parents=True)
+        (csv / "registered.csv").write_text(
+            "patient_id,id,registered_image,is_reference,channels,pixel_size\n"
+            "046,046_ref,/dev/null,true,DAPI|PANCK,0.325\n"
+            "046,046_r0,/dev/null,false,DAPI|M0,0.325\n"
+        )
+    log = tmp_path / "calls.log"
+    fake = tmp_path / "fake_render"
+    fake.write_text(f'#!/usr/bin/env bash\necho "$*" >> {log}\nexit 0\n')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+
+    proc = subprocess.run(
+        ["bash", str(BENCH / "draw_mosaics.sh")],
+        env={
+            **os.environ,
+            "ROOT": "root",  # RELATIVE, the whole point
+            "SRC_DIR": str(BENCH.parent),
+            "RENDER_EXEC": str(fake),
+            "PATCHES": "200",
+            "KINDS": "overlay",
+        },
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr
+    line = next(ln for ln in log.read_text().splitlines() if "reg_mosaic" in ln)
+    args = shlex.split(line)
+    for a in args:
+        if a.endswith(ARMS) or a == _flag(line, "-o"):
+            assert a.startswith("/"), f"{a!r} is relative; it resolves against SRC_DIR"
+    # and it resolved to the directory the caller meant, not to the checkout
+    assert _flag(line, "-o").startswith(str(root.resolve()))
+
+
 def _flag(line, name):
     args = shlex.split(line)
     return args[args.index(name) + 1] if name in args else None

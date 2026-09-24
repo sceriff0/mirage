@@ -51,6 +51,11 @@ SING_BINDS="${SING_BINDS:---bind /beegfs --bind /hpcnfs}"
 # which the segeval image cannot decode -- job 6844142). The quantify image carries all four.
 RENDER_EXEC="${RENDER_EXEC:-singularity exec $SING_BINDS $IMG}"
 
+# ROOT MUST BE ABSOLUTE: steps below run inside `(cd "$SRC_DIR" && ...)` while writing to
+# "$ROOT/...", and a relative ROOT re-resolves against the checkout there. Measured as
+# figures job 7052347, where ROOT=. sent every params.json into $SRC_DIR and failed all
+# three segmentations with FileNotFoundError.
+ROOT=$(cd "$ROOT" && pwd) || { echo "cannot resolve ROOT=$ROOT" >&2; exit 1; }
 cd "$ROOT" || exit 1
 [[ -x "$SRC_DIR/benchmarks/reg_mosaic.py" || -f "$SRC_DIR/benchmarks/reg_mosaic.py" ]] \
   || { echo "no reg_mosaic.py under $SRC_DIR" >&2; exit 1; }

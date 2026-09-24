@@ -63,7 +63,15 @@ SKIP_REGISTRATION="${SKIP_REGISTRATION:-0}"  # 1 = phase 1 is already done elsew
 [[ -s "$INPUT" ]] || { echo "samplesheet $INPUT not found or empty" >&2; exit 1; }
 [[ "$CONFIG" = /* ]] || CONFIG="$SUBMIT_DIR/$CONFIG"
 [[ -s "$CONFIG" ]] || { echo "config $CONFIG not found or empty" >&2; exit 1; }
-mkdir -p "$ROOT/.launch"
+# ROOT MUST BE ABSOLUTE, and this is not cosmetic. Several steps below run inside
+# `(cd "$SRC_DIR" && ...)` while writing to "$ROOT/..."; a relative ROOT re-resolves against
+# the checkout there and the write lands somewhere that does not exist. Measured as job
+# 7052347: ROOT=. made every segmentation die on
+#   FileNotFoundError: '.launch/seg_stardist/params.json'
+# -- inside $SRC_DIR, not inside ROOT -- and phase 2 reported all three methods failed.
+# INPUT and CONFIG are already absolutised just above; ROOT was the one that was not.
+mkdir -p "$ROOT/.launch" || { echo "cannot create $ROOT/.launch" >&2; exit 1; }
+ROOT=$(cd "$ROOT" && pwd) || { echo "cannot resolve ROOT=$ROOT" >&2; exit 1; }
 cd "$ROOT" || exit 1
 
 # shellcheck disable=SC1090

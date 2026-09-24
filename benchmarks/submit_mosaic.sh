@@ -96,7 +96,12 @@ if [[ -z "$ROWS" ]]; then
   ROWS=$(tail -n +2 "$INPUT" | tr -d '\r' | awk -F, -v p="$first" '$1 == p && $3 != "true"' | wc -l | tr -d ' ')
 fi
 (( ROWS >= 1 )) || { echo "no moving slide (is_reference=false) in $INPUT" >&2; exit 1; }
-mkdir -p "$ROOT/.launch"
+# ROOT MUST BE ABSOLUTE: steps below run inside `(cd "$SRC_DIR" && ...)` while writing to
+# "$ROOT/...", and a relative ROOT re-resolves against the checkout there. Measured as
+# figures job 7052347, where ROOT=. sent every params.json into $SRC_DIR and failed all
+# three segmentations with FileNotFoundError.
+mkdir -p "$ROOT/.launch" || { echo "cannot create $ROOT/.launch" >&2; exit 1; }
+ROOT=$(cd "$ROOT" && pwd) || { echo "cannot resolve ROOT=$ROOT" >&2; exit 1; }
 cd "$ROOT" || exit 1
 
 # shellcheck disable=SC1090
