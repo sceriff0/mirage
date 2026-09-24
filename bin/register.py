@@ -67,6 +67,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/xdg_cache")
 
 # VALIS library imports
+import valis_micro_rigid  # noqa: E402  (VALIS-free, like valis_preflight below)
 from valis import registration, slide_io  # noqa: E402
 from valis import warp_tools as valis_warp_tools  # noqa: E402
 
@@ -468,6 +469,28 @@ def valis_registration(
             "slide2image signatures differ from VALIS 1.0.0. A slide smaller than the "
             "source size the non-rigid stage needs will crash VALIS again."
         )
+    # ------------------------------------------------------------------
+    # MicroRigidRegistrar.align_slides raises on a pair whose high-resolution tiles
+    # all fail to match (a TMA core's ROI tiles are too small for SuperPoint), and
+    # Valis.register() turns that into a dead JVM for the whole patient. The guard
+    # keeps that pair's low-resolution transform instead -- VALIS's own "did not
+    # improve" outcome. bin/utils/valis_micro_rigid.py carries the chain.
+    # ------------------------------------------------------------------
+    if registrar_kwargs.get("micro_rigid_registrar_cls") is not None:
+        if valis_micro_rigid.guard_micro_rigid(
+            registrar_kwargs["micro_rigid_registrar_cls"]
+        ):
+            logger.info(
+                "  Micro-rigid guard applied to MicroRigidRegistrar.align_slides"
+            )
+        elif not valis_micro_rigid.is_guarded(
+            registrar_kwargs["micro_rigid_registrar_cls"]
+        ):
+            logger.warning(
+                "  Micro-rigid guard NOT applied: MicroRigidRegistrar.align_slides's "
+                "signature differs from VALIS 1.0.0. A pair whose high-resolution tiles "
+                "all fail to match will crash VALIS again."
+            )
     slide_files = sorted(
         os.path.join(input_dir, f)
         for f in os.listdir(input_dir)
@@ -501,9 +524,17 @@ def valis_registration(
                 "is on stdout just above. If it reads 'local variable 'tile' referenced "
                 "before assignment' next to 'Invalid resolution: -1', the pyramid-level "
                 "clamp did not reach the reader -- look for 'Pyramid-level clamp NOT "
-                "applied' earlier in this log (bin/utils/valis_preflight.py)."
+                "applied' earlier in this log (bin/utils/valis_preflight.py). If it "
+                "reads 'need at least one array to concatenate' after 'Micro-rigid "
+                "registration', look for 'Micro-rigid guard NOT applied' "
+                "(bin/utils/valis_micro_rigid.py)."
             )
         logger.info("Initial registration completed")
+        for moving, fixed, err in valis_micro_rigid.FALLBACKS:
+            logger.warning(
+                f"  [WARN] micro-rigid kept the low-resolution transform for "
+                f"{moving} -> {fixed}: {err}"
+            )
         logger.info(f"\nRegistration errors:\n{error_df}")
 
         # ---- Safety net: repair missing fwd_dxdy ----
