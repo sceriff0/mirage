@@ -15,19 +15,40 @@
 # only in a single-patient config.
 # =============================================================================
 
-# The three shipped configurations, which is what the mosaic compares. ASHLAR is
-# not in arm_results yet -- uncomment it once that arm exists, and it becomes a
-# third column with no other change.
+# THREE ARMS, so the mosaic is FOUR ROWS: Before + VALIS + STARE + ASHLAR. One
+# shipped configuration per backend -- the comparison a reader wants -- and the
+# parameter sweeps stay out of it (see the group recipe at the bottom).
 arms:
   - {name: valis_high_micro2, dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/valis_high_micro2}
   - {name: tiled_high_gate1,  dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/tiled_high_gate1}
-  # ASHLAR: there is no ashlar arm under arm_results/ yet. The one in
-  #   paper_figures/<pid>_all_in_one/ashlar_t1024_s500 registers the SAME slides onto the
-  #   SAME reference, so it is a valid third column -- but it covers only the patients that
-  #   run drew (033, 046). A mosaic for any other patient in the samplesheet would abort on
-  #   "patient not in registered.csv". So either restrict `patient:` to those two, or build
-  #   an ashlar arm over the whole cohort first.
-  # - {name: ashlar, dir: /beegfs/scratch/ieo7660/ihc_method/paper_figures/033_all_in_one/ashlar_t1024_s500}
+  # ONE ashlar column, so the mosaic is four rows: Before + VALIS + STARE + ASHLAR.
+  #
+  # s15 IS ASHLAR AT ITS OWN SHIPPED DEFAULT -- `ashlar --maximum-shift` defaults to 15 um
+  # (labsyspharm/ashlar, scripts/ashlar.py). This is deliberately the tool AS PUBLISHED
+  # rather than as we tuned it, because that is the comparison a reader means by "you
+  # compared against ASHLAR". The t1024 half is OURS: ASHLAR reads real microscope tiles
+  # and has no input-grid knob (its own --tile-size is the output pyramid's), so 1024 is
+  # the grid we cut stitched slides into, not a default we inherited.
+  #
+  # READ IT WITH ITS DISCARD FRACTION. 15 um is 26x under this cohort's measured
+  # cross-cycle drift (~386 um on patient 033), and ASHLAR does not error on an
+  # out-of-range tile -- it substitutes a linear-model PREDICTION. So this column shows
+  # what a stitching default does to cyclic-IF WSI drift, which is a real result, and NOT
+  # ASHLAR's attainable accuracy, which is a different number. The manifest carries the
+  # per-slide predicted-tile fraction; quote them together or not at all.
+  - {name: ashlar, dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/ashlar_t1024_s15}
+  #
+  # THE TUNED RUN BELONGS BESIDE IT, not instead of it, or the figure is a strawman. The
+  # budget sweep is its own question and a second mosaic answers it, without crowding the
+  # backend comparison to five rows:
+  #   - {name: ashlar_s30,   dir: .../arm_results/ashlar_t1024_s30}
+  #   - {name: ashlar_s120,  dir: .../arm_results/ashlar_t1024_s120}
+  #   - {name: ashlar_s480,  dir: .../arm_results/ashlar_t1024_s480}   # first budget over the drift
+  #   - {name: ashlar_s1920, dir: .../arm_results/ashlar_t1024_s1920}
+  # then add to figures.mosaic:
+  #   groups:
+  #     - {name: backends,     arms: [valis_high_micro2, tiled_high_gate1, ashlar]}
+  #     - {name: ashlar_shift, arms: [ashlar, ashlar_s30, ashlar_s120, ashlar_s480, ashlar_s1920]}
   #
   # The other eight arms of the benchmark are available for parameter crosses --
   # add them here and give `figures.mosaic.groups` one entry per axis, e.g.
@@ -54,13 +75,17 @@ figures:
     variants: 5
     kinds: [overlay]         # `checker` doubles the count and carries no numbers
                              # (annotation is drawn for the overlay kind only)
+    # allow_missing_arms defaults to TRUE: an arm still running is drawn as a flat "no data"
+    # column instead of aborting the figure, so a set can be drawn now and the gap is
+    # visible in it. Set it false for the published figure, where a silently missing column
+    # is the failure to prevent.
     numbers: [scorer]        # the arm benchmark ran at reg_qc=2, so its Dice and
                              # displacement are already on disk. Where a pair has
                              # none -- ASHLAR, or any arm at reg_qc<2 -- the cell
                              # prints "Dice = NA  Δ = NA" rather than nothing.
 
   overlay:
-    arms: [valis_high_micro2, tiled_high_gate1]
+    arms: [valis_high_micro2, tiled_high_gate1, ashlar]
     field_um: [500, 2000]
     zoom_um: [60]            # the inset: top right, channel names bottom right,
                              # the numbers top left under the title

@@ -39,6 +39,9 @@ ROI="${ROI:-}"
 ROI_CENTER="${ROI_CENTER:-}"
 MAX_CELL_PX="${MAX_CELL_PX:-1600}"
 ROWS="${ROWS:-}"
+ALLOW_MISSING="${ALLOW_MISSING:-1}"  # 1 (default) = an arm with no registration is drawn
+                                     # as a flat "no data" column; 0 aborts the figure
+                                     # instead, which is what a published one wants
 PIXEL_SIZE="${PIXEL_SIZE:-0.325}"
 FORMATS="${FORMATS:-png,pdf}"
 DPI="${DPI:-100}"
@@ -57,15 +60,26 @@ cd "$ROOT" || exit 1
 # DIRECTORIES AND LABELS ARE KEPT APART: ARM_DIR is nargs="+", so argparse stops collecting
 # positionals at the first flag and calls every later directory "unrecognized". The
 # directories go first, the --label flags after them.
-DIRS=(); LABELS=()
+DIRS=(); LABELS=(); REAL=0
 add_arm() {                        # add_arm <directory name> <column title>
-  [[ -s "$ROOT/$1/csv/registered.csv" ]] || return 0
+  # at ALLOW_MISSING=1 an arm with no checkpoint is still passed: reg_mosaic draws it as a
+  # labelled empty column, which is the point -- filtering it here would hide the gap
+  if [[ ! -s "$ROOT/$1/csv/registered.csv" ]]; then
+    [[ "$ALLOW_MISSING" == "1" ]] || return 0
+    mkdir -p "$ROOT/$1"
+  else
+    REAL=$(( REAL + 1 ))
+  fi
   DIRS+=("$ROOT/$1"); LABELS+=(--label "$1=$2")
 }
 add_arm valis_high_micro2 "VALIS high"
 add_arm stare_high        "STARE high"
-add_arm ashlar_t1024_s500 "ASHLAR"
-(( ${#DIRS[@]} > 0 )) || { echo "no arm under $ROOT has csv/registered.csv" >&2; exit 1; }
+add_arm ashlar_t1024_s15  "ASHLAR"
+# COUNT THE ARMS WITH DATA, not the columns. At ALLOW_MISSING=1 every arm is a column
+# whether or not it registered anything, so a `${#DIRS[@]}` test can never fail and an
+# empty ROOT would run all the way to a mosaic of nothing but grey boxes -- or, as
+# measured, to a confusing "could not count the moving rounds" three lines further down.
+(( REAL > 0 )) || { echo "no arm under $ROOT has csv/registered.csv" >&2; exit 1; }
 
 # --rows = one row per moving round, counted off the reference arm's checkpoint. Only needed
 # on a checkout older than the fix that made --rows default to exactly this.
@@ -93,6 +107,7 @@ for patch in $PATCHES; do
     args=(--rows "$ROWS" --patch-um "$patch" --kinds "$kind" --numbers "$NUMBERS"
           --variants "$VARIANTS" --formats "$FORMATS" --dpi "$DPI")
     [[ "$PIXEL_SIZE" != auto ]] && args+=(--pixel-size-um "$PIXEL_SIZE")
+    [[ "$ALLOW_MISSING" == "1" ]] || args+=(--no-allow-missing-arms)
 
     # The figure scales with the patch: at 0.325 um/px a 2000 um cell is 6154 px, so a
     # 10-round x 4-arm grid would be 1.5 gigapixels. --cell-in caps what is DRAWN (inches x

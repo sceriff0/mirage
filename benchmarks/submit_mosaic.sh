@@ -61,14 +61,20 @@ ASHLAR_MAX_DISCARD="${ASHLAR_MAX_DISCARD:-1}"  # tiles ASHLAR may replace with a
                                      # prediction before solve.py aborts. 1 = never abort:
                                      # a starved budget still finishes and its discard
                                      # fraction is reported, which is what a sweep needs.
-ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-500}"   # ONE OR MORE budgets (space-separated) for the
-                                     # cross-cycle drift; one arm and one column each. NOT the
-                                     # arm benchmark's 30/60 (a fairness axis against STARE's swept
-                                     # range): a budget below the real drift is not a fair baseline,
-                                     # it is a crippled one -- ASHLAR replaces out-of-range tiles
-                                     # with model predictions instead of erroring. Measured on 033:
-                                     # the cycles sit ~1187 px = 386 um apart, and at 30 um it
-                                     # discarded 30-57% of tiles.
+ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-15}"   # ONE OR MORE budgets (space-separated) for the
+                                     # cross-cycle drift; one arm and one column each.
+                                     # 15 IS ASHLAR'S OWN SHIPPED DEFAULT (`ashlar --maximum-shift`,
+                                     # scripts/ashlar.py), so the default column is the tool AS
+                                     # PUBLISHED -- which is the comparison a reader asks for.
+                                     # IT IS ALSO STARVED HERE and that must be said out loud:
+                                     # measured on 033 the cycles sit ~1187 px = 386 um apart, 26x
+                                     # the default budget, and ASHLAR replaces out-of-range tiles
+                                     # with MODEL PREDICTIONS instead of erroring (at 30 um it
+                                     # discarded 30-57%). So this column is not "ASHLAR's accuracy",
+                                     # it is "ASHLAR's accuracy at its default budget, with N% of
+                                     # its placements invented" -- never quote it without the
+                                     # discard fraction beside it. Pass a list, e.g.
+                                     # ASHLAR_SHIFT_UM="15 480", to put the tuned run next to it.
 ASHLAR_REG_QC="${ASHLAR_REG_QC:-0}"  # 1 also writes ASHLAR's 8-bit Before/After composite (the
                                      # figures read the stitched slide itself; that step is sized
                                      # >=100 GB in the pipeline and runs inside this job)

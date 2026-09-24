@@ -217,6 +217,10 @@ def _mosaic_rows(add, mosaic, run, tag, variants, kinds, numbers, regions, pids)
                     # here, since this file has no samplesheet to count the rounds in
                     if mosaic.get("rows"):
                         args += ["--rows", _count(mosaic, "rows", "figures.mosaic")]
+                    # reg_mosaic allows it by DEFAULT; the plan only has to say when the
+                    # config turns it off, which is what a published figure does
+                    if mosaic.get("allow_missing_arms") is False:
+                        args += ["--no-allow-missing-arms"]
                     if roi:
                         args += ["--roi", roi]
                     for pid in pids:  # reg_mosaic takes --patient repeatedly

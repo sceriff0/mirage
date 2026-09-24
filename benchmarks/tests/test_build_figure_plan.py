@@ -438,3 +438,18 @@ def test_every_group_is_crossed_with_the_sizes():
     )
     rows = [r for r in bfp.plan(cfg) if r[0] == "mosaic"]
     assert len(rows) == 2 * 2 * 2  # groups x patches x kinds
+
+
+def test_only_the_allow_missing_OPT_OUT_reaches_the_mosaic():
+    # the DEFAULT is to draw the gap, and reg_mosaic's default matches, so the plan is clean
+    rows = bfp.plan(_cfg(figures={"mosaic": {"patch_um": [200]}}))
+    assert "allow-missing-arms" not in rows[0][3]
+    rows = bfp.plan(
+        _cfg(figures={"mosaic": {"patch_um": [200], "allow_missing_arms": True}})
+    )
+    assert "allow-missing-arms" not in rows[0][3]
+    # only the opt-out is worth a flag: a published figure must not lose a column quietly
+    rows = bfp.plan(
+        _cfg(figures={"mosaic": {"patch_um": [200], "allow_missing_arms": False}})
+    )
+    assert "--no-allow-missing-arms" in rows[0][3]

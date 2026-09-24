@@ -701,10 +701,21 @@ class Arm:
         label: str | None = None,
         source: str = "auto",
         native_csv: Path | None = None,
+        allow_missing: bool = False,
     ):
         self.root = Path(root)
         self.name = label or self.root.name
-        self.per = read_checkpoint(self.root / REGISTERED_CSV)
+        # `missing` = this arm has no registration to show. With allow_missing it becomes a
+        # PLACEHOLDER COLUMN -- a flat box per cell saying so -- instead of aborting the
+        # figure: a proof of concept is drawn while an arm is still running, and the gap is
+        # visible in the figure rather than silently absent from it.
+        self.missing = False
+        if allow_missing and not (self.root / REGISTERED_CSV).is_file():
+            self.missing = True
+            self.per = {}
+        else:
+            self.per = read_checkpoint(self.root / REGISTERED_CSV)
+        self.allow_missing = allow_missing
         self.ref: Slide | None = None
         self.moving: dict[str, Slide] = {}
         self._comp: dict[str, Composite] = {}
@@ -735,10 +746,20 @@ class Arm:
 
     def open(self, patient: str) -> None:
         rows = self.per.get(patient)
+        if not rows and self.allow_missing:
+            self.missing, self.patient = True, patient
+            self.ref, self.moving = None, {}
+            log.warning(
+                "[%s] %s: nothing registered -- drawing it as an empty column",
+                self.name,
+                patient,
+            )
+            return
         if not rows:
             raise SystemExit(
                 f"[{self.name}] patient {patient!r} not in {self.root / REGISTERED_CSV}"
             )
+        self.missing = False
         refs = [r for r in rows if r.is_reference]
         if len(refs) != 1:
             raise SystemExit(
@@ -836,6 +857,10 @@ class Arm:
             )
         self._orig[key] = got
         return got
+
+    def missing_round(self, key: str) -> bool:
+        """Nothing to draw for this round: the whole arm is absent, or just this round."""
+        return self.missing or key not in self.moving
 
     def crop(self, key: str, panel: str, y: int, x: int, h: int, w: int, step: int = 1):
         """(reference, moving, source) for one panel on the reference canvas.
@@ -1043,6 +1068,8 @@ def image_metrics(
 
 
 NA = "NA"
+MISSING_NOTE = "no data"
+MISSING_GREY = 0.16  # a flat box that is visibly a placeholder, not a black crop
 
 
 def format_note(dice, delta, unit: str = "µm", slide_level: bool = False) -> str:
@@ -1689,7 +1716,14 @@ def process_patient(
     """
     for arm in arms:
         arm.open(pid)
-    first = arms[0]
+    # The LEAD arm supplies the canvas, the ROI choice and the Before panel, so it must be
+    # one that actually registered this patient; a placeholder column can be any of the rest.
+    first = next((a for a in arms if not a.missing), None)
+    if first is None:
+        raise SystemExit(
+            f"{pid}: no arm has a registration -- "
+            + ", ".join(f"{a.name} ({a.root})" for a in arms)
+        )
     assert first.ref is not None
     moving = list(first.moving.values())
     if opt.rounds:
@@ -1700,7 +1734,9 @@ def process_patient(
     # is dropped from the figure, naming it, rather than losing every other round and arm.
     skipped: dict[str, list[str]] = {}
     for sl in list(moving):
-        absent = [a.name for a in arms if sl.key not in a.moving]
+        # an arm that is a placeholder is EXPECTED to be missing every round: it does not
+        # cost the other arms their column, it just draws an empty box of its own
+        absent = [a.name for a in arms if not a.missing and sl.key not in a.moving]
         if absent:
             skipped[sl.key] = absent
             moving.remove(sl)
@@ -1749,6 +1785,8 @@ def process_patient(
     )
     for arm in arms:
         for k in keys:
+            if arm.missing_round(k):
+                continue  # a placeholder column has no canvas to agree with
             if (
                 arm is not first
                 and arm.source != "composite"
@@ -1846,6 +1884,12 @@ def process_patient(
             key, "before", y, x, patch_px, patch_px
         )
         for arm in arms:
+            if arm.missing_round(key):
+                # an empty box of the same size, so the grid keeps its shape and the gap is
+                # something the reader SEES rather than a column that quietly vanished
+                blank = np.zeros((patch_px, patch_px), np.uint8)
+                crops[arm.name], used[arm.name] = [blank, blank], "missing"
+                continue
             *crops[arm.name], used[arm.name] = arm.crop(
                 key, "after", y, x, patch_px, patch_px
             )
@@ -1868,7 +1912,14 @@ def process_patient(
                     else checkerboard(m01, r01, opt.checker_tiles)
                 )
                 note = ""
-                if k == "overlay":
+                if used.get(n) == "missing":
+                    # a flat GREY box, not black: black is what an empty crop of real tissue
+                    # looks like, and the reader has to be able to tell "nothing was drawn
+                    # here" from "nothing was there". The note says which.
+                    img = np.full((*img.shape[:2], 3), MISSING_GREY, np.float32)
+                    note = MISSING_NOTE
+                    cells_meta[n] = {"pixels": "missing"}
+                elif k == "overlay":
                     rc, mc = crops[n]
                     arm = (
                         first
@@ -2046,6 +2097,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="number of rows: (moving round, ROI) pairs, ROI-major. Default: one row per "
         "moving round the arms share, i.e. every round at one ROI -- which is what a "
         "caller that does not know the samplesheet would have to compute anyway",
+    )
+    ap.add_argument(
+        "--allow-missing-arms",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="DEFAULT ON: an arm with no registration for a patient is drawn as a labelled "
+        "EMPTY COLUMN (a flat box per cell) instead of aborting the figure, so a figure set "
+        "can be drawn while an arm is still running and the gap is visible IN it. "
+        "--no-allow-missing-arms makes a missing arm an error again, which is what a "
+        "published figure wants.",
     )
     ap.add_argument(
         "--variants",
@@ -2228,7 +2289,12 @@ def main(argv=None) -> int:
         raise SystemExit("--rows must be >= 1")
 
     labels = parse_labels(args.label)
-    arms = [Arm(d, labels.get(d.name), args.source, args.native_csv) for d in args.arm]
+    arms = [
+        Arm(
+            d, labels.get(d.name), args.source, args.native_csv, args.allow_missing_arms
+        )
+        for d in args.arm
+    ]
     names = [a.name for a in arms]
     if len(set(names)) != len(names) or BEFORE_LABEL in names:
         raise SystemExit(
@@ -2267,7 +2333,13 @@ def main(argv=None) -> int:
         lowres_um=args.lowres_um,
         variants=args.variants,
     )
-    patients = args.patient or arms[0].patients()
+    # the patient list comes from the first arm that HAS one: with --allow-missing-arms the
+    # first arm on the command line can be a placeholder, whose checkpoint is empty, and
+    # taking the list from it drew nothing at all while still exiting 0
+    lead = next((a for a in arms if not a.missing), arms[0])
+    patients = args.patient or lead.patients()
+    if not patients:
+        raise SystemExit("no patient found in any arm's csv/registered.csv")
     n = variant_count(opt)
     for pid in patients:
         # each variant avoids every earlier one's tissue, so the N figures are alternatives

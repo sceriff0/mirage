@@ -327,16 +327,37 @@ external_baseline:
     # as a genuine loss for ASHLAR. That is the exact shape of a strawman baseline, and
     # it is undetectable from the score alone.
     #
-    # That test RAN, on patient 033, and 30 failed it: ASHLAR measured the cycles ~1187 px
-    # = 386 um apart and at 30 um discarded 30-57% of tiles, refusing one round outright.
-    # A doubling to 60 is still 6x under the drift, so the pair 30/60 could only ever have
-    # compared two starved runs with each other.
+    # 15 IS ASHLAR'S OWN SHIPPED DEFAULT: `ashlar --maximum-shift` is `type=float,
+    # default=15`, read from labsyspharm/ashlar scripts/ashlar.py. It anchors the sweep
+    # because it is the run a reviewer means by "did you compare against ASHLAR": the tool
+    # as published, not the tool as we tuned it. It is the arm the mosaic's ASHLAR row
+    # draws.
     #
-    # The sweep is therefore geometric and BRACKETS the measurement: 30 (starved, kept as
-    # the stress case), 120, 480 (just over the measured drift) and 1920 (well past it).
-    # Where the discard fraction stops falling is the empirical answer to "what budget does
-    # this tissue need", which is a better number than any argument about it.
-    maximum_shift_um: [30, 120, 480, 1920]
+    # tile_size BELOW HAS NO UPSTREAM DEFAULT TO INHERIT, and it is worth not confusing the
+    # two. ASHLAR's own `--tile-size` (also 1024) is the "Pyramid tile size for OME-TIFF
+    # output" -- a writer setting. It reads REAL microscope tiles, so it has no input-grid
+    # knob at all; our tile_size is the grid we cut an already-stitched slide into to give
+    # ASHLAR something tile-shaped to align. 1024 is our choice, not ASHLAR's.
+    #
+    # The sweep is 15 -> 60 -> 240, geometric, by user ruling (2026-09-24).
+    #
+    # !! READ THIS BEFORE QUOTING ANY ASHLAR NUMBER FROM THIS SWEEP !!
+    # ALL THREE BUDGETS ARE BELOW THE MEASURED DRIFT. On patient 033 ASHLAR itself measured
+    # the cycles ~1187 px = 386 um apart; at 30 um it discarded 30-57% of tiles and refused
+    # one round outright. 240 um is the largest budget here and is still ~0.6x that drift,
+    # so this sweep does not bracket the measurement -- it samples the starved side of it
+    # three times. Expect every arm to carry a substantial predicted-tile fraction, and
+    # expect the fraction NOT to flatten (flattening is what would have identified the
+    # budget this tissue needs). Adding 480 would cross the drift; it is deliberately not
+    # here.
+    #
+    # That makes these arms a measurement of "what a stitching default does to cross-cycle
+    # WSI drift", which is a real and publishable result, and NOT a measurement of ASHLAR's
+    # attainable accuracy, which is a different number this sweep never reaches. The
+    # discard fraction is computed, warned per slide and written to the manifest for
+    # exactly this reason: it is the caveat, and it travels with the score or the score is
+    # a strawman.
+    maximum_shift_um: [15, 60, 240]
 
     # The quality gate: the fraction of tiles ASHLAR may replace with a model prediction
     # before solve.py calls the solve unreliable and aborts.

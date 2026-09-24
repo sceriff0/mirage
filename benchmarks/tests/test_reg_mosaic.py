@@ -1336,3 +1336,194 @@ def test_image_numbers_also_print_both(arm_root, tmp_path):
     cell = m["row_plan"][0]["cells"]["armA"]
     assert cell["source"] == "image"
     assert "dice_pixel" in cell and "shift_px" in cell
+
+
+# --- an arm that has not run yet ----------------------------------------------------
+def test_no_allow_missing_arms_still_aborts(arm_root, tmp_path):
+    """The opt-out is what a PUBLISHED figure wants: it must not quietly lose a column.
+
+    Drawing the gap is the DEFAULT, because a set is drawn many times while arms are still
+    running and once at the end; --no-allow-missing-arms is the once."""
+    empty = tmp_path / "ashlar_not_run"
+    empty.mkdir()
+    with pytest.raises(SystemExit, match="not found"):
+        rm.main(
+            [
+                str(arm_root / "armA"),
+                str(empty),
+                "--no-allow-missing-arms",
+                "--rows",
+                "1",
+                "-o",
+                str(tmp_path / "out"),
+                "--patch-px",
+                "64",
+                "--formats",
+                "png",
+                "--dpi",
+                "50",
+                "--numbers",
+                "none",
+            ]
+        )
+
+
+def test_allow_missing_arms_draws_it_as_a_labelled_empty_column(arm_root, tmp_path):
+    """Proof of concept while an arm is still running: the gap is IN the figure, a flat grey
+    box saying "no data", instead of a column that silently vanished."""
+    empty = tmp_path / "ashlar_not_run"
+    empty.mkdir()
+    out = tmp_path / "out"
+    seen = {}
+    real = rm.assemble_figure
+
+    def spy(grid, notes, row_labels, col_labels, *a, **k):
+        seen["grid"], seen["notes"] = grid, notes
+        seen["cols"] = col_labels
+        return real(grid, notes, row_labels, col_labels, *a, **k)
+
+    import unittest.mock as mock
+
+    with mock.patch.object(rm, "assemble_figure", spy):
+        assert (
+            rm.main(
+                [
+                    str(arm_root / "armA"),
+                    str(empty),
+                    "--rows",
+                    "2",
+                    "-o",
+                    str(out),
+                    "--patch-px",
+                    "64",
+                    "--formats",
+                    "png",
+                    "--dpi",
+                    "50",
+                    "--numbers",
+                    "none",
+                    "--allow-missing-arms",
+                    "--label",
+                    "ashlar_not_run=ASHLAR (pending)",
+                ]
+            )
+            == 0
+        )
+    assert (out / "P1_mosaic.png").is_file()
+    # the column is there, labelled, and its cells are the flat grey box with a note
+    flat = [
+        (img, note)
+        for row, notes in zip(seen["grid"], seen["notes"])
+        for img, note in zip(row, notes)
+        if note == rm.MISSING_NOTE
+    ]
+    assert flat, seen["notes"]
+    for img, _note in flat:
+        assert np.allclose(img, rm.MISSING_GREY)  # uniform, and NOT black
+    m = json.loads((out / "P1_rois.json").read_text())
+    assert m["row_plan"][0]["cells"]["ASHLAR (pending)"]["pixels"] == "missing"
+
+
+def test_drawing_the_gap_is_the_DEFAULT_no_flag_needed(arm_root, tmp_path):
+    """The flag above is redundant: the same run with NO --allow-missing-arms draws the same
+    figure. Pinned because the default is the whole point -- a set is drawn many times while
+    arms are still running, and one missing arm must not cost the others their row."""
+    empty = tmp_path / "ashlar_not_run"
+    empty.mkdir()
+    out = tmp_path / "out"
+    assert (
+        rm.main(
+            [
+                str(arm_root / "armA"),
+                str(empty),
+                "--rows",
+                "1",
+                "-o",
+                str(out),
+                "--patch-px",
+                "64",
+                "--formats",
+                "png",
+                "--dpi",
+                "50",
+                "--numbers",
+                "none",
+            ]
+        )
+        == 0
+    )
+    assert (out / "P1_mosaic.png").is_file()
+    cells = json.loads((out / "P1_rois.json").read_text())["row_plan"][0]["cells"]
+    assert "missing" in cells["ashlar_not_run"]["pixels"]
+
+
+def test_three_arms_make_a_four_row_mosaic(arm_root, tmp_path):
+    """The reader's row count is Before + one per arm, which is why the shipped figure config
+    names exactly three arms. `--rows` counts the (round, ROI) pairs -- the COLUMNS at the
+    default orientation -- so the two numbers are independent and easy to confuse."""
+    import unittest.mock as mock
+
+    seen = {}
+    real = rm.assemble_figure
+
+    def spy(grid, notes, row_labels, col_labels, *a, **k):
+        seen["rows"], seen["cols"] = row_labels, col_labels
+        return real(grid, notes, row_labels, col_labels, *a, **k)
+
+    arms = [str(arm_root / "armA")] + [str(tmp_path / n) for n in ("b", "c")]
+    for d in arms[1:]:
+        Path(d).mkdir()
+    with mock.patch.object(rm, "assemble_figure", spy):
+        assert (
+            rm.main(
+                arms
+                + [
+                    "--rows",
+                    "2",
+                    "-o",
+                    str(tmp_path / "out"),
+                    "--patch-px",
+                    "64",
+                    "--formats",
+                    "png",
+                    "--dpi",
+                    "50",
+                    "--numbers",
+                    "none",
+                ]
+            )
+            == 0
+        )
+    assert len(seen["rows"]) == 4, seen["rows"]  # Before + three arms
+    assert seen["rows"][0].startswith("Before")
+    assert len(seen["cols"]) == 2  # --rows counts these
+
+
+def test_a_missing_arm_cannot_be_the_lead(arm_root, tmp_path):
+    """The lead supplies the canvas, the ROI choice and the Before panel."""
+    empty = tmp_path / "ashlar_not_run"
+    empty.mkdir()
+    out = tmp_path / "out"
+    assert (
+        rm.main(
+            [
+                str(empty),  # first on the command line, but it has nothing
+                str(arm_root / "armA"),
+                "--rows",
+                "1",
+                "-o",
+                str(out),
+                "--patch-px",
+                "64",
+                "--formats",
+                "png",
+                "--dpi",
+                "50",
+                "--numbers",
+                "none",
+                "--allow-missing-arms",
+            ]
+        )
+        == 0
+    )
+    assert (out / "P1_mosaic.png").is_file()

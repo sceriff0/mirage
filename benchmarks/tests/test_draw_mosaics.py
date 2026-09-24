@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 BENCH = Path(__file__).resolve().parents[1]
-ARMS = ("valis_high_micro2", "stare_high", "ashlar_t1024_s500")
+ARMS = ("valis_high_micro2", "stare_high", "ashlar_t1024_s15")
 
 
 def _run(tmp_path, arms=ARMS, rounds=10, **env_over):
@@ -139,12 +139,19 @@ def test_directories_come_before_the_label_flags(default_run):
 
 
 def test_an_arm_without_registered_slides_is_left_out_not_fatal(tmp_path):
+    """At ALLOW_MISSING=0 -- the published-figure setting -- the arm with nothing is dropped
+    and the run still succeeds on the arms that did register. Losing the whole mosaic to one
+    failed arm is the outcome this guards against; drawing the gap (the default) is the
+    other answer to the same problem, covered below."""
     proc, calls = _run(
-        tmp_path, arms=("valis_high_micro2", "stare_high"), KINDS="overlay"
+        tmp_path,
+        arms=("valis_high_micro2", "stare_high"),
+        KINDS="overlay",
+        ALLOW_MISSING=0,
     )
     assert proc.returncode == 0
     line = next(ln for ln in calls.splitlines() if "reg_mosaic" in ln)
-    assert "stare_high" in line and "ashlar_t1024_s500" not in line
+    assert "stare_high" in line and "ashlar_t1024_s15" not in line
 
 
 def test_no_arm_at_all_is_refused_before_anything_runs(tmp_path):
@@ -162,7 +169,11 @@ def test_no_arm_at_all_is_refused_before_anything_runs(tmp_path):
         text=True,
         cwd=str(tmp_path),
     )
+    # and it is refused for the RIGHT reason: at the default ALLOW_MISSING=1 every arm is a
+    # column whether or not it has data, so the count of columns can never reach zero. An
+    # empty ROOT used to fall past this line and die on "could not count the moving rounds".
     assert proc.returncode != 0 and "no arm under" in proc.stderr
+    assert "could not count" not in proc.stderr
 
 
 # --- rows ---------------------------------------------------------------------------
@@ -214,3 +225,28 @@ def test_a_failed_size_is_named_and_the_others_still_draw(tmp_path):
     assert "--patch-um 500" in log.read_text()
     assert "1 mosaic(s)" in proc.stdout and "(1 failed)" in proc.stdout
     assert proc.returncode != 0
+
+
+def test_an_arm_with_no_checkpoint_is_passed_through_BY_DEFAULT(tmp_path):
+    """Filtering it here would hide the gap; reg_mosaic draws it as a labelled empty column,
+    which is what a proof of concept drawn mid-benchmark needs. No env var is needed for it:
+    a set is drawn many times while arms are still running and once at the end, so the many
+    is the default and the once is the opt-out."""
+    _proc, calls = _run(
+        tmp_path, arms=("valis_high_micro2",), PATCHES="200", KINDS="overlay"
+    )
+    line = next(ln for ln in calls.splitlines() if "reg_mosaic" in ln)
+    assert "ashlar_t1024_s15" in line  # the arm with nothing is still a column
+    # reg_mosaic's own default matches, so nothing is passed either way round
+    assert "allow-missing-arms" not in line
+
+    _proc, calls = _run(
+        tmp_path / "strict",
+        arms=("valis_high_micro2",),
+        PATCHES="200",
+        KINDS="overlay",
+        ALLOW_MISSING=0,
+    )
+    line = next(ln for ln in calls.splitlines() if "reg_mosaic" in ln)
+    assert "--no-allow-missing-arms" in line
+    assert "ashlar_t1024_s15" not in line
