@@ -439,3 +439,39 @@ def test_the_crop_size_survives_a_global_tight_bbox(seg_run, tmp_path, monkeypat
     _zoom(arm, out, "--crop", "only", "--crop-px", "512", "--formats", "png")
     img = matplotlib.image.imread(str(out / "P1_crop.png"))
     assert img.shape[:2] == (512, 512)
+
+
+def test_the_numbers_sit_under_the_title_not_over_the_zoom(tmp_path, monkeypatch):
+    """Top right is where the zoom panel and the funnel are: the note landed on top of them
+    (2026-09-24). It goes under the title, top left, offset in POINTS so the gap is one line
+    at any figure size."""
+    import matplotlib.axes
+
+    placed = []
+    orig = matplotlib.axes.Axes.annotate
+
+    def patched(self, text, **kw):
+        placed.append((text, kw))
+        return orig(self, text, **kw)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "annotate", patched)
+    over = np.zeros((64, 96, 3), np.float32)
+    zoom = np.zeros((32, 32, 3), np.float32)
+    rm.draw_overview_zoom(
+        over,
+        zoom,
+        (10, 10, 16),
+        1.0,
+        0.5,
+        tmp_path / "fig",
+        ["png"],
+        dpi=50,
+        title="After (VALIS high)",
+        note="Dice = 0.80  Δ = 1.2 µm",
+    )
+    notes = [(t, kw) for t, kw in placed if t.startswith("Dice")]
+    assert notes, placed
+    _text, kw = notes[0]
+    assert kw["xy"] == (0.02, 0.98)  # top LEFT, not (0.98, 0.98)
+    assert kw["ha"] == "left" and kw["va"] == "top"
+    assert kw["xytext"][1] < 0  # pushed down, under the title

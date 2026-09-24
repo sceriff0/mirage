@@ -1,0 +1,99 @@
+# =============================================================================
+# figures_arm_crosses.yaml — the figure set for an ARM BENCHMARK that already ran.
+#
+# Every arm below is a finished run of benchmarks/configs/arms.yaml, named by its
+# directory. NOTHING IS REGISTERED: those registrations are already on disk, so
+# this file costs only render time plus one segmentation per method.
+#
+#     python3 -m benchmarks.build_figure_plan --config <this file> --count
+#     sbatch --export=ALL,CONFIG=<this file> benchmarks/submit_figures.sh input.csv
+#
+# MULTI-PATIENT, SO NO PINNED ROI. `roi` is a coordinate in ONE reference canvas;
+# 033 and 046 have different canvases (31539x24166 vs 31539x33382), so a pinned
+# ROI names different tissue in each. Left empty, every figure picks its own
+# window per patient and `variants: 5` gives five to choose between. Pin an ROI
+# only in a single-patient config.
+# =============================================================================
+
+# The three shipped configurations, which is what the mosaic compares. ASHLAR is
+# not in arm_results yet -- uncomment it once that arm exists, and it becomes a
+# third column with no other change.
+arms:
+  - {name: valis_high_micro2, dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/valis_high_micro2}
+  - {name: tiled_high_gate1,  dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/tiled_high_gate1}
+  # ASHLAR: there is no ashlar arm under arm_results/ yet. The one in
+  #   paper_figures/<pid>_all_in_one/ashlar_t1024_s500 registers the SAME slides onto the
+  #   SAME reference, so it is a valid third column -- but it covers only the patients that
+  #   run drew (033, 046). A mosaic for any other patient in the samplesheet would abort on
+  #   "patient not in registered.csv". So either restrict `patient:` to those two, or build
+  #   an ashlar arm over the whole cohort first.
+  # - {name: ashlar, dir: /beegfs/scratch/ieo7660/ihc_method/paper_figures/033_all_in_one/ashlar_t1024_s500}
+  #
+  # The other eight arms of the benchmark are available for parameter crosses --
+  # add them here and give `figures.mosaic.groups` one entry per axis, e.g.
+  #   groups:
+  #     - {name: valis_micro, arms: [valis_high_micro0, valis_high_micro1, valis_high_micro2]}
+  #     - {name: stare_gate,  arms: [tiled_high_gate05, tiled_high_gate1, tiled_high_gate2]}
+  # One axis per group: a mosaic is one column per arm, so ten in one figure is a
+  # wall rather than a comparison.
+
+# Segmentation and the channel crops resume from this one: the shipped config,
+# whose cells and markers are the ones actually published.
+reference_arm: valis_high_micro2
+
+segmentation:
+  # One pipeline run each, all three segmenters. cellsam needs its weights on disk
+  # (~/.deepcell/models/cellsam_v1.2/) -- it reaches users.deepcell.org otherwise, which
+  # no node at this site can resolve.
+  methods: [stardist, instantseg, cellsam]
+  params: {}
+
+figures:
+  mosaic:
+    patch_um: [200, 500]     # 615 px and 1538 px at 0.325 um/px
+    variants: 5
+    kinds: [overlay]         # `checker` doubles the count and carries no numbers
+                             # (annotation is drawn for the overlay kind only)
+    numbers: [scorer]        # the arm benchmark ran at reg_qc=2, so its Dice and
+                             # displacement are already on disk. Where a pair has
+                             # none -- ASHLAR, or any arm at reg_qc<2 -- the cell
+                             # prints "Dice = NA  Δ = NA" rather than nothing.
+
+  overlay:
+    arms: [valis_high_micro2, tiled_high_gate1]
+    field_um: [500, 2000]
+    zoom_um: [60]            # the inset: top right, channel names bottom right,
+                             # the numbers top left under the title
+    variants: 5
+
+  zoom:
+    field_um: [150, 300]
+    masks: [cell, nuclei, both]   # the whole cell, the nucleus, and both together --
+                             # `both` draws cells in outline_color and nuclei in
+                             # nuclei_color, which is the one that shows the cytoplasmic
+                             # ring each segmenter claims
+    crop: also               # writes the zoom panel alone beside the figure
+
+  crop:
+    crop_px: [1024]
+
+  channels:
+    names: [DAPI, PANCK, SMA, PDL1, ARID1A, CD56, CD14, CD45, CD163, GZMB, CD74,
+            CD4, CD8, VIMENTIN, FOXP3, FSP1, L1CAM, CD3, P53, PD1]
+    colors: [white]
+    field_um: [150]
+    crop_px: [1024]
+    autoscale: [clean]
+
+options:
+  roi: []                    # see the header: multi-patient, so no pinned coordinate
+  patient: []                # every patient in the samplesheet
+  seg_qc: 0                  # these arms already carry reg_qc=2 QC; nothing to recompute
+  outline_color: "#ffd400"
+  nuclei_color: "#00e5ff"
+  outline_width: 2
+  channel_label: DAPI
+  sat: 0.35
+  bg_k: 3.0
+  formats: png,pdf
+  dpi: 100

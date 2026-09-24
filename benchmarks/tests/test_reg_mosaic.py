@@ -1291,3 +1291,48 @@ def test_rows_defaults_to_every_round_at_one_roi(arm_root, tmp_path):
 def test_an_explicit_rows_still_wins(arm_root, tmp_path):
     m = _run(arm_root, tmp_path / "rows3", "--numbers", "none", "--rows", "3")
     assert m["rows"] == 3 and len(m["row_plan"]) == 3
+
+
+# --- a missing number is reported, not dropped -------------------------------------
+def test_both_numbers_are_always_printed_NA_when_absent():
+    """A blank corner reads as a cell nobody measured; NA says the run has no such number."""
+    assert rm.format_note(0.871, 1.34) == "Dice = 0.87  Δ = 1.3 µm"
+    assert rm.format_note(None, 1.34) == "Dice = NA  Δ = 1.3 µm"
+    assert rm.format_note(0.871, None) == "Dice = 0.87  Δ = NA"
+    assert rm.format_note(None, None) == "Dice = NA  Δ = NA"
+    assert rm.format_note(0.5, 2.0, slide_level=True).endswith("2.0 µm*")
+    assert rm.format_note(0.5, 2.0, "px") == "Dice = 0.50  Δ = 2.0 px"
+
+
+def test_a_cell_with_no_scorer_output_says_NA_for_both(
+    originals_root, tmp_path, monkeypatch
+):
+    """armR ran at reg_qc<2, so there is no *_seg_qc.json: every cell must say NA twice
+    rather than leave the corner blank."""
+    seen = []
+    real = rm.assemble_figure
+
+    def spy(grid, notes, *a, **k):
+        seen.extend(n for row in notes for n in row)
+        return real(grid, notes, *a, **k)
+
+    monkeypatch.setattr(rm, "assemble_figure", spy)
+    _mosaic(originals_root / "armR", tmp_path / "na", "--numbers", "scorer")
+    assert seen and all(n == "Dice = NA  Δ = NA" for n in seen), seen
+
+
+def test_the_before_cell_carries_both_numbers_like_every_other(arm_root, tmp_path):
+    """It used to print Dice alone -- annotated by exception rather than measured."""
+    seen = []
+    m = _run(arm_root, tmp_path / "before", "--numbers", "scorer")
+    before = m["row_plan"][0]["cells"][rm.BEFORE_LABEL]
+    assert before["dice_matched"] is not None
+    assert "displacement_um" in before  # the native stage's, parsed alongside its dice
+    assert seen == []
+
+
+def test_image_numbers_also_print_both(arm_root, tmp_path):
+    m = _run(arm_root, tmp_path / "img", "--numbers", "image")
+    cell = m["row_plan"][0]["cells"]["armA"]
+    assert cell["source"] == "image"
+    assert "dice_pixel" in cell and "shift_px" in cell

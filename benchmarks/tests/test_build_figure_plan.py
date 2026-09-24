@@ -330,7 +330,7 @@ def test_the_shipped_plan_is_tsv_the_shell_can_read():
         assert len(fields) == 4, fields  # kind, run key, outdir, arguments
         kind, run, out, args = fields
         assert kind in ("mosaic", "overlay", "zoom", "crop", "channel")
-        assert run == "arms:all" or run.startswith(("arm:", "seg:"))
+        assert run.startswith(("arms:", "arm:", "seg:"))
         assert out and " " not in out  # a directory the shell can mkdir unquoted
         assert shlex.split(args)  # and arguments it can eval back
     # sizes survive as plain numbers, not 150.0 or 1.5e+02
@@ -363,3 +363,78 @@ def test_the_mosaic_row_count_is_left_to_reg_mosaic_unless_asked():
     assert _flag(rows[0], "--rows") is None
     rows = bfp.plan(_cfg(figures={"mosaic": {"patch_um": [200], "rows": 6}}))
     assert _flag(rows[0], "--rows") == "6"
+
+
+# --- mosaic groups: one comparison per figure ---------------------------------------
+def test_mosaic_groups_each_draw_their_own_arms():
+    """A mosaic is one column per arm, so 18 arms is a wall, not a figure. Each group is one
+    axis -- the only shape in which a mosaic answers a question."""
+    cfg = _cfg(
+        arms=["valis_high_micro2", "stare_high", "ashlar"],
+        figures={
+            "mosaic": {
+                "patch_um": [200],
+                "groups": [
+                    {"name": "backends", "arms": ["valis_high_micro2", "stare_high"]},
+                    {"name": "vs_ashlar", "arms": ["valis_high_micro2", "ashlar"]},
+                ],
+            }
+        },
+    )
+    rows = [r for r in bfp.plan(cfg) if r[0] == "mosaic"]
+    assert len(rows) == 2
+    assert [r[1] for r in rows] == [
+        "arms:valis_high_micro2,stare_high",
+        "arms:valis_high_micro2,ashlar",
+    ]
+    assert [r[2] for r in rows] == [
+        "mosaic/backends_p200_overlay_auto",
+        "mosaic/vs_ashlar_p200_overlay_auto",
+    ]
+
+
+def test_without_groups_every_arm_is_one_mosaic():
+    cfg = _cfg(
+        arms=["valis_high_micro2", "stare_high"],
+        figures={"mosaic": {"patch_um": [200]}},
+    )
+    rows = [r for r in bfp.plan(cfg) if r[0] == "mosaic"]
+    assert len(rows) == 1 and rows[0][1] == "arms:valis_high_micro2,stare_high"
+    assert rows[0][2] == "mosaic/p200_overlay_auto"  # no group tag
+
+
+def test_a_group_naming_an_arm_that_is_not_registered_is_refused():
+    with pytest.raises(SystemExit, match="not in arms"):
+        bfp.plan(
+            _cfg(
+                arms=["valis_high_micro2"],
+                figures={
+                    "mosaic": {
+                        "patch_um": [200],
+                        "groups": [{"name": "x", "arms": ["valis_low_micro0"]}],
+                    }
+                },
+            )
+        )
+    with pytest.raises(SystemExit, match="needs an `arms` list"):
+        bfp.plan(
+            _cfg(figures={"mosaic": {"patch_um": [200], "groups": [{"name": "empty"}]}})
+        )
+
+
+def test_every_group_is_crossed_with_the_sizes():
+    cfg = _cfg(
+        arms=["valis_high_micro2", "stare_high"],
+        figures={
+            "mosaic": {
+                "patch_um": [200, 500],
+                "kinds": ["overlay", "checker"],
+                "groups": [
+                    {"name": "a", "arms": ["valis_high_micro2"]},
+                    {"name": "b", "arms": ["stare_high"]},
+                ],
+            }
+        },
+    )
+    rows = [r for r in bfp.plan(cfg) if r[0] == "mosaic"]
+    assert len(rows) == 2 * 2 * 2  # groups x patches x kinds

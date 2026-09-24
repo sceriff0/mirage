@@ -205,6 +205,31 @@ def _validate_methods(cfg: dict) -> list[str]:
     return methods
 
 
+def _mosaic_rows(add, mosaic, run, tag, variants, kinds, numbers, regions, pids):
+    """One mosaic per (patch size x kind x numbers source x region) for one group of arms."""
+    for patch in _numbers(mosaic, "patch_um", "figures.mosaic"):
+        for kind in kinds:
+            for number in numbers:
+                for suffix, roi in regions:
+                    args = ["--patch-um", _num(patch), "--variants", variants]
+                    args += ["--kinds", kind, "--numbers", number]
+                    # left out, reg_mosaic draws every round at one ROI -- the right default
+                    # here, since this file has no samplesheet to count the rounds in
+                    if mosaic.get("rows"):
+                        args += ["--rows", _count(mosaic, "rows", "figures.mosaic")]
+                    if roi:
+                        args += ["--roi", roi]
+                    for pid in pids:  # reg_mosaic takes --patient repeatedly
+                        if pid:
+                            args += ["--patient", pid]
+                    add(
+                        "mosaic",
+                        run,
+                        f"mosaic/{tag}p{_num(patch)}_{kind}_{number}{suffix}",
+                        args,
+                    )
+
+
 # --- the plan ----------------------------------------------------------------------
 def plan(cfg: dict) -> list[tuple[str, str, str, str]]:
     arms, external = _validate_arms(cfg)
@@ -245,27 +270,24 @@ def plan(cfg: dict) -> list[tuple[str, str, str, str]]:
         variants = _count(mosaic, "variants", "figures.mosaic")
         kinds = _choices(mosaic, "kinds", "figures.mosaic", KINDS, ["overlay"])
         numbers = _choices(mosaic, "numbers", "figures.mosaic", NUMBERS, ["auto"])
-        for patch in _numbers(mosaic, "patch_um", "figures.mosaic"):
-            for kind in kinds:
-                for number in numbers:
-                    for suffix, roi in regions:
-                        args = ["--patch-um", _num(patch), "--variants", variants]
-                        args += ["--kinds", kind, "--numbers", number]
-                        # left out, reg_mosaic draws every round at one ROI -- the right
-                        # default here, since this file has no samplesheet to count rounds in
-                        if mosaic.get("rows"):
-                            args += ["--rows", _count(mosaic, "rows", "figures.mosaic")]
-                        if roi:
-                            args += ["--roi", roi]
-                        for pid in pids:  # reg_mosaic takes --patient repeatedly
-                            if pid:
-                                args += ["--patient", pid]
-                        add(
-                            "mosaic",
-                            "arms:all",
-                            f"mosaic/p{_num(patch)}_{kind}_{number}{suffix}",
-                            args,
-                        )
+        # A mosaic draws one COLUMN per arm, so 18 arms is not a figure, it is a wall.
+        # `groups` names the subsets worth comparing -- one axis each, which is what makes
+        # a mosaic answer a question rather than display an inventory. No groups = every
+        # arm in one mosaic, which is right when there are two or three of them.
+        groups = mosaic.get("groups") or [{"name": "", "arms": list(arms)}]
+        for group in groups:
+            if not isinstance(group, dict) or not group.get("arms"):
+                raise SystemExit(
+                    f"figures.mosaic.groups: {group!r} needs an `arms` list"
+                )
+            bad = [a for a in group["arms"] if a not in arms]
+            if bad:
+                raise SystemExit(
+                    f"figures.mosaic.groups[{group.get('name')}]: {bad} not in arms"
+                )
+            tag = f"{group['name']}_" if group.get("name") else ""
+            run = "arms:" + ",".join(group["arms"])
+            _mosaic_rows(add, mosaic, run, tag, variants, kinds, numbers, regions, pids)
 
     overlay = figures.get("overlay")
     if overlay:

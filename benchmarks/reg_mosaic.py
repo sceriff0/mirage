@@ -602,9 +602,9 @@ class SegQC:
     displacement_um: float | None
     displacement_px: float | None
     n_pairs: int | None
-    native_dice: float | None = (
-        None  # the "native" stage: the pair before any transform
-    )
+    # the "native" stage: the pair before any transform
+    native_dice: float | None = None
+    native_displacement_um: float | None = None
     residuals: np.ndarray = field(
         default_factory=lambda: np.zeros((0, 3))
     )  # ref_x, ref_y, residual_px
@@ -673,6 +673,9 @@ def load_seg_qc(qc_dir: Path, slide: Slide) -> SegQC | None:
             displacement_px=_float_or_none(final.get("displacement_px_p50")),
             n_pairs=final.get("n_pairs"),
             native_dice=_float_or_none(info["native"].get("dice_matched")),
+            native_displacement_um=_float_or_none(
+                info["native"].get("displacement_um_p50")
+            ),
             residuals=residuals,
         )
     return None
@@ -1039,17 +1042,32 @@ def image_metrics(
     return dice, float(np.hypot(*shift))
 
 
+NA = "NA"
+
+
+def format_note(dice, delta, unit: str = "µm", slide_level: bool = False) -> str:
+    """``Dice = 0.87  Δ = 1.3 µm`` -- BOTH always printed, NA where the value does not exist.
+
+    A missing number is a fact about the run (no scorer output, too few matched nuclei in
+    this ROI), and a cell that silently drops it reads as a cell nobody looked at. ``NA``
+    says which. ``slide_level`` marks a displacement that is the slide's, not this ROI's.
+    """
+    d = f"{dice:.2f}" if dice is not None else NA
+    if delta is None:
+        v = NA
+    else:
+        v = f"{delta:.1f} {unit}" + ("*" if slide_level else "")
+    return f"Dice = {d}  Δ = {v}"
+
+
 def image_note(ref, mov, px: float | None) -> tuple[str, dict]:
     """``Dice = 0.81  Δ = 0.4 µm`` computed from the crop (see image_metrics)."""
     dice, shift_px = image_metrics(ref, mov)
     vals = {"source": "image", "dice_pixel": dice, "shift_px": shift_px}
-    parts = []
-    if dice is not None:
-        parts.append(f"Dice = {dice:.2f}")
-    if shift_px is not None:
-        vals["shift_um"] = shift_px * px if px else None
-        parts.append(f"Δ = {shift_px * px:.1f} µm" if px else f"Δ = {shift_px:.1f} px")
-    return "  ".join(parts), vals
+    delta = None if shift_px is None else (shift_px * px if px else shift_px)
+    if shift_px is not None and px:
+        vals["shift_um"] = shift_px * px
+    return format_note(dice, delta, "µm" if px else "px"), vals
 
 
 def select_rois(
@@ -1214,28 +1232,27 @@ def cell_note(
 ) -> tuple[str, dict]:
     """``Dice = 0.87  Δ = 1.3 µm`` (+ ``*`` when the slide-level displacement stands in)."""
     if qc is None:
-        return "", {}
-    parts, vals = (
-        [],
-        {
-            "stage": qc.stage,
-            "dice_matched": qc.dice,
-            "slide_displacement_um": qc.displacement_um,
-        },
-    )
-    if qc.dice is not None:
-        parts.append(f"Dice = {qc.dice:.2f}")
+        # no scorer output for this pair: say so with NA rather than leaving a blank corner
+        return format_note(None, None), {}
+    vals = {
+        "stage": qc.stage,
+        "dice_matched": qc.dice,
+        "slide_displacement_um": qc.displacement_um,
+    }
     local_px, n = qc.local_displacement_px(y, x, size, size, min_nuclei)
     vals["n_nuclei_in_roi"] = n
+    unit, slide_level = "µm" if px else "px", False
     if local_px is not None:
         vals["roi_displacement_px"] = local_px
         vals["roi_displacement_um"] = local_px * px if px else None
-        parts.append(f"Δ = {local_px * px:.1f} µm" if px else f"Δ = {local_px:.1f} px")
+        delta = local_px * px if px else local_px
     elif qc.displacement_um is not None:
-        parts.append(f"Δ = {qc.displacement_um:.1f} µm*")
+        delta, unit, slide_level = qc.displacement_um, "µm", True
     elif qc.displacement_px is not None:
-        parts.append(f"Δ = {qc.displacement_px:.1f} px*")
-    return "  ".join(parts), vals
+        delta, unit, slide_level = qc.displacement_px, "px", True
+    else:
+        delta = None
+    return format_note(qc.dice, delta, unit, slide_level), vals
 
 
 def _mpl():
@@ -1458,13 +1475,17 @@ def draw_overview_zoom(
             )
         )
     if note:
+        # TOP LEFT, under the title -- not top right, which is where the zoom panel and the
+        # funnel are: the numbers landed on top of them (2026-09-24). Offset in POINTS from
+        # the title's anchor, so the gap is one line at any figure size.
         _outline(
-            ax_o.text(
-                0.98,
-                0.98,
+            ax_o.annotate(
                 note,
-                transform=ax_o.transAxes,
-                ha="right",
+                xy=(0.02, 0.98),
+                xycoords="axes fraction",
+                xytext=(0, -font * 1.9 if title else 0),
+                textcoords="offset points",
+                ha="left",
                 va="top",
                 fontsize=font * 0.95,
                 color="white",
@@ -1876,16 +1897,20 @@ def process_patient(
                         # can differ by a hair between arms: each pairs nuclei at its own
                         # anchor stage.
                         native = qc.native_dice if qc else None
+                        native_um = qc.native_displacement_um if qc else None
                         vals = (
                             {
                                 "source": "scorer",
                                 "stage": NATIVE_STAGE,
                                 "dice_matched": native,
+                                "displacement_um": native_um,
                             }
-                            if native is not None
+                            if native is not None or native_um is not None
                             else {}
                         )
-                        note = f"Dice = {native:.2f}" if native is not None else ""
+                        # both numbers, NA where the scorer has none: the Before cell is
+                        # measured like every other one, not annotated by exception
+                        note = format_note(native, native_um)
                         sources.add("scorer")
                     else:
                         note, vals = cell_note(qc, y, x, patch_px, px, opt.min_nuclei)

@@ -293,14 +293,19 @@ tool_for() {                       # tool_for <kind> -> the module to run
     *)       printf '' ;;
   esac
 }
-arm_args() {                       # every arm directory that has slides, for the mosaic
-  local label dir
-  for label in $BUILD $(awk -F'\t' '{print $1}' "$ARM_DIRS"); do
+arm_args() {                       # arm_args <comma-separated labels> -> dirs, then labels
+  # The DIRECTORIES are printed first and the --label flags after them: ARM_DIR is
+  # nargs="+", so argparse stops collecting positionals at the first flag and calls every
+  # later directory "unrecognized" (job 6874795 failed exactly that way).
+  local label dir dirs=() labels=()
+  for label in ${1//,/ }; do
     [[ -n "$label" ]] || continue
     dir=$(resolve "arm:$label")
     [[ -s "$dir/csv/registered.csv" ]] || continue
-    printf '%s\n--label\n%s\n' "$dir" "$(basename "$dir")=$label"
+    dirs+=("$dir"); labels+=("--label" "$(basename "$dir")=$label")
   done
+  (( ${#dirs[@]} > 0 )) || return 1
+  printf '%s\n' "${dirs[@]}" "${labels[@]}"
 }
 
 n=0; failed=0
@@ -319,9 +324,11 @@ while IFS=$'\t' read -r kind run out args; do
       fi ;;
   esac
   inputs=()
-  if [[ "$run" == "arms:all" ]]; then
-    while IFS= read -r line; do inputs+=("$line"); done < <(arm_args)
-    (( ${#inputs[@]} > 0 )) || { echo "[figures] no arm has registered slides; no mosaic" >&2; failed=$((failed+1)); continue; }
+  if [[ "$run" == arms:* ]]; then
+    while IFS= read -r line; do inputs+=("$line"); done < <(arm_args "${run#arms:}")
+    (( ${#inputs[@]} > 0 )) \
+      || { echo "[figures] FAILED: $kind $out -- no arm of ${run#arms:} has registered slides" >&2
+           failed=$((failed+1)); continue; }
   else
     inputs=("$(resolve "$run")")
     [[ -d "${inputs[0]}" ]] || { echo "[figures] FAILED: $kind -- no run at ${inputs[0]}" >&2; failed=$((failed+1)); continue; }
