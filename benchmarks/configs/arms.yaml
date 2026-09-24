@@ -327,16 +327,27 @@ external_baseline:
     # as a genuine loss for ASHLAR. That is the exact shape of a strawman baseline, and
     # it is undetectable from the score alone.
     #
-    # Two budgets, one doubling apart, convert that silent failure into a VISIBLE one: if
-    # 30 and 60 agree, the budget was not binding and the number is defensible; if they
-    # disagree, 30 was starving it and the 30 row must not be reported as ASHLAR's
-    # accuracy. This is cheap insurance -- ASHLAR is the only external comparator, so
-    # every claim of "we beat the field standard" rests on it not having been crippled.
-    maximum_shift_um: [30, 60]
+    # That test RAN, on patient 033, and 30 failed it: ASHLAR measured the cycles ~1187 px
+    # = 386 um apart and at 30 um discarded 30-57% of tiles, refusing one round outright.
+    # A doubling to 60 is still 6x under the drift, so the pair 30/60 could only ever have
+    # compared two starved runs with each other.
+    #
+    # The sweep is therefore geometric and BRACKETS the measurement: 30 (starved, kept as
+    # the stress case), 120, 480 (just over the measured drift) and 1920 (well past it).
+    # Where the discard fraction stops falling is the empirical answer to "what budget does
+    # this tissue need", which is a better number than any argument about it.
+    maximum_shift_um: [30, 120, 480, 1920]
 
-    # The quality gate: the fraction of tiles ASHLAR may discard before its own solve is
-    # considered unreliable. Held at the driver default (benchmarks/ashlar/solve.py's
-    # DEFAULT_MAX_DISCARD_FRACTION) rather than varied -- it decides which tiles COUNT,
-    # which is a correctness question, not a cost/accuracy trade. Tying it to a comparison
-    # axis would silently change what is being measured, the same reason STARE's gating
-    # knobs are deliberately NOT tiered in RegPresets.
+    # The quality gate: the fraction of tiles ASHLAR may replace with a model prediction
+    # before solve.py calls the solve unreliable and aborts.
+    #
+    # 1 = NEVER ABORT, which is what a sweep needs: the starved budgets have to finish, or
+    # the sweep measures only which ones survived a threshold. The discard fraction is
+    # still computed, still warned about per slide, and still written into the manifest --
+    # it becomes a reported quantity instead of a launch failure. Read it alongside the
+    # accuracy: a row with 40% predicted tiles is not ASHLAR's accuracy at that budget, it
+    # is ASHLAR's accuracy with 40% of its placements invented, and the column says so.
+    #
+    # Put it back to 0.5 for a single-budget production run, where a prediction-filled
+    # solve reaching the table unnoticed is the failure to prevent.
+    max_discard_fraction: 1

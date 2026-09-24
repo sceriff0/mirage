@@ -40,6 +40,15 @@
 #
 # Submit:  cd /beegfs/scratch/ieo7660/ihc_method/benchmark
 #          mkdir -p logs && sbatch ~/pipelines/mirage/benchmarks/submit_arms.sh
+#
+# EVERY KNOB BELOW TRAVELS IN --export, NEVER AS `VAR=x sbatch ...`. A variable
+# assigned in front of sbatch is consumed by the SUBMITTING shell and does not
+# reach the job at this site (measured 2026-09-14): the run then silently uses the
+# defaults, which for ARMS_RESUME means refusing an interrupted run and for
+# ARMS_CONCURRENCY means 32 heads instead of the 2 you asked for.
+#   sbatch --export=ALL,NAME=value,NAME=value <script>
+# ALL keeps the rest of the environment (conda, module, SINGULARITY_*); without it
+# the job starts with almost nothing.
 # Watch:   squeue -u $USER                 # 1 head job + N child jobs
 #          tail -f logs/arms_<jobid>.out
 # ============================================================================
@@ -74,10 +83,10 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 #   ONLY='^tiled_high_'        a regex on arm/run_id, passed as --only
 # and ARMS_REPLACE=1 makes run_arms.sh move those arms' previous results aside to
 # $RESULTS/.replaced/<timestamp>/ before launching (never deleted). Typical:
-#   CHANGED=tiled ARMS_REPLACE=1 sbatch benchmarks/submit_arms.sh
+#   sbatch --export=ALL,CHANGED=tiled,ARMS_REPLACE=1 benchmarks/submit_arms.sh
 #
 # RESUME after an interruption (scancel of this head job and its process jobs):
-#   ARMS_RESUME=1 sbatch benchmarks/submit_arms.sh
+#   sbatch --export=ALL,ARMS_RESUME=1 benchmarks/submit_arms.sh
 # Every arm whose last attempt finished (OK in its .nextflow/history) is skipped;
 # every interrupted or failed one is continued from its Nextflow cache under a
 # new run name (arms-<run_id>-rN), so only the unfinished tasks run. Plain
@@ -86,7 +95,8 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # nothing re-hashes); ARMS_RESUME_PARAMS=regenerate rebuilds the file from the CURRENT plan
 # instead, and tasks then re-run only where a param they read changed value. The head count
 # and PEAK_JOBS_TARGET can change between a stop and a resume without re-running anything:
-#   ARMS_RESUME=1 ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_arms.sh
+#   sbatch --export=ALL,ARMS_RESUME=1,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 \
+#          benchmarks/submit_arms.sh
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 # -------------------------------------------------------------------------------
@@ -200,7 +210,7 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # multiply the cluster load: PEAK_JOBS_TARGET is a CEILING on in-flight SLURM process jobs
 # across all heads of this submitter (32 heads -> 25 per head). Set QUEUE_SIZE to pin the
 # per-head queue instead. LOW LOAD, e.g. weekdays -- ten process jobs in total:
-#   ARMS_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_arms.sh
+#   sbatch --export=ALL,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 benchmarks/submit_arms.sh
 PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-800}"
 if [[ -z "${QUEUE_SIZE:-}" ]]; then
   QUEUE_SIZE=$(derive_queue_size "$CONCURRENCY" "$PEAK_JOBS_TARGET") || exit 1

@@ -60,6 +60,7 @@ EXTERNAL_ONLY = (
     "ext_tool",
     "ext_from_arm",
     "ext_tile_size",
+    "ext_max_discard_fraction",
     "ext_overlap",
     "ext_max_shift_um",
     "ext_seg_method",
@@ -221,6 +222,11 @@ def _external_arms(cfg: dict) -> list[dict]:
                     "ext_tile_size": tile,
                     "ext_overlap": ash.get("overlap_fraction", 0.1),
                     "ext_max_shift_um": shift,
+                    # 1 = never abort on discards. A shift SWEEP wants every budget to
+                    # finish so the discard fraction can be read off as a measurement;
+                    # below 1 it is a guard rail against reporting a prediction-filled
+                    # solve as a result.
+                    "ext_max_discard_fraction": ash.get("max_discard_fraction", 0.5),
                     # Filled in by build_arm_plan from ext_from_arm's own seg_method.
                     "ext_seg_method": "",
                     "label": f"ashlar (tile {int(tile)}, shift {int(shift)}um)",

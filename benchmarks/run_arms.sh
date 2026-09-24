@@ -424,6 +424,8 @@ launch_row() {
       ext_tile=$(col_val ext_tile_size "${vals[@]}")
       ext_overlap=$(col_val ext_overlap "${vals[@]}")
       ext_shift=$(col_val ext_max_shift_um "${vals[@]}")
+      ext_max_discard=$(col_val ext_max_discard_fraction "${vals[@]}")
+      [[ -n "$ext_max_discard" ]] || ext_max_discard=0.5
       if [[ "$ext_tool" != "ashlar" ]]; then
         echo "[$run_id] SKIP: unknown ext_tool '$ext_tool'" >&2; return 1
       fi
@@ -451,7 +453,8 @@ launch_row() {
         return 0
       fi
       mkdir -p "$ROOT/$arm"
-      if ! "$PIPELINE_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$ext_from_arm" "$preproc_csv" \
+      if ! ASHLAR_MAX_DISCARD="${ASHLAR_MAX_DISCARD:-$ext_max_discard}" \
+            "$PIPELINE_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$ext_from_arm" "$preproc_csv" \
             "$ext_tile" "$ext_overlap" "$ext_shift" \
             > "$ROOT/$arm/ashlar.stdout.log" 2> "$ROOT/$arm/ashlar.stderr.log"; then
         echo "[$run_id] FAILED" >&2

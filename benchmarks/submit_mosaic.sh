@@ -57,7 +57,12 @@ SEG_QC="${SEG_QC:-0}"                # 0 = reg_qc=1, no WARP_SEG_QC, no numbers;
 NUMBERS="${NUMBERS:-}"               # empty = none at SEG_QC=0, scorer values (auto) at SEG_QC=1
 ASHLAR_TILE="${ASHLAR_TILE:-1024}"
 ASHLAR_OVERLAP="${ASHLAR_OVERLAP:-0.1}"
-ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-500}"   # ASHLAR's budget for the cross-cycle drift. NOT the
+ASHLAR_MAX_DISCARD="${ASHLAR_MAX_DISCARD:-1}"  # tiles ASHLAR may replace with a model
+                                     # prediction before solve.py aborts. 1 = never abort:
+                                     # a starved budget still finishes and its discard
+                                     # fraction is reported, which is what a sweep needs.
+ASHLAR_SHIFT_UM="${ASHLAR_SHIFT_UM:-500}"   # ONE OR MORE budgets (space-separated) for the
+                                     # cross-cycle drift; one arm and one column each. NOT the
                                      # arm benchmark's 30/60 (a fairness axis against STARE's swept
                                      # range): a budget below the real drift is not a fair baseline,
                                      # it is a crippled one -- ASHLAR replaces out-of-range tiles
@@ -195,20 +200,35 @@ export ASHLAR_SEG_QC="$SEG_QC" ASHLAR_REG_QC
 # every ASHLAR step at the run's pixel size, not the slide header's (0.3453 on the ND2 slides)
 [[ "$PIXEL_SIZE" != auto ]] && export ASHLAR_PIXEL_SIZE_UM="$PIXEL_SIZE"
 REG_COMMON=(start=registration stop=registration "reg_qc=$REG_QC")
-ASHLAR_ARM="ashlar_t${ASHLAR_TILE}_s${ASHLAR_SHIFT_UM}"
+# ASHLAR_SHIFT_UM may be a LIST: one arm and one mosaic column per budget, which is how a
+# shift sweep is read -- the columns sit side by side on the same tissue.
+ASHLAR_ARMS=()
+for _s in $ASHLAR_SHIFT_UM; do ASHLAR_ARMS+=("ashlar_t${ASHLAR_TILE}_s${_s}"); done
+ASHLAR_ARM="${ASHLAR_ARMS[0]}"     # the first one, for the SEG_QC=1 ordering below
 
-run_ashlar() {                     # run_ashlar <arm whose QC nuclei score it; ignored at SEG_QC=0>
-  if done_marker "$ASHLAR_ARM"; then echo "[$ASHLAR_ARM] DONE already, skipping"; return 0; fi
-  echo "[$ASHLAR_ARM] launching (tile $ASHLAR_TILE, overlap $ASHLAR_OVERLAP, shift ${ASHLAR_SHIFT_UM} um, seg QC $SEG_QC)"
-  mkdir -p "$ROOT/$ASHLAR_ARM"
-  if "$SRC_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$ASHLAR_ARM" "$1" "$PREPROC_CSV" \
-        "$ASHLAR_TILE" "$ASHLAR_OVERLAP" "$ASHLAR_SHIFT_UM" \
-        > "$ROOT/$ASHLAR_ARM/ashlar.stdout.log" 2> "$ROOT/$ASHLAR_ARM/ashlar.stderr.log"; then
-    date '+%F %T' > "$ROOT/$ASHLAR_ARM/.done"; echo "[$ASHLAR_ARM] OK"; return 0
+run_ashlar_one() {                 # run_ashlar_one <arm> <shift> <arm whose QC nuclei score it>
+  local arm="$1" shift_um="$2" from="$3"
+  if done_marker "$arm"; then echo "[$arm] DONE already, skipping"; return 0; fi
+  echo "[$arm] launching (tile $ASHLAR_TILE, overlap $ASHLAR_OVERLAP, shift ${shift_um} um, seg QC $SEG_QC, discard<=${ASHLAR_MAX_DISCARD})"
+  mkdir -p "$ROOT/$arm"
+  if ASHLAR_MAX_DISCARD="$ASHLAR_MAX_DISCARD" \
+     "$SRC_DIR/benchmarks/run_ashlar_arm.sh" "$ROOT" "$arm" "$from" "$PREPROC_CSV" \
+        "$ASHLAR_TILE" "$ASHLAR_OVERLAP" "$shift_um" \
+        > "$ROOT/$arm/ashlar.stdout.log" 2> "$ROOT/$arm/ashlar.stderr.log"; then
+    date '+%F %T' > "$ROOT/$arm/.done"; echo "[$arm] OK"; return 0
   fi
-  echo "[$ASHLAR_ARM] FAILED; last lines of ashlar.stderr.log:" >&2
-  tail -n 25 "$ROOT/$ASHLAR_ARM/ashlar.stderr.log" >&2
+  echo "[$arm] FAILED; last lines of ashlar.stderr.log:" >&2
+  tail -n 25 "$ROOT/$arm/ashlar.stderr.log" >&2
   return 1
+}
+
+run_ashlar() {                     # every budget; one failing does not stop the others
+  local i=0 rc=0
+  for _s in $ASHLAR_SHIFT_UM; do
+    run_ashlar_one "${ASHLAR_ARMS[$i]}" "$_s" "$1" || rc=1
+    i=$((i + 1))
+  done
+  return "$rc"
 }
 
 run_nf valis_high_micro2 "$PREPROC_CSV" "${REG_COMMON[@]}" \
@@ -240,8 +260,8 @@ ARM_DIRS=(); LABELS=()
 # ASHLAR's column needs its registered slides, not a clean exit: its last per-round step (the QC
 # composite, sized >=100 GB in the pipeline) can fail in this head job after every slide was
 # stitched, and the mosaic reads the stitched slides themselves.
-ashlar_slides_ok() {
-  local csv="$ROOT/$ASHLAR_ARM/csv/registered.csv" n=0 img
+ashlar_slides_ok() {               # ashlar_slides_ok <arm>
+  local csv="$ROOT/$1/csv/registered.csv" n=0 img
   [[ -s "$csv" ]] || return 1
   while IFS= read -r img; do
     [[ -s "$img" ]] || { echo "[mosaic] ASHLAR slide missing: $img" >&2; return 1; }
@@ -249,10 +269,15 @@ ashlar_slides_ok() {
   done < <(tail -n +2 "$csv" | awk -F, '$4 != "true" { print $3 }')
   (( n > 0 ))
 }
-if (( rc_ashlar == 0 )) || ashlar_slides_ok; then
-  (( rc_ashlar == 0 )) || echo "[mosaic] ASHLAR exited non-zero but every round was stitched; drawing its column" >&2
-  ARM_DIRS+=("$ROOT/$ASHLAR_ARM"); LABELS+=(--label "$ASHLAR_ARM=ASHLAR")
-fi
+# Each budget is judged on ITS OWN output, not on the sweep's exit status: a run can exit
+# non-zero at its last per-round step (the QC composite, sized >=100 GB) with every slide
+# stitched, and one starved budget must not cost the others their columns.
+(( rc_ashlar == 0 )) || echo "[mosaic] an ASHLAR budget exited non-zero; drawing the columns whose slides exist" >&2
+for arm in "${ASHLAR_ARMS[@]}"; do
+  ashlar_slides_ok "$arm" || continue
+  ARM_DIRS+=("$ROOT/$arm")
+  LABELS+=(--label "$arm=ASHLAR ${arm##*_s}um")
+done
 if (( ${#ARM_DIRS[@]} == 0 )); then
   echo "no arm finished; no mosaic" >&2; exit 1
 fi

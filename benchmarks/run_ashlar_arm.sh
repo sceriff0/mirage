@@ -62,6 +62,12 @@ PREPROC_CSV="${4:?preprocessed.csv from the shared preprocessing run}"
 TILE="${5:?tile size (px)}"
 OVERLAP="${6:?overlap fraction}"
 MAXSHIFT="${7:?maximum shift (um)}"
+# The fraction of tiles ASHLAR may replace with a model prediction before solve.py calls
+# the result unusable and aborts. 1 = never abort: every tile ASHLAR could not place is
+# still predicted and the slide is still stitched, which is what a shift SWEEP wants --
+# the discard fraction is then a measurement (reported per slide and in the manifest)
+# rather than a launch failure. Below 1 it is a guard rail; at 1 it is data.
+MAX_DISCARD="${ASHLAR_MAX_DISCARD:-0.5}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
@@ -200,7 +206,7 @@ for pid in $patients; do
     qc_out="$OUT/$pid/qc/registration"
     mkdir -p "$qc_out"
 
-    echo "[$ARM/$pid] $ref_name -> $mov_name (tile=$TILE shift=${MAXSHIFT}um)"
+    echo "[$ARM/$pid] $ref_name -> $mov_name (tile=$TILE shift=${MAXSHIFT}um discard<=${MAX_DISCARD})"
     # shellcheck disable=SC2086
     step ASHLAR_RETILE "$pid" --input "$mov_img" -- \
         $QC_EXEC python3 -m benchmarks.ashlar.retile \
@@ -212,6 +218,7 @@ for pid in $patients; do
         --ref-tiles "$ref_tiles" --moving-tiles "$d/mov" \
         --reference-name "$ref_name" --moving-name "$mov_name" \
         --maximum-shift "$MAXSHIFT" \
+        --max-discard-fraction "$MAX_DISCARD" \
         --out-manifest "$d/manifest.json" --out-tre "$d/tre.json"
 
     # The registered slide and the pipeline's own before/after QC composite, so an
