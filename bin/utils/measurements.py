@@ -117,10 +117,33 @@ def parse_qc_key(key: str) -> Optional[Tuple[str, Optional[List[str]]]]:
 
 
 def morph_key(display_name: str) -> str:
+    """Build a morphology key: ``"MORPH: <display_name>"``.
+
+    Parameters
+    ----------
+    display_name : str
+        A morphology display name, e.g. one of ``MORPH_EXPORT``'s second elements.
+
+    Returns
+    -------
+    str
+    """
     return f"{MORPH_PREFIX}{display_name}"
 
 
 def is_qc_column(col) -> bool:
+    """True when ``col`` is a ``"QC: ..."`` measurement key.
+
+    Parameters
+    ----------
+    col
+        A candidate column name; any type is accepted, only a ``str`` starting
+        with ``QC_PREFIX`` can be ``True``.
+
+    Returns
+    -------
+    bool
+    """
     return isinstance(col, str) and col.startswith(QC_PREFIX)
 
 

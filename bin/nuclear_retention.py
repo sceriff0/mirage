@@ -33,6 +33,23 @@ _NAME = "nuclear"
 
 
 def nuclear_channel_index(names: List[str], nuclear_markers: List[str]) -> Optional[int]:
+    """Index of the first channel matching one of ``nuclear_markers``, via the shared rule.
+
+    Delegates to ``metadata.is_nuclear`` (case-insensitive substring match), so
+    the answer agrees with every other consumer of ``params.nuclear_markers``.
+
+    Parameters
+    ----------
+    names : list of str
+        Channel names, in image/channel order.
+    nuclear_markers : list of str
+        Configured nuclear/fiducial marker names.
+
+    Returns
+    -------
+    int or None
+        Index of the first matching channel, or ``None`` if no marker matches.
+    """
     for i, name in enumerate(names):
         if is_nuclear(name, nuclear_markers):
             return i
@@ -40,6 +57,27 @@ def nuclear_channel_index(names: List[str], nuclear_markers: List[str]) -> Optio
 
 
 def measure_nuclear(cell_mask, nuclei_mask, plane) -> pd.DataFrame:
+    """Per-cell nuclear-channel median, plus the whole-cell median for context.
+
+    Delegates to ``quantify.compute_compartment_intensities`` and keeps only the
+    ``Median`` statistic for the ``Nucleus`` and ``Cell`` compartments, so the
+    values mean exactly what the corresponding ``<nuclear>: <Compartment>:
+    Median`` columns mean in ``merged_quant.csv``.
+
+    Parameters
+    ----------
+    cell_mask : ndarray, shape (Y, X)
+        Whole-cell instance mask (background = 0).
+    nuclei_mask : ndarray or None, shape (Y, X)
+        Nuclear instance mask. When ``None``, only ``Cell`` is reported.
+    plane : ndarray, shape (Y, X)
+        The nuclear-channel intensity plane.
+
+    Returns
+    -------
+    DataFrame
+        Columns ``label``, ``Nucleus`` (when ``nuclei_mask`` is given) and ``Cell``.
+    """
     df = compute_compartment_intensities(cell_mask, nuclei_mask, plane, _NAME)
     out = pd.DataFrame({"label": df["label"].to_numpy()})
     for comp in ("Nucleus", "Cell"):
@@ -50,6 +88,17 @@ def measure_nuclear(cell_mask, nuclei_mask, plane) -> pd.DataFrame:
 
 
 def parse_args(argv=None):
+    """Parse CLI arguments for this script.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Argument vector; defaults to ``sys.argv[1:]`` (argparse's own default).
+
+    Returns
+    -------
+    argparse.Namespace
+    """
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--image", required=True)
     p.add_argument("--mask_file", required=True)
@@ -60,6 +109,24 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """Entry point: write the per-cell nuclear-retention CSV for one slide.
+
+    Reads the nuclear-marker channel named by ``--nuclear-markers`` out of
+    ``--image`` and measures it against ``--mask_file`` (and, if given,
+    ``--nuclei_mask_file``). Writes an empty ``label``-only table instead of
+    failing when no channel matches, so a slide missing the nuclear channel
+    simply gets no retention key downstream.
+
+    Parameters
+    ----------
+    argv : list of str, optional
+        Argument vector, forwarded to :func:`parse_args`.
+
+    Returns
+    -------
+    int
+        Process exit code; always ``0``.
+    """
     configure_logging()
     args = parse_args(argv)
     names = extract_channel_names_from_ome(args.image) or []
