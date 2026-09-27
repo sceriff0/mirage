@@ -61,6 +61,7 @@ from pixel_convention import CORNER_OFFSET, centre_to_corner  # noqa: E402
 from utils import cell_pairs as cp  # noqa: E402
 
 _ESD_PATH = BIN / "export_spatialdata.py"
+_CQ_PATH = BIN / "cell_qc.py"
 _REG_PATH = BIN / "utils" / "reg_residuals.py"
 _esd_spec = importlib.util.spec_from_file_location("export_spatialdata", _ESD_PATH)
 esd = importlib.util.module_from_spec(_esd_spec)
@@ -337,3 +338,57 @@ def test_the_offset_is_invisible_at_the_shipped_join_radius(tmp_path):
 
     assert out["cycle2"].tolist() == out_bad["cycle2"].tolist()
     assert stats["slides"] == stats_bad["slides"]
+
+
+# ── 2b. the same call-site check, for CELL_QC's join_one call ──────────────────
+def test_cell_qc_feeds_join_one_the_quantification_csv_not_a_converted_copy():
+    """CELL_QC's residual join has the same premise as EXPORT_SPATIALDATA's.
+
+    ``bin/cell_qc.py`` calls ``join_one`` directly (rather than
+    ``join_reg_residuals``) with the quantification table's raw ``x``/``y``, named
+    ``centroids`` and assigned from ``quant_xy[["x", "y"]]``. Same failure mode as
+    the ``export_spatialdata`` guard above: a "simplification" that routes this
+    through a corner-converted copy would give every joined cell the same
+    ``0.707 px`` bias, silently, because the shipped join radius does not notice it.
+    """
+    src = _CQ_PATH.read_text()
+    tree = ast.parse(src)
+
+    call, func = _call_and_enclosing_function(tree, "join_one")
+    assert call is not None, (
+        "no call to join_one found in bin/cell_qc.py -- this guard has lost its "
+        "subject; repoint it or delete it"
+    )
+    assert len(call.args) >= 2, "join_one is no longer called positionally"
+
+    arg = call.args[1]
+    assert isinstance(arg, ast.Name), (
+        "the centroids argument is no longer a plain name; this guard can no "
+        "longer trace its provenance and must be rewritten"
+    )
+
+    assigns = [
+        node
+        for node in ast.walk(func)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == arg.id for t in node.targets)
+    ]
+    assert len(assigns) == 1, (
+        f"expected exactly one assignment to {arg.id!r} in {func.name}(), found "
+        f"{len(assigns)}"
+    )
+
+    source = ast.get_source_segment(src, assigns[0]) or ""
+    assert 'quant_xy[["x", "y"]]' in source, (
+        f"{arg.id!r} is no longer read straight off the quantification table's "
+        "x/y columns. Those are raw regionprops centroids -- centre-of-pixel, the "
+        "same convention as the residual CSV's ref_x/ref_y. Any other source "
+        "(obsm, a converted copy) silently biases the join by "
+        f"{_DIAGONAL_BIAS:.3f} px. See bin/utils/pixel_convention.py.\n  {source}"
+    )
+    for forbidden in ("centre_to_corner", "obsm"):
+        assert forbidden not in source, (
+            f"{arg.id!r} now passes through {forbidden!r}: that is the "
+            "corner-of-pixel side, and the residual CSV it is matched against is "
+            f"centre-of-pixel.\n  {source}"
+        )
