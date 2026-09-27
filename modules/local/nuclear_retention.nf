@@ -5,7 +5,7 @@
  * round). Runs off the per-marker path on purpose: it reads the nuclear plane straight
  * from the registered slide, so channels_count, SPLIT_CHANNELS and the pyramid are
  * untouched. Assumes cyclic IF (same section re-stained); see
- * docs/superpowers/specs/2026-09-27-cell-qc-keys-design.md §3.1.
+ * docs/outputs.md, "Per-cell QC".
  */
 process NUCLEAR_RETENTION {
     tag "${meta.patient_id} - ${meta.id}"

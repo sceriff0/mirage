@@ -28,6 +28,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that now trips it was already dropping one of the two acquisitions silently, and the
   fix is to re-run the earlier step from a corrected samplesheet, not to edit the
   checkpoint.
+- **Per-cell QC keys (`QC: ...`) and the two processes that produce them.** Every
+  exported cell now carries `QC: Total intensity` (cell-level: the sum of every
+  non-nuclear marker's `Cell: Median`, NaN-skipped) plus, per moving imaging
+  round with non-nuclear markers, `QC: Nuclear retention: [...]`, `QC:
+  Registration displacement µm: [...]` and `QC: Registration Dice: [...]`
+  (round-level: the trailing `[marker, ...]` names exactly the markers a
+  failing round should blank). **`NUCLEAR_RETENTION`** (`modules/local/nuclear_retention.nf`
+  + `bin/nuclear_retention.py`) measures each moving slide's nuclear-channel
+  median per cell, against `quantify.compute_compartment_intensities` — the
+  same function `merged_quant.csv`'s own nuclear medians come from — and
+  publishes an intermediate `<id>_nuclear_retention.csv` per slide (gated the
+  same as `QUANTIFY`, under `quantify/`). It assumes the moving slide is a
+  re-stained round of the SAME section as the reference (cyclic IF); the value
+  is meaningless on serial sections. **`CELL_QC`** (`modules/local/cell_qc.nf`
+  + `bin/cell_qc.py`) is the per-patient process that adds every `QC: ...`
+  column, using the retention CSVs above and the residual displacement/Dice
+  join (see below); it republishes `quantification/merged_quant.csv` and also
+  writes `quantification/<patient_id>_round_qc.csv` (the same values, long and
+  tidy: `label, round_id, markers, nuclear_retention, displacement_px,
+  displacement_um, dice`) and `quantification/<patient_id>_rounds.json` (the
+  round manifest: `round_id`, `is_reference`, `markers`). All three are a
+  **FINAL** kind and survive `--cleanup_level final`. Registration
+  displacement/Dice are present only under `--reg_qc 2` (the default); a
+  round with no non-nuclear markers, and the reference round itself, get no
+  round-level keys. **NaN always means "no evidence", never "good"** and is
+  omitted from `cells.geojson` exactly like a NaN marker. Vocabulary lives in
+  one place, `bin/utils/measurements.py` (`QC_PREFIX`, `MORPH_PREFIX`,
+  `QC_CELL_METRICS`, `QC_ROUND_METRICS`); guarded by
+  `tests/test_qc_key_contract.py`, `tests/test_cell_qc.py`,
+  `tests/test_nuclear_retention.py`. `--mode add_cycle` (dev only) folds a new
+  cycle's rounds into the prior run's `<patient_id>_rounds.json` and
+  recomputes total intensity. See `docs/outputs.md`, "Per-cell QC".
 
 ### Changed
 
@@ -41,7 +73,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every other measurement uses) — not a unit or scale change, just more digits shown.
   `bin/export_spatialdata.py::build_table` puts `QC: ...` columns in `obs` verbatim;
   `parse_measurement_key` returns them unparsed rather than matching them against the
-  marker-compartment-statistic grammar.
+  marker-compartment-statistic grammar. **Requires FlowPath ≥ 0.10.0** — an older
+  FlowPath reads a `QC: ...` key as a phantom marker (summed into its own total
+  intensity) and `MORPH: Area µm²` defeats its `area` prefix lookup, so a saved
+  `area` filter range stops applying; there is no dual naming on the mirage side,
+  so the FlowPath upgrade must land before pointing it at output from this
+  pipeline version.
+- **`warp_seg_qc`'s per-cell residual CSV (`*_reg_residuals.csv`, written at
+  `--reg_qc 2`) gains an `iou` column**: `moving, ref_x, ref_y, residual_px, iou,
+  stage` (was without `iou`). It is the per-pair IoU `score_stage` already
+  computed at the final stage, now written out so `CELL_QC` can derive `QC:
+  Registration Dice: [...]` (`2·IoU / (1 + IoU)`) without re-deriving the pairing.
+  A CSV from before this change (no `iou` column) is read fine; Dice comes back
+  NaN while displacement is still reported. The join that pairs a residual row to
+  a cell (`bin/utils/reg_residuals.py::join_one`) moved out of
+  `export_spatialdata.py` so `CELL_QC` and `EXPORT_SPATIALDATA` share the exact
+  same spatial join and can never pair a QC nucleus to different cells.
+- **`MERGE_QUANT_CSVS` no longer publishes `quantification/merged_quant.csv`.**
+  `CELL_QC` republishes the same table, augmented with the `QC: ...` columns,
+  under the identical filename; publishing both would race writing one path.
+  Every downstream reader (`EXPORT_GEOJSON`, `EXPORT_SPATIALDATA`, the
+  `postprocessed` checkpoint) is unaffected — they read the file by path, and
+  the path is unchanged.
 - **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
   (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
   with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every

@@ -44,7 +44,7 @@ process EXPORT_GEOJSON {
     def nucleus_arg = params.quantify_compartments ? "--nucleus_contours_json ${nucleus_contours_json}" : ''
     // --pixel_size is NOT optional here even though the script has a parameter for it.
     // It was omitted, and export_geojson.py's own argparse default silently supplied
-    // 0.325 -- so every "Centroid X µm", "Area µm²", "Perimeter µm" and axis length in
+    // 0.325 -- so every "Centroid X µm", "MORPH: Area µm²", "MORPH: Perimeter µm" and axis length in
     // cells.geojson ignored the configured scale entirely. Those measurements are the
     // contract with qupath-extension-flowpath, so the run advertised a scale it was not
     // using. Pass it explicitly; the script now has no default to fall back to.
