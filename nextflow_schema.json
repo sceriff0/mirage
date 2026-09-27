@@ -511,7 +511,7 @@
                 },
                 "spatialdata_residual_join_max_px": {
                     "type": "number",
-                    "description": "Max centroid distance (px) when joining registration QC residuals onto cell_mask.",
+                    "description": "Max centroid distance (px) when joining registration QC residuals onto cell_mask. Also governs CELL_QC's per-cell registration QC join (its `--join-max-px`), so both outputs pair a QC nucleus to the same cell.",
                     "help_text": "The reg-QC segmentation is a separate native-image run and shares no label space with cell_mask, so the join is spatial.",
                     "default": 15.0,
                     "minimum": 0

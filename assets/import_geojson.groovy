@@ -7,8 +7,8 @@
  * using QuPath's NATIVE reader (PathIO.readObjects). This is dramatically
  * faster than drag-and-drop or hand-parsing the JSON, and — unlike a manual
  * parser — it faithfully reconstructs `cell` objects together with their
- * `nucleusGeometry` and raw measurement names (CD45, Area µm², ...), exactly
- * as FlowPath expects.
+ * `nucleusGeometry` and raw measurement names (CD45, MORPH: Area µm², ...),
+ * exactly as FlowPath expects.
  *
  * WHY THIS IS FASTER THAN DRAG-AND-DROP:
  *   Drag-and-drop re-parses the whole GeoJSON and resolves the hierarchy on

@@ -26,7 +26,13 @@ sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
 from image_utils import ensure_dir
 from logger import configure_logging, get_logger
-from measurements import MORPHOLOGY_COLS, identify_marker_columns
+from measurements import (
+    MORPH_EXPORT,
+    MORPHOLOGY_COLS,
+    identify_marker_columns,
+    is_qc_column,
+    morph_key,
+)
 from pixel_convention import centre_to_corner  # noqa: E402
 from pixel_size import resolve_pixel_size  # noqa: E402
 
@@ -103,7 +109,7 @@ def compute_zscores(df: pd.DataFrame, marker_cols: List[str]) -> pd.DataFrame:
     return df
 
 
-def _iter_rows_positional(df: pd.DataFrame, marker_cols: List[str]):
+def _iter_rows_positional(df: pd.DataFrame, marker_cols: List[str], qc_cols=()):
     """Yield ``(idx, x_px, y_px, row)`` for every row of ``df``, without ``iterrows()``.
 
     ``iterrows()`` materialises one pandas Series per row -- 500k of them on a
@@ -127,7 +133,7 @@ def _iter_rows_positional(df: pd.DataFrame, marker_cols: List[str]):
     a caller upstream may have already dropped rows (e.g. ``drop_duplicates``), leaving
     a non-contiguous index that a plain position counter would not reproduce.
     """
-    field_cols = [*_MORPHOLOGY_COL_ORDER, *marker_cols]
+    field_cols = [*_MORPHOLOGY_COL_ORDER, *marker_cols, *qc_cols]
     idx_arr = df.index.to_numpy()
     col_arrays = {c: df[c].to_numpy() for c in field_cols if c in df.columns}
     x_arr = col_arrays.get("x")
@@ -144,11 +150,14 @@ def build_measurements(
     row: pd.Series | Dict,
     marker_cols: List[str],
     pixel_size: float,
+    qc_cols=(),
 ) -> List[Dict]:
     """Build QuPath-native measurement array for a single cell.
 
     Returns a list of {"name": ..., "value": ...} dicts matching QuPath's
-    native GeoJSON serialization format.
+    native GeoJSON serialization format, in order: ``label``, centroids,
+    markers, ``QC: ...`` columns (in ``qc_cols`` order), then ``MORPH: ...``
+    morphology fields.
 
     ``row`` only needs ``.get(key)`` / ``.get(key, default)`` -- a ``pd.Series`` (the
     original per-row shape from ``iterrows()``) and a plain ``dict`` (what
@@ -187,30 +196,22 @@ def build_measurements(
         if pd.notna(val):
             measurements.append({"name": col, "value": round(float(val), 4)})
 
-    # Morphological features (converted to µm where appropriate)
-    area = row.get("area")
-    if pd.notna(area):
-        measurements.append(
-            {
-                "name": "Area µm²",
-                "value": round(float(area) * pixel_size * pixel_size, 3),
-            }
-        )
+    # QC: columns, verbatim (already carry their own "QC: " prefix), NaN omitted.
+    for col in qc_cols:
+        val = row.get(col)
+        if pd.notna(val):
+            measurements.append({"name": col, "value": round(float(val), 4)})
 
-    # Length measurements converted to µm, area measurements to µm²
-    # Dimensionless ratios (eccentricity, solidity) kept as-is
-    for morph_col, display_name, unit_factor in [
-        ("eccentricity", "Eccentricity", 1.0),
-        ("perimeter", "Perimeter µm", pixel_size),
-        ("solidity", "Solidity", 1.0),
-        ("convex_area", "Convex Area µm²", pixel_size * pixel_size),
-        ("axis_major_length", "Major Axis Length µm", pixel_size),
-        ("axis_minor_length", "Minor Axis Length µm", pixel_size),
-    ]:
+    # Morphological features, under their "MORPH: " names (converted to µm where
+    # appropriate; unit_power is 0/1/2 for none/µm/µm²).
+    for morph_col, display_name, unit_power in MORPH_EXPORT:
         val = row.get(morph_col)
         if pd.notna(val):
             measurements.append(
-                {"name": display_name, "value": round(float(val) * unit_factor, 4)}
+                {
+                    "name": morph_key(display_name),
+                    "value": round(float(val) * pixel_size**unit_power, 4),
+                }
             )
 
     return measurements
@@ -285,6 +286,7 @@ def export_geojson(
     """
     if marker_cols is None:
         marker_cols = identify_marker_columns(df)
+    qc_cols = [c for c in df.columns if is_qc_column(c)]
 
     logger.info(f"Exporting {len(df)} cells to GeoJSON: {output_path}")
     logger.info(f"  Markers: {marker_cols}")
@@ -297,7 +299,7 @@ def export_geojson(
     skipped = [0]
 
     def _iter_features():
-        for idx, x_px, y_px, row in _iter_rows_positional(df, marker_cols):
+        for idx, x_px, y_px, row in _iter_rows_positional(df, marker_cols, qc_cols):
             if pd.isna(x_px) or pd.isna(y_px):
                 skipped[0] += 1
                 continue
@@ -319,7 +321,7 @@ def export_geojson(
             }
 
             # Build measurements array (QuPath native format)
-            measurements = build_measurements(row, marker_cols, pixel_size)
+            measurements = build_measurements(row, marker_cols, pixel_size, qc_cols)
             # object_id=None: do not stamp every cell with the same constant id
             # ("PathDetectionObject"), which QuPath treats as a per-object UUID — a
             # shared id across all detections breaks re-import. (Matches the
@@ -389,6 +391,7 @@ def export_combined_geojson(
     identity on the cell label.
     """
     color_int = rgb_to_qupath_color(*CELL_COLOR_RGB)
+    qc_cols = [c for c in df.columns if is_qc_column(c)]
 
     cells_combined: List[Dict] = []
     n_with_nucleus = 0
@@ -398,7 +401,7 @@ def export_combined_geojson(
     # to handle (see compute_zscores' NaN-preservation comment above), not an edge case.
     skipped = 0
 
-    for idx, x_px, y_px, row in _iter_rows_positional(df, marker_cols):
+    for idx, x_px, y_px, row in _iter_rows_positional(df, marker_cols, qc_cols):
         if pd.isna(x_px) or pd.isna(y_px):
             skipped += 1
             continue
@@ -418,7 +421,7 @@ def export_combined_geojson(
         if nucleus_geom is not None:
             n_with_nucleus += 1
 
-        measurements = build_measurements(row, marker_cols, pixel_size)
+        measurements = build_measurements(row, marker_cols, pixel_size, qc_cols)
 
         cells_combined.append(
             build_feature(

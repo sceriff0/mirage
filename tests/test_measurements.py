@@ -143,3 +143,73 @@ def test_identify_marker_columns_excludes_morphology_and_non_numeric():
         }
     )
     assert m.identify_marker_columns(df) == ["CD3: Cell: Median", "DAPI"]
+
+
+# ── QC: and MORPH: measurement keywords (2026-09-27) ──────────────────────────
+import pytest  # noqa: E402, F401
+from measurements import (  # noqa: E402
+    MORPH_EXPORT,
+    MORPH_PREFIX,
+    QC_NUCLEAR_RETENTION,
+    QC_PREFIX,
+    QC_REG_DICE,
+    QC_REG_DISPLACEMENT,
+    QC_TOTAL_INTENSITY,
+    identify_marker_columns,
+    is_qc_column,
+    morph_key,
+    parse_qc_key,
+    qc_key,
+)
+
+
+def test_cell_level_qc_key():
+    assert qc_key(QC_TOTAL_INTENSITY) == "QC: Total intensity"
+
+
+def test_round_level_qc_key_sorts_markers():
+    assert (
+        qc_key(QC_NUCLEAR_RETENTION, ["FOXP3", "CD3", "CD8"])
+        == "QC: Nuclear retention: [CD3, CD8, FOXP3]"
+    )
+
+
+def test_round_key_round_trips():
+    key = qc_key(QC_REG_DISPLACEMENT, ["CD8", "CD3"])
+    assert parse_qc_key(key) == (QC_REG_DISPLACEMENT, ["CD3", "CD8"])
+    assert parse_qc_key(qc_key(QC_TOTAL_INTENSITY)) == (QC_TOTAL_INTENSITY, None)
+
+
+def test_parse_rejects_non_qc_and_unknown_metrics():
+    assert parse_qc_key("CD3: Cell: Median") is None
+    assert parse_qc_key("QC: Mystery") is None
+
+
+def test_unknown_metric_is_refused():
+    with pytest.raises(ValueError):
+        qc_key("Mystery")
+
+
+def test_round_key_needs_markers_and_clean_names():
+    with pytest.raises(ValueError):
+        qc_key(QC_REG_DICE, [])
+    with pytest.raises(ValueError):
+        qc_key(QC_REG_DICE, ["CD3, CD8"])
+
+
+def test_morph_key_and_export_table():
+    assert morph_key("Area µm²") == "MORPH: Area µm²"
+    assert [c for c, _, _ in MORPH_EXPORT] == [
+        "area", "eccentricity", "perimeter", "solidity",
+        "convex_area", "axis_major_length", "axis_minor_length",
+    ]
+    assert MORPH_PREFIX == "MORPH: " and QC_PREFIX == "QC: "
+
+
+def test_qc_columns_are_not_markers():
+    df = pd.DataFrame(
+        {"label": [1], "x": [1.0], "CD3: Cell: Median": [2.0], "QC: Total intensity": [5.0]}
+    )
+    assert is_qc_column("QC: Total intensity")
+    assert not is_qc_column("CD3: Cell: Median")
+    assert identify_marker_columns(df) == ["CD3: Cell: Median"]

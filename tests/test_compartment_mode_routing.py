@@ -101,6 +101,13 @@ ALLOWED_FILES = {
         "ext.args-shaped flag this process builds is assembled inside its "
         "own script: block."
     ),
+    "modules/local/nuclear_retention.nf": (
+        "script: block -- builds its own --nuclei_mask_file flag from "
+        "params.quantify_compartments, the identical leaf pattern as "
+        "quantify.nf (same flag, same param, same reason): a leaf process "
+        "reading the param to render its own CLI flag, never re-exporting "
+        "the decision anywhere else."
+    ),
     "modules/local/export_geojson.nf": (
         "script:/stub: blocks -- script: builds its own "
         "--nucleus_contours_json flag from params.quantify_compartments; "

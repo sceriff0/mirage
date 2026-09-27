@@ -1,0 +1,75 @@
+nextflow_process {
+
+    name "Test CELL_QC process"
+    script "modules/local/cell_qc.nf"
+    process "CELL_QC"
+
+    tag "modules"
+    tag "modules_local"
+    tag "cell_qc"
+
+    test("Should republish the merged table and write the round outputs - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', id: 'P001', pixel_size: 0.325 ],
+                    file('$projectDir/tests/testdata/P001_merged_quant.csv', checkIfExists: true),
+                    [[round_id: 'P001_ref', is_reference: true, markers: ['DAPI', 'PANCK'], retention_csv: null, residual_csv: null]],
+                    [],
+                    [],
+                    []
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.merged_csv.get(0).get(1).toString().endsWith('merged_quant.csv')
+            assert process.out.round_qc.get(0).get(1).toString().endsWith('P001_round_qc.csv')
+            assert process.out.rounds.get(0).get(1).toString().endsWith('P001_rounds.json')
+        }
+    }
+
+    test("Should render the join radius, pixel size and nuclear markers - rendered command") {
+
+        // No options "-stub": the point is the rendered script.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', id: 'P001', pixel_size: 0.325 ],
+                    file('$projectDir/tests/testdata/P001_merged_quant.csv', checkIfExists: true),
+                    [[round_id: 'P001_ref', is_reference: true, markers: ['DAPI', 'PANCK'], retention_csv: null, residual_csv: null]],
+                    [],
+                    [],
+                    []
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('cell_qc.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1, "no rendered CELL_QC .command.sh found" },
+                { assert rendered.every { it.contains('--join-max-px 15.0') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--pixel-size 0.325') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nuclear-markers DAPI') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('"round_id":"P001_ref"') }, rendered.join(' --- ') }
+            )
+        }
+    }
+}
