@@ -97,6 +97,26 @@ ARM_PLAN="$(resolve_plan "$ARM_PLAN" "$ARM_ROOT")"
 
 PY="$(command -v python3 || command -v python)"
 
+# SYNTHETIC PLACEHOLDERS NEVER CROSS THE HAND-OFF. make_figures --placeholder-missing
+# (benchmarks/analysis/lib/placeholders.py) is a preview: it marks synthetic points
+# with hollow markers, hatching and a watermark -- styling the consumer's R pages do not
+# have, so a placeholder copied there would render as a measurement. The env form is
+# cleared so a --build can never produce one, and a staged directory still carrying a
+# preview's PLACEHOLDER_DATA.txt is refused below, before anything is copied.
+unset PLACEHOLDER_MISSING
+refuse_placeholders() {
+  local d
+  for d in "$@"; do
+    if [[ -f "$d/PLACEHOLDER_DATA.txt" ]]; then
+      echo "REFUSED: $d holds a --placeholder-missing preview (PLACEHOLDER_DATA.txt)." >&2
+      echo "         Synthetic points must not reach ihc_method. Re-run make_figures" >&2
+      echo "         WITHOUT the flag into that directory (it clears the preview), or" >&2
+      echo "         write previews to a separate --outdir." >&2
+      exit 1
+    fi
+  done
+}
+
 DEST_ARMS="$IHC/data/registration_arms"
 DEST_BENCH="$IHC/data/benchmark"
 # Staging lives in the repo by default, but a cluster checkout is often read-only
@@ -136,6 +156,8 @@ if [[ "$BUILD" -eq 1 ]]; then
     echo "  note: no arm run plan found; skipping the arm table build" >&2
   fi
 fi
+
+refuse_placeholders "$SWEEP_TABLES" "$ARM_TABLES"
 
 echo "=== 1/5  registration arms -> data/registration_arms/ ==="
 # --prune-empty-dirs keeps the tree to arms that actually produced QC: an arm
