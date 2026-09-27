@@ -181,22 +181,27 @@ workflow POSTPROCESSING {
 
     // Per slide: its markers (the split files' names -- the exact marker prefixes of
     // the quant columns), and the file names of its retention / residual CSVs, keyed by
-    // meta.id. join(remainder: true): the reference has neither CSV; with reg_qc < 2 or
+    // [patient_id, id]: Meta.identityFor ids are unique only WITHIN a patient, so a bare
+    // meta.id key could cross-pair two patients' slides. The key is ONE list-valued
+    // element at index 0, so `by: 0` and the null-padding positions are unchanged.
+    // join(remainder: true): the reference has neither CSV; with reg_qc < 2 or
     // --start postprocessing there are no residuals at all.
     ch_round_rows = SPLIT_CHANNELS.out.channels
         .map { meta, tiffs ->
             def list = tiffs instanceof List ? tiffs : [tiffs]
-            [meta.id, meta.patient_id, meta.is_reference as boolean, list.collect { it.baseName }.toSorted()]
+            [[meta.patient_id, meta.id], meta.patient_id, meta.is_reference as boolean, list.collect { it.baseName }.toSorted()]
         }
-        .join(NUCLEAR_RETENTION.out.csv.map { meta, csv -> [meta.id, csv] }, by: 0, remainder: true)
-        .join(ch_reg_residuals.map { meta, csv -> [meta.id, csv] }, by: 0, remainder: true)
+        .join(NUCLEAR_RETENTION.out.csv.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
+        .join(ch_reg_residuals.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
         .filter { row -> row[1] != null }     // a residual whose slide never split (keep-set empty)
-        .map { id, pid, is_ref, markers, ret_csv, res_csv ->
-            [pid, [round_id: id, is_reference: is_ref, markers: markers,
+        .map { key, pid, is_ref, markers, ret_csv, res_csv ->
+            [pid, [round_id: key[1], is_reference: is_ref, markers: markers,
                    retention_csv: ret_csv ? ret_csv.name : null,
                    residual_csv : res_csv ? res_csv.name : null],
              ret_csv, res_csv]
         }
+        // Deliberate cross-patient barrier: the remainder joins above release only on
+        // channel close, so no size hint could help here. MERGE_AND_PYRAMID does not wait on it.
         .groupTuple(by: 0)
         .map { pid, entries, ret_csvs, res_csvs ->
             // CANONICAL ORDER: groupTuple emits in arrival order and val/path lists hash

@@ -400,6 +400,107 @@ nextflow_workflow {
         }
     }
 
+    /*
+     * Round ids (Meta.identityFor) are unique only WITHIN a patient. Two patients whose
+     * moving slides share meta.id 'mov1' must each get THEIR OWN retention and residual
+     * CSV at CELL_QC -- the round joins key on [patient_id, id]. The stub .command.sh
+     * of every task names its patient (ProcessEnvelope.sizeLogStub's `<process>,<pid>,stub,0` row), so the
+     * staged retention symlink is traced back to the NUCLEAR_RETENTION task that wrote
+     * it. The residual CSVs are two differently-named files so each is identifiable.
+     */
+    test("Should pair each patient's round CSVs with that patient when slide ids collide - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                seg_gpu = false
+                pixel_size = 0.325
+            }
+            workflow {
+                """
+                def ch = ['DAPI', 'PANCK', 'SMA']
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'ref',  is_reference: true,  channels: ch],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff')],
+                    [[patient_id: 'P001', id: 'mov1', is_reference: false, channels: ch],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff')],
+                    [[patient_id: 'P002', id: 'ref',  is_reference: true,  channels: ch],
+                     file('$projectDir/tests/testdata/P002_ref.ome.tiff')],
+                    [[patient_id: 'P002', id: 'mov1', is_reference: false, channels: ch],
+                     file('$projectDir/tests/testdata/P001_mov2.ome.tiff')]
+                ])
+                input[1] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_cell_mask.tif')],
+                    [[patient_id: 'P002', id: 'P002', is_reference: true],
+                     file('$projectDir/tests/testdata/P002_cell_mask.tif')]
+                ])
+                input[2] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_nuclei_mask.tif')],
+                    [[patient_id: 'P002', id: 'P002', is_reference: true],
+                     file('$projectDir/tests/testdata/P001_nuclei_mask.tif')]
+                ])
+                input[3] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')],
+                    ['P002', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[4] = Channel.fromList([
+                    ['P001', file('$projectDir/tests/testdata/sample_contours.json')],
+                    ['P002', file('$projectDir/tests/testdata/sample_contours.json')]
+                ])
+                input[5] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001', is_reference: true],
+                     file('$projectDir/tests/testdata/sample_morphology.csv')],
+                    [[patient_id: 'P002', id: 'P002', is_reference: true],
+                     file('$projectDir/tests/testdata/sample_morphology.csv')]
+                ])
+                input[6] = Channel.empty()
+                input[7] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'mov1', is_reference: false],
+                     file('$projectDir/tests/testdata/sample_reg_residuals.csv')],
+                    [[patient_id: 'P002', id: 'mov1', is_reference: false],
+                     file('$projectDir/tests/testdata/celltox_nonreference.csv')]
+                ])
+                input[8] = ParamUtils.compartmentMode(params)
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                {
+                    def patientOf = { File taskDir ->
+                        def m = new File(taskDir, '.command.sh').text =~ /:[A-Z_]+,(P00[12]),stub,0/
+                        m.find() ? m.group(1) : null
+                    }
+                    def cellQcDirs = []
+                    new File("$workDir").eachFileRecurse { f ->
+                        if (f.isDirectory() && f.name == 'retention' && new File(f.parentFile, 'base').isDirectory())
+                            cellQcDirs << f.parentFile
+                    }
+                    assert cellQcDirs.size() == 2 : "expected one CELL_QC per patient, found ${cellQcDirs.size()}"
+                    def expectedResidual = [P001: 'sample_reg_residuals.csv', P002: 'celltox_nonreference.csv']
+                    cellQcDirs.each { d ->
+                        def pid = patientOf(d)
+                        assert pid in ['P001', 'P002'] : "could not read the patient of CELL_QC task ${d}"
+                        def rets = new File(d, 'retention').listFiles()
+                        assert rets*.name == ['mov1_nuclear_retention.csv']
+                        def producer = rets[0].toPath().toRealPath().toFile().parentFile
+                        assert patientOf(producer) == pid :
+                            "CELL_QC(${pid}) staged the retention CSV of ${patientOf(producer)}"
+                        assert new File(d, 'residuals').listFiles()*.name == [expectedResidual[pid]] :
+                            "CELL_QC(${pid}) staged residuals ${new File(d, 'residuals').listFiles()*.name}"
+                    }
+                }
+            )
+        }
+    }
+
     test("Should create checkpoint CSV - stub") {
 
         tag "stub"
