@@ -168,6 +168,7 @@ def score_stage(
     supersample=DEFAULT_SUPERSAMPLE,
     max_pair_window_px=cp.DEFAULT_MAX_PAIR_WINDOW_PX,
     pixel_size_um=None,
+    return_iou=False,
 ) -> dict:
     """Per-pair IoU + centroid residual for one stage, over an already-fixed pairing."""
     iou, scored = cp.pair_iou(
@@ -179,7 +180,7 @@ def score_stage(
         max_window_px=max_pair_window_px,
     )
     dist = cp.centroid_distance(cent_ref, cent_mov, idx_ref, idx_mov)
-    return cp.summarize_stage(
+    rec = cp.summarize_stage(
         iou,
         scored,
         dist,
@@ -188,6 +189,7 @@ def score_stage(
         iou_thresh=iou_thresh,
         pixel_size_um=pixel_size_um,
     )
+    return (rec, iou) if return_iou else rec
 
 
 def _stage_line(rec) -> str:
@@ -303,19 +305,19 @@ def run(
         max_pair_window_px=max_pair_window_px,
         pixel_size_um=pixel_size_um,
     )
-    records = {
-        ANCHOR_STAGE: score_stage(
-            a_ref,
-            a_mov,
-            a_cent_ref,
-            a_cent_mov,
-            a_area_ref,
-            a_area_mov,
-            idx_ref,
-            idx_mov,
-            **score_kwargs,
-        )
-    }
+    anchor_rec, anchor_iou = score_stage(
+        a_ref,
+        a_mov,
+        a_cent_ref,
+        a_cent_mov,
+        a_area_ref,
+        a_area_mov,
+        idx_ref,
+        idx_mov,
+        return_iou=True,
+        **score_kwargs,
+    )
+    records = {ANCHOR_STAGE: anchor_rec}
     _log(f"stage '{ANCHOR_STAGE}': {_stage_line(records[ANCHOR_STAGE])}", t0)
 
     # See the note on `per_cell` below. Captured here, before the anchor arrays are
@@ -328,6 +330,7 @@ def run(
             "residual_px": cp.centroid_distance(
                 a_cent_ref, a_cent_mov, idx_ref, idx_mov
             ),
+            "iou": np.asarray(anchor_iou, dtype=float),
         }
 
     del a_ref, a_mov, a_cent_ref, a_cent_mov, a_area_ref, a_area_mov
@@ -346,14 +349,17 @@ def run(
             continue
         s_ref, ar_ref, c_ref = _stage_geometry(warp, ref_slide, ref_native, stage)
         s_mov, ar_mov, c_mov = _stage_geometry(warp, moving_slide, mov_native, stage)
-        records[stage] = score_stage(
-            s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, idx_ref, idx_mov, **score_kwargs
+        rec, stage_iou = score_stage(
+            s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, idx_ref, idx_mov,
+            return_iou=True, **score_kwargs
         )
+        records[stage] = rec
         if stage == final_stage and idx_ref.size:
             per_cell = {
                 "stage": stage,
                 "ref_xy": np.asarray(c_ref, dtype=float)[idx_ref],
                 "residual_px": cp.centroid_distance(c_ref, c_mov, idx_ref, idx_mov),
+                "iou": np.asarray(stage_iou, dtype=float),
             }
         _log(f"stage '{stage}': {_stage_line(records[stage])}", t0)
         del s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov
@@ -393,7 +399,7 @@ def run(
 def write_per_cell_csv(path, per_cell, moving_name) -> int:
     """Write the final-stage per-pair registration residuals as CSV.
 
-    Columns are ``moving,ref_x,ref_y,residual_px,stage``. ``ref_x``/``ref_y`` are
+    Columns are ``moving,ref_x,ref_y,residual_px,iou,stage``. ``ref_x``/``ref_y`` are
     reference-cell centroids **in the final stage's frame** — i.e. the frame the
     registered reference image (and therefore ``cell_mask``) lives in, which is what
     makes a downstream spatial join onto cell labels well-posed.
@@ -408,14 +414,16 @@ def write_per_cell_csv(path, per_cell, moving_name) -> int:
 
     with open(path, "w", newline="") as fh:
         w = _csv.writer(fh)
-        w.writerow(["moving", "ref_x", "ref_y", "residual_px", "stage"])
+        w.writerow(["moving", "ref_x", "ref_y", "residual_px", "iou", "stage"])
         if not per_cell:
             return 0
         xy = np.asarray(per_cell["ref_xy"], dtype=float)
         dist = np.asarray(per_cell["residual_px"], dtype=float)
+        iou = np.asarray(per_cell.get("iou", np.full(dist.shape, np.nan)), dtype=float)
         stage = per_cell["stage"]
-        for (x, y), d in zip(xy, dist):
-            w.writerow([moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", stage])
+        for (x, y), d, i in zip(xy, dist, iou):
+            iou_str = "" if not np.isfinite(i) else f"{i:.6f}"
+            w.writerow([moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", iou_str, stage])
         return int(dist.size)
 
 
