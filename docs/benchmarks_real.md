@@ -147,7 +147,9 @@ memory with the Nextflow heads, so keep the head count low while they run.
 byte-identical to every manifest produced before 2026-09-12) or `robust`
 (neighbour-consistency rejection, in-fill of dropped tiles, Tikhonov smoothing,
 invertibility check — `stare.solve`, `docs/parallel_registration_design.md` §6b).
-The pipeline default is `robust`; the 9 STARE base arms are pinned to `legacy` in
+The pipeline default is `dctpls` since 2026-09-27 (robust affine + robust DCT-PLS,
+`docs/parallel_registration_design.md` §6b); this cross still runs `robust` until it is
+re-planned. The 9 STARE base arms are pinned to `legacy` in
 `arms.yaml`'s baseline because they were launched before the solver existed and
 *are* that path, so their results stay valid. `robust` enters as a **solver cross**
 (`solver_cross`, `arm_kind=registration_solver`): one row per STARE base arm, named

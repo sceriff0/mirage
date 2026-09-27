@@ -29,8 +29,8 @@ process TILED_SOLVE {
     def slidename = meta.channels.join('_')
     def gate      = params.reg_tiled_gate_tre
     // --solver: which SOLVE algorithm builds the mesh from the gated control points
-    // ('robust' | 'legacy', see stare.solve). A correctness knob like the gates, so it is a
-    // param rather than a tier value.
+    // ('dctpls' | 'robust' | 'legacy', see stare.solve; 'dctpls' ignores --gate-tre). A
+    // correctness knob like the gates, so it is a param rather than a tier value.
     def solver    = params.reg_tiled_solver
     // --max-error / --max-disp: the confidence and range gates on the control points, from
     // conf/modules.config's ext.args for this process.

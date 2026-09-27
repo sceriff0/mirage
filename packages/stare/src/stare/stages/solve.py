@@ -4,12 +4,15 @@ Gathers the control points emitted by every tile task, lays them on the grid, an
 self-contained manifest (reference identity + the moving slide's M0 + mesh) the warp and the
 reg_qc=2 scorer consume. One cheap per-slide reduction — kilobytes, no image data.
 
-The solve itself -- gates, neighbour consistency, in-fill, smoothing, the invertibility
-check -- lives in ``stare.solve``; this stage is the file contract around it. ``--solver``
-picks ``legacy`` (what STARE shipped until 2026-09: three gates, then a median over the
-accepted cells; byte-for-byte the pre-package behaviour, so a prior run reproduces) or
-``robust`` (the default). Whichever ran, its report goes into the ``*_tre.json`` under
-``"solve"`` and its name into the moving slide's manifest entry as ``"solver"``.
+The solve itself -- gates, robust affine, smoothing, the fold certificate -- lives in
+``stare.solve``; this stage is the file contract around it. ``--solver`` picks ``dctpls``
+(the default: robust affine + robust DCT-PLS with a data-chosen smoothing parameter and no
+TRE dead zone), ``robust`` (gates, normalised median test, in-fill, Tikhonov) or ``legacy``
+(what STARE shipped until 2026-09: three gates, then a median over the accepted cells;
+byte-for-byte the pre-package behaviour, so a prior run reproduces). Whichever ran, its
+report goes into the ``*_tre.json`` under ``"solve"`` and its name into the moving slide's
+manifest entry as ``"solver"``. ``--gate-tre`` is still accepted by every solver and used
+by ``robust``/``legacy`` only; ``dctpls`` ignores it.
 
 The mirage pipeline invokes this stage through ``bin/tiled_solve.py``, a shim over ``main``.
 ``_accept`` and ``_grid_from_controls`` below are the names that shim's tests reach; they are
@@ -65,7 +68,13 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--controls", required=True, help="glob for the per-tile control JSONs"
     )
-    ap.add_argument("--gate-tre", type=float, default=1.0)
+    ap.add_argument(
+        "--gate-tre",
+        type=float,
+        default=1.0,
+        help="TRE dead zone for `robust`/`legacy`: a control point below it contributes [0, 0]. "
+        "Ignored by `dctpls`, which never zeroes a measured displacement.",
+    )
     ap.add_argument(
         "--max-error",
         type=float,
@@ -96,10 +105,11 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--solver",
         choices=list(SOLVERS),
-        default="robust",
-        help="`legacy` reproduces the pre-2026-09 solve byte-for-byte (gates + median); "
-        "`robust` adds neighbour-consistency rejection, in-fill, regularised smoothing "
-        "and the invertibility check. See stare.solve.",
+        default="dctpls",
+        help="`dctpls` (default): robust affine + robust DCT-PLS, smoothing chosen by h-block "
+        "cross-validation, no TRE dead zone, fold certificate reported. `robust`: gates, "
+        "neighbour-consistency rejection, in-fill, Tikhonov smoothing and the invertibility "
+        "check. `legacy`: the pre-2026-09 solve byte-for-byte (gates + median). See stare.solve.",
     )
     ap.add_argument("--moving-name", required=True)
     ap.add_argument("--out-manifest", required=True)
@@ -152,7 +162,7 @@ def main(argv=None) -> int:
         # Re-ask `accept` rather than thread the grid's decision out of the solver: it is the
         # single owner of the rule, it is pure and cheap, and re-asking keeps the mesh and the
         # report provably in agreement. A record here that says accepted=False is exactly a
-        # control point the gates did not admit (the robust solver may still drop more, and
+        # control point the gates did not admit (a solver may still down-weight more, and
         # says how many in the "solve" report below).
         records = [
             {

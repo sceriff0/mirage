@@ -291,9 +291,10 @@
                 },
                 "reg_tiled_solver": {
                     "type": "string",
-                    "description": "STARE only: the SOLVE stage. 'robust' = neighbour-consistency rejection (normalised median test), in-fill of dropped tiles, Tikhonov smoothing and an invertibility check over the control grid (stare.solve); 'legacy' = the gates plus a median filter, byte-identical to manifests produced before 2026-09-12.",
-                    "default": "robust",
+                    "description": "STARE only: the SOLVE stage (stare.solve). 'dctpls' = robust affine + robust DCT-PLS (Garcia 2010) of the residual, smoothing parameter chosen by h-block cross-validation, no TRE dead zone, fold certificate reported; 'robust' = neighbour-consistency rejection (normalised median test), in-fill of dropped tiles, Tikhonov smoothing and an invertibility check over the control grid; 'legacy' = the gates plus a median filter, byte-identical to manifests produced before 2026-09-12.",
+                    "default": "dctpls",
                     "enum": [
+                        "dctpls",
                         "robust",
                         "legacy"
                     ]

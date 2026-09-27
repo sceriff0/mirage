@@ -241,7 +241,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--max-disp", type=float, default=None, help="default: --halo, as the pipeline"
     )
-    r.add_argument("--solver", choices=["legacy", "robust"], default="robust")
+    # literal, not stare.solve.SOLVERS: the parser stays importable without numpy
+    r.add_argument("--solver", choices=["dctpls", "robust", "legacy"], default="dctpls")
     # stitch
     r.add_argument("--out-tile", type=int, default=1024)
     r.add_argument("--pixel-size", default="auto")

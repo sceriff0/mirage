@@ -32,7 +32,7 @@ stage invocation, through the `bin/tiled_*.py` shims).
 |---|---|---|
 | `stare coarse --reference R --moving M --max-dim N --out-m0 M0.json --out-tiles tiles.csv` | the nuclear channel of both slides, decimated | `M0.json` (the global anchor, reference dims, the coarse residual) and `tiles.csv`, one row per tile (`ix iy cx cy x0 y0 x1 y1 rx0 ry0 rx1 ry1`) |
 | `stare reg-tile --reference R --moving M --m0 M0.json --plan tiles.csv --row N --out X_ctrl.json` (or the same tile as explicit `--ix --iy --cx --cy --rx0 --ry0 --rx1 --ry1`) | one reference tile and the moving crop its inverse map draws from | one control JSON: the tile's displacement, TRE, correlation error and foreground fractions |
-| `stare solve --m0 M0.json --controls 'X_*_ctrl.json' --moving-name M --out-manifest M_manifest.json [--out-tre M_tre.json] [--solver legacy\|robust]` | every control JSON the glob matches | the transform manifest (`M0` + mesh + `solver`) and the TRE report (with the solve's own report under `"solve"`) |
+| `stare solve --m0 M0.json --controls 'X_*_ctrl.json' --moving-name M --out-manifest M_manifest.json [--out-tre M_tre.json] [--solver dctpls\|robust\|legacy]` | every control JSON the glob matches | the transform manifest (`M0` + mesh + `solver`) and the TRE report (with the solve's own report under `"solve"`) |
 | `stare stitch --moving M --manifest M_manifest.json --out M_registered.ome.tif --pixel-size P` | the moving slide, tile by tile | the registered OME-TIFF |
 
 `--plan/--row` and the explicit geometry produce the identical control JSON; the row form

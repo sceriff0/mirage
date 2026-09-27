@@ -249,12 +249,26 @@ regularise → densify*. `stare.solve` now does the same, on the control grid, n
 | smoothing | Tikhonov: `argmin_u Σ wᵢ|uᵢ − dᵢ|² + λ Σ|∇u|²`, `wᵢ = 1 − errorᵢ` on measured cells, 0.25 on in-filled ones, sparse solve | `λ = 1.0` (grid units) | Rohr et al. approximating TPS; RegWSI's diffusive term |
 | invertibility | STITCH inverts `F` by fixed-point iteration, which converges when the field's Lipschitz constant is < 1 (Chen et al. 2008). The Jacobian of `u` on the grid is reported (max operator norm, min `det(I + J)`); if the norm reaches 0.9 the field is scaled to it and the manifest says so | `max_lipschitz = 0.9` | Chen et al. 2008; Kuang et al. 2019 |
 
-`reg_tiled_solver = 'robust'` (default) selects this; `'legacy'` reproduces the pre-2026-09-12
+`reg_tiled_solver = 'robust'` selects this; `'legacy'` reproduces the pre-2026-09-12
 mesh byte-for-byte (`packages/stare/tests/test_solve.py` pins it against a verbatim copy of
 the old stage). The solver's name and diagnostics are recorded in the manifest and in
 `*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
 changes with the solver, the arm benchmark carries it as an axis rather than silently moving the
 default: `docs/benchmarks_real.md`, "Re-running a subset after a code change".
+
+**Since 2026-09-27 the default is `dctpls`**, not `robust`. On the 16-tile synthetic slide
+`robust` scored 8.7 px median against 2.2 px for the raw tile vectors, for conceptual rather
+than tuning reasons (`research/stare-optimal-design-2026-09-27.md` §0): the TRE gate
+hard-zeroes sub-gate vectors and those zeros poison the median test; a first-order Tikhonov
+penalty is not affine-invariant and shrinks M0's residual rotation; and `1 − error` weights
+have no fixed scale, so λ means a different amount of smoothing on every dataset. `dctpls`
+removes a Huber-IRLS affine first, then smooths the residual by robust DCT-PLS (Garcia 2010,
+thin-plate penalty, bisquare weights) with the smoothing parameter chosen by h-block
+cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). It has no TRE dead
+zone, weights a control by `1/σ²` when it carries `sigma` (else 1), fills unmeasured tiles
+from the smoother, and reports the field's Lipschitz constant and min `det(I + J)` as a fold
+certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field. `robust`
+and `legacy` remain selectable.
 
 ---
 
