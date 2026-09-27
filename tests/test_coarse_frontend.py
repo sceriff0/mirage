@@ -9,8 +9,8 @@ is a different, internal shape (``_orb_fallback``), not the old selectable front
 and ``test_the_deleted_frontends_are_really_gone`` below is what stops one coming back
 without a decision.
 
-CI runs this file on its own and fails on any reported skip
-(tests/test_disk_test_actually_runs.py). Nothing here skips: the anchor needs no torch.
+Nothing here skips: the anchor needs no torch (the DRAPE image, containers/drape, has none),
+and the suite step's MIRAGE_STRICT_SKIPS floor fails CI on any unexpected skip.
 
 Import note: coarse_align.py does ``from logger import get_logger`` at module scope (an
 unqualified import resolved against ``bin/utils`` on sys.path directly, the same convention

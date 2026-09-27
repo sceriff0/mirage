@@ -34,8 +34,8 @@ FRAMEWORKS = {
     "mesmer": "mesmer",
     "deepcell": "deepcell",
     # containers/tiled installed these for STARE's DISK+LightGlue COARSE front-end, retired
-    # 2026-09-27 for an NCC rotation sweep with an ORB fallback that imports neither. Until the
-    # image is rebuilt they are PENDING_IMAGE_REBUILD below, not silently reachable.
+    # 2026-09-27 for an NCC rotation sweep with an ORB fallback that imports neither; its
+    # replacement, containers/drape, installs neither. Kept here so neither comes back.
     "torch": "torch",
     "kornia": "kornia",
 }
@@ -59,14 +59,8 @@ CODE_DIRS = (
 # Each entry must still be a real offender (test_pending_rebuild_entries_are_still_offenders),
 # so the day the Dockerfile drops the wheel the entry fails and has to go.
 PENDING_IMAGE_REBUILD = {
-    ("containers/tiled/Dockerfile", "kornia"): (
-        "COARSE's DISK+LightGlue anchor was replaced by an NCC rotation sweep + ORB fallback "
-        "(drape/coarse_align.py, 2026-09-27); bolt3x/mirage-tiled:1.0.0 still carries the "
-        "wheel, and dropping requirements/kornia.txt from the image needs a rebuild + publish."
-    ),
-    # torch is not listed: other first-party code (the segmentation backends) still imports
-    # it, so the scan does not flag it -- but the tiled image's copy is equally orphaned and
-    # goes in the same rebuild.
+    # Empty since 2026-09-27: ("containers/tiled/Dockerfile", "kornia") went when the
+    # tiled image was replaced by the torch-free containers/drape.
 }
 
 

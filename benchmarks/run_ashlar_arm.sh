@@ -34,7 +34,7 @@
 #   ASHLAR_EXEC   command prefix for the alignment solve (needs the ashlar package:
 #                 labsyspharm/ashlar:1.20.0, amd64-only).
 #   QC_EXEC       command prefix for retile, the stitch and warp_seg_qc.py (the pipeline's
-#                 tiled image, bolt3x/mirage-tiled:1.0.0 -- TILED_STITCH's and the tiled
+#                 tiled image, bolt3x/mirage-drape:1.0.0 -- TILED_STITCH's and the tiled
 #                 WARP_SEG_QC's container).
 #   REGQC_EXEC    command prefix for generate_registration_qc.py (bolt3x/mirage-regqc:1.0.0,
 #                 GENERATE_REGISTRATION_QC's container).

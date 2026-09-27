@@ -1,6 +1,7 @@
 [
   { "dir": "cellsam",     "tag": "cellsam" },
   { "dir": "convert",     "tag": "convert" },
+  { "dir": "drape",       "tag": "drape" },
   { "dir": "instanseg",   "tag": "instanseg" },
   { "dir": "merge",       "tag": "merge" },
   { "dir": "preprocess",  "tag": "preprocess" },
@@ -8,6 +9,5 @@
   { "dir": "regqc",       "tag": "regqc" },
   { "dir": "segeval",     "tag": "segeval" },
   { "dir": "spatialdata", "tag": "spatialdata" },
-  { "dir": "stardist",    "tag": "stardist" },
-  { "dir": "tiled",       "tag": "tiled" }
+  { "dir": "stardist",    "tag": "stardist" }
 ]

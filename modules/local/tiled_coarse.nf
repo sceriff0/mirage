@@ -5,7 +5,7 @@ process TILED_COARSE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
     label 'process_low'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-drape:1.0.0'
 
     input:
     tuple val(meta), path(reference, stageAs: 'ref/*'), path(moving, stageAs: 'mov/*')

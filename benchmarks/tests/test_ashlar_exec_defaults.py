@@ -84,8 +84,8 @@ def test_sif_or_docker_prefers_nextflows_cached_image(tmp_path):
     ]
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / "bolt3x-mirage-tiled-1.0.0.img").write_bytes(b"")
-    snippet = f"{fn}\nsif_or_docker bolt3x/mirage-tiled:1.0.0; echo; sif_or_docker {ASHLAR_IMAGE}"
+    (cache / "bolt3x-mirage-drape-1.0.0.img").write_bytes(b"")
+    snippet = f"{fn}\nsif_or_docker bolt3x/mirage-drape:1.0.0; echo; sif_or_docker {ASHLAR_IMAGE}"
     r = subprocess.run(
         ["bash", "-c", snippet],
         capture_output=True,
@@ -94,7 +94,7 @@ def test_sif_or_docker_prefers_nextflows_cached_image(tmp_path):
     )
     assert r.returncode == 0, r.stderr
     cached, pulled = r.stdout.splitlines()
-    assert cached == str(cache / "bolt3x-mirage-tiled-1.0.0.img")
+    assert cached == str(cache / "bolt3x-mirage-drape-1.0.0.img")
     assert pulled == f"docker://{ASHLAR_IMAGE}"
 
 

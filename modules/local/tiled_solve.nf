@@ -12,7 +12,7 @@ process TILED_SOLVE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
     label 'process_single'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-drape:1.0.0'
 
     input:
     tuple val(meta), path(m0), path(controls, stageAs: 'ctrl_?/*')

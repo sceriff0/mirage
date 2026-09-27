@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already computed on the `benchmarking` branch. Entries below this one keep the name the
   method had when they were written.
 
+- **The tiled backend's image is `bolt3x/mirage-drape:1.0.0`, and it is slim.** Built from
+  `containers/drape` (was `containers/tiled`, image `bolt3x/mirage-tiled:1.0.0`): the same
+  `python:3.11-slim` digest, `procps`, `requirements/drape.txt` (was `tiled.txt`) and the
+  `drape` package — no torch, no kornia, no libGL, no baked DISK/LightGlue weights, which
+  served only the COARSE front-end retired on 2026-09-27. Its smoke test fails the build if
+  torch is importable. Every `TILED_*` process and `WARP_SEG_QC`'s tiled backend use it.
+  `requirements/kornia.txt` is deleted; `requirements/torch-cpu.txt` is now CI-only (the
+  VALIS matcher tests import torch). **The image must be published before a
+  `registration_method='tiled'` run can pull it.**
+
 - **STARE SOLVE/ESTIMATE audit fixes** (`research/drape-step-support-2026-09-27.md`). The
   robust scale of a residual vector's norm is now the Rayleigh one (`median |r| / 1.1774`;
   Huber 2.448σ and bisquare 5.06σ from χ²₂) — the 1-D `1.4826 × MAD` made Huber down-weight

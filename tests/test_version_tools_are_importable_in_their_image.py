@@ -129,7 +129,7 @@ def test_the_scan_finds_all_three_sources():
         "container never appears as a literal in modules/local/segment.nf, so losing that "
         "table means losing three images at once."
     )
-    assert "tiled" in claims, (
+    assert "drape" in claims, (
         "lib/WarpBackends.groovy's versionTools were not resolved."
     )
     assert "convert" in claims, (

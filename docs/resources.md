@@ -568,7 +568,7 @@ difference is the two new parameters. Guarded by `tests/test_concurrency_params.
 
 Every process pins a fixed image tag — never `:latest`. The `bolt3x/mirage-*` image
 NAMES (one Docker Hub repository per image, e.g. `bolt3x/mirage-preprocess`,
-`bolt3x/mirage-tiled`) are content-descriptive; the TAG on each is an immutable
+`bolt3x/mirage-drape`) are content-descriptive; the TAG on each is an immutable
 SemVer version (`1.0.0`), tied to `manifest.version` — see
 [Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
 
@@ -578,7 +578,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
 | `cdgatenbee/valis-wsi:1.0.0` | `REGISTER` |
-| `bolt3x/mirage-tiled:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
+| `bolt3x/mirage-drape:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
 | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
 | `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` *(default)* |

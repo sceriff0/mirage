@@ -188,7 +188,7 @@ sif_or_docker() {                  # sif_or_docker <registry/name:tag>
   if [[ -f "$f" ]]; then printf '%s' "$f"; else printf 'docker://%s' "$ref"; fi
 }
 export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(sif_or_docker labsyspharm/ashlar:1.20.0)}"
-export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-tiled:1.0.0)}"
+export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-drape:1.0.0)}"
 export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-regqc:1.0.0)}"
 
 # Concurrency is passed on the COMMAND LINE, not via benchmark.config. Every

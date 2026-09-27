@@ -92,8 +92,7 @@
 # GUARDS THAT READ THIS FILE. Moving a step into a composite action moves it out
 # of `.github/workflows/*.yml`, which is where several guard tests used to stop
 # looking. tests/ci_actions.py resolves a workflow to the local actions it uses,
-# and tests/test_ci_stack_pinned.py, tests/test_ci_job_hygiene.py,
-# tests/test_disk_test_actually_runs.py and
+# and tests/test_ci_stack_pinned.py, tests/test_ci_job_hygiene.py and
 # tests/test_release_workflow_graph.py all go through it. In particular the
 # `nextflow plugin install` line below is one of the blocking checks
 # test_release_workflow_graph.BLOCKING_CHECKS enumerates — asserted here, not in

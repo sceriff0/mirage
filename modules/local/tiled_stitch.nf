@@ -8,7 +8,7 @@ process TILED_STITCH {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
     label 'process_medium'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-drape:1.0.0'
 
     input:
     tuple val(meta), path(manifest), path(moving, stageAs: 'mov/*')

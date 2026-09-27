@@ -6,23 +6,20 @@
 #
 # `requirements` IS AN ORDERED LIST, one file per line, and each line becomes its
 # OWN `pip install` invocation. That is not cosmetic. The python-tests stack
-# installs three files and the order and the separation are both load-bearing:
+# installs two files and the separation is load-bearing:
 #
 #   * requirements/torch-cpu.txt carries `--index-url .../whl/cpu`, which applies
 #     to the WHOLE resolve if the file is pulled in by `-r` from another
 #     requirements file — so it must be its own invocation, not a line inside
-#     requirements/ci.txt.
-#   * kornia drags the ~2.5 GB CUDA wheel from PyPI if torch is not already
-#     satisfied, so torch goes first.
+#     requirements/ci.txt. (kornia, which had to follow torch, left with the
+#     DISK front-end on 2026-09-27.)
 #
-# This matches containers/tiled/Dockerfile exactly, which is the point: the pins
-# exist once, in requirements/, and CI and the image read the same files.
+# The pins exist once, in requirements/, and CI and the images read the same files.
 #
 # NO VERSION STRING MAY APPEAR IN THIS FILE. tests/test_ci_stack_pinned.py scans
 # `.github/actions/**` alongside `.github/workflows/**` for exactly that, and
-# tests/test_disk_test_actually_runs.py resolves a workflow through the
-# `requirements:` input below to prove the DISK front-end stack really is
-# installed wherever the pytest suite runs. Both go through tests/ci_actions.py.
+# resolves each job's installs through the `requirements:` input below
+# (tests/ci_actions.py).
 #
 # `cache-dependency-path: 'requirements/**'` is NOT optional. `cache: 'pip'`
 # defaults its key to the hash of `**/requirements.txt`, and the only files

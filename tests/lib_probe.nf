@@ -1505,7 +1505,7 @@ workflow {
     assert WarpBackends.methods().toSorted() == ['tiled', 'valis']
     // Digest-pinned (ruling R6): no tag, see tests/test_base_images_are_digest_pinned.py.
     assert WarpBackends.container('valis') == 'cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6'
-    assert WarpBackends.container('tiled') == 'bolt3x/mirage-tiled:1.0.0'
+    assert WarpBackends.container('tiled') == 'bolt3x/mirage-drape:1.0.0'
     assert WarpBackends.of('valis').stages == ['native', 'rigid', 'non_rigid', 'micro']
     assert WarpBackends.of('tiled').stages == ['native', 'rigid', 'refined']
 

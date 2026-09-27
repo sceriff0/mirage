@@ -41,8 +41,8 @@ from tests import test_container_harmonisation as harmonisation
 # NOTE ON WHAT DOES NOT NEED AN ENTRY HERE: `_unimported()` below counts
 # `REQUIRED_RUNTIME_IMPORTS[container]` (test_container_harmonisation.py) as reached, not
 # just module-scope imports. A package whose only importer is a LAZY import already
-# declared there -- containers/convert's bioio, h5py, scyjava; containers/tiled's torch,
-# kornia, zarr, scipy, skimage; containers/segeval's matplotlib; every name in
+# declared there -- containers/convert's bioio, h5py, scyjava; containers/drape's zarr,
+# scipy, skimage; containers/segeval's matplotlib; every name in
 # containers/spatialdata's REQUIRED_RUNTIME_IMPORTS entry -- is therefore never unimported
 # in the first place and must NOT be listed below: an entry here for one of those would
 # immediately fail test_every_allowlist_entry_is_still_unimported, because the package is
@@ -74,12 +74,12 @@ ALLOWED_UNIMPORTED = {
             "quantify",
             "regqc",
             "stardist",
-            "tiled",
+            "drape",
         )
     },
     # zarr 2 delegates every compression to numcodecs, and the two must move together:
     # a newer numcodecs drops blosc.cbuffer_sizes, which zarr 2.18 imports at module
-    # scope (requirements/tiled.txt records the same fact for the same reason).
+    # scope (requirements/drape.txt records the same fact for the same reason).
     **{
         (c, "numcodecs"): (
             "zarr 2.18's codec layer. Pinned beside zarr because the pair cannot split: "
@@ -94,7 +94,7 @@ ALLOWED_UNIMPORTED = {
             "quantify",
             "regqc",
             "stardist",
-            "tiled",
+            "drape",
         )
     },
     # --- per-image runtime dependencies -------------------------------------------
@@ -176,17 +176,8 @@ ALLOWED_UNIMPORTED = {
         "zstd/LZW-compressed OME-TIFF through tifffile."
     ),
     # --- pending an image rebuild -------------------------------------------------
-    **{
-        ("tiled", dist): (
-            "DRAPE's COARSE anchor stopped importing torch/kornia on 2026-09-27 (DISK + "
-            "LightGlue -> NCC rotation sweep + ORB fallback, drape/coarse_align.py). "
-            "bolt3x/mirage-tiled:1.0.0 still installs both; dropping requirements/"
-            "torch-cpu.txt and requirements/kornia.txt from containers/tiled/Dockerfile "
-            "needs a user-approved rebuild + publish. Delete this entry in that change -- "
-            "test_every_allowlist_entry_is_still_installed will insist."
-        )
-        for dist in ("torch", "kornia")
-    },
+    # (empty since 2026-09-27: containers/tiled's torch/kornia entries went when the
+    # torch-free containers/drape replaced it)
 }
 
 
@@ -199,7 +190,7 @@ def _unimported(container):
     (runtime, not module-scope) import, each proven still genuine by
     ``test_required_runtime_imports_are_actually_reached`` in test_container_harmonisation.
     Without that union, every package a script needs only at runtime -- bioio, h5py and
-    scyjava for containers/convert; torch/kornia for containers/tiled; matplotlib for
+    scyjava for containers/convert; zarr/scipy/skimage for containers/drape; matplotlib for
     containers/segeval -- would read as unreached and demand an ALLOWED_UNIMPORTED entry
     duplicating a reason REQUIRED_RUNTIME_IMPORTS already states, which is exactly the kind
     of second copy of the same fact this repository's guards avoid (see
@@ -235,7 +226,7 @@ def test_the_scan_reaches_every_image_that_runs_a_script():
         "instanseg",
         "preprocess",
         "merge",
-        "tiled",
+        "drape",
         "segeval",
         "spatialdata",
     ):

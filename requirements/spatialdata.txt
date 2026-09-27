@@ -28,7 +28,7 @@
 #
 # PYTHON 3.12 IS EXERCISED BY NO CI LEG, and adding one would not close the gap.
 # _test-suite.yml's python-tests matrix is 3.10/3.11 and installs requirements/ci.txt,
-# which is `-c constraints.txt` plus segeval.txt and tiled.txt — zarr 2.18.3 and
+# which is `-c constraints.txt` plus segeval.txt and drape.txt — zarr 2.18.3 and
 # anndata<0.12, i.e. NOT what this image ships. A 3.12 leg would test a combination no
 # image runs while still never importing spatialdata. The real closure is a job that runs
 # tests/test_join_flowpath.py inside bolt3x/mirage-spatialdata; requirements/ci.txt's

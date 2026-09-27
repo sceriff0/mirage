@@ -295,7 +295,7 @@ def test_the_scanned_files_actually_install_something():
 
 # The requirements/ files CI actually installs, as a NAMED SET rather than a count.
 # Measured 2026-09-01 on ci/phase-6-7 (CI redesign Phase 7):
-#   _test-suite.yml::python-tests    ci.txt, torch-cpu.txt, kornia.txt
+#   _test-suite.yml::python-tests    ci.txt, torch-cpu.txt (kornia.txt until 2026-09-27)
 #   _test-suite.yml::nextflow-stub   testdata.txt
 #   _test-suite.yml::nf-test-stub    testdata.txt
 #   _test-suite.yml::security-tests  testdata.txt
@@ -320,7 +320,6 @@ def test_the_scanned_files_actually_install_something():
 EXPECTED_CI_REQUIREMENTS = {
     "requirements/ci.txt",
     "requirements/torch-cpu.txt",
-    "requirements/kornia.txt",
     "requirements/testdata.txt",
     "requirements/lint.txt",
     "requirements/format-tests.txt",

@@ -220,7 +220,7 @@ def test_the_install_resolver_actually_finds_packages():
                      this proves the `-r` chain is followed one hop deep; its
                      distribution name also differs from its import name (`sklearn`),
                      so DIST_OF is proved applied rather than the import name matched raw
-      numpy          named in segeval.txt AND tiled.txt, i.e. reached twice -- the cycle
+      numpy          named in segeval.txt AND drape.txt, i.e. reached twice -- the cycle
                      guard in _expand must not drop it
     """
     files = _requirement_files()

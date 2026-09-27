@@ -11,7 +11,7 @@ process TILED_REG_TILE {
     tag "${meta.patient_id}:${row.ix}_${row.iy}"
     label 'process_low'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-drape:1.0.0'
 
     input:
     tuple val(meta), path(m0), path(reference, stageAs: 'ref/*'), path(moving, stageAs: 'mov/*'), val(row)

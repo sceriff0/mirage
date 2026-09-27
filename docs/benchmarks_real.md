@@ -140,7 +140,7 @@ Nextflow's singularity cache when the pipeline already pulled it:
 
 | step | image | overridable with |
 |---|---|---|
-| retile, stitch, seg QC | `bolt3x/mirage-tiled:1.0.0` | `QC_EXEC` |
+| retile, stitch, seg QC | `bolt3x/mirage-drape:1.0.0` | `QC_EXEC` |
 | registration QC composite | `bolt3x/mirage-regqc:1.0.0` | `REGQC_EXEC` |
 | alignment solve | `labsyspharm/ashlar:1.20.0` | `ASHLAR_EXEC` |
 

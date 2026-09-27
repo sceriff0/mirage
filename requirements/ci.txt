@@ -11,10 +11,10 @@
 # out where it sits. Everything else is either constrained by constraints.txt or comes from
 # a production image's own file.
 #
-# NOTE ON torch/kornia: they are NOT included here. `requirements/torch-cpu.txt` carries an
-# `--index-url`, which applies to the whole pip resolve if it is pulled in by `-r`. They
-# are installed as two separate `pip install -r` steps after this one, in that order,
-# exactly as containers/tiled/Dockerfile does it.
+# NOTE ON torch: it is NOT included here. `requirements/torch-cpu.txt` carries an
+# `--index-url`, which applies to the whole pip resolve if it is pulled in by `-r`, so CI
+# installs it as a separate `pip install -r` step after this one. No image installs it any
+# more; tests/test_valis_matching_bounds.py is what needs it (see that file's header).
 -c constraints.txt
 
 # containers/segeval — the CSE evaluation image. Supplies numpy, scipy, pandas,
@@ -24,13 +24,13 @@
 # CI cannot drift from the image any more.
 -r segeval.txt
 
-# containers/tiled — the DRAPE tiled-registration image. Supplies zarr, numcodecs and
+# containers/drape — the DRAPE registration image. Supplies zarr, numcodecs and
 # imagecodecs on top of the imaging stack above (same harmonised pins, so no conflict).
 # zarr/numcodecs must move together: a newer numcodecs drops blosc.cbuffer_sizes that zarr
 # 2.18 imports, and tests/test_tiled_stitch_streaming.py then fails at COLLECTION.
 # imagecodecs supplies the zstd/LZW codecs tifffile writes through — its absence is not an
 # ImportError, it surfaces only on a WRITE.
--r tiled.txt
+-r drape.txt
 
 # ---- The DRAPE package -----------------------------------------------------------------
 # packages/drape is the registration method itself; bin/tiled_*.py and the bin/utils
@@ -39,7 +39,7 @@
 # path in a requirements file against the working directory, not the file), which is the
 # repository root in every job that installs this file. It names no version: its
 # dependencies are the constrained ones above, and its own version is pyproject.toml's.
-# containers/tiled/Dockerfile installs the same directory with `pip install /tmp/drape`.
+# containers/drape/Dockerfile installs the same directory with `pip install /tmp/drape`.
 -e ./packages/drape
 
 # ---- CI-only tooling -------------------------------------------------------------------

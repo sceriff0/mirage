@@ -1,9 +1,0 @@
-# kornia. THE single copy of this pin — read by containers/tiled/Dockerfile and by every
-# CI job that runs the Python suite.
-#
-# Installed as its own `pip install -r` invocation AFTER requirements/torch-cpu.txt: kornia
-# drags the CUDA torch wheel (~2.5 GB) from PyPI if torch is not already satisfied.
-#
-# Powers DRAPE's DISK + LightGlue COARSE front-end
-# (bin/utils/coarse_align.py::_frontend_disk_lightglue).
-kornia==0.7.3

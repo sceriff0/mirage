@@ -221,7 +221,8 @@ def _dockerfile_pip_tokens(text):
     while torch/kornia were missing from the counted set -- reporting a container "installs
     everything its scripts import" when the packages the DISK+LightGlue front-end actually
     needs were invisible to it. The defect was first found in the now-deleted containers/
-    stare-ml image; the same chained form is what containers/tiled uses today.
+    stare-ml image; containers/tiled used the same chained form until containers/drape
+    replaced it (2026-09-27).
     """
     joined = re.sub(r"\\\s*\n", " ", text)
     tokens = []
@@ -267,7 +268,7 @@ def _requirements_files_installed(text):
     The files moved out of ``containers/<c>/requirements.txt`` into ``requirements/<c>.txt``
     so a single ``constraints.txt`` could be shared with CI. This resolves them by the
     BASENAME the Dockerfile installs rather than by the container's own name, because
-    containers/tiled installs three (tiled.txt, torch-cpu.txt, kornia.txt) -- and reading only
+    the retired containers/tiled installed three (tiled.txt, torch-cpu.txt, kornia.txt) -- and reading only
     ``tiled.txt`` would have hidden torch and kornia from every check below, which is exactly
     the "counted set is smaller than the installed set" defect this module's parser docstring
     describes.
@@ -411,7 +412,7 @@ def _module_container_and_scripts():
     backend-dispatched way, via ``lib/WarpBackends.groovy``, but is deliberately NOT given
     the same treatment here. Its VALIS backend's image (``cdgatenbee/valis-wsi``) is not a
     first-party ``bolt3x/mirage-*`` image and has no ``containers/`` entry to check against;
-    its tiled backend's image (``bolt3x/mirage-tiled``) already gets script coverage from
+    its tiled backend's image (``bolt3x/mirage-drape``) already gets script coverage from
     tiled_coarse.nf / tiled_reg_tile.nf / etc above. Attributing ``warp_seg_qc.py`` itself to
     'tiled' would be unsound the way SEGMENT's attribution is not: SEGMENT has three separate
     per-backend entrypoint FILES (segment.py / segment_instantseg.py / segment_cellsam.py),
@@ -685,10 +686,10 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     )
 
 
-def test_the_first_party_install_scan_reads_the_tiled_dockerfile():
+def test_the_first_party_install_scan_reads_the_drape_dockerfile():
     """Non-vacuity: the scan must find the one install that exists, and must NOT be
     satisfied by a COPY alone (a probe Dockerfile with the COPY but no pip line)."""
-    assert _first_party_packages_installed("tiled") == {"drape"}
+    assert _first_party_packages_installed("drape") == {"drape"}
     probe = "COPY packages/drape /tmp/drape\nRUN echo no install\n"
     text = re.sub(r"\\\s*\n", " ", probe)
     assert not re.search(r"pip3?\s+install\b[^\n&]*\s/tmp/drape(?:\s|$)", text)
@@ -752,12 +753,12 @@ REQUIRED_RUNTIME_IMPORTS = {
             "is called, on every .svs/.qptiff/.vsi/.scn/.mrxs/.bif/.ims read."
         ),
     },
-    "tiled": {
-        # torch/kornia USED to be listed here: COARSE's anchor was DISK + LightGlue. Since
-        # 2026-09-27 it is an FFT NCC rotation sweep with a scikit-image ORB fallback and
-        # imports neither (test_tiled_coarse_imports_no_learned_stack below). The image still
-        # INSTALLS both until it is rebuilt -- a separate, user-approved step; see
-        # tests/test_no_unreachable_container_frameworks.py's PENDING_IMAGE_REBUILD.
+    "drape": {
+        # torch/kornia USED to be listed here (for the retired containers/tiled): COARSE's
+        # anchor was DISK + LightGlue. Since 2026-09-27 it is an FFT NCC rotation sweep with a
+        # scikit-image ORB fallback and imports neither
+        # (test_tiled_coarse_imports_no_learned_stack below), and containers/drape installs
+        # neither.
         "zarr": (
             "drape/slide_io.py's open_lazy (tifffile's aszarr region-read view; the "
             "package's copy of bin/utils/tiled_io.py) is called directly by the coarse, "
