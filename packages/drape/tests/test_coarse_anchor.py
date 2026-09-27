@@ -99,6 +99,37 @@ def test_the_sweep_recovers_hard_rigid_cases(keep, theta, tx, ty):
     assert 0 < a.residual_px < 5  # the quantisation bound, finite for the JSON
 
 
+def _sweep_curve(keep, theta, tx, ty):
+    """NCC as a function of sweep angle, built exactly as ``_sweep`` builds it."""
+    from skimage.transform import downscale_local_mean
+
+    ref, mov, _m = _pair(keep, theta, tx, ty)
+    k = max(1, math.ceil(max(*ref.shape, *mov.shape) / ca.SWEEP_SIDE))
+    rs = ca._preprocess(downscale_local_mean(ref, (k, k)), ca.BLUR_SIGMA)
+    ms = ca._preprocess(downscale_local_mean(mov, (k, k)), ca.BLUR_SIGMA)
+    canvas = ca._Canvas.for_shapes(rs.shape, ms.shape)
+    corr = ca._Correlator(rs, canvas)
+    mc = canvas.place(ms)
+    return lambda a: corr.peak(ca._rotate_canvas(mc, a, canvas))[0]
+
+
+@pytest.mark.parametrize("keep", [0.2, 1.0], ids=["turnover80", "same_nuclei"])
+@pytest.mark.parametrize("theta,tx,ty", CASES, ids=[f"rot{c[0]}" for c in CASES])
+def test_half_a_sweep_step_off_the_peak_keeps_90_percent_of_the_correlation(
+    keep, theta, tx, ty
+):
+    """The nearest sweep angle is at most SWEEP_STEP_DEG / 2 from the truth; the step is
+    safe only if the correlation there still stands >= 90 % of the peak, so the true basin
+    cannot lose to a runner-up by quantisation (coarse NOTES, "Rotation step: DERIVE")."""
+    f = _sweep_curve(keep, theta, tx, ty)
+    fine = np.arange(-0.6, 0.61, 0.2)
+    vals = [f(theta + d) for d in fine]
+    a0, p0 = theta + fine[int(np.argmax(vals))], max(vals)
+    half = ca.SWEEP_STEP_DEG / 2.0
+    worst = min(f(a0 + half), f(a0 - half))
+    assert worst >= 0.9 * p0, (worst, p0)
+
+
 def test_estimate_rigid_is_the_three_tuple_view():
     ref, mov, m_true = _pair(1.0, 37, 60, -45)
     m, residual, n_inliers = ca.estimate_rigid(ref, mov)

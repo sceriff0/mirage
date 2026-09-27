@@ -288,7 +288,7 @@ def test_the_solve_reports_held_out_coverage_and_rms_ratio():
     assert report["coverage_calibration_folds"] == [0, 2, 4]
     assert report["coverage_n_scored"] > 500
     assert 0.8 < report["rms_error_over_rms_sigma"] < 1.25, report
-    assert report["smoothing_selection"] == solve.CV_LABEL
+    assert report["smoothing_selection"] == solve.CV_LABELS[report["cv_buffer"]]
 
 
 def test_the_reindex_fixed_point_residual_is_reported_and_small():

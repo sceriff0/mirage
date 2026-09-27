@@ -186,7 +186,9 @@ per patient  (patients already parallel)
 ```
 
 **Primitive split (falls out of the architecture):** COARSE searches rotation exhaustively —
-an NCC sweep over 0–360° on a 256 px tissue thumbnail, refined at the anchor thumbnail, with
+a globally normalised cross-correlation (NCC) sweep over 0–360° in 3° steps on a 256 px tissue
+thumbnail (half a step off the peak keeps ≥ 96 % of the correlation on every synthetic test
+geometry at the σ = 1 px blur, measured in Phase 5e), refined at the anchor thumbnail, with
 ORB + RANSAC only as a fallback (DISK + LightGlue from v1.0.0 to 2026-09-27) — because
 inter-cycle repositioning can carry any rotation, including a 180° flip; SOLVE's robust affine
 absorbs residual scale/shear; after M₀ the per-tile residual is
@@ -292,8 +294,13 @@ scale a residual vector's NORM by its Rayleigh median (`median |r| / 1.1774`, no
 `1.4826 × MAD`) and take their cutoffs from χ²₂ (Huber 2.448σ, bisquare 5.06σ): on clean
 Gaussian residuals Huber down-weights 5 %, not the 67 % the 1-D scale gave (Phase 5b,
 `research/drape-step-support-2026-09-27.md` S1). True h-block CV (a 1-cell buffer ring,
-Burman et al. 1994) is implemented but off: the vector errors correlate at only 0.01–0.07 at
-lag 1, and the ring raised the synthetic field error ~50 %. It has no TRE dead
+Burman et al. 1994) is chosen per slide since Phase 5e (Valavi et al. 2019): the noise's lag-1
+correlation is estimated from the plain block-CV fit's residuals (sign correlation, corrected
+for the smoother's imprint against iid and 50 %-overlap reference noise) and the ring is used
+only above 0.2, and refused if it then picks a flat field (s ≥ 1e5: lattice-scale signal,
+not noise) (`residual_lag1_rho`, `cv_buffer`, `smoothing_selection` `hblock_cv` vs
+`block_cv`); on the synthetic slide it reads 0.06–0.09 and stays off, where it had raised the
+field error ~50 %. It has no TRE dead
 zone, weights a control by `1/σ²` when it carries `sigma` (else 1), fills unmeasured tiles
 from the smoother, and reports the field's Lipschitz constant and min `det(I + J)` as a fold
 certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field.
@@ -310,7 +317,10 @@ residuals binned by peak ratio on folds 0/2/4 and scores it on the disjoint fold
 (`coverage_1sigma`, `rms_error_over_rms_sigma`), re-solves once at `w = 1/σ²` with the same
 smoothing parameter, re-indexes the field to the moving frame STITCH evaluates it in (fixed
 point iterated to 1e-3 px, residual reported as `reindex_residual_px`), certifies folds on the
-cubic interpolant itself (Jacobian every stride/4), and writes a cubic B-spline mesh. The per-tile median of the
+cubic interpolant itself (Jacobian every stride/4), and writes a cubic B-spline mesh. STITCH
+inverts it by the fixed point `v = u − F(v)` iterated per point to a 1e-3 px step (cap 50,
+logged, and a WARNING if the cap is hit) rather than a fixed 3 steps, which left up to 12.5 px
+at the certificate's edge L = 0.5 (Phase 5e). The per-tile median of the
 vectors is still written as the tile's `dx`/`dy`/`tre` for the TRE heatmap; the correlation
 `error` is recorded but gates nothing. `legacy`, `robust` and the one-point-per-tile path were
 deleted with their parameters; SOLVE refuses a control JSON without `vectors`.

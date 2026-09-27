@@ -22,11 +22,14 @@ slide-global vector lattice REG_TILE measures (``drape.vector_grid``):
    ``1.4826 MAD``, and take their cutoffs from chi-square with 2 dof (``HUBER_C``,
    ``BISQUARE_C``).
 3. **s chosen once, from the data** -- spatial block cross-validation (5 folds of 3x3-node
-   patches; ``block_cv``) when there are >= 25 valid nodes, GCV below that; fewer nodes
-   degrade to affine-only (3-5), translation-only (1-2) or no mesh (0). True h-block CV
-   (Burman, Chow & Nolan 1994: a buffer ring around each patch, left out of training and
-   not scored) is one constant away (``CV_BUFFER``) and off by measurement -- the vector
-   errors barely correlate at lag 1 (see the constants).
+   patches) when there are >= 25 valid nodes, GCV below that; fewer nodes degrade to
+   affine-only (3-5), translation-only (1-2) or no mesh (0). Whether the held-out patches
+   get a 1-cell buffer ring (true h-block CV, Burman, Chow & Nolan 1994; ``hblock_cv``) or
+   not (``block_cv``) is decided from the data, as Valavi et al. size the buffer from the
+   residuals' spatial autocorrelation: the ring is used only when the lag-1 noise
+   correlation estimated from the plain block-CV fit's robust-weighted residuals exceeds
+   ``CV_BUFFER_RHO`` (reported as ``residual_lag1_rho`` and ``cv_buffer``; see the
+   constants).
 4. **sigma calibration** -- per-vector sigma from block held-out residuals binned by peak
    ratio, calibrated on folds 0/2/4 and scored (``coverage_1sigma``,
    ``rms_error_over_rms_sigma``, over the vectors the robust fit kept) on the disjoint
@@ -198,25 +201,56 @@ SIGMA_FLOOR_PX = 0.1
 AFFINE_ITERATIONS = 10
 ROBUST_ITERATIONS = 6
 # Block cross-validation: K folds of 3x3-cell patches; a held-out patch is left out of the
-# training fit and its cells are scored. Around each patch there can be a CV_BUFFER-cell
-# ring that is ALSO left out of training but not scored -- true h-block CV (Burman, Chow &
-# Nolan 1994), for errors correlated between neighbouring vectors: without the ring the
-# cells just outside a patch carry part of the held-out cells' error into the prediction,
-# and CV undersmooths (De Brabanter et al. 2011). ``_block_cv_select(buffer=1)`` does that,
-# and on noise correlated over ~1 cell it picks s ~1000x larger and a 35 % smaller error
-# (test_hblock_cv_with_a_buffer_ring_does_not_undersmooth_correlated_noise).
+# training fit and its cells are scored. Around each patch there can be a 1-cell buffer ring
+# that is ALSO left out of training but not scored -- true h-block CV (Burman, Chow & Nolan
+# 1994), for errors correlated between neighbouring vectors: without the ring the cells just
+# outside a patch carry part of the held-out cells' error into the prediction, and CV
+# undersmooths (De Brabanter et al. 2011). On noise correlated over ~1 cell the ring picks s
+# ~1000x larger and a 35 % smaller error
+# (test_hblock_cv_with_a_buffer_ring_does_not_undersmooth_correlated_noise). Where the errors
+# do NOT correlate the ring only costs: on the 8192^2 synthetic slide (Hann-windowed, 50 %
+# overlap, error lag-1 correlation 0.01-0.07) its 5x5 holes turn the CV into an
+# extrapolation problem and the field error rose ~50 % (median 0.13-0.15 -> 0.20-0.22 px).
 #
-# The DEFAULT is no ring, by measurement: Burman's h is the lag at which the errors
-# decorrelate, and REG_TILE's vector errors on the 8192^2 synthetic slide (Hann-windowed,
-# 50 % overlap) correlate at only 0.01-0.07 at lag 1 (seeds 0/1, base and +100 px). There
-# the ring's 5x5 holes turn the CV into an extrapolation problem, it picks the smallest s
-# (interpolation) in 3 of 4 runs and the field error rises ~50 % (median 0.13-0.15 ->
-# 0.20-0.22 px). The selection is labelled ``block_cv`` accordingly, ``hblock_cv`` only
-# when CV_BUFFER > 0 -- the label always says which one ran.
+# So the ring is chosen per slide, as Valavi et al. (2019) size the buffer from the
+# residuals' spatial autocorrelation. Plain block CV selects s first (the initial fit); the
+# lag-1 correlation of the noise between 4-neighbour nodes is estimated from that fit's
+# robust-weighted residuals (``_noise_lag1_rho``); above CV_BUFFER_RHO the h-block
+# selection (1-cell ring) re-selects s, otherwise the plain choice stands.
+#
+# The raw residual correlation cannot be thresholded as it is: the residual is (I - H) e, and
+# the smoother's high-pass imprint dominates it. Measured on 48x48 lattices, iid noise reads
+# -0.13 at plain CV's s, and noise with true lag-1 0.58 reads -0.16 because plain CV then
+# interpolates (s at the grid floor) and whitens it -- the very failure the ring exists for.
+# So the same statistic is taken on two reference noises pushed through the SAME fit
+# (weights, s): iid noise (lag-1 0) and a 2x2 box average of it, which is exactly the linear
+# 50 %-overlap window model (lag-1 0.5, diagonal 0.25, 0 beyond; solve NOTES S4); the
+# estimate is the observed value placed linearly between the two, scaled to that 0 .. 0.5.
+# The statistic is the sign correlation (Sheppard: P(same sign) = 1/2 + arcsin(rho) / pi),
+# not the product moment, so a single lattice-scale FEATURE left in the residuals -- a
+# 3-cell bump an interpolating fit leaves as a large local residual -- does not read as
+# correlated noise: measured on the bump test's 10x10 lattice 0.02-0.12 (product moment
+# 0.43-0.55, which would have smoothed the bump away). On 48x48 lattices: iid -0.04, true
+# 0.10 -> 0.05, 0.58 -> 0.52, 0.77 -> 1.0.
+#
+# CV_BUFFER_RHO = 0.2: the linear 50 %-overlap model (research/drape-papers/oa/solve/NOTES.md
+# S4) predicts 0.5, far above it, while the
+# Hann-windowed vectors REG_TILE actually emits correlate at 0.01-0.07 against the truth,
+# far below it -- so the ring stays off on those slides, where it cost ~50 % field error.
+#
+# The residual cannot tell correlated noise from lattice-scale SIGNAL an interpolating fit
+# leaves behind everywhere (a wave of ~6 nodes period read 1.3-1.4 on a 15x15 lattice). The
+# ring's own choice can: there it hides a whole period, and h-block CV picks the flattest
+# field on the grid (s = 1e6; the wave is lost, field error 0.17 -> 2.1 px on
+# tests/test_tiled_pipeline.py's local-deformation slide). So a ring whose s reaches
+# CV_RING_MAX_LOG10_S -- a field with no local structure left -- is refused and plain block
+# CV stands (logged). On correlated noise the ring's s is interior (0.56 on the 48x48 tests).
+CV_BUFFER_RHO = 0.2
+CV_RING_MAX_LOG10_S = 5.0
+CV_BUFFER_RING = 1
+CV_LABELS = {0: "block_cv", CV_BUFFER_RING: "hblock_cv"}
 CV_FOLDS = 5
 CV_BLOCK = 3
-CV_BUFFER = 0
-CV_LABEL = "hblock_cv" if CV_BUFFER > 0 else "block_cv"
 # log10 s candidates. GCV scans the fine grid; block CV scans the coarse one and then
 # refines by +-0.25 around its best (each CV candidate costs K fits, each GCV one fit).
 LOG10_S_FINE = np.arange(-4.0, 6.0 + 1e-9, 0.25)
@@ -407,7 +441,7 @@ def _cv_folds(W, k=CV_FOLDS, block=CV_BLOCK):
     return order[bid] % k
 
 
-def _cv_split(folds, f, valid, buffer=CV_BUFFER):
+def _cv_split(folds, f, valid, buffer=0):
     """``(scored, excluded)`` for fold ``f``: the held-out cells and everything not trained on.
 
     ``scored`` is the fold's valid cells; ``excluded`` adds the ``buffer``-cell ring around
@@ -424,7 +458,7 @@ def _cv_split(folds, f, valid, buffer=CV_BUFFER):
     return valid & in_fold, excluded
 
 
-def _block_cv_errors(R, W, Lam, log10_grid=CV_LOG10_S, buffer=CV_BUFFER):
+def _block_cv_errors(R, W, Lam, log10_grid=CV_LOG10_S, buffer=0):
     """Held-out error norm per cell and per ``s``, over block-CV folds.
 
     Returns an array ``(len(log10_grid), ny, nx)``: for each valid cell, the norm of
@@ -462,11 +496,11 @@ def _huber_losses(E, W, c):
     return np.asarray(out)
 
 
-def _block_cv_select(R, W, Lam, coarse=None, buffer=CV_BUFFER):
+def _block_cv_select(R, W, Lam, coarse=None, buffer=0):
     """``log10 s`` by block CV: coarse scan, then a +-``CV_REFINE`` refinement.
 
-    ``buffer`` is the h-block ring (``CV_BUFFER``, default 0: plain spatial-block CV; 1:
-    true h-block CV -- see the constants for why the default is 0).
+    ``buffer`` is the h-block ring (0: plain spatial-block CV; 1: true h-block CV --
+    ``_dctpls_core`` picks it per slide, see the constants).
 
     The score is the weighted mean Huber loss of the held-out errors. A squared loss
     would let one wildly wrong vector (large held-out error at every ``s``) steer the
@@ -495,7 +529,77 @@ def _block_cv_select(R, W, Lam, coarse=None, buffer=CV_BUFFER):
     return float(10 ** cand[j]), errs[j]
 
 
-def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
+def _sign_lag1(E, W):
+    """Lag-1 sign correlation of residual vectors ``E`` between 4-neighbour nodes.
+
+    Over both components and both lattice directions, pairs of nodes with ``W > 0``:
+    ``sin(pi (P(same sign) - 1/2))``, which is the correlation for a Gaussian pair
+    (Sheppard) and is bounded by one sign per node however large a residual is. ``None``
+    without a pair.
+    """
+    ok = (np.asarray(W) > 0) & np.all(np.isfinite(E), axis=-1)
+    same = total = 0
+    for a, b, m in (
+        (E[:, :-1], E[:, 1:], ok[:, :-1] & ok[:, 1:]),
+        (E[:-1], E[1:], ok[:-1] & ok[1:]),
+    ):
+        p = np.sign(a[m] * b[m])
+        same += int((p > 0).sum())
+        total += int((p != 0).sum())
+    if total == 0:
+        return None
+    return float(np.sin(np.pi * (same / total - 0.5)))
+
+
+def _noise_lag1_rho(R, W, Lam, s, Z, Wr):
+    """Lag-1 correlation of the NOISE behind the fit ``Z`` of ``R``, imprint-corrected.
+
+    ``_sign_lag1`` of the residual, placed between the same statistic on iid noise (0) and
+    on the 50 %-overlap window model (0.5), each fitted with the same weights ``W * Wr``
+    and ``s`` (see ``CV_BUFFER_RHO``). ``None`` when the fit cannot tell the two references
+    apart (they read within 0.05 of each other) or a statistic is undefined.
+    """
+    Wf = W * Wr
+    obs = _sign_lag1(R - Z, Wf)
+    x = np.random.default_rng(0).normal(0.0, 1.0, (W.shape[0] + 1, W.shape[1] + 1, 2))
+    white = x[:-1, :-1]
+    box = (x[:-1, :-1] + x[1:, :-1] + x[:-1, 1:] + x[1:, 1:]) / 2.0
+    r_white = _sign_lag1(white - _pls_fit(white, Wf, Lam, s), Wf)
+    r_box = _sign_lag1(box - _pls_fit(box, Wf, Lam, s), Wf)
+    if obs is None or r_white is None or r_box is None or r_box - r_white < 0.05:
+        return None
+    return 0.5 * (obs - r_white) / (r_box - r_white)
+
+
+def _select_s_adaptive(R, W, Lam):
+    """``(s, held-out errors, buffer, rho, (Z, Wr) or None)`` -- plain block CV, then the
+    h-block ring only if the noise correlates (``CV_BUFFER_RHO``) and the ring's ``s`` is
+    below ``CV_RING_MAX_LOG10_S``.
+
+    The robust fit at the plain ``s`` is returned when that ``s`` stands, so it is not
+    recomputed. ``None`` when block CV has no fold.
+    """
+    plain = _block_cv_select(R, W, Lam, buffer=0)
+    if plain is None:
+        return None
+    s0, e0 = plain
+    Z0, Wr0 = _robust_pls(R, W, Lam, s0)
+    rho = _noise_lag1_rho(R, W, Lam, s0, Z0, Wr0)
+    if rho is not None and rho > CV_BUFFER_RHO:
+        ring = _block_cv_select(R, W, Lam, buffer=CV_BUFFER_RING)
+        if ring is not None and np.log10(ring[0]) < CV_RING_MAX_LOG10_S:
+            return ring[0], ring[1], CV_BUFFER_RING, rho, None
+        if ring is not None:
+            logger.info(
+                f"h-block CV refused: lag-1 noise correlation {rho:.2f} > "
+                f"{CV_BUFFER_RHO}, but the ring chose s = {ring[0]:.3g} (>= "
+                f"1e{CV_RING_MAX_LOG10_S:g}, a flat field): the residual structure is "
+                "lattice-scale signal the ring hides, not noise; plain block CV kept"
+            )
+    return s0, e0, 0, rho, (Z0, Wr0)
+
+
+def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None, cv_buffer=0):
     """Robust affine + robust DCT-PLS on a regular lattice.
 
     ``Y`` is ``(ny, nx, 2)`` observations, ``W0`` prior weights (0 = no data),
@@ -511,6 +615,8 @@ def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
     has uniform weights, mean 1, where the two agree). ``internals``, when a dict, receives
     the affine field, the residual ``R``, the eigenvalues, the normalised weights and the
     chosen ``s`` -- what the sigma calibration needs to re-fit held-out folds at that ``s``.
+    ``cv_buffer`` is the ring the ``s_fixed`` path scores its held-out error with (the one
+    the first solve chose); a selecting solve decides it itself (``_select_s_adaptive``).
     """
     Y = np.asarray(Y, dtype=float)
     W0 = np.asarray(W0, dtype=float)
@@ -524,6 +630,8 @@ def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
         "smoothing_s": None,
         "smoothing_selection": "none",
         "holdout_rmse_px": None,
+        "residual_lag1_rho": None,
+        "cv_buffer": None,
     }
     if n_valid == 0:
         return np.zeros((ny, nx, 2)), info
@@ -550,22 +658,29 @@ def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
     # 0.28 px for one selection. Robustness in the selection comes from its loss instead.
     # The sigma re-solve (s_fixed) does not scan again either.
     wbar = float(W0n[valid].mean())
+    fitted = None
     if s_fixed is not None:
         s = float(s_fixed) * wbar
         selection = "fixed"
         e_held = None
         if n_valid >= MIN_CV_CELLS:
-            E = _block_cv_errors(R, W0n, Lam, np.array([np.log10(s)]))
+            E = _block_cv_errors(R, W0n, Lam, np.array([np.log10(s)]), buffer=cv_buffer)
             e_held = None if E is None else E[0]
+            info["cv_buffer"] = int(cv_buffer)
     else:
-        picked = _block_cv_select(R, W0n, Lam) if n_valid >= MIN_CV_CELLS else None
+        picked = _select_s_adaptive(R, W0n, Lam) if n_valid >= MIN_CV_CELLS else None
         if picked is not None:
-            s, e_held = picked
-            selection = CV_LABEL
+            s, e_held, buffer, rho, fitted = picked
+            selection = CV_LABELS[buffer]
+            info["cv_buffer"] = int(buffer)
+            info["residual_lag1_rho"] = None if rho is None else float(rho)
         else:
             s, e_held = _gcv_s(R, W0n, Lam), None
             selection = "gcv"
-    Z, Wr = _robust_pls(R, W0n, Lam, s)
+    if fitted is not None:
+        Z, Wr = fitted
+    else:
+        Z, Wr = _robust_pls(R, W0n, Lam, s)
     rmse = None
     if e_held is not None:
         held = ~np.isnan(e_held)
@@ -579,7 +694,16 @@ def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
     info["holdout_rmse_px"] = rmse
     info["n_downweighted"] = int(np.sum(Wr[valid] < 0.1))
     if internals is not None:
-        internals.update({"R": R, "Lam": Lam, "W0n": W0n, "s": float(s), "Wr": Wr})
+        internals.update(
+            {
+                "R": R,
+                "Lam": Lam,
+                "W0n": W0n,
+                "s": float(s),
+                "Wr": Wr,
+                "cv_buffer": info["cv_buffer"],
+            }
+        )
     return aff + Z, info
 
 
@@ -667,16 +791,17 @@ def _lattice_from_vectors(controls, max_disp):
     return grid_x, grid_y, Y, W0, PR, counts, lattice
 
 
-def _block_heldout(R, W, Lam, s):
+def _block_heldout(R, W, Lam, s, buffer=0):
     """Held-out residual VECTORS ``fit - obs`` per valid node at a fixed ``s`` (block CV).
 
-    Same folds and buffer ring as the ``s`` selection. Returns ``(E, folds)``.
+    Same folds as the ``s`` selection; pass it the selection's ``buffer`` ring.
+    Returns ``(E, folds)``.
     """
     folds = _cv_folds(W)
     valid = W > 0
     E = np.full(W.shape + (2,), np.nan)
     for f in range(CV_FOLDS):
-        hold, excluded = _cv_split(folds, f, valid)
+        hold, excluded = _cv_split(folds, f, valid, buffer)
         Wt = np.where(excluded, 0.0, W)
         if not hold.any() or not (Wt > 0).any():
             continue
@@ -866,6 +991,8 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
             "smoothing_s": None,
             "smoothing_selection": "none",
             "holdout_rmse_px": None,
+            "residual_lag1_rho": None,
+            "cv_buffer": None,
             "smoothing_s_effective": None,
             "sigma_calibration": None,
             "sigma_calibration_skipped": "no lattice node",
@@ -887,9 +1014,15 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
     field, info = _dctpls_core(Y, W0, grid_x, grid_y, internals=internals)
     calibration, scores, why = None, None, None
     valid = W0 > 0
-    if "s" in internals and info["smoothing_selection"] == CV_LABEL:
+    selection = info["smoothing_selection"]
+    if "s" in internals and selection in CV_LABELS.values():
+        buffer = internals["cv_buffer"]
         E, folds = _block_heldout(
-            internals["R"], internals["W0n"], internals["Lam"], internals["s"]
+            internals["R"],
+            internals["W0n"],
+            internals["Lam"],
+            internals["s"],
+            buffer=buffer,
         )
         sigma, bins, scores = _calibrate_sigma(
             PR, valid, E, folds, inlier=internals["Wr"] >= 0.1
@@ -898,11 +1031,14 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
             why = bins
         else:
             calibration = bins
-            s_chosen = info["smoothing_s"]
+            s_chosen, rho = info["smoothing_s"], info["residual_lag1_rho"]
             W1 = np.where(valid, 1.0 / np.where(valid, sigma, 1.0) ** 2, 0.0)
             # s is chosen ONCE: the re-solve reuses it (in mean-weight units), no re-scan
-            field, info = _dctpls_core(Y, W1, grid_x, grid_y, s_fixed=s_chosen)
-            info["smoothing_selection"] = CV_LABEL
+            field, info = _dctpls_core(
+                Y, W1, grid_x, grid_y, s_fixed=s_chosen, cv_buffer=buffer
+            )
+            info["smoothing_selection"] = selection
+            info["residual_lag1_rho"] = rho
     else:
         why = (
             f"smoothing chosen by {info['smoothing_selection']}, not block CV "
@@ -922,6 +1058,8 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
         "smoothing_s": info["smoothing_s"],
         "smoothing_selection": info["smoothing_selection"],
         "holdout_rmse_px": info["holdout_rmse_px"],
+        "residual_lag1_rho": info["residual_lag1_rho"],
+        "cv_buffer": info["cv_buffer"],
         "smoothing_s_effective": info.get("smoothing_s_effective"),
         "sigma_calibration": calibration,
         "sigma_calibration_skipped": why,

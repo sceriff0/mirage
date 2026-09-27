@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **DRAPE Phase 5e fixes** (`research/drape-step-support-oa-2026-09-27.md`). STITCH's inverse
+  map iterates each point's fixed point to a 1e-3 px step (cap 50) instead of a fixed 3 steps,
+  and logs the achieved step, warning when the cap is hit (at L = 0.45, |F| ≈ 90 px: 9.2 px
+  error before, 3e-4 px after). SOLVE's h-block buffer ring is chosen per slide from the
+  imprint-corrected lag-1 noise correlation of the plain block-CV residuals (ring above 0.2,
+  refused when it would choose a flat field, s >= 1e5; new report keys `residual_lag1_rho`,
+  `cv_buffer`). COARSE's 3° sweep step at σ = 1 px is
+  kept, now backed by a measured step-vs-blur table and a test; the sweep is described as
+  *globally* normalised cross-correlation.
+
 - **STARE is renamed DRAPE** (Distributed Robust Alignment by Piecewise Estimation). The
   package moved from `packages/stare` to `packages/drape` and is now `drape-registration`
   2.0.0 (import `drape`, CLI `drape {coarse,reg-tile,solve,stitch,register}`); there is no

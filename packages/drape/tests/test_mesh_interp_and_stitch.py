@@ -21,12 +21,12 @@ import json
 
 import numpy as np
 import pytest
-from drape import solve
+from drape import solve, warp
 from drape.manifest import build_manifest, slide_entry
 from drape.mesh_field import MeshField, resample_bilinear
 from drape.stage_warp import STAGE_REFINED, make_warper
 from drape.stages import stitch
-from drape.warp import _invert, source_coords
+from drape.warp import _invert, new_inverse_stats, source_coords
 from scipy.ndimage import map_coordinates
 
 S = 128
@@ -178,9 +178,12 @@ def test_the_sub_grid_inverse_is_within_bound_of_the_exact_field(interp):
     extent = int(S * (n + 1))
     q = np.random.default_rng(3).integers(0, extent, (10000, 2))
     stitched = np.array(
-        [source_coords(M0, mesh, (1, 1), (int(x), int(y)), 3, h)[0, 0] for x, y in q]
+        [
+            source_coords(M0, mesh, (1, 1), (int(x), int(y)), field_step=h)[0, 0]
+            for x, y in q
+        ]
     )
-    exact = _invert(M0, mesh, q.astype(float), 3)
+    exact = _invert(M0, mesh, q.astype(float))
     sub = np.hypot(*(stitched - exact).T)
     # a bilinear mesh adds h |jump u'| / 4 at its cell edges (0.013 px measured): only the
     # cubic field (the one SOLVE writes) is held to the h^2/8 figure
@@ -196,9 +199,102 @@ def test_a_window_of_the_sub_grid_map_equals_the_same_pixels_of_a_larger_window(
     """Global sub-grid nodes: output tiles share nodes, so there is no seam at a tile edge."""
     gx, gy, disp, _r = _solved(12, "cubic")
     mesh = MeshField(gx, gy, disp, interp="cubic")
-    big = source_coords(M0, mesh, (300, 260), (40, 70), 3, 8)
-    small = source_coords(M0, mesh, (37, 53), (101, 133), 3, 8)
+    big = source_coords(M0, mesh, (300, 260), (40, 70), field_step=8)
+    small = source_coords(M0, mesh, (37, 53), (101, 133), field_step=8)
     assert np.abs(big[133 - 70 : 170 - 70, 101 - 40 : 154 - 40] - small).max() < 1e-9
+
+
+# ── the inverse map runs to a tolerance ───────────────────────────────────────
+def _contraction_mesh(lip, offset=(100.0, 0.0), ctr=512.0):
+    """A bilinear lattice holding F(v) = offset + lip * rot90 (v - ctr): Lipschitz ``lip``.
+
+    Linear, so the bilinear mesh is exact inside the lattice and the fixed point has a closed
+    form: (I + B) v = u - offset + B ctr. The skew B contracts the iteration at exactly
+    ``lip`` per step -- the worst case the certificate allows at ``lip`` < 0.5.
+    """
+    g = np.arange(-512.0, 1536.0 + 1, 64.0)
+    GX, GY = np.meshgrid(g, g)
+    B = lip * np.array([[0.0, -1.0], [1.0, 0.0]])
+    rel = np.stack([GX - ctr, GY - ctr], axis=-1)
+    disp = np.asarray(offset) + rel @ B.T
+    return MeshField(g, g, disp, interp="bilinear"), B, np.asarray(offset), ctr
+
+
+def _fixed_point(u, B, offset, ctr):
+    rhs = u - offset + (B @ np.array([ctr, ctr]))
+    return np.linalg.solve(np.eye(2) + B, rhs.T).T
+
+
+def test_the_inverse_of_a_certificate_edge_field_converges_to_tolerance():
+    """L = 0.45, |F| ~ 100 px: inside SOLVE's fold certificate (L < 0.5). Three fixed-point
+    steps (the pre-2026-09-27 hard-coded count) leave ~0.45^3 x 100 = 9 px; the loop runs to
+    the tolerance and records how far it got (field NOTES F2c)."""
+    mesh, B, off, ctr = _contraction_mesh(0.45)
+    m0 = np.eye(3)
+    out = source_coords(m0, mesh, (32, 32), (480, 490))
+    ys, xs = np.mgrid[490:522, 480:512]
+    u = np.column_stack([xs.ravel(), ys.ravel()]).astype(float)
+    err = np.hypot(*(out.reshape(-1, 2) - _fixed_point(u, B, off, ctr)).T)
+    assert err.max() < 1e-2, err.max()
+    stats = new_inverse_stats()
+    _invert(m0, mesh, u, stats=stats)
+    assert stats["inverse_cap_hits"] == 0
+    assert stats["inverse_residual_px"] < warp.INVERSE_TOL_PX
+    assert stats["inverse_iterations_max"] > 3
+
+
+def test_a_small_field_still_inverts_in_a_few_iterations():
+    """SOLVE's own meshes (L ~ 0.02) stop long before the cap: a handful of steps."""
+    gx, gy, disp, _r = _solved(12, "cubic")
+    mesh = MeshField(gx, gy, disp, interp="cubic")
+    stats = new_inverse_stats()
+    source_coords(M0, mesh, (256, 256), (300, 300), field_step=8, stats=stats)
+    assert stats["inverse_cap_hits"] == 0
+    assert stats["inverse_iterations_max"] <= 5, stats
+
+
+def test_a_field_outside_the_certificate_hits_the_cap_and_says_so():
+    """L > 1 is not a contraction: the loop stops at the cap and records it, never hangs."""
+    mesh, *_ = _contraction_mesh(1.2, offset=(10.0, 0.0))
+    stats = new_inverse_stats()
+    _invert(np.eye(3), mesh, np.array([[500.0, 520.0]]), stats=stats)
+    assert stats["inverse_cap_hits"] == 1
+    assert stats["inverse_iterations_max"] == warp.INVERSE_MAX_ITERATIONS
+    assert stats["inverse_residual_px"] >= warp.INVERSE_TOL_PX
+
+
+def test_the_stitch_warns_when_the_inverse_hit_the_cap(caplog):
+    """stream_tiles accumulates the record over tiles; a capped inverse is a WARNING.
+
+    L = 1 exactly (a skew): the fixed-point error neither shrinks nor grows, so the source
+    boxes stay on the image and every tile is warped -- and none converges.
+    """
+    import logging
+
+    mesh, *_ = _contraction_mesh(1.0, offset=(10.0, 0.0), ctr=32.0)
+    src = np.ones((1, 64, 64), np.float32)
+    stats = new_inverse_stats()
+    list(
+        stitch.stream_tiles(
+            src, np.eye(3), mesh, 8, 64, 64, 32, np.float32, stats=stats
+        )
+    )
+    assert stats["inverse_calls"] == 4 and stats["inverse_cap_hits"] == 4
+    with caplog.at_level(logging.INFO):
+        stitch.log_inverse(stats)
+    assert any(
+        r.levelno == logging.WARNING and "cap" in r.message for r in caplog.records
+    )
+    good = new_inverse_stats()
+    mesh, *_ = _contraction_mesh(0.1, offset=(10.0, 0.0), ctr=32.0)
+    list(
+        stitch.stream_tiles(src, np.eye(3), mesh, 8, 64, 64, 32, np.float32, stats=good)
+    )
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        stitch.log_inverse(good)
+    assert good["inverse_calls"] == 4 and good["inverse_cap_hits"] == 0
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
 
 
 # ── the resampler ──────────────────────────────────────────────────────────────
