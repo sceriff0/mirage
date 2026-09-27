@@ -28,7 +28,8 @@ logger = get_logger(__name__)
 # (stare.warp.source_coords). Evaluating the mesh at every pixel of every channel was 74 % of
 # STITCH on a 4096^2, 3-channel slide with a stride-128 mesh. At 8 px, on SOLVE's own cubic
 # meshes of the 8192^2 synthetic slide (seeds 0/1, base and +100 px), the upsampled map is
-# within 0.0015 px of the exact one at 10k random pixels (h^2/8 bound <= 0.003 px); 16 px was
+# within 0.0015 px of the exact one at 10k random pixels (the bilinear bound
+# (h^2/8)(max|u_xx| + max|u_yy|) <= 0.003 px); 16 px was
 # 0.0055 px (bound 0.0115). 8 costs ~16k field evaluations per 1024^2 tile against 1M.
 # Pinned by tests/test_tiled_warp.py.
 FIELD_STEP = 8

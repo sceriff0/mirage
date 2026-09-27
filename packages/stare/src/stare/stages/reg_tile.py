@@ -321,6 +321,9 @@ def main(argv=None) -> int:
                 "vectors": vectors,
                 "rejected": vec["rejected"],
                 "pass1": vec["pass1"],
+                # fraction of pass-2 windows whose 3-point Gaussian sub-pixel fit fell back
+                # to the parabola (a sample <= the local minimum); null: nothing correlated
+                "gauss_fallback_rate": vec.get("gauss_fallback_rate"),
             }
         )
     )

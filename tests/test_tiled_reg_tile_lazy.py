@@ -52,7 +52,8 @@ from tiled_warp import warp_image  # noqa: E402
 # The pipeline's key set, pinned EXACTLY (not with `>=`) on purpose -- a control point is a
 # published artifact and a silent extra key is how two writers drift. ref_fg / mov_fg came
 # with Phase 1 of the foreground work; lattice / vectors / rejected / pass1 with the window-
-# vector grid (stare.vector_grid). Update deliberately, naming the new keys.
+# vector grid (stare.vector_grid); gauss_fallback_rate with the Xue min-subtracted sub-pixel
+# fit (Phase 5b). Update deliberately, naming the new keys.
 CONTROL_KEYS = {
     "ix",
     "iy",
@@ -68,6 +69,7 @@ CONTROL_KEYS = {
     "vectors",
     "rejected",
     "pass1",
+    "gauss_fallback_rate",
 }
 
 

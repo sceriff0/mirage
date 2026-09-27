@@ -23,12 +23,14 @@ with a grid of window vectors, one per lattice node, the PIV/SOFIMA estimator
   resolution, and the moving crop is pulled back through it. Two passes are REQUIRED, not an
   option: with +100 px left over from COARSE a single pass keeps 3 % of windows and a 10 px
   median error, two passes 0.67 px (``research/stare-sota-review-2026-09-27.md`` Part C §6).
-* **Pass 2** at full resolution on the tile's owned nodes: whiten (subtract a sigma=3
-  Gaussian), Hann window, FFT cross-correlation, integer peak, then a **3-point Gaussian**
-  sub-pixel fit (parabolic when a sample is not positive). Measured less noisy than a x10
-  upsampled DFT and <= 0.08 px biased (``peaklock.py``, Part C §3). Per vector: the
-  **peak ratio** (peak over the highest other local maximum more than 3 px away) and the
-  **sharpness** (peak over the minimum within 5 px).
+* **Pass 2** at full resolution on the tile's owned nodes: a DoG high-pass (a sigma=3
+  Gaussian subtracted), analogous to ASHLAR's Laplacian/LoG whitening; Hann window, FFT
+  cross-correlation, integer peak, then a **3-point Gaussian** sub-pixel fit on the
+  surface minus its local minimum (Xue et al. 2014; parabolic when a sample is still not
+  positive -- the per-tile ``gauss_fallback_rate`` says how often). Measured less noisy
+  than a x10 upsampled DFT and <= 0.08 px biased (``peaklock.py``, Part C §3). Per vector:
+  the **peak ratio** (peak over the highest other local maximum more than 3 px away) and
+  the **sharpness** (``|peak|`` over ``|minimum|`` within 5 px, SOFIMA's rule).
 
 Sign convention is the control point's, unchanged: ``(dx, dy)`` is what to ADD to a moving
 coordinate (in the M0-warped frame) to reach the reference, i.e. ``ref(x) = mov(x - d)``;
@@ -52,6 +54,7 @@ __all__ = [
     "tissue_mask",
     "estimate_tile_vectors",
     "correlate_windows",
+    "peak_stats",
 ]
 
 # A window is estimated only when this fraction of it is foreground (SOFIMA max_masked=0.75).
@@ -199,26 +202,81 @@ class _Integral:
 # ── correlation ───────────────────────────────────────────────────────────────
 
 
-def _subpixel(cm, c0, cp):
-    """3-point Gaussian peak offset; parabolic when a sample is not positive."""
-    if cm > 0 and c0 > 0 and cp > 0:
-        lm, l0, lp = math.log(cm), math.log(c0), math.log(cp)
+def _subpixel(cm, c0, cp, floor=0.0):
+    """3-point Gaussian peak offset on ``c - floor``; parabolic when a sample is not positive.
+
+    ``floor`` is the local correlation minimum (Xue et al. 2014): subtracting it before the
+    log makes the three samples positive on a whitened (zero-mean, negative-lobed)
+    correlation, where the raw samples beside the peak can dip below zero and force the
+    parabolic fallback. Returns ``(offset, fell_back)``.
+    """
+    am, a0, ap = cm - floor, c0 - floor, cp - floor
+    if am > 0 and a0 > 0 and ap > 0:
+        lm, l0, lp = math.log(am), math.log(a0), math.log(ap)
         den = 2.0 * lm - 4.0 * l0 + 2.0 * lp
         off = (lm - lp) / den if den < 0 else 0.0
+        fell_back = False
     else:
         den = cm - 2.0 * c0 + cp
         off = 0.5 * (cm - cp) / den if den < 0 else 0.0
-    return float(min(max(off, -1.0), 1.0))
+        fell_back = True
+    return float(min(max(off, -1.0), 1.0)), fell_back
+
+
+def peak_stats(c, lmax=None):
+    """Sub-pixel peak and validity statistics of one ``fftshift``-ed correlation surface.
+
+    Returns ``(dx, dy, peak_ratio, sharpness, fell_back)`` or ``None`` for a non-positive
+    peak. ``dx``/``dy`` are relative to the surface centre. The sub-pixel fit is the
+    3-point Gaussian on the surface minus its minimum within ``SHARPNESS_RADIUS`` of the
+    peak (``_subpixel``); ``fell_back`` is ``True`` when either axis needed the parabola.
+    ``peak_ratio`` is the peak over the highest other local maximum more than
+    ``PEAK_EXCLUDE_RADIUS`` away; ``sharpness`` is ``|peak| / |min within
+    SHARPNESS_RADIUS|`` -- on ABSOLUTE values, as SOFIMA filters, so a negative minimum
+    (a whitened surface) cannot flip its sign or turn it into the cap.
+    """
+    from scipy.ndimage import maximum_filter
+
+    h, w = c.shape
+    if lmax is None:
+        lmax = c == maximum_filter(c, size=3, mode="wrap")
+    flat = int(np.argmax(c))
+    py, px = divmod(flat, w)
+    peak = float(c[py, px])
+    if not (peak > 0) or not np.isfinite(peak):
+        return None
+    yy = np.arange(h)[:, None]
+    xx = np.arange(w)[None, :]
+    # circular distance to the peak
+    dyy = np.minimum(np.abs(yy - py), h - np.abs(yy - py))
+    dxx = np.minimum(np.abs(xx - px), w - np.abs(xx - px))
+    d2 = dyy**2 + dxx**2
+    lo = float(c[d2 <= SHARPNESS_RADIUS**2].min())
+    oy, fy = _subpixel(float(c[(py - 1) % h, px]), peak, float(c[(py + 1) % h, px]), lo)
+    ox, fx = _subpixel(float(c[py, (px - 1) % w]), peak, float(c[py, (px + 1) % w]), lo)
+    others = c[lmax & (d2 > PEAK_EXCLUDE_RADIUS**2)]
+    second = float(others.max()) if others.size else 0.0
+    ratio = peak / second if second > 0 else RATIO_CAP
+    sharp = abs(peak) / abs(lo) if lo != 0 else RATIO_CAP
+    return (
+        (px - w // 2) + ox,
+        (py - h // 2) + oy,
+        min(ratio, RATIO_CAP),
+        min(sharp, RATIO_CAP),
+        fx or fy,
+    )
 
 
 def correlate_windows(R, M):
-    """Shift, peak ratio, sharpness and normalised error for each window pair.
+    """Shift, peak ratio, sharpness, normalised error and fallback flag per window pair.
 
     ``R``, ``M`` are ``(n, h, w)`` stacks already whitened and Hann-windowed. The circular
     cross-correlation ``c(t) = sum_x R(x) M(x - t)`` peaks at the ``t`` with
-    ``R(x) = M(x - t)``, i.e. at the control displacement ``d`` itself. Returns an ``(n, 5)``
-    array ``[dx, dy, peak_ratio, sharpness, error]``; ``error = 1 - ncc^2`` is scikit-image's
-    phase-correlation error for the same kernel. A non-positive peak gives NaN shifts.
+    ``R(x) = M(x - t)``, i.e. at the control displacement ``d`` itself. Returns an ``(n, 6)``
+    array ``[dx, dy, peak_ratio, sharpness, error, gauss_fallback]`` (``peak_stats``);
+    ``error = 1 - ncc^2`` is scikit-image's phase-correlation error for the same kernel and
+    ``gauss_fallback`` is 1.0 when the sub-pixel fit fell back to the parabola. A
+    non-positive peak gives NaN everywhere.
     """
     from scipy.fft import irfft2, rfft2
     from scipy.ndimage import maximum_filter
@@ -226,7 +284,7 @@ def correlate_windows(R, M):
     R = np.asarray(R, dtype=np.float32)
     M = np.asarray(M, dtype=np.float32)
     n, h, w = R.shape
-    out = np.full((n, 5), np.nan)
+    out = np.full((n, 6), np.nan)
     if n == 0:
         return out
     C = irfft2(
@@ -238,35 +296,13 @@ def correlate_windows(R, M):
         * (M.astype(np.float64) ** 2).sum(axis=(1, 2))
     )
     lmax = C == maximum_filter(C, size=(1, 3, 3), mode="wrap")
-    yy = np.arange(h)[:, None]
-    xx = np.arange(w)[None, :]
     for i in range(n):
-        c = C[i]
-        flat = int(np.argmax(c))
-        py, px = divmod(flat, w)
-        peak = float(c[py, px])
-        if not (peak > 0) or not np.isfinite(peak):
+        st = peak_stats(C[i], lmax[i])
+        if st is None:
             continue
-        oy = _subpixel(float(c[(py - 1) % h, px]), peak, float(c[(py + 1) % h, px]))
-        ox = _subpixel(float(c[py, (px - 1) % w]), peak, float(c[py, (px + 1) % w]))
-        # circular distance to the peak
-        dyy = np.minimum(np.abs(yy - py), h - np.abs(yy - py))
-        dxx = np.minimum(np.abs(xx - px), w - np.abs(xx - px))
-        d2 = dyy**2 + dxx**2
-        others = c[lmax[i] & (d2 > PEAK_EXCLUDE_RADIUS**2)]
-        second = float(others.max()) if others.size else 0.0
-        ratio = peak / second if second > 0 else RATIO_CAP
-        near = c[d2 <= SHARPNESS_RADIUS**2]
-        lo = float(near.min())
-        sharp = peak / lo if lo > 0 else RATIO_CAP
-        ncc = peak / energy[i] if energy[i] > 0 else 0.0
-        out[i] = [
-            (px - w // 2) + ox,
-            (py - h // 2) + oy,
-            min(ratio, RATIO_CAP),
-            min(sharp, RATIO_CAP),
-            1.0 - ncc * ncc,
-        ]
+        dx, dy, ratio, sharp, fell_back = st
+        ncc = float(C[i].max()) / energy[i] if energy[i] > 0 else 0.0
+        out[i] = [dx, dy, ratio, sharp, 1.0 - ncc * ncc, float(fell_back)]
     return out
 
 
@@ -289,7 +325,7 @@ def _correlate_boxes(ref, mov, boxes, shape):
         R = np.stack([ref[y : y + h, x : x + w] for y, x in chunk]) * han
         M = np.stack([mov[y : y + h, x : x + w] for y, x in chunk]) * han
         res.append(correlate_windows(R, M))
-    return np.concatenate(res) if res else np.zeros((0, 5))
+    return np.concatenate(res) if res else np.zeros((0, 6))
 
 
 # ── pass 1 ────────────────────────────────────────────────────────────────────
@@ -379,7 +415,7 @@ def _pass1(ref_q, mov_q, mask_q, stride):
     for n, ok in enumerate(keep):
         if not ok:
             continue
-        dx, dy, pr, _sh, _err = next(it)
+        dx, dy, pr, _sh, _err, _fb = next(it)
         iy, ix = divmod(n, len(xs))
         if np.isfinite(dx) and pr >= PEAK_RATIO_MIN and max(abs(dx), abs(dy)) <= cap:
             V[iy, ix] = [dx * QUARTER, dy * QUARTER]
@@ -433,7 +469,9 @@ def estimate_tile_vectors(ref, mov, origin, core, stride, two_pass=True):
         ``[kx, ky, cx, cy, dx, dy, peak_ratio, sharpness, fg]`` per VALID node --,
         ``rejected`` -- ``[kx, ky, cx, cy, fg, peak_ratio]`` per owned node that was not
         emitted (``peak_ratio`` null when the window was never correlated) --, ``errors``
-        (the valid vectors' normalised correlation error, same order), and ``pass1`` info.
+        (the valid vectors' normalised correlation error, same order), ``pass1`` info and
+        ``gauss_fallback_rate`` -- the fraction of pass-2 windows with a positive peak whose
+        sub-pixel fit fell back to the parabola (``None`` when no window was correlated).
     """
     from scipy.ndimage import map_coordinates
 
@@ -452,6 +490,7 @@ def estimate_tile_vectors(ref, mov, origin, core, stride, two_pass=True):
         "rejected": [],
         "errors": [],
         "pass1": {"n": 0, "n_valid": 0, "cleaning": "skipped"},
+        "gauss_fallback_rate": None,
     }
     if not kxs or not kys:
         return result
@@ -524,7 +563,10 @@ def estimate_tile_vectors(ref, mov, origin, core, stride, two_pass=True):
         )
         for y, x in boxes
     ]
-    for (kx, ky, c, f, _ry, _rx), (sx, sy, pr, sh, err), (m1x, m1y) in zip(
+    fb = res[:, 5] if len(res) else np.zeros(0)
+    fb = fb[np.isfinite(fb)]
+    result["gauss_fallback_rate"] = float(fb.mean()) if fb.size else None
+    for (kx, ky, c, f, _ry, _rx), (sx, sy, pr, sh, err, _fb), (m1x, m1y) in zip(
         meta, res, d1_mean
     ):
         if not (np.isfinite(sx) and np.isfinite(sy)) or not (pr >= PEAK_RATIO_MIN):

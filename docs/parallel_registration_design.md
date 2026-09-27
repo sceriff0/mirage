@@ -190,8 +190,9 @@ an NCC sweep over 0–360° on a 256 px tissue thumbnail, refined at the anchor 
 ORB + RANSAC only as a fallback (DISK + LightGlue from v1.0.0 to 2026-09-27) — because
 inter-cycle repositioning can carry any rotation, including a 180° flip; SOLVE's robust affine
 absorbs residual scale/shear; after M₀ the per-tile residual is
-near-pure-translation, so REG_TILE uses **phase-correlation** (ASHLAR's whitened, Hann-windowed
-`phase_cross_correlation`) — cheapest possible, no keypoints needed.
+near-pure-translation, so REG_TILE uses plain **FFT cross-correlation** of Hann-windowed crops
+after a DoG high-pass (a Gaussian σ=3 subtracted), analogous to ASHLAR's Laplacian/LoG
+whitening — cheapest possible, no keypoints needed.
 
 **Memory, per step — and the knob that controls each.** *(This heading used to read "memory
 sanity-check (8 GB is generous)"; COARSE broke that premise, see below.)* This table
@@ -285,8 +286,14 @@ hard-zeroes sub-gate vectors and those zeros poison the median test; a first-ord
 penalty is not affine-invariant and shrinks M0's residual rotation; and `1 − error` weights
 have no fixed scale, so λ means a different amount of smoothing on every dataset. `dctpls`
 removes a Huber-IRLS affine first, then smooths the residual by robust DCT-PLS (Garcia 2010,
-thin-plate penalty, bisquare weights) with the smoothing parameter chosen by h-block
-cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). It has no TRE dead
+thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block
+cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). Both robust steps
+scale a residual vector's NORM by its Rayleigh median (`median |r| / 1.1774`, not the 1-D
+`1.4826 × MAD`) and take their cutoffs from χ²₂ (Huber 2.448σ, bisquare 5.06σ): on clean
+Gaussian residuals Huber down-weights 5 %, not the 67 % the 1-D scale gave (Phase 5b,
+`research/drape-step-support-2026-09-27.md` S1). True h-block CV (a 1-cell buffer ring,
+Burman et al. 1994) is implemented but off: the vector errors correlate at only 0.01–0.07 at
+lag 1, and the ring raised the synthetic field error ~50 %. It has no TRE dead
 zone, weights a control by `1/σ²` when it carries `sigma` (else 1), fills unmeasured tiles
 from the smoother, and reports the field's Lipschitz constant and min `det(I + J)` as a fold
 certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field.
@@ -294,11 +301,16 @@ certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the fiel
 **STARE v2 (2026-09-27): the vector lattice, and dctpls only.** REG_TILE measures one window
 vector per `reg_tiled_stride` px (window `2 × stride`, 50 % overlap) on a slide-global lattice,
 foreground-masked, in two passes (quarter-resolution capture, then full resolution with a
-3-point Gaussian peak fit), keeping a vector only when its correlation peak ratio clears 1.2.
+3-point Gaussian peak fit on the correlation minus its local minimum, Xue et al. 2014, with a
+parabolic fallback whose per-tile rate is recorded as `gauss_fallback_rate`), keeping a vector
+only when its correlation peak ratio clears 1.2.
 SOLVE lays every tile's vectors on that lattice, drops those at or beyond `reg_tiled_max_disp`,
-solves them with the `dctpls` core above, calibrates each vector's σ from h-block held-out
-residuals binned by peak ratio (one re-solve at `w = 1/σ²`), re-indexes the field to the moving
-frame STITCH evaluates it in, and writes a cubic B-spline mesh. The per-tile median of the
+solves them with the `dctpls` core above, calibrates each vector's σ from block-CV held-out
+residuals binned by peak ratio on folds 0/2/4 and scores it on the disjoint folds 1/3
+(`coverage_1sigma`, `rms_error_over_rms_sigma`), re-solves once at `w = 1/σ²` with the same
+smoothing parameter, re-indexes the field to the moving frame STITCH evaluates it in (fixed
+point iterated to 1e-3 px, residual reported as `reindex_residual_px`), certifies folds on the
+cubic interpolant itself (Jacobian every stride/4), and writes a cubic B-spline mesh. The per-tile median of the
 vectors is still written as the tile's `dx`/`dy`/`tre` for the TRE heatmap; the correlation
 `error` is recorded but gates nothing. `legacy`, `robust` and the one-point-per-tile path were
 deleted with their parameters; SOLVE refuses a control JSON without `vectors`.

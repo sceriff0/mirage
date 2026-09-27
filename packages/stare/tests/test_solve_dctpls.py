@@ -93,6 +93,7 @@ def _solve(controls, max_disp=256):
     """``_dctpls_core`` on the laid-out lattice, with the jacobian the solve reports."""
     gx, gy, Y, W0, n_disp = _lay_out(controls, max_disp)
     field, info = solve._dctpls_core(Y, W0, gx, gy)
+    # the Jacobian of the bilinear interpolant (the tests here build bilinear meshes)
     jac = solve.jacobian_report(gx, gy, field)
     report = {
         **info,
@@ -151,6 +152,10 @@ def test_a_three_cell_bump_is_preserved_at_its_centre():
     A SHARP 3x3 top-hat of 3 px is, to any smoothness prior with robust weights,
     indistinguishable from a coherent cluster of wrong vectors -- the case Garcia (2011)
     designs the bisquare to reject -- so the physically meaningful bump is a smooth one.
+
+    Pinned at the DEFAULT block CV (no buffer ring). With the true h-block ring
+    (``CV_BUFFER = 1``) a sigma = 1-cell bump is hidden from every training fit and smoothed
+    away (measured 0/3 seeds here) -- one of the reasons the ring is off by default.
     """
     centre = (4 * TILE + TILE / 2, 4 * TILE + TILE / 2)
 
@@ -212,10 +217,12 @@ def test_few_valid_cells_degrade_to_a_simpler_model(n_valid, selection):
     np.testing.assert_allclose(disp, _truth(controls, fn), atol=1e-6)
 
 
-def test_hblock_cv_selects_s_on_a_large_enough_grid():
+def test_block_cv_selects_s_on_a_large_enough_grid():
     controls = _controls(8, _rotation_about_centre(8), noise=0.1)
     report = _solve(controls)[3]
-    assert report["smoothing_selection"] == "hblock_cv"
+    # the label says which CV ran: block CV by default, hblock_cv only with the ring
+    assert solve.CV_LABEL == ("hblock_cv" if solve.CV_BUFFER else "block_cv")
+    assert report["smoothing_selection"] == solve.CV_LABEL
     assert report["holdout_rmse_px"] is not None and 0 < report["holdout_rmse_px"] < 1.0
 
 
@@ -314,3 +321,137 @@ def test_on_a_coarse_4x4_grid_dctpls_ties_raw_vectors():
     # on raw bilinear to within a fraction of a percent (either side, with the noise). The
     # 1 % allowance is that tie (STARE v1's robust solver was 7x worse, not 1 %).
     assert e_dct <= 1.01 * e_raw, (e_dct, e_raw)
+
+
+# ── Phase 5b audit fixes (research/drape-step-support-2026-09-27.md, SOLVE S1-S6) ────
+def test_the_robust_scale_of_residual_norms_is_the_rayleigh_one():
+    """|r| of an isotropic Gaussian residual is Rayleigh: median(|r|) / 1.1774 is sigma."""
+    rng = np.random.default_rng(0)
+    r = np.linalg.norm(rng.normal(0, 0.7, (20000, 2)), axis=1)
+    assert solve._norm_scale(r) == pytest.approx(0.7, rel=0.03)
+    assert solve.HUBER_C == pytest.approx(2.4477, abs=1e-4)
+    assert solve.BISQUARE_C == pytest.approx(5.0569, abs=1e-4)
+
+
+def test_huber_downweights_few_clean_gaussian_residuals():
+    """On clean isotropic Gaussian residuals the Huber IRLS down-weights ~5 %, not ~67 %.
+
+    1.4826 x MAD of Rayleigh norms is ~0.66 sigma, and Huber's 1.345 on that scale cut at
+    0.89 sigma: two thirds of perfectly clean vectors were treated as outliers.
+    """
+    n = 40
+    g = 128.0 * (np.arange(n) + 1)
+    GX, GY = np.meshgrid(g, g)
+    rng = np.random.default_rng(1)
+    truth = np.stack([1.0 + 1e-3 * GX, -2.0 + 5e-4 * GY], axis=-1)
+    Y = truth + rng.normal(0, 0.5, (n, n, 2))
+    _field, _coef, wr = solve._robust_affine(Y, np.ones((n, n)), g, g)
+    frac = float(np.mean(wr < 1.0))
+    assert frac <= 0.10, frac
+
+
+def test_bisquare_rejects_almost_no_clean_gaussian_residual():
+    rng = np.random.default_rng(2)
+    R = rng.normal(0, 0.5, (40, 40, 2))
+    w = solve._bisquare(R, np.zeros_like(R), np.ones((40, 40)), s=1e6)
+    assert float(np.mean(w < 0.1)) < 0.005
+    # a real outlier among them is still rejected
+    R[5, 5] = (20.0, 0.0)
+    w = solve._bisquare(R, np.zeros_like(R), np.ones((40, 40)), s=1e6)
+    assert w[5, 5] == 0.0
+
+
+def test_with_the_ring_an_hblock_scored_cell_is_never_next_to_a_training_cell():
+    """The buffer ring: every scored cell is >= 2 lattice steps from every training cell."""
+    from scipy.ndimage import binary_dilation
+
+    W = np.ones((20, 23))
+    folds = solve._cv_folds(W)
+    for f in range(solve.CV_FOLDS):
+        scored, excluded = solve._cv_split(folds, f, W > 0, buffer=1)
+        assert scored.any()
+        training = ~excluded
+        near_scored = binary_dilation(scored, structure=np.ones((3, 3), bool))
+        assert not (near_scored & training).any(), f
+        # the ring is excluded but not scored
+        assert (excluded & ~scored).any()
+        # and without it (the default) the excluded cells are exactly the scored patch
+        plain, excl0 = solve._cv_split(folds, f, W > 0, buffer=0)
+        assert (plain == excl0).all()
+
+
+def _correlated_noise_lattice(n=48, corr_cells=0.7, sd=0.3, seed=0):
+    """A smooth field plus noise correlated over ~1 cell, as 50 %-overlap windows give."""
+    from scipy.ndimage import gaussian_filter
+
+    g = 128.0 * (np.arange(n) + 1)
+    GX, GY = np.meshgrid(g, g)
+    truth = np.stack(
+        [2 * np.sin(2 * np.pi * GY / 3000), 2 * np.cos(2 * np.pi * GX / 3000)], axis=-1
+    )
+    rng = np.random.default_rng(seed)
+    noise = rng.normal(0, 1, (n, n, 2))
+    noise = np.stack(
+        [gaussian_filter(noise[..., k], corr_cells) for k in range(2)], axis=-1
+    )
+    noise *= sd / noise.std()
+    return g, truth, truth + noise
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_hblock_cv_with_a_buffer_ring_does_not_undersmooth_correlated_noise(seed):
+    """Burman, Chow & Nolan (1994): with correlated errors, CV that trains on a held-out
+    cell's neighbours predicts the error along with the signal and picks s too small
+    (interpolation). The 1-cell ring removes the leak: larger s, smaller true error."""
+    g, truth, Y = _correlated_noise_lattice(seed=seed)
+    n = g.size
+    W = np.ones((n, n))
+    Lam = solve._dct_eigenvalues(n, n, g, g)
+    s_plain, _ = solve._block_cv_select(Y, W, Lam, buffer=0)
+    s_ring, _ = solve._block_cv_select(Y, W, Lam, buffer=1)
+    assert s_ring >= s_plain
+    assert s_ring > 100 * s_plain, (s_plain, s_ring)
+
+    def err(s):
+        return float(np.sqrt(np.mean((solve._pls_fit(Y, W, Lam, s) - truth) ** 2)))
+
+    assert err(s_ring) < 0.8 * err(s_plain), (err(s_ring), err(s_plain))
+
+
+def test_the_calibrated_resolve_reuses_s_instead_of_rescanning(monkeypatch):
+    """'s chosen once' is true: the 1/sigma^2 re-solve calls no selector."""
+    calls = []
+    real = solve._block_cv_select
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(solve, "_block_cv_select", counting)
+    fn = _rotation_about_centre(12)
+    controls = _controls(12, fn, noise=0.1)
+    gx, gy, Y, W0, _ = _lay_out(controls, 256)
+    _f, info = solve._dctpls_core(Y, W0, gx, gy)
+    assert calls == [1] and info["smoothing_selection"] == solve.CV_LABEL
+    W1 = np.where(W0 > 0, 0.25, 0.0)  # uniform weights at a different scale
+    _f2, info2 = solve._dctpls_core(Y, W1, gx, gy, s_fixed=info["smoothing_s"])
+    assert calls == [1] and info2["smoothing_selection"] == "fixed"
+    # s is in mean-weight units, so a uniform rescale of W leaves the fit unchanged
+    np.testing.assert_allclose(_f2, _f, atol=1e-6)
+    assert info2["smoothing_s"] == pytest.approx(info["smoothing_s"])
+
+
+def test_the_fold_certificate_reads_the_cubic_interpolant_not_the_nodes():
+    """An alternating node sequence: node central differences see slope 0 inside and
+    2a/h at the edge, but the interpolating cubic B-spline through it swings at 3a/h
+    between nodes. The certificate must see the interpolant's slope."""
+    h, a, n = 100.0, 20.0, 12
+    gx = h * np.arange(n)
+    gy = h * np.arange(6)
+    disp = np.zeros((gy.size, n, 2))
+    disp[..., 0] = a * (-1.0) ** np.arange(n)[None, :]
+    node = np.abs(np.gradient(disp[..., 0], gx, axis=1)).max()
+    assert node <= 2 * a / h + 1e-9  # 0.4: what node differences certify
+    r = solve.jacobian_report(gx, gy, disp, interp="cubic")
+    assert r["max_operator_norm"] == pytest.approx(3 * a / h, rel=0.02), r
+    assert r["max_operator_norm"] > solve.FOLD_CERTIFICATE_LIPSCHITZ

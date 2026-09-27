@@ -8,7 +8,8 @@ What each test pins:
   constructor (``MeshField.from_spec``), so they cannot sample different fields;
 * the stitch's sub-grid inverse map (every ``FIELD_STEP`` px, bilinearly upsampled) is within
   0.01 px of the exact per-pixel inverse, and within 0.02 px of the QC seam's exact forward
-  map, at 10k random pixels; the ``h^2/8 |u''|`` bound is < 0.01 px on the field;
+  map, at 10k random pixels; the ``(h^2/8)(max|u_xx| + max|u_yy|)`` bound is < 0.01 px on
+  the field;
 * ``resample_bilinear`` (now ``map_coordinates(order=1)``) equals the explicit four-tap form;
 * a moving point pushed through the QC seam's ``refined`` stage and pulled back out of the
   STITCHED image lands on itself within 0.05 px, for both interpolants.

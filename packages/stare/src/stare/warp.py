@@ -83,8 +83,8 @@ def source_coords(
 
     ``field_step=None`` inverts the map exactly at every pixel. An integer ``field_step`` inverts
     it only on a sub-grid every ``field_step`` px (global multiples) and bilinearly upsamples the
-    result: exact for the affine part, and for the mesh part off by at most ~``h^2/8 |u''|``
-    (a cubic mesh; a bilinear one adds ``h |jump u'| / 4`` at its cell edges) -- 0.0015 px
+    result: exact for the affine part, and for the mesh part off by at most
+    ``(h^2/8)(max|u_xx| + max|u_yy|)``, the bilinear interpolation bound (a cubic mesh; a bilinear one adds ``h |jump u'| / 4`` at its cell edges) -- 0.0015 px
     worst of 10k pixels on SOLVE's cubic meshes at the stitch's ``h = 8``
     (``stages.stitch.FIELD_STEP``; ``tests/test_tiled_warp.py`` pins it). The QC seam
     (``stage_warp``) keeps evaluating the exact field at its points.

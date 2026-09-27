@@ -108,9 +108,9 @@ def residual_displacement(ref_tile, mov_tile, upsample=10, whiten_sigma=3.0):
     empty, which is what ``tiled_reg_tile.py`` manufactures when the moving crop falls outside the
     slide. Callers must treat NaN as "reject", not as "small".
 
-    The correlation kernel mirrors ASHLAR's: **whiten** each crop with a high-pass (subtract a
-    Gaussian blur) to strip the low-frequency intensity mismatch between stains, then **Hann
-    window** to taper the non-periodic tile edges the FFT would otherwise wrap. Plain (un-phase-
+    The correlation kernel is analogous to ASHLAR's: **whiten** each crop with a DoG high-pass
+    (a sigma=3 Gaussian subtracted; ASHLAR uses a Laplacian/LoG) to strip the low-frequency
+    intensity mismatch between stains, then **Hann window** to taper the non-periodic tile edges the FFT would otherwise wrap. Plain (un-phase-
     normalised) cross-correlation is used deliberately — phase normalisation amplifies the
     high-frequency noise the whitening leaves and destabilises the sub-pixel peak on small tiles.
     """

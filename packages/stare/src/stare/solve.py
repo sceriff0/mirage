@@ -12,22 +12,32 @@ slide-global vector lattice REG_TILE measures (``stare.vector_grid``):
    displacement is a measurement, never ``[0, 0]``. Background is kept out upstream:
    REG_TILE emits only foreground-masked vectors whose peak ratio clears its floor.
 1. **robust affine** -- weighted Huber IRLS of a 6-parameter affine, subtracted. DCT-PLS's
-   null space is only a constant, so without this a residual rotation left by M0 is charged
-   as roughness and shrunk.
+   null space is only a constant (an affine is penalised through the boundary rows), so
+   without this a residual rotation left by M0 is charged as roughness and shrunk.
 2. **robust DCT-PLS** of the residual (Garcia 2010, CSDA 54:1167): a thin-plate
    (squared-Laplacian) penalty with reflective boundaries, solved by DCT; one shared
    smoothing parameter ``s`` for x and y; bisquare weights on the vector-residual norm.
-   Missing nodes are filled by the smoother, not zeroed.
-3. **s chosen from the data** -- h-block cross-validation (5 folds of 3x3-node patches,
-   Burman et al. 1994) when there are >= 25 valid nodes, GCV below that; fewer nodes
-   degrade to affine-only (3-5), translation-only (1-2) or no mesh (0).
-4. **sigma calibration** -- per-vector sigma from h-block held-out residuals binned by peak
-   ratio, then one re-solve at ``w = 1/sigma^2``.
+   Missing nodes are filled by the smoother, not zeroed. Both robust steps scale the
+   residual NORM by its Rayleigh median (``median |r| / 1.1774``), not by the 1-D
+   ``1.4826 MAD``, and take their cutoffs from chi-square with 2 dof (``HUBER_C``,
+   ``BISQUARE_C``).
+3. **s chosen once, from the data** -- spatial block cross-validation (5 folds of 3x3-node
+   patches; ``block_cv``) when there are >= 25 valid nodes, GCV below that; fewer nodes
+   degrade to affine-only (3-5), translation-only (1-2) or no mesh (0). True h-block CV
+   (Burman, Chow & Nolan 1994: a buffer ring around each patch, left out of training and
+   not scored) is one constant away (``CV_BUFFER``) and off by measurement -- the vector
+   errors barely correlate at lag 1 (see the constants).
+4. **sigma calibration** -- per-vector sigma from block held-out residuals binned by peak
+   ratio, calibrated on folds 0/2/4 and scored (``coverage_1sigma``,
+   ``rms_error_over_rms_sigma``, over the vectors the robust fit kept) on the disjoint
+   folds 1/3; then one re-solve at ``w = 1/sigma^2`` at the SAME ``s`` (in mean-weight
+   units), not a re-scan.
 5. **re-index** -- the field is re-indexed to the moving frame the stitch evaluates it in,
-   ``F(g) = D(g + F(g))``.
-6. **fold certificate** -- the field's Lipschitz constant and ``min det(I + J)`` are
-   reported, and ``fold_certificate_ok`` when the constant is below 0.5. The field is never
-   rescaled.
+   ``F(g) = D(g + F(g))``, iterated to a 1e-3 px fixed-point residual, which is reported
+   (``reindex_residual_px``).
+6. **fold certificate** -- the Lipschitz constant and ``min det(I + J)`` of the field as
+   the mesh INTERPOLATES it (sub-grid at stride/4) are reported, and
+   ``fold_certificate_ok`` when the constant is below 0.5. The field is never rescaled.
 
 History: until STARE v2 (2026-09) SOLVE also carried a ``legacy`` solver (three gates, then a
 median filter) and a ``robust`` one (gates, normalised median test, in-fill, Tikhonov), both
@@ -43,6 +53,7 @@ and the manifest record about the solve.
 from __future__ import annotations
 
 import logging
+import math
 
 import numpy as np
 
@@ -84,29 +95,63 @@ def tile_accepted(control, max_disp):
     )
 
 
-def jacobian_report(grid_x, grid_y, disp):
-    """Lipschitz and folding diagnostics of the displacement field on the grid.
+# The fold certificate samples the interpolated field every ``stride / JACOBIAN_SUBSTEPS``
+# (the cubic B-spline can overshoot BETWEEN nodes, where node differences never look), with
+# central differences of +-JACOBIAN_FD_FRACTION of a lattice step.
+JACOBIAN_SUBSTEPS = 4
+JACOBIAN_FD_FRACTION = 0.01
 
-    Finite differences of ``u`` over the (possibly non-uniform) grid give the
-    2x2 Jacobian per cell; ``max_operator_norm`` is the largest spectral norm
-    (the field's Lipschitz constant on the grid) and ``min_jacobian_det`` the
-    smallest ``det(I + J)`` (negative means a fold). A single-row or
-    single-column grid has no gradient along that axis.
+
+def _axis_samples(grid, substeps):
+    """Points every ``1/substeps`` of a node step along a 1-D ascending ``grid``."""
+    g = np.asarray(grid, dtype=float)
+    if g.size < 2:
+        return g.copy()
+    t = np.linspace(0.0, g.size - 1.0, (g.size - 1) * substeps + 1)
+    return np.interp(t, np.arange(g.size, dtype=float), g)
+
+
+def jacobian_report(grid_x, grid_y, disp, interp="bilinear"):
+    """Lipschitz and folding diagnostics of the field AS THE MESH INTERPOLATES IT.
+
+    The 2x2 Jacobian ``J = du/dx`` is evaluated on the ``interp`` interpolant
+    (``MeshField``) at a sub-grid of ``JACOBIAN_SUBSTEPS`` points per node step, by central
+    differences clamped to the lattice. ``max_operator_norm`` is the largest spectral norm
+    (the field's Lipschitz constant) and ``min_jacobian_det`` the smallest ``det(I + J)``
+    (negative means a fold); ``L < 1`` guarantees ``det(I + J) >= (1 - L)^2 > 0``. A
+    single-row or single-column grid has no gradient along that axis.
     """
-    gy = np.asarray(grid_y, dtype=float)
+    from stare.mesh_field import MeshField
+
     gx = np.asarray(grid_x, dtype=float)
-    ny, nx, _ = disp.shape
-    du_dx = np.zeros((ny, nx, 2))
-    du_dy = np.zeros((ny, nx, 2))
-    if nx > 1:
-        du_dx = np.gradient(disp, gx, axis=1)
-    if ny > 1:
-        du_dy = np.gradient(disp, gy, axis=0)
-    # J = [[dux/dx, dux/dy], [duy/dx, duy/dy]] per cell
+    gy = np.asarray(grid_y, dtype=float)
+    disp = np.asarray(disp, dtype=float)
+    if disp.size == 0:
+        return {"max_operator_norm": 0.0, "min_jacobian_det": 1.0}
+    mesh = MeshField(gx, gy, disp, interp=interp)
+    xs, ys = _axis_samples(gx, JACOBIAN_SUBSTEPS), _axis_samples(gy, JACOBIAN_SUBSTEPS)
+    X, Y = np.meshgrid(xs, ys)
+    X, Y = X.ravel(), Y.ravel()
+
+    def partial(coord, other, grid, along_x):
+        if grid.size < 2:
+            return np.zeros((coord.size, 2))
+        h = JACOBIAN_FD_FRACTION * float(np.min(np.diff(grid)))
+        hi = np.minimum(coord + h, grid[-1])
+        lo = np.maximum(coord - h, grid[0])
+        if along_x:
+            a, b = np.column_stack([hi, other]), np.column_stack([lo, other])
+        else:
+            a, b = np.column_stack([other, hi]), np.column_stack([other, lo])
+        return (mesh.displacement(a) - mesh.displacement(b)) / (hi - lo)[:, None]
+
+    du_dx = partial(X, Y, gx, True)
+    du_dy = partial(Y, X, gy, False)
+    # J = [[dux/dx, dux/dy], [duy/dx, duy/dy]] per sample
     j = np.stack(
         [
-            np.stack([du_dx[..., 0], du_dy[..., 0]], axis=-1),
-            np.stack([du_dx[..., 1], du_dy[..., 1]], axis=-1),
+            np.stack([du_dx[:, 0], du_dy[:, 0]], axis=-1),
+            np.stack([du_dx[:, 1], du_dy[:, 1]], axis=-1),
         ],
         axis=-2,
     )
@@ -119,25 +164,60 @@ def jacobian_report(grid_x, grid_y, disp):
 
 
 # ── dctpls ────────────────────────────────────────────────────────────────────
-# Huber (1964) tuning for 95 % Gaussian efficiency; 1.4826 turns a MAD into a sigma.
-HUBER_C = 1.345
-MAD_TO_SIGMA = 1.4826
-# Tukey's bisquare at 95 % efficiency, as Garcia (2010) uses for the robust weights.
-BISQUARE_C = 4.685
+# The robust scale of a 2-D residual. Every robust step below works on the NORM ``|r|`` of a
+# vector residual, and for an isotropic Gaussian residual with per-component sigma that norm
+# is Rayleigh-distributed, not Gaussian: 1.4826 x MAD (the 1-D Gaussian rule) of Rayleigh
+# norms is ~0.66 sigma, and a Huber threshold built on it down-weighted ~67 % of clean data.
+# The Rayleigh median is sigma sqrt(2 ln 2), so sigma_hat = median(|r|) / 1.1774.
+RAYLEIGH_MEDIAN = float(np.sqrt(2.0 * np.log(2.0)))  # 1.17741
+# Huber threshold on the NORM, in sigma_hat units: the 95 % point of chi-square(2 dof),
+# sqrt(-2 ln 0.05) = 2.4477, so exactly 5 % of clean isotropic Gaussian residuals are
+# down-weighted (the role 1.345 plays for a 1-D residual, whose 95 % efficiency point it is).
+HUBER_C = float(np.sqrt(-2.0 * np.log(0.05)))  # 2.44775
+# Tukey's bisquare cutoff, as Garcia (2010) uses for the robust weights, carried from 1-D to
+# the norm at the SAME tail probability: 4.685 sigma leaves P(|z| > 4.685) = 2.80e-6 of a 1-D
+# Gaussian; the chi-square(2) norm with that tail is sqrt(-2 ln 2.80e-6) = 5.0569 sigma.
+BISQUARE_C_1D = 4.685
+BISQUARE_C = float(
+    np.sqrt(-2.0 * np.log(math.erfc(BISQUARE_C_1D / math.sqrt(2.0))))
+)  # 5.0569
+
+
+def _norm_scale(r):
+    """Robust per-component sigma of 2-D residuals from their norms: ``median(|r|) / 1.1774``."""
+    r = np.asarray(r, dtype=float)
+    return float(np.median(r)) / RAYLEIGH_MEDIAN if r.size else 0.0
+
+
 # The robust scale never drops below this (px): a per-window phase-correlation vector is
 # not more precise than ~0.1 px (0.10-0.25 px measured, research peaklock.py). Without a
 # floor, a near-exact field -- or any fit at small s, whose residuals collapse toward zero
-# -- gives MAD ~ 0 and bisquare then rejects a real feature over a hundredth of a pixel.
-# With it, a disagreement under ~0.5 px (4.685 x 0.1) is never called an outlier.
+# -- gives a scale ~ 0 and bisquare then rejects a real feature over a hundredth of a pixel.
+# With it, a disagreement under ~0.5 px (5.06 x 0.1) is never called an outlier.
 SIGMA_FLOOR_PX = 0.1
 AFFINE_ITERATIONS = 10
 ROBUST_ITERATIONS = 6
-# h-block cross-validation: K folds of 3x3-cell patches (Burman et al. 1994). A 3-cell
-# patch is wider than one window's overlap, so a held-out cell's neighbours are held out
-# with it and its error is not predicted from its own (correlated) measurement.
+# Block cross-validation: K folds of 3x3-cell patches; a held-out patch is left out of the
+# training fit and its cells are scored. Around each patch there can be a CV_BUFFER-cell
+# ring that is ALSO left out of training but not scored -- true h-block CV (Burman, Chow &
+# Nolan 1994), for errors correlated between neighbouring vectors: without the ring the
+# cells just outside a patch carry part of the held-out cells' error into the prediction,
+# and CV undersmooths (De Brabanter et al. 2011). ``_block_cv_select(buffer=1)`` does that,
+# and on noise correlated over ~1 cell it picks s ~1000x larger and a 35 % smaller error
+# (test_hblock_cv_with_a_buffer_ring_does_not_undersmooth_correlated_noise).
+#
+# The DEFAULT is no ring, by measurement: Burman's h is the lag at which the errors
+# decorrelate, and REG_TILE's vector errors on the 8192^2 synthetic slide (Hann-windowed,
+# 50 % overlap) correlate at only 0.01-0.07 at lag 1 (seeds 0/1, base and +100 px). There
+# the ring's 5x5 holes turn the CV into an extrapolation problem, it picks the smallest s
+# (interpolation) in 3 of 4 runs and the field error rises ~50 % (median 0.13-0.15 ->
+# 0.20-0.22 px). The selection is labelled ``block_cv`` accordingly, ``hblock_cv`` only
+# when CV_BUFFER > 0 -- the label always says which one ran.
 CV_FOLDS = 5
 CV_BLOCK = 3
-# log10 s candidates. GCV scans the fine grid; h-block CV scans the coarse one and then
+CV_BUFFER = 0
+CV_LABEL = "hblock_cv" if CV_BUFFER > 0 else "block_cv"
+# log10 s candidates. GCV scans the fine grid; block CV scans the coarse one and then
 # refines by +-0.25 around its best (each CV candidate costs K fits, each GCV one fit).
 LOG10_S_FINE = np.arange(-4.0, 6.0 + 1e-9, 0.25)
 CV_LOG10_S = np.arange(-4.0, 6.0 + 1e-9, 0.5)
@@ -156,8 +236,9 @@ def _robust_affine(Y, W0, gx, gy, iterations=AFFINE_ITERATIONS):
     """Weighted Huber IRLS of the 6-parameter affine ``u = a + B (x, y)``.
 
     Coordinates are centred and scaled for conditioning; the returned field is in
-    pixels. ``c = 1.345 * 1.4826 * MAD`` of the vector-residual norms, re-estimated
-    every iteration. Returns ``(field (ny, nx, 2), coef (3, 2) in pixel coords,
+    pixels. ``c = HUBER_C * sigma_hat`` on the vector-residual norms, with
+    ``sigma_hat = median(|r|) / 1.1774`` (the Rayleigh median), re-estimated every
+    iteration: 5 % of clean isotropic Gaussian residuals are down-weighted. Returns ``(field (ny, nx, 2), coef (3, 2) in pixel coords,
     huber weight per valid cell)``.
     """
     GX, GY = np.meshgrid(gx, gy)
@@ -179,8 +260,7 @@ def _robust_affine(Y, W0, gx, gy, iterations=AFFINE_ITERATIONS):
         sw = np.sqrt(w0 * wr)
         coef = np.linalg.lstsq(Am * sw[:, None], Ym * sw[:, None], rcond=None)[0]
         r = np.linalg.norm(Ym - Am @ coef, axis=1)
-        mad = float(np.median(np.abs(r - np.median(r))))
-        c = HUBER_C * max(MAD_TO_SIGMA * mad, SIGMA_FLOOR_PX)
+        c = HUBER_C * max(_norm_scale(r), SIGMA_FLOOR_PX)
         wr = np.where(r <= c, 1.0, c / np.maximum(r, 1e-300))
     field = (A @ coef).reshape(GX.shape + (2,))
     # back to pixel coordinates: u = a + b (x - x0)/sc + c (y - y0)/sc
@@ -257,7 +337,7 @@ def _gcv_s(R, W, Lam, log10_grid=LOG10_S_FINE):
 
     Used only below ``MIN_CV_CELLS`` valid cells, i.e. a coarse grid of one vector per
     large tile. Deliberately NOT floored at ``s >= 1``: that floor is a patch for
-    correlated errors between 50 %-overlapping windows (Altman 1990), which h-block CV
+    correlated errors between 50 %-overlapping windows (Altman 1990), which block CV
     now handles properly on the grids where it applies. On a coarse grid the residual
     after the affine is mostly real, unresolved deformation, and the floor smooths it
     away -- measured on the 16-tile synthetic slide: 3.7 px median with the floor
@@ -285,17 +365,21 @@ def _gcv_s(R, W, Lam, log10_grid=LOG10_S_FINE):
 
 
 def _bisquare(R, Z, W0, s):
-    """Tukey bisquare weights on the studentised vector-residual norm (Garcia 2010)."""
+    """Tukey bisquare weights on the studentised vector-residual norm (Garcia 2010).
+
+    Garcia studentises a 1-D residual by ``1.4826 MAD sqrt(1 - h)``; here the residual is a
+    2-D vector, so the scale is the Rayleigh one (``_norm_scale``) and the cutoff is
+    ``BISQUARE_C`` = 5.06, the norm with the same tail probability as 4.685 in 1-D.
+    """
     t = np.sqrt(1.0 + 16.0 * s)
     h = (np.sqrt(1.0 + t) / np.sqrt(2.0) / t) ** 2  # average leverage, 2-D
     r = np.linalg.norm(R - Z, axis=-1)
     m = W0 > 0
     if not m.any():
         return np.ones_like(W0)
-    mad = float(np.median(np.abs(r[m] - np.median(r[m]))))
-    # Garcia: u = r / (1.4826 MAD sqrt(1 - h)). The floor bounds that denominator, so a
+    # Garcia: u = r / (sigma_hat sqrt(1 - h)). The floor bounds that denominator, so a
     # residual under BISQUARE_C * SIGMA_FLOOR_PX is never rejected however small s is.
-    scale = max(MAD_TO_SIGMA * mad * np.sqrt(max(1.0 - h, 0.0)), SIGMA_FLOOR_PX)
+    scale = max(_norm_scale(r[m]) * np.sqrt(max(1.0 - h, 0.0)), SIGMA_FLOOR_PX)
     u = r / scale
     return np.where(u < BISQUARE_C, (1.0 - (u / BISQUARE_C) ** 2) ** 2, 0.0)
 
@@ -311,7 +395,7 @@ def _robust_pls(R, W0, Lam, s, Wr=None, iterations=ROBUST_ITERATIONS):
     return Z, Wr
 
 
-def _hblock_folds(W, k=CV_FOLDS, block=CV_BLOCK):
+def _cv_folds(W, k=CV_FOLDS, block=CV_BLOCK):
     """Fold id per cell: 3x3-cell patches dealt round-robin (deterministic) to ``k`` folds."""
     ny, nx = W.shape
     by, bx = np.meshgrid(np.arange(ny) // block, np.arange(nx) // block, indexing="ij")
@@ -323,20 +407,38 @@ def _hblock_folds(W, k=CV_FOLDS, block=CV_BLOCK):
     return order[bid] % k
 
 
-def _hblock_cv_errors(R, W, Lam, log10_grid=CV_LOG10_S):
-    """Held-out error norm per cell and per ``s``, over h-block folds.
+def _cv_split(folds, f, valid, buffer=CV_BUFFER):
+    """``(scored, excluded)`` for fold ``f``: the held-out cells and everything not trained on.
+
+    ``scored`` is the fold's valid cells; ``excluded`` adds the ``buffer``-cell ring around
+    them (a square dilation), which the training fit ignores and nothing scores.
+    """
+    from scipy.ndimage import binary_dilation
+
+    in_fold = folds == f
+    excluded = in_fold
+    if buffer > 0:
+        excluded = binary_dilation(
+            in_fold, structure=np.ones((2 * buffer + 1, 2 * buffer + 1), dtype=bool)
+        )
+    return valid & in_fold, excluded
+
+
+def _block_cv_errors(R, W, Lam, log10_grid=CV_LOG10_S, buffer=CV_BUFFER):
+    """Held-out error norm per cell and per ``s``, over block-CV folds.
 
     Returns an array ``(len(log10_grid), ny, nx)``: for each valid cell, the norm of
-    ``fit - observation`` where the fit was made WITHOUT that cell's whole 3x3 patch;
-    NaN elsewhere. ``None`` when no fold has both held-out and training cells.
+    ``fit - observation`` where the fit was made WITHOUT that cell's whole 3x3 patch and
+    the ``buffer``-cell ring around it; NaN elsewhere. ``None`` when no fold has both
+    held-out and training cells.
     """
-    folds = _hblock_folds(W)
+    folds = _cv_folds(W)
     valid = W > 0
     E = np.full((len(log10_grid),) + W.shape, np.nan)
     any_fold = False
     for f in range(CV_FOLDS):
-        hold = valid & (folds == f)
-        Wt = np.where(hold, 0.0, W)
+        hold, excluded = _cv_split(folds, f, valid, buffer)
+        Wt = np.where(excluded, 0.0, W)
         if not hold.any() or not (Wt > 0).any():
             continue
         any_fold = True
@@ -360,29 +462,32 @@ def _huber_losses(E, W, c):
     return np.asarray(out)
 
 
-def _hblock_select(R, W, Lam, coarse=None):
-    """``log10 s`` by h-block CV: coarse scan, then a +-``CV_REFINE`` refinement.
+def _block_cv_select(R, W, Lam, coarse=None, buffer=CV_BUFFER):
+    """``log10 s`` by block CV: coarse scan, then a +-``CV_REFINE`` refinement.
+
+    ``buffer`` is the h-block ring (``CV_BUFFER``, default 0: plain spatial-block CV; 1:
+    true h-block CV -- see the constants for why the default is 0).
 
     The score is the weighted mean Huber loss of the held-out errors. A squared loss
     would let one wildly wrong vector (large held-out error at every ``s``) steer the
-    choice, so the loss is Huber with ONE scale for all candidates: ``1.345 x`` the
-    robust scale of the errors at the coarse ``s`` with the smallest median held-out
-    error. Returns ``(s, held-out errors at s)`` or ``None`` when there is no fold.
+    choice, so the loss is Huber with ONE scale for all candidates: ``HUBER_C x`` the
+    Rayleigh scale (``median / 1.1774``) of the error norms at the coarse ``s`` with the
+    smallest median held-out error. Returns ``(s, held-out errors at s)`` or ``None`` when there is no fold.
     """
     coarse = CV_LOG10_S if coarse is None else np.asarray(coarse, dtype=float)
-    E = _hblock_cv_errors(R, W, Lam, coarse)
+    E = _block_cv_errors(R, W, Lam, coarse, buffer=buffer)
     if E is None:
         return None
     held = ~np.isnan(E[0])
     med = np.array([np.median(e[held]) for e in E])
-    c = HUBER_C * max(MAD_TO_SIGMA * float(med[int(np.argmin(med))]), SIGMA_FLOOR_PX)
+    c = HUBER_C * max(float(med.min()) / RAYLEIGH_MEDIAN, SIGMA_FLOOR_PX)
     i = int(np.argmin(_huber_losses(E, W, c)))
     p = float(coarse[i])
     fine = np.array([p - CV_REFINE, p + CV_REFINE])
     fine = fine[(fine >= LOG10_S_FINE[0]) & (fine <= LOG10_S_FINE[-1])]
     cand, errs = [p], [E[i]]
     if fine.size:
-        Ef = _hblock_cv_errors(R, W, Lam, fine)
+        Ef = _block_cv_errors(R, W, Lam, fine, buffer=buffer)
         cand += list(fine)
         errs += list(Ef)
     errs = np.asarray(errs)
@@ -390,7 +495,7 @@ def _hblock_select(R, W, Lam, coarse=None):
     return float(10 ** cand[j]), errs[j]
 
 
-def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
+def _dctpls_core(Y, W0, gx, gy, s_fixed=None, internals=None):
     """Robust affine + robust DCT-PLS on a regular lattice.
 
     ``Y`` is ``(ny, nx, 2)`` observations, ``W0`` prior weights (0 = no data),
@@ -399,10 +504,13 @@ def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
     JSON-serialisable dict of what was done. Independent of how the lattice was
     built (the unit tests feed it synthetic lattices directly).
 
-    ``cv_grid`` narrows the h-block CV's coarse ``log10 s`` scan (a re-solve that already
-    knows roughly where ``s`` is). ``internals``, when a dict, receives the affine field,
-    the residual ``R``, the eigenvalues, the normalised weights and the chosen ``s`` --
-    what the sigma calibration needs to re-fit held-out folds at the same ``s``.
+    ``s_fixed`` skips the selection and solves at that ``s`` -- the re-solve at calibrated
+    weights reuses the first solve's choice. ``s`` is in units of the MEAN data weight: the
+    objective ``sum W |Z - R|^2 + s |Lap Z|^2`` is unchanged by scaling ``W`` and ``s``
+    together, so the fit runs at ``s_fixed * mean(W)`` over the valid cells (the first solve
+    has uniform weights, mean 1, where the two agree). ``internals``, when a dict, receives
+    the affine field, the residual ``R``, the eigenvalues, the normalised weights and the
+    chosen ``s`` -- what the sigma calibration needs to re-fit held-out folds at that ``s``.
     """
     Y = np.asarray(Y, dtype=float)
     W0 = np.asarray(W0, dtype=float)
@@ -440,15 +548,23 @@ def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
     # look cleaner, the selector then smooths less, more cells get dropped -- measured
     # on a 63x63 synthetic lattice, 28 % of vectors downweighted and 0.35 px against
     # 0.28 px for one selection. Robustness in the selection comes from its loss instead.
-    picked = (
-        _hblock_select(R, W0n, Lam, coarse=cv_grid) if n_valid >= MIN_CV_CELLS else None
-    )
-    if picked is not None:
-        s, e_held = picked
-        selection = "hblock_cv"
+    # The sigma re-solve (s_fixed) does not scan again either.
+    wbar = float(W0n[valid].mean())
+    if s_fixed is not None:
+        s = float(s_fixed) * wbar
+        selection = "fixed"
+        e_held = None
+        if n_valid >= MIN_CV_CELLS:
+            E = _block_cv_errors(R, W0n, Lam, np.array([np.log10(s)]))
+            e_held = None if E is None else E[0]
     else:
-        s, e_held = _gcv_s(R, W0n, Lam), None
-        selection = "gcv"
+        picked = _block_cv_select(R, W0n, Lam) if n_valid >= MIN_CV_CELLS else None
+        if picked is not None:
+            s, e_held = picked
+            selection = CV_LABEL
+        else:
+            s, e_held = _gcv_s(R, W0n, Lam), None
+            selection = "gcv"
     Z, Wr = _robust_pls(R, W0n, Lam, s)
     rmse = None
     if e_held is not None:
@@ -457,7 +573,8 @@ def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
         wh = (W0n * Wr)[held]
         if wh.sum() > 0:
             rmse = float(np.sqrt(np.sum(wh * e_held[held] ** 2) / wh.sum()))
-    info["smoothing_s"] = float(s)
+    info["smoothing_s"] = float(s) / wbar
+    info["smoothing_s_effective"] = float(s)
     info["smoothing_selection"] = selection
     info["holdout_rmse_px"] = rmse
     info["n_downweighted"] = int(np.sum(Wr[valid] < 0.1))
@@ -474,9 +591,10 @@ CAL_MAX_BINS = 8
 CAL_MIN_PER_BIN = 30
 CAL_MIN_VECTORS = 60
 CAL_SIGMA_FLOOR_PX = 0.05
-# The re-solve at calibrated weights scans log10 s only this far either side of the first
-# solve's choice (the weights change the scale of s, not its order of magnitude).
-CAL_RESCAN_HALF_WIDTH = 1.0
+# Folds of the block-CV split the sigma bins are CALIBRATED on; the rest score the coverage.
+# A coverage computed on the residuals that set sigma is near-tautological (~0.68 by
+# construction of a median-based scale); scored on disjoint folds it is a real check.
+CAL_FOLDS = (0, 2, 4)
 # median of a chi-square with 2 dof: a 2-D isotropic Gaussian residual with per-component
 # sigma has median |e|^2 = 2 ln 2 sigma^2
 _MEDIAN_CHI2_2 = 2.0 * np.log(2.0)
@@ -549,45 +667,70 @@ def _lattice_from_vectors(controls, max_disp):
     return grid_x, grid_y, Y, W0, PR, counts, lattice
 
 
-def _hblock_heldout(R, W, Lam, s):
-    """Held-out residual VECTORS ``fit - obs`` per valid node at a fixed ``s`` (h-block)."""
-    folds = _hblock_folds(W)
+def _block_heldout(R, W, Lam, s):
+    """Held-out residual VECTORS ``fit - obs`` per valid node at a fixed ``s`` (block CV).
+
+    Same folds and buffer ring as the ``s`` selection. Returns ``(E, folds)``.
+    """
+    folds = _cv_folds(W)
     valid = W > 0
     E = np.full(W.shape + (2,), np.nan)
     for f in range(CV_FOLDS):
-        hold = valid & (folds == f)
-        Wt = np.where(hold, 0.0, W)
+        hold, excluded = _cv_split(folds, f, valid)
+        Wt = np.where(excluded, 0.0, W)
         if not hold.any() or not (Wt > 0).any():
             continue
         Z = _pls_fit(R, Wt, Lam, s, tol=PLS_TOL_CV)
         E[hold] = Z[hold] - R[hold]
-    return E
+    return E, folds
 
 
-def _calibrate_sigma(PR, valid, E):
-    """Per-vector sigma from held-out residuals binned by peak ratio.
+def _calibrate_sigma(PR, valid, E, folds=None, cal_folds=CAL_FOLDS, inlier=None):
+    """Per-vector sigma from held-out residuals binned by peak ratio, scored on other folds.
 
-    Bins are peak-ratio quantiles, ``min(8, n // 30)`` of them. Per bin, sigma is the
-    robust per-component scale ``sqrt(median |e|^2 / (2 ln 2))`` (exact for an isotropic
-    Gaussian residual, insensitive to the outliers the robust fit rejects), floored at
-    0.05 px. Returns ``(sigma per node, bins, coverage_1sigma)`` or ``(None, reason, None)``.
+    Bins are peak-ratio quantiles, ``min(8, n // 30)`` of them, fitted on the residuals of
+    the ``cal_folds`` block-CV folds only. Per bin, sigma is the robust per-component scale
+    ``sqrt(median |e|^2 / (2 ln 2))`` (exact for an isotropic Gaussian residual, insensitive
+    to the outliers the robust fit rejects), floored at 0.05 px. The remaining folds, which
+    set nothing, score it: ``coverage_1sigma`` (fraction of residual components within
+    +-sigma; ideal ~0.68 for a Gaussian) and ``rms_error_over_rms_sigma`` (per-component RMS
+    residual over RMS sigma; ideal 1). ``inlier`` (optional boolean lattice) restricts the
+    SCORING to the vectors the robust fit kept, as ``holdout_rmse_px`` does: ~1 % of window
+    vectors are gross outliers the bisquare rejects, and on the synthetic slide they alone
+    push the RMS ratio to 2.5-5 while the bulk is calibrated. ``folds`` ``None`` puts every
+    node in calibration and scores nothing (``None`` for both scores).
+
+    Returns ``(sigma per node, bins, scores)`` or ``(None, reason, None)``; ``scores`` is
+    ``{"coverage_1sigma", "rms_error_over_rms_sigma", "n_scored", "calibration_folds",
+    "scoring_folds"}``.
 
     The held-out residual is measurement error PLUS the smoother's prediction error at a
-    node whose 3x3 patch was withheld, so sigma is an upper bound on measurement noise;
-    ``coverage_1sigma`` (ideal ~0.68 for a Gaussian) says how honest it is on this slide.
+    node whose patch (and its buffer ring) was withheld, so sigma is an upper bound on
+    measurement noise; the scores say how honest it is on this slide.
     """
     ok = valid & np.all(np.isfinite(E), axis=-1)
-    n = int(ok.sum())
+    if folds is None:
+        cal = ok
+        score = np.zeros_like(ok)
+        scoring = []
+    else:
+        in_cal = np.isin(folds, list(cal_folds))
+        cal, score = ok & in_cal, ok & ~in_cal
+        if inlier is not None:
+            score = score & inlier
+        scoring = sorted(set(range(CV_FOLDS)) - set(cal_folds))
+    n = int(cal.sum())
     if n < CAL_MIN_VECTORS:
         return (
             None,
-            f"{n} vectors with a held-out residual < {CAL_MIN_VECTORS}: too few to "
-            f"calibrate {CAL_MIN_PER_BIN}-vector peak-ratio bins; uniform weights kept",
+            f"{n} calibration-fold vectors with a held-out residual < {CAL_MIN_VECTORS}: "
+            f"too few to calibrate {CAL_MIN_PER_BIN}-vector peak-ratio bins; uniform "
+            "weights kept",
             None,
         )
     nb = max(1, min(CAL_MAX_BINS, n // CAL_MIN_PER_BIN))
-    pr = PR[ok]
-    e2 = np.sum(E[ok] ** 2, axis=-1)
+    pr = PR[cal]
+    e2 = np.sum(E[cal] ** 2, axis=-1)
     edges = np.quantile(pr, np.linspace(0.0, 1.0, nb + 1))
     b_of = np.clip(np.searchsorted(edges[1:-1], pr, side="right"), 0, nb - 1)
     sig = np.empty(nb)
@@ -615,18 +758,35 @@ def _calibrate_sigma(PR, valid, E):
             sig[b] = sig[finite[np.argmin(np.abs(finite - b))]]
     node_b = np.clip(np.searchsorted(edges[1:-1], PR, side="right"), 0, nb - 1)
     sigma = np.where(valid, sig[node_b], np.nan)
-    comp = np.abs(E[ok])
-    coverage = float(np.mean(comp <= sig[b_of][:, None]))
-    return sigma, bins, coverage
+    scores = {
+        "coverage_1sigma": None,
+        "rms_error_over_rms_sigma": None,
+        "n_scored": int(score.sum()),
+        "calibration_folds": sorted(int(f) for f in cal_folds) if scoring else [],
+        "scoring_folds": [int(f) for f in scoring],
+    }
+    if score.any():
+        comp = np.abs(E[score])
+        sg = sigma[score]
+        scores["coverage_1sigma"] = float(np.mean(comp <= sg[:, None]))
+        scores["rms_error_over_rms_sigma"] = float(
+            np.sqrt(np.mean(comp**2)) / np.sqrt(np.mean(sg**2))
+        )
+    return sigma, bins, scores
 
 
-# Fixed-point iterations re-indexing the field to the stitch's frame; the map is a
-# contraction when the field's Lipschitz constant is < 1 (the fold certificate asks < 0.5),
-# so the error shrinks by that factor per step -- 5 steps take 100 px to well under 0.01 px.
-REINDEX_ITERATIONS = 5
+# Fixed-point re-indexing of the field to the stitch's frame. ``F <- D(g + F)`` is a
+# contraction when D's Lipschitz constant L is < 1, and its error shrinks by a factor L per
+# step -- NOT to "well under 0.01 px" in a fixed 5 steps whatever the field: after k steps
+# the error is bounded by L^k / (1 - L) times the first step, which at L = 0.49 and a 100 px
+# offset is still ~1.5 px after 5. Real fields have L ~ 0.02, where 3 steps suffice; the loop
+# runs until the fixed-point residual max |F - D(g + F)| is below REINDEX_TOL_PX (or the
+# iteration cap) and that residual is REPORTED (``reindex_residual_px``), not assumed.
+REINDEX_MAX_ITERATIONS = 30
+REINDEX_TOL_PX = 1e-3
 
 
-def _reindex_to_moving_frame(grid_x, grid_y, D, interp="bilinear"):
+def _reindex_to_moving_frame(grid_x, grid_y, D, interp="bilinear", info=None):
     """``F(g) = D(g + F(g))``: the lattice field re-indexed from reference to moving points.
 
     A window vector is MEASURED at a reference-frame node ``x``: ``ref(x) = mov(x - D(x))``.
@@ -637,18 +797,33 @@ def _reindex_to_moving_frame(grid_x, grid_y, D, interp="bilinear"):
     on the synthetic slide (0.15 px median error at the reference nodes, 0.71 px through the
     stitch until this was added). ``D`` is read with the same ``interp`` the manifest
     records, clamped at the lattice edges.
+
+    ``info``, when a dict, receives ``reindex_residual_px`` (the final
+    ``max |F(g) - D(g + F(g))|``) and ``reindex_iterations``.
     """
     from stare.mesh_field import MeshField
 
     ny, nx, _ = D.shape
     if ny < 2 and nx < 2:
+        if info is not None:
+            info.update({"reindex_residual_px": 0.0, "reindex_iterations": 0})
         return D.copy()
     # D interpolated exactly as the manifest's reader will interpolate F: one MeshField rule
     mesh_d = MeshField(grid_x, grid_y, D, interp=interp)
     G = np.stack(np.meshgrid(mesh_d.grid_x, mesh_d.grid_y), axis=-1).reshape(-1, 2)
     F = D.reshape(-1, 2).copy()
-    for _ in range(REINDEX_ITERATIONS):
-        F = mesh_d.displacement(G + F)
+    residual, it = np.inf, 0
+    while it < REINDEX_MAX_ITERATIONS:
+        Fn = mesh_d.displacement(G + F)
+        residual = float(np.abs(Fn - F).max()) if F.size else 0.0
+        F = Fn
+        it += 1
+        if residual < REINDEX_TOL_PX:
+            break
+    # the residual of the RETURNED field: max |F - D(g + F)|
+    residual = float(np.abs(mesh_d.displacement(G + F) - F).max()) if F.size else 0.0
+    if info is not None:
+        info.update({"reindex_residual_px": residual, "reindex_iterations": it})
     return F.reshape(ny, nx, 2)
 
 
@@ -691,9 +866,16 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
             "smoothing_s": None,
             "smoothing_selection": "none",
             "holdout_rmse_px": None,
+            "smoothing_s_effective": None,
             "sigma_calibration": None,
             "sigma_calibration_skipped": "no lattice node",
             "coverage_1sigma": None,
+            "rms_error_over_rms_sigma": None,
+            "coverage_n_scored": None,
+            "coverage_calibration_folds": None,
+            "coverage_scoring_folds": None,
+            "reindex_residual_px": None,
+            "reindex_iterations": None,
             "lipschitz": 0.0,
             "min_det_jacobian": 1.0,
             "fold_certificate_ok": True,
@@ -703,33 +885,35 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
         return [], [], [], report
     internals = {}
     field, info = _dctpls_core(Y, W0, grid_x, grid_y, internals=internals)
-    calibration, coverage, why = None, None, None
+    calibration, scores, why = None, None, None
     valid = W0 > 0
-    if "s" in internals and info["smoothing_selection"] == "hblock_cv":
-        E = _hblock_heldout(
+    if "s" in internals and info["smoothing_selection"] == CV_LABEL:
+        E, folds = _block_heldout(
             internals["R"], internals["W0n"], internals["Lam"], internals["s"]
         )
-        sigma, bins, coverage = _calibrate_sigma(PR, valid, E)
+        sigma, bins, scores = _calibrate_sigma(
+            PR, valid, E, folds, inlier=internals["Wr"] >= 0.1
+        )
         if sigma is None:
             why = bins
         else:
             calibration = bins
-            p = np.log10(internals["s"])
-            grid = np.arange(
-                p - CAL_RESCAN_HALF_WIDTH, p + CAL_RESCAN_HALF_WIDTH + 1e-9, 0.5
-            )
-            grid = grid[(grid >= LOG10_S_FINE[0]) & (grid <= LOG10_S_FINE[-1])]
+            s_chosen = info["smoothing_s"]
             W1 = np.where(valid, 1.0 / np.where(valid, sigma, 1.0) ** 2, 0.0)
-            field, info = _dctpls_core(Y, W1, grid_x, grid_y, cv_grid=grid)
+            # s is chosen ONCE: the re-solve reuses it (in mean-weight units), no re-scan
+            field, info = _dctpls_core(Y, W1, grid_x, grid_y, s_fixed=s_chosen)
+            info["smoothing_selection"] = CV_LABEL
     else:
         why = (
-            f"smoothing chosen by {info['smoothing_selection']}, not h-block CV "
+            f"smoothing chosen by {info['smoothing_selection']}, not block CV "
             f"({info['n_valid']} valid vectors < {MIN_CV_CELLS}); uniform weights kept"
         )
     if why:
         logger.info(f"sigma calibration skipped: {why}")
-    field = _reindex_to_moving_frame(grid_x, grid_y, field, interp=interp)
-    jac = jacobian_report(grid_x, grid_y, field)
+    scores = scores or {}
+    reindex = {}
+    field = _reindex_to_moving_frame(grid_x, grid_y, field, interp=interp, info=reindex)
+    jac = jacobian_report(grid_x, grid_y, field, interp=interp)
     report = {
         **base,
         "n_valid": info["n_valid"],
@@ -738,9 +922,16 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
         "smoothing_s": info["smoothing_s"],
         "smoothing_selection": info["smoothing_selection"],
         "holdout_rmse_px": info["holdout_rmse_px"],
+        "smoothing_s_effective": info.get("smoothing_s_effective"),
         "sigma_calibration": calibration,
         "sigma_calibration_skipped": why,
-        "coverage_1sigma": coverage,
+        "coverage_1sigma": scores.get("coverage_1sigma"),
+        "rms_error_over_rms_sigma": scores.get("rms_error_over_rms_sigma"),
+        "coverage_n_scored": scores.get("n_scored"),
+        "coverage_calibration_folds": scores.get("calibration_folds"),
+        "coverage_scoring_folds": scores.get("scoring_folds"),
+        "reindex_residual_px": reindex.get("reindex_residual_px"),
+        "reindex_iterations": reindex.get("reindex_iterations"),
         "lipschitz": jac["max_operator_norm"],
         "min_det_jacobian": jac["min_jacobian_det"],
         "fold_certificate_ok": bool(
@@ -763,7 +954,7 @@ def solve_dctpls(controls, max_disp=None, interp=VECTOR_MESH_INTERP):
     ``controls`` are REG_TILE's per-tile control JSONs; every one must carry ``lattice`` and
     ``vectors`` (``_require_vectors`` refuses one that does not, naming the tiles). Validity
     is "finite and ``|d| < max_disp``"; the prior weights are calibrated from the data
-    (``_calibrate_sigma``): one solve at uniform weights, h-block held-out residuals binned
+    (``_calibrate_sigma``): one solve at uniform weights, block-CV held-out residuals binned
     by peak ratio, then one re-solve at ``w = 1/sigma^2``. See the module docstring for the
     stages.
 

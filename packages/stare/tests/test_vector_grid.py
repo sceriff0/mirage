@@ -180,3 +180,49 @@ def test_pass_one_is_required_for_a_100_px_residual():
     )
     assert ok1 < 0.5 * n_owned, (ok1, bad1)
     assert bad1 >= 1, "premise: a single pass emits confident-but-wrong vectors"
+
+
+# ── Phase 5b: the sub-pixel fit and sharpness on a whitened (negative-lobed) surface ──
+def _gauss_surface(x0, y0, amp=1.0, base=-0.6, s=1.2, n=33):
+    """A Gaussian correlation peak at (x0, y0) from the centre on a NEGATIVE floor."""
+    yy, xx = np.mgrid[0:n, 0:n].astype(float) - n // 2
+    return amp * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * s * s)) + base
+
+
+def test_the_gaussian_fit_subtracts_the_local_minimum_first():
+    """Xue et al. 2014: with the floor at -0.6 the samples beside the peak are negative, so
+    the raw 3-point Gaussian cannot take their log and fell back to the (biased) parabola.
+    On the surface minus its local minimum the Gaussian is exact again."""
+    c = _gauss_surface(0.3, -0.2)
+    assert c[16, 15] < 0  # a neighbour of the peak is negative
+    dx, dy, _ratio, _sharp, fell_back = vg.peak_stats(c)
+    assert not fell_back
+    assert dx == pytest.approx(0.3, abs=0.01) and dy == pytest.approx(-0.2, abs=0.01)
+    # without the floor it falls back and is visibly worse
+    off, fb = vg._subpixel(float(c[16, 15]), float(c[16, 16]), float(c[16, 17]))
+    assert fb and abs(off - 0.3) > 0.03
+
+
+def test_sharpness_is_on_absolute_values_so_a_negative_minimum_cannot_flip_it():
+    """peak / min with min < 0 was negative-or-capped; SOFIMA's rule is |peak| / |min|."""
+    c = _gauss_surface(0.0, 0.0, amp=1.0, base=-0.6)
+    _dx, _dy, _ratio, sharp, _fb = vg.peak_stats(c)
+    lo = c[np.hypot(*(np.mgrid[0:33, 0:33] - 16)) <= vg.SHARPNESS_RADIUS].min()
+    assert lo < 0
+    assert sharp == pytest.approx(abs(c.max()) / abs(lo), rel=1e-9)
+    assert 0 < sharp < vg.RATIO_CAP
+
+
+def test_each_tile_reports_its_gaussian_fallback_rate():
+    ref, mov = make_pair(1024, _uniform(2.3, -1.7), noise=0.005)
+    res = vg.estimate_tile_vectors(ref, mov, (0, 0), (0, 0, 1024, 1024), 128)
+    rate = res["gauss_fallback_rate"]
+    assert isinstance(rate, float) and 0.0 <= rate <= 1.0
+    assert rate < 0.2  # clean nuclei: the min-subtracted Gaussian nearly always applies
+    blank = np.zeros((1024, 1024), np.float32)
+    assert (
+        vg.estimate_tile_vectors(blank, blank, (0, 0), (0, 0, 1024, 1024), 128)[
+            "gauss_fallback_rate"
+        ]
+        is None
+    )

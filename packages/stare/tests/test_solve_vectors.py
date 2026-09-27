@@ -2,7 +2,7 @@
 
 When the controls carry ``vectors`` (stare.vector_grid), SOLVE lays every vector on the
 slide-global lattice, applies no correlation-error gate (it drops good window vectors; REG_TILE
-already applied the peak-ratio floor), calibrates each vector's sigma from h-block held-out
+already applied the peak-ratio floor), calibrates each vector's sigma from block-CV held-out
 residuals binned by peak ratio, and re-indexes the field to the frame the stitch evaluates it
 in. research/stare-sota-review-2026-09-27.md Part C §4, §6.
 """
@@ -253,3 +253,61 @@ def test_a_gentle_synthetic_field_passes_the_fold_certificate():
     _gx, _gy, _disp, report = solve.solve_dctpls([_control(0, 0, vecs)], max_disp=256)
     assert report["lipschitz"] < 0.5 and report["fold_certificate_ok"] is True
     assert report["min_det_jacobian"] > 0
+
+
+# ── Phase 5b: coverage on disjoint folds, re-index residual ──────────────────────
+def test_sigma_coverage_is_scored_on_folds_the_calibration_never_saw():
+    """Residuals in the scoring folds are 3x those in the calibration folds: a coverage
+    computed on the calibration residuals would still read ~0.68; scored on the disjoint
+    folds it must collapse, and the RMS ratio must read ~3."""
+    rng = np.random.default_rng(0)
+    n = 60
+    W = np.ones((n, n))
+    folds = solve._cv_folds(W)
+    in_cal = np.isin(folds, solve.CAL_FOLDS)
+    E = rng.normal(0, 0.3, (n, n, 2))
+    E[~in_cal] *= 3.0
+    PR = rng.uniform(1.2, 8.0, (n, n))
+    sigma, bins, scores = solve._calibrate_sigma(PR, W > 0, E, folds)
+    assert sigma is not None
+    assert set(scores["calibration_folds"]).isdisjoint(scores["scoring_folds"])
+    assert set(scores["calibration_folds"]) | set(scores["scoring_folds"]) == set(
+        range(solve.CV_FOLDS)
+    )
+    assert scores["n_scored"] == int((~in_cal).sum())
+    assert scores["coverage_1sigma"] < 0.35, scores
+    assert scores["rms_error_over_rms_sigma"] == pytest.approx(3.0, rel=0.1)
+    # every bin is built from calibration-fold vectors only
+    assert sum(b["n"] for b in bins) == int(in_cal.sum())
+
+
+def test_the_solve_reports_held_out_coverage_and_rms_ratio():
+    controls = _field_controls(80, _smooth, lambda pr: 0.05 + 0.5 / pr)
+    _gx, _gy, _disp, report = solve.solve_dctpls(controls, max_disp=256)
+    assert report["coverage_scoring_folds"] == [1, 3]
+    assert report["coverage_calibration_folds"] == [0, 2, 4]
+    assert report["coverage_n_scored"] > 500
+    assert 0.8 < report["rms_error_over_rms_sigma"] < 1.25, report
+    assert report["smoothing_selection"] == solve.CV_LABEL
+
+
+def test_the_reindex_fixed_point_residual_is_reported_and_small():
+    n = 40
+    gx = gy = S * (np.arange(n) + 1.0)
+    GX, GY = np.meshgrid(gx, gy)
+    th = np.radians(0.3)
+    D = np.stack(
+        [
+            100.0 + (np.cos(th) - 1) * GX - np.sin(th) * GY,
+            -50.0 + np.sin(th) * GX + (np.cos(th) - 1) * GY,
+        ],
+        axis=-1,
+    )
+    info = {}
+    F = solve._reindex_to_moving_frame(gx, gy, D, interp="cubic", info=info)
+    mesh_d = MeshField(gx, gy, D, interp="cubic")
+    G = np.stack([GX.ravel(), GY.ravel()], axis=1)
+    actual = np.abs(mesh_d.displacement(G + F.reshape(-1, 2)) - F.reshape(-1, 2)).max()
+    assert info["reindex_residual_px"] == pytest.approx(actual, abs=1e-12)
+    assert info["reindex_residual_px"] < solve.REINDEX_TOL_PX
+    assert 1 <= info["reindex_iterations"] <= solve.REINDEX_MAX_ITERATIONS

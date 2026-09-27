@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE SOLVE/ESTIMATE audit fixes** (`research/drape-step-support-2026-09-27.md`). The
+  robust scale of a residual vector's norm is now the Rayleigh one (`median |r| / 1.1774`;
+  Huber 2.448σ and bisquare 5.06σ from χ²₂) — the 1-D `1.4826 × MAD` made Huber down-weight
+  ~67 % of clean data, now 5 %. The smoothing selection is honestly labelled `block_cv`
+  (true h-block CV with a buffer ring is implemented, `CV_BUFFER`, but off: measured lag-1
+  error correlation 0.01–0.07 and +50 % field error with it). The σ re-solve reuses the
+  first `s`. `coverage_1sigma` and the new `rms_error_over_rms_sigma` are scored on folds
+  disjoint from the σ calibration. The fold certificate reads the cubic interpolant, and the
+  re-index reports its fixed-point residual (`reindex_residual_px`). REG_TILE fits its
+  3-point Gaussian after subtracting the local correlation minimum, computes sharpness on
+  absolute values, and records a per-tile `gauss_fallback_rate` in the control JSON.
+
 - **STARE v2: REG_TILE measures a grid of window vectors and SOLVE is `dctpls` only — the
   old STARE surface is removed.** Each tile now emits one displacement vector per
   `reg_tiled_stride` px (default 128; window 2 × stride) on a slide-global lattice
