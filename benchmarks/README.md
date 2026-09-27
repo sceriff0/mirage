@@ -31,8 +31,9 @@ matrix generation and the DATA emit run **locally**.
     It measures how cost SCALES. To choose a configuration — an arm ranking on the
     REAL study slides — see `docs/benchmarks_real.md` (`benchmarks/configs/arms.yaml`).
 
-**Where the plots come from.** This layer emits **data**, plus `scaling_*.pdf/svg`
-from `make_figures`. Every other figure is rendered by the consumer,
+**Where the plots come from.** This layer emits **data**, plus `scaling_*`, `cost_by_run`,
+`registration_accuracy_by_run` (and, with a landmark table, `accuracy_vs_cost`) from
+`make_figures`. Every other figure is rendered by the consumer,
 `../ihc_method`, whose `code/benchmark_plots.R` + `code/registration_accuracy_plots.R`
 are the maintained descendants of a `plots.R` that used to live here. That copy was
 deleted rather than kept in sync: it was referenced by nothing, tested by nothing,
@@ -226,6 +227,12 @@ launch it into the same results root, then build the tables over the full plan. 
 > `only_successful` then drops any non-`COMPLETED` row, so the fits/means never see a partial process.
 > Early on, size-varying runs may be too few for a real fit (`r2` empty ⇒ `n<3` flat fallback) — that
 > is expected, not an error. Re-run it as more runs land to watch the fits firm up.
+>
+> **Preview with synthetic placeholders:** add `--placeholder-missing` (or set `PLACEHOLDER_MISSING=1`;
+> `--placeholder-seed N`, default 0) to draw every expected-but-missing point as a hollow/hatched,
+> watermarked SYNTHETIC placeholder, listed in `placeholders.csv` with `PLACEHOLDER_DATA.txt` beside it.
+> CSVs, fits and `modules.optimized.config` stay real-only; write previews to a separate `--outdir`,
+> because `pull_to_ihc_method.sh` refuses a directory holding a preview. Rules: `benchmarks/analysis/lib/placeholders.py`.
 
 - **Output:**
   - `benchmarks/analysis/measurements.csv` — **the primary data artifact**: one tidy row per
@@ -358,7 +365,7 @@ only redraws. Every option is listed in each script's header.
 | `build_run_plan.py` | `sweep.yaml` | `run_plan.csv` |
 | `run_sweep.sh` | manifest + run plan | per-run `trace.txt` + `input_sizes.csv` + QC JSONs (`*_seg_qc.json`) |
 | **`make_tables`** | results + run plan | **`paper_data/{runs_master,scaling_fits,registration_accuracy,registration_valis_rtre,segmentation_agreement,param_matrix}.csv` (+ `.dict.md`)** — the paper DATA |
-| `make_figures` (optional) | results + run plan | `measurements.csv` + `resource_models.csv` + `resource_stats.csv` + `scaling_*.pdf/svg` + `modules.optimized.config` |
+| `make_figures` (optional) | results + run plan | `measurements.csv` + `resource_models.csv` + `resource_stats.csv` + `figures/{scaling_*,cost_by_run,registration_accuracy_by_run}.pdf/svg` + `modules.optimized.config` |
 | `build_arm_plan.py` | `arms.yaml` + real `input.csv` | `arm_plan.csv` + `arms.csv` (label manifest) |
 | `run_arms.sh` | arm plan + real `input.csv` | per-arm `<root>/<arm>/<patient>/qc/registration/*_seg_qc.json` |
 | `run_ashlar_arm.sh` | preprocessed CSV + a registration arm's QC nuclei | the ashlar external baseline, in that SAME tree, plus a Nextflow-format `trace/trace.txt` via `trace_step.py` |
