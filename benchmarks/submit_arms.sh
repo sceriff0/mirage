@@ -344,6 +344,8 @@ echo "    python -m benchmarks.analysis.make_figures \\"
 echo "        --results-root $RESULTS --run-plan $BENCH_DIR/arm_plan.csv \\"
 echo "        --reg-eval <external landmark TRE csv | none> \\"
 echo "        --outdir benchmarks/_handoff/arms"
+echo "    (preview before every run lands: add --placeholder-missing and a separate --outdir;"
+echo "     synthetic points are marked + watermarked, and pull_to_ihc_method.sh refuses them)"
 echo
 echo "Then hand off to ihc_method (small QC artifacts only — the images stay here):"
 echo "    benchmarks/pull_to_ihc_method.sh $RESULTS <path-to>/ihc_method"

@@ -4,6 +4,10 @@ This is the reproducible artifact the notebook mirrors. Run:
   python -m benchmarks.analysis.make_figures --results-root <dir> \
       --run-plan run_plan.csv \
       --reg-eval reg_eval.csv --outdir benchmarks/analysis/figures
+
+While runs are still landing, `--placeholder-missing` (or PLACEHOLDER_MISSING=1) draws
+every expected-but-absent point as a SYNTHETIC, visibly marked placeholder so the
+figures can be judged early; see lib/placeholders.py for the rules and the guard.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ matplotlib.use("Agg")
 
 import pandas as pd
 
-from .lib import emit_config, load, plotting, quality, regress
+from .lib import emit_config, load, placeholders, plotting, quality, regress
 
 # Only these runs change input_gb: the scaling grid (size x channels), the
 # registration grid (size x n_register_images — REGISTER's input is the SUM of all
@@ -114,13 +118,101 @@ def _join_ground_truth(runs_df, reg_eval_csv, outdir):
     return merged
 
 
+# A run's KIND decides which metrics it is expected to have (a segmentation arm has
+# no registration QC); the first of these the plan carries is used. The FAMILY
+# columns are the placeholder "neighbours": runs sharing a backend, then a tier.
+_KIND_COLS = ("arm_kind", "varied_axis")
+_FAMILY_COLS = ("backend", "registration_method", "memory_mode")
+_REG_METRICS = ("dice_matched", "displacement_um_p50")
+_REG_TITLES = ("matched Dice", "displacement p50 (\u00b5m)")
+
+
+def _kind_col(plan):
+    return next((c for c in _KIND_COLS if c in plan.columns), None)
+
+
+def _family_levels(plan):
+    return [("neighbours", [c]) for c in _FAMILY_COLS if c in plan.columns]
+
+
+def _final_stage(reg_qc_long):
+    """Each (run, patient, moving) slide's most-registered stage -- the same
+    reduction quality.registration_accuracy_per_run takes before its median."""
+    df = reg_qc_long.copy()
+    df["_rank"] = df["stage"].map(quality._STAGE_RANK).fillna(-1)
+    return (
+        df.sort_values("_rank", kind="stable")
+        .groupby(["run_id", "patient_id", "moving"], as_index=False, dropna=False)
+        .tail(1)
+        .drop(columns="_rank")
+        .reset_index(drop=True)
+    )
+
+
+def _expected_reg_points(plan, final):
+    """plan run x every (patient, moving) slide seen in ANY run's QC, narrowed to
+    the plan's `only_patient` where a run is restricted to one patient."""
+    slides = final[["patient_id", "moving"]].drop_duplicates()
+    exp = plan.merge(slides, how="cross")
+    if "only_patient" in exp.columns:
+        only = exp["only_patient"].fillna("").astype(str)
+        exp = exp[(only == "") | (only == exp["patient_id"].astype(str))]
+    return exp
+
+
+def _plot_registration_accuracy(reg_qc_long, plan, ledger, outdir, formats):
+    if reg_qc_long.empty or not {"patient_id", "moving", "stage"} <= set(
+        reg_qc_long.columns
+    ):
+        return
+    final = _final_stage(reg_qc_long)
+    ctx = [c for c in plan.columns if c != "run_id" and c not in final.columns]
+    final = final.merge(plan[["run_id"] + ctx], on="run_id", how="left")
+    kind = _kind_col(plan)
+    stem = "figures/registration_accuracy_by_run"
+    filled = ledger.fill(
+        final,
+        _expected_reg_points(plan, final),
+        keys=["run_id", "patient_id", "moving"],
+        metrics=list(_REG_METRICS),
+        levels=[("same_run", ["run_id"])] + _family_levels(plan) + [("global", [])],
+        expect_by=[kind] if kind else None,
+        figure=stem,
+    )
+    order = {r: i for i, r in enumerate(plan["run_id"].astype(str))}
+    filled = filled.assign(_o=filled["run_id"].astype(str).map(order)).sort_values(
+        "_o", kind="stable"
+    )
+    mask = placeholders.placeholder_mask(filled)
+    fig = plotting.strip_by_run(
+        filled, "run_id", list(_REG_METRICS), list(_REG_TITLES), placeholder=mask
+    )
+    ledger.finish_figure(fig, stem, int(mask.sum()))
+    plotting.save_fig(fig, outdir / stem, formats=formats)
+
+
 def run(
-    results_root, run_plan_csv, reg_eval_csv, outdir, formats=("pdf", "svg")
+    results_root,
+    run_plan_csv,
+    reg_eval_csv,
+    outdir,
+    formats=("pdf", "svg"),
+    placeholder_missing=False,
+    placeholder_seed=placeholders.DEFAULT_SEED,
 ) -> dict:
+    """`placeholder_missing` is the opt-in of lib/placeholders.py; the CLI resolves
+    the env var into it (placeholders.resolve_enabled), so run() itself only ever
+    does what its caller passed."""
     outdir = Path(outdir)
     figdir = outdir / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
     plotting.set_paper_theme()
+    # A previous preview's watermarked figures, sidecar and marker must not survive
+    # into this run's output, whichever mode this run is in.
+    placeholders.clear_stale(outdir)
+    ledger = placeholders.Ledger(enabled=placeholder_missing, seed=placeholder_seed)
+    plan = pd.read_csv(run_plan_csv)
+    kind = _kind_col(plan)
 
     runs_all = load.load_runs(results_root, run_plan_csv)
     # measurements.csv keeps EVERY row (incl. failed processes, with status/exit) — lossless. But the
@@ -170,33 +262,91 @@ def run(
     stats_df = load.aggregate_repeats(runs_df)
     stats_df.to_csv(stats_csv, index=False)
 
-    # per-process memory scaling figures (size-varying runs only, matching the fit)
+    # per-process memory scaling figures (size-varying runs only, matching the fit).
+    # The fit above saw REAL rows only; placeholders are filled after it, for drawing.
+    plan_sized = _size_varying(plan)
+    scaling_levels = (
+        ([("same_run", ["config_id"])] if "config_id" in plan.columns else [])
+        + [
+            ("neighbours", [c])
+            for c in ("target_px", "n_register_images", *_FAMILY_COLS)
+            if c in plan.columns
+        ]
+        + [("global", [])]
+    )
     for proc, g in scaling_df.groupby("process"):
-        sub = g[["input_gb", "peak_rss_gb"]].dropna()
+        stem = f"figures/scaling_{proc}"
+        g = ledger.fill(
+            g,
+            plan_sized.assign(process=proc),
+            keys=["run_id", "process"],
+            metrics=["input_gb", "peak_rss_gb"],
+            levels=scaling_levels,
+            expect_by=[kind] if kind else None,
+            figure=stem,
+        )
+        sub = g.dropna(subset=["input_gb", "peak_rss_gb"])
         if sub.empty:
             continue
-        m = models[proc]
+        mask = placeholders.placeholder_mask(sub)
+        m = models.get(proc) or {}
         fig = plotting.scatter_with_fit(
             sub["input_gb"],
             sub["peak_rss_gb"],
-            m["slope"],
-            m["intercept"],
+            m.get("slope"),
+            m.get("intercept"),
             xlabel="input (GiB)",
             ylabel="peak RSS (GiB)",
             title=proc,
+            placeholder=mask,
         )
-        plotting.save_fig(fig, figdir / f"scaling_{proc}", formats=formats)
+        ledger.finish_figure(fig, stem, int(mask.sum()))
+        plotting.save_fig(fig, outdir / stem, formats=formats)
 
     emit_config.write_optimized_config(models, outdir / "modules.optimized.config")
 
     # ── QUALITY + COST (the result-quality the trace ignores + derived cost). All best-effort and
     #    robust to missing/failed runs, so a CellSAM run that OOMs simply contributes no rows. ──
     # Per-run cost (cpu/gpu-hours, wall-clock, bottleneck) — from the trace, always available.
-    quality.run_cost_summary(runs_df).to_csv(outdir / "run_cost.csv", index=False)
+    cost_real = quality.run_cost_summary(runs_df)
+    cost_real.to_csv(outdir / "run_cost.csv", index=False)
+    # Every planned run costs something, so a run with no trace yet is an expected
+    # point (always_expected); the CSV above stays measured-only.
+    cost_levels = (
+        ([("same_run", ["config_id"])] if "config_id" in plan.columns else [])
+        + _family_levels(plan)
+        + [("global", [])]
+    )
+    cost_plot = ledger.fill(
+        cost_real if not cost_real.empty else pd.DataFrame(columns=["run_id"]),
+        plan,
+        keys=["run_id"],
+        metrics=["cpu_hours"],
+        levels=cost_levels,
+        always_expected=True,
+        figure="figures/cost_by_run",
+    )
+    if "cpu_hours" in cost_plot.columns and cost_plot["cpu_hours"].notna().any():
+        order = {r: i for i, r in enumerate(plan["run_id"].astype(str))}
+        cost_plot = cost_plot.assign(
+            _o=cost_plot["run_id"].astype(str).map(order)
+        ).sort_values("_o", kind="stable")
+        bars = cost_plot.dropna(subset=["cpu_hours"])
+        mask = placeholders.placeholder_mask(bars)
+        fig = plotting.bar_by_run(
+            bars["run_id"],
+            bars["cpu_hours"],
+            ylabel="CPU-hours",
+            title="Cost per run",
+            placeholder=mask,
+        )
+        ledger.finish_figure(fig, "figures/cost_by_run", int(mask.sum()))
+        plotting.save_fig(fig, outdir / "figures/cost_by_run", formats=formats)
     # Registration accuracy (staged QC, reg_qc=2) — the full per-(run, moving, stage) table, and a
     # per-run headline reduction (final stage, median over moving slides).
     reg_qc_long = quality.harvest_registration_qc(results_root, run_plan_csv)
     reg_qc_long.to_csv(outdir / "registration_accuracy.csv", index=False)
+    _plot_registration_accuracy(reg_qc_long, plan, ledger, outdir, formats)
     reg_run = quality.registration_accuracy_per_run(reg_qc_long)
     # VALIS's own feature-based registration error (the independent second accuracy signal).
     quality.harvest_valis_rtre(results_root, run_plan_csv).to_csv(
@@ -253,10 +403,24 @@ def run(
             metric = (
                 "gt_true_median_um" if "gt_true_median_um" in gt_cols else gt_cols[0]
             )
-            sub = acc[["cpu_hours", metric, "registration_method"]].dropna(
-                subset=["cpu_hours", metric]
+            # Drawn from the placeholder-filled cost (cost_plot, == cost when the mode
+            # is off). The landmark TRE itself is NEVER synthesized: it is a per-method
+            # measurement, joined by method, so a placeholder run only ever borrows
+            # its method's REAL TRE and a synthetic cost.
+            per_method = runs_df.drop_duplicates("registration_method")[
+                ["registration_method"] + gt_cols
+            ]
+            drawn = cost_plot.drop(
+                columns=[c for c in gt_cols if c in cost_plot.columns]
             )
+            if "registration_method" not in drawn.columns:
+                drawn = drawn.merge(
+                    plan[["run_id", "registration_method"]], on="run_id", how="left"
+                )
+            drawn = drawn.merge(per_method, on="registration_method", how="left")
+            sub = drawn.dropna(subset=["cpu_hours", metric])
             if not sub.empty:
+                mask = placeholders.placeholder_mask(sub)
                 fig = plotting.scatter(
                     sub["cpu_hours"],
                     sub[metric],
@@ -264,7 +428,9 @@ def run(
                     ylabel=f"landmark TRE ({metric.replace('gt_true_', '')})",
                     title="Ground-truth accuracy vs cost",
                     labels=sub["registration_method"],
+                    placeholder=mask,
                 )
+                ledger.finish_figure(fig, "figures/accuracy_vs_cost", int(mask.sum()))
                 plotting.save_fig(fig, figdir / "accuracy_vs_cost", formats=formats)
 
     quality_df.to_csv(outdir / "quality.csv", index=False)
@@ -275,6 +441,14 @@ def run(
         seg_agree = pd.DataFrame()
     seg_agree.to_csv(outdir / "segmentation_agreement.csv", index=False)
 
+    n_placeholder = ledger.write(outdir)
+    if ledger.enabled:
+        print(
+            f"[analysis] PLACEHOLDER MODE: {n_placeholder} synthetic point(s) drawn in "
+            f"{len(ledger.figures)} watermarked figure(s); see "
+            f"{outdir}/{placeholders.MARKER} and {outdir}/{placeholders.SIDECAR}"
+        )
+
     return {
         "runs_df": runs_df,
         "models": models,
@@ -282,6 +456,8 @@ def run(
         "measurements_csv": measurements_csv,
         "models_csv": models_csv,
         "stats_csv": stats_csv,
+        "placeholders": ledger.frame(),
+        "placeholder_figures": dict(ledger.figures),
     }
 
 
@@ -305,8 +481,31 @@ def main():
         ),
     )
     ap.add_argument("--outdir", default="benchmarks/analysis")
+    ap.add_argument(
+        "--placeholder-missing",
+        action="store_true",
+        help=(
+            "PREVIEW ONLY, default off: draw every expected-but-missing point as a "
+            "SYNTHETIC placeholder (hollow/hatched, watermarked figures, listed in "
+            "placeholders.csv, PLACEHOLDER_DATA.txt written). The CSVs and fits stay "
+            f"real-only. Also enabled by {placeholders.ENV_VAR}=1."
+        ),
+    )
+    ap.add_argument(
+        "--placeholder-seed",
+        type=int,
+        default=placeholders.DEFAULT_SEED,
+        help="seed for the placeholder noise (deterministic per point)",
+    )
     a = ap.parse_args()
-    res = run(a.results_root, a.run_plan, a.reg_eval, a.outdir)
+    res = run(
+        a.results_root,
+        a.run_plan,
+        a.reg_eval,
+        a.outdir,
+        placeholder_missing=placeholders.resolve_enabled(a.placeholder_missing),
+        placeholder_seed=a.placeholder_seed,
+    )
     print(
         f"Wrote {res['measurements_csv']} ({len(res['runs_df'])} rows), "
         f"{res['models_csv']} ({len(res['models'])} processes), "
