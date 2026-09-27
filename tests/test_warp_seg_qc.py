@@ -683,3 +683,36 @@ def test_reg_qc2_tiled_cli_scores_through_a_manifest_without_a_jvm(tmp_path):
     assert s["refined"]["displacement_px_p50"] == pytest.approx(0.0, abs=1e-9)
     assert s["rigid"]["iou_mean"] < s["refined"]["iou_mean"]
     assert rec["matching"]["n_pairs"] == 6
+
+
+# ── per-cell IoU ───────────────────────────────────────────────────────────────
+def test_per_cell_carries_the_final_stage_iou(tmp_path):
+    ref = _write(tmp_path, "ref.geojson", _grid_fc())
+    mov = _write(tmp_path, "mov.geojson", _grid_fc(dx=100.0))
+    warp = _shift_warp(
+        {STAGE_NATIVE: 0.0, STAGE_RIGID: -96.0, STAGE_NON_RIGID: -99.0, STAGE_MICRO: -100.0}
+    )
+    out = wsq.run(
+        ref, mov, warp,
+        [STAGE_NATIVE, STAGE_RIGID, STAGE_NON_RIGID, STAGE_MICRO],
+        ref_slide=REF, moving_slide=MOV, supersample=4,
+    )
+    per_cell = out["_per_cell"]
+    assert per_cell["stage"] == STAGE_MICRO
+    assert per_cell["iou"].shape == per_cell["residual_px"].shape
+    assert np.allclose(per_cell["iou"], 1.0)
+
+
+def test_per_cell_csv_has_an_iou_column(tmp_path):
+    per_cell = {
+        "stage": "micro",
+        "ref_xy": np.array([[1.0, 2.0], [3.0, 4.0]]),
+        "residual_px": np.array([0.5, 1.5]),
+        "iou": np.array([0.9, np.nan]),
+    }
+    path = tmp_path / "r.csv"
+    assert wsq.write_per_cell_csv(str(path), per_cell, "mov") == 2
+    lines = path.read_text().splitlines()
+    assert lines[0] == "moving,ref_x,ref_y,residual_px,iou,stage"
+    assert lines[1].split(",")[4] == "0.900000"
+    assert lines[2].split(",")[4] == ""

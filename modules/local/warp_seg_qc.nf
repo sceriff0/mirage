@@ -108,7 +108,7 @@ ${backend_flags}
     def stub_json = groovy.json.JsonOutput.toJson(base + backend.stubExtras(ctx) + rest)
     """
     echo '${stub_json}' > ${prefix}_seg_qc.json
-    printf 'moving,ref_x,ref_y,residual_px,stage\\n' > ${prefix}_reg_residuals.csv
+    printf 'moving,ref_x,ref_y,residual_px,iou,stage\\n' > ${prefix}_reg_residuals.csv
     ${ProcessEnvelope.sizeLogStub(task.process, meta.patient_id, "${prefix}.WARP_SEG_QC.size.csv")}
 
     ${ProcessEnvelope.versionsStub(task.process, backend.versionTools, task.container)}

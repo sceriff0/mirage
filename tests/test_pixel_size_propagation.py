@@ -62,7 +62,7 @@ def _one_square_cell(side_px: int):
 
 def _measure_area_um2(mask, pixel_size: float) -> float:
     """Run the mask through the REAL production morphology + µm-conversion chain and
-    return the reported "Area µm²" measurement for the one cell in ``mask``.
+    return the reported "MORPH: Area µm²" measurement for the one cell in ``mask``.
     """
     props_df, _mask_out, valid_labels = ecp.extract_morphology(mask)
     assert props_df is not None and len(valid_labels) == 1, (
@@ -71,8 +71,8 @@ def _measure_area_um2(mask, pixel_size: float) -> float:
     row = props_df.loc[valid_labels[0]]
 
     measurements = eg.build_measurements(row, marker_cols=[], pixel_size=pixel_size)
-    area_entries = [m["value"] for m in measurements if m["name"] == "Area µm²"]
-    assert area_entries, "build_measurements did not emit an Area µm² measurement"
+    area_entries = [m["value"] for m in measurements if m["name"] == "MORPH: Area µm²"]
+    assert area_entries, "build_measurements did not emit a MORPH: Area µm² measurement"
     return area_entries[0]
 
 

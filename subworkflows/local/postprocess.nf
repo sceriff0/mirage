@@ -11,6 +11,8 @@ include { GENERATE_POSTPROCESSING_QC    } from '../../modules/local/generate_pos
 include { EXPORT_SPATIALDATA } from '../../modules/local/export_spatialdata'
 include { SEG_QUALITY_EVAL         } from '../../modules/local/seg_quality_eval'
 include { MERGE_SEG_EVAL           } from '../../modules/local/merge_seg_eval'
+include { NUCLEAR_RETENTION        } from '../../modules/local/nuclear_retention'
+include { CELL_QC                  } from '../../modules/local/cell_qc'
 // Shared with subworkflows/local/add_cycle.nf — see those files for why the shaping
 // lives there rather than being copied into each caller. groupTiffsByPatient is a
 // plain function, not a process/workflow, but Nextflow's `include` pulls in either.
@@ -163,6 +165,65 @@ workflow POSTPROCESSING {
 
     MERGE_QUANT_CSVS(ch_for_quant_merge)
 
+    // ========================================================================
+    // CELL QC - per-round nuclear retention + registration residuals, total intensity
+    // ========================================================================
+    // One NUCLEAR_RETENTION task per MOVING slide that contributes markers (the same
+    // empty-keep-set rule SPLIT_CHANNELS' filter applies above). The reference is the frame.
+    def contributes = { meta -> !(meta.keep_channels != null && meta.keep_channels.isEmpty()) }
+
+    ch_retention_in = ch_registered
+        .filter { meta, _f -> !meta.is_reference && contributes(meta) }
+        .map { meta, img -> [meta.patient_id, meta, img] }
+        .combine(ch_mask, by: 0)
+        .map { _pid, meta, img, cmask, nmask -> [meta, img, cmask, nmask] }
+    NUCLEAR_RETENTION(ch_retention_in)
+
+    // Per slide: its markers (the split files' names -- the exact marker prefixes of
+    // the quant columns), and the file names of its retention / residual CSVs, keyed by
+    // [patient_id, id]: Meta.identityFor ids are unique only WITHIN a patient, so a bare
+    // meta.id key could cross-pair two patients' slides. The key is ONE list-valued
+    // element at index 0, so `by: 0` and the null-padding positions are unchanged.
+    // join(remainder: true): the reference has neither CSV; with reg_qc < 2 or
+    // --start postprocessing there are no residuals at all.
+    ch_round_rows = SPLIT_CHANNELS.out.channels
+        .map { meta, tiffs ->
+            def list = tiffs instanceof List ? tiffs : [tiffs]
+            [[meta.patient_id, meta.id], meta.patient_id, meta.is_reference as boolean, list.collect { it.baseName }.toSorted()]
+        }
+        .join(NUCLEAR_RETENTION.out.csv.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
+        .join(ch_reg_residuals.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
+        .filter { row -> row[1] != null }     // a residual whose slide never split (keep-set empty)
+        .map { key, pid, is_ref, markers, ret_csv, res_csv ->
+            [pid, [round_id: key[1], is_reference: is_ref, markers: markers,
+                   retention_csv: ret_csv ? ret_csv.name : null,
+                   residual_csv : res_csv ? res_csv.name : null],
+             ret_csv, res_csv]
+        }
+        // Deliberate cross-patient barrier: the remainder joins above release only on
+        // channel close, so no size hint could help here. MERGE_AND_PYRAMID does not wait on it.
+        .groupTuple(by: 0)
+        .map { pid, entries, ret_csvs, res_csvs ->
+            // CANONICAL ORDER: groupTuple emits in arrival order and val/path lists hash
+            // positionally, so an identical rerun would miss -resume. Sort the entries;
+            // the file lists are only staged by name (the manifest pairs by NAME, never
+            // by position), so sorting them independently is safe here.
+            [pid,
+             entries.toSorted { it.round_id },
+             ret_csvs.findAll { it != null }.toSorted { it.name },
+             res_csvs.findAll { it != null }.toSorted { it.name }]
+        }
+
+    ch_cell_qc_in = MERGE_QUANT_CSVS.out.merged_csv
+        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .join(ch_round_rows, by: 0, remainder: true)
+        .filter { row -> row[1] != null }
+        .map { _pid, meta, csv, rounds, rets, ress ->
+            [meta, csv, rounds ?: [], rets ?: [], ress ?: [], []]
+        }
+    CELL_QC(ch_cell_qc_in)
+    ch_merged_with_qc = CELL_QC.out.merged_csv
+
     // ch_contours arrives via take: (segmentation.nf's EXTRACT_CELL_PROPERTIES.out.contours,
     // already re-keyed to patient_id) — nothing to derive here any more.
     ch_nuc_contours_for_export = compartment_mode.compartments ? ch_nucleus_contours : ch_contours
@@ -216,7 +277,7 @@ workflow POSTPROCESSING {
     // EXPORT_GEOJSON tuple assembly + the embed_masks pyramid gate live in
     // ASSEMBLE_EXPORT, shared with add_cycle.nf.
     ASSEMBLE_EXPORT(
-        MERGE_QUANT_CSVS.out.merged_csv,
+        ch_merged_with_qc,
         ch_contours,
         ch_nuc_contours_for_export,
         ch_split_grouped,
@@ -233,7 +294,7 @@ workflow POSTPROCESSING {
         ch_for_postprocess_qc = ch_cell_mask
             .map { meta, mask -> [meta.patient_id, meta, mask] }
             .join(
-                MERGE_QUANT_CSVS.out.merged_csv.map { meta, csv -> [meta.patient_id, csv] },
+                ch_merged_with_qc.map { meta, csv -> [meta.patient_id, csv] },
                 by: 0
             )
             .map { _patient_id, meta, mask, csv -> [meta, mask, csv] }
@@ -246,7 +307,7 @@ workflow POSTPROCESSING {
     // SPATIALDATA EXPORT - scverse-native .zarr (additive; OME-TIFF + GeoJSON stay primary)
     // ========================================================================
     if (!params.skip_spatialdata_export) {
-        def ch_sd_in = MERGE_QUANT_CSVS.out.merged_csv
+        def ch_sd_in = ch_merged_with_qc
             .map { meta, csv -> [meta.patient_id, meta, csv] }
             .join(ch_contours, by: 0)
             .join(ch_nuc_contours_for_export, by: 0)
@@ -280,7 +341,7 @@ workflow POSTPROCESSING {
     POSTPROCESSED_CHECKPOINT(
         ASSEMBLE_EXPORT.out.csv,
         ASSEMBLE_EXPORT.out.geojson,
-        MERGE_QUANT_CSVS.out.merged_csv,
+        ch_merged_with_qc,
         ch_cell_mask,
         ASSEMBLE_EXPORT.out.pyramid
     )
@@ -298,6 +359,8 @@ workflow POSTPROCESSING {
         .mix(SPLIT_CHANNELS.out.size_log)
         .mix(QUANTIFY_MARKERS.out.size_logs)
         .mix(MERGE_QUANT_CSVS.out.size_log)
+        .mix(NUCLEAR_RETENTION.out.size_log)
+        .mix(CELL_QC.out.size_log)
         .mix(ASSEMBLE_EXPORT.out.size_logs)
 
     // Add postprocessing QC size logs if enabled
@@ -314,6 +377,8 @@ workflow POSTPROCESSING {
         .mix(SPLIT_CHANNELS.out.versions.first())
         .mix(QUANTIFY_MARKERS.out.versions)
         .mix(MERGE_QUANT_CSVS.out.versions.first())
+        .mix(NUCLEAR_RETENTION.out.versions.first())
+        .mix(CELL_QC.out.versions.first())
         .mix(ASSEMBLE_EXPORT.out.versions)
 
     if (!params.skip_postprocessing_qc) {

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import generate_postprocessing_qc as gpq
 import numpy as np
+import pandas as pd
 import pytest
 
 TESTDATA = Path(__file__).resolve().parent / "testdata"
@@ -87,3 +88,16 @@ def test_a_mask_with_no_cells_is_still_reported_rather_than_crashing(tmp_path):
     )
     assert (tmp_path / "out" / "P001_seg_overlay.png").exists()
     assert outputs
+
+
+def test_qc_columns_are_excluded_from_intensity_distributions():
+    """A "QC: ..." column (e.g. QC: Total intensity) is not a marker; plotting it
+    as an intensity histogram alongside DAPI/PANCK/etc mislabels it as one."""
+    df = pd.DataFrame({
+        "label": [1, 2],
+        "DAPI": [10.0, 20.0],
+        "QC: Total intensity": [5.0, 6.0],
+    })
+    cols = gpq._intensity_marker_columns(df)
+    assert "QC: Total intensity" not in cols
+    assert "DAPI" in cols

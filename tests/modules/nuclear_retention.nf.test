@@ -1,0 +1,72 @@
+nextflow_process {
+
+    name "Test NUCLEAR_RETENTION process"
+    script "modules/local/nuclear_retention.nf"
+    process "NUCLEAR_RETENTION"
+
+    tag "modules"
+    tag "modules_local"
+    tag "nuclear_retention"
+
+    test("Should write the per-slide retention CSV - stub") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', id: 'P001_mov1' ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.csv.get(0).get(1).toString().endsWith('P001_mov1_nuclear_retention.csv')
+        }
+    }
+
+    test("Should render the nuclear markers and the nuclei mask - rendered command") {
+
+        // No options "-stub": the point is the rendered script.
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', id: 'P001_mov1', channels: ['DAPI', 'CD3'] ],
+                    file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_cell_mask.tif', checkIfExists: true),
+                    file('$projectDir/tests/testdata/P001_nuclei_mask.tif', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('nuclear_retention.py')) {
+                    rendered << f.text
+                }
+            }
+            assertAll(
+                { assert rendered.size() >= 1, "no rendered NUCLEAR_RETENTION .command.sh found" },
+                { assert rendered.every { it.contains('--nuclear-markers DAPI') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--nuclei_mask_file P001_nuclei_mask.tif') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--output P001_mov1_nuclear_retention.csv') }, rendered.join(' --- ') },
+                // Finding 1: same condition + rendering as SPLIT_CHANNELS -- meta.channels,
+                // when present, is passed through as --channels so the script can prefer
+                // it over the image's own (possibly generic) OME channel names.
+                { assert rendered.every { it.contains('--channels DAPI CD3') }, rendered.join(' --- ') }
+            )
+        }
+    }
+}
