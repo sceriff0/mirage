@@ -42,6 +42,8 @@ include { EXTRACT_NUCLEI_PROPERTIES } from '../../modules/local/extract_nuclei_p
 include { SPLIT_CHANNELS           } from '../../modules/local/split_channels'
 include { SPLIT_CHANNELS as SPLIT_PRIOR_PYRAMID } from '../../modules/local/split_channels'
 include { MERGE_QUANT_CSVS         } from '../../modules/local/merge_quant_csvs'
+include { NUCLEAR_RETENTION        } from '../../modules/local/nuclear_retention'
+include { CELL_QC                  } from '../../modules/local/cell_qc'
 include { GENERATE_REGISTRATION_QC } from '../../modules/local/generate_registration_qc'
 include { SEG_QC                   } from './seg_qc'
 // Shared with subworkflows/local/postprocess.nf. groupTiffsByPatient is a plain
@@ -354,6 +356,70 @@ workflow ADD_CYCLE {
     MERGE_QUANT_CSVS(ch_for_merge)
 
     // ------------------------------------------------------------------ //
+    // 7b. CELL QC — the new rounds' QC columns folded onto the prior table
+    // ------------------------------------------------------------------ //
+    // Mirrors postprocess.nf's CELL QC block. The prior reference is NOT among the new
+    // slides, so the new rounds carry only moving entries. The prior rounds' "QC: ..."
+    // columns arrive in the base table (MERGE_QUANT_CSVS carries base columns through)
+    // and cell_qc.py keeps every round column it does not own; the prior run's
+    // <pid>_rounds.json is handed over so the published manifest (and the long
+    // round_qc table) is prior + new, new winning a shared round_id.
+    //
+    // NUCLEAR_RETENTION runs on exactly the slides SPLIT_CHANNELS gets: ch_new_for_split
+    // carries the keep-set AFTER the prior reference's channels were subtracted, and
+    // the same empty-keep-set rule decides whether a slide contributes.
+    def contributes = { meta -> !(meta.keep_channels != null && meta.keep_channels.isEmpty()) }
+
+    ch_retention_in = ch_new_for_split
+        .filter { meta, _f, _is_ref -> contributes(meta) }
+        .map { meta, img, _is_ref -> [meta.patient_id, meta, img] }
+        .combine(ch_masks, by: 0)
+        .map { _pid, meta, img, cmask, nmask -> [meta, img, cmask, nmask] }
+    NUCLEAR_RETENTION(ch_retention_in)
+
+    // Keyed by [patient_id, id] for the reason postprocess.nf's twin gives
+    // (Meta.identityFor ids are unique only within a patient).
+    ch_round_rows = SPLIT_CHANNELS.out.channels
+        .map { meta, tiffs ->
+            def list = tiffs instanceof List ? tiffs : [tiffs]
+            [[meta.patient_id, meta.id], meta.patient_id, meta.is_reference as boolean, list.collect { it.baseName }.toSorted()]
+        }
+        .join(NUCLEAR_RETENTION.out.csv.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
+        .join(ch_seg_residuals.map { meta, csv -> [[meta.patient_id, meta.id], csv] }, by: 0, remainder: true)
+        .filter { row -> row[1] != null }     // a residual whose slide never split (keep-set empty)
+        .map { key, pid, is_ref, markers, ret_csv, res_csv ->
+            [pid, [round_id: key[1], is_reference: is_ref, markers: markers,
+                   retention_csv: ret_csv ? ret_csv.name : null,
+                   residual_csv : res_csv ? res_csv.name : null],
+             ret_csv, res_csv]
+        }
+        // Deliberate cross-patient barrier: the remainder joins above release only on
+        // channel close, so no size hint could help here. MERGE_AND_PYRAMID does not wait on it.
+        .groupTuple(by: 0)
+        .map { pid, entries, ret_csvs, res_csvs ->
+            // CANONICAL ORDER — see postprocess.nf's twin: entries sorted for -resume;
+            // the file lists are paired by NAME in the manifest, never by position.
+            [pid,
+             entries.toSorted { it.round_id },
+             ret_csvs.findAll { it != null }.toSorted { it.name },
+             res_csvs.findAll { it != null }.toSorted { it.name }]
+        }
+
+    // The prior run's manifest, where CELL_QC published it. A prior run from before
+    // this feature has none: pass [] and its rounds simply get no long-table rows
+    // (their QC columns, if any, still survive in the base table).
+    ch_cell_qc_in = MERGE_QUANT_CSVS.out.merged_csv
+        .map { meta, csv -> [meta.patient_id, meta, csv] }
+        .join(ch_round_rows, by: 0, remainder: true)
+        .filter { row -> row[1] != null }
+        .map { pid, meta, csv, rounds, rets, ress ->
+            def prior_manifest = file("${Layout.patientDir(params.prior_outdir, pid, 'quantification')}/${pid}_rounds.json")
+            [meta, csv, rounds ?: [], rets ?: [], ress ?: [], prior_manifest.exists() ? prior_manifest : []]
+        }
+    CELL_QC(ch_cell_qc_in)
+    ch_merged_with_qc = CELL_QC.out.merged_csv
+
+    // ------------------------------------------------------------------ //
     // 8. EXPORT complete cells.geojson from the COMBINED table.
     //    nucleus slot: real nucleus contours when compartments enabled,
     //    else the cell contours (harmless placeholder — EXPORT_GEOJSON only
@@ -461,7 +527,7 @@ workflow ADD_CYCLE {
     // ch_prior_assets (they are unchanged here — no re-derivation), so the
     // rebuilt combined pyramid carries the mask series whenever embed_masks is on.
     ASSEMBLE_EXPORT(
-        MERGE_QUANT_CSVS.out.merged_csv,
+        ch_merged_with_qc,
         ch_contours,
         ch_nuc_for_export,
         ch_all_channels,
@@ -487,7 +553,7 @@ workflow ADD_CYCLE {
     POSTPROCESSED_CHECKPOINT(
         ASSEMBLE_EXPORT.out.csv,
         ASSEMBLE_EXPORT.out.geojson,
-        MERGE_QUANT_CSVS.out.merged_csv,
+        ch_merged_with_qc,
         ch_prior_cell_mask,
         ASSEMBLE_EXPORT.out.pyramid
     )
@@ -511,6 +577,8 @@ workflow ADD_CYCLE {
         .mix(SPLIT_PRIOR_PYRAMID.out.versions.first())
         .mix(QUANTIFY_MARKERS.out.versions)
         .mix(MERGE_QUANT_CSVS.out.versions.first())
+        .mix(NUCLEAR_RETENTION.out.versions.first())
+        .mix(CELL_QC.out.versions.first())
         .mix(ASSEMBLE_EXPORT.out.versions)
 
     ch_size_logs = Channel.empty()
@@ -518,6 +586,8 @@ workflow ADD_CYCLE {
         .mix(SPLIT_PRIOR_PYRAMID.out.size_log)
         .mix(QUANTIFY_MARKERS.out.size_logs)
         .mix(MERGE_QUANT_CSVS.out.size_log)
+        .mix(NUCLEAR_RETENTION.out.size_log)
+        .mix(CELL_QC.out.size_log)
         .mix(ASSEMBLE_EXPORT.out.size_logs)
         .mix(EXTRACT_CELL_PROPERTIES.out.size_log)
 
@@ -537,7 +607,7 @@ workflow ADD_CYCLE {
 
     emit:
     geojson     = ASSEMBLE_EXPORT.out.geojson
-    merged_csv  = MERGE_QUANT_CSVS.out.merged_csv
+    merged_csv  = ch_merged_with_qc
     // csv/registered.csv. Nothing in workflows/mirage.nf consumes it (collectFile's
     // storeDir writes the file regardless), but it is emitted so a test can assert on
     // it and so the add_cycle path advertises the same artifact REGISTRATION does.

@@ -69,6 +69,13 @@ nextflow run . -profile <profile> \
   reused from the prior run, only the masks they're recomputed from are;
   quantify new markers; rebuild `cells.geojson` and the pyramid from the
   combined set.
+- Per-cell QC (`CELL_QC`): the new cycle's rounds get their `QC: ...` columns
+  (nuclear retention; registration displacement and Dice at `reg_qc=2`), the prior
+  rounds' `QC: ...` columns are kept as they are, and `QC: Total intensity` is
+  recomputed over the combined markers. The published `<pid>_rounds.json` is the
+  prior run's manifest plus the new rounds (the new entry wins a shared `round_id`).
+  A prior run from before per-cell QC has no manifest, so its rounds get no rows in
+  `<pid>_round_qc.csv`.
 
 ## Marker collisions
 A new-cycle marker that shares a name with a prior column overwrites it

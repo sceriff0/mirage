@@ -161,3 +161,58 @@ def test_main_writes_three_outputs(tmp_path):
     assert json.loads((tmp_path / "P_rounds.json").read_text())[1] == {
         "round_id": "mov1", "is_reference": False, "markers": ["CD3", "CD8"],
     }
+
+
+def test_prior_round_columns_survive_a_new_round(tmp_path):
+    prior_key = "QC: Nuclear retention: [PANCK]"
+    quant = _quant()
+    quant[prior_key] = 0.5
+    out = cell_qc.add_qc_columns(
+        quant, _rounds()[1:], _retention(tmp_path, [1000.0] * 4), tmp_path,
+        pixel_size=0.5, join_max_px=5.0, nuclear_markers=NUC,
+    )
+    assert (out[prior_key] == 0.5).all() and RET in out.columns
+
+
+def test_main_merges_prior_rounds(tmp_path):
+    # add_cycle: the base table already carries a prior round's QC column, and the
+    # prior run's <pid>_rounds.json names that round plus a stale copy of a round this
+    # run recomputes. The prior-only round survives; the new entry wins its round_id.
+    prior_key = "QC: Nuclear retention: [PD1]"
+    base = tmp_path / "base.csv"
+    quant = _quant()
+    quant[prior_key] = [0.9, 0.8, 0.7, 0.6]
+    quant.to_csv(base, index=False)
+    _retention(tmp_path, [1000.0, 1000.0, 10.0, 1000.0])
+    _residuals(tmp_path)
+    rounds = tmp_path / "rounds_in.json"
+    rounds.write_text(json.dumps(_rounds(res="P_mov1_reg_residuals.csv")[1:]))
+    prior = tmp_path / "prior_rounds.json"
+    prior.write_text(json.dumps([
+        {"round_id": "ref", "is_reference": True, "markers": ["PANCK"]},
+        {"round_id": "old", "is_reference": False, "markers": ["PD1"]},
+        {"round_id": "mov1", "is_reference": False, "markers": ["STALE"]},
+    ]))
+    rc = cell_qc.main([
+        "--merged", str(base), "--rounds", str(rounds),
+        "--retention-dir", str(tmp_path / "retention"),
+        "--residual-dir", str(tmp_path / "residuals"),
+        "--pixel-size", "0.5", "--join-max-px", "5", "--nuclear-markers", "DAPI",
+        "--patient-id", "P", "--prior-rounds", str(prior),
+        "--out-merged", str(tmp_path / "merged_quant.csv"),
+        "--out-round-qc", str(tmp_path / "P_round_qc.csv"),
+        "--out-rounds", str(tmp_path / "P_rounds.json"),
+    ])
+    assert rc == 0
+    manifest = {r["round_id"]: r for r in json.loads((tmp_path / "P_rounds.json").read_text())}
+    assert set(manifest) == {"ref", "old", "mov1"}
+    assert manifest["old"]["markers"] == ["PD1"]
+    assert manifest["mov1"]["markers"] == ["CD3", "CD8"]          # new wins, not STALE
+    long = pd.read_csv(tmp_path / "P_round_qc.csv")
+    old_rows = long[long["round_id"] == "old"]
+    assert len(old_rows) == 4
+    assert old_rows["nuclear_retention"].tolist() == pytest.approx([0.9, 0.8, 0.7, 0.6])
+    assert set(long["round_id"]) == {"old", "mov1"}
+    merged = pd.read_csv(tmp_path / "merged_quant.csv")
+    assert merged[prior_key].tolist() == pytest.approx([0.9, 0.8, 0.7, 0.6])
+    assert RET in merged.columns

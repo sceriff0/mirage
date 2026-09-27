@@ -150,7 +150,84 @@ nextflow_workflow {
                 { assert workflow.trace.tasks().findAll {
                     it.name.contains('EXTRACT_MASK_SERIES') }.size() == 1 },
                 { assert workflow.trace.tasks().findAll {
-                    it.name.contains('MERGE_QUANT_CSVS') }.size() == 1 }
+                    it.name.contains('MERGE_QUANT_CSVS') }.size() == 1 },
+                // Cell QC folds the new round onto the prior table: one retention task
+                // for the one contributing new slide, one CELL_QC for the one patient.
+                { assert workflow.trace.tasks().findAll {
+                    it.name.contains('NUCLEAR_RETENTION') }.size() == 1 },
+                { assert workflow.trace.tasks().findAll {
+                    it.name.contains('CELL_QC') }.size() == 1 },
+                // tests/testdata/prior_run predates the rounds manifest: nothing is
+                // staged as the prior manifest (the `[]` branch).
+                {
+                    def priorDirs = []
+                    new File("$workDir").eachFileRecurse { f ->
+                        if (f.isDirectory() && f.name == 'prior') priorDirs << f
+                    }
+                    assert priorDirs.isEmpty() :
+                        "a prior run without <pid>_rounds.json staged ${priorDirs*.listFiles().flatten()*.name}"
+                }
+            )
+        }
+    }
+
+    /*
+     * The prior run's rounds manifest reaches CELL_QC. A copy of tests/testdata/prior_run
+     * (its checkpoint CSVs carry absolute paths, so copying csv/ is enough) gains
+     * P001/quantification/P001_rounds.json where CELL_QC publishes it; add_cycle.nf must
+     * find it there and stage it as CELL_QC's 6th input (stageAs 'prior/*'). The same
+     * task must also have staged the new slide's retention CSV -- the round join keyed on
+     * [patient_id, id] matched.
+     */
+    test("hands the prior run's rounds manifest to CELL_QC - stub") {
+        tag "stub"
+        options "-stub"
+
+        when {
+            workflow {
+                """
+                input[0] = Channel.of([
+                    [ id: 'P001_cycle2', patient_id: 'P001', is_reference: false,
+                      channels: ['DAPI','CD8'], images_count: 1, channels_count: 2 ],
+                    file('tests/testdata/P001_image.tiff')
+                ])
+                input[1] = [compartments: false, expanded: false, embedMasks: false]
+                """
+            }
+            params {
+                def prior = new File("$outputDir/prior_with_manifest")
+                new File(prior, 'csv').mkdirs()
+                ['postprocessed.csv', 'registered.csv'].each { n ->
+                    new File(prior, "csv/${n}").text =
+                        new File("$projectDir/tests/testdata/prior_run/csv/${n}").text
+                }
+                def q = new File(prior, 'P001/quantification')
+                q.mkdirs()
+                new File(q, 'P001_rounds.json').text =
+                    '[{"round_id": "P001_old", "is_reference": false, "markers": ["PD1"]}]\n'
+                outdir = "$outputDir/out"
+                mode = 'add_cycle'
+                prior_outdir = prior.absolutePath
+                reg_qc = 1
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                {
+                    def priorDirs = []
+                    new File("$workDir").eachFileRecurse { f ->
+                        if (f.isDirectory() && f.name == 'prior') priorDirs << f
+                    }
+                    assert priorDirs.size() == 1 :
+                        "expected CELL_QC to stage the prior manifest once, found ${priorDirs.size()}"
+                    def staged = priorDirs[0].listFiles()*.name
+                    assert staged == ['P001_rounds.json']
+                    def retention = new File(priorDirs[0].parentFile, 'retention').listFiles()*.name
+                    assert retention == ['P001_cycle2_nuclear_retention.csv'] :
+                        "CELL_QC staged retention ${retention}: the [patient_id, id] round join did not match"
+                }
             )
         }
     }
