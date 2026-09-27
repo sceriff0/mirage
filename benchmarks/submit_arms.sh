@@ -4,8 +4,8 @@
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/arms_%j.err
 #SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8    # headroom for CONCURRENCY Nextflow heads (they poll SLURM, not compute)
-#SBATCH --mem=128G           # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below).
-                             # 32 heads x (2 GB heap + 0.75 GB overhead) = 88 GB. head_sizing.sh
+#SBATCH --mem=32G            # ALL heads share this; NXF_OPTS -Xmx caps each head's heap (below).
+                             # 10 heads x (2 GB heap + 0.75 GB overhead) = 27.5 GB. head_sizing.sh
                              # refuses the launch at runtime if CONCURRENCY x heap outgrows this.
 #SBATCH --partition=normal
 #
@@ -45,7 +45,7 @@
 # assigned in front of sbatch is consumed by the SUBMITTING shell and does not
 # reach the job at this site (measured 2026-09-14): the run then silently uses the
 # defaults, which for ARMS_RESUME means refusing an interrupted run and for
-# ARMS_CONCURRENCY means 32 heads instead of the 2 you asked for.
+# ARMS_CONCURRENCY means 10 heads instead of the 2 you asked for.
 #   sbatch --export=ALL,NAME=value,NAME=value <script>
 # ALL keeps the rest of the environment (conda, module, SINGULARITY_*); without it
 # the job starts with almost nothing.
@@ -62,9 +62,9 @@ ARMS_YAML="$SRC_DIR/benchmarks/configs/arms.yaml"
 PROFILES="${PROFILES:-singularity,ieo}"        # OVERRIDES run_arms.sh's default -profile docker
 SITE_CONFIG="$SRC_DIR/conf/ieo.config"    # gitignored: executor=slurm + cacheDir + paths
 CONDA_ENV="nf-env"
-CONCURRENCY="${ARMS_CONCURRENCY:-32}"     # arms launched AT ONCE. Each is one Nextflow head.
-                                          # 32 = every registration arm (18) at once, then 32 of
-                                          # the 99 resumed crosses. Heads share --mem: N x (-Xmx +
+CONCURRENCY="${ARMS_CONCURRENCY:-10}"     # arms launched AT ONCE. Each is one Nextflow head.
+                                          # 10 = the most a 32G head job holds at -Xmx2g (2026-09-27:
+                                          # head jobs cut from 128G to 32G). Heads share --mem: N x (-Xmx +
                                           # 0.75 GB) must fit it, and benchmarks/head_sizing.sh
                                           # REFUSES the launch when it does not (the -Xmx32g people
                                           # copy from the single-run launcher would blow the job
@@ -208,7 +208,7 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # larger number just buries your own queue behind jobs that cannot start.
 # Derived from a TOTAL target rather than fixed per head, so the head count does not
 # multiply the cluster load: PEAK_JOBS_TARGET is a CEILING on in-flight SLURM process jobs
-# across all heads of this submitter (32 heads -> 25 per head). Set QUEUE_SIZE to pin the
+# across all heads of this submitter (10 heads -> 80 per head). Set QUEUE_SIZE to pin the
 # per-head queue instead. LOW LOAD, e.g. weekdays -- ten process jobs in total:
 #   sbatch --export=ALL,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 benchmarks/submit_arms.sh
 PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-800}"

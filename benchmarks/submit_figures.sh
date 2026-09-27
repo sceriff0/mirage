@@ -2,7 +2,7 @@
 #SBATCH --job-name=mirage_figures
 #SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/figures_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/figures_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G             # the Nextflow heads (-Xmx4g each) + the renders
 #SBATCH --partition=normal

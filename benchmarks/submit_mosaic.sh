@@ -2,7 +2,7 @@
 #SBATCH --job-name=mirage_mosaic
 #SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/mosaic_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/mosaic_%j.err
-#SBATCH --time=96:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=24G             # 2 Nextflow heads (-Xmx4g each) + the ASHLAR steps and the mosaic,
                               # which run INSIDE this job, not as SLURM children

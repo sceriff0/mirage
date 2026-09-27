@@ -2,10 +2,10 @@
 #SBATCH --job-name=mirage_bench
 #SBATCH --output=/hpcnfs/home/ieo7660/logs/bench_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/logs/bench_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=12  # headroom for CONCURRENCY Nextflow JVMs (they mostly poll SLURM, not compute)
-#SBATCH --mem=128G          # all CONCURRENCY heads share this; NXF_OPTS -Xmx caps each head's heap (below).
-                            # 40 heads x (2 GB heap + 0.75 GB overhead) = 110 GB. head_sizing.sh
+#SBATCH --mem=32G           # all CONCURRENCY heads share this; NXF_OPTS -Xmx caps each head's heap (below).
+                            # 10 heads x (2 GB heap + 0.75 GB overhead) = 27.5 GB. head_sizing.sh
                             # refuses the launch at runtime if CONCURRENCY x heap outgrows this.
 # #SBATCH --partition=<your_partition>     # uncomment + set if your site needs it
 # #SBATCH --mail-type=END,FAIL
@@ -63,7 +63,7 @@ CONDA_ENV="nf-env"                        # env that has nextflow + python
 REPEATS="${SWEEP_REPEATS:-3}"             # replicate runs per config. 135 configs -> 405 runs at 3,
                                           # 135 at 1. Timing at n=1 is noisy (cache state, node
                                           # contention), so 3 is the default; drop to 1 for a first pass.
-CONCURRENCY="${SWEEP_CONCURRENCY:-40}"   # pipeline runs launched AT ONCE (each = 1 Nextflow head that
+CONCURRENCY="${SWEEP_CONCURRENCY:-10}"   # pipeline runs launched AT ONCE (each = 1 Nextflow head that
                                           # submits its OWN SLURM process jobs). Heads share --mem:
                                           # N x (-Xmx + 0.75 GB) must fit, and benchmarks/head_sizing.sh
                                           # REFUSES the launch when it does not. The per-head queueSize
@@ -115,7 +115,7 @@ export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-$NXF_SINGULARITY_CACHEDIR/.pull_tmp
 export SINGULARITY_TMPDIR="${SINGULARITY_TMPDIR:-$APPTAINER_TMPDIR}"
 mkdir -p "$APPTAINER_TMPDIR"
 # Cap EACH concurrent Nextflow head's JVM heap so CONCURRENCY x heap stays under --mem
-# (16 x 3 GB = 48 GB < 64 GB, leaving room for JVM/OS overhead). Raise -Xmx only if a head OOMs.
+# (10 x 2.75 GB = 27.5 GB < 32 GB, leaving room for JVM/OS overhead). Raise -Xmx only if a head OOMs.
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx2g}"
 # shellcheck disable=SC1091
 source "$SRC_DIR/benchmarks/head_sizing.sh"
@@ -170,7 +170,7 @@ MAX_FORKS="${MAX_FORKS:-20}"
 # 5/20 pair, max_forks was the binding constraint and the cluster sat idle.
 # Derived from a TOTAL target rather than fixed per head, so the head count does not
 # multiply the cluster load: PEAK_JOBS_TARGET is a CEILING on in-flight SLURM process jobs
-# across all heads of this submitter (40 heads -> 40 per head). Set QUEUE_SIZE to pin the
+# across all heads of this submitter (10 heads -> 160 per head). Set QUEUE_SIZE to pin the
 # per-head queue instead. LOW LOAD, e.g. weekdays -- ten process jobs in total:
 #   SWEEP_CONCURRENCY=2 PEAK_JOBS_TARGET=10 sbatch benchmarks/submit_sweep.sh
 PEAK_JOBS_TARGET="${PEAK_JOBS_TARGET:-1600}"
