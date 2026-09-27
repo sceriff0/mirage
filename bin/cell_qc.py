@@ -49,6 +49,20 @@ def _base_markers(columns) -> List[str]:
 
 
 def total_intensity(df: pd.DataFrame, nuclear_markers: List[str]) -> pd.Series:
+    """Per-cell sum of every non-nuclear marker's ``Cell: Median`` column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The quantification table (already has ``<marker>: Cell: Median`` columns).
+    nuclear_markers : list of str
+        Markers to exclude (the nuclear/fiducial channel(s)).
+
+    Returns
+    -------
+    pd.Series
+        NaN where every non-nuclear marker was NaN for that cell.
+    """
     cols = [
         measurement_key(m, "Cell", "Median")
         for m in _base_markers(df.columns)
@@ -60,6 +74,24 @@ def total_intensity(df: pd.DataFrame, nuclear_markers: List[str]) -> pd.Series:
 
 
 def normalised_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
+    """Per-cell ``mov / ref``, normalised by the round's own median ratio.
+
+    Dividing by the round median (rather than reporting the raw ratio) removes a
+    globally dimmer round's uniform intensity drop, so the signal that survives is
+    per-cell RELATIVE retention within that round.
+
+    Parameters
+    ----------
+    ref : np.ndarray
+        Reference-round nuclear intensities, per cell.
+    mov : np.ndarray
+        Moving-round nuclear intensities, per cell, same order.
+
+    Returns
+    -------
+    np.ndarray
+        All-NaN if the round has no finite ratio or a non-positive median.
+    """
     ref = np.asarray(ref, dtype=float)
     mov = np.asarray(mov, dtype=float)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -94,6 +126,36 @@ def add_qc_columns(
     join_max_px: float,
     nuclear_markers: List[str],
 ) -> pd.DataFrame:
+    """Add every ``QC: ...`` column this run owns, replacing any of the same name.
+
+    Cell-level ``QC: Total intensity`` is always (re)computed. Each moving round
+    with non-nuclear markers gets ``QC: Nuclear retention: [...]`` (if it has a
+    retention CSV) and ``QC: Registration displacement µm: [...]`` /
+    ``QC: Registration Dice: [...]`` (if it has a residual CSV, joined via
+    ``reg_residuals.join_one``). A round with no non-nuclear markers, or the
+    reference round, contributes no round-level keys.
+
+    Parameters
+    ----------
+    quant : pd.DataFrame
+        MERGE_QUANT_CSVS's per-patient table.
+    rounds : list of dict
+        Per-slide manifest entries (``round_id``, ``is_reference``, ``markers``,
+        ``retention_csv``, ``residual_csv``).
+    retention_dir, residual_dir : Path
+        Directories the ``retention_csv``/``residual_csv`` filenames resolve in.
+    pixel_size : float
+        µm/px, used to convert the residual join's pixel displacement.
+    join_max_px : float
+        Max spatial-join radius handed to ``reg_residuals.join_one``.
+    nuclear_markers : list of str
+        Markers excluded from every round-level key and from total intensity.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``quant`` with this run's QC columns dropped and rebuilt.
+    """
     out = quant.copy()
     owned = {qc_key(QC_TOTAL_INTENSITY)}
     moving = [
@@ -144,6 +206,28 @@ def add_qc_columns(
 
 
 def round_long_table(table: pd.DataFrame, rounds: List[Dict], pixel_size: float) -> pd.DataFrame:
+    """One row per (cell, moving round) with that round's QC values, wide-to-long.
+
+    Reads the PUBLISHED manifest shape -- ``rounds`` entries whose ``markers``
+    already exclude nuclear markers (as ``main()`` writes them out), not the raw
+    per-slide rows ``add_qc_columns`` takes.
+
+    Parameters
+    ----------
+    table : pd.DataFrame
+        The table `add_qc_columns` returned (already carries the QC columns).
+    rounds : list of dict
+        Manifest entries; reference rounds and rounds with no markers are skipped.
+    pixel_size : float
+        µm/px, used to recover ``displacement_px`` from the stored µm column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``label, round_id, markers, nuclear_retention, displacement_px,
+        displacement_um, dice``. Empty (but correctly-columned) if no round
+        contributed a row.
+    """
     frames = []
     nan = pd.Series(np.nan, index=table.index)
     for r in rounds:
@@ -172,6 +256,7 @@ def round_long_table(table: pd.DataFrame, rounds: List[Dict], pixel_size: float)
 
 
 def parse_args(argv=None):
+    """Parse CELL_QC's CLI arguments (see module docstring for the flag list)."""
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--merged", required=True)
     p.add_argument("--rounds", required=True)
@@ -189,6 +274,8 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """CLI entry point: write the augmented merged CSV, the round-QC CSV and the
+    round manifest JSON. Returns 0 on success."""
     configure_logging()
     a = parse_args(argv)
     rounds = json.loads(Path(a.rounds).read_text())
