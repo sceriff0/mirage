@@ -14,7 +14,8 @@ Manifest shape::
       "slides": {
         "<name>": {
           "M0":   3x3 affine (forward: native moving coords -> reference frame),
-          "mesh": {"grid_x": [...], "grid_y": [...], "displacements": [[[dx,dy],...],...]} | null,
+          "mesh": {"grid_x": [...], "grid_y": [...], "displacements": [[[dx,dy],...],...],
+                   "interp": "cubic"  (optional; absent = bilinear)} | null,
         },
         ...
       }
@@ -66,7 +67,7 @@ def _apply_affine(m, xy):
 def _mesh_from_spec(spec):
     if spec is None:
         return None
-    return MeshField(spec["grid_x"], spec["grid_y"], spec["displacements"])
+    return MeshField.from_spec(spec)
 
 
 def make_warper(manifest):

@@ -18,7 +18,7 @@ import numpy as np
 
 from stare.mesh_field import resample_bilinear
 
-__all__ = ["warp_image", "source_region"]
+__all__ = ["warp_image", "source_coords", "source_region"]
 
 
 def _apply_affine(m, xy):
@@ -61,6 +61,55 @@ def source_region(m0, mesh, out_origin, out_shape, margin=8, src_shape=None):
     return x0, y0, x1, y1
 
 
+def _axis_upsampler(n_out, origin, step):
+    """Sub-grid nodes on one axis, and each output pixel's lower node + linear weight.
+
+    Nodes sit at GLOBAL multiples of ``step`` (not tile-relative), so a pixel is interpolated
+    from the same nodes whichever output tile it falls in: the streamed stitch equals a
+    whole-image warp at the same ``step``, tile seams included.
+    """
+    k0 = origin // step
+    k1 = max(-(-(origin + n_out - 1) // step), k0 + 1)
+    nodes = np.arange(k0, k1 + 1, dtype=float) * step
+    t = (np.arange(n_out, dtype=float) + origin - k0 * step) / step
+    i0 = np.minimum(np.floor(t).astype(int), nodes.size - 2)
+    return nodes, i0, t - i0
+
+
+def source_coords(
+    m0, mesh, out_shape, out_origin=(0, 0), mesh_inverse_iters=3, field_step=None
+):
+    """Moving coordinates ``(H, W, 2)`` (x, y) that each reference-frame output pixel samples.
+
+    ``field_step=None`` inverts the map exactly at every pixel. An integer ``field_step`` inverts
+    it only on a sub-grid every ``field_step`` px (global multiples) and bilinearly upsamples the
+    result: exact for the affine part, and for the mesh part off by at most ~``h^2/8 |u''|``
+    (a cubic mesh; a bilinear one adds ``h |jump u'| / 4`` at its cell edges) -- 0.0015 px
+    worst of 10k pixels on SOLVE's cubic meshes at the stitch's ``h = 8``
+    (``stages.stitch.FIELD_STEP``; ``tests/test_tiled_warp.py`` pins it). The QC seam
+    (``stage_warp``) keeps evaluating the exact field at its points.
+    """
+    out_h, out_w = out_shape
+    ox, oy = out_origin
+    if mesh is None or not field_step:
+        ys, xs = np.mgrid[0:out_h, 0:out_w]
+        u = np.column_stack(
+            [(xs.ravel() + ox).astype(float), (ys.ravel() + oy).astype(float)]
+        )
+        return _invert(m0, mesh, u, mesh_inverse_iters).reshape(out_h, out_w, 2)
+    step = int(field_step)
+    nx, ix, fx = _axis_upsampler(out_w, int(ox), step)
+    ny, iy, fy = _axis_upsampler(out_h, int(oy), step)
+    gx, gy = np.meshgrid(nx, ny)
+    xc = _invert(
+        m0, mesh, np.column_stack([gx.ravel(), gy.ravel()]), mesh_inverse_iters
+    ).reshape(ny.size, nx.size, 2)
+    # separable linear upsampling: along x on the node rows, then along y
+    fx, fy = fx[None, :, None], fy[:, None, None]
+    rows = xc[:, ix] * (1.0 - fx) + xc[:, ix + 1] * fx
+    return rows[iy] * (1.0 - fy) + rows[iy + 1] * fy
+
+
 def warp_image(
     image,
     m0,
@@ -69,6 +118,7 @@ def warp_image(
     mesh_inverse_iters=3,
     out_origin=(0, 0),
     src_origin=(0, 0),
+    field_step=None,
 ):
     """Warp ``image`` (moving) into an ``out_shape`` = ``(H, W)`` reference-frame raster.
 
@@ -89,20 +139,19 @@ def warp_image(
     src_origin : (int, int)
         ``(x, y)`` of ``image``'s top-left in moving coordinates, when ``image`` is a crop of the
         moving slide (streaming stitch). Sample points are shifted into the crop's local frame.
+    field_step : int or None
+        Evaluate the inverse map on a sub-grid this many px apart and upsample it
+        (:func:`source_coords`); ``None`` (default) evaluates it at every pixel.
     """
     image = np.asarray(image, dtype=float)
     out_h, out_w = out_shape
-    ox, oy = out_origin
     sox, soy = src_origin
-
-    ys, xs = np.mgrid[0:out_h, 0:out_w]
-    u = np.column_stack(
-        [(xs.ravel() + ox).astype(float), (ys.ravel() + oy).astype(float)]
-    )
 
     # Forward map is u = v + F(v) with v = M0 x the rigid (ref-frame) position. Invert in two
     # decoupled steps: solve v = u - F(v) by fixed-point (F is small and smooth), then x = M0^-1 v.
-    x = _invert(m0, mesh, u, mesh_inverse_iters)
+    x = source_coords(
+        m0, mesh, out_shape, out_origin, mesh_inverse_iters, field_step
+    ).reshape(-1, 2)
     # ``image`` may be a crop of the moving slide whose top-left sits at ``src_origin`` in moving
     # coordinates — shift the sample points into the crop's local frame.
     if sox or soy:

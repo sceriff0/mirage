@@ -37,11 +37,14 @@ def assemble_control_grid(tiles, residuals, gate_tre):
     return grid_x, grid_y, disp
 
 
-def slide_entry(m0, grid_x=None, grid_y=None, displacements=None):
+def slide_entry(m0, grid_x=None, grid_y=None, displacements=None, interp=None):
     """Build one slide's manifest entry: ``{"M0": ..., "mesh": ... | None}``.
 
     A mesh is emitted only when some displacement is non-zero; an all-zero (fully TRE-gated) grid
-    collapses to ``mesh: None`` so the warper cleanly falls back to rigid.
+    collapses to ``mesh: None`` so the warper cleanly falls back to rigid. ``interp`` other than
+    ``None``/``"bilinear"`` is recorded as the mesh's ``"interp"`` (``MeshField.from_spec``);
+    a bilinear mesh carries no key, so its manifest is byte-identical to one written before
+    the key existed.
     """
     entry = {"M0": np.asarray(m0, dtype=float).tolist(), "mesh": None}
     if displacements is not None:
@@ -52,6 +55,8 @@ def slide_entry(m0, grid_x=None, grid_y=None, displacements=None):
                 "grid_y": [float(v) for v in grid_y],
                 "displacements": d.tolist(),
             }
+            if interp not in (None, "bilinear"):
+                entry["mesh"]["interp"] = interp
     return entry
 
 

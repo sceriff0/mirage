@@ -136,7 +136,9 @@ def main(argv=None) -> int:
         max_disp=a.max_disp,
         solver=a.solver,
     )
-    entry = slide_entry(m0, grid_x, grid_y, disp)
+    entry = slide_entry(
+        m0, grid_x, grid_y, disp, interp=solve_report.get("mesh_interp")
+    )
     # carry the reference frame so the stitch knows the output size without re-reading the reference
     entry["out_shape"] = [int(m0_doc["ref_h"]), int(m0_doc["ref_w"])]
     # which solve produced the mesh; the warpers ignore the key, a reader of the manifest wants it

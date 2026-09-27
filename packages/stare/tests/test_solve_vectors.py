@@ -214,6 +214,44 @@ def test_end_to_end_4096_through_the_stitch_semantics(case):
     med2, report = run(True)
     assert med2 < 0.4, (case, med2)
     assert report["input"] == "vectors" and report["sigma_calibration"] is not None
+    # a normal field is nowhere near a fold: the certificate holds with room to spare
+    assert report["lipschitz"] < 0.5 and report["fold_certificate_ok"], report[
+        "lipschitz"
+    ]
+    assert report["min_det_jacobian"] > 0.5
     if case == "large100":
         med1, _ = run(False)
         assert med1 > 1.0, ("a single pass should not survive +100 px", med1)
+
+
+def test_a_folding_control_set_fails_the_fold_certificate():
+    """A reference-frame expansion steeper than 1 (dD/dx > 1) folds the moving frame.
+
+    ``dx = 250 sin(2 pi x / 1024)`` peaks at a slope of 1.53: ``x -> x - D(x)`` is not
+    monotone there, so the mesh the stitch reads has ``det(I + J) < 0`` somewhere. The
+    certificate must say so rather than ship it silently.
+    """
+    n = 24
+    X = S * (np.arange(n) + 1.0)
+    vecs = [
+        _vec(kx, ky, 250.0 * np.sin(2 * np.pi * X[kx] / 1024), 0.0)
+        for ky in range(n)
+        for kx in range(n)
+    ]
+    _gx, _gy, _disp, report = solve.solve_dctpls([_control(0, 0, vecs)], max_disp=None)
+    assert report["min_det_jacobian"] < 0, report["min_det_jacobian"]
+    assert report["fold_certificate_ok"] is False
+    assert report["lipschitz"] >= 1.0
+
+
+def test_a_gentle_synthetic_field_passes_the_fold_certificate():
+    n = 24
+    X = S * (np.arange(n) + 1.0)
+    vecs = [
+        _vec(kx, ky, 4.0 * np.sin(2 * np.pi * X[kx] / 1500), 2.0 * np.cos(X[ky] / 900))
+        for ky in range(n)
+        for kx in range(n)
+    ]
+    _gx, _gy, _disp, report = solve.solve_dctpls([_control(0, 0, vecs)], max_disp=256)
+    assert report["lipschitz"] < 0.5 and report["fold_certificate_ok"] is True
+    assert report["min_det_jacobian"] > 0

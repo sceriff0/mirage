@@ -24,6 +24,15 @@ from stare.warp import source_region, warp_image
 
 logger = get_logger(__name__)
 
+# The inverse map is evaluated every FIELD_STEP output px and bilinearly upsampled
+# (stare.warp.source_coords). Evaluating the mesh at every pixel of every channel was 74 % of
+# STITCH on a 4096^2, 3-channel slide with a stride-128 mesh. At 8 px, on SOLVE's own cubic
+# meshes of the 8192^2 synthetic slide (seeds 0/1, base and +100 px), the upsampled map is
+# within 0.0015 px of the exact one at 10k random pixels (h^2/8 bound <= 0.003 px); 16 px was
+# 0.0055 px (bound 0.0115). 8 costs ~16k field evaluations per 1024^2 tile against 1M.
+# Pinned by tests/test_tiled_warp.py.
+FIELD_STEP = 8
+
 
 def _entry_for(manifest, moving_name):
     slides = manifest["slides"]
@@ -38,11 +47,11 @@ def _entry_for(manifest, moving_name):
 def _mesh_and_margin(entry):
     if entry.get("mesh") is None:
         return None, 4
-    m = entry["mesh"]
-    disp = np.asarray(m["displacements"], dtype=float)
-    mesh = MeshField(m["grid_x"], m["grid_y"], disp)
-    # the source box must cover the residual displacement the mesh can add, plus a bilinear pixel
-    margin = int(np.ceil(np.abs(disp).max())) + 4
+    # the same constructor stage_warp uses: the image and the QC seam sample one field
+    mesh = MeshField.from_spec(entry["mesh"])
+    # the source box must cover the residual displacement the mesh can add, plus a bilinear
+    # pixel; a cubic spline may overshoot its nodes slightly, which the +4 covers
+    margin = int(np.ceil(np.abs(mesh.disp).max())) + 4
     return mesh, margin
 
 
@@ -54,7 +63,9 @@ def _clamp(arr, dtype):
     return out.astype(dtype)
 
 
-def stream_tiles(src, m0, mesh, margin, out_h, out_w, tile, dtype):
+def stream_tiles(
+    src, m0, mesh, margin, out_h, out_w, tile, dtype, field_step=FIELD_STEP
+):
     """Yield tiled output in tifffile order (channel, row, col), warping one tile at a time."""
     c_n, h, w = src.shape
     for c in range(c_n):
@@ -76,6 +87,7 @@ def stream_tiles(src, m0, mesh, margin, out_h, out_w, tile, dtype):
                         (th, tw),
                         out_origin=(tx, ty),
                         src_origin=(sx0, sy0),
+                        field_step=field_step,
                     )
                     out_tile[:th, :tw] = _clamp(warped, dtype)
                 yield out_tile
@@ -141,6 +153,13 @@ def main(argv=None) -> int:
         help="Channel names in order (TILED_STITCH passes meta.channels), written into the OME "
         "header. Omitted = anonymous channels, which is what a reader used to get.",
     )
+    ap.add_argument(
+        "--field-step",
+        type=int,
+        default=FIELD_STEP,
+        help="evaluate the warp's inverse map every N output px and upsample it bilinearly; "
+        "0 = at every pixel (exact, several times slower)",
+    )
     a = ap.parse_args(argv)
 
     # 'auto' reads the scale off the moving slide's own OME header, which CONVERT_IMAGE
@@ -170,7 +189,17 @@ def main(argv=None) -> int:
         # (mod UUID); see tests/test_stitch_ome_metadata.py.
         with ome_tiff_writer(str(a.out), bigtiff=True, ome=True) as tw:
             tw.write(
-                stream_tiles(src, m0, mesh, margin, out_h, out_w, a.out_tile, dtype),
+                stream_tiles(
+                    src,
+                    m0,
+                    mesh,
+                    margin,
+                    out_h,
+                    out_w,
+                    a.out_tile,
+                    dtype,
+                    field_step=a.field_step or None,
+                ),
                 shape=(c_n, out_h, out_w),
                 dtype=dtype,
                 tile=(a.out_tile, a.out_tile),

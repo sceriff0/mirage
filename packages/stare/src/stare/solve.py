@@ -988,7 +988,7 @@ def _calibrate_sigma(PR, valid, E):
 REINDEX_ITERATIONS = 5
 
 
-def _reindex_to_moving_frame(grid_x, grid_y, D):
+def _reindex_to_moving_frame(grid_x, grid_y, D, interp="bilinear"):
     """``F(g) = D(g + F(g))``: the lattice field re-indexed from reference to moving points.
 
     A window vector is MEASURED at a reference-frame node ``x``: ``ref(x) = mov(x - D(x))``.
@@ -997,35 +997,31 @@ def _reindex_to_moving_frame(grid_x, grid_y, D):
     mesh must hold ``F(v) = D(v + F(v))``. The two differ by ``J D``: negligible for a
     sub-pixel field, 0.3 px for a +100 px offset with a 0.15 deg residual rotation, measured
     on the synthetic slide (0.15 px median error at the reference nodes, 0.71 px through the
-    stitch until this was added). Bilinear on the lattice, clamped at its edges.
+    stitch until this was added). ``D`` is read with the same ``interp`` the manifest
+    records, clamped at the lattice edges.
     """
-    from scipy.ndimage import map_coordinates
+    from stare.mesh_field import MeshField
 
-    gx = np.asarray(grid_x, dtype=float)
-    gy = np.asarray(grid_y, dtype=float)
     ny, nx, _ = D.shape
     if ny < 2 and nx < 2:
         return D.copy()
-    hx = float(gx[1] - gx[0]) if nx > 1 else 1.0
-    hy = float(gy[1] - gy[0]) if ny > 1 else 1.0
-    GY, GX = np.meshgrid(
-        np.arange(ny, dtype=float), np.arange(nx, dtype=float), indexing="ij"
-    )
-    F = D.copy()
+    # D interpolated exactly as the manifest's reader will interpolate F: one MeshField rule
+    mesh_d = MeshField(grid_x, grid_y, D, interp=interp)
+    G = np.stack(np.meshgrid(mesh_d.grid_x, mesh_d.grid_y), axis=-1).reshape(-1, 2)
+    F = D.reshape(-1, 2).copy()
     for _ in range(REINDEX_ITERATIONS):
-        iy = np.clip(GY + F[..., 1] / hy, 0, ny - 1) if ny > 1 else np.zeros_like(GY)
-        ix = np.clip(GX + F[..., 0] / hx, 0, nx - 1) if nx > 1 else np.zeros_like(GX)
-        F = np.stack(
-            [
-                map_coordinates(D[..., k], [iy, ix], order=1, mode="nearest")
-                for k in range(2)
-            ],
-            axis=-1,
-        )
-    return F
+        F = mesh_d.displacement(G + F)
+    return F.reshape(ny, nx, 2)
 
 
-def _solve_dctpls_vectors(controls, max_disp):
+# The interpolant the vector-lattice mesh is written with (the manifest's ``"interp"``).
+# Measured on the 8192^2 synthetic e2e (seeds 0, 1; base and +100 px), field error through
+# the stitch's inverse, bilinear -> cubic: median 0.153/0.200/0.180/0.203 ->
+# 0.130/0.141/0.144/0.140 px and p99 0.435/0.705/0.777/0.611 -> 0.403/0.637/0.748/0.538 px.
+VECTOR_MESH_INTERP = "cubic"
+
+
+def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
     """``solve_dctpls`` on REG_TILE's vector lattice, with sigma calibration."""
     import time
 
@@ -1036,6 +1032,7 @@ def _solve_dctpls_vectors(controls, max_disp):
     base = {
         "solver": "dctpls",
         "input": "vectors",
+        "mesh_interp": interp,
         "n_controls": len(controls),
         "n_vectors": counts["n_vectors"],
         "n_rejected_disp": counts["disp"],
@@ -1072,7 +1069,7 @@ def _solve_dctpls_vectors(controls, max_disp):
         )
     if why:
         logger.info(f"sigma calibration skipped: {why}")
-    field = _reindex_to_moving_frame(grid_x, grid_y, field)
+    field = _reindex_to_moving_frame(grid_x, grid_y, field, interp=interp)
     jac = jacobian_report(grid_x, grid_y, field)
     report = {
         **base,
@@ -1101,7 +1098,9 @@ def _solve_dctpls_vectors(controls, max_disp):
     )
 
 
-def solve_dctpls(controls, max_error=None, max_disp=None, **kw):
+def solve_dctpls(
+    controls, max_error=None, max_disp=None, interp=VECTOR_MESH_INTERP, **kw
+):
     """Robust affine, then robust DCT-PLS of the residual; no dead zone, no rescale.
 
     There is no TRE gate here -- a caller's ``gate_tre`` never reaches this solver.
@@ -1126,12 +1125,16 @@ def solve_dctpls(controls, max_error=None, max_disp=None, **kw):
     at uniform weights, h-block held-out residuals binned by peak ratio, then one re-solve at
     ``w = 1/sigma^2``. Without ``vectors`` it is the one-control-per-tile lattice as before.
 
+    ``interp`` is the interpolant the vector-lattice mesh is re-indexed with and that the
+    manifest records (``report["mesh_interp"]``; ``VECTOR_MESH_INTERP``, cubic, by default).
+    The per-tile lattice (a few nodes, a short last tile) is always written bilinear.
+
     Extra keyword arguments are accepted and ignored so the dispatcher can pass one
     set. Returns ``(grid_x, grid_y, disp, report)`` like the other solvers.
     """
     del kw
     if any("vectors" in c for c in controls):
-        out = _solve_dctpls_vectors(controls, max_disp)
+        out = _solve_dctpls_vectors(controls, max_disp, interp=interp)
         if out is not None:
             return out
         # not one lattice node anywhere (a stride larger than the slide): one control per tile
@@ -1143,6 +1146,7 @@ def solve_dctpls(controls, max_error=None, max_disp=None, **kw):
     jac = jacobian_report(grid_x, grid_y, field)
     report = {
         "solver": "dctpls",
+        "mesh_interp": "bilinear",
         "n_controls": len(controls),
         "n_rejected_error": counts["error"],
         "n_rejected_disp": counts["disp"],
