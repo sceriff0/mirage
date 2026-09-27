@@ -12,21 +12,50 @@ up to 0.1.0; it is now `drape-registration` (import `drape`, CLI `drape`). There
 `reg_tiled_*`) and so do the `TILED_*` processes.
 
 ```bash
-pip install -e packages/drape            # from the mirage checkout
+pip install git+https://github.com/sceriff0/drape   # standalone repository
+pip install -e packages/drape                       # or from a mirage checkout
 
 drape register --reference ref.ome.tif --moving mov.ome.tif \
     --out mov_registered.ome.tif --manifest mov_manifest.json --workers 8
 ```
 
-The four stages are also individual subcommands (`drape coarse`, `drape reg-tile`,
-`drape solve`, `drape stitch`) so a workflow engine can fan the tile stage out across
-nodes, which is how the mirage pipeline runs it.
+A slim container with DRAPE preinstalled is published as `bolt3x/mirage-drape:1.0.0`. It has
+no JVM, no GPU and no torch.
 
-This package lives inside the mirage repository as `packages/drape/` and is the single
-source of truth for the method: mirage's `bin/tiled_*.py` are shims over it, and
-`tests/test_drape_package_parity.py` asserts the two paths produce the same manifest and
-the same pixels. It is extracted to its own repository with
-`git subtree split -P packages/drape` when it ships on its own.
+The four stages are also individual subcommands (`drape coarse`, `drape reg-tile`,
+`drape solve`, `drape stitch`), so a workflow engine can fan the tile stage out across
+nodes. That is how the [mirage](https://github.com/sceriff0/mirage) Nextflow pipeline runs it.
+
+**Where development happens.** DRAPE is developed inside mirage as `packages/drape/`, which
+is the single source of truth:
+- mirage's `bin/tiled_*.py` scripts are shims over it;
+- `tests/test_drape_package_parity.py` in mirage asserts that the pipeline and
+  `drape register` produce the same manifest and the same pixels.
+
+The standalone repository [sceriff0/drape](https://github.com/sceriff0/drape) is generated
+from that directory with `git subtree split -P packages/drape`, so the two cannot diverge.
+
+## How it works, in brief
+
+1. **COARSE.** A global rigid anchor from an exhaustive rotation sweep with globally
+   normalised cross-correlation on tissue-masked thumbnails. It falls back to ORB + RANSAC,
+   and refuses rather than guesses.
+2. **REG-TILE.** Per tile, displacement vectors on a slide-global lattice of 50 %-overlapping
+   windows, following the particle-image-velocimetry recipe:
+   - high-pass + Hann-windowed cross-correlation;
+   - two passes with window deformation;
+   - a 3-point Gaussian sub-pixel fit;
+   - peak-ratio and foreground validity.
+3. **SOLVE.** Remove a robust affine, then apply Garcia's robust DCT-PLS smoother. The
+   smoothing is chosen by blocked cross-validation, with an h-block buffer when the measured
+   residual autocorrelation calls for it. Per-vector uncertainties are calibrated on held-out
+   residuals.
+4. **STITCH.** An interpolating cubic B-spline field, inverted by fixed-point iteration to a
+   tolerance, applied by streaming bilinear pull-back resampling.
+
+Every design choice traces to open-access literature read in full, to a derivation, or to a
+stated measurement. The literature is PIVlab and OpenPIV, Garcia 2010 and 2011,
+De Brabanter et al. 2011, Unser 1999, Behrmann et al. 2019, ASHLAR and SOFIMA.
 
 ## Fan-out contract
 
