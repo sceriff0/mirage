@@ -61,6 +61,7 @@ from pixel_convention import CORNER_OFFSET, centre_to_corner  # noqa: E402
 from utils import cell_pairs as cp  # noqa: E402
 
 _ESD_PATH = BIN / "export_spatialdata.py"
+_REG_PATH = BIN / "utils" / "reg_residuals.py"
 _esd_spec = importlib.util.spec_from_file_location("export_spatialdata", _ESD_PATH)
 esd = importlib.util.module_from_spec(_esd_spec)
 _esd_spec.loader.exec_module(esd)
@@ -243,22 +244,25 @@ def test_join_reg_residuals_is_fed_the_quantification_csv_not_obsm_spatial():
             f"centre-of-pixel.\n  {source}"
         )
 
-    body = (
-        ast.get_source_segment(
-            src,
-            next(
-                n
-                for n in ast.walk(tree)
-                if isinstance(n, ast.FunctionDef) and n.name == "join_reg_residuals"
-            ),
+    reg_src = _REG_PATH.read_text()
+    reg_tree = ast.parse(reg_src)
+    for fn_name in ("join_one", "join_reg_residuals"):
+        body = (
+            ast.get_source_segment(
+                reg_src,
+                next(
+                    n
+                    for n in ast.walk(reg_tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == fn_name
+                ),
+            )
+            or ""
         )
-        or ""
-    )
-    for forbidden in ("centre_to_corner", "obsm"):
-        assert forbidden not in body, (
-            f"join_reg_residuals itself now mentions {forbidden!r}; both of its "
-            "sides are centre-of-pixel and it must not convert either"
-        )
+        for forbidden in ("centre_to_corner", "obsm"):
+            assert forbidden not in body, (
+                f"{fn_name} itself now mentions {forbidden!r}; both of its "
+                "sides are centre-of-pixel and it must not convert either"
+            )
 
     # Non-vacuous: the conversion IS available in this module and IS used
     # elsewhere in it, so its absence on this path is a choice, not an omission.

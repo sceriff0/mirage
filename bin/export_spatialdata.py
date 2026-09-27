@@ -49,6 +49,7 @@ from measurements import (  # noqa: E402
 )
 from pixel_convention import centre_to_corner  # noqa: E402
 from pixel_size import resolve_pixel_size  # noqa: E402
+from reg_residuals import join_reg_residuals  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -134,77 +135,6 @@ def load_qc(reg_qc_paths: List[str], versions_paths: List[str]) -> Tuple[Dict, D
         except OSError as exc:
             logger.warning("skipping unreadable versions file %s: %s", p, exc)
     return qc, {"qc_json": raw, "versions": versions}
-
-
-# ── per-cell registration residuals ────────────────────────────────────────────
-def join_reg_residuals(
-    residual_paths: List[str],
-    centroids_xy: np.ndarray,
-    labels: np.ndarray,
-    max_dist_px: float,
-) -> Tuple[pd.DataFrame, Dict]:
-    """Spatially join per-cell registration residuals onto segmentation labels.
-
-    ``warp_seg_qc`` scores a *separate* StarDist run on each slide's native image
-    (see ``modules/local/seg_qc_geojson.nf``), so its cells share **no label
-    space** with ``cell_mask``. The two do share a coordinate frame though — the
-    residual CSV reports reference centroids in the registered reference frame,
-    which is the frame ``SEGMENT`` ran on — so the join is spatial: each QC pair
-    is assigned to the nearest ``cell_mask`` centroid within ``max_dist_px``.
-
-    Returns ``(residuals, stats)`` where ``residuals`` is a cells x moving-slides
-    frame of displacement in pixels (NaN where a cell was never matched) and
-    ``stats`` records how well the join went — an unmatched cell means "no QC
-    evidence", NOT "well registered", and conflating those would invert the
-    signal's meaning.
-    """
-    from scipy.spatial import cKDTree
-
-    out = pd.DataFrame(index=pd.Index(labels, name=INSTANCE_KEY))
-    stats: Dict = {"max_dist_px": float(max_dist_px), "slides": {}}
-    if not residual_paths or centroids_xy.size == 0:
-        return out, stats
-
-    tree = cKDTree(centroids_xy)
-    for p in residual_paths:
-        try:
-            df = pd.read_csv(p)
-        except (OSError, pd.errors.EmptyDataError) as exc:
-            logger.warning("skipping unreadable residual CSV %s: %s", p, exc)
-            continue
-        if df.empty or not {"ref_x", "ref_y", "residual_px"} <= set(df.columns):
-            logger.warning("residual CSV %s has no usable rows; skipping", p)
-            continue
-
-        moving = str(df["moving"].iloc[0]) if "moving" in df.columns else Path(p).stem
-        query = df[["ref_x", "ref_y"]].to_numpy(dtype=float)
-        dist, idx = tree.query(query, distance_upper_bound=float(max_dist_px))
-        ok = np.isfinite(dist)
-
-        col = np.full(len(labels), np.nan, dtype=float)
-        # Several QC cells can land on one mask cell (different segmentations);
-        # keep the worst residual, since this column is used to *exclude* cells and
-        # the optimistic choice would hide exactly the cells it exists to flag.
-        for cell_i, resid in zip(idx[ok], df["residual_px"].to_numpy(dtype=float)[ok]):
-            if np.isnan(col[cell_i]) or resid > col[cell_i]:
-                col[cell_i] = resid
-        out[moving] = col
-
-        stats["slides"][moving] = {
-            "qc_pairs": int(len(df)),
-            "joined": int(ok.sum()),
-            "join_fraction": float(ok.sum()) / max(len(df), 1),
-            "cells_with_residual": int(np.isfinite(col).sum()),
-            "cell_coverage": float(np.isfinite(col).sum()) / max(len(labels), 1),
-        }
-        logger.info(
-            "  %s: %d/%d QC pairs joined, %.1f%% of cells covered",
-            moving,
-            ok.sum(),
-            len(df),
-            100 * stats["slides"][moving]["cell_coverage"],
-        )
-    return out, stats
 
 
 # ── element builders ───────────────────────────────────────────────────────────
