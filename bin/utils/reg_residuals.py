@@ -47,7 +47,17 @@ def join_one(
     if n == 0:
         return resid, iou, stats
 
-    tree = cKDTree(centroids_xy)
+    # cKDTree raises on a non-finite row (a cell whose centroid could not be computed,
+    # e.g. a degenerate mask region). Build the tree on the finite rows only and map
+    # its (compacted) indices back to the original cell positions; a NaN-centroid cell
+    # is simply never a query target and keeps its NaN, same as an unmatched one.
+    finite_mask = np.all(np.isfinite(centroids_xy), axis=1)
+    finite_idx = np.nonzero(finite_mask)[0]
+    if finite_idx.size == 0:
+        stats = {"qc_pairs": int(len(df)), "joined": 0}
+        return resid, iou, stats
+
+    tree = cKDTree(centroids_xy[finite_idx])
     dist, idx = tree.query(
         df[["ref_x", "ref_y"]].to_numpy(dtype=float),
         distance_upper_bound=float(max_dist_px),
@@ -59,7 +69,8 @@ def join_one(
         if "iou" in df.columns
         else np.full(len(df), np.nan)
     )
-    for cell_i, r, i in zip(idx[ok], r_vals[ok], i_vals[ok]):
+    for compact_i, r, i in zip(idx[ok], r_vals[ok], i_vals[ok]):
+        cell_i = finite_idx[compact_i]
         if np.isnan(resid[cell_i]) or r > resid[cell_i]:
             resid[cell_i] = r
             iou[cell_i] = i

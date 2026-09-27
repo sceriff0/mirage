@@ -43,7 +43,7 @@ from skimage.segmentation import find_boundaries
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
 from logger import configure_logging, get_logger
-from measurements import MORPHOLOGY_COLS
+from measurements import MORPHOLOGY_COLS, is_qc_column
 
 __all__ = ["main", "generate_postprocessing_qc"]
 
@@ -263,6 +263,22 @@ def _generate_cell_stats(
     return output_path
 
 
+def _intensity_marker_columns(df: pd.DataFrame) -> List[str]:
+    """Numeric marker columns of ``df``, excluding morphology and QC columns.
+
+    A "QC: ..." column (``measurements.is_qc_column``, e.g. ``QC: Total
+    intensity``) is not a marker intensity and must not be plotted as one
+    alongside DAPI/PANCK/etc.
+    """
+    return [
+        col
+        for col in df.columns
+        if col not in MORPHOLOGY_COLUMNS
+        and not is_qc_column(col)
+        and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]
+    ]
+
+
 def _generate_intensity_distributions(
     df: pd.DataFrame,
     output_path: Path,
@@ -287,13 +303,8 @@ def _generate_intensity_distributions(
     if logger is None:
         logger = get_logger(__name__)
 
-    # Identify marker columns (everything that is not morphology/metadata)
-    marker_cols = [
-        col
-        for col in df.columns
-        if col not in MORPHOLOGY_COLUMNS
-        and df[col].dtype in [np.float64, np.float32, np.int64, np.int32]
-    ]
+    # Identify marker columns (everything that is not morphology/metadata/QC)
+    marker_cols = _intensity_marker_columns(df)
 
     if not marker_cols:
         logger.warning("No marker columns found for intensity distributions")

@@ -49,6 +49,16 @@ def test_empty_csv_joins_nothing(tmp_path):
     assert resid is None and iou is None
 
 
+def test_nan_centroid_row_does_not_crash_and_gets_nan(tmp_path):
+    centroids = np.array([[10.0, 10.0], [np.nan, np.nan], [90.0, 10.0]])
+    p = _csv(tmp_path, ["m,11,10,2.0,0.8,micro", "m,91,10,0.3,0.7,micro"])
+    resid, iou, stats = join_one(p, centroids, 5.0)
+    assert resid[0] == 2.0 and iou[0] == pytest.approx(0.8)
+    assert np.isnan(resid[1]) and np.isnan(iou[1])
+    assert resid[2] == 0.3 and iou[2] == pytest.approx(0.7)
+    assert stats["joined"] == 2
+
+
 def test_join_reg_residuals_keeps_its_frame_shape(tmp_path):
     p = _csv(tmp_path, ["m,11,10,2.0,0.8,micro"])
     frame, stats = join_reg_residuals([p], CENTROIDS, np.array([1, 2, 3]), 5.0)

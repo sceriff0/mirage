@@ -52,7 +52,7 @@ MORPHOLOGY_COLS: tuple = (
 COMPARTMENTS: tuple = ("Nucleus", "Cytoplasm", "Cell")
 STATISTICS: tuple = ("Median", "Mean", "Sum")
 
-# ── Non-marker measurement keywords (2026-09-27 spec §2) ───────────────────────
+# ── Non-marker measurement keywords (docs/outputs.md, "Per-cell QC") ───────────
 # Every non-marker, non-identity measurement in the per-patient table and in
 # cells.geojson starts with exactly one of these. FlowPath classifies on the prefix
 # alone, so a key without one is read as a marker.

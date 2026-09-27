@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-cell QC columns for one patient (CELL_QC).
 
-Adds every "QC: ..." column (spec 2026-09-27 §2) to MERGE_QUANT_CSVS's table and
+Adds every "QC: ..." column (docs/outputs.md, "Per-cell QC") to MERGE_QUANT_CSVS's table and
 republishes it as merged_quant.csv, so EXPORT_GEOJSON, EXPORT_SPATIALDATA and the
 postprocessed checkpoint all read ONE table. Also writes the long per-round table and
 the round manifest for analysis. Recomputing is idempotent: QC columns this run owns are
@@ -183,6 +183,11 @@ def add_qc_columns(
                 else "Cell"
             )
             if comp in ret.columns:
+                logger.info(
+                    "%s: nuclear retention paired against reference column %s "
+                    "(moving compartment %s)",
+                    r["round_id"], measurement_key(ref_marker, comp, "Median"), comp,
+                )
                 mov = ret.set_index("label")[comp].reindex(labels).to_numpy(dtype=float)
                 ref = out[measurement_key(ref_marker, comp, "Median")].to_numpy(dtype=float)
                 new[qc_key(QC_NUCLEAR_RETENTION, markers)] = pd.Series(

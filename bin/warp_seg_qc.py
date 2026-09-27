@@ -541,7 +541,7 @@ def parse_args(argv=None):
         default=None,
         help=(
             "Optional path for final-stage per-pair registration residuals "
-            "(moving,ref_x,ref_y,residual_px,stage). ref_x/ref_y are in the registered "
+            "(moving,ref_x,ref_y,residual_px,iou,stage). ref_x/ref_y are in the registered "
             "reference frame, for spatial joining onto cell_mask downstream."
         ),
     )
