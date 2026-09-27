@@ -28,8 +28,11 @@ solve, PIV) turns sparse, noisy displacement measurements into a dense field by
     vectors and the zeros poison the median test, its first-order Tikhonov penalty
     shrinks the affine residual, and ``1 - error`` weights have no fixed scale
     (``research/stare-optimal-design-2026-09-27.md`` §0, §3). The core, ``_dctpls_core``,
-    takes a lattice array, not controls, so a finer many-points-per-tile lattice can
-    feed it unchanged.
+    takes a lattice array, not controls, and is fed two ways: one control per tile, or --
+    when the controls carry ``vectors`` (REG_TILE's window grid, ``stare.vector_grid``) --
+    the slide-global vector lattice, with per-vector sigma calibrated from h-block
+    held-out residuals binned by peak ratio (one re-solve at ``w = 1/sigma^2``) and the
+    field re-indexed to the moving frame the stitch evaluates it in.
 
 ``legacy``
     What STARE shipped until 2026-09: the three gates (confidence, range, TRE),
@@ -468,8 +471,8 @@ def _lattice_from_controls(controls, max_error, max_disp):
     scale is arbitrary (0.001-0.05 on one dataset, 0.96 on another), so a weight built
     from it means a different amount of smoothing on every slide.
 
-    Kept separate from the solve so a later phase can feed many points per tile on a
-    finer regular lattice straight into ``_dctpls_core``.
+    The vector-lattice counterpart is ``_lattice_from_vectors``; both feed
+    ``_dctpls_core``.
     """
     nx = max(c["ix"] for c in controls) + 1
     ny = max(c["iy"] for c in controls) + 1
@@ -714,7 +717,7 @@ def _huber_losses(E, W, c):
     return np.asarray(out)
 
 
-def _hblock_select(R, W, Lam):
+def _hblock_select(R, W, Lam, coarse=None):
     """``log10 s`` by h-block CV: coarse scan, then a +-``CV_REFINE`` refinement.
 
     The score is the weighted mean Huber loss of the held-out errors. A squared loss
@@ -723,14 +726,15 @@ def _hblock_select(R, W, Lam):
     robust scale of the errors at the coarse ``s`` with the smallest median held-out
     error. Returns ``(s, held-out errors at s)`` or ``None`` when there is no fold.
     """
-    E = _hblock_cv_errors(R, W, Lam, CV_LOG10_S)
+    coarse = CV_LOG10_S if coarse is None else np.asarray(coarse, dtype=float)
+    E = _hblock_cv_errors(R, W, Lam, coarse)
     if E is None:
         return None
     held = ~np.isnan(E[0])
     med = np.array([np.median(e[held]) for e in E])
     c = HUBER_C * max(MAD_TO_SIGMA * float(med[int(np.argmin(med))]), SIGMA_FLOOR_PX)
     i = int(np.argmin(_huber_losses(E, W, c)))
-    p = float(CV_LOG10_S[i])
+    p = float(coarse[i])
     fine = np.array([p - CV_REFINE, p + CV_REFINE])
     fine = fine[(fine >= LOG10_S_FINE[0]) & (fine <= LOG10_S_FINE[-1])]
     cand, errs = [p], [E[i]]
@@ -743,14 +747,19 @@ def _hblock_select(R, W, Lam):
     return float(10 ** cand[j]), errs[j]
 
 
-def _dctpls_core(Y, W0, gx, gy):
+def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
     """Robust affine + robust DCT-PLS on a regular lattice.
 
     ``Y`` is ``(ny, nx, 2)`` observations, ``W0`` prior weights (0 = no data),
     ``gx``/``gy`` the node coordinates in pixels. Returns ``(field, info)``: the
     displacement at EVERY node (holes filled by the smoother, never zeroed) and a
     JSON-serialisable dict of what was done. Independent of how the lattice was
-    built, so a later phase can hand it many points per tile on a finer lattice.
+    built: it runs on one control per tile and on the vector lattice alike.
+
+    ``cv_grid`` narrows the h-block CV's coarse ``log10 s`` scan (a re-solve that already
+    knows roughly where ``s`` is). ``internals``, when a dict, receives the affine field,
+    the residual ``R``, the eigenvalues, the normalised weights and the chosen ``s`` --
+    what the sigma calibration needs to re-fit held-out folds at the same ``s``.
     """
     Y = np.asarray(Y, dtype=float)
     W0 = np.asarray(W0, dtype=float)
@@ -788,7 +797,9 @@ def _dctpls_core(Y, W0, gx, gy):
     # look cleaner, the selector then smooths less, more cells get dropped -- measured
     # on a 63x63 synthetic lattice, 28 % of vectors downweighted and 0.35 px against
     # 0.28 px for one selection. Robustness in the selection comes from its loss instead.
-    picked = _hblock_select(R, W0n, Lam) if n_valid >= MIN_CV_CELLS else None
+    picked = (
+        _hblock_select(R, W0n, Lam, coarse=cv_grid) if n_valid >= MIN_CV_CELLS else None
+    )
     if picked is not None:
         s, e_held = picked
         selection = "hblock_cv"
@@ -807,7 +818,287 @@ def _dctpls_core(Y, W0, gx, gy):
     info["smoothing_selection"] = selection
     info["holdout_rmse_px"] = rmse
     info["n_downweighted"] = int(np.sum(Wr[valid] < 0.1))
+    if internals is not None:
+        internals.update({"R": R, "Lam": Lam, "W0n": W0n, "s": float(s), "Wr": Wr})
     return aff + Z, info
+
+
+# ── dctpls on the vector lattice ──────────────────────────────────────────────
+# Sigma calibration (research/stare-sota-review-2026-09-27.md Part C §4): peak-ratio bins
+# of held-out residuals. At most CAL_MAX_BINS bins of at least CAL_MIN_PER_BIN vectors; no
+# calibration at all below CAL_MIN_VECTORS (2 bins' worth).
+CAL_MAX_BINS = 8
+CAL_MIN_PER_BIN = 30
+CAL_MIN_VECTORS = 60
+CAL_SIGMA_FLOOR_PX = 0.05
+# The re-solve at calibrated weights scans log10 s only this far either side of the first
+# solve's choice (the weights change the scale of s, not its order of magnitude).
+CAL_RESCAN_HALF_WIDTH = 1.0
+# median of a chi-square with 2 dof: a 2-D isotropic Gaussian residual with per-component
+# sigma has median |e|^2 = 2 ln 2 sigma^2
+_MEDIAN_CHI2_2 = 2.0 * np.log(2.0)
+
+
+def _lattice_from_vectors(controls, max_disp):
+    """Every tile's window vectors laid on the slide-global lattice.
+
+    Returns ``(grid_x, grid_y, Y, W0, PR, counts, lattice)``. Node ``(kx, ky)`` sits at
+    ``origin + k * stride``; the extent covers every node any tile reported, valid or
+    rejected, so the field spans the tiles' cores. A node reported twice (a hand-run tile
+    without core bounds) takes the mean vector and the larger peak ratio. Controls without
+    ``vectors`` are ignored with a warning -- a mixed set is two estimators in one mesh.
+    """
+    with_v = [c for c in controls if "vectors" in c]
+    if len(with_v) != len(controls):
+        logger.warning(
+            f"{len(controls) - len(with_v)}/{len(controls)} control(s) carry no 'vectors' "
+            "-- ignored; re-run REG_TILE for those tiles"
+        )
+    lattices = {
+        (int(c["lattice"]["stride"]), float(c["lattice"]["origin"])) for c in with_v
+    }
+    if len(lattices) != 1:
+        raise ValueError(
+            f"controls disagree on the vector lattice (stride, origin): {sorted(lattices)}"
+        )
+    stride, origin = lattices.pop()
+    nodes = []
+    for c in with_v:
+        nodes += [(int(v[0]), int(v[1])) for v in c["vectors"]]
+        nodes += [(int(r[0]), int(r[1])) for r in c.get("rejected", [])]
+    counts = {"disp": 0, "nonfinite": 0, "duplicates": 0, "n_vectors": 0}
+    if not nodes:
+        return None, None, None, None, None, counts, {"stride": stride}
+    kx0 = min(k[0] for k in nodes)
+    ky0 = min(k[1] for k in nodes)
+    nx = max(k[0] for k in nodes) - kx0 + 1
+    ny = max(k[1] for k in nodes) - ky0 + 1
+    grid_x = origin + (kx0 + np.arange(nx)) * stride
+    grid_y = origin + (ky0 + np.arange(ny)) * stride
+    S = np.zeros((ny, nx, 2))
+    N = np.zeros((ny, nx))
+    PR = np.zeros((ny, nx))
+    for c in with_v:
+        for v in c["vectors"]:
+            counts["n_vectors"] += 1
+            dx, dy, pr = float(v[4]), float(v[5]), float(v[6])
+            if not (np.isfinite(dx) and np.isfinite(dy)):
+                counts["nonfinite"] += 1
+                continue
+            if max_disp is not None and float(np.hypot(dx, dy)) >= max_disp:
+                counts["disp"] += 1
+                continue
+            iy, ix = int(v[1]) - ky0, int(v[0]) - kx0
+            if N[iy, ix] > 0:
+                counts["duplicates"] += 1
+            S[iy, ix] += (dx, dy)
+            N[iy, ix] += 1
+            PR[iy, ix] = max(PR[iy, ix], pr if np.isfinite(pr) else 0.0)
+    W0 = (N > 0).astype(float)
+    Y = np.where(N[..., None] > 0, S / np.maximum(N, 1)[..., None], 0.0)
+    if counts["disp"] or counts["nonfinite"]:
+        logger.info(
+            f"rejected {counts['disp'] + counts['nonfinite']}/{counts['n_vectors']} "
+            f"vector(s): {counts['disp']} out of range (|d| >= {max_disp}), "
+            f"{counts['nonfinite']} non-finite"
+        )
+    lattice = {
+        "stride": stride,
+        "origin": origin,
+        "k0": [int(kx0), int(ky0)],
+        "shape": [int(ny), int(nx)],
+    }
+    return grid_x, grid_y, Y, W0, PR, counts, lattice
+
+
+def _hblock_heldout(R, W, Lam, s):
+    """Held-out residual VECTORS ``fit - obs`` per valid node at a fixed ``s`` (h-block)."""
+    folds = _hblock_folds(W)
+    valid = W > 0
+    E = np.full(W.shape + (2,), np.nan)
+    for f in range(CV_FOLDS):
+        hold = valid & (folds == f)
+        Wt = np.where(hold, 0.0, W)
+        if not hold.any() or not (Wt > 0).any():
+            continue
+        Z = _pls_fit(R, Wt, Lam, s, tol=PLS_TOL_CV)
+        E[hold] = Z[hold] - R[hold]
+    return E
+
+
+def _calibrate_sigma(PR, valid, E):
+    """Per-vector sigma from held-out residuals binned by peak ratio.
+
+    Bins are peak-ratio quantiles, ``min(8, n // 30)`` of them. Per bin, sigma is the
+    robust per-component scale ``sqrt(median |e|^2 / (2 ln 2))`` (exact for an isotropic
+    Gaussian residual, insensitive to the outliers the robust fit rejects), floored at
+    0.05 px. Returns ``(sigma per node, bins, coverage_1sigma)`` or ``(None, reason, None)``.
+
+    The held-out residual is measurement error PLUS the smoother's prediction error at a
+    node whose 3x3 patch was withheld, so sigma is an upper bound on measurement noise;
+    ``coverage_1sigma`` (ideal ~0.68 for a Gaussian) says how honest it is on this slide.
+    """
+    ok = valid & np.all(np.isfinite(E), axis=-1)
+    n = int(ok.sum())
+    if n < CAL_MIN_VECTORS:
+        return (
+            None,
+            f"{n} vectors with a held-out residual < {CAL_MIN_VECTORS}: too few to "
+            f"calibrate {CAL_MIN_PER_BIN}-vector peak-ratio bins; uniform weights kept",
+            None,
+        )
+    nb = max(1, min(CAL_MAX_BINS, n // CAL_MIN_PER_BIN))
+    pr = PR[ok]
+    e2 = np.sum(E[ok] ** 2, axis=-1)
+    edges = np.quantile(pr, np.linspace(0.0, 1.0, nb + 1))
+    b_of = np.clip(np.searchsorted(edges[1:-1], pr, side="right"), 0, nb - 1)
+    sig = np.empty(nb)
+    bins = []
+    for b in range(nb):
+        m = b_of == b
+        if not m.any():
+            sig[b] = np.nan
+            continue
+        sig[b] = max(
+            float(np.sqrt(np.median(e2[m]) / _MEDIAN_CHI2_2)), CAL_SIGMA_FLOOR_PX
+        )
+        bins.append(
+            {
+                "pr_lo": float(edges[b]),
+                "pr_hi": float(edges[b + 1]),
+                "sigma_px": float(sig[b]),
+                "n": int(m.sum()),
+            }
+        )
+    # a quantile tie can leave a bin empty: it takes its neighbour's sigma
+    for b in range(nb):
+        if not np.isfinite(sig[b]):
+            finite = np.flatnonzero(np.isfinite(sig))
+            sig[b] = sig[finite[np.argmin(np.abs(finite - b))]]
+    node_b = np.clip(np.searchsorted(edges[1:-1], PR, side="right"), 0, nb - 1)
+    sigma = np.where(valid, sig[node_b], np.nan)
+    comp = np.abs(E[ok])
+    coverage = float(np.mean(comp <= sig[b_of][:, None]))
+    return sigma, bins, coverage
+
+
+# Fixed-point iterations re-indexing the field to the stitch's frame; the map is a
+# contraction when the field's Lipschitz constant is < 1 (the fold certificate asks < 0.5),
+# so the error shrinks by that factor per step -- 5 steps take 100 px to well under 0.01 px.
+REINDEX_ITERATIONS = 5
+
+
+def _reindex_to_moving_frame(grid_x, grid_y, D):
+    """``F(g) = D(g + F(g))``: the lattice field re-indexed from reference to moving points.
+
+    A window vector is MEASURED at a reference-frame node ``x``: ``ref(x) = mov(x - D(x))``.
+    The stitch (``warp._invert``) evaluates the mesh at the moving point instead -- it solves
+    ``v = u - F(v)`` for the M0-frame moving point ``v`` of reference pixel ``u`` -- so the
+    mesh must hold ``F(v) = D(v + F(v))``. The two differ by ``J D``: negligible for a
+    sub-pixel field, 0.3 px for a +100 px offset with a 0.15 deg residual rotation, measured
+    on the synthetic slide (0.15 px median error at the reference nodes, 0.71 px through the
+    stitch until this was added). Bilinear on the lattice, clamped at its edges.
+    """
+    from scipy.ndimage import map_coordinates
+
+    gx = np.asarray(grid_x, dtype=float)
+    gy = np.asarray(grid_y, dtype=float)
+    ny, nx, _ = D.shape
+    if ny < 2 and nx < 2:
+        return D.copy()
+    hx = float(gx[1] - gx[0]) if nx > 1 else 1.0
+    hy = float(gy[1] - gy[0]) if ny > 1 else 1.0
+    GY, GX = np.meshgrid(
+        np.arange(ny, dtype=float), np.arange(nx, dtype=float), indexing="ij"
+    )
+    F = D.copy()
+    for _ in range(REINDEX_ITERATIONS):
+        iy = np.clip(GY + F[..., 1] / hy, 0, ny - 1) if ny > 1 else np.zeros_like(GY)
+        ix = np.clip(GX + F[..., 0] / hx, 0, nx - 1) if nx > 1 else np.zeros_like(GX)
+        F = np.stack(
+            [
+                map_coordinates(D[..., k], [iy, ix], order=1, mode="nearest")
+                for k in range(2)
+            ],
+            axis=-1,
+        )
+    return F
+
+
+def _solve_dctpls_vectors(controls, max_disp):
+    """``solve_dctpls`` on REG_TILE's vector lattice, with sigma calibration."""
+    import time
+
+    t0 = time.perf_counter()
+    grid_x, grid_y, Y, W0, PR, counts, lattice = _lattice_from_vectors(
+        controls, max_disp
+    )
+    base = {
+        "solver": "dctpls",
+        "input": "vectors",
+        "n_controls": len(controls),
+        "n_vectors": counts["n_vectors"],
+        "n_rejected_disp": counts["disp"],
+        "n_rejected_nonfinite": counts["nonfinite"],
+        "n_duplicate_nodes": counts["duplicates"],
+        "lattice": lattice,
+    }
+    if grid_x is None:
+        return None
+    internals = {}
+    field, info = _dctpls_core(Y, W0, grid_x, grid_y, internals=internals)
+    calibration, coverage, why = None, None, None
+    valid = W0 > 0
+    if "s" in internals and info["smoothing_selection"] == "hblock_cv":
+        E = _hblock_heldout(
+            internals["R"], internals["W0n"], internals["Lam"], internals["s"]
+        )
+        sigma, bins, coverage = _calibrate_sigma(PR, valid, E)
+        if sigma is None:
+            why = bins
+        else:
+            calibration = bins
+            p = np.log10(internals["s"])
+            grid = np.arange(
+                p - CAL_RESCAN_HALF_WIDTH, p + CAL_RESCAN_HALF_WIDTH + 1e-9, 0.5
+            )
+            grid = grid[(grid >= LOG10_S_FINE[0]) & (grid <= LOG10_S_FINE[-1])]
+            W1 = np.where(valid, 1.0 / np.where(valid, sigma, 1.0) ** 2, 0.0)
+            field, info = _dctpls_core(Y, W1, grid_x, grid_y, cv_grid=grid)
+    else:
+        why = (
+            f"smoothing chosen by {info['smoothing_selection']}, not h-block CV "
+            f"({info['n_valid']} valid vectors < {MIN_CV_CELLS}); uniform weights kept"
+        )
+    if why:
+        logger.info(f"sigma calibration skipped: {why}")
+    field = _reindex_to_moving_frame(grid_x, grid_y, field)
+    jac = jacobian_report(grid_x, grid_y, field)
+    report = {
+        **base,
+        "n_valid": info["n_valid"],
+        "n_downweighted": info["n_downweighted"],
+        "affine": info["affine"],
+        "smoothing_s": info["smoothing_s"],
+        "smoothing_selection": info["smoothing_selection"],
+        "holdout_rmse_px": info["holdout_rmse_px"],
+        "sigma_calibration": calibration,
+        "sigma_calibration_skipped": why,
+        "coverage_1sigma": coverage,
+        "lipschitz": jac["max_operator_norm"],
+        "min_det_jacobian": jac["min_jacobian_det"],
+        "fold_certificate_ok": bool(
+            jac["max_operator_norm"] < FOLD_CERTIFICATE_LIPSCHITZ
+        ),
+        "solve_seconds": round(time.perf_counter() - t0, 2),
+        "measured": valid.astype(int).tolist(),
+    }
+    return (
+        [float(v) for v in grid_x],
+        [float(v) for v in grid_y],
+        field.tolist(),
+        report,
+    )
 
 
 def solve_dctpls(controls, max_error=None, max_disp=None, **kw):
@@ -823,13 +1114,28 @@ def solve_dctpls(controls, max_error=None, max_disp=None, **kw):
     constant, so without this a residual rotation from M0 would be charged as
     roughness and shrunk; (2) Garcia's (2010) robust DCT-PLS (thin-plate penalty,
     reflective boundaries, bisquare weights) on the residual, with ``s`` chosen by
-    h-block cross-validation (>= 25 valid cells) or floored GCV (6-24); fewer cells
-    fall back to affine-only (3-5), translation-only (1-2) or no mesh (0).
+    h-block cross-validation (>= 25 valid cells) or GCV (6-24, not floored -- see
+    ``_gcv_s``); fewer cells fall back to affine-only (3-5), translation-only (1-2) or no
+    mesh (0).
+
+    **Two input shapes.** When the controls carry ``vectors`` (REG_TILE's window grid,
+    ``stare.vector_grid``), the lattice is the slide-global vector lattice: every vector
+    is a node, validity is "present and ``|d| < max_disp``" -- the correlation-error gate is
+    NOT applied, it drops good window vectors (REG_TILE already required peak ratio >= 1.2)
+    -- and the prior weights are calibrated from the data (``_calibrate_sigma``): one solve
+    at uniform weights, h-block held-out residuals binned by peak ratio, then one re-solve at
+    ``w = 1/sigma^2``. Without ``vectors`` it is the one-control-per-tile lattice as before.
 
     Extra keyword arguments are accepted and ignored so the dispatcher can pass one
     set. Returns ``(grid_x, grid_y, disp, report)`` like the other solvers.
     """
     del kw
+    if any("vectors" in c for c in controls):
+        out = _solve_dctpls_vectors(controls, max_disp)
+        if out is not None:
+            return out
+        # not one lattice node anywhere (a stride larger than the slide): one control per tile
+        logger.warning("no tile reported a lattice node; solving the per-tile controls")
     grid_x, grid_y, Y, W0, counts = _lattice_from_controls(
         controls, max_error, max_disp
     )

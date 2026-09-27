@@ -82,3 +82,42 @@ def test_the_parser_would_notice_if_the_stub_stopped_emitting_a_control_json():
     assert _stub_control(), (
         "parsed an empty control JSON -- the extraction regex has rotted"
     )
+
+
+# ---------------------------------------------------------------------------
+# The window-vector grid (stare.vector_grid): the stub must drive the VECTOR solve
+# ---------------------------------------------------------------------------
+# `stare.solve.solve_dctpls` takes the vector-lattice path only when a control carries
+# `vectors`; a stub without them would exercise the one-control-per-tile fallback while every
+# real run takes the other branch -- the same "stub routes around the branch under test" trap
+# the `error` key above was.
+
+
+def test_the_stub_carries_a_lattice_and_a_vector_list():
+    control = _stub_control()
+
+    assert "lattice" in control, "stub control JSON has no 'lattice'"
+    lattice = control["lattice"]
+    for key in ("stride", "window", "origin"):
+        assert key in lattice, f"stub lattice is missing {key!r}"
+    assert lattice["window"] == 2 * lattice["stride"]
+    assert lattice["origin"] == lattice["window"] / 2
+
+    vectors = control.get("vectors")
+    assert isinstance(vectors, list) and vectors, "stub must emit at least one vector"
+    for v in vectors:
+        # [kx, ky, cx, cy, dx, dy, peak_ratio, sharpness, fg]
+        assert len(v) == 9, f"a vector is 9 numbers, got {v!r}"
+
+
+def test_the_stub_vectors_reach_the_vector_solve():
+    """Drive the real dctpls consumer: the stub's vectors must be laid on the lattice."""
+    from stare.solve import solve_dctpls
+
+    control = _stub_control()
+    _gx, _gy, _disp, report = solve_dctpls([control], max_error=0.99, max_disp=256)
+
+    assert report.get("input") == "vectors", (
+        "the stub's control JSON was solved per tile, not on the vector lattice"
+    )
+    assert report["n_valid"] >= 1

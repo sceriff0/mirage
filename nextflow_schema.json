@@ -299,12 +299,18 @@
                         "legacy"
                     ]
                 },
+                "reg_tiled_stride": {
+                    "type": "integer",
+                    "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
+                    "default": 128,
+                    "minimum": 16
+                },
                 "reg_tiled_upsample": {
                     "type": [
                         "integer",
                         "null"
                     ],
-                    "description": "phase-correlation sub-pixel upsample factor. null = from reg_tiled_mode.",
+                    "description": "phase-correlation sub-pixel upsample factor. null = from reg_tiled_mode. Rendered into TILED_REG_TILE but ignored by the window-vector estimator since reg_tiled_stride was introduced (a 3-point Gaussian peak fit replaces the upsampled DFT).",
                     "minimum": 1
                 },
                 "reg_tiled_out_tile": {

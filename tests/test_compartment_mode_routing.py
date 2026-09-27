@@ -344,7 +344,10 @@ ALLOWED_LINES = {
         # memory became 64 GB doubling with maxRetries pinned (:wrench: "REGISTER memory
         # starts at 64 GB and doubles"), which did not re-pin this entry.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1231
-        1231: (
+        # 1231 -> 1240 (2026-09-27): TILED_REG_TILE's memory closure was re-derived for the
+        # window-vector grid (read box = core + 3*stride), +9 comment/code lines above.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1240
+        1240: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

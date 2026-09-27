@@ -126,7 +126,22 @@ def _fanout(work, ref_f, mov_f):
         out = work / f"ctrl_{r['ix']}_{r['iy']}.json"
         argv = ["--reference", str(ref_f), "--moving", str(mov_f), "--m0", str(m0_f)]
         argv += ["--nuclear-index", "0"]
-        for k in ("ix", "iy", "cx", "cy", "rx0", "ry0", "rx1", "ry1"):
+        # the core bounds too, as the pipeline's TILED_REG_TILE process renders them: without them
+        # the tile cannot tell which lattice nodes it owns (stare.vector_grid)
+        for k in (
+            "ix",
+            "iy",
+            "cx",
+            "cy",
+            "rx0",
+            "ry0",
+            "rx1",
+            "ry1",
+            "x0",
+            "y0",
+            "x1",
+            "y1",
+        ):
             argv += [f"--{k}", r[k]]
         argv += ["--out", str(out)]
         assert tiled_reg_tile.main(argv) == 0
@@ -294,7 +309,20 @@ def test_the_plan_row_form_names_the_same_tile_as_the_explicit_form(tmp_path):
     common = ["--reference", str(ref_f), "--moving", str(mov_f), "--m0", str(m0_f)]
     explicit = tmp_path / "explicit.json"
     argv = list(common)
-    for k in ("ix", "iy", "cx", "cy", "rx0", "ry0", "rx1", "ry1"):
+    for k in (
+        "ix",
+        "iy",
+        "cx",
+        "cy",
+        "rx0",
+        "ry0",
+        "rx1",
+        "ry1",
+        "x0",
+        "y0",
+        "x1",
+        "y1",
+    ):
         argv += [f"--{k}", r[k]]
     assert tiled_reg_tile.main(argv + ["--out", str(explicit)]) == 0
     by_row = tmp_path / "by_row.json"

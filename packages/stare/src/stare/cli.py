@@ -126,6 +126,8 @@ def register(a) -> int:
                     str(row),
                     "--upsample",
                     str(a.upsample),
+                    "--stride",
+                    str(a.stride),
                     "--out",
                     str(out),
                 ]
@@ -235,6 +237,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # reg-tile
     r.add_argument("--upsample", type=int, default=10)
+    r.add_argument(
+        "--stride",
+        type=int,
+        default=128,
+        help="vector-lattice stride (px); window = 2 x stride (stare.vector_grid)",
+    )
     # solve
     r.add_argument("--gate-tre", type=float, default=1.0)
     r.add_argument("--max-error", type=float, default=0.99)

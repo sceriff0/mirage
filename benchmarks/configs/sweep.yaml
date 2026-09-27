@@ -165,6 +165,11 @@ baseline:
                                       # existed -- pinning `legacy` keeps every launched tiled run
                                       # reproducible without a re-run. The solver COMPARISON is the
                                       # arm benchmark's job (arms.yaml crosses legacy x robust).
+  reg_tiled_stride: 128               # REG_TILE vector-lattice stride (px), pipeline default. Declared
+                                      # because test_every_pipeline_param_is_swept_or_excused demands it;
+                                      # NOT a resource-neutral knob: the read box is core + 3*stride and
+                                      # REG_TILE's memory closure derives from it. Crossing it with the
+                                      # tiers is the arm benchmark's job (a later phase).
   # --- registration (ASHLAR) ---
   # THE reg_ashlar_* BASELINE ENTRIES ARE GONE, with the backend. :fire: 6a54479 removed
   # ashlar from the pipeline for v1.0.0, so reg_ashlar_tile / _overlap / _max_shift_um name
