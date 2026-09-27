@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`cells.geojson` measurements: morphology under `MORPH: ` names, `QC: ` columns
+  carried through.** `bin/export_geojson.py::build_measurements` now writes
+  `MORPH: Area µm²`, `MORPH: Eccentricity`, etc. (was the bare display name) using the
+  single vocabulary in `bin/utils/measurements.py::MORPH_EXPORT`, and appends every
+  `QC: ...` column of the per-patient table as its own measurement (NaN omitted),
+  ordered after markers and before the `MORPH:` block. Incidental: the area value's
+  display rounding changed from 3 to 4 decimal places (now the same `round(..., 4)`
+  every other measurement uses) — not a unit or scale change, just more digits shown.
+  `bin/export_spatialdata.py::build_table` puts `QC: ...` columns in `obs` verbatim;
+  `parse_measurement_key` returns them unparsed rather than matching them against the
+  marker-compartment-statistic grammar.
 - **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
   (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
   with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every

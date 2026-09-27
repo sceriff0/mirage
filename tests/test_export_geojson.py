@@ -438,3 +438,31 @@ def test_export_combined_geojson_survives_a_nan_centroid(tmp_path, caplog):
     assert labels == [1, 3]
 
     assert any("skipped 1" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# QC: passthrough and MORPH: prefixing (2026-09-27 spec)
+# ---------------------------------------------------------------------------
+
+
+def test_measurements_carry_qc_and_prefixed_morphology():
+    row = {
+        "label": 3,
+        "x": 1.0,
+        "y": 1.0,
+        "CD3: Cell: Median": 2.0,
+        "QC: Total intensity": 7.0,
+        "QC: Registration Dice: [CD3]": float("nan"),
+        "area": 4.0,
+        "eccentricity": 0.5,
+    }
+    ms = eg.build_measurements(
+        row, ["CD3: Cell: Median"], 0.5,
+        qc_cols=["QC: Total intensity", "QC: Registration Dice: [CD3]"],
+    )
+    names = [m["name"] for m in ms]
+    assert "QC: Total intensity" in names
+    assert "QC: Registration Dice: [CD3]" not in names          # NaN omitted
+    assert "MORPH: Area µm²" in names and "Area µm²" not in names
+    assert names.index("CD3: Cell: Median") < names.index("QC: Total intensity") < names.index("MORPH: Area µm²")
+    assert next(m["value"] for m in ms if m["name"] == "MORPH: Area µm²") == 1.0

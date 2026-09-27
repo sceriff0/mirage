@@ -46,6 +46,7 @@ from measurements import (  # noqa: E402
     MORPHOLOGY_COLS,
     STATISTICS,
     identify_marker_columns,
+    is_qc_column,
 )
 from pixel_convention import centre_to_corner  # noqa: E402
 from pixel_size import resolve_pixel_size  # noqa: E402
@@ -64,11 +65,16 @@ def parse_measurement_key(key: str) -> Tuple[str, Optional[str], Optional[str]]:
 
     A bare marker name (legacy / whole-cell-mean export) returns
     ``(key, None, None)`` rather than guessing, so ``var`` never asserts a
-    compartment the pipeline did not actually measure.
+    compartment the pipeline did not actually measure. A ``"QC: ..."`` key
+    (see ``bin/utils/measurements.py``) is never a marker and is excluded from
+    ``markers``/``var`` entirely (``build_table`` puts it in ``obs`` instead),
+    so this also short-circuits before the compartment/statistic match.
 
     Matching is on the *last two* tokens, because marker names may themselves
     contain ": " (e.g. an antibody clone).
     """
+    if is_qc_column(key):
+        return key, None, None
     for comp in COMPARTMENTS:
         for stat in STATISTICS:
             suffix = f": {comp}: {stat}"
@@ -298,6 +304,12 @@ def build_table(
     for col in MORPHOLOGY_COLS:
         if col in df.columns and col not in (INSTANCE_KEY, "x", "y"):
             obs[f"qc_{col}" if col not in ("fov",) else col] = df[col].to_numpy()
+    # Per-cell/per-round QC columns (bin/cell_qc.py), verbatim "QC: ..." names —
+    # unrelated to the `qc_<morphology>` obs columns just above, which predate this
+    # spec and are morphology, not the QC vocabulary in bin/utils/measurements.py.
+    for col in df.columns:
+        if is_qc_column(col):
+            obs[col] = df[col].to_numpy(dtype=float)
     # region_key MUST be categorical and its categories must match `region` exactly.
     obs[REGION_KEY] = pd.Categorical(
         [REGION_LABELS] * len(df), categories=[REGION_LABELS]

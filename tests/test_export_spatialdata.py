@@ -593,3 +593,37 @@ def test_shapes_keep_the_contour_ring_verbatim(tmp_path, fake_geo_stack):
         assert poly.ring == expected, (
             f"cell {lab}: build_shapes altered the contour ring it was given"
         )
+
+
+# ── QC: columns land in obs, not var (2026-09-27 spec) ──────────────────────────
+def test_build_table_puts_qc_columns_in_obs_not_var(tmp_path, fake_geo_stack):
+    """A `QC: ...` column in the quantification CSV becomes an `obs` column,
+    verbatim, and is never treated as a marker (excluded from `X`/`var`)."""
+    df = pd.DataFrame(
+        {
+            "label": [1, 2],
+            "x": [1.0, 2.0],
+            "y": [1.0, 2.0],
+            "area": [10.0, 20.0],
+            "CD3: Cell: Median": [1.0, 2.0],
+            "QC: Total intensity": [5.0, float("nan")],
+            "QC: Registration Dice: [CD3]": [0.9, 0.8],
+        }
+    )
+    quant_csv = tmp_path / "quant.csv"
+    df.to_csv(quant_csv, index=False)
+
+    adata = esd.build_table(
+        str(quant_csv), "P001", None, {}, {"qc_json": "{}", "versions": ""}, {}
+    )
+
+    assert "QC: Total intensity" in adata.obs.columns
+    assert "QC: Registration Dice: [CD3]" in adata.obs.columns
+    np.testing.assert_array_equal(
+        adata.obs["QC: Registration Dice: [CD3]"].to_numpy(), [0.9, 0.8]
+    )
+    assert np.isnan(adata.obs["QC: Total intensity"].to_numpy()[1])
+
+    assert "QC: Total intensity" not in adata.var_names
+    assert "QC: Registration Dice: [CD3]" not in adata.var_names
+    assert list(adata.var_names) == ["CD3: Cell: Median"]
