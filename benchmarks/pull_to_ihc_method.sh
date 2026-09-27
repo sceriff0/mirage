@@ -241,6 +241,12 @@ for want in runs_master.csv param_matrix.csv registration_accuracy.csv \
   [[ -f "$DEST_BENCH/$want" ]] || missing+=("$want")
 done
 echo "  $copied table(s) copied"
+# The sweep's run plan travels too: it is the only record of a run that has not
+# produced a row in ANY table yet, which ihc_method's opt-in placeholder mode
+# (code/placeholders.R) needs to know the run is expected at all.
+if [[ -n "$SWEEP_PLAN" && -f "$SWEEP_PLAN" ]]; then
+  cp "$SWEEP_PLAN" "$DEST_BENCH/run_plan.csv" && echo "  run plan copied -> data/benchmark/run_plan.csv"
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "  WARNING: not present: ${missing[*]}" >&2
   echo "           Looked ONLY in $SWEEP_TABLES. The two legacy fallback directories" >&2

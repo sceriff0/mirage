@@ -123,3 +123,16 @@ def test_append_arms_does_not_overwrite_the_first_roots_arm_tables(tmp_path):
     assert (
         ihc / "data" / "registration_arms" / "arm_summary.csv"
     ).read_text() == "first\n"
+
+
+def test_sweep_run_plan_is_handed_off(tmp_path):
+    ihc = _ihc(tmp_path)
+    root = _arm_root(tmp_path / "arms", {"tiled_high_s128": "DRAPE high"})
+    sweep = tmp_path / "sweep"
+    sweep.mkdir()
+    (tmp_path / "sweep_plan.csv").write_text("run_id\nr1\n")
+
+    r = _run(root, ihc, "--sweep", sweep, handoff=tmp_path / "h")
+
+    assert r.returncode == 0, r.stderr
+    assert (ihc / "data" / "benchmark" / "run_plan.csv").read_text() == "run_id\nr1\n"
