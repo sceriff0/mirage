@@ -1,5 +1,5 @@
 /*
- * TILED_STITCH - STARE fan-out step 4/4: warp the moving slide through the manifest.
+ * TILED_STITCH - DRAPE fan-out step 4/4: warp the moving slide through the manifest.
  *
  * Applies M0 + mesh to every channel of the moving slide (bilinear, non-negative), in row strips
  * so peak memory is a strip. Writes the registered OME-TIFF in the reference frame.
@@ -29,7 +29,7 @@ process TILED_STITCH {
     // the mode and the override are passed as SCALARS, never the params map, because a
     // script: block that hands `params` to a helper makes Nextflow hash the whole map
     // and re-run the task on any unrelated parameter change (see CLAUDE.md).
-    def out_tile  = RegPresets.stare(params.reg_tiled_mode, 'out_tile', params.reg_tiled_out_tile)
+    def out_tile  = RegPresets.drape(params.reg_tiled_mode, 'out_tile', params.reg_tiled_out_tile)
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${moving}"], "${prefix}.TILED_STITCH.size.csv")}
 

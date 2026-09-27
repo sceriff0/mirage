@@ -1,8 +1,8 @@
-"""Tests for bin/utils/tre_report.py — STARE's intrinsic TRE report builder.
+"""Tests for bin/utils/tre_report.py — DRAPE's intrinsic TRE report builder.
 
 Used by the one entry point (tiled_solve) so the `_tre.json` has one shape. Reports the coarse
 (rigid) feature-fit TRE, a per-tile spatial heatmap of the rigid-stage misalignment, and — when
-the caller measured it — the post-refinement residual that is STARE's VALIS-comparable
+the caller measured it — the post-refinement residual that is DRAPE's VALIS-comparable
 final-accuracy number.
 """
 

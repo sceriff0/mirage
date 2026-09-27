@@ -46,7 +46,7 @@ def parse_args():
         default="registration_tre/",
         help=(
             "Directory of the registration method's own target-registration-error "
-            "artifacts (VALIS *_summary.csv / STARE *_tre.json)"
+            "artifacts (VALIS *_summary.csv / DRAPE *_tre.json)"
         ),
     )
     p.add_argument(
@@ -297,7 +297,7 @@ def _html_table(headers, rows, extra_body_html=""):
     every header and every cell value via ``html.escape``.
 
     Centralizes the table-render logic that used to be duplicated across the
-    registration-QC Valis rTRE table and the STARE tiled-TRE table, and
+    registration-QC Valis rTRE table and the DRAPE tiled-TRE table, and
     ensures neither can inject raw CSV/JSON-derived HTML into the report.
 
     `extra_body_html`: optional pre-rendered ``<tr>...</tr>`` HTML appended
@@ -528,7 +528,7 @@ def registration_qc_section(reg_dir, valis_dir, seg_qc_dir=None):
     parts.append(img_grid(pngs))
 
     # Registration-accuracy summaries. The method decides the format: VALIS emits rTRE CSVs, the
-    # tiled ('STARE') method emits its own intrinsic-TRE JSON (_tre.json) — both land here.
+    # tiled ('DRAPE') method emits its own intrinsic-TRE JSON (_tre.json) — both land here.
     valis_csvs = list_files(valis_dir, "*.csv")
     tiled_tre_jsons = list_files(valis_dir, "*_tre.json")
     if valis_csvs:
@@ -552,7 +552,7 @@ def registration_qc_section(reg_dir, valis_dir, seg_qc_dir=None):
     if tiled_tre_jsons:
         parts.append(
             "<h3 style='margin:20px 0 8px;font-size:1rem;color:#444;'>Registration Accuracy "
-            "(STARE Tiled TRE)</h3>"
+            "(DRAPE Tiled TRE)</h3>"
         )
         parts.append(_tiled_tre_plots(tiled_tre_jsons))
     if not valis_csvs and not tiled_tre_jsons:
@@ -583,7 +583,7 @@ def postprocess_qc_section(postprocess_dir):
 # into its JSON, but a directory holding several slides can hold several orders and
 # a report is diffed across runs — so the order is fixed here and anything
 # unrecognised is appended, sorted, rather than dropped. `refined` is the tiled
-# (STARE) backend's terminal stage (bin/utils/tiled_stage_warp.py's STAGES =
+# (DRAPE) backend's terminal stage (bin/utils/tiled_stage_warp.py's STAGES =
 # native, rigid, refined -- it never emits non_rigid/micro), placed last as the
 # tiled analogue of VALIS's `micro`: the final measured stage.
 SEG_QC_STAGE_ORDER = ("native", "rigid", "non_rigid", "micro", "refined")
@@ -601,7 +601,7 @@ def _seg_qc_stage_plots(seg_qc_dir):
     says so; the per-slide records are copied verbatim into the report's
     ``seg_qc/`` data folder, which is where a single slide's numbers belong.
 
-    Units are never mixed within one distribution. STARE (tiled) runs are the
+    Units are never mixed within one distribution. DRAPE (tiled) runs are the
     COMMON case for px, not an edge case (see ``_read_seg_cell_disp``), so a
     directory holding both a calibrated (µm) and an uncalibrated (px) slide for
     the same stage is split into up to two plots, one per unit actually present,
@@ -664,8 +664,8 @@ def _seg_qc_stage_plots(seg_qc_dir):
     return "\n".join(parts)
 
 
-# ── STARE tiled-registration intrinsic TRE ──────────────────────────────────────
-# The tiled ('STARE') method emits its own intrinsic Target Registration Error per slide
+# ── DRAPE tiled-registration intrinsic TRE ──────────────────────────────────────
+# The tiled ('DRAPE') method emits its own intrinsic Target Registration Error per slide
 # (_tre.json), the way VALIS emits rTRE: coarse (rigid) feature-fit TRE, a per-tile spatial
 # heatmap VALIS does not have, and — in the default path — the post-refinement residual (its
 # analogue of VALIS's non-rigid error). Rendered here alongside the other registration-accuracy
@@ -675,7 +675,7 @@ def _fmt_px(v):
 
 
 def parse_tiled_tre_json(path):
-    """Flatten a STARE _tre.json into the headline registration-accuracy fields."""
+    """Flatten a DRAPE _tre.json into the headline registration-accuracy fields."""
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
 
@@ -710,7 +710,7 @@ def parse_tiled_tre_json(path):
 
 
 def _tiled_tre_heatmap_svg(info, cell=14):
-    """A compact per-tile TRE heatmap (green=low, red=high) — STARE's spatial accuracy view."""
+    """A compact per-tile TRE heatmap (green=low, red=high) — DRAPE's spatial accuracy view."""
     tiles = info["tiles"]
     if not tiles:
         return ""
@@ -757,7 +757,7 @@ def _tiled_tre_heatmap_svg(info, cell=14):
 
 
 def _tiled_tre_plots(tre_jsons):
-    """Per-slide STARE intrinsic TRE: headline caption, per-stage distributions, heatmap.
+    """Per-slide DRAPE intrinsic TRE: headline caption, per-stage distributions, heatmap.
 
     This replaced a per-slide summary TABLE (spec Phase 4). The numbers that table
     carried — coarse TRE, rigid and final percentiles, whether the mesh was
@@ -855,11 +855,11 @@ def _read_intrinsic_tre(tre_dir):
     VALIS emits per-patient ``*_summary[.csv]`` rows (and a ``_premicro`` variant) keyed by the
     ``from``/``filename`` column: read unchanged into ``final``/``premicro``.
 
-    STARE (tiled) emits one per-slide ``*_tre.json``, keyed by its ``moving`` field. Per
+    DRAPE (tiled) emits one per-slide ``*_tre.json``, keyed by its ``moving`` field. Per
     ``bin/utils/tre_report.py``'s module docstring, ``coarse_tre_px`` is the rigid-stage TRE
     ("directly comparable to VALIS's rigid error") and ``residual_after_px`` is the
     post-registration number ("the analogue of VALIS's non-rigid error"); its p50 is used so it
-    lines up with the seg-QC side's ``displacement_*_p50``. STARE has no separate pre-micro stage,
+    lines up with the seg-QC side's ``displacement_*_p50``. DRAPE has no separate pre-micro stage,
     so both values land in ``final`` — the existing non-rigid fallback in ``reconcile_rows``
     (final's ``non_rigid_D`` when no premicro summary exists) already covers it. Both formats
     write into the same slide dict so a directory containing both is a merge, not a shadow.
@@ -899,7 +899,7 @@ def _read_seg_cell_disp(seg_qc_dir):
     """slide -> {stage: (displacement_p50, unit)} from the WARP_SEG_QC JSONs.
 
     ``unit`` is ``"um"`` when the JSON's own micron column (``displacement_um_p50``)
-    is present, else ``"px"`` when it falls back to ``displacement_px_p50``. STARE
+    is present, else ``"px"`` when it falls back to ``displacement_px_p50``. DRAPE
     (tiled) runs are the COMMON case for px, not an edge case:
     ``modules/local/warp_seg_qc.nf`` passes no pixel size on that path,
     ``bin/warp_seg_qc.py`` forwards ``None``, and ``bin/utils/cell_pairs.py`` only
@@ -966,7 +966,7 @@ def reconcile_rows(tre_dir, seg_qc_dir):
 
     Returns a list of dicts: ``slide``, ``stage``, ``feature_tre_um``, ``cell_disp_um``,
     ``divergent`` (True/False, or None when either number is missing so no verdict is possible).
-    Slides are keyed by slide name (VALIS's ``from``/``filename`` or STARE's ``moving`` — both
+    Slides are keyed by slide name (VALIS's ``from``/``filename`` or DRAPE's ``moving`` — both
     resolve to the same identifier); rows are only emitted for slides that appear in the seg-QC
     output.
     """

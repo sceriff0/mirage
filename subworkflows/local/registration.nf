@@ -56,7 +56,7 @@ workflow REGISTRATION {
     // ========================================================================
     // STEP 1: Images enter registration as-is. Both backends align inputs of
     // differing sizes natively (VALIS resolves them into a shared space; the
-    // tiled/STARE backend warps each moving slide into the reference's shape),
+    // tiled/DRAPE backend warps each moving slide into the reference's shape),
     // so no common-canvas padding step is needed.
     // ========================================================================
     ch_images = ch_preprocessed
@@ -160,7 +160,7 @@ workflow REGISTRATION {
 
     ch_registered         = REGISTER_PATIENT.out.registered
     ch_images_multi       = REGISTER_PATIENT.out.images_multi
-    // The method's transform, per patient (VALIS registrar pickle / STARE manifest) and --
+    // The method's transform, per patient (VALIS registrar pickle / DRAPE manifest) and --
     // where the method has one -- per moving slide. The unfilled one is Channel.empty().
     ch_transform          = REGISTER_PATIENT.out.transform
     ch_transform_by_slide = REGISTER_PATIENT.out.transform_by_slide
@@ -168,7 +168,7 @@ workflow REGISTRATION {
     ch_adapter_logs       = REGISTER_PATIENT.out.size_logs
     ch_adapter_versions   = REGISTER_PATIENT.out.versions
     // The method's OWN target-registration-error estimate. Both backends produce one
-    // (VALIS a feature-distance CSV, STARE a *_tre.json); a backend that produced none
+    // (VALIS a feature-distance CSV, DRAPE a *_tre.json); a backend that produced none
     // would emit Channel.empty() here and every consumer must tolerate that.
     ch_registration_tre   = REGISTER_PATIENT.out.intrinsic_tre
 
@@ -177,7 +177,7 @@ workflow REGISTRATION {
     def reg_qc_level = ParamUtils.regQcLevel(params)
 
     // Level 2 warps polygons through the registrar the method produced — the VALIS pickle (via the
-    // BioFormats JVM) or the STARE manifest (JVM-free). The scorer is identical; only the warper
+    // BioFormats JVM) or the DRAPE manifest (JVM-free). The scorer is identical; only the warper
     // differs (WARP_SEG_QC's two backends, keyed by lib/WarpBackends.groovy). Segmentation of
     // the native slides is shared.
     def do_seg_qc = reg_qc_level >= 2

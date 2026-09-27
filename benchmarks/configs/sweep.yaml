@@ -138,7 +138,7 @@ baseline:
                                       # Live at this baseline (registration_method=valis); an OFAT
                                       # axis above, ungated so legal at every tier.
   reg_tiled_coarse_max_dim: null      # STARE coarse-anchor thumbnail, longest side (px). null = from
-                                      # reg_tiled_mode (high -> 1024, RegPresets.STARE), the pipeline
+                                      # reg_tiled_mode (high -> 1024, RegPresets.DRAPE), the pipeline
                                       # default. The resolution M0 is refined at (the rotation sweep
                                       # itself runs at 256 px). TIER-OWNED: it moves with reg_tiled_mode,
                                       # which registration_method_grid.tiled crosses, so it is never
@@ -380,7 +380,7 @@ registration_method_grid:
     memory_mode:       [low, medium, high]    # the tier: 512 / 1024 / 2048 px, one matcher throughout
     reg_micro_reg:     [0, 1, 2]              # refinement DEPTH: none | micro-rigid | + micro non-rigid
   tiled:
-    reg_tiled_mode:    [low, medium, high]    # the tier: RegPresets.STARE rows, 512 / 1024 / 2048 px
+    reg_tiled_mode:    [low, medium, high]    # the tier: RegPresets.DRAPE rows, 512 / 1024 / 2048 px
     reg_tiled_stride:  [64, 128, 256]         # mesh resolution (px per vector, window 2*stride);
                                               # brackets the default 128 -- the arms' same axis
 

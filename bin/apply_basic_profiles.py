@@ -52,7 +52,7 @@ NOTHING SLIDE-SIZED IS EVER RESIDENT, and this is the half of the path where tha
 to be false. The correction is applied one OUTPUT WRITE-TILE at a time: read that tile's
 region through the lazy zarr view, correct it, clip it, cast it, hand it to ``tifffile``'s
 iterator-fed writer, drop it. Peak is one write-tile buffer -- constant in slide size,
-the same property ``bin/tiled_stitch.py`` has on the STARE path -- PLUS the profile
+the same property ``bin/tiled_stitch.py`` has on the DRAPE path -- PLUS the profile
 planes, which are held for the whole run and are NOT constant in channel count: BASICPY
 returns one flatfield and one darkfield plane per fitted channel, at full pseudo-FOV
 resolution, held as float64, i.e. ``2 x C x preproc_tile_size^2 x 8`` bytes. That is a

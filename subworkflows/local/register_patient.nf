@@ -13,7 +13,7 @@
       - the checkpoint manifest (an add_cycle run wrote none, so its --outdir could
         never be a second add_cycle's --prior_outdir),
       - the single-slide passthrough branch, and
-      - the tiled/STARE backend.
+      - the tiled/DRAPE backend.
 
     This file is now the only place that answers "how does a patient group become a
     registered stream?". Both callers assemble the group their own way — the linear
@@ -48,7 +48,7 @@
         transform          [patient_id, registrar.pickle | manifest] — seg-QC warper
         transform_by_slide [meta, manifest] — one per moving slide (empty under VALIS)
         stage_checkpoint   [patient_id, reg_stage_checkpoint/] (VALIS, reg_qc>=2 only)
-        intrinsic_tre      the method's own TRE estimate (VALIS CSV / STARE JSON)
+        intrinsic_tre      the method's own TRE estimate (VALIS CSV / DRAPE JSON)
         size_logs / versions — the adapter's, unaggregated
 
     Those last six are passed through from the adapter UNRENAMED. Both adapters emit the
@@ -127,7 +127,7 @@ workflow REGISTER_PATIENT {
     //
     // NOTE: the *old distributed-VALIS* low-memory path was archived 2026-07-24
     // (git tag archive/tiled-valis-2026-07-24). The 'tiled' backend is a SEPARATE,
-    // live STARE backend — don't confuse the two.
+    // live DRAPE backend — don't confuse the two.
     def adapter = RegBackends.of(method).adapter
     if (adapter == 'TILED_ADAPTER') {
         TILED_ADAPTER(ch_grouped_multi)

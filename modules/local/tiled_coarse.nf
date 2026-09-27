@@ -1,5 +1,5 @@
 /*
- * TILED_COARSE - STARE fan-out step 1/4: global rigid anchor (M0) + tile plan (per moving slide).
+ * TILED_COARSE - DRAPE fan-out step 1/4: global rigid anchor (M0) + tile plan (per moving slide).
  */
 process TILED_COARSE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
@@ -40,9 +40,9 @@ process TILED_COARSE {
     // the mode and the override are passed as SCALARS, never the params map, because a
     // script: block that hands `params` to a helper makes Nextflow hash the whole map
     // and re-run the task on any unrelated parameter change (see CLAUDE.md).
-    def tile       = RegPresets.stare(params.reg_tiled_mode, 'tile', params.reg_tiled_tile)
-    def halo       = RegPresets.stare(params.reg_tiled_mode, 'halo', params.reg_tiled_halo)
-    def max_dim    = RegPresets.stare(params.reg_tiled_mode, 'coarse_max_dim', params.reg_tiled_coarse_max_dim)
+    def tile       = RegPresets.drape(params.reg_tiled_mode, 'tile', params.reg_tiled_tile)
+    def halo       = RegPresets.drape(params.reg_tiled_mode, 'halo', params.reg_tiled_halo)
+    def max_dim    = RegPresets.drape(params.reg_tiled_mode, 'coarse_max_dim', params.reg_tiled_coarse_max_dim)
     """
     tiled_coarse.py \\
         --reference ${reference} \\

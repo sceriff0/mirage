@@ -1,7 +1,7 @@
 """No reference to the deleted COARSE front-ends outside history and the allow-list.
 
 ORB IS NO LONGER ON THE LIST (2026-09-27). It came back, deliberately, as the FALLBACK of the
-new COARSE anchor (stare/coarse_align.py: NCC rotation sweep first, scikit-image ORB + RANSAC
+new COARSE anchor (drape/coarse_align.py: NCC rotation sweep first, scikit-image ORB + RANSAC
 only when the sweep is ambiguous), so the word now names a live component and forbidding it
 repo-wide would forbid documenting the method. SIFT, the log-polar Fourier method and the
 `reg_tiled_frontend` dispatch knob stay deleted and stay forbidden.

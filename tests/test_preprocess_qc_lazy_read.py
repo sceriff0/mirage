@@ -12,7 +12,7 @@ This is a peak-MEMORY fix, not an I/O-size fix: ``downsample_image`` uses
 read-size saving available here (unlike the naive ``[::factor, ::factor]``
 decimation ``tiled_io.read_decimated`` performs at nonzero ``factor``, which is
 NOT used at this call site -- see ``bin/generate_preprocess_qc.py``'s comment).
-``bin/utils/tiled_io.py`` already has the machinery (proven correct by the STARE
+``bin/utils/tiled_io.py`` already has the machinery (proven correct by the DRAPE
 coarse-align path and by Task 1's registration-QC change) to read one channel
 through a lazy, region-readable zarr view (``open_lazy``) banded via
 ``read_decimated(..., factor=1)`` -- full resolution, one channel, one plane (or

@@ -113,7 +113,7 @@
             "properties": {
                 "registration_method": {
                     "type": "string",
-                    "description": "Registration backend: 'valis' (VALIS graph-based whole-slide) or 'tiled' (STARE: JVM-free, internally tiled, fully parallel). See lib/ParamUtils.groovy.",
+                    "description": "Registration backend: 'valis' (VALIS graph-based whole-slide) or 'tiled' (DRAPE: JVM-free, internally tiled, fully parallel). See lib/ParamUtils.groovy.",
                     "default": "valis",
                     "enum": [
                         "valis",
@@ -234,7 +234,7 @@
                 "reg_tiled_mode": {
                     "type": "string",
                     "default": "high",
-                    "description": "STARE/tiled cost/accuracy tier. Table: lib/RegPresets.groovy RegPresets.STARE. 'custom' starts from 'high' and applies the reg_tiled_* overrides you set.",
+                    "description": "DRAPE/tiled cost/accuracy tier. Table: lib/RegPresets.groovy RegPresets.DRAPE. 'custom' starts from 'high' and applies the reg_tiled_* overrides you set.",
                     "enum": [
                         "high",
                         "medium",
@@ -247,7 +247,7 @@
                         "integer",
                         "null"
                     ],
-                    "description": "STARE (registration_method=tiled) only: nuclear/fiducial channel index used to estimate the transform. null = resolve from channel metadata against nuclear_markers.",
+                    "description": "DRAPE (registration_method=tiled) only: nuclear/fiducial channel index used to estimate the transform. null = resolve from channel metadata against nuclear_markers.",
                     "default": null,
                     "minimum": 0
                 },
@@ -272,13 +272,13 @@
                         "number",
                         "null"
                     ],
-                    "description": "STARE only: range gate. Drop a window vector whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
+                    "description": "DRAPE only: range gate. Drop a window vector whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
                     "default": null,
                     "minimum": 0
                 },
                 "reg_tiled_stride": {
                     "type": "integer",
-                    "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
+                    "description": "DRAPE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
                     "default": 128,
                     "minimum": 16
                 },

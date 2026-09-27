@@ -43,7 +43,7 @@ flowchart LR
     end
     C --> D
     subgraph REG[Registration]
-      D[Whole-slide alignment<br/>VALIS or tiled/STARE]
+      D[Whole-slide alignment<br/>VALIS or tiled/DRAPE, formerly STARE]
     end
     D --> E
     subgraph SEG[Segmentation]
@@ -68,7 +68,7 @@ raw marker intensities, and you gate/phenotype downstream in QuPath or the
   normalizes to OME-TIFF, and moves the configured nuclear marker
   (`params.nuclear_markers`, default `DAPI`/`CELLTOX`) to channel 0.
 - **Two registration backends** — **VALIS** (default, deep-feature rigid + non-rigid
-  alignment) or **tiled/STARE** (JVM-free, fully parallel), both aligning every panel
+  alignment) or **tiled/DRAPE** (JVM-free, fully parallel), both aligning every panel
   to a shared reference with quantitative error metrics.
 - **Three segmentation backends** — swap between **StarDist**, **InstanSeg**, and
   **CellSAM** with a single `--seg_method` flag.

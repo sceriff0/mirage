@@ -209,7 +209,7 @@ def test_both_halves_of_the_phase_correlation_arrive_at_the_same_precision(
     )
 
     seen = {}
-    # the correlation's two halves enter at the window-vector estimator (stare.vector_grid)
+    # the correlation's two halves enter at the window-vector estimator (drape.vector_grid)
     real = tiled_reg_tile.estimate_tile_vectors
 
     def capture(ref_tile, mov_tile, *args, **kw):

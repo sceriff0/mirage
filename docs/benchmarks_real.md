@@ -29,7 +29,7 @@ Defined in `benchmarks/configs/arms.yaml`. They are **factored, not crossed** �
 registration is the expensive half, so it is paid for once.
 
 At the shipped settings that is **119 launches**: 1 shared preprocessing, 18
-registration arms (9 VALIS + 9 STARE), 90 QC instrument crosses (54 one-at-a-time + 36
+registration arms (9 VALIS + 9 DRAPE, formerly STARE), 90 QC instrument crosses (54 one-at-a-time + 36
 joint cells; all **resume** their base arm and re-run only the QC chain — see §2), 6
 external (ASHLAR), 3 segmentation, 1 compute profile. **All but the compute profile launch
 the whole cohort**, so the launch count is not the run count — for a 6-patient cohort,
@@ -54,13 +54,13 @@ changes the staged registration QC. **18 arms**, nine per backend:
   (`bin/utils/valis_config.py`; an earlier `low` used BRISK/RANSAC, which is why older
   notes call the tiers "different matchers") — crossed with `reg_micro_reg` (a
   **depth**: 0 none, 1 micro-rigid, 2 + micro non-rigid). A depth is why this is
-  3 × 3, not 3 × 2. STARE's ladder is the same three rungs (`lib/RegPresets.groovy`),
+  3 × 3, not 3 × 2. DRAPE's ladder is the same three rungs (`lib/RegPresets.groovy`),
   so `low` against `low` is a like-for-like comparison — the same axis the synthetic
   sweep's `registration_method_grid` crosses.
-- **STARE (`registration_method = tiled`) tier × stride = 9.** A different
+- **DRAPE (`registration_method = tiled`) tier × stride = 9.** A different
   *backend*: `memory_mode` and `reg_micro_reg` do not exist there, so these arms
   carry neither. `reg_tiled_mode` (`low|medium|high`) is the same 512 / 1024 / 2048 px
-  ladder as VALIS's tiers, and `reg_tiled_stride` {64, 128, 256} is STARE's mesh
+  ladder as VALIS's tiers, and `reg_tiled_stride` {64, 128, 256} is DRAPE's mesh
   **resolution** — REG_TILE measures one window displacement vector per `stride` px
   (window `W = 2 × stride`) on a slide-global lattice and SOLVE (`dctpls`) solves that
   lattice into the mesh — the counterpart of `reg_micro_reg`. Arms are named
@@ -68,11 +68,11 @@ changes the staged registration QC. **18 arms**, nine per backend:
   `tiled_high_s128`). Nine against nine (since 2026-09-10; it was three tier-only arms
   against nine, which handed VALIS three times the draws in a best-cell ranking). The
   **tier** rather than its four knobs because the tier is what an operator picks, each
-  `RegPresets.STARE` row moves all four coherently, and `validateRegPresets` refuses a
+  `RegPresets.DRAPE` row moves all four coherently, and `validateRegPresets` refuses a
   per-knob override under any tier but `custom`. The synthetic sweep crosses exactly the
   same two axes on synthetic images.
 
-  **Old STARE (v1) is not re-run.** Until 2026-09-27 the second STARE axis was the TRE
+  **Old STARE (v1) is not re-run.** Until 2026-09-27 the second DRAPE axis was the TRE
   gate `reg_tiled_gate_tre` {0.5, 1.0, 2.0} (arms `tiled_<tier>_gate<g>`), plus a 9-run
   SOLVE cross. Those parameters and solvers no longer exist on this branch; the head-to-head
   against old STARE reads those arms' results as already computed on the `benchmarking`
@@ -102,7 +102,7 @@ was not binding; if they disagree, the 30 row must not be reported as ASHLAR's
 accuracy.
 
 ASHLAR is comparable at all only because `benchmarks/ashlar/solve.py` rewrites
-its per-tile placements into the same `M0` + mesh manifest STARE emits — so
+its per-tile placements into the same `M0` + mesh manifest DRAPE emits — so
 `bin/warp_seg_qc.py --method tiled`, the pipeline's **own** `reg_qc=2` scorer,
 reads it unchanged and writes the same `*_seg_qc.json` into the same tree. Same
 metric family, same columns, one layout, and `ihc_method` picks it up with no
@@ -111,7 +111,7 @@ shares no column with this table — which is what the deleted synthetic
 ground-truth rung did, and why it could never be ranked against these arms.
 Its `tile_size` stays a **fairness** knob, not a cost one — ASHLAR takes one
 independent shift per tile, so a finer grid buys it more local freedom, the
-direct analogue of STARE's `reg_tiled_tile`, which the synthetic sweep varies
+direct analogue of DRAPE's `reg_tiled_tile`, which the synthetic sweep varies
 over `[1024, 2048, 4096]`; `[1024, 4096]` brackets that range at both ends.
 **Read it against VALIS's `rigid` stage** for the like-for-like number and
 against `micro` to quantify what non-rigid buys: ASHLAR attempts no non-rigid
@@ -144,20 +144,20 @@ Nextflow's singularity cache when the pipeline already pulled it:
 | registration QC composite | `bolt3x/mirage-regqc:1.0.0` | `REGQC_EXEC` |
 | alignment solve | `labsyspharm/ashlar:1.20.0` | `ASHLAR_EXEC` |
 
-The repo and `packages/stare/src` are put on `PYTHONPATH` inside every container, because
-the `bin/utils` shims import `stare` and the ASHLAR image does not install it. A finished
+The repo and `packages/drape/src` are put on `PYTHONPATH` inside every container, because
+the `bin/utils` shims import `drape` and the ASHLAR image does not install it. A finished
 ASHLAR arm leaves `<arm>/.external_done`, so a relaunch reports it DONE instead of redoing
 it; `ARMS_REPLACE=1` moves the arm, marker included, aside. Its steps share the head job's
 memory with the Nextflow heads, so keep the head count low while they run.
 
 ### 1c. The SOLVE-stage cross — **retired with STARE v2**
 
-Until 2026-09-27 `reg_tiled_solver` selected STARE's SOLVE stage (`legacy`: gates + median
+Until 2026-09-27 `reg_tiled_solver` selected DRAPE's SOLVE stage (`legacy`: gates + median
 filter; `robust`: neighbour consistency, in-fill, Tikhonov, invertibility; later `dctpls`),
 and a `solver_cross` (`arm_kind=registration_solver`, arms `<base>_solver_robust`) re-ran
-the 9 STARE base arms — which were pinned to `legacy` — with `robust`. STARE v2 kept only
+the 9 DRAPE base arms — which were pinned to `legacy` — with `robust`. STARE v2 kept only
 `dctpls` (on the per-window vector lattice), removed the parameter, and with it this cross
-and its arm kind. `--changed solve` now selects every STARE row (see "Which components map
+and its arm kind. `--changed solve` now selects every DRAPE row (see "Which components map
 to which arms"). The v1 arms and their solver crosses remain as computed results on the
 `benchmarking` branch.
 
@@ -551,11 +551,11 @@ moving slide through ASHLAR's manifest with the pipeline's own `tiled_stitch.py`
 column like any other.
 
 ```bash
-# VALIS best cell against STARE best cell, six rows, one patient
+# VALIS best cell against DRAPE best cell, six rows, one patient
 python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_s128 \
     --rows 6 --patient 5456 -o figs/mosaic
 
-# STARE's coarsest vs finest stride and ASHLAR, four rows, overlay + checkerboard, titled columns
+# DRAPE's coarsest vs finest stride and ASHLAR, four rows, overlay + checkerboard, titled columns
 python -m benchmarks.reg_mosaic arm_results/tiled_high_s256 arm_results/tiled_high_s64 \
     arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker \
     --label tiled_high_s256=s256 --label tiled_high_s64=s64 \
@@ -598,8 +598,8 @@ Nothing else is.
 
 | `--changed` | seeds | closure adds | at the shipped `arms.yaml` |
 |---|---|---|---|
-| `solve` | an alias of `tiled` since STARE v2: every STARE row runs the one SOLVE (`dctpls` on the vector lattice), so a change to `stare.solve` reaches all of them (under v1 it selected only the `robust` solver crosses) | as `tiled` | **54 of 119** |
-| `tiled` / `stare` | every row at `registration_method=tiled` — the 9 bases and their 45 QC crosses, which all carry the backend column | (the crosses would be added by closure if they did not) | 9 + 45 = **54 of 119**; no VALIS arm, no preprocessing, no segmentation arm, no ASHLAR arm (all scored on the VALIS reference) |
+| `solve` | an alias of `tiled` since STARE v2: every DRAPE row runs the one SOLVE (`dctpls` on the vector lattice), so a change to `drape.solve` reaches all of them (under v1 it selected only the `robust` solver crosses) | as `tiled` | **54 of 119** |
+| `tiled` / `drape` | every row at `registration_method=tiled` — the 9 bases and their 45 QC crosses, which all carry the backend column | (the crosses would be added by closure if they did not) | 9 + 45 = **54 of 119**; no VALIS arm, no preprocessing, no segmentation arm, no ASHLAR arm (all scored on the VALIS reference) |
 | `valis` | every VALIS arm | their crosses, the segmentation arms (`from_arm`), the ASHLAR arms (`ext_from_arm`), the compute profile (baseline backend) | 64 of 119 |
 | `seg:<method>` | every row whose `seg_method` is that backend — the segmentation arm *and* every `_seg<method>` cross, since `SEG_QC_SEGMENT` is `SEGMENT` under an alias | — | `seg:stardist`: 37 of 119 |
 | `ashlar` | the external arms | nothing depends on them | 6 of 119 |
@@ -666,7 +666,7 @@ grid** (`delta_grids` in `sweep.yaml`): the cells of one per-method grid replica
 variant's params, appended *after* every other block so the launched run ids never move (the
 new cells are new run ids at the end; `benchmarks/tests/test_delta_grids.py` pins that). None
 is declared today — STARE v2 retired the one there was (`solver_robust`, the old STARE cells
-at `reg_tiled_solver=robust`) with the solver, and re-plans STARE's own grid as tier ×
+at `reg_tiled_solver=robust`) with the solver, and re-plans DRAPE's own grid as tier ×
 `reg_tiled_stride`. To add one and launch only it:
 
 ```bash
@@ -702,7 +702,7 @@ conclusion inverted.
    change. **A true rigid-only baseline exists only in the depth-0 arms.**
 
 2. **The backends do not share a stage vocabulary.** `lib/WarpBackends.groovy`:
-   VALIS is `native → rigid → non_rigid → micro`; STARE and ASHLAR are both
+   VALIS is `native → rigid → non_rigid → micro`; DRAPE and ASHLAR are both
    `native → rigid → refined` (they serialize the same `M0` + mesh manifest, so
    they read through the same warper). Only `native` and `rigid` are shared as
    both a spelling and a meaning across all three. Each arm is therefore ranked on
@@ -715,7 +715,7 @@ conclusion inverted.
    vocabularies out of `WarpBackends` rather than restating them. It was added
    after `refined` was found MISSING from that table: an unranked stage maps to
    `-1`, ties with `native`, and the "final stage" pick then rests on a stable-sort
-   accident — so every STARE run was one upstream reordering away from reporting
+   accident — so every DRAPE run was one upstream reordering away from reporting
    its *unregistered* accuracy as its headline number.
 
 3. **Label the arms explicitly.** `arms.csv` is always written, because the
@@ -733,7 +733,7 @@ Per patient, at the shipped `arms.yaml`:
 | arm | runs | pipeline extent |
 |---|---|---|
 | shared preprocessing | 1 | preprocessing only |
-| registration (9 VALIS + 9 STARE) | 18 | registration only (resumed from preprocessing) |
+| registration (9 VALIS + 9 DRAPE) | 18 | registration only (resumed from preprocessing) |
 | QC instrument crosses (2 segmenters + 1 pairing per arm) | 54 | QC chain only (resumes the base arm's session) |
 | QC joint cells (2 segmenters × 1 pairing per arm) | 36 | QC chain only (resumes the base arm's session) |
 | ASHLAR external baseline | 4 | ASHLAR + the pipeline's QC scorer |

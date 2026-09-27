@@ -1,6 +1,6 @@
 """Pin the registration cost/accuracy tier tables to their forced duplicates.
 
-The `high | medium | low | custom` vocabulary and the STARE tier values exist in more than one
+The `high | medium | low | custom` vocabulary and the DRAPE tier values exist in more than one
 place, and not by choice:
 
 * `lib/RegPresets.groovy` -- the single source for the pipeline and the tiled modules.
@@ -93,10 +93,10 @@ def _parse_row(block: str, mode: str) -> dict[str, int]:
     return {k: int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row.group(1))}
 
 
-def reg_presets_stare() -> dict[str, dict[str, int]]:
-    """The authoritative table: RegPresets.STARE from lib/RegPresets.groovy."""
-    body = re.search(r"STARE\s*=\s*\[(.*?)\n    \]", GROOVY, re.S)
-    assert body, "could not locate the STARE table in lib/RegPresets.groovy"
+def reg_presets_drape() -> dict[str, dict[str, int]]:
+    """The authoritative table: RegPresets.DRAPE from lib/RegPresets.groovy."""
+    body = re.search(r"DRAPE\s*=\s*\[(.*?)\n    \]", GROOVY, re.S)
+    assert body, "could not locate the DRAPE table in lib/RegPresets.groovy"
     return {mode: _parse_row(body.group(1), mode) for mode in TIERS}
 
 
@@ -114,10 +114,10 @@ def groovy_modes() -> list[str]:
 
 def test_parsers_actually_parse():
     """If these come back empty every other test in this file passes vacuously."""
-    stare = reg_presets_stare()
-    assert set(stare) == set(TIERS), f"parsed tiers {sorted(stare)}"
-    for mode, row in stare.items():
-        assert row, f"RegPresets.STARE['{mode}'] parsed empty"
+    drape = reg_presets_drape()
+    assert set(drape) == set(TIERS), f"parsed tiers {sorted(drape)}"
+    for mode, row in drape.items():
+        assert row, f"RegPresets.DRAPE['{mode}'] parsed empty"
 
     tables = inlined_tables()
     assert len(tables) == 4, (
@@ -140,13 +140,13 @@ def test_inlined_config_tables_match_reg_presets():
     (TILED_SOLVE carries halo alone), and demanding full rows would force dead keys into the
     config just to satisfy a test.
     """
-    authoritative = reg_presets_stare()
+    authoritative = reg_presets_drape()
     for idx, table in enumerate(inlined_tables()):
         for mode, row in table.items():
             for key, value in row.items():
                 assert key in authoritative[mode], (
                     f"inlined table #{idx + 1} in conf/modules.config has "
-                    f"{mode}.{key}, which RegPresets.STARE['{mode}'] does not define"
+                    f"{mode}.{key}, which RegPresets.DRAPE['{mode}'] does not define"
                 )
                 assert value == authoritative[mode][key], (
                     f"inlined table #{idx + 1} in conf/modules.config says "
@@ -188,8 +188,8 @@ def test_custom_is_not_a_preset_row(valis_config):
     true and `custom` becomes a fourth tier with its own numbers.
     """
     assert "custom" in groovy_modes(), "'custom' left the tier vocabulary"
-    assert "custom" not in reg_presets_stare(), (
-        "RegPresets.STARE grew a 'custom' row. 'custom' is defined as 'start from high and apply "
+    assert "custom" not in reg_presets_drape(), (
+        "RegPresets.DRAPE grew a 'custom' row. 'custom' is defined as 'start from high and apply "
         "the overrides given' -- a row of its own contradicts that."
     )
 
@@ -226,16 +226,16 @@ def test_tier_owned_params_are_null_declared(param):
     )
 
 
-def test_every_stare_tier_key_maps_to_a_real_param():
-    """STARE_PARAM_OF must not name a param that does not exist -- the lookup fails silently."""
+def test_every_drape_tier_key_maps_to_a_real_param():
+    """DRAPE_PARAM_OF must not name a param that does not exist -- the lookup fails silently."""
     mapping = dict(re.findall(r"(\w+)\s*:\s*'(reg_tiled_\w+)'", GROOVY))
-    assert mapping, "could not parse RegPresets.STARE_PARAM_OF"
-    stare_keys = set(reg_presets_stare()["high"])
-    assert set(mapping) == stare_keys, (
-        f"STARE_PARAM_OF covers {sorted(mapping)} but the tier rows define {sorted(stare_keys)}"
+    assert mapping, "could not parse RegPresets.DRAPE_PARAM_OF"
+    drape_keys = set(reg_presets_drape()["high"])
+    assert set(mapping) == drape_keys, (
+        f"DRAPE_PARAM_OF covers {sorted(mapping)} but the tier rows define {sorted(drape_keys)}"
     )
     for key, param in mapping.items():
         assert re.search(rf"^\s*{param}\s*=", NEXTFLOW_CONFIG, re.M), (
-            f"RegPresets.STARE_PARAM_OF maps '{key}' to '{param}', which nextflow.config does "
+            f"RegPresets.DRAPE_PARAM_OF maps '{key}' to '{param}', which nextflow.config does "
             "not declare"
         )

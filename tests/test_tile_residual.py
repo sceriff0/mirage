@@ -1,4 +1,4 @@
-"""Tests for bin/utils/tile_residual.py — the per-tile refinement primitive of STARE.
+"""Tests for bin/utils/tile_residual.py — the per-tile refinement primitive of DRAPE.
 
 After the global M0 anchor, each tile's moving crop is near-aligned to the reference crop, so the
 leftover misalignment is a small (near-pure-translation) residual. Phase correlation recovers it

@@ -69,7 +69,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.stare_shims import shim_target, shims
+from tests.drape_shims import shim_target, shims
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO_ROOT / "bin"
@@ -102,10 +102,10 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "reason": (
             "No production importer: only tests/test_tiled_pipeline.py and "
             "tests/test_reg_benchmark.py import it. It is a deliberate "
-            "test/benchmark oracle for the STARE registration path, documented "
+            "test/benchmark oracle for the DRAPE registration path, documented "
             "at CHANGELOG.md:487-488 -- not dead code, just never called from "
-            "a production script. (Since the move into packages/stare the bin/utils "
-            "file is a shim over stare.pipeline and is exempt via _candidate_modules; "
+            "a production script. (Since the move into packages/drape the bin/utils "
+            "file is a shim over drape.pipeline and is exempt via _candidate_modules; "
             "this entry stays so test_allowlisted_tiled_pipeline_has_no_production_"
             "importer keeps the oracle's test-only status checked.)"
         ),
@@ -129,16 +129,16 @@ ALLOWLIST: dict[str, dict[str, str]] = {
 
 
 def _candidate_modules() -> list[Path]:
-    """bin/utils/**/*.py, excluding __init__.py and the STARE shims.
+    """bin/utils/**/*.py, excluding __init__.py and the DRAPE shims.
 
-    A SHIM (`tests/stare_shims.py`: a docstring, `from stare... import x as _impl`,
+    A SHIM (`tests/drape_shims.py`: a docstring, `from drape... import x as _impl`,
     `sys.modules[__name__] = _impl`, nothing else) is not a module with a body that could
-    be dead code -- it is a compatibility name over `packages/stare`, kept so the flat
+    be dead code -- it is a compatibility name over `packages/drape`, kept so the flat
     `from mesh_field import MeshField` convention the tests, bin/warp_seg_qc.py and
     benchmarks/anhir/warp.py use keeps resolving. The production-importer rule below
     would flag six of them (their former production importers moved into the package
     with them) for a reason that does not apply. They get their OWN rule instead,
-    `test_every_stare_shim_is_imported_by_something`: a shim nothing under bin/, tests/
+    `test_every_drape_shim_is_imported_by_something`: a shim nothing under bin/, tests/
     or benchmarks/ imports is a name nobody needs and is deleted, not kept.
     """
     mods = []
@@ -239,8 +239,8 @@ def test_bin_utils_module_has_a_real_importer(module_path: Path) -> None:
     )
 
 
-def test_every_stare_shim_is_imported_by_something() -> None:
-    """The rule for a STARE shim (see `_candidate_modules`): it must be imported by a
+def test_every_drape_shim_is_imported_by_something() -> None:
+    """The rule for a DRAPE shim (see `_candidate_modules`): it must be imported by a
     real import statement somewhere under bin/, tests/ or benchmarks/ -- by its FLAT name,
     which is the only reason the shim exists. One with no importer at all is deleted."""
     haystack = _production_haystack_files() + _test_haystack_files()
@@ -249,7 +249,7 @@ def test_every_stare_shim_is_imported_by_something() -> None:
     # invoke by name (tests/test_bin_entrypoint_idiom.py covers them), not import names.
     found = [shim for shim in shims() if UTILS_DIR in shim.parents]
     assert found, (
-        "no STARE shims found under bin/utils -- tests/stare_shims.py is broken"
+        "no DRAPE shims found under bin/utils -- tests/drape_shims.py is broken"
     )
     orphans = [
         str(shim.relative_to(REPO_ROOT))
@@ -257,9 +257,9 @@ def test_every_stare_shim_is_imported_by_something() -> None:
         if not _is_imported_anywhere(shim, haystack)
     ]
     assert not orphans, (
-        f"STARE shim(s) nothing imports by their flat name: {orphans}. A shim exists only "
+        f"DRAPE shim(s) nothing imports by their flat name: {orphans}. A shim exists only "
         "to keep an existing `from <name> import ...` resolving; with no such importer "
-        "it is dead and should be deleted (import from `stare` directly instead)."
+        "it is dead and should be deleted (import from `drape` directly instead)."
     )
 
 
@@ -270,13 +270,13 @@ def test_a_shim_is_excluded_from_the_dead_module_rule_only_if_it_really_is_one(
     `sys.modules` line to a real module would exempt it from the dead-code rule."""
     real = tmp_path / "real_module.py"
     real.write_text(
-        '"""doc"""\nimport sys\nfrom stare import mesh_field as _impl\n\n'
+        '"""doc"""\nimport sys\nfrom drape import mesh_field as _impl\n\n'
         "def helper():\n    return 1\n\nsys.modules[__name__] = _impl\n"
     )
     assert shim_target(real) is None
     shim = tmp_path / "shim.py"
     shim.write_text(
-        '"""doc"""\nimport sys\nfrom stare import mesh_field as _impl\n\n'
+        '"""doc"""\nimport sys\nfrom drape import mesh_field as _impl\n\n'
         "sys.modules[__name__] = _impl\n"
     )
     assert shim_target(shim) is not None and shim_target(shim).name == "mesh_field.py"

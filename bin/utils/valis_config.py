@@ -207,7 +207,7 @@ MEMORY_PRESETS = {
 }
 
 
-# The tier vocabulary, shared with the STARE backend and with nextflow_schema.json's
+# The tier vocabulary, shared with the DRAPE backend and with nextflow_schema.json's
 # `memory_mode` enum. 'custom' is not a row in MEMORY_PRESETS: it means "start from 'high' and
 # apply whichever per-knob overrides the caller passed", which is what resolve_memory_mode encodes.
 # Mirrored by lib/RegPresets.groovy (MODES / DEFAULT_MODE) for the tiled backend; the two are

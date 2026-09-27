@@ -48,12 +48,12 @@ same `params.preproc_tile_size` grid the in-process path fitted on, via the same
 ### Neither half ever holds the slide
 
 Both `bin/tile_for_basic.py` and `bin/apply_basic_profiles.py` follow the discipline the
-STARE registration path uses in `bin/tiled_stitch.py`, and for the same reason — a WSI
+DRAPE (formerly STARE) registration path uses in `bin/tiled_stitch.py`, and for the same reason — a WSI
 does not fit in a sensible memory request:
 
 * **Geometry is separated from pixels.** `fov_tiling.fov_positions` is pure arithmetic on
   `(H, W, n_fovs_y, n_fovs_x)`; it allocates nothing and reads nothing, exactly as
-  `tile_grid.tile_grid` does for STARE. That is what makes streaming possible at all —
+  `tile_grid.tile_grid` does for DRAPE. That is what makes streaming possible at all —
   you can know where every tile goes before decoding a byte.
 * **Reads are lazy region reads** through `tiled_io.open_lazy`'s zarr view.
 * **Writes are generator-fed**: `TiffWriter.write(iterator, shape=…, tile=…)`, one tile

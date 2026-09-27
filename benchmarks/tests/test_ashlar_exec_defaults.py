@@ -12,7 +12,7 @@ pipeline's Python stack is installed. Pinned here:
     solve, and bind the data filesystems Nextflow's autoMounts would have bound;
   * sif_or_docker prefers Nextflow's cached image over a fresh pull;
   * each step in run_ashlar_arm.sh uses the prefix that matches its image;
-  * the repo and packages/stare/src are on PYTHONPATH inside the containers, because
+  * the repo and packages/drape/src are on PYTHONPATH inside the containers, because
     the bin/utils shims import `stare` and the ASHLAR image does not install it.
 """
 
@@ -117,12 +117,12 @@ def test_each_step_uses_the_prefix_of_its_image():
 def test_the_repo_and_the_stare_package_are_on_the_path_inside_the_containers():
     code = _code(BENCH / "run_ashlar_arm.sh")
     m = re.search(r'^STEP_PYTHONPATH="([^"]+)"$', code, re.M)
-    assert m and m.group(1) == "$REPO:$REPO/packages/stare/src", m and m.group(1)
+    assert m and m.group(1) == "$REPO:$REPO/packages/drape/src", m and m.group(1)
     assert 'export PYTHONPATH="$STEP_PYTHONPATH' in code
     assert 'SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH"' in code
     assert 'APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"' in code
     # the shim that makes it necessary is still a shim
     assert (
-        "from stare import manifest"
+        "from drape import manifest"
         in (REPO / "bin" / "utils" / "tiled_manifest.py").read_text()
     )

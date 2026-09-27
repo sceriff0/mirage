@@ -7,7 +7,7 @@ second, silent owner — exactly the failure this file exists to prevent.
 
 Static rather than behavioural on purpose. `-stub` never evaluates a `script:` block, so
 a stub run cannot see a rendered command at all, and a real nf-test per process would
-need that process's whole dependency stack (a STARE manifest for
+need that process's whole dependency stack (a DRAPE manifest for
 TILED_STITCH) to be installed just to read a string.
 `tests/modules/split_channels.nf.test`'s rendered-command case is the behavioural
 counterpart for the one process that can be rendered cheaply.
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.stare_shims import source_of
+from tests.drape_shims import source_of
 
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "bin"
@@ -39,8 +39,8 @@ STANDALONE = {"join_flowpath.py"}
 def _scripts_accepting_a_scale() -> dict[str, str]:
     """{bin script name: the --pixel-size flag it declares}.
 
-    Read through ``tests.stare_shims.source_of``: ``bin/tiled_stitch.py`` is a shim over
-    ``stare.stages.stitch``, whose argparse is where the flag now lives. Keyed by the
+    Read through ``tests.drape_shims.source_of``: ``bin/tiled_stitch.py`` is a shim over
+    ``drape.stages.stitch``, whose argparse is where the flag now lives. Keyed by the
     SHIM's name, because that is what ``modules/local/tiled_stitch.nf`` invokes.
     """
     out = {}

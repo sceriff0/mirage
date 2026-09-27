@@ -18,7 +18,7 @@ GEOMETRY IS SEPARATE FROM PIXELS, and that is the whole point of this module's s
 ``fov_positions`` is pure arithmetic on ``(H, W, n_fovs_y, n_fovs_x)``: it allocates
 nothing, imports no image library, and can be called before a single byte is read. That
 is what lets both callers stream. It is the same split ``bin/utils/tile_grid.py`` makes
-for the STARE registration path, deliberately -- the two tilings solve different problems
+for the DRAPE registration path, deliberately -- the two tilings solve different problems
 (see "WHY THIS GRID IS NOT tile_grid's" below) but they are built the same way, so a
 reader who has understood one has understood the other.
 
@@ -44,7 +44,7 @@ produce a smaller input, it produces one ``fit()`` cannot accept.
 WHY THIS GRID IS NOT ``tile_grid.py``'s. They are not interchangeable and unifying them
 would change what BaSiC fits on:
 
-* ``tile_grid`` uses a FIXED tile size with a short last cell, because the STARE stitch
+* ``tile_grid`` uses a FIXED tile size with a short last cell, because the DRAPE stitch
   needs cores that partition the image at predictable offsets. On a 4097 px axis at
   tile=2048 that yields cells of 2048, 2048 and **1**.
 * This module BALANCES the cells (1366, 1366, 1365 for the same axis), because a one-pixel
@@ -197,7 +197,7 @@ def fov_overlaps(positions, y0: int, x0: int, h: int, w: int):
     The inverse lookup ``bin/apply_basic_profiles.py`` needs to correct one write-tile at a
     time: an illumination profile is indexed in FOV-LOCAL coordinates, so a window that
     straddles a FOV boundary must be corrected piecewise. This is the analogue of
-    ``tiled_warp.source_region`` on the STARE path -- geometry that says which source
+    ``tiled_warp.source_region`` on the DRAPE path -- geometry that says which source
     pixels an output tile draws from, computed before anything is read.
 
     Yields ``(index, window_slices, profile_slices)`` where ``window_slices`` index into

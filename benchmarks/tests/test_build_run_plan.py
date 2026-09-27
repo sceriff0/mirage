@@ -289,7 +289,7 @@ def test_project_sweep_covers_every_shipped_segmentation_backend():
 
 
 def stare_preset_row(mode):
-    """Parse one row of RegPresets.STARE out of lib/RegPresets.groovy.
+    """Parse one row of RegPresets.DRAPE out of lib/RegPresets.groovy.
 
     The STARE tier knobs are null-declared in nextflow.config -- their shipped default now lives
     in that table, not in the config -- so a test that wants "the value a default run actually
@@ -301,17 +301,17 @@ def stare_preset_row(mode):
     regex that stops matching cannot quietly turn every caller into a no-op assertion.
     """
     text = (Path(__file__).parents[2] / "lib" / "RegPresets.groovy").read_text()
-    body = re.search(r"STARE\s*=\s*\[(.*?)\n    \]", text, re.S)
-    assert body, "could not locate the STARE table in lib/RegPresets.groovy"
+    body = re.search(r"DRAPE\s*=\s*\[(.*?)\n    \]", text, re.S)
+    assert body, "could not locate the DRAPE table in lib/RegPresets.groovy"
     row = re.search(rf"^\s*{mode}\s*:\s*\[([^\]]*)\]", body.group(1), re.M)
-    assert row, f"could not locate the '{mode}' row in RegPresets.STARE"
+    assert row, f"could not locate the '{mode}' row in RegPresets.DRAPE"
     return {
         k.strip(): int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row.group(1))
     }
 
 
 def stare_preset_modes():
-    """The tier NAMES in RegPresets.STARE -- the owner of which tiers exist.
+    """The tier NAMES in RegPresets.DRAPE -- the owner of which tiers exist.
 
     Shares stare_preset_row's parse deliberately. A second private regex over the same
     Groovy file is the pattern tests/test_nfmodel.py exists to stop: seven guards each
@@ -320,10 +320,10 @@ def stare_preset_modes():
     overrides" -- so callers get exactly the tiers that have values.
     """
     text = (Path(__file__).parents[2] / "lib" / "RegPresets.groovy").read_text()
-    body = re.search(r"STARE\s*=\s*\[(.*?)\n    \]", text, re.S)
-    assert body, "could not locate the STARE table in lib/RegPresets.groovy"
+    body = re.search(r"DRAPE\s*=\s*\[(.*?)\n    \]", text, re.S)
+    assert body, "could not locate the DRAPE table in lib/RegPresets.groovy"
     modes = re.findall(r"^\s*(\w+)\s*:\s*\[", body.group(1), re.M)
-    assert modes, "parsed no tier names out of RegPresets.STARE"
+    assert modes, "parsed no tier names out of RegPresets.DRAPE"
     return modes
 
 
@@ -337,7 +337,7 @@ def test_stare_preset_parser_actually_parses():
     rows = {m: stare_preset_row(m) for m in ("high", "medium", "low")}
     for mode, row in rows.items():
         assert set(row) == {"tile", "halo", "out_tile", "coarse_max_dim"}, (
-            f"RegPresets.STARE['{mode}'] parsed as {row} -- the table shape changed"
+            f"RegPresets.DRAPE['{mode}'] parsed as {row} -- the table shape changed"
         )
     assert rows["high"]["tile"] > rows["low"]["tile"], "tiers are not ordered by cost"
 

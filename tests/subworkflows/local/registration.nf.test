@@ -59,7 +59,7 @@ nextflow_workflow {
 
     // Legacy GPU/CPU registration tests moved to legacy/
 
-    test("Should run tiled/STARE registration - stub") {
+    test("Should run tiled/DRAPE registration - stub") {
 
         // Same inputs as "Should run VALIS registration - stub", with
         // registration_method flipped to 'tiled'.
@@ -67,7 +67,7 @@ nextflow_workflow {
         // The brief for this case assumed intrinsic_tre follows the adapter seam's
         // null-object rule for a method that "produces no TRE" -- but tiled_adapter.nf's
         // own header and registration.nf's ch_registration_tre comment both say
-        // otherwise: "Both backends produce one (VALIS a feature-distance CSV, STARE a
+        // otherwise: "Both backends produce one (VALIS a feature-distance CSV, DRAPE a
         // *_tre.json)". TILED_SOLVE declares `path("*_tre.json"), emit: tre` as a real,
         // unconditional output (modules/local/tiled_solve.nf), so the tiled adapter's
         // intrinsic_tre is NOT a Channel.empty() slot -- it is populated once per moving
@@ -102,7 +102,7 @@ nextflow_workflow {
                 { assert workflow.success },
                 { assert workflow.out.checkpoint_csv },
                 { assert workflow.out.registration_tre.size() >= 1,
-                    "the tiled adapter also produces its own STARE *_tre.json -- " +
+                    "the tiled adapter also produces its own DRAPE *_tre.json -- " +
                     "intrinsic_tre is not a null-object slot for this backend, contrary to " +
                     "the brief's fallback premise. Real: " + workflow.out.registration_tre }
             )

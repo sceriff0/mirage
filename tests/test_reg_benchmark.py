@@ -53,7 +53,7 @@ def test_a_misaligned_pair_scores_a_large_residual():
 
 
 def test_benchmark_shows_registration_reduced_the_residual():
-    """The end-to-end accuracy claim, on synthetic ground truth: STARE lowers the TRE.
+    """The end-to-end accuracy claim, on synthetic ground truth: DRAPE lowers the TRE.
 
     The only case in this file that runs a REGISTRATION rather than just scoring one, so it is
     also the only one needing the learned COARSE matcher. The ORB oracle this module measures

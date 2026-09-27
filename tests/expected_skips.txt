@@ -52,7 +52,7 @@ tests/test_ci_stack_pinned.py::test_image_installing_a_constrained_package_reads
 tests/test_ci_stack_pinned.py::test_image_installing_a_constrained_package_reads_the_constraints_file[spatialdata]
 
 # --- bin/utils/tiled_pipeline.py has no production importer by design: it is a
-# --- test/benchmark oracle for the STARE registration path (CHANGELOG.md:487-488).
+# --- test/benchmark oracle for the DRAPE registration path (CHANGELOG.md:487-488).
 # --- The skip comes from that file's own permanent allowlist, so this entry is
 # --- a pointer to a decision recorded elsewhere, not a second decision.
 

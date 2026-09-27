@@ -21,7 +21,7 @@ process, default and path below is read from the pipeline source —
     - **S4 · lazy reads** — [figure](figures/zarr-schematic.html){ target=_blank } ·
       where lazy zarr reads cut peak memory, and every place they cannot help
     - **S5 · coarse alignment** — [figure](figures/coarse-schematic.html){ target=_blank } ·
-      why the STARE global pose is a learned matcher, and what that costs in memory
+      why the DRAPE (formerly STARE) global pose is a learned matcher, and what that costs in memory
     - **S6 · accuracy measures** — [figure](figures/accuracy-schematic.html){ target=_blank } ·
       the four registration-accuracy numbers, which two are scored on the registrar's own features, and why none is ground truth
 
@@ -137,7 +137,7 @@ Chips give real defaults. Every process runs in a pinned container and emits
             slides into a shared space. Full micro-registration by default
             (<code>reg_micro_reg=2</code>: micro-rigid, then the micro non-rigid pass); <code>1</code> stops after micro-rigid.</div>
           <div class="pp"><span>memory_mode <b>high</b></span><span>micro_reg <b>2</b></span><span>max_dim <b>4000</b></span></div></div>
-        <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
+        <div class="opt"><div class="oh"><span>tiled → DRAPE</span><span class="tag-alt">method=tiled</span></div>
           <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial is
             channel 0. Every step is bounded by a parameter; COARSE (NCC rotation sweep, ORB
             fallback) needs &lt;0.5 GB at every tier. The per-tile fan-out is the only shape.</div>

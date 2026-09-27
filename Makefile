@@ -132,7 +132,7 @@ arm-run: arm-plan
 
 # Re-running a SUBSET after a code change (docs/benchmarks_real.md, "Re-running a
 # subset after a code change"). CHANGED is a space-separated list of components
-# (tiled|stare|valis|qc|preprocess|seg:<method>, see benchmarks/impact.py), ONLY a
+# (tiled|drape|valis|qc|preprocess|seg:<method>, see benchmarks/impact.py), ONLY a
 # regex on arm/run_id; build_arm_plan.py takes the transitive closure (a QC cross
 # of a re-run base re-runs, and so on). The subset plan gets ITS OWN file so
 # $(ROOT)_plan.csv -- the FULL plan that arm-tables and arm-pull read -- is never
@@ -146,7 +146,7 @@ ONLY ?=
 SUBSET_PLAN ?= $(ROOT)_plan.subset.csv
 
 arm-plan-subset:
-	@[ -n "$(CHANGED)$(ONLY)" ] || { echo "set CHANGED=<tiled|stare|valis|qc|preprocess|seg:<method> ...> and/or ONLY=<regex>"; exit 1; }
+	@[ -n "$(CHANGED)$(ONLY)" ] || { echo "set CHANGED=<tiled|drape|valis|qc|preprocess|seg:<method> ...> and/or ONLY=<regex>"; exit 1; }
 	python benchmarks/build_arm_plan.py \
 	    --arms $(ARMS) --input $(INPUT) \
 	    --out $(SUBSET_PLAN) --results-root $(ROOT) \

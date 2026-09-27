@@ -1,4 +1,4 @@
-"""Tests for bin/utils/tile_grid.py — the tiling geometry of the STARE registration method.
+"""Tests for bin/utils/tile_grid.py — the tiling geometry of the DRAPE registration method.
 
 A slide is split into core tiles that *partition* it (no gaps, no overlaps) so stitching just
 places each core back; each core is read with a halo (clamped to the image) so per-tile

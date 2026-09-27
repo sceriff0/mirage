@@ -1,7 +1,7 @@
-"""End-to-end test for bin/utils/tiled_pipeline.py — the STARE registration, in one process.
+"""End-to-end test for bin/utils/tiled_pipeline.py — the DRAPE registration, in one process.
 
 ``register_slide`` chains the whole method: global rigid M0 (coarse_align) -> rigid pre-warp ->
-per-tile window vectors (tile_grid + vector_grid) -> the dctpls mesh (stare.solve) -> mesh warp
+per-tile window vectors (tile_grid + vector_grid) -> the dctpls mesh (drape.solve) -> mesh warp
 (tiled_warp). This is the proof the pieces compose into a working registration: a
 synthetically warped moving image is brought back into alignment with the reference, and the
 output is non-negative.

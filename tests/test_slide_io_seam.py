@@ -14,7 +14,7 @@ The measured inventory, at the time of writing:
     tile_for_basic.py                 yes     minisblack   none         none      yes
     apply_basic_profiles.py           yes     minisblack   zlib         2048      yes
     merge_channels_pyramid.py         yes     minisblack   zstd(param)  tile_size yes
-    stare/stages/stitch.py            yes     minisblack   none         out_tile  yes
+    drape/stages/stitch.py            yes     minisblack   none         out_tile  yes
     split_multichannel.py             no      -            zlib         2048      yes
     segment.py / _cellsam / _instanseg no     -            zlib         none      NO
     utils/image_utils.py              generic passed through by the caller
@@ -27,7 +27,7 @@ change published bytes:
   * the two largest intermediates, ``convert_image`` and ``tiled_stitch``, are written
     uncompressed -- compression stays out of scope for both. ``convert_image`` USED to be
     untiled too; PERF-PLAN.md measured that an untiled canonical intermediate forecloses
-    every windowed read downstream (BaSiC, STARE registration, SPLIT_CHANNELS, QC) at 2%
+    every windowed read downstream (BaSiC, DRAPE registration, SPLIT_CHANNELS, QC) at 2%
     wall-clock cost to fix, so it is now tiled at ``CONVERT_TIFF_TILE`` (2048px) -- see
     ``tests/test_convert_streaming_write.py::test_the_write_is_tiled``.
 
@@ -42,7 +42,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.stare_shims import source_of
+from tests.drape_shims import source_of
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -81,8 +81,8 @@ PIXEL_WRITERS = {
         1,
         "the multi-site CZYX pseudo-FOV stack BASICPY fits on",
     ),
-    # the STARE stitch stage; bin/tiled_stitch.py is a shim over it
-    "packages/stare/src/stare/stages/stitch.py": (1, "the STARE registered slide"),
+    # the DRAPE stitch stage; bin/tiled_stitch.py is a shim over it
+    "packages/drape/src/drape/stages/stitch.py": (1, "the DRAPE registered slide"),
     # The seam itself. The regex counts BOTH a def line and a call line whenever they share
     # a name -- `def ome_tiff_writer(` and `def write_ome_tiff(` each match their own pattern
     # too, not just their call sites -- so this is 3 def lines (ome_tiff_writer, write_ome_tiff,
@@ -108,7 +108,7 @@ MULTI_CHANNEL_WRITERS = (
     "bin/apply_basic_profiles.py",
     "bin/tile_for_basic.py",
     "bin/merge_channels_pyramid.py",
-    "packages/stare/src/stare/stages/stitch.py",
+    "packages/drape/src/drape/stages/stitch.py",
 )
 
 # ... and the one that DELEGATES the flag. bin/convert_image.py hands its stack to
@@ -168,9 +168,9 @@ def _writer_sites(rel):
 
 
 def _all_writer_files():
-    """{repo-relative file: write-call count} over bin/, with each STARE shim resolved
-    to the package file it stands for (``tests.stare_shims.source_of``): the stitch's
-    writer lives in packages/stare/src/stare/stages/stitch.py, and bin/tiled_stitch.py
+    """{repo-relative file: write-call count} over bin/, with each DRAPE shim resolved
+    to the package file it stands for (``tests.drape_shims.source_of``): the stitch's
+    writer lives in packages/drape/src/drape/stages/stitch.py, and bin/tiled_stitch.py
     is a shim that names no writer at all."""
     found = {}
     for shim in sorted((REPO / "bin").rglob("*.py")):
@@ -344,7 +344,7 @@ TILE_FED_GENERATORS = {
     "_iter_tiles": "bin/utils/ome_io.py -- wraps _iter_planes and re-slices each plane",
     "_tiles": "bin/apply_basic_profiles.py -- channel-major, tile-major",
     "_plane_tiles": "bin/merge_channels_pyramid.py -- per-plane tile walk",
-    "stream_tiles": "packages/stare/src/stare/stages/stitch.py -- warps and emits one out_tile at a time",
+    "stream_tiles": "packages/drape/src/drape/stages/stitch.py -- warps and emits one out_tile at a time",
 }
 
 

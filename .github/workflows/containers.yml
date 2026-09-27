@@ -289,7 +289,7 @@ jobs:
                 per_image_globs="${per_image_globs}${nl}${req}"
               done < <(grep -oE 'requirements/[A-Za-z0-9._-]+\.txt' "containers/${dir}/Dockerfile" | sort -u)
               # And every first-party packages/ directory it COPYs (containers/tiled:
-              # packages/stare), emitted below per image as 'packages/<pkg>/**'.
+              # packages/drape), emitted below per image as 'packages/<pkg>/**'.
               while read -r pkg; do
                 per_image_globs="${per_image_globs}${nl}${pkg}/**"
               done < <(grep -oE '^COPY packages/[A-Za-z0-9._-]+' "containers/${dir}/Dockerfile" | sed 's/^COPY //' | sort -u)
@@ -309,7 +309,7 @@ jobs:
                 | sort -u \
                 | while read -r req; do echo "  - '${req}'"; done
               # Every first-party package directory it COPYs and pip-installs
-              # (containers/tiled: packages/stare, the STARE method itself). Same
+              # (containers/tiled: packages/drape, the DRAPE method itself). Same
               # rule as the requirements files: the image reads it, so a change to
               # it must rebuild the image, and only that image.
               grep -oE '^COPY packages/[A-Za-z0-9._-]+' "containers/${dir}/Dockerfile" \

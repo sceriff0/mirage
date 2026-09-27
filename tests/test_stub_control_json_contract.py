@@ -8,7 +8,7 @@ SOLVE solves only the window-vector lattice and REFUSES a control JSON without `
 vectors are all out of range would solve to no mesh while real runs refine one.
 
 The test drives the real consumer rather than string-matching the stub, so the two cannot
-drift: it parses the JSON the stub actually writes and runs `stare.solve.solve_dctpls` on it.
+drift: it parses the JSON the stub actually writes and runs `drape.solve.solve_dctpls` on it.
 """
 
 import json
@@ -68,9 +68,9 @@ def test_the_parser_would_notice_if_the_stub_stopped_emitting_a_control_json():
 
 
 # ---------------------------------------------------------------------------
-# The window-vector grid (stare.vector_grid): the stub must drive the VECTOR solve
+# The window-vector grid (drape.vector_grid): the stub must drive the VECTOR solve
 # ---------------------------------------------------------------------------
-# `stare.solve.solve_dctpls` refuses a control without `vectors`, so a stub without them would
+# `drape.solve.solve_dctpls` refuses a control without `vectors`, so a stub without them would
 # fail TILED_SOLVE on every stub run.
 
 
@@ -93,7 +93,7 @@ def test_the_stub_carries_a_lattice_and_a_vector_list():
 
 def test_the_stub_vectors_reach_the_vector_solve():
     """Drive the real dctpls consumer: the stub's vectors must be laid on the lattice."""
-    from stare.solve import solve_dctpls
+    from drape.solve import solve_dctpls
 
     control = _stub_control()
     _gx, _gy, _disp, report = solve_dctpls([control], max_disp=256)

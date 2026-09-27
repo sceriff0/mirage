@@ -1,7 +1,7 @@
 /*
  * WARP_SEG_QC - staged, fixed-correspondence segmentation-overlap QC (reg_qc = 2)
  *
- * Loads the registration transform (a VALIS registrar pickle, or a STARE transform
+ * Loads the registration transform (a VALIS registrar pickle, or a DRAPE transform
  * manifest for the tiled method) and warps the reference and moving native-cell
  * GeoJSONs through each registration stage in turn. Cell-to-cell correspondence is
  * established ONCE at the rigid stage (optimal one-to-one assignment minimising total

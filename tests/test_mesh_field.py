@@ -1,5 +1,5 @@
 """Tests for bin/utils/mesh_field.py — the smooth control-grid displacement field and the
-bilinear intensity resampler used by the tiled ('STARE') registration method.
+bilinear intensity resampler used by the tiled ('DRAPE') registration method.
 
 Two guarantees are pinned here:
   * the field is a single continuous function of position (exact at control nodes, bilinear

@@ -95,7 +95,7 @@ def _ashlar(r: Row) -> bool:
 # component name -> predicate over a plan row. `stare` is an alias of `tiled`
 # because the docs use both names for the same backend. `solve` is one too since STARE v2:
 # every tiled row runs the one SOLVE (dctpls on the vector lattice), so a change to
-# stare.solve reaches every STARE row and nothing else. (Under STARE v1 it selected only the
+# drape.solve reaches every STARE row and nothing else. (Under STARE v1 it selected only the
 # `robust`-solver cross arms, because `legacy` was pinned byte-identical; both are gone.)
 COMPONENTS: dict[str, Predicate] = {
     "tiled": _reg_method_is("tiled"),

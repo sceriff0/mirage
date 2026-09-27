@@ -1,4 +1,4 @@
-# STARE tiled registration (registration_method='tiled') — CPU-only, JVM-free.
+# DRAPE tiled registration (registration_method='tiled') — CPU-only, JVM-free.
 # COPY'd into containers/tiled/Dockerfile, and `-r`-included by requirements/ci.txt so
 # CI runs the same pins the production tiled image does, with no second copy.
 #

@@ -15,7 +15,7 @@ grep would delete them". Two ASHLAR sentences in this set are CORRECT and must
 survive:
   * pipeline-schematic.html -- mcmicro applies BaSiC profiles inside ASHLAR's
     mosaic step, which mirage has no counterpart for.
-  * registration-schematic.html -- STARE's phase-correlation kernel mirrors
+  * registration-schematic.html -- DRAPE's phase-correlation kernel mirrors
     ASHLAR's.
 So `ashlar` is forbidden only where it reads as a SELECTABLE BACKEND (a
 `registration_method` value, a process name, an adapter name), never as a word.
@@ -46,7 +46,7 @@ FIGURES_DIR = REPO_ROOT / "docs" / "figures"
 RETIRED = {
     r"(?<![A-Za-z0-9])orb(?![A-Za-z0-9])": (
         "the classical ORB front-end is deleted",
-        "packages/stare/src/stare/coarse_align.py (bin/utils/coarse_align.py shims it) has no _frontend_orb; the only front-end is "
+        "packages/drape/src/drape/coarse_align.py (bin/utils/coarse_align.py shims it) has no _frontend_orb; the only front-end is "
         "_frontend_disk_lightglue",
     ),
     r"(?<![A-Za-z0-9])sift(?![A-Za-z0-9])": (
@@ -61,7 +61,7 @@ RETIRED = {
         "the front-end selector param is deleted",
         "nextflow.config declares no such param; a single-valued enum is dead config",
     ),
-    r"stare[_-]ml": (
+    r"drape[_-]ml": (
         "containers/stare-ml/ is deleted; torch+kornia folded into the tiled image",
         "containers/images.json has no stare-ml entry",
     ),

@@ -1,8 +1,8 @@
 /*
- * TILED_REG_TILE - STARE fan-out step 2/4: one tile's residual (the little-process fan-out).
+ * TILED_REG_TILE - DRAPE fan-out step 2/4: one tile's residual (the little-process fan-out).
  *
  * One task per tile: rigid-warps this tile's reference-frame read box of the moving DAPI and
- * measures a grid of window vectors on the slide-global lattice (stare.vector_grid: node k at
+ * measures a grid of window vectors on the slide-global lattice (drape.vector_grid: node k at
  * W/2 + k*stride, W = 2*stride; the tile emits the nodes whose centre lies in its CORE, so
  * every node is measured exactly once across tiles). `row` is a tile-plan CSV row from
  * TILED_COARSE; its core columns x0/y0/x1/y1 are what makes the ownership exact.
@@ -59,7 +59,7 @@ process TILED_REG_TILE {
     """
 
     stub:
-    // "lattice"/"vectors" are not decoration: stare.solve's SOLVE solves only the vector
+    // "lattice"/"vectors" are not decoration: drape.solve's SOLVE solves only the vector
     // lattice and REFUSES a control JSON without them, so a stub that omitted them would fail
     // every stub run's TILED_SOLVE. One confident, in-range vector per tile, at node (ix, iy);
     // the per-tile summary keys (dx/dy/tre/error, ref_fg/mov_fg) mirror the real script's.

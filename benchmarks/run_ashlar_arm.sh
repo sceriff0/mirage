@@ -78,10 +78,10 @@ SEG_QC="${ASHLAR_SEG_QC:-1}"
 REG_QC="${ASHLAR_REG_QC:-1}"
 PIXEL_SIZE_OVERRIDE="${ASHLAR_PIXEL_SIZE_UM:-}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
-# the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
+# the `stare` package (packages/drape), which the ASHLAR image does not install. Put the repo
 # and the package source on the path, and hand the same value into the containers:
 # Singularity and Apptainer set SINGULARITYENV_X / APPTAINERENV_X as X inside.
-STEP_PYTHONPATH="$REPO:$REPO/packages/stare/src"
+STEP_PYTHONPATH="$REPO:$REPO/packages/drape/src"
 export PYTHONPATH="$STEP_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 export SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH" APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"
 

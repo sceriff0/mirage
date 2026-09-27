@@ -1,4 +1,4 @@
-"""Tests for bin/utils/coarse_align.py — the global rigid anchor (M0) of the STARE method.
+"""Tests for bin/utils/coarse_align.py — the global rigid anchor (M0) of the DRAPE method.
 
 The COARSE step estimates one affine ``M0`` that places a whole moving slide into the reference
 frame, absorbing inter-cycle rotation/translation. The numerically load-bearing core is
@@ -6,7 +6,7 @@ frame, absorbing inter-cycle rotation/translation. The numerically load-bearing 
 residual TRE); it is tested deterministically against transforms it did not compute the same way.
 The anchor itself (``estimate_rigid``: NCC rotation sweep + ORB fallback) is exercised as a
 smoke test on a synthetic image here; its hard cases live in
-packages/stare/tests/test_coarse_anchor.py.
+packages/drape/tests/test_coarse_anchor.py.
 """
 
 from __future__ import annotations

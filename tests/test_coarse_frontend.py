@@ -2,7 +2,7 @@
 
 There is exactly ONE front-end, reached through ``estimate_rigid`` / ``estimate_anchor``: an
 FFT NCC rotation sweep refined at the thumbnail, with a scikit-image ORB fallback and a loud
-refusal (packages/stare/tests/test_coarse_anchor.py holds the hard-case and fallback tests).
+refusal (packages/drape/tests/test_coarse_anchor.py holds the hard-case and fallback tests).
 It replaced DISK + LightGlue on 2026-09-27. The three classical CPU alternatives and the
 ``estimate_affine`` dispatch table deleted for v1.0.0 stay deleted -- the ORB of the fallback
 is a different, internal shape (``_orb_fallback``), not the old selectable front-end --

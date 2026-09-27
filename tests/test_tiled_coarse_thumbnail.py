@@ -296,7 +296,7 @@ def test_reference_and_moving_share_one_decimation_factor(tmp_path, monkeypatch)
     # about the shapes the anchor is handed, so it answers with an identity anchor.
     def spy(ref, mov, **kw):
         seen.append((ref.shape, mov.shape))
-        from stare.coarse_align import Anchor
+        from drape.coarse_align import Anchor
 
         return Anchor(np.eye(3), 1.0, 0, "ncc_sweep", 1.0, 2.0, 0.0)
 
@@ -337,7 +337,7 @@ def test_an_unanchorable_pair_fails_the_task_naming_both_slides(tmp_path):
     """Two unrelated slides must not produce an M0 at all: a wrong anchor fails nothing
     downstream (tiles are simply read from the wrong place), so COARSE refuses, loudly, with
     the slide names and the scores in the error, and writes no M0 JSON."""
-    from stare.coarse_align import CoarseRefused
+    from drape.coarse_align import CoarseRefused
 
     # 512 vs 1024 draws of the textured field are different random fields, not a crop.
     ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))

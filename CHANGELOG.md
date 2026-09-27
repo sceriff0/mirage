@@ -31,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE is renamed DRAPE** (Distributed Robust Alignment by Piecewise Estimation). The
+  package moved from `packages/stare` to `packages/drape` and is now `drape-registration`
+  2.0.0 (import `drape`, CLI `drape {coarse,reg-tile,solve,stitch,register}`); there is no
+  `stare` alias. `lib/RegPresets.STARE`/`stare()` are `RegPresets.DRAPE`/`drape()`,
+  `tests/stare_shims.py` is `tests/drape_shims.py`, and the docs say "DRAPE (formerly
+  STARE)". **Unchanged, on purpose:** `registration_method='tiled'`, every `reg_tiled_*`
+  parameter, the `TILED_*` process names, the `bin/tiled_*.py` shims (now over `drape`), and
+  the benchmark arm ids and data columns (`stare_high`, `stare_*_px`), which name results
+  already computed on the `benchmarking` branch. Entries below this one keep the name the
+  method had when they were written.
+
 - **STARE SOLVE/ESTIMATE audit fixes** (`research/drape-step-support-2026-09-27.md`). The
   robust scale of a residual vector's norm is now the Rayleigh one (`median |r| / 1.1774`;
   Huber 2.448σ and bisquare 5.06σ from χ²₂) — the 1-D `1.4826 × MAD` made Huber down-weight

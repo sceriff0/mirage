@@ -1,6 +1,6 @@
 /*
 ========================================================================================
-    TILED (STARE) REGISTRATION ADAPTER
+    TILED (DRAPE) REGISTRATION ADAPTER
 ========================================================================================
     Converts the patient-grouped structure into the tiled method's per-moving-slide star:
     every moving slide registers directly to the fixed reference (which defines the frame),
@@ -33,7 +33,7 @@
         size_logs / versions
 
     `intrinsic_tre` is deliberately NOT named after any one method. Both shipped backends
-    estimate a TRE from their own registration -- VALIS a feature-distance CSV, STARE a
+    estimate a TRE from their own registration -- VALIS a feature-distance CSV, DRAPE a
     *_tre.json -- and the seam used to call the slot `summary` and then re-emit it as
     `valis_summary`, which pinned one method's name into the artifact vocabulary all the way
     out to the QC report. Formats are NOT normalised here; that is the reader's job.
@@ -181,7 +181,7 @@ workflow TILED_ADAPTER {
 
     emit:
     registered       = ch_registered
-    // The STARE transform manifest keyed by patient — the same slot VALIS fills with its
+    // The DRAPE transform manifest keyed by patient — the same slot VALIS fills with its
     // registrar pickle. A patient with several moving slides contributes several items here.
     transform        = ch_manifest_by_meta.map { meta, m -> tuple(meta.patient_id, m) }
     // The same manifests keyed by meta. Unlike VALIS, the tiled method DOES have one transform
@@ -192,7 +192,7 @@ workflow TILED_ADAPTER {
     stage_checkpoint = Channel.empty()
     size_logs        = ch_size_logs
     versions         = ch_versions
-    // STARE's intrinsic TRE: *_tre.json from bin/utils/tre_report.py. A DIFFERENT format
+    // DRAPE's intrinsic TRE: *_tre.json from bin/utils/tre_report.py. A DIFFERENT format
     // from VALIS's CSV, on purpose — the channel vocabulary is unified, the file formats
     // are not, and teaching the report reader both shapes is a separate change.
     intrinsic_tre    = ch_intrinsic_tre

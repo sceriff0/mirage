@@ -8,7 +8,7 @@ magnitude more data decoded than the QC step ever uses -- paid twice, once per s
 
 ``bin/utils/tiled_io.py`` already has the machinery to read one channel through a
 lazy, region-readable zarr view (``open_lazy``) at a chosen decimation
-(``decimation_factor`` + ``read_decimated``), proven correct by the STARE coarse-align
+(``decimation_factor`` + ``read_decimated``), proven correct by the DRAPE coarse-align
 path (``tests/test_tiled_coarse_thumbnail.py::test_banded_read_is_numerically_identical_to_full_decimation``).
 This file pins two properties for routing ``create_registration_qc`` through it:
 

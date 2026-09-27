@@ -40,7 +40,7 @@ except ModuleNotFoundError:
 VALIS_ONLY = ("memory_mode", "reg_micro_reg")
 
 # The mirror of VALIS_ONLY for the tiled/STARE backend. reg_tiled_mode selects a row of
-# RegPresets.STARE and means nothing on a VALIS arm, so a VALIS arm must carry it BLANK --
+# RegPresets.DRAPE and means nothing on a VALIS arm, so a VALIS arm must carry it BLANK --
 # both so the consumer can tell "not applicable" from "at default", and so run_arms.sh's
 # add_param blank-guard never emits `--reg_tiled_mode ""`, which schema validation rejects.
 TILED_ONLY = ("reg_tiled_mode", "reg_tiled_stride")
@@ -122,7 +122,7 @@ def _registration_arms(cfg: dict) -> list[dict]:
         # STARE fans out over its TIER, not over individual knobs. reg_tiled_mode is the
         # knob an operator actually picks, and each tier moves all four tier-owned values
         # (tile / halo / out_tile / coarse_max_dim) coherently -- see
-        # RegPresets.STARE. Varying them singly is sweep.yaml's job, on synthetic images
+        # RegPresets.DRAPE. Varying them singly is sweep.yaml's job, on synthetic images
         # where a cell is cheap; here a cell is a real WSI at up to 483 GB, so arms carries
         # the three shipped tiers and nothing finer.
         #

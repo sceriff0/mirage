@@ -620,7 +620,7 @@ def test_parse_args_accepts_micro_reg_level():
     assert a.micro_reg == 1
 
 
-# ── the tiled (STARE) dispatch: JVM-free, driven through the real CLI main() ────
+# ── the tiled (DRAPE) dispatch: JVM-free, driven through the real CLI main() ────
 #
 # Folded in from the former tests/test_warp_seg_qc_tiled.py when
 # modules/local/warp_seg_qc_tiled.nf was merged into modules/local/warp_seg_qc.nf

@@ -44,7 +44,7 @@ FRAMEWORKS = {
 # or imported by first-party code.
 CODE_DIRS = (
     "bin",
-    "packages",  # packages/stare: the STARE method; bin/tiled_*.py are shims over it
+    "packages",  # packages/drape: the DRAPE method; bin/tiled_*.py are shims over it
     "tests",
     "benchmarks",
     "lib",
@@ -61,7 +61,7 @@ CODE_DIRS = (
 PENDING_IMAGE_REBUILD = {
     ("containers/tiled/Dockerfile", "kornia"): (
         "COARSE's DISK+LightGlue anchor was replaced by an NCC rotation sweep + ORB fallback "
-        "(stare/coarse_align.py, 2026-09-27); bolt3x/mirage-tiled:1.0.0 still carries the "
+        "(drape/coarse_align.py, 2026-09-27); bolt3x/mirage-tiled:1.0.0 still carries the "
         "wheel, and dropping requirements/kornia.txt from the image needs a rebuild + publish."
     ),
     # torch is not listed: other first-party code (the segmentation backends) still imports

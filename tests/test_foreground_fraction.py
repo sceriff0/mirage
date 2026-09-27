@@ -212,9 +212,9 @@ def test_nothing_gates_on_the_foreground_fraction_yet():
     """Phase 1 emits without gating -- deliberately, so the next phase stays measurable.
 
     The per-tile ``ref_fg``/``mov_fg`` must not change what SOLVE takes from a tile: a tile's
-    acceptance (``stare.solve.tile_accepted``) reads only its vectors and the range gate.
+    acceptance (``drape.solve.tile_accepted``) reads only its vectors and the range gate.
     """
-    from stare.solve import tile_accepted
+    from drape.solve import tile_accepted
 
     base = {
         "ix": 0,

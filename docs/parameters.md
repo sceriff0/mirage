@@ -73,14 +73,14 @@ owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
 ## Registration
 
 Two backends, selected by `--registration_method`: **VALIS** (default, graph-based
-whole-slide alignment) and **STARE tiled** (JVM-free, fully parallel). STARE is **not**
-laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
+whole-slide alignment) and **DRAPE (formerly STARE) tiled** (JVM-free, fully parallel). DRAPE is **not**
+laptop-sized at its shipped tier — see the memory note under [Tiled / DRAPE](#tiled-drape-registration_methodtiled).
 
 ### Common
 
 | Parameter | Default | Description |
 |---|---|---|
-| `registration_method` | `valis` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (STARE — see [Tiled / STARE](#tiled-stare-registration_methodtiled)). |
+| `registration_method` | `valis` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (DRAPE — see [Tiled / DRAPE](#tiled-drape-registration_methodtiled)). |
 | `nuclear_markers` | `['DAPI','CELLTOX']` | Ordered preference of nuclear/fiducial marker names. The first present (resolved from channel metadata, never the filename) is moved to channel 0 and drives both cell segmentation and the registration fiducial. Fails fast if none present (single-channel images excepted). Accepts a **list** (config or `-params-file`) or a **comma/space-separated string**, which is the only shape a command line can produce: `--nuclear_markers CELLTOX` and `--nuclear_markers DAPI,CELLTOX` both work. Matching is case-insensitive **substring**, so `DAPI_nuclear` counts as nuclear. |
 
 !!! warning "The reference is declared, never inferred"
@@ -113,25 +113,25 @@ stage — so per-pair IoU and centroid residual can be attributed to `rigid`, `n
 `micro` individually. See [Staged registration QC](registration_qc.md) for the output schema
 and how to read it.
 
-### Tiled / STARE (`registration_method=tiled`)
+### Tiled / DRAPE (`registration_method=tiled`)
 
-STARE is an alternative registration backend that is **JVM-free** (no Bio-Formats/Java
+DRAPE is an alternative registration backend that is **JVM-free** (no Bio-Formats/Java
 heap), tiles the slide internally, and runs fully in parallel. These params apply only when
 `--registration_method tiled`.
 
-**Sizing.** Every STARE step is region-streamed and bounded by a parameter, not by the slide.
+**Sizing.** Every DRAPE step is region-streamed and bounded by a parameter, not by the slide.
 `TILED_COARSE` estimates its rigid anchor with an FFT NCC rotation sweep (0.25–0.43 GB peak RSS
 measured at every tier, 2 GB requested); from v1.0.0 until 2026-09-27 it was a DISK U-Net that
-asked ~48 GB at the `high` tier, so sites sized for that can lower `max_memory` for STARE.
+asked ~48 GB at the `high` tier, so sites sized for that can lower `max_memory` for DRAPE.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `reg_tiled_mode` | `high` | Cost/accuracy tier: `high` \| `medium` \| `low` \| `custom`. Supplies every tier-owned knob below. `custom` starts from `high` and applies only the knobs you set. Table: `RegPresets.STARE` in `lib/RegPresets.groovy`. |
+| `reg_tiled_mode` | `high` | Cost/accuracy tier: `high` \| `medium` \| `low` \| `custom`. Supplies every tier-owned knob below. `custom` starts from `high` and applies only the knobs you set. Table: `RegPresets.DRAPE` in `lib/RegPresets.groovy`. |
 | `reg_tiled_nuclear_index` | `null` | Nuclear/fiducial channel index used to estimate the transform. `null` resolves it from the slide's channel metadata against `nuclear_markers`; set an integer only to override. |
 | `reg_tiled_tile` | tier (`high`: 2048) | Tile core size (px): one `TILED_REG_TILE` task per tile. Not the mesh resolution since STARE v2 — that is `reg_tiled_stride`. **Tier-owned** — only settable under `--reg_tiled_mode custom`. |
 | `reg_tiled_halo` | tier (`high`: 256) | Per-tile read halo (px) for registration context. **Tier-owned.** |
 | `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. Not tier-owned. (STARE v2 has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
-| `reg_tiled_stride` | `128` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. Not tier-owned: a resolution knob of its own. See `research/stare-optimal-design-2026-09-27.md` §2. |
+| `reg_tiled_stride` | `128` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`drape.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. Not tier-owned: a resolution knob of its own. See `research/stare-optimal-design-2026-09-27.md` §2. |
 | `reg_tiled_out_tile` | tier (`high`: 1024) | Streaming stitch write-tile size (px) — gigapixel-safe. **Tier-owned.** |
 | `reg_tiled_coarse_max_dim` | tier (`high`: 1024) | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateRegPresets` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. **Tier-owned.** |
 
@@ -146,7 +146,7 @@ anchor's refine resolution and 1024 already lands M0 well inside every tier's ha
 `lib/RegPresets.groovy`.
 
 ```bash
---reg_tiled_mode low                                   # every STARE knob from the low row
+--reg_tiled_mode low                                   # every DRAPE knob from the low row
 --reg_tiled_mode custom --reg_tiled_tile 4096          # high everywhere else, tile overridden
 --memory_mode custom --reg_valis_max_non_rigid_dim 1024
 ```
@@ -168,8 +168,8 @@ process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that
 not using, and the tier name is what reaches the QC report and the benchmark tables.
 
 Tier values live in two places, because they have to:
-`lib/RegPresets.groovy` (STARE) and `bin/utils/valis_config.py` (VALIS — its rows hold Python
-objects that cannot be expressed in Groovy). `conf/modules.config` additionally inlines the STARE
+`lib/RegPresets.groovy` (DRAPE) and `bin/utils/valis_config.py` (VALIS — its rows hold Python
+objects that cannot be expressed in Groovy). `conf/modules.config` additionally inlines the DRAPE
 table, because config files cannot see `lib/*.groovy`. All copies are pinned together by
 `tests/test_reg_presets_inlined_in_config.py`.
 
@@ -319,7 +319,7 @@ the same masks, polygons, measurements and QC. Full store layout:
 
 - **`qc/mirage_qc_report_<timestamp>.html`** — aggregated QC report: run summary,
   pipeline-stage status, preprocessing QC images, registration QC (overlays, the
-  VALIS rTRE summary, per-stage STARE TRE distributions with the per-tile spatial
+  VALIS rTRE summary, per-stage DRAPE TRE distributions with the per-tile spatial
   heatmap, and per-stage cell-displacement distributions from the warp-seg QC),
   the feature-TRE vs cell-displacement reconciliation scatter, the per-cell
   residual distribution, segmentation overlays, and postprocessing QC.
