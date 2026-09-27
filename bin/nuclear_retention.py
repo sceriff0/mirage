@@ -7,7 +7,7 @@ so "median inside the nucleus" means exactly what `<nuclear>: Nucleus: Median` m
 merged_quant.csv. Only the nuclear plane is read.
 
 Assumes the moving slide is a re-stained round of the SAME section as the reference
-(cyclic IF); on serial sections the value is meaningless (spec §3.1).
+(cyclic IF); on serial sections the value is meaningless (docs/outputs.md, "Per-cell QC").
 """
 
 from __future__ import annotations
@@ -54,6 +54,50 @@ def nuclear_channel_index(names: List[str], nuclear_markers: List[str]) -> Optio
         if is_nuclear(name, nuclear_markers):
             return i
     return None
+
+
+def resolve_channel_names(
+    image_path: str, n_channels: int, channels: Optional[List[str]]
+) -> List[str]:
+    """Channel names for ``image_path``, preferring ``channels`` over OME metadata.
+
+    Mirrors ``split_multichannel.split_multichannel_tiff``'s precedence and
+    length-mismatch handling exactly (bin/split_multichannel.py): an explicit
+    ``channels`` list -- the samplesheet's own names, as SPLIT_CHANNELS passes them
+    -- wins over whatever this image's own OME-XML says, so the two processes
+    agree on which plane is nuclear even when the OME names are generic
+    (``Channel_0``, ...). A length mismatch against the image's actual channel
+    count is patched the same way split_multichannel does: padded with generic
+    ``Channel_i`` names when too few, truncated when too many -- never raised.
+
+    Parameters
+    ----------
+    image_path : str
+        Path to the image, used only for OME-XML extraction and log messages.
+    n_channels : int
+        The image's actual channel count (its array's leading dimension).
+    channels : list of str, optional
+        Channel names supplied by the caller (``--channels``), or ``None``.
+
+    Returns
+    -------
+    list of str
+        Exactly ``n_channels`` names, in channel order.
+    """
+    if channels:
+        names = list(channels)
+        logger.info("channel names from --channels: %d channels", len(names))
+    else:
+        names = extract_channel_names_from_ome(image_path) or []
+    if len(names) != n_channels:
+        logger.warning(
+            "%s: %d names vs %d channels", image_path, len(names), n_channels
+        )
+        if len(names) < n_channels:
+            names = names + [f"Channel_{i}" for i in range(len(names), n_channels)]
+        else:
+            names = names[:n_channels]
+    return names
 
 
 def measure_nuclear(cell_mask, nuclei_mask, plane) -> pd.DataFrame:
@@ -104,6 +148,14 @@ def parse_args(argv=None):
     p.add_argument("--mask_file", required=True)
     p.add_argument("--nuclei_mask_file", default=None)
     p.add_argument("--nuclear-markers", nargs="+", required=True)
+    p.add_argument(
+        "--channels",
+        nargs="+",
+        default=None,
+        help="Channel names, e.g. the samplesheet's own list (optional; will try to "
+        "read from OME metadata when omitted, same fallback as split_multichannel.py "
+        "--channels). Backward compatible: omitting it is unchanged.",
+    )
     p.add_argument("--output", required=True)
     return p.parse_args(argv)
 
@@ -129,18 +181,19 @@ def main(argv=None) -> int:
     """
     configure_logging()
     args = parse_args(argv)
-    names = extract_channel_names_from_ome(args.image) or []
-    idx = nuclear_channel_index(names, args.nuclear_markers)
-    if idx is None:
-        logger.warning(
-            "%s: no channel matches --nuclear-markers %s (channels: %s); writing an "
-            "empty table, so this round gets no retention key",
-            args.image, args.nuclear_markers, names,
-        )
-        pd.DataFrame(columns=["label"]).to_csv(args.output, index=False)
-        return 0
     arr, _dtype, close = open_lazy(args.image)
     try:
+        n_channels = arr.shape[0]
+        names = resolve_channel_names(args.image, n_channels, args.channels)
+        idx = nuclear_channel_index(names, args.nuclear_markers)
+        if idx is None:
+            logger.warning(
+                "%s: no channel matches --nuclear-markers %s (channels: %s); writing an "
+                "empty table, so this round gets no retention key",
+                args.image, args.nuclear_markers, names,
+            )
+            pd.DataFrame(columns=["label"]).to_csv(args.output, index=False)
+            return 0
         plane = np.asarray(arr[idx, :, :])
     finally:
         close()

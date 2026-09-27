@@ -26,6 +26,12 @@ process NUCLEAR_RETENTION {
     script:
     def nuclei_arg = params.quantify_compartments ? "--nuclei_mask_file ${nuclei_mask}" : ''
     def nuclear_args = "--nuclear-markers ${MarkerUtils.markerList(params.nuclear_markers).join(' ')}"
+    // Same condition and rendering as SPLIT_CHANNELS (modules/local/split_channels.nf):
+    // prefer the samplesheet's own channel names over whatever this image's OME-XML
+    // says, so the two processes agree on which plane is nuclear even when the OME
+    // names are generic (e.g. "Channel_0").
+    def channel_args = (meta.channels && meta.channels instanceof List && !meta.channels.isEmpty()) ?
+        "--channels ${meta.channels.join(' ')}" : ""
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${image}", "${cell_mask}"], "${meta.id}.NUCLEAR_RETENTION.size.csv")}
 
@@ -34,6 +40,7 @@ process NUCLEAR_RETENTION {
         --mask_file ${cell_mask} \\
         ${nuclei_arg} \\
         ${nuclear_args} \\
+        ${channel_args} \\
         --output ${meta.id}_nuclear_retention.csv
 
     ${ProcessEnvelope.versions(task.process, ['pandas', 'tifffile'], task.container)}
