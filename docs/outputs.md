@@ -120,7 +120,8 @@ aggregates at the `<outdir>` root.
 ```text
 results/                              # = --outdir, at --cleanup_level=final
 ├── <patient_id>/
-│   ├── quantification/               # merged_quant.csv
+│   ├── quantification/               # merged_quant.csv (+ "QC: " columns),
+│   │                                 #   <patient_id>_round_qc.csv, <patient_id>_rounds.json
 │   ├── geojson/export/               # cells.geojson, cells_wholecell.geojson, cells_data.csv
 │   ├── pyramid/                      # pyramid.ome.tiff
 │   ├── spatialdata/                  # <patient_id>.zarr
@@ -173,7 +174,14 @@ results/                              # = --outdir
 │   │   └── nuclei/                   # morphology.csv, contours.json — EXTRACT_NUCLEI_PROPERTIES
 │   ├── split_channels/               # <MARKER>.tiff, one per marker — SPLIT_CHANNELS
 │   ├── quantify/                     # <id>_quant.csv, per-marker, pre-merge — QUANTIFY
-│   ├── quantification/               # merged_quant.csv      — MERGE_QUANT_CSVS
+│   │                                 # <id>_nuclear_retention.csv, per moving slide
+│   │                                 #   — NUCLEAR_RETENTION (intermediate; gated same as QUANTIFY)
+│   ├── quantification/               # merged_quant.csv (+ "QC: " columns) — CELL_QC
+│   │                                 #   (republishes MERGE_QUANT_CSVS's table, augmented;
+│   │                                 #   MERGE_QUANT_CSVS no longer publishes its own copy)
+│   │                                 # <patient_id>_round_qc.csv — long, tidy per-round QC
+│   │                                 # <patient_id>_rounds.json — round manifest (round_id,
+│   │                                 #   is_reference, markers) — both from CELL_QC
 │   ├── geojson/
 │   │   └── export/                   # cells.geojson, cells_wholecell.geojson,
 │   │                                 #   cells_data.csv        — EXPORT_GEOJSON
@@ -267,6 +275,7 @@ Written to `--trace_dir` (default `.trace`, **independent of `--outdir`**) when
       <li>One row per cell</li>
       <li>All markers × compartments × statistics</li>
       <li>Morphology joined in</li>
+      <li>Per-cell QC (<code>QC: ...</code>) columns joined in — see <a href="#per-cell-qc">Per-cell QC</a></li>
     </ul>
   </div>
   <div class="out">
@@ -380,8 +389,11 @@ written in every mode — FlowPath's bare-key fast path is hard-wired to
     and z-scores exclude the missing cells, where the artificial `0.0`s used to
     sit in the low tail.
 
-    The same applies to the morphology keys (`Eccentricity`, `Perimeter µm`,
-    `Solidity`, `Convex Area µm²`, `Major/Minor Axis Length µm`, `Area µm²`).
+    The same applies to the morphology keys (`MORPH: Eccentricity`, `MORPH: Perimeter µm`,
+    `MORPH: Solidity`, `MORPH: Convex Area µm²`, `MORPH: Major/Minor Axis Length µm`,
+    `MORPH: Area µm²`) and to every `QC: ...` key — see
+    [Per-cell QC](#per-cell-qc): **NaN there means "no evidence", never "good"**, and is
+    omitted from the GeoJSON exactly like a NaN marker.
 
     This changed with the 2026-08-24 merge; see the
     [CHANGELOG's Migration section](https://github.com/sceriff0/mirage/blob/main/CHANGELOG.md#migration--read-before-comparing-any-output-across-this-release).
@@ -405,6 +417,133 @@ axis_major_length · axis_minor_length · solidity · fov · cell_size
 `label` is the segmentation instance id — the **only stable cell identifier the
 pipeline produces**. It is the SpatialData store's `instance_key`, so every join
 is keyed on it and a mismatch is fatal rather than silently positional.
+
+---
+
+## Per-cell QC
+
+Every exported cell carries a small set of quality and shape measurements, marked
+by one of two prefixes so a downstream consumer (FlowPath) can recognise them
+without guessing from the name:
+
+| prefix | meaning | FlowPath panel |
+|---|---|---|
+| `QC: ` | quality of the measurement — was this cell imaged and aligned properly | QC |
+| `MORPH: ` | the cell's shape | Morphology |
+
+### Grammar
+
+```text
+QC: <Metric>                                 cell-level  — no per-round marker list
+QC: <Metric>: [<marker>, <marker>, ...]      round-level — failing it blanks only that round's markers
+MORPH: <Name>[ <unit>]                       morphology
+```
+
+- The separator is exactly `": "`, as in the marker-measurement grammar, and is
+  case-sensitive.
+- A round-level key's marker list is that slide's emitted **non-nuclear** markers
+  (the names of its split-channel files), **sorted alphabetically**, joined by
+  `", "` and wrapped in `[` `]`. A round with no non-nuclear markers, and the
+  reference round itself, contribute **no** round-level keys.
+- The vocabulary lives in one place, `bin/utils/measurements.py`
+  (`QC_PREFIX`, `MORPH_PREFIX`, `QC_CELL_METRICS`, `QC_ROUND_METRICS`); nothing
+  else restates it.
+
+### The four metrics
+
+| key | level | present when |
+|---|---|---|
+| `QC: Total intensity` | cell | always |
+| `QC: Nuclear retention: [...]` | round | ≥1 moving (non-reference) slide contributes non-nuclear markers |
+| `QC: Registration displacement µm: [...]` | round | `--reg_qc 2` (the default) |
+| `QC: Registration Dice: [...]` | round | `--reg_qc 2` |
+
+- **`QC: Total intensity`** — the sum, over every **non-nuclear** marker, of
+  `<marker>: Cell: Median`; a NaN term is skipped, and the value is NaN only when
+  every term was NaN. The nuclear channel(s) (`--nuclear_markers`) are always
+  excluded.
+- **`QC: Nuclear retention: [...]`** — for moving round *r* and cell *c*:
+  `raw(c, r) = median nuclear-channel intensity of round r inside c's nucleus /
+  the same reference-round median`, then **normalised by the round's own median
+  ratio** so a typical cell reads ≈1.0 in every round — this removes a globally
+  dimmer round's uniform intensity drop, leaving per-cell *relative* retention.
+  0 ≈ nucleus gone, ~1 ≈ intact, >1 possible. Both medians come from the same
+  function quantification itself uses
+  (`quantify.compute_compartment_intensities`). A reference median of 0 or NaN
+  reads NaN for that cell; a round whose ratio has no finite, positive median
+  reads NaN for the **whole round**, with a log warning. Known limit: if more
+  than half a round's cells are lost, the normaliser itself shifts.
+
+    **Assumes the moving slide is a re-stained round of the SAME section as the
+    reference (cyclic IF).** This is never checked — moving slides are always
+    treated this way — so on **serial sections the value is meaningless**.
+
+- **`QC: Registration displacement µm: [...]`** / **`QC: Registration Dice: [...]`**
+  — need **`--reg_qc 2`**; at any other `--reg_qc` level these keys are simply
+  **absent**, not NaN. Source: the per-cell residual CSV `WARP_SEG_QC` already
+  writes at `reg_qc=2` (columns `moving, ref_x, ref_y, residual_px, iou, stage`;
+  `iou` is the addition this feature made), joined onto cells by the same spatial
+  join `EXPORT_SPATIALDATA` uses — nearest `cell_mask` centroid within
+  `--spatialdata_residual_join_max_px` (default 15 px) — so the two outputs can
+  never pair a QC nucleus to a different cell. Displacement is that pixel
+  residual × the reference pixel size (µm). Dice is `2·IoU / (1 + IoU)` of the
+  matched pair, both at the **final** registration stage. A residual CSV from a
+  run before this feature (no `iou` column) yields Dice NaN while displacement is
+  still present. A cell the join never matched has neither key for that round.
+- **`MORPH: ...`** — the existing morphology values, renamed:
+  `MORPH: Area µm²`, `MORPH: Perimeter µm`, `MORPH: Eccentricity`, `MORPH: Solidity`,
+  `MORPH: Convex Area µm²`, `MORPH: Major Axis Length µm`,
+  `MORPH: Minor Axis Length µm`. Unchanged: `label`, `Centroid X µm`,
+  `Centroid Y µm` (identity, not quality) and every marker key.
+
+**NaN always means "no evidence", never "good"**, and — like a NaN marker — it is
+simply omitted from `cells.geojson` rather than written as a value a filter could
+mistake for a real reading.
+
+### Where the values live
+
+- **`quantification/merged_quant.csv`** — the same per-patient table
+  `MERGE_QUANT_CSVS` has always produced, now carrying the `QC: ...` columns too.
+  `CELL_QC` republishes it under the **same filename**, and `MERGE_QUANT_CSVS` no
+  longer publishes its own copy (publishing both would race on one path). Every
+  downstream reader — `EXPORT_GEOJSON`, `EXPORT_SPATIALDATA`, the `postprocessed`
+  checkpoint — reads this one table. **There is no separate `cell_qc.csv`.**
+- **`quantification/<patient_id>_round_qc.csv`** — the same values in a long,
+  tidy shape: one row per `(cell, moving round)`, columns `label, round_id,
+  markers, nuclear_retention, displacement_px, displacement_um, dice`. This is
+  the analysis-friendly form (R/pandas); the wide `QC: ...` keys are the
+  FlowPath form. Both are written by `CELL_QC` from the same arrays.
+- **`quantification/<patient_id>_rounds.json`** — the round manifest: one entry
+  per slide (`round_id`, `is_reference`, `markers` — its kept non-nuclear
+  markers, sorted alphabetically). Maps a round key's marker list back to the
+  slide it came from.
+- All three files are `CELL_QC`'s outputs and all publish under
+  `quantification/` — a **FINAL** kind (`Layout.FINAL_KINDS`) — so they survive
+  `--cleanup_level final` as well as `none`.
+- The per-slide `<id>_nuclear_retention.csv` files that `NUCLEAR_RETENTION`
+  writes (one per moving slide that contributes markers) are an
+  **intermediate**: they publish under `<patient_id>/quantify/`, alongside the
+  per-marker `QUANTIFY` CSVs, and only at `--cleanup_level none`.
+
+### Where each consumer reads it
+
+- **`cells.geojson`** — `QC: ...` keys pass through verbatim; morphology is
+  written under its `MORPH: ...` names.
+- **SpatialData (`.zarr`)** — `QC: ...` columns land in `obs`, and
+  `export_spatialdata.py::parse_measurement_key` returns them unparsed rather
+  than matching the `<marker>: <Compartment>: <Statistic>` grammar.
+- **`merged_quant.csv` / `cells_data.csv`** — keep the **unchanged snake_case**
+  morphology column names (`area`, `perimeter`, ...); the benchmark harness and
+  `ihc_method` read these, so only the GeoJSON/SpatialData *display* names
+  changed.
+
+!!! warning "FlowPath ≤ 0.9.4 mis-reads this export"
+    A `QC: ...` key becomes a phantom marker there (and is summed into FlowPath's
+    own total-intensity computation); `MORPH: Area µm²` defeats FlowPath's `area`
+    prefix lookup, so a saved `area` filter range stops applying and every cell
+    falls back to a per-cell scan. **Upgrade FlowPath before pointing it at
+    output from this pipeline version** — see the CHANGELOG's `[Unreleased]`
+    section for the minimum version.
 
 ---
 

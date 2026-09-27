@@ -2,11 +2,11 @@
 
 WHAT THIS CAUGHT. `modules/local/export_geojson.nf` did not pass `--pixel_size` at all,
 and `bin/export_geojson.py` carried `default=0.325` in its own argparse. So every
-"Centroid X µm", "Centroid Y µm", "Area µm²", "Perimeter µm", "Convex Area µm²" and axis
-length written into `cells.geojson` was computed at 0.325 µm/px no matter what the run
-configured. A run on a 0.5 µm/px objective published measurements 35% wrong, silently,
-and the symptom surfaced one repository away -- in `qupath-extension-flowpath`, which
-reads exactly those keys.
+"Centroid X µm", "Centroid Y µm", "MORPH: Area µm²", "MORPH: Perimeter µm",
+"MORPH: Convex Area µm²" and axis length written into `cells.geojson` was computed at
+0.325 µm/px no matter what the run configured. A run on a 0.5 µm/px objective published
+measurements 35% wrong, silently, and the symptom surfaced one repository away -- in
+`qupath-extension-flowpath`, which reads exactly those keys.
 
 The bug needed BOTH halves to hide: a module that forgot to pass the flag, and a script
 default that made the omission invisible. So this guard checks both halves, statically:
