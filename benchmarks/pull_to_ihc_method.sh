@@ -11,6 +11,12 @@
 #   --anhir <dir>        benchmarks/anhir evaluate.py's --out (its tables -> data/benchmark/)
 #   --handoff <dir>      where built tables are staged (default: benchmarks/_handoff)
 #   --build              regenerate the tables from the roots before copying
+#   --append-arms        ADD this root's arms to data/registration_arms/ instead of
+#                        replacing the manifest: arms.csv is merged by arm_dir (this
+#                        root wins on a clash) and the root's pre-aggregated arm
+#                        tables are NOT copied (they describe only this root).
+#                        Use it for a second arm experiment run into its own results
+#                        root, e.g. the DRAPE arms beside the benchmarking arms.
 #   -h | --help
 #
 # Local (both repos side by side under Github/):
@@ -46,9 +52,9 @@
 # benchmarks/_handoff/ and copies only the sweep's tables to data/benchmark/.
 
 ARM_ROOT=""; IHC=""; SWEEP_ROOT=""; SWEEP_PLAN=""; ARM_PLAN=""; SRC_RUN=""; BUILD=0
-HANDOFF=""; ANHIR_TABLES=""
+HANDOFF=""; ANHIR_TABLES=""; APPEND_ARMS=0
 
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,6 +63,8 @@ while [[ $# -gt 0 ]]; do
     --arm-plan)   ARM_PLAN="$2";   shift 2 ;;
     --run)        SRC_RUN="$2";    shift 2 ;;
     --handoff)    HANDOFF="$2";    shift 2 ;;
+    --anhir)      ANHIR_TABLES="$2"; shift 2 ;;
+    --append-arms) APPEND_ARMS=1;  shift ;;
     --build)      BUILD=1;         shift ;;
     -h|--help)    usage 0 ;;
     -*)           echo "unknown option: $1" >&2; usage 1 ;;
@@ -187,7 +195,31 @@ if [[ "$n_qc" -eq 0 ]]; then
   echo "           runs were launched without reg_qc=2 (which is what emits them)." >&2
 fi
 
-if [[ -f "$ARM_ROOT/arms.csv" ]]; then
+if [[ -f "$ARM_ROOT/arms.csv" && "$APPEND_ARMS" -eq 1 && -f "$DEST_ARMS/arms.csv" ]]; then
+  # Union by arm_dir, the key registration_arms.R's arm_manifest() joins on. A plain
+  # cp here REPLACED the manifest, so the first root's arms lost their labels and
+  # fell back to directory-name parsing -- rendering, but under the wrong names.
+  "$PY" - "$DEST_ARMS/arms.csv" "$ARM_ROOT/arms.csv" <<'PYEOF' || { echo "  ERROR: arms.csv merge failed" >&2; exit 1; }
+import csv, sys
+old_p, new_p = sys.argv[1], sys.argv[2]
+def read(p):
+    with open(p, newline="") as f:
+        r = csv.DictReader(f)
+        return list(r.fieldnames or []), list(r)
+old_cols, old_rows = read(old_p)
+new_cols, new_rows = read(new_p)
+if "arm_dir" not in old_cols or "arm_dir" not in new_cols:
+    sys.exit("arms.csv without an arm_dir column")
+cols = old_cols + [c for c in new_cols if c not in old_cols]
+merged = {r["arm_dir"]: r for r in old_rows}
+merged.update({r["arm_dir"]: r for r in new_rows})
+with open(old_p, "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=cols, restval="")
+    w.writeheader()
+    w.writerows(merged.values())
+print(f"  arms.csv merged: {len(old_rows)} existing + {len(new_rows)} from this root -> {len(merged)} arm(s)")
+PYEOF
+elif [[ -f "$ARM_ROOT/arms.csv" ]]; then
   cp "$ARM_ROOT/arms.csv" "$DEST_ARMS/arms.csv"
   echo "  arms.csv copied (labels explicit — directory-name parsing bypassed)"
 else
@@ -231,6 +263,12 @@ for want in runs_master.csv param_matrix.csv registration_accuracy.csv \
   [[ -f "$DEST_BENCH/$want" ]] || missing+=("$want")
 done
 echo "  $copied table(s) copied"
+# The sweep's run plan travels too: it is the only record of a run that has not
+# produced a row in ANY table yet, which ihc_method's opt-in placeholder mode
+# (code/placeholders.R) needs to know the run is expected at all.
+if [[ -n "$SWEEP_PLAN" && -f "$SWEEP_PLAN" ]]; then
+  cp "$SWEEP_PLAN" "$DEST_BENCH/run_plan.csv" && echo "  run plan copied -> data/benchmark/run_plan.csv"
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "  WARNING: not present: ${missing[*]}" >&2
   echo "           Looked ONLY in $SWEEP_TABLES. The two legacy fallback directories" >&2
@@ -271,7 +309,11 @@ echo "=== 3/5  ARM tables -> data/registration_arms/ ==="
 # are the same arms pre-aggregated, kept BESIDE the arms rather than in
 # data/benchmark/ so they can never be mistaken for the sweep's.
 copied=0
-if [[ -d "$ARM_TABLES" ]]; then
+if [[ "$APPEND_ARMS" -eq 1 ]]; then
+  # The tables aggregate ONE results root. Copying them over the first root's would
+  # silently replace its aggregates with a subset; the per-arm tree is what the pages read.
+  echo "  --append-arms: arm tables not copied (they describe only $ARM_ROOT)"
+elif [[ -d "$ARM_TABLES" ]]; then
   for f in "$ARM_TABLES"/*.csv; do
     [[ -e "$f" ]] || continue
     cp "$f" "$DEST_ARMS"/ && copied=$((copied + 1))
