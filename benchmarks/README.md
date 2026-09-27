@@ -113,9 +113,11 @@ Verify the whole harness with no data at all:
     with its **refinement knob**. **One grid, both methods, at equal dimensionality** — 2 knobs ×
     3 levels = **9 cells each**: `valis` crosses `memory_mode` {low, medium, high} ×
     `reg_micro_reg` {0, 1, 2}; `tiled`/STARE crosses `reg_tiled_mode` {low, medium, high} ×
-    `reg_tiled_gate_tre` {0.5, 1.0, 2.0}. Both tiers are the same three-rung resolution ladder
+    `reg_tiled_stride` {64, 128, 256} (STARE v2's mesh resolution: one window vector per stride
+    px, window 2×stride; it was the retired TRE gate `reg_tiled_gate_tre` before 2026-09-27).
+    Both tiers are the same three-rung resolution ladder
     (high → medium → low = 2048 → 1024 → 512 px; VALIS uses SuperPoint+SuperGlue at every rung, STARE's
-    row moves tile, halo, out_tile, coarse anchor and upsample together — `lib/RegPresets.groovy`),
+    row moves tile, halo, out_tile and coarse anchor together — `lib/RegPresets.groovy`),
     so `low` against `low` is the same question asked of both methods. `reg_max_image_dim`
     (VALIS, ungated, live at every tier) is an OFAT axis.
 
@@ -123,7 +125,7 @@ Verify the whole harness with no data at all:
     and cross `reg_tiled_tile` × `reg_tiled_gate_tre` × `reg_tiled_coarse_max_dim` (27 cells)
     against VALIS's `memory_mode` × `reg_micro_reg` × `reg_max_image_dim` (27). Equal in count —
     but STARE's shipped presets never ran: `custom` starts from the `high` row, so only the
-    (2048, 2048) cell was a tier; the 1024 cell kept `high`'s halo/out_tile/upsample and 512 was
+    (2048, 2048) cell was a tier; the 1024 cell kept `high`'s halo/out_tile and 512 was
     not a level. The tier knobs are tier-owned (`ParamUtils.validateRegPresets` refuses them under
     any tier but `custom`), so a tier axis and a knob cross cannot share a grid; the tier won,
     because it is what an operator chooses and what the real-sample arms compare.
@@ -160,8 +162,10 @@ Verify the whole harness with no data at all:
 
 `sweep.yaml`'s `delta_grids` replicate the cells of a per-method grid with extra params
 applied and are appended **after** every other block, so a launched sweep's run ids never
-move. `delta_grids.solver_robust` re-runs the 9 STARE cells at `reg_tiled_solver=robust`.
-Build the subset with `--only 'delta_grid:solver_robust'` (same `--repeats` as the launch),
+move. None is declared today: STARE v2 retired the one there was (`solver_robust`, the old
+STARE cells at `reg_tiled_solver=robust`) along with the solver; `sweep.yaml`'s comment above
+`delta_grids` shows the block shape. Build a subset with `--only 'delta_grid:<name>'` (same
+`--repeats` as the launch),
 launch it into the same results root, then build the tables over the full plan. See
 `docs/benchmarks_real.md`, "Re-running a subset after a code change".
 
@@ -293,7 +297,7 @@ resolution. The **gate-ROC family is gone entirely** — STARE's per-tile accept
 decision was scorable only against a known registrable/not-registrable label, which only
 the synthetic rung had. `Finding 1` from its freeze record (the default
 `reg_tiled_gate_tre=1.0` collapsing the mesh toward identity on sub-pixel fields) is not
-reproducible by anything remaining. Recoverable from history if wanted:
+reproducible by anything remaining — and is moot since STARE v2 removed the TRE gate. Recoverable from history if wanted:
 `benchmarks/stare_bench/` at `cacc850`.
 
 **Data access.** `challenge/` is gitignored. The image archive is a split zip; the landmark

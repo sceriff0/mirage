@@ -28,6 +28,16 @@
 > `reg_tiled_solver`. §3's "no global solve" and §9.1's novelty claim are corrected in place.
 > The four stages now live in `packages/stare/` (`pip install -e packages/stare`, CLI `stare`);
 > `bin/tiled_*.py` are shims over it.
+>
+> **Added 2026-09-27 — STARE v2 replaced REG_TILE and SOLVE.** Each tile now measures a GRID
+> of window vectors on one slide-global lattice (`reg_tiled_stride`, window `2 × stride`;
+> `stare.vector_grid`) instead of one control point, and SOLVE is `dctpls` only: robust affine +
+> robust DCT-PLS on that lattice, per-vector σ calibrated by peak ratio, a cubic B-spline mesh,
+> no TRE dead zone. The `legacy` and `robust` solvers, the TRE gate (`reg_tiled_gate_tre`), the
+> confidence gate (`reg_tiled_max_error`), `reg_tiled_solver` and `reg_tiled_upsample` were
+> **removed**, and SOLVE refuses a control JSON without `vectors` — a pre-v2 run's control files
+> cannot be re-solved; re-run REG_TILE. §6's one-control-point-per-tile description and §6b's
+> gate/solver tables are kept below as history, marked superseded.
 
 **Status:** implemented on branch `feat/tiled-registration` (Phases 1–2 + Nextflow wiring, 56
 Python tests, JVM-free stub run green). Remaining: reg_qc=2 seg-QC Nextflow dispatch, the slim
@@ -214,6 +224,12 @@ Tile size *is* the mesh-grid resolution knob: smaller tiles → finer non-rigid 
 
 ## 6. TRE + seam continuity (the two quality mechanisms)
 
+> **Superseded 2026-09-27 (STARE v2).** A tile no longer contributes one control point: it
+> contributes one window vector per lattice node it owns (`reg_tiled_stride` px apart), and
+> there is no TRE gate — SOLVE never writes `dᵢ = 0` for a small displacement. The seam
+> argument below still holds: the mesh is one continuous field (now cubic B-spline) that STITCH
+> and the reg_qc=2 warper both sample through `MeshField.from_spec`.
+
 **TRE — intrinsic, VALIS `error_df` semantics.** Each REG_TILE scores the residual of the
 phase-correlation match *after* applying its transform — a Target Registration Error per tile,
 aggregated to a per-slide table (mean/percentiles, in px and µm) and a **spatial heatmap** (one
@@ -230,6 +246,13 @@ contribute `dᵢ = 0` — the interpolation stays smooth.
 ---
 
 ## 6b. The SOLVE stage (added 2026-09-12)
+
+> **Superseded 2026-09-27 (STARE v2).** Everything in this section up to "Since 2026-09-27"
+> describes solvers that were **removed**: the three gates, `robust` and `legacy`, and the
+> `reg_tiled_solver` / `reg_tiled_gate_tre` / `reg_tiled_max_error` parameters no longer exist.
+> SOLVE is `dctpls` on the vector lattice only; the one remaining gate is the range gate
+> (`reg_tiled_max_disp`, default the halo). Kept as the record of what was measured and why it
+> was replaced; the arm results for the old solvers live on the `benchmarking` branch.
 
 Until this date SOLVE contained no algorithm: after the three gates (confidence, range, TRE)
 it laid the accepted per-tile translations on the grid, median-filtered them over accepted
@@ -266,8 +289,19 @@ thin-plate penalty, bisquare weights) with the smoothing parameter chosen by h-b
 cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). It has no TRE dead
 zone, weights a control by `1/σ²` when it carries `sigma` (else 1), fills unmeasured tiles
 from the smoother, and reports the field's Lipschitz constant and min `det(I + J)` as a fold
-certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field. `robust`
-and `legacy` remain selectable.
+certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field.
+
+**STARE v2 (2026-09-27): the vector lattice, and dctpls only.** REG_TILE measures one window
+vector per `reg_tiled_stride` px (window `2 × stride`, 50 % overlap) on a slide-global lattice,
+foreground-masked, in two passes (quarter-resolution capture, then full resolution with a
+3-point Gaussian peak fit), keeping a vector only when its correlation peak ratio clears 1.2.
+SOLVE lays every tile's vectors on that lattice, drops those at or beyond `reg_tiled_max_disp`,
+solves them with the `dctpls` core above, calibrates each vector's σ from h-block held-out
+residuals binned by peak ratio (one re-solve at `w = 1/σ²`), re-indexes the field to the moving
+frame STITCH evaluates it in, and writes a cubic B-spline mesh. The per-tile median of the
+vectors is still written as the tile's `dx`/`dy`/`tre` for the TRE heatmap; the correlation
+`error` is recorded but gates nothing. `legacy`, `robust` and the one-point-per-tile path were
+deleted with their parameters; SOLVE refuses a control JSON without `vectors`.
 
 ---
 
@@ -352,8 +386,8 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
    tree (§6b) — an engineering contribution, to be claimed as such.
 2. **Registration-as-a-DAG-of-≤8 GB-processes.** The archived tiled path tiled only the *warp*
    (monolithic VALIS `REG_PREP`); STARE tiles the *registration estimation* itself, JVM-free.
-3. **Intrinsic per-tile TRE → a spatial error heatmap** that doubles as the refinement gate —
-   quality metric and control signal are the same object.
+3. **Intrinsic per-tile TRE → a spatial error heatmap.** (Until STARE v2 it doubled as the
+   refinement gate; v2 retired the TRE gate, so the heatmap is a diagnostic only.)
 4. **Non-negativity by construction** (convex resample + convex blend), not post-hoc clipping.
 
 ---

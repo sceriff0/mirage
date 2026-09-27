@@ -28,14 +28,14 @@ images cannot imitate.
 Defined in `benchmarks/configs/arms.yaml`. They are **factored, not crossed** —
 registration is the expensive half, so it is paid for once.
 
-At the shipped settings that is **126 launches**: 1 shared preprocessing, 18
+At the shipped settings that is **119 launches**: 1 shared preprocessing, 18
 registration arms (9 VALIS + 9 STARE), 90 QC instrument crosses (54 one-at-a-time + 36
-joint cells; all **resume** their base arm and re-run only the QC chain — see §2), 9 solver crosses (the STARE
-arms with the `robust` SOLVE stage, `arm_kind=registration_solver`; they resume
-their base too but re-run the tiled stages — see §1c), 4 external (ASHLAR), 3
-segmentation, 1 compute profile. **All but the compute profile launch the whole
-cohort**, so the launch count is not the run count — for a 6-patient cohort,
-116 × 6 = 696 patient-runs plus the compute launch, of which 90 × 6 are QC-only.
+joint cells; all **resume** their base arm and re-run only the QC chain — see §2), 6
+external (ASHLAR), 3 segmentation, 1 compute profile. **All but the compute profile launch
+the whole cohort**, so the launch count is not the run count — for a 6-patient cohort,
+118 × 6 = 708 patient-runs plus the compute launch, of which 90 × 6 are QC-only. (Until
+STARE v2 there were also 9 `registration_solver` crosses — the old STARE arms re-run with the
+`robust` SOLVE stage; they were retired with that solver, see §1c.)
 `build_arm_plan.py` prints this multiplier; read the arm counts below as
 per-patient multipliers.
 
@@ -57,18 +57,27 @@ changes the staged registration QC. **18 arms**, nine per backend:
   3 × 3, not 3 × 2. STARE's ladder is the same three rungs (`lib/RegPresets.groovy`),
   so `low` against `low` is a like-for-like comparison — the same axis the synthetic
   sweep's `registration_method_grid` crosses.
-- **STARE (`registration_method = tiled`) tier × refinement gate = 9.** A different
+- **STARE (`registration_method = tiled`) tier × stride = 9.** A different
   *backend*: `memory_mode` and `reg_micro_reg` do not exist there, so these arms
   carry neither. `reg_tiled_mode` (`low|medium|high`) is the same 512 / 1024 / 2048 px
-  ladder as VALIS's tiers, and `reg_tiled_gate_tre` {0.5, 1.0, 2.0} is STARE's
-  refinement depth — the rigid-stage TRE above which a tile is non-rigidly refined —
-  the counterpart of `reg_micro_reg`. Nine against nine (since 2026-09-10; it was
-  three tier-only arms against nine, which handed VALIS three times the draws in a
-  best-cell ranking). The **tier** rather than its five knobs because the tier is
-  what an operator picks, each `RegPresets.STARE` row moves all five coherently, and
-  `validateRegPresets` refuses a per-knob override under any tier but `custom`. The
-  synthetic sweep crosses exactly the same two axes on synthetic images.
-### 1b. ASHLAR — the external baseline, **4 runs**
+  ladder as VALIS's tiers, and `reg_tiled_stride` {64, 128, 256} is STARE's mesh
+  **resolution** — REG_TILE measures one window displacement vector per `stride` px
+  (window `W = 2 × stride`) on a slide-global lattice and SOLVE (`dctpls`) solves that
+  lattice into the mesh — the counterpart of `reg_micro_reg`. Arms are named
+  `tiled_<tier>_s<stride>` (`tiled_low_s64` … `tiled_high_s256`; the shipped default is
+  `tiled_high_s128`). Nine against nine (since 2026-09-10; it was three tier-only arms
+  against nine, which handed VALIS three times the draws in a best-cell ranking). The
+  **tier** rather than its four knobs because the tier is what an operator picks, each
+  `RegPresets.STARE` row moves all four coherently, and `validateRegPresets` refuses a
+  per-knob override under any tier but `custom`. The synthetic sweep crosses exactly the
+  same two axes on synthetic images.
+
+  **Old STARE (v1) is not re-run.** Until 2026-09-27 the second STARE axis was the TRE
+  gate `reg_tiled_gate_tre` {0.5, 1.0, 2.0} (arms `tiled_<tier>_gate<g>`), plus a 9-run
+  SOLVE cross. Those parameters and solvers no longer exist on this branch; the head-to-head
+  against old STARE reads those arms' results as already computed on the `benchmarking`
+  branch.
+### 1b. ASHLAR — the external baseline, **6 runs**
 
 ASHLAR is not a *registration* arm: `v1.0.0` removed it as a backend
 (`registration_method` is now `valis | tiled`), so a registration arm would be
@@ -77,7 +86,7 @@ rejected at launch. It is an `arm_kind=external` row instead — planned by
 configured under `external_baseline:` in `arms.yaml`. Comparing against an
 external tool should not require the pipeline to adopt it as a backend.
 
-`tile_size` [1024, 4096] × `maximum_shift_um` [30, 60] = **4 runs**, each over
+`tile_size` [1024, 4096] × `maximum_shift_um` [15, 60, 240] = **6 runs**, each over
 the whole cohort. It runs in its own pass, after the registration arms, because
 it **reuses `from_arm`'s published QC nuclei**
 (`<root>/<from_arm>/<patient>/qc/registration/geojson/`) rather than
@@ -141,27 +150,16 @@ ASHLAR arm leaves `<arm>/.external_done`, so a relaunch reports it DONE instead 
 it; `ARMS_REPLACE=1` moves the arm, marker included, aside. Its steps share the head job's
 memory with the Nextflow heads, so keep the head count low while they run.
 
-### 1c. The SOLVE-stage cross — **9 runs**
+### 1c. The SOLVE-stage cross — **retired with STARE v2**
 
-`reg_tiled_solver` selects STARE's SOLVE stage: `legacy` (gates + median filter,
-byte-identical to every manifest produced before 2026-09-12) or `robust`
-(neighbour-consistency rejection, in-fill of dropped tiles, Tikhonov smoothing,
-invertibility check — `stare.solve`, `docs/parallel_registration_design.md` §6b).
-The pipeline default is `dctpls` since 2026-09-27 (robust affine + robust DCT-PLS,
-`docs/parallel_registration_design.md` §6b); this cross still runs `robust` until it is
-re-planned. The 9 STARE base arms are pinned to `legacy` in
-`arms.yaml`'s baseline because they were launched before the solver existed and
-*are* that path, so their results stay valid. `robust` enters as a **solver cross**
-(`solver_cross`, `arm_kind=registration_solver`): one row per STARE base arm, named
-`<base>_solver_robust`, resuming the base arm's launch directory. Unlike the QC
-crosses of §2 it changes the registration, not how it is measured, so it is a third
-kind rather than a `registration_qc` row, and the VALIS-vs-STARE draw count stays 9
-against 9.
-
-Cost: the tile modules reference `params` in their script blocks, so under
-`-resume` the tiled stages re-run — a solver cross is one full STARE registration,
-not a QC-only resume. Nine launches, never a cohort. After any change to
-`stare.solve`, `--changed solve` selects exactly these nine (see "Re-running a subset after a code change").
+Until 2026-09-27 `reg_tiled_solver` selected STARE's SOLVE stage (`legacy`: gates + median
+filter; `robust`: neighbour consistency, in-fill, Tikhonov, invertibility; later `dctpls`),
+and a `solver_cross` (`arm_kind=registration_solver`, arms `<base>_solver_robust`) re-ran
+the 9 STARE base arms — which were pinned to `legacy` — with `robust`. STARE v2 kept only
+`dctpls` (on the per-window vector lattice), removed the parameter, and with it this cross
+and its arm kind. `--changed solve` now selects every STARE row (see "Which components map
+to which arms"). The v1 arms and their solver crosses remain as computed results on the
+`benchmarking` branch.
 
 ### 2. QC instrument crosses — *does the verdict depend on how it was measured?*
 
@@ -554,17 +552,17 @@ column like any other.
 
 ```bash
 # VALIS best cell against STARE best cell, six rows, one patient
-python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \
+python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_s128 \
     --rows 6 --patient 5456 -o figs/mosaic
 
-# legacy vs robust SOLVE and ASHLAR, four rows, overlay + checkerboard, titled columns
-python -m benchmarks.reg_mosaic arm_results/tiled_high_gate1 arm_results/tiled_high_gate1_solver_robust \
+# STARE's coarsest vs finest stride and ASHLAR, four rows, overlay + checkerboard, titled columns
+python -m benchmarks.reg_mosaic arm_results/tiled_high_s256 arm_results/tiled_high_s64 \
     arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker \
-    --label tiled_high_gate1=legacy --label tiled_high_gate1_solver_robust=robust \
-    --label ashlar_t1024_s30=ASHLAR -o figs/solver
+    --label tiled_high_s256=s256 --label tiled_high_s64=s64 \
+    --label ashlar_t1024_s30=ASHLAR -o figs/stride
 
 # or through make, into the arms hand-off directory
-make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_gate1" MOSAIC_ROWS=6
+make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_s128" MOSAIC_ROWS=6
 ```
 
 `--rows N` is exact. Rows are laid out ROI-major — every round at ROI 1, then every
@@ -600,14 +598,14 @@ Nothing else is.
 
 | `--changed` | seeds | closure adds | at the shipped `arms.yaml` |
 |---|---|---|---|
-| `solve` | the STARE rows that run the `robust` SOLVE stage — the 9 solver crosses. The 9 STARE base arms are the `legacy` solver, pinned byte-identical to the code that produced them, so a change to `stare.solve` does not reach them | nothing resumes a solver cross | **9 of 90** — this is the re-run after a SOLVE change |
-| `tiled` / `stare` | every row at `registration_method=tiled` — the 9 bases, their 27 QC crosses and their 9 solver crosses, which all carry the backend column | (the crosses would be added by closure if they did not) | 9 + 27 + 9 = **45 of 90**; no VALIS arm, no preprocessing, no segmentation arm, no ASHLAR arm (all scored on the VALIS reference) |
-| `valis` | every VALIS arm | their crosses, the segmentation arms (`from_arm`), the ASHLAR arms (`ext_from_arm`), the compute profile (baseline backend) | 44 of 90 |
-| `seg:<method>` | every row whose `seg_method` is that backend — the segmentation arm *and* every `_seg<method>` cross, since `SEG_QC_SEGMENT` is `SEGMENT` under an alias | — | `seg:stardist`: 19 of 90 |
-| `ashlar` | the external arms | nothing depends on them | 4 of 90 |
-| `qc` | every row that runs the `reg_qc` scorer, ASHLAR included | — | 89 of 90 (all but `preprocess_shared`) |
-| `preprocess` | `preprocess_shared` and the compute profile | everything resumes from it | 90 of 90 |
-| `--only <regex>` | rows whose `arm`/`run_id` matches (`re.search`) | the same closure | `--only 'ashlar.*'` → the 4 external arms |
+| `solve` | an alias of `tiled` since STARE v2: every STARE row runs the one SOLVE (`dctpls` on the vector lattice), so a change to `stare.solve` reaches all of them (under v1 it selected only the `robust` solver crosses) | as `tiled` | **54 of 119** |
+| `tiled` / `stare` | every row at `registration_method=tiled` — the 9 bases and their 45 QC crosses, which all carry the backend column | (the crosses would be added by closure if they did not) | 9 + 45 = **54 of 119**; no VALIS arm, no preprocessing, no segmentation arm, no ASHLAR arm (all scored on the VALIS reference) |
+| `valis` | every VALIS arm | their crosses, the segmentation arms (`from_arm`), the ASHLAR arms (`ext_from_arm`), the compute profile (baseline backend) | 64 of 119 |
+| `seg:<method>` | every row whose `seg_method` is that backend — the segmentation arm *and* every `_seg<method>` cross, since `SEG_QC_SEGMENT` is `SEGMENT` under an alias | — | `seg:stardist`: 37 of 119 |
+| `ashlar` | the external arms | nothing depends on them | 6 of 119 |
+| `qc` | every row that runs the `reg_qc` scorer, ASHLAR included | — | 118 of 119 (all but `preprocess_shared`) |
+| `preprocess` | `preprocess_shared` and the compute profile | everything resumes from it | 119 of 119 |
+| `--only <regex>` | rows whose `arm`/`run_id` matches (`re.search`) | the same closure | `--only 'ashlar.*'` → the 6 external arms |
 
 The subset plan's rows are **byte-identical lines of the full plan** — same
 `run_id`, same `arm`, same params, same `resume_run`, under the full plan's
@@ -661,15 +659,15 @@ the subset is written to `<ROOT>_plan.subset.csv` precisely so it never
 overwrites it — and `load_runs` / the QC harvesters take the union of whatever
 each arm directory holds.
 
-### The sweep: the launched rows stay, the new solver gets its own rows
+### The sweep: a new method variant gets its own rows
 
-A SOLVE-only change moves `TILED_SOLVE`'s peak by kilobytes, so the resource curves of the
-**launched** sweep are not invalidated, and `sweep.yaml` pins `reg_tiled_solver: legacy`
-in its baseline so those 9 STARE cells stay exactly what they were. The new solver's
-resource curves come from a **delta grid** (`delta_grids.solver_robust` in `sweep.yaml`):
-the same 9 STARE tier × gate cells replicated at `reg_tiled_solver=robust`, appended
-*after* every other block so the launched run ids never move (the new cells are new run
-ids at the end; `benchmarks/tests/test_delta_grids.py` pins that). Launch only them:
+A variant that arrives after the sweep was launched gets its resource curves from a **delta
+grid** (`delta_grids` in `sweep.yaml`): the cells of one per-method grid replicated with the
+variant's params, appended *after* every other block so the launched run ids never move (the
+new cells are new run ids at the end; `benchmarks/tests/test_delta_grids.py` pins that). None
+is declared today — STARE v2 retired the one there was (`solver_robust`, the old STARE cells
+at `reg_tiled_solver=robust`) with the solver, and re-plans STARE's own grid as tier ×
+`reg_tiled_stride`. To add one and launch only it:
 
 ```bash
 # 1. the plan, with the SAME --repeats as the original launch (run ids depend on it);
@@ -678,20 +676,17 @@ python benchmarks/build_run_plan.py --sweep benchmarks/configs/sweep.yaml \
     --out sweep_plan.csv --repeats 3
 diff <(head -n $(wc -l < sweep_plan.old.csv) sweep_plan.csv) sweep_plan.old.csv && echo "launched rows unchanged"
 
-# 2. the subset: only the delta block (27 rows at --repeats 3)
+# 2. the subset: only the delta block (27 rows at --repeats 3 for a 9-cell grid)
 python benchmarks/build_run_plan.py --sweep benchmarks/configs/sweep.yaml \
-    --out sweep_plan.subset.csv --repeats 3 --only 'delta_grid:solver_robust'
+    --out sweep_plan.subset.csv --repeats 3 --only 'delta_grid:<name>'
 
 # 3. launch it into the SAME results root and matrix as the sweep (new run ids: no replace needed)
 benchmarks/run_sweep.sh sweep_plan.subset.csv matrix/matrix_manifest.csv sweep_results
 
-# 4. tables over the FULL plan: reg_tiled_solver is now an identity column, so the legacy
-#    and robust rows sit side by side rather than collapsing
+# 4. tables over the FULL plan: the varied param is now an identity column, so the old
+#    and new rows sit side by side rather than collapsing
 make sweep-tables SWEEP=sweep_results SWEEP_PLAN=sweep_plan.csv
 ```
-
-`--only-method tiled` now selects both tiled blocks (18 cells); `--only
-'registration_method_grid:tiled'` is the launched 9 alone.
 
 ## Three traps the consumer already guards, and why the producer respects them
 

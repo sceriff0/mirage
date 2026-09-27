@@ -31,6 +31,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE v2: REG_TILE measures a grid of window vectors and SOLVE is `dctpls` only — the
+  old STARE surface is removed.** Each tile now emits one displacement vector per
+  `reg_tiled_stride` px (default 128; window 2 × stride) on a slide-global lattice
+  (`stare.vector_grid`), and SOLVE lays every tile's vectors on that lattice, drops those at
+  or beyond the range gate (`reg_tiled_max_disp`, default the halo), and solves them with
+  robust affine + robust DCT-PLS, per-vector σ calibrated by peak ratio, writing a cubic
+  B-spline mesh (`stare.solve.solve_dctpls`). There is no TRE dead zone and no
+  correlation-error gate. **Removed:** the `legacy` and `robust` solvers, the
+  one-control-point-per-tile solve path, and the parameters `reg_tiled_solver`,
+  `reg_tiled_gate_tre`, `reg_tiled_max_error` and `reg_tiled_upsample` (the last also leaves
+  `RegPresets.STARE`, whose rows now own four knobs); the matching `stare solve`
+  (`--gate-tre`, `--max-error`, `--solver`), `stare reg-tile` (`--upsample`) and
+  `stare register` flags are gone, and passing any of them is an argparse error. A run that
+  still sets one of those params is rejected by schema validation at launch. **Old control
+  files cannot be re-solved:** SOLVE refuses a control JSON without `vectors`/`lattice`
+  (written by a pre-v2 REG_TILE), naming the tiles — re-run REG_TILE (a `-resume` after the
+  upgrade does, since the task script changed). `stare.pipeline.register_slide` runs the same
+  vector-grid + dctpls method in process (`stride=` replaces `gate_tre=`/`upsample=`).
+  **Benchmarks:** the STARE arms are `reg_tiled_mode` {low, medium, high} ×
+  `reg_tiled_stride` {64, 128, 256} (arms `tiled_<tier>_s<stride>`), replacing × the gate;
+  the 9-run `solver_cross` (`arm_kind=registration_solver`) and the sweep's `solver_robust`
+  delta grid are deleted, and the sweep's tiled grid crosses the stride too. The
+  head-to-head against old STARE uses the arm results already computed on the
+  `benchmarking` branch. `--changed solve` now selects every STARE row.
+
 - **STARE's COARSE anchor is an NCC rotation sweep, not DISK + LightGlue.** `stare/coarse_align.py`
   sweeps rotation over 0-360 deg in 3 deg steps on a 256 px tissue-masked thumbnail (FFT
   cross-correlation), refines the two best distinct angles +-3 deg at `reg_tiled_coarse_max_dim`,
