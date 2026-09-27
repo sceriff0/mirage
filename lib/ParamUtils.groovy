@@ -408,7 +408,6 @@ class ParamUtils {
         def stareBad = offenders('reg_tiled_mode', params.reg_tiled_mode, [
             reg_tiled_tile          : params.reg_tiled_tile,
             reg_tiled_halo          : params.reg_tiled_halo,
-            reg_tiled_upsample      : params.reg_tiled_upsample,
             reg_tiled_out_tile      : params.reg_tiled_out_tile,
             reg_tiled_coarse_max_dim: params.reg_tiled_coarse_max_dim,
         ])

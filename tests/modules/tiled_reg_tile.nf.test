@@ -38,7 +38,7 @@ nextflow_process {
         }
     }
 
-    test("Should render the nuclear index, the high-tier upsample, the tile geometry and the stride - rendered command") {
+    test("Should render the nuclear index, the tile geometry and the stride - rendered command") {
 
         // No options "-stub". tiled_reg_tile.py needs the tiled container; read the
         // command only.
@@ -59,8 +59,9 @@ nextflow_process {
                 { assert rendered.size() >= 1 },
                 { assert rendered.every { it.contains('--nuclear-index 0') },
                     "DAPI is channel 0 under the default nuclear_markers: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--upsample 10') },
-                    "reg_tiled_mode defaults to 'high', whose upsample is 10: " + rendered.join(' --- ') },
+                // STARE v2 retired --upsample (the per-window peak is a 3-point Gaussian fit);
+                // reg_tile.py's argparse no longer accepts it, so a stale rendering fails the task
+                { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--ix 0 --iy 0 --cx 8 --cy 8') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--rx0 0 --ry0 0 --rx1 16 --ry1 16') }, rendered.join(' --- ') },
                 // the core bounds: what makes the vector-lattice ownership exact (stare.vector_grid)
@@ -73,7 +74,7 @@ nextflow_process {
         }
     }
 
-    test("Should take the low tier's upsample from reg_tiled_mode - rendered command") {
+    test("Should keep the stride under the low tier: it is not tier-owned - rendered command") {
 
         tag "stub"
 
@@ -91,31 +92,8 @@ nextflow_process {
             }
             assertAll(
                 { assert rendered.size() >= 1 },
-                { assert rendered.every { it.contains('--upsample 5') }, rendered.join(' --- ') }
-            )
-        }
-    }
-
-    test("Should let an explicit reg_tiled_upsample override the tier - rendered command") {
-
-        tag "stub"
-
-        when {
-            params {
-                reg_tiled_mode = 'custom'
-                reg_tiled_upsample = 3
-            }
-            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
-        }
-
-        then {
-            def rendered = []
-            new File("$workDir").eachFileRecurse { f ->
-                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
-            }
-            assertAll(
-                { assert rendered.size() >= 1 },
-                { assert rendered.every { it.contains('--upsample 3') }, rendered.join(' --- ') }
+                { assert rendered.every { it.contains('--stride 128') }, rendered.join(' --- ') },
+                { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') }
             )
         }
     }

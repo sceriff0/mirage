@@ -1,11 +1,15 @@
 """delta_grids: new method-variant cells APPENDED to a launched sweep.
 
-The sweep was launched before STARE's `robust` solver existed, with
-reg_tiled_solver pinned to `legacy` in the baseline. The resource curves of the
-new solver must come from the same 9 STARE cells re-run at `robust` -- without
-re-running anything else, and without moving a single run id of the launched
-plan (run ids are assigned by enumeration; a block inserted anywhere but the
-end renumbers everything after it, and the re-run lands in the wrong dirs).
+When a method variant arrives after the sweep was launched, its resource curves must come
+from the same per-method cells re-run with the variant's params -- without re-running
+anything else, and without moving a single run id of the launched plan (run ids are
+assigned by enumeration; a block inserted anywhere but the end renumbers everything after
+it, and the re-run lands in the wrong dirs).
+
+The shipped sweep.yaml declares no delta grid since STARE v2 retired the one it had
+(`solver_robust`, the old STARE cells at reg_tiled_solver=robust). The mechanism stays, so
+these tests exercise it with a probe block injected into a copy of the real sweep:
+the 9 STARE cells again at a non-default range gate.
 """
 
 from __future__ import annotations
@@ -25,9 +29,33 @@ BENCH = Path(__file__).resolve().parents[1]
 SWEEP = BENCH / "configs" / "sweep.yaml"
 
 
+DELTA = "maxdisp_probe"
+PROBE = {
+    DELTA: {
+        "from": "registration_method_grid",
+        "registration_method": "tiled",
+        "params": {"reg_tiled_max_disp": [64]},
+    }
+}
+
+
 @pytest.fixture(scope="module")
-def sweep():
+def shipped():
     return yaml.safe_load(SWEEP.read_text())
+
+
+@pytest.fixture(scope="module")
+def sweep(shipped):
+    s = copy.deepcopy(shipped)
+    s["delta_grids"] = copy.deepcopy(PROBE)
+    return s
+
+
+def test_the_shipped_sweep_carries_no_retired_solver_grid(shipped):
+    grids = shipped.get("delta_grids") or {}
+    assert "solver_robust" not in grids
+    for block in grids.values():
+        assert "reg_tiled_solver" not in (block.get("params") or {})
 
 
 def _without_delta(sweep):
@@ -46,19 +74,19 @@ def test_delta_rows_are_appended_so_launched_run_ids_never_move(sweep, repeats):
     assert all(r["varied_axis"].startswith("delta_grid:") for r in tail)
 
 
-def test_solver_robust_replicates_the_nine_stare_cells_at_robust(sweep):
+def test_a_delta_grid_replicates_the_nine_stare_cells_with_its_params(sweep):
     plan = build_run_plan(sweep, repeats=1)
-    delta = [r for r in plan if r["varied_axis"] == "delta_grid:solver_robust"]
+    delta = [r for r in plan if r["varied_axis"] == f"delta_grid:{DELTA}"]
     stare = [r for r in plan if r["varied_axis"] == "registration_method_grid:tiled"]
     assert len(stare) == 9 and len(delta) == 9
-    key = ("reg_tiled_mode", "reg_tiled_gate_tre")
+    key = ("reg_tiled_mode", "reg_tiled_stride")
     assert {tuple(r[k] for k in key) for r in delta} == {
         tuple(r[k] for k in key) for r in stare
     }
-    assert {r["reg_tiled_solver"] for r in delta} == {"robust"}
-    assert {r["reg_tiled_solver"] for r in stare} == {"legacy"}
+    assert {r["reg_tiled_max_disp"] for r in delta} == {64}
+    assert {r["reg_tiled_max_disp"] for r in stare} == {None}
     # everything else identical to the launched cell it replicates
-    skip = {"run_id", "config_id", "varied_axis", "reg_tiled_solver"}
+    skip = {"run_id", "config_id", "varied_axis", "reg_tiled_max_disp"}
     by_cell = {tuple(r[k] for k in key): r for r in stare}
     for r in delta:
         base = by_cell[tuple(r[k] for k in key)]
@@ -67,30 +95,32 @@ def test_solver_robust_replicates_the_nine_stare_cells_at_robust(sweep):
         }
 
 
-def test_the_solver_becomes_an_identity_column_so_rows_cannot_collapse(sweep):
-    assert "reg_tiled_solver" in contract.axes(sweep)
-    assert "reg_tiled_solver" in contract.identity_columns(sweep)
-    assert "reg_tiled_solver" not in contract.axes(_without_delta(sweep))
+def test_the_delta_param_becomes_an_identity_column_so_rows_cannot_collapse(sweep):
+    assert "reg_tiled_max_disp" in contract.axes(sweep)
+    assert "reg_tiled_max_disp" in contract.identity_columns(sweep)
+    assert "reg_tiled_max_disp" not in contract.axes(_without_delta(sweep))
 
 
 def test_only_regex_selects_exactly_the_delta_block(sweep):
     plan = build_run_plan(sweep, repeats=3)
-    sub = select_runs(plan, [], "delta_grid:solver_robust")
+    sub = select_runs(plan, [], f"delta_grid:{DELTA}")
     assert len(sub) == 27 and all(
-        r["varied_axis"] == "delta_grid:solver_robust" for r in sub
+        r["varied_axis"] == f"delta_grid:{DELTA}" for r in sub
     )
 
 
-def test_cli_writes_the_delta_subset_as_lines_of_the_full_plan(tmp_path):
+def test_cli_writes_the_delta_subset_as_lines_of_the_full_plan(tmp_path, sweep):
+    sweep_f = tmp_path / "sweep.yaml"
+    sweep_f.write_text(yaml.safe_dump(sweep, sort_keys=False))
     full = tmp_path / "full.csv"
     sub = tmp_path / "sub.csv"
-    for out, extra in ((full, []), (sub, ["--only", "delta_grid:solver_robust"])):
+    for out, extra in ((full, []), (sub, ["--only", f"delta_grid:{DELTA}"])):
         subprocess.run(
             [
                 sys.executable,
                 str(BENCH / "build_run_plan.py"),
                 "--sweep",
-                str(SWEEP),
+                str(sweep_f),
                 "--out",
                 str(out),
                 "--repeats",
@@ -120,7 +150,7 @@ def test_a_delta_block_must_name_a_real_grid_and_change_something(sweep):
         "x": {
             "from": "axes",
             "registration_method": "tiled",
-            "params": {"reg_tiled_solver": ["robust"]},
+            "params": {"reg_tiled_max_disp": [64]},
         }
     }
     with pytest.raises(ValueError, match="only registration_method_grid"):

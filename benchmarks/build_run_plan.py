@@ -144,7 +144,7 @@ def _configs(sweep: dict) -> list[tuple[dict, str]]:
     #    enumeration order, so a block inserted anywhere above would renumber every run
     #    after it and a sweep already launched would no longer match its results root.
     #    A delta grid replicates the cells of one per-method grid (`from`, `registration_method`)
-    #    with `params` applied -- e.g. the 9 STARE cells again at reg_tiled_solver=robust --
+    #    with `params` applied -- e.g. the 9 STARE cells again under a new method variant --
     #    so a NEW method variant gets the same resource curves as the launched sweep without
     #    re-running any of it. Labelled delta_grid:<name>; select with --only 'delta_grid:<name>'.
     #    Guarded by benchmarks/tests/test_delta_grids.py.

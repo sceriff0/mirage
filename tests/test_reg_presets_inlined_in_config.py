@@ -204,7 +204,6 @@ def test_custom_is_not_a_preset_row(valis_config):
     [
         "reg_tiled_tile",
         "reg_tiled_halo",
-        "reg_tiled_upsample",
         "reg_tiled_out_tile",
         "reg_tiled_coarse_max_dim",
         "reg_valis_max_processed_dim",

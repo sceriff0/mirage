@@ -40,12 +40,6 @@ process TILED_REG_TILE {
             "patient ${meta.patient_id}. Configured nuclear_markers: " +
             "${MarkerUtils.markerList(params.nuclear_markers).join(', ')}. " +
             "Set params.reg_tiled_nuclear_index to override.")
-    // Tier-owned knobs: null means take the value from reg_tiled_mode's row in
-    // lib/RegPresets.groovy. Resolved via RegPresets so the tier table has one home;
-    // the mode and the override are passed as SCALARS, never the params map, because a
-    // script: block that hands `params` to a helper makes Nextflow hash the whole map
-    // and re-run the task on any unrelated parameter change (see CLAUDE.md).
-    def upsample   = RegPresets.stare(params.reg_tiled_mode, 'upsample', params.reg_tiled_upsample)
     // NOT tier-owned: the lattice resolution is its own axis (crossed with the tiers in the
     // arms). An itemised params.reg_tiled_stride reference, so only its value enters the hash.
     def stride     = params.reg_tiled_stride
@@ -59,19 +53,16 @@ process TILED_REG_TILE {
         --rx0 ${row.rx0} --ry0 ${row.ry0} --rx1 ${row.rx1} --ry1 ${row.ry1} \\
         --x0 ${row.x0} --y0 ${row.y0} --x1 ${row.x1} --y1 ${row.y1} \\
         --stride ${stride} \\
-        --upsample ${upsample} \\
         --out ${prefix}_ctrl.json
 
     ${ProcessEnvelope.versions(task.process, [], task.container)}
     """
 
     stub:
-    // "error" is not decoration: tiled_solve._accept treats a control point WITHOUT it as
-    // legacy and accepts it unconditionally, so a stub that omits it made every stub run
-    // exercise the legacy path instead of the confidence gate. 0.0 models a confident match.
-    // "lattice"/"vectors" likewise: stare.solve's dctpls takes the vector-lattice path only
-    // when a control carries vectors, so a stub without them would exercise the per-tile
-    // fallback every real run skips. One confident vector per tile, at node (ix, iy).
+    // "lattice"/"vectors" are not decoration: stare.solve's SOLVE solves only the vector
+    // lattice and REFUSES a control JSON without them, so a stub that omitted them would fail
+    // every stub run's TILED_SOLVE. One confident, in-range vector per tile, at node (ix, iy);
+    // the per-tile summary keys (dx/dy/tre/error, ref_fg/mov_fg) mirror the real script's.
     // Guarded by tests/test_stub_control_json_contract.py.
     def prefix = "${meta.patient_id}_${meta.channels.join('_')}_${row.ix}_${row.iy}"
     def stride = params.reg_tiled_stride

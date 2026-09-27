@@ -256,7 +256,7 @@
                         "integer",
                         "null"
                     ],
-                    "description": "tile core size (px); also the mesh grid resolution. null = from reg_tiled_mode.",
+                    "description": "tile core size (px): one TILED_REG_TILE task per tile (the mesh resolution is reg_tiled_stride). null = from reg_tiled_mode.",
                     "minimum": 16
                 },
                 "reg_tiled_halo": {
@@ -267,51 +267,20 @@
                     "description": "tile read halo (px). null = from reg_tiled_mode.",
                     "minimum": 0
                 },
-                "reg_tiled_gate_tre": {
-                    "type": "number",
-                    "description": "STARE only: refine only tiles whose rigid-stage TRE (px) exceeds this.",
-                    "default": 1.0,
-                    "minimum": 0
-                },
-                "reg_tiled_max_error": {
-                    "type": "number",
-                    "description": "STARE only: confidence gate. Drop a mesh control point whose phase-correlation error exceeds this (0 = perfect match, ~1 = no shared structure). Keeps background and section-edge tiles out of the deformation mesh.",
-                    "default": 0.99,
-                    "minimum": 0,
-                    "maximum": 1
-                },
                 "reg_tiled_max_disp": {
                     "type": [
                         "number",
                         "null"
                     ],
-                    "description": "STARE only: range gate. Drop a mesh control point whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
+                    "description": "STARE only: range gate. Drop a window vector whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
                     "default": null,
                     "minimum": 0
-                },
-                "reg_tiled_solver": {
-                    "type": "string",
-                    "description": "STARE only: the SOLVE stage (stare.solve). 'dctpls' = robust affine + robust DCT-PLS (Garcia 2010) of the residual, smoothing parameter chosen by h-block cross-validation, no TRE dead zone, fold certificate reported; 'robust' = neighbour-consistency rejection (normalised median test), in-fill of dropped tiles, Tikhonov smoothing and an invertibility check over the control grid; 'legacy' = the gates plus a median filter, byte-identical to manifests produced before 2026-09-12.",
-                    "default": "dctpls",
-                    "enum": [
-                        "dctpls",
-                        "robust",
-                        "legacy"
-                    ]
                 },
                 "reg_tiled_stride": {
                     "type": "integer",
                     "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
                     "default": 128,
                     "minimum": 16
-                },
-                "reg_tiled_upsample": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "description": "phase-correlation sub-pixel upsample factor. null = from reg_tiled_mode. Rendered into TILED_REG_TILE but ignored by the window-vector estimator since reg_tiled_stride was introduced (a 3-point Gaussian peak fit replaces the upsampled DFT).",
-                    "minimum": 1
                 },
                 "reg_tiled_out_tile": {
                     "type": [

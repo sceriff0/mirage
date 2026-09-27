@@ -200,12 +200,12 @@ _DICTS = {
             (
                 "reg_tiled_tile",
                 "px",
-                "STARE tile core / mesh resolution (only when registration_method=tiled).",
+                "STARE tile core = one REG_TILE task (only when registration_method=tiled).",
             ),
             (
-                "reg_tiled_gate_tre",
+                "reg_tiled_stride",
                 "px",
-                "STARE per-tile non-rigid refine gate (only when registration_method=tiled).",
+                "STARE vector-lattice stride = mesh resolution; window 2*stride (only when registration_method=tiled).",
             ),
             (
                 "reg_tiled_coarse_max_dim",

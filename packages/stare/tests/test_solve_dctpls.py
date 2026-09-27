@@ -1,9 +1,13 @@
-"""stare.solve's ``dctpls`` solver: robust affine + robust DCT-PLS, no dead zone.
+"""stare.solve's ``dctpls`` core: robust affine + robust DCT-PLS, no dead zone.
 
-Why it exists (research/stare-optimal-design-2026-09-27.md §0, §3): the ``robust``
-solver's TRE gate hard-zeroes sub-gate vectors, its first-order Tikhonov penalty
-shrinks the affine residual M0 leaves, and its ``1 - error`` weights have no fixed
-scale. These tests pin the behaviours that replace each of those.
+Why it exists (research/stare-optimal-design-2026-09-27.md §0, §3): STARE v1's ``robust``
+solver's TRE gate hard-zeroed sub-gate vectors, its first-order Tikhonov penalty shrank the
+affine residual M0 leaves, and its ``1 - error`` weights had no fixed scale. These tests pin
+the behaviours that replaced each of those, on ``_dctpls_core`` -- the lattice solver that
+``solve_dctpls`` feeds with REG_TILE's vector lattice (test_solve_vectors.py covers that
+feed: the range gate, sigma calibration, the re-index). Synthetic lattices are laid out
+here directly, one node per ``(ix, iy)``; a node is invalid (weight 0) when it is flagged
+``valid=False``, non-finite, or at/beyond ``max_disp``.
 """
 
 from __future__ import annotations
@@ -19,8 +23,8 @@ from stare.mesh_field import MeshField
 TILE = 1024.0
 
 
-def _controls(n, fn, tile=TILE, noise=0.0, seed=0, error=0.05, ny=None):
-    """An ``n x ny`` grid of controls sampling ``fn(cx, cy) -> (dx, dy)`` at tile centres."""
+def _controls(n, fn, tile=TILE, noise=0.0, seed=0, ny=None):
+    """An ``n x ny`` lattice of nodes sampling ``fn(cx, cy) -> (dx, dy)`` at cell centres."""
     rng = np.random.default_rng(seed)
     out = []
     for iy in range(ny or n):
@@ -37,8 +41,7 @@ def _controls(n, fn, tile=TILE, noise=0.0, seed=0, error=0.05, ny=None):
                     "cy": cy,
                     "dx": dx,
                     "dy": dy,
-                    "tre": float(np.hypot(dx, dy)),
-                    "error": error,
+                    "valid": True,
                 }
             )
     return out
@@ -67,28 +70,41 @@ def _rotation_about_centre(n, deg=0.15, t=(3.0, -2.0), tile=TILE):
     return fn
 
 
-def _solve(controls, **kw):
-    kw.setdefault("max_error", 0.99)
-    kw.setdefault("max_disp", 256)
-    gx, gy, disp, report = solve.solve_grid(controls, 1.0, solver="dctpls", **kw)
-    return gx, gy, np.asarray(disp), report
+def _lay_out(controls, max_disp):
+    nx = max(c["ix"] for c in controls) + 1
+    ny = max(c["iy"] for c in controls) + 1
+    gx, gy = np.zeros(nx), np.zeros(ny)
+    Y, W0 = np.zeros((ny, nx, 2)), np.zeros((ny, nx))
+    n_disp = 0
+    for c in controls:
+        gx[c["ix"]], gy[c["iy"]] = c["cx"], c["cy"]
+        dx, dy = float(c["dx"]), float(c["dy"])
+        if not (c["valid"] and np.isfinite(dx) and np.isfinite(dy)):
+            continue
+        if max_disp is not None and np.hypot(dx, dy) >= max_disp:
+            n_disp += 1
+            continue
+        Y[c["iy"], c["ix"]] = (dx, dy)
+        W0[c["iy"], c["ix"]] = 1.0
+    return gx, gy, Y, W0, n_disp
 
 
-# ── the default ──────────────────────────────────────────────────────────────
-def test_dctpls_is_the_default_solver():
-    controls = _controls(4, lambda x, y: (1.0, 0.5))
-    assert solve.solve_grid(controls, 1.0, 0.99, 256)[3]["solver"] == "dctpls"
-    assert "dctpls" in solve.SOLVERS
-
-
-def test_gate_tre_is_ignored_so_there_is_no_dead_zone():
-    controls = _controls(6, lambda x, y: (0.4, -0.3))  # every tile far below gate 5 px
-    a = solve.solve_grid(controls, 0.0, 0.99, 256, solver="dctpls")
-    b = solve.solve_grid(controls, 5.0, 0.99, 256, solver="dctpls")
-    assert a[2] == b[2]
-    np.testing.assert_allclose(
-        np.asarray(a[2]), _truth(controls, lambda x, y: (0.4, -0.3)), atol=1e-6
-    )
+def _solve(controls, max_disp=256):
+    """``_dctpls_core`` on the laid-out lattice, with the jacobian the solve reports."""
+    gx, gy, Y, W0, n_disp = _lay_out(controls, max_disp)
+    field, info = solve._dctpls_core(Y, W0, gx, gy)
+    jac = solve.jacobian_report(gx, gy, field)
+    report = {
+        **info,
+        "n_rejected_disp": n_disp,
+        "lipschitz": jac["max_operator_norm"],
+        "min_det_jacobian": jac["min_jacobian_det"],
+        "fold_certificate_ok": bool(
+            jac["max_operator_norm"] < solve.FOLD_CERTIFICATE_LIPSCHITZ
+        ),
+        "measured": (W0 > 0).astype(int).tolist(),
+    }
+    return list(gx), list(gy), field, report
 
 
 # ── the affine is recovered, not shrunk ─────────────────────────────────────
@@ -120,15 +136,12 @@ def test_a_pure_affine_field_is_recovered(noise):
         pytest.param(lambda x, y: (0.9 + 0.0 * x, 0.0 * x), id="uniform-0.9px"),
     ],
 )
-def test_sub_gate_fields_are_kept_not_zeroed(fn):
-    """Every one of these displacements is below the default 1 px TRE gate that the
-    other solvers turn into [0, 0]; dctpls keeps them."""
+def test_sub_pixel_fields_are_kept_not_zeroed(fn):
+    """Every one of these displacements is below the 1 px TRE gate STARE v1 turned into
+    [0, 0] (a dead zone); dctpls keeps them."""
     controls = _controls(10, fn, noise=0.02)
     _, _, disp, _ = _solve(controls)
     assert np.abs(disp - _truth(controls, fn)).max() < 0.1
-    legacy = np.asarray(solve.solve_grid(controls, 1.0, 0.99, 256, solver="legacy")[2])
-    # ...which is the dead zone it replaces
-    assert np.abs(legacy - _truth(controls, fn)).max() > 0.5
 
 
 # ── local structure survives; a lone wrong vector does not ───────────────────
@@ -156,45 +169,29 @@ def test_a_single_wildly_wrong_cell_is_downweighted():
     fn = _rotation_about_centre(10)
     controls = _controls(10, fn, noise=0.05)
     bad = next(c for c in controls if c["ix"] == 5 and c["iy"] == 4)
-    bad["dx"] += 50.0
-    bad["error"] = 0.01  # more confident than its neighbours: no gate can see it
+    bad["dx"] += 50.0  # inside the range gate: no gate can see it
     _, _, disp, report = _solve(controls)
     assert np.hypot(*(disp[4, 5] - _truth(controls, fn)[4, 5])) < 1.0
     assert report["n_downweighted"] >= 1
 
 
 # ── validity ─────────────────────────────────────────────────────────────────
-def test_a_nan_error_is_rejected_and_its_node_filled_from_the_field():
+def test_an_invalid_node_is_filled_from_the_field_not_zeroed():
     fn = _rotation_about_centre(8)
     controls = _controls(8, fn)
     hole = next(c for c in controls if c["ix"] == 3 and c["iy"] == 3)
-    hole["error"] = float("nan")
-    hole["dx"], hole["dy"] = 40.0, 40.0  # whatever an empty crop returned
+    hole["valid"] = False
+    hole["dx"], hole["dy"] = 40.0, 40.0  # whatever a rejected window returned
     _, _, disp, report = _solve(controls)
-    assert report["n_rejected_error"] == 1 and report["n_valid"] == 63
+    assert report["n_valid"] == 63
     assert report["measured"][3][3] == 0 and report["measured"][3][4] == 1
     assert np.hypot(*(disp[3, 3] - _truth(controls, fn)[3, 3])) < 0.05
-
-
-def test_sigma_sets_the_prior_weight_and_error_does_not():
-    fn = lambda x, y: (1.0 + 0.0 * x, 0.0 * x)  # noqa: E731
-    controls = _controls(6, fn)
-    for c in controls:
-        c["error"] = 0.97  # an arbitrary-scale error must not change the fit
-    base = _solve(controls)[2]
-    for c in controls:
-        c["error"] = 0.02
-    np.testing.assert_allclose(_solve(controls)[2], base, atol=1e-9)
-    controls[0]["sigma"] = 0.5
-    controls[1]["sigma"] = 0.0  # not positive: default weight
-    w = solve._lattice_from_controls(controls, 0.99, 256)[3]
-    assert w[0, 0] == pytest.approx(4.0) and w[0, 1] == 1.0 and w[0, 2] == 1.0
 
 
 def test_all_invalid_controls_give_no_mesh():
     controls = _controls(4, lambda x, y: (2.0, 1.0))
     for c in controls:
-        c["error"] = float("nan")
+        c["valid"] = False
     gx, gy, disp, report = _solve(controls)
     assert report["smoothing_selection"] == "none" and report["n_valid"] == 0
     assert slide_entry(np.eye(3), gx, gy, disp)["mesh"] is None
@@ -208,7 +205,7 @@ def test_few_valid_cells_degrade_to_a_simpler_model(n_valid, selection):
     fn = lambda x, y: (1.5 + 0.0 * x, -0.5 + 0.0 * y)  # noqa: E731
     controls = _controls(5, fn)
     for c in controls[n_valid:]:
-        c["error"] = float("nan")
+        c["valid"] = False
     _, _, disp, report = _solve(controls)
     assert report["smoothing_selection"] == selection
     # no hole stays at zero: every node carries the model
@@ -228,9 +225,6 @@ def test_report_has_every_key_and_is_json_serialisable():
     controls[0]["dx"] = 999.0  # out of range
     report = _solve(controls)[3]
     for k in (
-        "solver",
-        "n_controls",
-        "n_rejected_error",
         "n_rejected_disp",
         "n_valid",
         "n_downweighted",
@@ -252,7 +246,7 @@ def test_report_has_every_key_and_is_json_serialisable():
         "scale_y",
         "shear",
     }
-    assert report["n_rejected_disp"] == 1 and report["n_controls"] == 36
+    assert report["n_rejected_disp"] == 1 and report["n_valid"] == 35
     assert report["fold_certificate_ok"] is True and report["min_det_jacobian"] > 0
     json.dumps(report)
 
@@ -269,11 +263,10 @@ def test_the_field_is_never_rescaled_and_a_fold_is_reported():
 
 
 # ── the 16-tile acceptance, analytic and fast ────────────────────────────────
-def test_on_a_coarse_4x4_grid_dctpls_beats_raw_vectors_and_robust():
+def test_on_a_coarse_4x4_grid_dctpls_ties_raw_vectors():
     """The research §0 comparison without the 8192^2 image: an analytic pull-back field
     (0.15 deg rotation about the centre + translation + a 4 px sinusoid at 6000 px +
-    a 4 px Gaussian bump) sampled at 4x4 tile centres with 0.2 px noise and the
-    whitened-correlation errors seen on the synthetic slide (~0.96). Scored on a dense
+    a 4 px Gaussian bump) sampled at 4x4 tile centres with 0.2 px noise. Scored on a dense
     grid through the same bilinear MeshField the stitch uses."""
     n, tile = 4, 2048.0
     c = n * tile / 2
@@ -297,7 +290,7 @@ def test_on_a_coarse_4x4_grid_dctpls_beats_raw_vectors_and_robust():
         )
         return ux, uy
 
-    controls = _controls(n, fn, tile=tile, noise=0.2, seed=0, error=0.96)
+    controls = _controls(n, fn, tile=tile, noise=0.2, seed=0)
     ey, ex = np.mgrid[256 : n * tile - 256 : 64, 256 : n * tile - 256 : 64].astype(
         float
     )
@@ -315,15 +308,9 @@ def test_on_a_coarse_4x4_grid_dctpls_beats_raw_vectors_and_robust():
         raw[ct["iy"], ct["ix"]] = (ct["dx"], ct["dy"])
     gx = [i * tile + tile / 2 for i in range(n)]
     e_raw = median_error(gx, gx, raw)
-    e_dct = median_error(
-        *solve.solve_grid(controls, 1.0, 0.99, 256, solver="dctpls")[:3]
-    )
-    e_rob = median_error(
-        *solve.solve_grid(controls, 1.0, 0.99, 256, solver="robust")[:3]
-    )
+    e_dct = median_error(*_solve(controls)[:3])
     # On a 4x4 grid the residual after the affine is mostly real, unresolved deformation,
     # so the best any smoother can do is interpolate: GCV picks s ~ 1e-4 and dctpls lands
     # on raw bilinear to within a fraction of a percent (either side, with the noise). The
-    # 1 % allowance is that tie; the robust solver is 7x worse, not 1 %.
+    # 1 % allowance is that tie (STARE v1's robust solver was 7x worse, not 1 %).
     assert e_dct <= 1.01 * e_raw, (e_dct, e_raw)
-    assert e_raw <= e_rob, (e_raw, e_rob)

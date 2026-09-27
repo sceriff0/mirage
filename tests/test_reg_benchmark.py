@@ -69,7 +69,7 @@ def test_benchmark_shows_registration_reduced_the_residual():
 
     tform = EuclideanTransform(rotation=np.deg2rad(2.0), translation=(11.0, -7.0))
     mov = sk_warp(ref, tform, order=1, mode="reflect").astype(np.float32)
-    registered = register_slide(ref, mov, tile=128, halo=32, gate_tre=0.0)["registered"]
+    registered = register_slide(ref, mov, tile=128, halo=32, stride=32)["registered"]
 
     report = benchmark(ref, mov, registered)
     assert report["after"]["tre_px_median"] < report["before"]["tre_px_median"]

@@ -124,8 +124,6 @@ def register(a) -> int:
                     str(tiles_f),
                     "--row",
                     str(row),
-                    "--upsample",
-                    str(a.upsample),
                     "--stride",
                     str(a.stride),
                     "--out",
@@ -144,12 +142,6 @@ def register(a) -> int:
             str(m0_f),
             "--controls",
             str(work / f"{mov_name}_*_ctrl.json"),
-            "--gate-tre",
-            str(a.gate_tre),
-            "--max-error",
-            str(a.max_error),
-            "--solver",
-            a.solver,
             "--reference-name",
             ref_name,
             "--moving-name",
@@ -236,7 +228,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", default="euclidean", choices=["euclidean", "similarity", "affine"]
     )
     # reg-tile
-    r.add_argument("--upsample", type=int, default=10)
     r.add_argument(
         "--stride",
         type=int,
@@ -244,13 +235,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="vector-lattice stride (px); window = 2 x stride (stare.vector_grid)",
     )
     # solve
-    r.add_argument("--gate-tre", type=float, default=1.0)
-    r.add_argument("--max-error", type=float, default=0.99)
     r.add_argument(
         "--max-disp", type=float, default=None, help="default: --halo, as the pipeline"
     )
-    # literal, not stare.solve.SOLVERS: the parser stays importable without numpy
-    r.add_argument("--solver", choices=["dctpls", "robust", "legacy"], default="dctpls")
     # stitch
     r.add_argument("--out-tile", type=int, default=1024)
     r.add_argument("--pixel-size", default="auto")

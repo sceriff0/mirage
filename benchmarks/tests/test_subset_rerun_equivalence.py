@@ -75,7 +75,7 @@ FIXTURE_ARMS = {
         "tiled": {
             "enabled": True,
             "reg_tiled_mode": ["low"],
-            "reg_tiled_gate_tre": [1.0],
+            "reg_tiled_stride": [128],
         },
     },
     "qc_segmenter_cross": {
@@ -403,12 +403,10 @@ def test_sweep_subset_is_row_identical_and_keeps_run_ids(tmp_path):
     assert {r["run_id"] for r in plan if r["registration_method"] == "tiled"} == {
         r["run_id"] for r in sub
     }
-    # --only on varied_axis, the name an operator knows a block by. The tiled
-    # method spans TWO blocks since the delta grid landed (the launched 9 cells
-    # at reg_tiled_solver=legacy, and their 9 replicas at robust), so the block
-    # name selects a strict subset of the method.
+    # --only on varied_axis, the name an operator knows a block by. With no delta grid
+    # declared (STARE v2 retired `solver_robust`), the tiled grid block IS the method.
     by_axis = select_runs(plan, [], only=r"registration_method_grid:tiled")
-    delta = select_runs(plan, [], only=r"delta_grid:solver_robust")
+    delta = select_runs(plan, [], only=r"delta_grid:")
     assert {r["run_id"] for r in by_axis} | {r["run_id"] for r in delta} == {
         r["run_id"] for r in sub
     }
@@ -689,7 +687,7 @@ def _launch_cfg():
     cfg["registration_arms"]["valis"]["memory_mode"] = ["high"]
     cfg["registration_arms"]["valis"]["reg_micro_reg"] = [1, 2]
     cfg["registration_arms"]["tiled"]["reg_tiled_mode"] = ["low"]
-    cfg["registration_arms"]["tiled"]["reg_tiled_gate_tre"] = [1.0]
+    cfg["registration_arms"]["tiled"]["reg_tiled_stride"] = [128]
     cfg["external_baseline"]["ashlar"]["enabled"] = False
     cfg["segmentation_arms"]["seg_method"] = []
     cfg["qc_segmenter_cross"]["cross"] = "all"
@@ -768,10 +766,10 @@ def test_arms_replace_moves_exactly_the_subset_aside_and_relaunches_it(launched)
     plan, root, run = launched
     sub = impact.affected_rows(plan, ["tiled"])
     sub_ids = {r["run_id"] for r in sub}
-    base = "tiled_low_gate1"
+    base = "tiled_low_s128"
     # the tiled base, its two segmenter crosses, its pairing cross, its two joint
-    # cells (qc_joint_cross), its solver cross
-    assert base in sub_ids and len(sub) == 7
+    # cells (qc_joint_cross). (STARE v1 added a solver cross, 7; retired with the solver.)
+    assert base in sub_ids and len(sub) == 6
     untouched = [p["run_id"] for p in plan if p["run_id"] not in sub_ids]
     before = {
         u: (root / u).stat().st_mtime_ns for u in untouched if (root / u).exists()
@@ -808,12 +806,12 @@ def test_arms_replace_moves_exactly_the_subset_aside_and_relaunches_it(launched)
 
 
 def test_arms_replace_refuses_a_base_whose_crosses_are_not_in_the_plan(launched):
-    """A hand-filtered plan: the tiled base without its six crosses (three one-at-a-time
-    QC instruments, two joint QC cells and the solver cross)."""
+    """A hand-filtered plan: the tiled base without its five crosses (three one-at-a-time
+    QC instruments and two joint QC cells)."""
     plan, root, run = launched
-    base_only = [p for p in plan if p["run_id"] == "tiled_low_gate1"]
-    crosses = [p["run_id"] for p in plan if p["resume_run"] == "tiled_low_gate1"]
-    assert len(crosses) == 6
+    base_only = [p for p in plan if p["run_id"] == "tiled_low_s128"]
+    crosses = [p["run_id"] for p in plan if p["resume_run"] == "tiled_low_s128"]
+    assert len(crosses) == 5
     r, names = run(base_only, ARMS_REPLACE="1")
     assert r.returncode != 0
     assert names == [], "refused, yet something launched"
@@ -821,13 +819,13 @@ def test_arms_replace_refuses_a_base_whose_crosses_are_not_in_the_plan(launched)
         assert c in r.stderr, f"the refusal does not name {c}"
     assert "--changed" in r.stderr
     assert not (root / ".replaced").exists(), "refused, yet something was moved"
-    assert (root / "tiled_low_gate1").is_dir()
+    assert (root / "tiled_low_s128").is_dir()
 
 
 def test_arms_replace_relaunches_a_cross_alone_without_touching_its_base(launched):
     plan, root, run = launched
-    cross = "tiled_low_gate1_pairmutual_nn"
-    base = "tiled_low_gate1"
+    cross = "tiled_low_s128_pairmutual_nn"
+    base = "tiled_low_s128"
     hist = root / ".launch" / base / ".nextflow" / "history"
     base_line = next(
         ln for ln in hist.read_text().splitlines() if f"\tarms-{base}\t" in ln

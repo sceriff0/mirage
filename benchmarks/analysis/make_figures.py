@@ -217,7 +217,7 @@ def run(
                     "memory_mode",
                     "reg_micro_reg",
                     "reg_tiled_tile",
-                    "reg_tiled_gate_tre",
+                    "reg_tiled_stride",
                     "reg_tiled_coarse_max_dim",
                     "seg_method",
                 )

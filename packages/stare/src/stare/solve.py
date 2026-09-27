@@ -1,340 +1,87 @@
-"""The SOLVE stage: per-tile control points -> a control-grid displacement mesh.
+"""The SOLVE stage: REG_TILE's window vectors -> a control-grid displacement mesh.
 
-Every comparable method (approximating TPS, elastix FFD, RegWSI's diffusive
-solve, PIV) turns sparse, noisy displacement measurements into a dense field by
-*reject -> regularise -> densify*. Three solvers live here:
+Every comparable method (approximating TPS, elastix FFD, RegWSI's diffusive solve, PIV)
+turns sparse, noisy displacement measurements into a dense field by
+*reject -> regularise -> densify*. STARE does it with one solver, ``dctpls``, on the
+slide-global vector lattice REG_TILE measures (``stare.vector_grid``):
 
-``dctpls`` (the default)
-    No TRE gate, so no dead zone: a small displacement is a measurement, never ``[0, 0]``.
-    Invalid controls (``accept``) get weight 0; the rest carry ``1/sigma**2`` when they
-    report a ``sigma``, else 1 -- the correlation ``error`` is a gate, never a weight
-    (its scale is arbitrary). Then:
+0. **the lattice** -- every tile's window vectors laid on one lattice (node ``k`` at
+   ``origin + k * stride``). A vector is valid when it is finite and ``|d| < max_disp`` (the
+   range gate: a peak further than the read window is an artefact). There is no
+   correlation-error gate -- it drops good window vectors -- and no TRE gate: a small
+   displacement is a measurement, never ``[0, 0]``. Background is kept out upstream:
+   REG_TILE emits only foreground-masked vectors whose peak ratio clears its floor.
+1. **robust affine** -- weighted Huber IRLS of a 6-parameter affine, subtracted. DCT-PLS's
+   null space is only a constant, so without this a residual rotation left by M0 is charged
+   as roughness and shrunk.
+2. **robust DCT-PLS** of the residual (Garcia 2010, CSDA 54:1167): a thin-plate
+   (squared-Laplacian) penalty with reflective boundaries, solved by DCT; one shared
+   smoothing parameter ``s`` for x and y; bisquare weights on the vector-residual norm.
+   Missing nodes are filled by the smoother, not zeroed.
+3. **s chosen from the data** -- h-block cross-validation (5 folds of 3x3-node patches,
+   Burman et al. 1994) when there are >= 25 valid nodes, GCV below that; fewer nodes
+   degrade to affine-only (3-5), translation-only (1-2) or no mesh (0).
+4. **sigma calibration** -- per-vector sigma from h-block held-out residuals binned by peak
+   ratio, then one re-solve at ``w = 1/sigma^2``.
+5. **re-index** -- the field is re-indexed to the moving frame the stitch evaluates it in,
+   ``F(g) = D(g + F(g))``.
+6. **fold certificate** -- the field's Lipschitz constant and ``min det(I + J)`` are
+   reported, and ``fold_certificate_ok`` when the constant is below 0.5. The field is never
+   rescaled.
 
-    1. **robust affine** -- weighted Huber IRLS of a 6-parameter affine, subtracted.
-       DCT-PLS's null space is only a constant, so without this a residual rotation left
-       by M0 is charged as roughness and shrunk.
-    2. **robust DCT-PLS** of the residual (Garcia 2010, CSDA 54:1167): a thin-plate
-       (squared-Laplacian) penalty with reflective boundaries, solved by DCT; one shared
-       smoothing parameter ``s`` for x and y; bisquare weights on the vector-residual
-       norm. Missing cells are filled by the smoother, not zeroed.
-    3. **s chosen from the data** -- h-block cross-validation (5 folds of 3x3-cell patches,
-       Burman et al. 1994) when there are >= 25 valid cells, GCV below that.
-    4. **fold certificate** -- the field's Lipschitz constant and ``min det(I + J)`` are
-       reported, and ``fold_certificate_ok`` when the constant is below 0.5. The field is
-       never rescaled.
+History: until STARE v2 (2026-09) SOLVE also carried a ``legacy`` solver (three gates, then a
+median filter) and a ``robust`` one (gates, normalised median test, in-fill, Tikhonov), both
+fed one control point per tile. On the 16-tile synthetic slide ``robust`` scored 8.7 px
+median against 2.2 px for the raw tile vectors (``research/stare-optimal-design-2026-09-27.md``
+§0, §3). Both were removed with the one-point-per-tile path, so a control JSON without
+``vectors`` (written by REG_TILE before the vector grid) cannot be re-solved: re-run REG_TILE.
 
-    Why it replaced ``robust``: on the 16-tile synthetic slide ``robust`` scored 8.7 px
-    median against 2.2 px for the raw tile vectors -- its TRE gate zeroes sub-gate
-    vectors and the zeros poison the median test, its first-order Tikhonov penalty
-    shrinks the affine residual, and ``1 - error`` weights have no fixed scale
-    (``research/stare-optimal-design-2026-09-27.md`` §0, §3). The core, ``_dctpls_core``,
-    takes a lattice array, not controls, and is fed two ways: one control per tile, or --
-    when the controls carry ``vectors`` (REG_TILE's window grid, ``stare.vector_grid``) --
-    the slide-global vector lattice, with per-vector sigma calibrated from h-block
-    held-out residuals binned by peak ratio (one re-solve at ``w = 1/sigma^2``) and the
-    field re-indexed to the moving frame the stitch evaluates it in.
-
-``legacy``
-    What STARE shipped until 2026-09: the three gates (confidence, range, TRE),
-    then a median filter over the accepted cells. Rejected and unmeasured cells
-    hold ``[0, 0]``, the mesh's null action -- a step in the field wherever a
-    tile was dropped. Kept byte-for-byte so a prior run reproduces.
-
-``robust``
-    The same three gates, then, on the control grid:
-
-    1. **neighbour consistency** -- the normalised median test of Westerweel &
-       Scarano (2005): a cell whose displacement disagrees with the median of
-       its accepted neighbours by more than ``nmt_threshold`` median absolute
-       deviations (plus ``nmt_epsilon`` px of measurement noise) is rejected.
-       This is the cross-tile consistency layer ASHLAR gets from its spanning
-       tree and STARE dropped; a confident-but-wrong tile (a partly blank crop
-       correlated against the wrong structure) is caught here, not by any
-       single-tile score.
-    2. **in-fill** -- a rejected or unmeasured cell takes the inverse-distance
-       weighted mean of accepted cells within ``infill_radius`` grid steps, so a
-       dropped tile is bridged from its neighbours instead of stepping to zero.
-       Cells with no accepted cell in reach stay at zero (the field decays into
-       background rather than extrapolating).
-    3. **regularised smoothing** -- a Tikhonov solve
-       ``argmin_u  sum_i w_i |u_i - d_i|^2 + lambda * sum |grad u|^2``
-       with ``w_i = 1 - error_i`` on measured cells and ``infill_weight`` on
-       in-filled ones. ``lambda`` is in grid units, so the same value means the
-       same thing at every tile size. Solved sparse; the grid is kilobytes.
-    4. **invertibility** -- the stitch inverts the field by fixed-point
-       iteration, which converges when the displacement's Lipschitz constant is
-       below one (Chen et al. 2008). The Jacobian of ``u`` on the grid is
-       reported (its maximum operator norm and the minimum determinant of
-       ``I + J``); when the norm reaches ``max_lipschitz`` the field is scaled
-       down to it and the report says so, rather than shipping a fold.
-
-All three return the same ``(grid_x, grid_y, disp, report)`` so the stage that writes
-the manifest does not care which ran. ``report`` is what ``*_tre.json`` and the
-manifest record about the solve.
+``solve_dctpls`` returns ``(grid_x, grid_y, disp, report)``; ``report`` is what ``*_tre.json``
+and the manifest record about the solve.
 """
 
 from __future__ import annotations
 
 import logging
-from statistics import median
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-SOLVERS = ("dctpls", "robust", "legacy")
 
-# Westerweel & Scarano (2005), Exp. Fluids 39: universal outlier detection for
-# PIV data. Threshold 2.0 and epsilon 0.1 px are the values they report as
-# universal across flows; epsilon absorbs the sub-pixel measurement noise.
-NMT_THRESHOLD = 2.0
-NMT_EPSILON = 0.1
-INFILL_RADIUS = 2
-INFILL_WEIGHT = 0.25
-LAMBDA = 1.0
-MAX_LIPSCHITZ = 0.9
+def _in_range(dx, dy, max_disp):
+    """A vector is usable when it is finite and inside the range gate (``None`` = no bound)."""
+    if not (np.isfinite(dx) and np.isfinite(dy)):
+        return False
+    return max_disp is None or float(np.hypot(dx, dy)) < max_disp
 
 
-def accept(control, max_error, max_disp):
-    """Is this control point trustworthy enough to place in the mesh?
-
-    Two independent bounds, and the *confidence* one does the real work:
-
-    - ``error`` is scikit-image's normalised correlation error. Phase
-      correlation always returns a peak, so a background tile or a tile
-      straddling the section edge produces a displacement that a magnitude
-      bound cannot tell from a small real residual -- only its error (~1.0
-      against real tissue's ~0.04) exposes it. NaN, which scikit-image returns
-      when a crop is empty, is rejected by the same comparison.
-    - ``|d| >= max_disp`` means the true match was never inside the read window
-      (``max_disp`` defaults to the read halo), so the peak is an artefact.
-
-    A control point with no ``"error"`` key predates confidence gating. It is
-    accepted -- unknown confidence -- so a run resumed across that change does
-    not silently lose every tile written before it. Returns ``(accepted, reason)``.
-    """
-    if (
-        max_disp is not None
-        and float(np.hypot(control["dx"], control["dy"])) >= max_disp
-    ):
-        return False, "disp"
-    if "error" not in control:
-        return True, None
-    error = float(control["error"])
-    # `not (error <= max_error)` so NaN rejects rather than passes.
-    if max_error is not None and not (error <= max_error):
-        return False, "error"
-    return True, None
-
-
-def _lay_out(controls, gate_tre, max_error, max_disp):
-    """Grid coordinates, the raw displacement per cell, and the per-cell state.
-
-    ``measured`` marks cells that passed the gates; ``refined`` the subset of
-    those at or above ``gate_tre`` whose displacement is carried into the field
-    (a trustworthy tile below the gate is *already aligned*: it contributes
-    ``[0, 0]`` as a measurement, not as an absence). ``weight`` is the
-    confidence ``1 - error`` (1.0 for a legacy point without one).
-    """
-    nx = max(c["ix"] for c in controls) + 1
-    ny = max(c["iy"] for c in controls) + 1
-    grid_x = np.zeros(nx)
-    grid_y = np.zeros(ny)
-    disp = np.zeros((ny, nx, 2))
-    measured = np.zeros((ny, nx), dtype=bool)
-    refined = np.zeros((ny, nx), dtype=bool)
-    weight = np.zeros((ny, nx))
-    counts = {"error": 0, "disp": 0, "legacy": 0, "below_gate": 0}
-    for c in controls:
-        grid_x[c["ix"]] = float(c["cx"])
-        grid_y[c["iy"]] = float(c["cy"])
-        ok, reason = accept(c, max_error, max_disp)
-        if not ok:
-            counts[reason] += 1
-            continue
-        if "error" not in c:
-            counts["legacy"] += 1
-            weight[c["iy"], c["ix"]] = 1.0
-        else:
-            weight[c["iy"], c["ix"]] = float(np.clip(1.0 - float(c["error"]), 0.0, 1.0))
-        measured[c["iy"], c["ix"]] = True
-        if float(c["tre"]) >= gate_tre:
-            refined[c["iy"], c["ix"]] = True
-            disp[c["iy"], c["ix"]] = [float(c["dx"]), float(c["dy"])]
-        else:
-            counts["below_gate"] += 1
-    if counts["legacy"]:
-        logger.warning(
-            f"{counts['legacy']}/{len(controls)} control point(s) carry no 'error' key -- "
-            "written before confidence gating existed. Accepting them with unknown "
-            "confidence; re-run the tile stage for those tiles to have them gated."
+def _require_vectors(controls):
+    """Refuse a control JSON written before the vector grid, with the remedy in the message."""
+    missing = [c for c in controls if "vectors" not in c or "lattice" not in c]
+    if missing:
+        names = ", ".join(f"({c.get('ix')},{c.get('iy')})" for c in missing[:5])
+        more = f" and {len(missing) - 5} more" if len(missing) > 5 else ""
+        raise ValueError(
+            f"{len(missing)}/{len(controls)} control point(s) carry no 'vectors'/'lattice' "
+            f"(tiles {names}{more}): they were written by a REG_TILE that predates the "
+            "window-vector grid (STARE v1, one point per tile). STARE v2's SOLVE solves only "
+            "the vector lattice and cannot re-solve them -- re-run REG_TILE for these tiles "
+            "(a -resume after the upgrade re-runs it, the task script changed)."
         )
-    if counts["error"] or counts["disp"]:
-        logger.info(
-            f"rejected {counts['error'] + counts['disp']}/{len(controls)} control point(s): "
-            f"{counts['error']} low-confidence (error > {max_error}), "
-            f"{counts['disp']} out of range (|d| >= {max_disp})"
-        )
-    return grid_x, grid_y, disp, measured, refined, weight, counts
 
 
-# ── legacy ────────────────────────────────────────────────────────────────────
-def _median_filter_accepted(disp, accepted, radius=1):
-    """Median-smooth over ACCEPTED cells only; a rejected cell keeps ``[0, 0]``.
+def tile_accepted(control, max_disp):
+    """Did this tile contribute at least one vector to the mesh?
 
-    Reject first, then smooth: a whole-grid median would refill a cell the
-    confidence gate just rejected from its agreeing neighbours.
+    The per-tile ``accepted`` flag of the ``*_tre.json`` report: ``True`` when the tile
+    carries a finite window vector inside the range gate. It is a report of what SOLVE used,
+    not a gate of its own -- the vectors are the unit SOLVE accepts or rejects.
     """
-    ny = len(disp)
-    nx = len(disp[0]) if ny else 0
-    out = [[list(d) for d in row] for row in disp]
-    for iy in range(ny):
-        for ix in range(nx):
-            if not accepted[iy][ix]:
-                continue
-            xs, ys = [], []
-            for jy in range(max(0, iy - radius), min(ny, iy + radius + 1)):
-                for jx in range(max(0, ix - radius), min(nx, ix + radius + 1)):
-                    if accepted[jy][jx]:
-                        xs.append(disp[jy][jx][0])
-                        ys.append(disp[jy][jx][1])
-            out[iy][ix] = [float(median(xs)), float(median(ys))]
-    return out
-
-
-def solve_legacy(controls, gate_tre, max_error=None, max_disp=None, median_radius=1):
-    """The pre-2026-09 solve, byte-for-byte: gates, then a median over accepted cells."""
-    grid_x, grid_y, disp, measured, refined, _, counts = _lay_out(
-        controls, gate_tre, max_error, max_disp
+    return any(
+        _in_range(float(v[4]), float(v[5]), max_disp)
+        for v in control.get("vectors", [])
     )
-    disp_l = disp.tolist()
-    accepted = measured.tolist()
-    disp_l = _median_filter_accepted(disp_l, accepted, radius=median_radius)
-    report = {
-        "solver": "legacy",
-        "n_controls": len(controls),
-        "n_rejected_error": counts["error"],
-        "n_rejected_disp": counts["disp"],
-        "n_legacy_unscored": counts["legacy"],
-        "n_below_gate": counts["below_gate"],
-        "n_refined": int(sum(1 for row in disp_l for d in row if d != [0.0, 0.0])),
-    }
-    return [float(v) for v in grid_x], [float(v) for v in grid_y], disp_l, report
-
-
-# ── robust ────────────────────────────────────────────────────────────────────
-def _neighbours(iy, ix, ny, nx, radius=1):
-    for jy in range(max(0, iy - radius), min(ny, iy + radius + 1)):
-        for jx in range(max(0, ix - radius), min(nx, ix + radius + 1)):
-            if (jy, jx) != (iy, ix):
-                yield jy, jx
-
-
-def normalized_median_test(
-    disp, measured, threshold=NMT_THRESHOLD, epsilon=NMT_EPSILON
-):
-    """Westerweel & Scarano's universal outlier test on the measured cells.
-
-    For each measured cell with at least three measured 8-neighbours: the
-    residual ``r = |d - median(neighbours)|`` per component, normalised by the
-    neighbours' median absolute residual plus ``epsilon``; the cell is an
-    outlier when the larger normalised component exceeds ``threshold``. Cells
-    with fewer than three measured neighbours cannot be tested and are kept.
-    Returns a boolean grid of outliers.
-    """
-    ny, nx = measured.shape
-    outlier = np.zeros((ny, nx), dtype=bool)
-    for iy in range(ny):
-        for ix in range(nx):
-            if not measured[iy, ix]:
-                continue
-            nb = [
-                disp[jy, jx]
-                for jy, jx in _neighbours(iy, ix, ny, nx)
-                if measured[jy, jx]
-            ]
-            if len(nb) < 3:
-                continue
-            nb = np.asarray(nb)
-            med = np.median(nb, axis=0)
-            resid_nb = np.median(np.abs(nb - med), axis=0)
-            ratio = np.abs(disp[iy, ix] - med) / (resid_nb + epsilon)
-            if float(ratio.max()) > threshold:
-                outlier[iy, ix] = True
-    return outlier
-
-
-def infill(disp, trusted, radius=INFILL_RADIUS):
-    """Fill untrusted cells from trusted ones within ``radius`` grid steps (IDW).
-
-    A cell with no trusted cell in reach stays at zero: the field decays into
-    unmeasured background rather than extrapolating a guess across it.
-    Returns ``(filled_disp, filled_mask)``.
-    """
-    ny, nx = trusted.shape
-    out = disp.copy()
-    filled = np.zeros((ny, nx), dtype=bool)
-    for iy in range(ny):
-        for ix in range(nx):
-            if trusted[iy, ix]:
-                continue
-            num = np.zeros(2)
-            den = 0.0
-            for jy, jx in _neighbours(iy, ix, ny, nx, radius):
-                if not trusted[jy, jx]:
-                    continue
-                w = 1.0 / float(np.hypot(jy - iy, jx - ix))
-                num += w * disp[jy, jx]
-                den += w
-            if den > 0:
-                out[iy, ix] = num / den
-                filled[iy, ix] = True
-            else:
-                out[iy, ix] = 0.0
-    return out, filled
-
-
-def tikhonov_smooth(disp, weight, lam=LAMBDA):
-    """``argmin_u sum w |u - d|^2 + lam * sum |grad u|^2`` on the grid, per component.
-
-    ``weight`` zero on a cell means "no data here, follow the neighbours";
-    ``lam`` in grid units. A 1x1 grid or ``lam == 0`` returns the input.
-    """
-    ny, nx, _ = disp.shape
-    n = ny * nx
-    if n == 1 or lam <= 0:
-        return disp.copy()
-    from scipy.sparse import coo_matrix, diags
-    from scipy.sparse.linalg import spsolve
-
-    idx = np.arange(n).reshape(ny, nx)
-    rows, cols, vals = [], [], []
-
-    def edge(a, b):
-        # the gradient term |u_a - u_b|^2 contributes [[1,-1],[-1,1]] to the normal matrix
-        rows.extend([a, a, b, b])
-        cols.extend([a, b, a, b])
-        vals.extend([1.0, -1.0, -1.0, 1.0])
-
-    for iy in range(ny):
-        for ix in range(nx):
-            if ix + 1 < nx:
-                edge(idx[iy, ix], idx[iy, ix + 1])
-            if iy + 1 < ny:
-                edge(idx[iy, ix], idx[iy + 1, ix])
-    laplacian = coo_matrix((vals, (rows, cols)), shape=(n, n)).tocsr()
-    w = weight.reshape(n)
-    a = diags(w) + lam * laplacian
-    out = np.empty_like(disp)
-    for k in range(2):
-        b = w * disp[:, :, k].reshape(n)
-        # a is symmetric positive semi-definite; with any positive weight it is
-        # non-singular. An all-zero weight field has nothing to fit: return zeros.
-        if not np.any(w > 0):
-            out[:, :, k] = 0.0
-            continue
-        out[:, :, k] = spsolve(a.tocsc(), b).reshape(ny, nx)
-    return out
 
 
 def jacobian_report(grid_x, grid_y, disp):
@@ -371,60 +118,6 @@ def jacobian_report(grid_x, grid_y, disp):
     }
 
 
-def solve_robust(
-    controls,
-    gate_tre,
-    max_error=None,
-    max_disp=None,
-    nmt_threshold=NMT_THRESHOLD,
-    nmt_epsilon=NMT_EPSILON,
-    infill_radius=INFILL_RADIUS,
-    infill_weight=INFILL_WEIGHT,
-    lam=LAMBDA,
-    max_lipschitz=MAX_LIPSCHITZ,
-):
-    """Gates -> neighbour consistency -> in-fill -> Tikhonov -> invertibility."""
-    grid_x, grid_y, disp, measured, refined, weight, counts = _lay_out(
-        controls, gate_tre, max_error, max_disp
-    )
-    outlier = normalized_median_test(disp, measured, nmt_threshold, nmt_epsilon)
-    trusted = measured & ~outlier
-    filled, filled_mask = infill(disp, trusted, infill_radius)
-    w = np.where(trusted, weight, 0.0)
-    w = np.where(filled_mask, infill_weight, w)
-    smooth = tikhonov_smooth(filled, w, lam)
-    # cells beyond in-fill reach carry no data and no weight: the solve leaves them
-    # following their neighbours, which is the intended decay into background
-    jac = jacobian_report(grid_x, grid_y, smooth)
-    scaled = 1.0
-    if jac["max_operator_norm"] > max_lipschitz > 0:
-        scaled = max_lipschitz / jac["max_operator_norm"]
-        smooth = smooth * scaled
-        jac = jacobian_report(grid_x, grid_y, smooth)
-    report = {
-        "solver": "robust",
-        "n_controls": len(controls),
-        "n_rejected_error": counts["error"],
-        "n_rejected_disp": counts["disp"],
-        "n_legacy_unscored": counts["legacy"],
-        "n_below_gate": counts["below_gate"],
-        "n_rejected_inconsistent": int(outlier.sum()),
-        "n_infilled": int(filled_mask.sum()),
-        "n_unfilled": int((~trusted & ~filled_mask).sum()),
-        "n_refined": int(np.sum(np.any(smooth != 0.0, axis=-1))),
-        "lambda": float(lam),
-        "nmt_threshold": float(nmt_threshold),
-        "lipschitz_scale": float(scaled),
-        **jac,
-    }
-    return (
-        [float(v) for v in grid_x],
-        [float(v) for v in grid_y],
-        smooth.tolist(),
-        report,
-    )
-
-
 # ── dctpls ────────────────────────────────────────────────────────────────────
 # Huber (1964) tuning for 95 % Gaussian efficiency; 1.4826 turns a MAD into a sigma.
 HUBER_C = 1.345
@@ -457,56 +150,6 @@ PLS_TOL = 1e-4
 PLS_TOL_CV = 1e-3
 PLS_MAX_ITER = 300
 FOLD_CERTIFICATE_LIPSCHITZ = 0.5
-
-
-def _lattice_from_controls(controls, max_error, max_disp):
-    """Controls -> a regular lattice of observations with prior weights.
-
-    Lays the controls on the grid exactly as ``_lay_out`` does (``ix``/``iy`` index
-    the lattice, ``cx``/``cy`` are the node coordinates). Returns
-    ``(grid_x, grid_y, Y, W0, counts)``: ``Y`` is ``(ny, nx, 2)`` with the measured
-    ``(dx, dy)``, ``W0`` the prior weight -- ``1/sigma**2`` when a control carries a
-    positive ``"sigma"``, else 1.0; 0 for a missing or rejected cell. The phase-
-    correlation ``error`` is used ONLY by the ``accept`` gate, never as a weight: its
-    scale is arbitrary (0.001-0.05 on one dataset, 0.96 on another), so a weight built
-    from it means a different amount of smoothing on every slide.
-
-    The vector-lattice counterpart is ``_lattice_from_vectors``; both feed
-    ``_dctpls_core``.
-    """
-    nx = max(c["ix"] for c in controls) + 1
-    ny = max(c["iy"] for c in controls) + 1
-    grid_x = np.zeros(nx)
-    grid_y = np.zeros(ny)
-    Y = np.zeros((ny, nx, 2))
-    W0 = np.zeros((ny, nx))
-    counts = {"error": 0, "disp": 0, "legacy": 0}
-    for c in controls:
-        grid_x[c["ix"]] = float(c["cx"])
-        grid_y[c["iy"]] = float(c["cy"])
-        ok, reason = accept(c, max_error, max_disp)
-        if not ok:
-            counts[reason] += 1
-            continue
-        if "error" not in c:
-            counts["legacy"] += 1
-        dx, dy = float(c["dx"]), float(c["dy"])
-        if not (np.isfinite(dx) and np.isfinite(dy)):
-            counts["error"] += 1
-            continue
-        sigma = c.get("sigma")
-        w = 1.0
-        if sigma is not None and np.isfinite(float(sigma)) and float(sigma) > 0:
-            w = 1.0 / float(sigma) ** 2
-        Y[c["iy"], c["ix"]] = [dx, dy]
-        W0[c["iy"], c["ix"]] = w
-    if counts["error"] or counts["disp"]:
-        logger.info(
-            f"rejected {counts['error'] + counts['disp']}/{len(controls)} control point(s): "
-            f"{counts['error']} low-confidence (error > {max_error}), "
-            f"{counts['disp']} out of range (|d| >= {max_disp})"
-        )
-    return grid_x, grid_y, Y, W0, counts
 
 
 def _robust_affine(Y, W0, gx, gy, iterations=AFFINE_ITERATIONS):
@@ -754,7 +397,7 @@ def _dctpls_core(Y, W0, gx, gy, cv_grid=None, internals=None):
     ``gx``/``gy`` the node coordinates in pixels. Returns ``(field, info)``: the
     displacement at EVERY node (holes filled by the smoother, never zeroed) and a
     JSON-serialisable dict of what was done. Independent of how the lattice was
-    built: it runs on one control per tile and on the vector lattice alike.
+    built (the unit tests feed it synthetic lattices directly).
 
     ``cv_grid`` narrows the h-block CV's coarse ``log10 s`` scan (a re-solve that already
     knows roughly where ``s`` is). ``internals``, when a dict, receives the affine field,
@@ -846,14 +489,9 @@ def _lattice_from_vectors(controls, max_disp):
     ``origin + k * stride``; the extent covers every node any tile reported, valid or
     rejected, so the field spans the tiles' cores. A node reported twice (a hand-run tile
     without core bounds) takes the mean vector and the larger peak ratio. Controls without
-    ``vectors`` are ignored with a warning -- a mixed set is two estimators in one mesh.
+    ``vectors`` are refused by the caller (``_require_vectors``).
     """
-    with_v = [c for c in controls if "vectors" in c]
-    if len(with_v) != len(controls):
-        logger.warning(
-            f"{len(controls) - len(with_v)}/{len(controls)} control(s) carry no 'vectors' "
-            "-- ignored; re-run REG_TILE for those tiles"
-        )
+    with_v = controls
     lattices = {
         (int(c["lattice"]["stride"]), float(c["lattice"]["origin"])) for c in with_v
     }
@@ -885,7 +523,7 @@ def _lattice_from_vectors(controls, max_disp):
             if not (np.isfinite(dx) and np.isfinite(dy)):
                 counts["nonfinite"] += 1
                 continue
-            if max_disp is not None and float(np.hypot(dx, dy)) >= max_disp:
+            if not _in_range(dx, dy, max_disp):
                 counts["disp"] += 1
                 continue
             iy, ix = int(v[1]) - ky0, int(v[0]) - kx0
@@ -1041,7 +679,28 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
         "lattice": lattice,
     }
     if grid_x is None:
-        return None
+        # not one lattice node anywhere (a stride larger than the slide): no mesh
+        logger.warning(
+            "no tile reported a lattice node; the slide stays rigid (no mesh)"
+        )
+        report = {
+            **base,
+            "n_valid": 0,
+            "n_downweighted": 0,
+            "affine": None,
+            "smoothing_s": None,
+            "smoothing_selection": "none",
+            "holdout_rmse_px": None,
+            "sigma_calibration": None,
+            "sigma_calibration_skipped": "no lattice node",
+            "coverage_1sigma": None,
+            "lipschitz": 0.0,
+            "min_det_jacobian": 1.0,
+            "fold_certificate_ok": True,
+            "solve_seconds": round(time.perf_counter() - t0, 2),
+            "measured": [],
+        }
+        return [], [], [], report
     internals = {}
     field, info = _dctpls_core(Y, W0, grid_x, grid_y, internals=internals)
     calibration, coverage, why = None, None, None
@@ -1098,92 +757,23 @@ def _solve_dctpls_vectors(controls, max_disp, interp=VECTOR_MESH_INTERP):
     )
 
 
-def solve_dctpls(
-    controls, max_error=None, max_disp=None, interp=VECTOR_MESH_INTERP, **kw
-):
-    """Robust affine, then robust DCT-PLS of the residual; no dead zone, no rescale.
+def solve_dctpls(controls, max_disp=None, interp=VECTOR_MESH_INTERP):
+    """Robust affine, then robust DCT-PLS of the residual, on the vector lattice.
 
-    There is no TRE gate here -- a caller's ``gate_tre`` never reaches this solver.
-    A displacement below any threshold is a measurement, not a reason to write
-    ``[0, 0]``: hard-zeroing it poisons every neighbour-based estimate and puts a step
-    in the field. Invalid controls (NaN / low-confidence / out-of-range, ``accept``)
-    carry weight 0 and their nodes are filled by the smoother.
+    ``controls`` are REG_TILE's per-tile control JSONs; every one must carry ``lattice`` and
+    ``vectors`` (``_require_vectors`` refuses one that does not, naming the tiles). Validity
+    is "finite and ``|d| < max_disp``"; the prior weights are calibrated from the data
+    (``_calibrate_sigma``): one solve at uniform weights, h-block held-out residuals binned
+    by peak ratio, then one re-solve at ``w = 1/sigma^2``. See the module docstring for the
+    stages.
 
-    Stages: (1) weighted Huber IRLS affine, subtracted -- DCT-PLS's null space is only a
-    constant, so without this a residual rotation from M0 would be charged as
-    roughness and shrunk; (2) Garcia's (2010) robust DCT-PLS (thin-plate penalty,
-    reflective boundaries, bisquare weights) on the residual, with ``s`` chosen by
-    h-block cross-validation (>= 25 valid cells) or GCV (6-24, not floored -- see
-    ``_gcv_s``); fewer cells fall back to affine-only (3-5), translation-only (1-2) or no
-    mesh (0).
+    ``interp`` is the interpolant the mesh is re-indexed with and that the manifest records
+    (``report["mesh_interp"]``; ``VECTOR_MESH_INTERP``, cubic, by default).
 
-    **Two input shapes.** When the controls carry ``vectors`` (REG_TILE's window grid,
-    ``stare.vector_grid``), the lattice is the slide-global vector lattice: every vector
-    is a node, validity is "present and ``|d| < max_disp``" -- the correlation-error gate is
-    NOT applied, it drops good window vectors (REG_TILE already required peak ratio >= 1.2)
-    -- and the prior weights are calibrated from the data (``_calibrate_sigma``): one solve
-    at uniform weights, h-block held-out residuals binned by peak ratio, then one re-solve at
-    ``w = 1/sigma^2``. Without ``vectors`` it is the one-control-per-tile lattice as before.
-
-    ``interp`` is the interpolant the vector-lattice mesh is re-indexed with and that the
-    manifest records (``report["mesh_interp"]``; ``VECTOR_MESH_INTERP``, cubic, by default).
-    The per-tile lattice (a few nodes, a short last tile) is always written bilinear.
-
-    Extra keyword arguments are accepted and ignored so the dispatcher can pass one
-    set. Returns ``(grid_x, grid_y, disp, report)`` like the other solvers.
+    Returns ``(grid_x, grid_y, disp, report)``; with no lattice node anywhere the three
+    arrays are empty and the slide stays rigid.
     """
-    del kw
-    if any("vectors" in c for c in controls):
-        out = _solve_dctpls_vectors(controls, max_disp, interp=interp)
-        if out is not None:
-            return out
-        # not one lattice node anywhere (a stride larger than the slide): one control per tile
-        logger.warning("no tile reported a lattice node; solving the per-tile controls")
-    grid_x, grid_y, Y, W0, counts = _lattice_from_controls(
-        controls, max_error, max_disp
-    )
-    field, info = _dctpls_core(Y, W0, grid_x, grid_y)
-    jac = jacobian_report(grid_x, grid_y, field)
-    report = {
-        "solver": "dctpls",
-        "mesh_interp": "bilinear",
-        "n_controls": len(controls),
-        "n_rejected_error": counts["error"],
-        "n_rejected_disp": counts["disp"],
-        "n_legacy_unscored": counts["legacy"],
-        "n_valid": info["n_valid"],
-        "n_downweighted": info["n_downweighted"],
-        "affine": info["affine"],
-        "smoothing_s": info["smoothing_s"],
-        "smoothing_selection": info["smoothing_selection"],
-        "holdout_rmse_px": info["holdout_rmse_px"],
-        "lipschitz": jac["max_operator_norm"],
-        "min_det_jacobian": jac["min_jacobian_det"],
-        "fold_certificate_ok": bool(
-            jac["max_operator_norm"] < FOLD_CERTIFICATE_LIPSCHITZ
-        ),
-        "measured": (W0 > 0).astype(int).tolist(),
-    }
-    return (
-        [float(v) for v in grid_x],
-        [float(v) for v in grid_y],
-        field.tolist(),
-        report,
-    )
-
-
-def solve_grid(
-    controls, gate_tre, max_error=None, max_disp=None, solver="dctpls", **kw
-):
-    """Dispatch on ``solver``; see the module docstring for what each does.
-
-    ``gate_tre`` is honoured by ``legacy`` and ``robust`` and IGNORED by ``dctpls``,
-    which never zeroes a measured displacement however small.
-    """
-    if solver not in SOLVERS:
-        raise ValueError(f"unknown solver {solver!r}; expected one of {SOLVERS}")
-    if solver == "legacy":
-        return solve_legacy(controls, gate_tre, max_error, max_disp, **kw)
-    if solver == "dctpls":
-        return solve_dctpls(controls, max_error, max_disp, **kw)
-    return solve_robust(controls, gate_tre, max_error, max_disp, **kw)
+    if not controls:
+        raise ValueError("no control points to solve")
+    _require_vectors(controls)
+    return _solve_dctpls_vectors(controls, max_disp, interp=interp)

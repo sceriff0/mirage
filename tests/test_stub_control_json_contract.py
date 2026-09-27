@@ -1,22 +1,17 @@
-"""The stub control JSON must exercise the gate, not route around it.
+"""The stub control JSON must exercise the solve every real run takes, not route around it.
 
-`bin/tiled_solve._accept` treats a control point with no `"error"` key as legacy -- written
-before confidence gating existed -- and accepts it unconditionally with a warning, so a run
-resumed across that change does not lose every tile. That contract is right for real data and
-wrong for a stub: `modules/local/tiled_reg_tile.nf`'s stub block emitted no `"error"`, so
-**every stub run took the legacy accept-with-warning path** and the gate CI exercises was not
-the gate production runs.
-
-`-stub` already cannot see a `script:` block. If the stub's own output also dodges the one
-branch under test, stub coverage of this module is worth nothing.
+`-stub` already cannot see a `script:` block. If the stub's own output also dodges the branch
+under test, stub coverage of this module is worth nothing. Under STARE v1 the trap was the
+`error` key (a control point without it took a legacy accept-with-warning path). Since STARE v2
+SOLVE solves only the window-vector lattice and REFUSES a control JSON without `lattice` and
+`vectors` -- so a stub missing them would fail every stub run's TILED_SOLVE, and a stub whose
+vectors are all out of range would solve to no mesh while real runs refine one.
 
 The test drives the real consumer rather than string-matching the stub, so the two cannot
-drift: it parses the JSON the stub actually writes and asserts `_grid_from_controls` does not
-report it as legacy.
+drift: it parses the JSON the stub actually writes and runs `stare.solve.solve_dctpls` on it.
 """
 
 import json
-import logging
 import os
 import re
 import sys
@@ -48,32 +43,20 @@ def _stub_control():
     return json.loads(literal)
 
 
-def test_the_stub_control_json_is_gated_not_legacy_accepted(caplog):
-    """A stub control point must go through the confidence gate like a real one."""
-    control = _stub_control()
-
-    with caplog.at_level(logging.WARNING, logger="stare.solve"):
-        tiled_solve._grid_from_controls(
-            [control], gate_tre=1.0, max_error=0.99, max_disp=256
-        )
-
-    assert "carry no 'error' key" not in caplog.text
-
-
-def test_the_stub_control_json_is_accepted_by_the_shipped_gate():
+def test_the_stub_control_json_is_accepted_by_the_shipped_range_gate():
     """The stub must model a GOOD tile -- a stub that models a rejected tile tests the wrong path."""
     control = _stub_control()
 
-    accepted, reason = tiled_solve._accept(control, max_error=0.99, max_disp=256)
-
-    assert accepted, f"stub control point is rejected by the shipped gate ({reason})"
+    assert tiled_solve.tile_accepted(control, max_disp=256), (
+        "stub control JSON contributes no in-range vector"
+    )
 
 
 def test_the_stub_carries_every_key_the_consumer_reads():
     """Guard the whole contract, not just `error`, so a future key cannot be forgotten here."""
     control = _stub_control()
 
-    for key in ("ix", "iy", "cx", "cy", "dx", "dy", "tre", "error"):
+    for key in ("ix", "iy", "cx", "cy", "dx", "dy", "tre", "lattice", "vectors"):
         assert key in control, f"stub control JSON is missing {key!r}"
 
 
@@ -87,10 +70,8 @@ def test_the_parser_would_notice_if_the_stub_stopped_emitting_a_control_json():
 # ---------------------------------------------------------------------------
 # The window-vector grid (stare.vector_grid): the stub must drive the VECTOR solve
 # ---------------------------------------------------------------------------
-# `stare.solve.solve_dctpls` takes the vector-lattice path only when a control carries
-# `vectors`; a stub without them would exercise the one-control-per-tile fallback while every
-# real run takes the other branch -- the same "stub routes around the branch under test" trap
-# the `error` key above was.
+# `stare.solve.solve_dctpls` refuses a control without `vectors`, so a stub without them would
+# fail TILED_SOLVE on every stub run.
 
 
 def test_the_stub_carries_a_lattice_and_a_vector_list():
@@ -115,9 +96,7 @@ def test_the_stub_vectors_reach_the_vector_solve():
     from stare.solve import solve_dctpls
 
     control = _stub_control()
-    _gx, _gy, _disp, report = solve_dctpls([control], max_error=0.99, max_disp=256)
+    _gx, _gy, _disp, report = solve_dctpls([control], max_disp=256)
 
-    assert report.get("input") == "vectors", (
-        "the stub's control JSON was solved per tile, not on the vector lattice"
-    )
+    assert report.get("input") == "vectors"
     assert report["n_valid"] >= 1

@@ -9,17 +9,16 @@ Two executors of one method:
   (b) ``stare register --workers 2``, the package's single-process command, which maps the
       same reg-tile function over the same rows with a local pool.
 
-Both are run with ``--solver legacy`` so the solve is the byte-for-byte pre-package one
-and any disagreement is the executor's, not the solver's. The manifests must be equal
-(JSON structure exact, floats to within 1e-9) and the stitched arrays identical.
+Both run the same (deterministic) dctpls solve on the same control JSONs, so any
+disagreement is the executor's, not the solver's. The manifests must be equal (JSON structure
+exact, floats to within 1e-9) and the stitched arrays identical.
 
 WHY THERE IS NO "PRE-MOVE SCRIPTS vs SHIMS" LEG. The ``bin/tiled_*.py`` shims ARE the
 package: each one imports its stage's ``main`` from ``stare.stages`` and replaces itself in
 ``sys.modules`` with the stage module, so there is no second implementation for (a) to be
 compared against -- running (a) against "the old scripts" would be running the package
 against itself. The parity that can drift is between the two EXECUTORS, and that is what
-this file pins. The legacy solve's own byte-for-byte claim against the pre-package code is
-pinned separately, from a verbatim copy, in ``packages/stare/tests/test_solve.py``.
+this file pins.
 
 The COARSE anchor is numpy/scipy/scikit-image only (NCC rotation sweep, ORB fallback), so
 this runs wherever the rest of the suite does.
@@ -153,12 +152,8 @@ def _fanout(work, ref_f, mov_f):
                 str(m0_f),
                 "--controls",
                 str(work / "ctrl_*.json"),
-                "--gate-tre",
-                "0.0",
                 "--max-disp",
                 str(HALO),
-                "--solver",
-                "legacy",
                 "--reference-name",
                 "ref",
                 "--moving-name",
@@ -224,10 +219,6 @@ def _register(work, ref_f, mov_f):
             str(HALO),
             "--max-dim",
             str(MAX_DIM),
-            "--gate-tre",
-            "0.0",
-            "--solver",
-            "legacy",
             "--pixel-size",
             "0.325",
         ]
@@ -260,13 +251,16 @@ def test_stare_register_equals_the_pipeline_fanout(tmp_path):
 
     manifest_a = json.loads(man_a.read_text())
     manifest_b = json.loads(man_b.read_text())
-    # premise: both ran the legacy solve and actually refined something
-    assert manifest_a["slides"]["mov"]["solver"] == "legacy"
+    # premise: both ran the (only) dctpls solve and actually refined something
+    assert manifest_a["slides"]["mov"]["solver"] == "dctpls"
     assert manifest_a["slides"]["mov"]["mesh"] is not None
     _assert_json_equal(manifest_a, manifest_b)
 
     tre_a_doc, tre_b_doc = json.loads(tre_a.read_text()), json.loads(tre_b.read_text())
     assert tre_a_doc["n_tiles"] == tre_b_doc["n_tiles"] >= 4
+    # solve_seconds is wall-clock, the one key two executors legitimately disagree on
+    for doc in (tre_a_doc, tre_b_doc):
+        doc["solve"].pop("solve_seconds", None)
     _assert_json_equal(tre_a_doc["solve"], tre_b_doc["solve"])
 
     pixels_a, pixels_b = tifffile.imread(str(reg_a)), tifffile.imread(str(reg_b))

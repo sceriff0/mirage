@@ -1,7 +1,7 @@
 """stare.solve's ``dctpls`` on REG_TILE's window-vector lattice.
 
 When the controls carry ``vectors`` (stare.vector_grid), SOLVE lays every vector on the
-slide-global lattice, skips the correlation-error gate (it drops good window vectors; REG_TILE
+slide-global lattice, applies no correlation-error gate (it drops good window vectors; REG_TILE
 already applied the peak-ratio floor), calibrates each vector's sigma from h-block held-out
 residuals binned by peak ratio, and re-indexes the field to the frame the stitch evaluates it
 in. research/stare-sota-review-2026-09-27.md Part C §4, §6.
@@ -86,11 +86,11 @@ def test_a_node_reported_twice_takes_the_mean_vector():
     assert PR[0, 0] == 4.0 and counts["duplicates"] == 1
 
 
-def test_the_correlation_error_gate_is_not_applied_to_vectors():
-    """Top-level error 0.9999 would reject the TILE; its window vectors still count."""
+def test_the_tile_level_correlation_error_is_not_a_gate():
+    """Top-level error 0.9999 rejected the TILE under STARE v1; its window vectors count."""
     vecs = [_vec(kx, ky, 1.0, -1.0) for ky in range(8) for kx in range(8)]
     c = _control(0, 0, vecs, error=0.9999)
-    _gx, _gy, disp, report = solve.solve_dctpls([c], max_error=0.99, max_disp=256)
+    _gx, _gy, disp, report = solve.solve_dctpls([c], max_disp=256)
     assert report["input"] == "vectors"
     assert report["n_valid"] == 64
     assert np.allclose(np.asarray(disp), [1.0, -1.0], atol=1e-6)
@@ -99,9 +99,7 @@ def test_the_correlation_error_gate_is_not_applied_to_vectors():
 def test_the_range_gate_still_rejects_a_vector_beyond_max_disp():
     vecs = [_vec(kx, ky, 1.0, 0.0) for ky in range(6) for kx in range(6)]
     vecs.append(_vec(6, 6, 300.0, 0.0))
-    _gx, _gy, disp, report = solve.solve_dctpls(
-        [_control(0, 0, vecs)], max_error=0.99, max_disp=256
-    )
+    _gx, _gy, disp, report = solve.solve_dctpls([_control(0, 0, vecs)], max_disp=256)
     assert report["n_rejected_disp"] == 1 and report["n_valid"] == 36
     assert abs(np.asarray(disp)[6, 6, 0] - 1.0) < 0.2
 

@@ -140,8 +140,6 @@ def test_fanout_scripts_chain_into_a_registered_slide(tmp_path):
             str(m0_f),
             "--controls",
             str(tmp_path / "ctrl_*.json"),
-            "--gate-tre",
-            "0.0",
             "--reference-name",
             "ref",
             "--moving-name",

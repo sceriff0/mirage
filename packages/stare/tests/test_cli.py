@@ -3,7 +3,7 @@
 
 Deliberately small. The COARSE anchor has its own tests (``test_coarse_anchor.py``), and the
 real coverage of the method -- the four-stage chain, the fan-out vs ``stare register``
-parity, the solver's byte-for-byte legacy claim -- lives in the mirage suite
+parity, the solver's contract -- lives in the mirage suite
 (``tests/test_tiled_fanout.py``, ``tests/test_stare_package_parity.py``) and in
 ``test_solve.py`` beside this file. What is pinned here is only the CLI's
 wiring, and the ``--plan/--row`` contract on a hand-written plan.
@@ -27,7 +27,7 @@ def test_stage_subcommands_pass_argv_through_to_the_stage(capsys):
         cli.main(["solve", "--help"])
     assert e.value.code == 0
     out = capsys.readouterr().out
-    assert "--solver" in out and "--controls" in out
+    assert "--max-disp" in out and "--controls" in out
 
 
 def test_register_rejects_a_stray_argument(capsys):

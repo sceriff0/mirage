@@ -4,8 +4,8 @@ Given the global M0 and a tile's core, rigid-warps the reference-frame read box 
 DAPI (core + 3 x stride, see ``vector_grid.read_box``) and measures a GRID of window vectors on
 the slide-global lattice (``stare.vector_grid``: two passes, foreground-masked, one vector per
 owned node with its peak ratio and sharpness). The control JSON keeps the one-point-per-tile
-keys (their values are now the median of the tile's valid vectors) and adds ``lattice`` and
-``vectors``, which the ``dctpls`` SOLVE consumes. One task per tile — this is the little-process fan-out, so unlike
+keys (their values are the median of the tile's valid vectors, for the per-tile TRE heatmap)
+and adds ``lattice`` and ``vectors``, which SOLVE consumes. One task per tile — this is the little-process fan-out, so unlike
 the stitch stage (one process for the whole slide) this runs N times over. It reads through the
 same lazy zarr-region primitives (``open_lazy`` + ``source_region``) the stitch uses, so each
 invocation decodes only the reference tile and the small moving crop the tile's inverse map draws
@@ -128,7 +128,7 @@ def _resolve_tile(ap, a):
 # extra precision bought nothing while doubling the bytes of the two largest arrays in the task
 # (the moving crop and the warped tile). Measured over 6 seeded tiles with a known shift, the
 # recovered displacement is identical to every printed digit and the correlation error moves by
-# 7e-11 to 1.3e-09 -- against a gate threshold of 0.99. Guarded by
+# 7e-11 to 1.3e-09. Guarded by
 # tests/test_dtype_rounding_contract.py.
 TILE_DTYPE = np.float32
 
@@ -136,9 +136,9 @@ TILE_DTYPE = np.float32
 def main(argv=None) -> int:
     """CLI entry point: measure one tile's residual displacement against the reference.
 
-    Writes a per-tile control-point JSON carrying the recovered displacement and
-    the ``error``/``ref_fg``/``mov_fg`` values behind STARE's accept/reject gate --
-    the only on-disk record of those, which is why the artifact is published.
+    Writes a per-tile control-point JSON carrying the tile's window vectors (what SOLVE
+    consumes) and the ``error``/``ref_fg``/``mov_fg`` values -- the only on-disk record
+    of those, which is why the artifact is published.
 
     Returns
     -------
@@ -194,14 +194,6 @@ def main(argv=None) -> int:
         default=128,
         help="vector-lattice stride (px); window = 2 x stride. Node k is centred at "
         "W/2 + k*stride in reference-frame pixels, so every tile shares one lattice.",
-    )
-    ap.add_argument(
-        "--upsample",
-        type=int,
-        default=10,
-        help="accepted and IGNORED since the vector grid: the per-window sub-pixel peak is a "
-        "3-point Gaussian fit (less noisy than a x10 DFT, research peaklock.py). Kept so a "
-        "rendered command or a plan written before it still parses.",
     )
     ap.add_argument("--out", required=True, help="output control-point JSON")
     a = ap.parse_args(argv)
@@ -288,12 +280,11 @@ def main(argv=None) -> int:
         for v in vec["vectors"]
     ]
 
-    # Backward-compatible top level: the MEDIAN of the valid vectors, so tre_report, the
-    # legacy/robust solvers and any reader of the one-point-per-tile contract keep working.
-    # `error` is the median normalised correlation error (1 - ncc^2, scikit-image's quantity
-    # for the same kernel) of those vectors; with no valid vector the tile reports a zero
-    # displacement and error NaN, which `accept` rejects -- the pre-grid semantics of an
-    # uncomputable correlation.
+    # Per-tile summary at the top level: the MEDIAN of the valid vectors, which tre_report's
+    # per-tile heatmap reads (`tre`). `error` is the median normalised correlation error
+    # (1 - ncc^2, scikit-image's quantity for the same kernel) of those vectors -- recorded,
+    # not gated on; with no valid vector the tile reports a zero displacement and error NaN.
+    # SOLVE reads only `lattice` and `vectors`.
     if vectors:
         dx = float(np.median([v[4] for v in vectors]))
         dy = float(np.median([v[5] for v in vectors]))

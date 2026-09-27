@@ -63,11 +63,10 @@ class RegPresets {
      * axis to VALIS's is benchmarks/tests/test_build_run_plan.py, which exists only on the
      * `benchmarking` branch -- there is no benchmarks/ directory on this one.)
      *
-     * Gating and quality knobs -- reg_tiled_gate_tre, reg_tiled_max_error, reg_tiled_max_disp,
-     * reg_tiled_solver, reg_tiled_nuclear_index -- are deliberately NOT tiered. They set what counts as an
-     * acceptable control point, which is a correctness question, not a cost/accuracy trade. Tying
-     * them to a cost tier would silently change which control points are accepted when a user
-     * asked only to use less memory.
+     * Gating and resolution knobs -- reg_tiled_max_disp, reg_tiled_stride, reg_tiled_nuclear_index --
+     * are deliberately NOT tiered. The range gate sets what counts as an acceptable displacement
+     * vector, a correctness question, not a cost/accuracy trade; the stride is the mesh resolution
+     * and is crossed with the tiers in the benchmark arms rather than tied to one.
      *
      * `coarse_max_dim` is the resolution COARSE REFINES its rigid anchor at (stare/coarse_align.py:
      * a 256 px NCC rotation sweep, then +-3 deg at this thumbnail, then sub-pixel translation). It
@@ -81,13 +80,13 @@ class RegPresets {
      * share 1024 and `low` keeps 512 (half the CPU of the ~50 refine evaluations).
      */
     static final Map<String, Map<String, Integer>> STARE = [
-        high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 1024, upsample: 10],
-        medium: [tile: 1024, halo: 192, out_tile:  768, coarse_max_dim: 1024, upsample: 10],
-        low   : [tile:  512, halo: 128, out_tile:  512, coarse_max_dim:  512, upsample:  5],
+        high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 1024],
+        medium: [tile: 1024, halo: 192, out_tile:  768, coarse_max_dim: 1024],
+        low   : [tile:  512, halo: 128, out_tile:  512, coarse_max_dim:  512],
     ]
 
     /** The STARE knobs that a tier owns, i.e. the ones `--reg_tiled_mode` moves. */
-    static final List<String> STARE_KEYS = ['tile', 'halo', 'out_tile', 'coarse_max_dim', 'upsample']
+    static final List<String> STARE_KEYS = ['tile', 'halo', 'out_tile', 'coarse_max_dim']
 
     /**
      * Map a STARE tier key to the pipeline param that overrides it.
@@ -100,7 +99,6 @@ class RegPresets {
         halo          : 'reg_tiled_halo',
         out_tile      : 'reg_tiled_out_tile',
         coarse_max_dim: 'reg_tiled_coarse_max_dim',
-        upsample      : 'reg_tiled_upsample',
     ]
 
     /**
@@ -125,7 +123,7 @@ class RegPresets {
      * hashing rules in CLAUDE.md.
      *
      * Uses an explicit null test rather than `?:` because `?:` is falsy-coalescing: a legitimate
-     * `--reg_tiled_upsample 0` would be silently rewritten to the tier value.
+     * `--reg_tiled_halo 0` would be silently rewritten to the tier value.
      */
     static int stare(String mode, String key, Object override) {
         if (override != null) {

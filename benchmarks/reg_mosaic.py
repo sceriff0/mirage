@@ -70,10 +70,10 @@ one roll of the dice; N gives something to choose between. (N = 1, the default, 
 untagged names.)
 
 Recipes:
-    python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_gate1 \\
+    python -m benchmarks.reg_mosaic arm_results/valis_high_micro2 arm_results/tiled_high_s128 \\
         --rows 6 --patient 5456 -o figs/mosaic
-    python -m benchmarks.reg_mosaic arm_results/tiled_high_gate1 arm_results/tiled_high_gate1_solver_robust \\
-        arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker -o figs/solver
+    python -m benchmarks.reg_mosaic arm_results/tiled_high_s64 arm_results/tiled_high_s256 \\
+        arm_results/ashlar_t1024_s30 --rows 4 --kinds overlay,checker -o figs/stride
 
 Requires numpy, scipy, scikit-image, tifffile and matplotlib -- the benchmarks
 analysis stack (requirements/segeval.txt).

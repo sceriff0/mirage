@@ -37,20 +37,18 @@ nextflow_process {
         }
     }
 
-    test("Should render the confidence and range gates on the control points - rendered command") {
+    test("Should render the range gate and no retired STARE v1 flag - rendered command") {
 
         // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate collects it, but
         // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:` block,
         // so no stub run can observe a rendered command. Same shape as
         // tests/modules/tiled_coarse.nf.test's "rendered command" cases.
         //
-        // These are the teeth for the bad-mesh fix. `_grid_from_controls` used to gate purely on
-        // displacement magnitude, so a control point measured on background or across the section
-        // edge went straight into the deformation mesh, which MeshField then spread bilinearly
-        // +-reg_tiled_tile px into neighbouring tissue. `--max-error` is the confidence gate that
-        // stops it, and `--max-disp` is the secondary range net. If either flag stops being
-        // rendered, tiled_solve.py falls back to its own argparse defaults (--max-disp defaults to
-        // None -- NO range bound at all) and the pipeline silently loses a gate.
+        // `--max-disp` is the range gate on the window vectors: a peak further than the read
+        // window is an artefact. If it stops being rendered, tiled_solve.py falls back to its own
+        // argparse default (None -- NO range bound at all) and the pipeline silently loses it.
+        // STARE v2 removed --gate-tre / --max-error / --solver; tiled_solve.py's argparse would
+        // REJECT them, so a stale rendering of any of them fails every real TILED_SOLVE task.
         //
         // The assertions read the rendered .command.sh rather than the process outcome, so the
         // case holds whether tiled_solve.py itself succeeds; under `-profile test` no container
@@ -77,10 +75,8 @@ nextflow_process {
                 }
             }
             // Extract each flag's COMPLETE value as a token. A substring match on the flag
-            // and value together is also satisfied by a LONGER value -- an assertion written
-            // for 0.99 is silently satisfied by 0.9999, which re-admits background (measured
-            // error 0.99947) into the mesh. That one-character config edit is exactly what
-            // these cases exist to catch, so the value is compared as a whole token.
+            // and value together is also satisfied by a LONGER value (256 by 2560), so the
+            // value is compared as a whole token.
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -89,24 +85,14 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_SOLVE .command.sh found under the task work dir" },
-                { assert rendered.every { flagValue(it, '--max-error') == '0.99' },
-                    "--max-error is not exactly 0.99 (params.reg_tiled_max_error default). A looser " +
-                    "value such as 0.9999 re-admits background into the mesh; got: " +
-                    rendered.collect { flagValue(it, '--max-error') }.join(', ') },
                 // reg_tiled_max_disp is declared null in nextflow.config so it DERIVES from the
                 // read halo: a match further than the halo was never inside the read window.
                 { assert rendered.every { flagValue(it, '--max-disp') == '256' },
                     "--max-disp is not exactly 256 (derived from params.reg_tiled_halo); got: " +
                     rendered.collect { flagValue(it, '--max-disp') }.join(', ') },
-                // the pre-existing gate must survive the change
-                { assert rendered.every { flagValue(it, '--gate-tre') == '1.0' },
-                    "--gate-tre is not exactly 1.0; got: " +
-                    rendered.collect { flagValue(it, '--gate-tre') }.join(', ') },
-                // The SOLVE algorithm is a rendered flag too: if it stops rendering, the
-                // package CLI's own default decides which mesh a run ships, silently.
-                { assert rendered.every { flagValue(it, '--solver') == 'dctpls' },
-                    "--solver is not exactly 'dctpls' (params.reg_tiled_solver default); got: " +
-                    rendered.collect { flagValue(it, '--solver') }.join(', ') }
+                // the retired STARE v1 flags: tiled_solve.py's argparse no longer knows them
+                { assert rendered.every { t -> ['--gate-tre', '--max-error', '--solver'].every { !t.contains(it) } },
+                    "a retired STARE v1 flag is still rendered: " + rendered.join(' --- ') }
             )
         }
     }
@@ -139,11 +125,8 @@ nextflow_process {
                     rendered << f.text
                 }
             }
-            // Extract each flag's COMPLETE value as a token. A substring match on the flag
-            // and value together is also satisfied by a LONGER value -- an assertion written
-            // for 0.99 is silently satisfied by 0.9999, which re-admits background (measured
-            // error 0.99947) into the mesh. That one-character config edit is exactly what
-            // these cases exist to catch, so the value is compared as a whole token.
+            // Extract each flag's COMPLETE value as a token (a substring match of 512 is also
+            // satisfied by 5120), so the value is compared as a whole token.
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -166,7 +149,6 @@ nextflow_process {
         when {
             params {
                 reg_tiled_max_disp  = 100
-                reg_tiled_max_error = 0.8
             }
             process {
                 """
@@ -186,11 +168,8 @@ nextflow_process {
                     rendered << f.text
                 }
             }
-            // Extract each flag's COMPLETE value as a token. A substring match on the flag
-            // and value together is also satisfied by a LONGER value -- an assertion written
-            // for 0.99 is silently satisfied by 0.9999, which re-admits background (measured
-            // error 0.99947) into the mesh. That one-character config edit is exactly what
-            // these cases exist to catch, so the value is compared as a whole token.
+            // Extract each flag's COMPLETE value as a token (a substring match of 512 is also
+            // satisfied by 5120), so the value is compared as a whole token.
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -203,10 +182,7 @@ nextflow_process {
                 // than coincidentally agreeing with the derived value.
                 { assert rendered.every { flagValue(it, '--max-disp') == '100' },
                     "explicit params.reg_tiled_max_disp was not honoured; got: " +
-                    rendered.collect { flagValue(it, '--max-disp') }.join(', ') },
-                { assert rendered.every { flagValue(it, '--max-error') == '0.8' },
-                    "explicit params.reg_tiled_max_error was not honoured; got: " +
-                    rendered.collect { flagValue(it, '--max-error') }.join(', ') }
+                    rendered.collect { flagValue(it, '--max-disp') }.join(', ') }
             )
         }
     }

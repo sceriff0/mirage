@@ -1,7 +1,7 @@
 """Which plan rows a code change touches -- the impact model, in code.
 
-A pipeline change rarely touches every arm. A change confined to STARE's SOLVE
-stage (``registration_method=tiled``) leaves the nine VALIS arms, the shared
+A pipeline change rarely touches every arm. A change confined to STARE
+(``registration_method=tiled``) leaves the nine VALIS arms, the shared
 preprocessing run, the segmentation arms and the ashlar baseline byte-identical;
 re-running them repeats days of cluster time to reproduce numbers already on
 disk. But re-running *too little* is worse, because it is invisible: a QC cross
@@ -93,21 +93,14 @@ def _ashlar(r: Row) -> bool:
 
 
 # component name -> predicate over a plan row. `stare` is an alias of `tiled`
-# because the docs use both names for the same backend.
-def _solve(r: Row) -> bool:
-    """Rows that run STARE's `robust` SOLVE stage (stare.solve). The `legacy` path
-    is pinned byte-identical to the pre-package code, so a change to the solver
-    reaches only the rows that selected the new one: the solver cross arms."""
-    return _reg_method_is("tiled")(r) and _s(r, "reg_tiled_solver") not in (
-        "",
-        "legacy",
-    )
-
-
+# because the docs use both names for the same backend. `solve` is one too since STARE v2:
+# every tiled row runs the one SOLVE (dctpls on the vector lattice), so a change to
+# stare.solve reaches every STARE row and nothing else. (Under STARE v1 it selected only the
+# `robust`-solver cross arms, because `legacy` was pinned byte-identical; both are gone.)
 COMPONENTS: dict[str, Predicate] = {
     "tiled": _reg_method_is("tiled"),
     "stare": _reg_method_is("tiled"),
-    "solve": _solve,
+    "solve": _reg_method_is("tiled"),
     "valis": _reg_method_is("valis"),
     "ashlar": _ashlar,
     "qc": _runs_qc_chain,

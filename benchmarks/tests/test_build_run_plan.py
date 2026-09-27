@@ -336,7 +336,7 @@ def test_stare_preset_parser_actually_parses():
     """The parser above must find a complete table, or every test using it silently passes."""
     rows = {m: stare_preset_row(m) for m in ("high", "medium", "low")}
     for mode, row in rows.items():
-        assert set(row) == {"tile", "halo", "out_tile", "coarse_max_dim", "upsample"}, (
+        assert set(row) == {"tile", "halo", "out_tile", "coarse_max_dim"}, (
             f"RegPresets.STARE['{mode}'] parsed as {row} -- the table shape changed"
         )
     assert rows["high"]["tile"] > rows["low"]["tile"], "tiers are not ordered by cost"
@@ -432,7 +432,6 @@ def test_project_tiers_are_crossed_on_the_same_rungs():
         "reg_tiled_halo",
         "reg_tiled_out_tile",
         "reg_tiled_coarse_max_dim",
-        "reg_tiled_upsample",
     }
     leaked = tier_owned & (set(rmg["tiled"]) | set(axes))
     assert not leaked, (
@@ -519,9 +518,8 @@ def test_project_sweep_has_no_dead_axes():
     )
     gated = {
         "reg_tiled_tile",
-        "reg_tiled_gate_tre",  # registration_method=tiled
+        "reg_tiled_stride",  # registration_method=tiled
         "reg_tiled_halo",
-        "reg_tiled_upsample",
         "reg_tiled_out_tile",
         "reg_tiled_coarse_max_dim",
         "seg_n_tiles_x",
@@ -607,14 +605,7 @@ def test_project_sweep_enables_qc_signals():
 # An entry whose pipeline default has caught up with the baseline is a hard failure
 # below, not a silent pass -- the same shrink-only discipline the debt allowlists in
 # tests/ follow. A stale exemption is how the seg_method desync survived.
-BASELINE_DEVIATIONS = {
-    # The sweep measures RESOURCES and was launched before the `robust` solver existed;
-    # the solve runs on kilobytes of control points, so pinning `legacy` keeps every
-    # launched tiled run reproducible at no cost to the curves. The solver comparison
-    # lives in the arm benchmark (arms.yaml solver_cross). Drop this entry when the
-    # sweep is re-launched on the shipped default.
-    "reg_tiled_solver": "sweep pre-dates the robust solver; resources only",
-}
+BASELINE_DEVIATIONS: dict[str, str] = {}
 
 
 def test_project_sweep_baseline_matches_pipeline_defaults():
@@ -888,7 +879,6 @@ NOT_SWEPT = {
     "seg_cellsam_overlap": "seg_method=cellsam only — add to segmentation_grid.cellsam if needed",
     "seg_cellsam_use_wsi": "seg_method=cellsam only — see seg_cellsam_overlap",
     "reg_tiled_halo": "registration_method=tiled only — secondary accuracy knob, held at default",
-    "reg_tiled_upsample": "registration_method=tiled only — see reg_tiled_halo",
     "reg_tiled_out_tile": "registration_method=tiled only — write-side I/O, held at default",
     "reg_tiled_nuclear_index": (
         "registration_method=tiled only — a channel index, not a cost knob. Renamed "

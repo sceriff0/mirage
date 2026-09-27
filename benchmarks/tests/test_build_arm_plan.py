@@ -101,14 +101,7 @@ def test_arms_baseline_values_match_the_pipeline_defaults(cfg):
         (REPO_ROOT / "nextflow.config").read_text()
     )
     # param -> why arms.yaml deliberately pins something other than the shipped default.
-    DELIBERATE = {
-        # The 9 STARE base arms were launched before the `robust` solver existed, so
-        # they ARE the `legacy` path (pinned byte-identical in stare.solve). Pinning
-        # the baseline keeps those results valid; `robust` enters as solver_cross,
-        # which is where the comparison the paper needs is made. Drop this entry the
-        # day the arms are re-run from scratch on the shipped default.
-        "reg_tiled_solver": "launched arms pre-date the robust solver; crossed instead",
-    }
+    DELIBERATE: dict[str, str] = {}
     drift = []
     for k, v in cfg["baseline"].items():
         if k in DELIBERATE or k not in defaults:
@@ -437,25 +430,20 @@ def test_cross_all_crosses_every_arm(cfg):
     qc = [r for r in full if r["arm_kind"] == "registration_qc"]
     n_seg = len(cfg["qc_segmenter_cross"]["seg_method"])
     n_pair = len(cfg["qc_pairing_cross"]["seg_qc_pairing"])
-    # 18 = 9 VALIS (3 tiers x 3 micro-depths) + 9 STARE (3 tiers x 3 gates). History: 7, 9,
-    # 7, 9, 12 (VALIS gained medium), and 18 now that STARE mirrors VALIS's shape. Quoted
+    # 18 = 9 VALIS (3 tiers x 3 micro-depths) + 9 STARE (3 tiers x 3 strides). History: 7,
+    # 9, 7, 9, 12 (VALIS gained medium), and 18 now that STARE mirrors VALIS's shape. Quoted
     # in docs/benchmarks_real.md and arms.yaml's cost gate, which is why it is asserted
     # rather than derived: the point is that the prose and the code agree.
-    # The 9 solver crosses (2026-09-12) are their own kind, `registration_solver`: they
-    # resume a STARE base arm like a QC cross but change the registration, so they are
-    # counted beside the 54 QC-instrument crosses, not among them: 18 + 54 + 9 = 81.
-    solver = [r for r in full if r["arm_kind"] == "registration_solver"]
-    n_solver = len(cfg["solver_cross"]["reg_tiled_solver"]) - 1
-    n_tiled = len([r for r in base if r["backend"] == "tiled"])
     # The 36 joint cells (qc_joint_cross, 2026-09-23) complete segmenter x pairing on
-    # every arm: 18 x (n_seg - 1) x (n_pair - 1). 18 + 54 + 36 + 9 = 117.
+    # every arm: 18 x (n_seg - 1) x (n_pair - 1). 18 + 54 + 36 = 108. (STARE v1 added 9
+    # `registration_solver` crosses, 117; they went with the legacy/robust solvers.)
     joint = [r for r in qc if _is_joint(r, cfg)]
     assert len(base) == 18, len(base)
     assert len(qc) - len(joint) == 18 * ((n_seg - 1) + (n_pair - 1)) == 54, len(qc)
     assert len(joint) == 18 * (n_seg - 1) * (n_pair - 1) == 36, len(joint)
-    assert len(solver) == n_tiled * n_solver == 9, len(solver)
-    assert len(base) + len(qc) + len(solver) == 117, (
-        "arms.yaml's cost gate quotes 117 registration-step launches"
+    assert not [r for r in full if r["arm_kind"] == "registration_solver"]
+    assert len(base) + len(qc) == 108, (
+        "arms.yaml's cost gate quotes 108 registration-step launches"
     )
 
 
@@ -1057,7 +1045,7 @@ def test_benchmark_config_does_not_set_concurrency_directives():
 
 
 def test_registration_arms_are_symmetric_across_backends(plan):
-    """VALIS tier x depth and STARE tier x gate: the same number of draws each, or the
+    """VALIS tier x depth and STARE tier x stride: the same number of draws each, or the
     best-cell ranking is tuned-vs-untuned in whichever direction has more cells."""
     base = [r for r in plan if r["arm_kind"] == "registration"]
     valis = [r for r in base if r["backend"] == "valis"]
@@ -1065,26 +1053,46 @@ def test_registration_arms_are_symmetric_across_backends(plan):
     assert len(valis) == len(tiled) == 9, (len(valis), len(tiled))
 
 
-def test_tiled_arms_are_tier_x_gate(plan):
-    """Every shipped tier at every gate value, and the gate really varies."""
+def test_tiled_arms_are_tier_x_stride(plan):
+    """Every shipped tier at every stride, and the stride really varies (STARE v2)."""
     tiled = [
         r for r in plan if r["backend"] == "tiled" and r["arm_kind"] == "registration"
     ]
     shipped = set(stare_preset_modes())
     assert {r["reg_tiled_mode"] for r in tiled} == shipped
-    gates = {str(r["reg_tiled_gate_tre"]) for r in tiled}
-    assert len(gates) == 3, gates
-    cells = {(r["reg_tiled_mode"], str(r["reg_tiled_gate_tre"])) for r in tiled}
-    assert len(cells) == len(shipped) * len(gates) == len(tiled)
-    # and the gate is in the directory name, so a lost arms.csv cannot merge them
+    strides = {str(r["reg_tiled_stride"]) for r in tiled}
+    assert strides == {"64", "128", "256"}, strides
+    cells = {(r["reg_tiled_mode"], str(r["reg_tiled_stride"])) for r in tiled}
+    assert len(cells) == len(shipped) * len(strides) == len(tiled)
+    # and the stride is in the directory name, so a lost arms.csv cannot merge them
     assert len({r["arm"] for r in tiled}) == len(tiled)
-    assert all("gate" in r["arm"] and "." not in r["arm"] for r in tiled)
+    assert {r["arm"] for r in tiled} == {
+        f"tiled_{m}_s{s}" for m in shipped for s in (64, 128, 256)
+    }
+    assert all("." not in r["arm"] for r in tiled)
 
 
-def test_valis_arms_carry_no_gate(plan):
+def test_the_stride_axis_brackets_the_shipped_default(cfg):
+    """The middle stride is the pipeline's default, so one arm per tier IS what ships."""
+    defaults = _param_checker().extract_config_defaults(
+        (REPO_ROOT / "nextflow.config").read_text()
+    )
+    strides = cfg["registration_arms"]["tiled"]["reg_tiled_stride"]
+    assert str(sorted(strides)[1]) == str(defaults["reg_tiled_stride"]), strides
+
+
+def test_no_arm_carries_a_retired_stare_v1_column(plan):
+    """reg_tiled_gate_tre / reg_tiled_solver were removed with STARE v1: a column naming
+    them would be forwarded by run_arms.sh as a --flag the schema now rejects."""
+    for r in plan:
+        for k in ("reg_tiled_gate_tre", "reg_tiled_solver", "reg_tiled_upsample"):
+            assert k not in r, (r["arm"], k)
+
+
+def test_valis_arms_carry_no_stride(plan):
     for r in plan:
         if r.get("backend") == "valis":
-            assert r.get("reg_tiled_gate_tre", "") == "", r["arm"]
+            assert r.get("reg_tiled_stride", "") == "", r["arm"]
 
 
 def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
@@ -1106,13 +1114,13 @@ def test_qc_cross_arms_resume_their_base_arm(cfg, plan):
             "memory_mode",
             "reg_micro_reg",
             "reg_tiled_mode",
-            "reg_tiled_gate_tre",
+            "reg_tiled_stride",
             "from_arm",
         ):
             assert str(r[k]) == str(base[k]), (r["arm"], k)
-    # base arms never resume anything; only the two cross kinds do
+    # base arms never resume anything; only the QC crosses do
     for r in plan:
-        if r["arm_kind"] not in ("registration_qc", "registration_solver"):
+        if r["arm_kind"] != "registration_qc":
             assert r["resume_run"] == "", r["arm"]
 
 
@@ -1201,7 +1209,7 @@ def test_base_arms_carry_the_baseline_instruments(cfg, plan):
 def test_qc_pass_runs_after_registration_and_before_the_rest():
     """registration_qc after registration: a cross resumes its base's finished session.
     external (ASHLAR) right after registration and BEFORE the QC pass (2026-09-14): it
-    needs only its reference arm's published nuclei, and behind the 63-cross QC pass it
+    needs only its reference arm's published nuclei, and behind the 90-cross QC pass it
     waited days at a low job ceiling. Both before segmentation and the timed compute arm."""
     script = (BENCH / "run_arms.sh").read_text()
     m = re.search(r"for kind in ([\w ]+); do", script)
@@ -1213,7 +1221,7 @@ def test_qc_pass_runs_after_registration_and_before_the_rest():
         < order.index("segmentation")
         < order.index("compute")
     ), order
-    for flag in ("seg_qc_pairing", "reg_tiled_gate_tre"):
+    for flag in ("seg_qc_pairing", "reg_tiled_stride"):
         assert f"add_param {flag} " in script, f"run_arms.sh does not forward --{flag}"
 
 
@@ -1388,7 +1396,7 @@ def test_run_arms_relaunch_reaches_nextflow_for_nothing_it_already_holds(tmp_pat
     assert "rm -rf" not in second.stdout + second.stderr
 
     # interrupt one base and one of its crosses: scancel leaves status '-'
-    resumed = ("registration_qc", "registration_solver")
+    resumed = ("registration_qc",)
     base = next(p for p in plan if p["arm_kind"] == "registration")["run_id"]
     cross = next(
         p for p in plan if p["arm_kind"] in resumed and p["resume_run"] == base
@@ -1411,32 +1419,3 @@ def test_run_arms_relaunch_reaches_nextflow_for_nothing_it_already_holds(tmp_pat
         )
         assert "ARMS_RESUME=1" in line and "ARMS_REPLACE=1" in line, line
         assert "rm -rf" not in line, line
-
-
-def test_solver_crosses_are_a_kind_of_their_own(cfg, plan):
-    """The SOLVE cross changes the registration, not the QC instrument, so it must be
-    neither a base arm (it resumes one) nor a `registration_qc` row (it varies no QC
-    instrument) -- a third kind, launched in the resumed pass, on STARE bases only."""
-    by_id = {r["run_id"]: r for r in plan}
-    solver = [r for r in plan if r["arm_kind"] == "registration_solver"]
-    assert solver, "no solver cross arms planned"
-    values = set(cfg["solver_cross"]["reg_tiled_solver"]) - {
-        cfg["baseline"]["reg_tiled_solver"]
-    }
-    for r in solver:
-        base = by_id[r["resume_run"]]
-        assert base["arm_kind"] == "registration" and base["backend"] == "tiled"
-        assert r["reg_tiled_solver"] in values
-        assert r["reg_tiled_solver"] != base["reg_tiled_solver"]
-        assert base["reg_tiled_solver"] == cfg["baseline"]["reg_tiled_solver"]
-        for k in QC_INSTRUMENTS + ("reg_tiled_mode", "reg_tiled_gate_tre"):
-            assert str(r[k]) == str(base[k]), (r["arm"], k)
-        assert r["arm"].endswith(f"_solver_{r['reg_tiled_solver']}")
-    # VALIS rows carry no solver at all
-    for r in plan:
-        if r["backend"] == "valis":
-            assert r["reg_tiled_solver"] == "", r["arm"]
-    tiled_bases = [
-        r for r in plan if r["arm_kind"] == "registration" and r["backend"] == "tiled"
-    ]
-    assert len(solver) == len(tiled_bases) * len(values)

@@ -108,12 +108,10 @@ baseline:
                                       # they are null in nextflow.config and take their values from this
                                       # tier's row in lib/RegPresets.groovy. See registration_method_grid,
                                       # which pins 'custom' where it varies them.
-  reg_tiled_tile: null                # STARE tile core / mesh resolution (px). null = from reg_tiled_mode,
+  reg_tiled_tile: null                # STARE tile core (px) = one REG_TILE task. null = from reg_tiled_mode,
                                       # which is the pipeline default (high -> 2048). Declared here (like the
                                       # seg_* backend params) so EVERY config shares columns —
                                       # registration_method_grid crosses it, pinning reg_tiled_mode=custom.
-  reg_tiled_gate_tre: 1.0             # STARE per-tile non-rigid refine gate (px), pipeline default. Only live for
-                                      # tiled runs; declared for column uniformity (crossed by registration_method_grid).
   # The COARSE front-end param is GONE, not merely unswept. :fire: 5f7f986 deleted the
   # three classical front-ends and the param that selected them; COARSE is now one
   # fixed recipe (bin/utils/coarse_align.py: NCC rotation sweep with an internal ORB
@@ -146,30 +144,17 @@ baseline:
                                       # which registration_method_grid.tiled crosses, so it is never
                                       # set directly here (validateRegPresets would refuse it under a
                                       # tier). Declared for column uniformity; inert at this baseline.
-  # The two STARE control-point gates. PINNED AT THE DEFAULT, DELIBERATELY NOT SWEPT.
-  # They are ACCURACY knobs with no cost signature -- the phase correlation they gate on
-  # has already been computed by the time either applies, so neither moves memory or
-  # runtime. Crossing them into registration_method_grid.tiled made them 60% of this
-  # sweep (162 of 270 runs) to measure something a RESOURCE sweep does not report.
-  # Their behaviour is characterised where ground truth exists instead:
-  # tests/test_tile_residual_confidence.py measures real tissue 0.041 vs background
-  # 0.9995 vs section edge 0.99996 on synthetic tiles. Declared here so every run
-  # RECORDS the value it used, which the accuracy tables need.
-  # Add them to registration_method_grid.tiled if you want the tissue-side curve --
-  # it costs 6x the tiled grid.
-  reg_tiled_max_error: 0.99           # CONFIDENCE gate (phase-correlation error), pipeline default
+  # The STARE range gate. PINNED AT THE DEFAULT, DELIBERATELY NOT SWEPT: an ACCURACY knob with
+  # no cost signature -- the window correlations it gates have already been computed by the time
+  # it applies, so it moves neither memory nor runtime. Declared so every run RECORDS the value
+  # it used. (STARE v2 retired the confidence gate reg_tiled_max_error, the TRE gate
+  # reg_tiled_gate_tre, reg_tiled_solver and reg_tiled_upsample; their baseline entries went
+  # with them, and so did the `solver_robust` delta grid that re-ran the old STARE cells.)
   reg_tiled_max_disp: null            # RANGE gate; null = fall back to reg_tiled_halo
-  reg_tiled_solver: legacy            # SOLVE stage, PINNED to the pre-2026-09-12 path on purpose: the
-                                      # sweep measures RESOURCES, the solve runs on kilobytes of control
-                                      # points, and the sweep was launched before the `robust` solver
-                                      # existed -- pinning `legacy` keeps every launched tiled run
-                                      # reproducible without a re-run. The solver COMPARISON is the
-                                      # arm benchmark's job (arms.yaml crosses legacy x robust).
-  reg_tiled_stride: 128               # REG_TILE vector-lattice stride (px), pipeline default. Declared
-                                      # because test_every_pipeline_param_is_swept_or_excused demands it;
-                                      # NOT a resource-neutral knob: the read box is core + 3*stride and
-                                      # REG_TILE's memory closure derives from it. Crossing it with the
-                                      # tiers is the arm benchmark's job (a later phase).
+  reg_tiled_stride: 128               # REG_TILE vector-lattice stride (px), pipeline default: one window
+                                      # vector per stride px, window 2*stride. NOT resource-neutral: the
+                                      # read box is core + 3*stride and REG_TILE's memory closure derives
+                                      # from it. Crossed with the tiers by registration_method_grid.tiled.
   # --- registration (ASHLAR) ---
   # THE reg_ashlar_* BASELINE ENTRIES ARE GONE, with the backend. :fire: 6a54479 removed
   # ashlar from the pipeline for v1.0.0, so reg_ashlar_tile / _overlap / _max_shift_um name
@@ -349,24 +334,26 @@ segmentation_grid:
 # Both backends ship a three-rung preset ladder over the same vocabulary (RegPresets.MODES):
 #
 #     tier     VALIS `memory_mode` (bin/utils/valis_config.py)      STARE `reg_tiled_mode` (lib/RegPresets.groovy)
-#     high     SuperPoint+SuperGlue at 2048 px (detect + non-rigid)  tile 2048, halo 256, out_tile 1024, coarse 2048, upsample 10
-#     medium   same matcher at 1024 px                               tile 1024, halo 192, out_tile 768, coarse 1024, upsample 10
-#     low      same matcher at 512 px                                tile 512,  halo 128, out_tile 512, coarse 512,  upsample 5
+#     high     SuperPoint+SuperGlue at 2048 px (detect + non-rigid)  tile 2048, halo 256, out_tile 1024, coarse 1024
+#     medium   same matcher at 1024 px                               tile 1024, halo 192, out_tile 768, coarse 1024
+#     low      same matcher at 512 px                                tile 512,  halo 128, out_tile 512, coarse 512
 #
 # i.e. since 60f624d7 (VALIS: one size per tier, same matcher throughout) both tiers are pure
 # RESOLUTION LADDERS on the same 2048/1024/512 rungs. The tier is therefore the like-for-like axis:
 # `memory_mode=low` against `reg_tiled_mode=low` is the same question asked of both methods. The
-# second knob of each is its REFINEMENT DEPTH: VALIS's reg_micro_reg (0 none | 1 micro-rigid | 2 +
-# micro non-rigid) and STARE's reg_tiled_gate_tre (the rigid-stage TRE above which a tile gets
-# non-rigid refinement -- lower = more tiles refined). 3 x 3 = 9 cells per method, 18 in all.
+# second knob of each is its REFINEMENT knob: VALIS's reg_micro_reg (0 none | 1 micro-rigid | 2 +
+# micro non-rigid) and STARE's reg_tiled_stride (the mesh resolution: one window vector per stride
+# px, window 2*stride; STARE v2 -- it was the TRE gate reg_tiled_gate_tre until that was retired).
+# 3 x 3 = 9 cells per method, 18 in all. The STARE v1 tier x gate cells were launched and measured
+# on the `benchmarking` branch; the head-to-head against old STARE reads those results there.
 #
 # WHY NOT THE KNOB CROSS THIS GRID USED TO BE (2026-09-10). The previous `tiled` entry pinned
-# reg_tiled_mode=custom and crossed reg_tiled_tile x reg_tiled_gate_tre x reg_tiled_coarse_max_dim
+# reg_tiled_mode=custom and crossed reg_tiled_tile x reg_tiled_gate_tre (since retired) x reg_tiled_coarse_max_dim
 # (27 cells) against VALIS's memory_mode x reg_micro_reg x reg_max_image_dim (27). Equal in count,
 # but the STARE PRESETS NEVER RAN: `custom` starts from the high row, so the (2048, 2048) cell was
-# `high` and nothing else was a tier -- the 1024/1024 cell kept high's halo/out_tile/upsample, and
+# `high` and nothing else was a tier -- the 1024/1024 cell kept high's halo/out_tile, and
 # 512 was not a level at all. A sweep that prices a method's shipped configurations must run them.
-# The tier knobs (tile, coarse_max_dim, halo, out_tile, upsample) are TIER-OWNED --
+# The tier knobs (tile, coarse_max_dim, halo, out_tile) are TIER-OWNED --
 # ParamUtils.validateRegPresets refuses a per-knob override under any tier but `custom` -- so a
 # tier axis and a knob cross cannot live in one grid; the tier axis won, because it is what an
 # operator actually chooses and what the real-sample arms already compare (docs/benchmarks_real.md).
@@ -382,8 +369,8 @@ segmentation_grid:
 # the first knob of each method is its tier and that both list the same three rungs.
 #
 # Held at pipeline defaults, deliberately: the tier-owned STARE knobs (they move WITH the tier);
-# the two STARE control-point gates (see the baseline block: accuracy knobs with no cost
-# signature); reg_tiled_nuclear_index. There is no execution-shape axis -- STARE has ONE shape,
+# the STARE range gate (see the baseline block: an accuracy knob with no cost signature);
+# reg_tiled_nuclear_index. There is no execution-shape axis -- STARE has ONE shape,
 # the per-tile fan-out TILED_COARSE -> TILED_REG_TILE -> TILED_SOLVE -> TILED_STITCH -- and no
 # coarse front-end axis: COARSE is one fixed recipe (:fire: 5f7f986 deleted the classical
 # front-ends and the param that selected them; the NCC rotation sweep replaced DISK+LightGlue on
@@ -394,22 +381,23 @@ registration_method_grid:
     reg_micro_reg:     [0, 1, 2]              # refinement DEPTH: none | micro-rigid | + micro non-rigid
   tiled:
     reg_tiled_mode:    [low, medium, high]    # the tier: RegPresets.STARE rows, 512 / 1024 / 2048 px
-    reg_tiled_gate_tre: [0.5, 1.0, 2.0]       # refinement gate: rigid-stage TRE (px) above which a
-                                              # tile is non-rigidly refined; brackets the default 1.0
+    reg_tiled_stride:  [64, 128, 256]         # mesh resolution (px per vector, window 2*stride);
+                                              # brackets the default 128 -- the arms' same axis
 
 # ---------------------------------------------------------------------------------------------
-# DELTA GRIDS -- resource curves for a method variant that arrived AFTER the sweep was launched.
+# DELTA GRIDS -- resource curves for a method variant that arrives AFTER the sweep was launched.
 # build_run_plan.py appends these cells after every other block, so the run ids of the launched
 # sweep never move; the new cells are new run ids at the end. Each block replicates the cells of
-# one per-method grid above with `params` applied. Launch only them with
+# one per-method grid above with `params` applied:
+#   delta_grids:
+#     <name>:
+#       from: registration_method_grid
+#       registration_method: tiled
+#       params: {<param>: [<value>]}
+# Launch only them with
 #   build_run_plan.py --sweep ... --out sweep_plan.subset.csv --repeats <same as the launch> \
-#       --only 'delta_grid:solver_robust'
-# and point make_tables at the FULL plan afterwards. Because `reg_tiled_solver` then differs
-# across runs it becomes an identity column of every table (analysis/lib/contract.py), so the
-# legacy and robust rows never collapse into one.
-delta_grids:
-  solver_robust:
-    from: registration_method_grid           # the 9 STARE tier x gate cells
-    registration_method: tiled
-    params:
-      reg_tiled_solver: [robust]             # the SOLVE stage that did not exist at launch
+#       --only 'delta_grid:<name>'
+# and point make_tables at the FULL plan afterwards; the varied param becomes an identity column
+# of every table (analysis/lib/contract.py), so old and new rows never collapse into one.
+# None is declared: STARE v2 retired the one there was (`solver_robust`, the old STARE cells at
+# reg_tiled_solver=robust) together with the solver.

@@ -2,7 +2,7 @@
 
 After the global M0 anchor, a tile's moving crop and the reference crop differ only by a small,
 near-translational residual. :func:`residual_displacement` recovers it sub-pixel with phase
-correlation and returns it as ``(dx, dy)`` — the mesh control-point displacement for the tile,
+correlation and returns it as ``(dx, dy)`` — the whole-tile displacement,
 i.e. the amount to add to a moving-tile coordinate to land it on the reference — together with the
 tile's local Target Registration Error (the magnitude of that residual) and the correlation's
 normalised error, which is how a caller tells a real match from a peak in noise.
@@ -92,17 +92,17 @@ def residual_displacement(ref_tile, mov_tile, upsample=10, whiten_sigma=3.0):
     - ``(dx, dy)`` is the control-point displacement (add it to a moving coordinate to reach the
       reference);
     - ``tre = hypot(dx, dy)`` is the tile's local rigid-stage TRE — the pre-refinement
-      misalignment magnitude used to gate whether the tile needs refining;
+      misalignment magnitude;
     - ``error`` is scikit-image's normalised correlation error, in ``[0, 1]``, where 0 is a
       perfect match and ~1 means the two crops share no structure at all.
 
-    ``error`` is the *confidence* of the match and is not optional bookkeeping. Phase correlation
-    always returns a peak, so a background tile or a tile straddling the section edge yields a
-    displacement that is indistinguishable from a small real residual by magnitude — measured on
-    the synthetic tiles in ``tests/test_tile_residual_confidence.py``, a tissue-vs-background tile
-    scores ``|d| = 5.66 px`` (well inside ``reg_tiled_halo``) and only its ``error`` of 0.999961,
-    against real tissue's 0.040956, gives it away. ``tiled_solve._grid_from_controls`` rejects
-    control points above ``--max-error`` for exactly that reason.
+    ``error`` is the *confidence* of the match. Phase correlation always returns a peak, so a
+    background tile or a tile straddling the section edge yields a displacement that is
+    indistinguishable from a small real residual by magnitude; its ``error`` (~1.0 against real
+    tissue's ~0.04) gives it away. STARE v1's SOLVE gated one-point-per-tile control points on it;
+    since STARE v2 this function is the whole-tile oracle (the post-refinement residual in
+    ``stare.pipeline`` and the reference ``stare.vector_grid``'s tests compare against), and the
+    pipeline's per-window vectors are validated by peak ratio instead.
 
     ``error`` is **NaN** where scikit-image cannot compute it at all — notably when either crop is
     empty, which is what ``tiled_reg_tile.py`` manufactures when the moving crop falls outside the

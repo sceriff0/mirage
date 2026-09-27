@@ -43,7 +43,7 @@ VALIS_ONLY = ("memory_mode", "reg_micro_reg")
 # RegPresets.STARE and means nothing on a VALIS arm, so a VALIS arm must carry it BLANK --
 # both so the consumer can tell "not applicable" from "at default", and so run_arms.sh's
 # add_param blank-guard never emits `--reg_tiled_mode ""`, which schema validation rejects.
-TILED_ONLY = ("reg_tiled_mode", "reg_tiled_gate_tre", "reg_tiled_solver")
+TILED_ONLY = ("reg_tiled_mode", "reg_tiled_stride")
 
 # The two QC MEASURING INSTRUMENTS every registration-step arm carries: which segmenter
 # finds the nuclei the seg-overlap QC scores on (params.seg_method) and how those nuclei
@@ -76,15 +76,15 @@ def valis_arm_name(memory_mode: str, micro: int) -> str:
     return f"valis_{memory_mode}_micro{micro}"
 
 
-def tiled_arm_name(mode: str, gate) -> str:
-    # The tier AND the gate are IN the name, not only in arms.csv. registration_arms.R
+def tiled_arm_name(mode: str, stride) -> str:
+    # The tier AND the stride are IN the name, not only in arms.csv. registration_arms.R
     # falls back to parsing the directory name when the manifest is missing, and arms that
     # differed only by a column it failed to read would render as one replicated box.
-    # Keeps the `tiled` substring the consumer's backend fallback keys on. The gate is
-    # written without its decimal point (0.5 -> gate05, 1.0 -> gate1, 2.0 -> gate2): a dot
-    # in a directory name reads as an extension to half the tools that will touch it.
-    g = f"{float(gate):g}".replace(".", "")
-    return f"tiled_{mode}_gate{g}"
+    # Keeps the `tiled` substring the consumer's backend fallback keys on. The stride is an
+    # integer pixel count (s64, s128, s256), so the name carries no dot a tool could read as
+    # an extension. (STARE v1's arms were `tiled_<tier>_gate<g>`; their results live on the
+    # `benchmarking` branch and are compared against these by name there.)
+    return f"tiled_{mode}_s{int(stride)}"
 
 
 def _registration_arms(cfg: dict) -> list[dict]:
@@ -120,8 +120,8 @@ def _registration_arms(cfg: dict) -> list[dict]:
     tiled = ra.get("tiled") or {}
     if tiled.get("enabled"):
         # STARE fans out over its TIER, not over individual knobs. reg_tiled_mode is the
-        # knob an operator actually picks, and each tier moves all five tier-owned values
-        # (tile / halo / out_tile / coarse_max_dim / upsample) coherently -- see
+        # knob an operator actually picks, and each tier moves all four tier-owned values
+        # (tile / halo / out_tile / coarse_max_dim) coherently -- see
         # RegPresets.STARE. Varying them singly is sweep.yaml's job, on synthetic images
         # where a cell is cheap; here a cell is a real WSI at up to 483 GB, so arms carries
         # the three shipped tiers and nothing finer.
@@ -130,17 +130,18 @@ def _registration_arms(cfg: dict) -> list[dict]:
         # six configurations and STARE across none, which is the same tuned-vs-untuned bias
         # test_project_stare_resolution_axis_mirrors_the_valis_one guards in the sweep --
         # and it was unguarded here, in the block that produces the manuscript figure.
-        # TIER x GATE, the mirror of the VALIS block (2026-09-10). reg_tiled_gate_tre is
-        # STARE's refinement depth -- the rigid-stage TRE above which a tile is non-rigidly
-        # refined -- and is ungated, so it is legal under every tier; the tier-owned knobs
-        # (tile / halo / out_tile / coarse_max_dim / upsample) are not, and stay with the tier.
+        # TIER x STRIDE, the mirror of the VALIS block (STARE v2, 2026-09-27; it was tier x
+        # reg_tiled_gate_tre until the TRE gate was retired). reg_tiled_stride is STARE's mesh
+        # RESOLUTION -- one window vector per stride px, window 2*stride -- the counterpart of
+        # reg_micro_reg's depth, and not tier-owned, so it is legal under every tier; the
+        # tier-owned knobs (tile / halo / out_tile / coarse_max_dim) stay with the tier.
         # Three tier-only arms against nine VALIS arms gave VALIS three times the draws.
         for mode in tiled.get("reg_tiled_mode", []):
-            for gate in tiled.get("reg_tiled_gate_tre", [None]):
+            for stride in tiled.get("reg_tiled_stride", [None]):
                 arms.append(
                     {
-                        "arm": tiled_arm_name(mode, gate)
-                        if gate is not None
+                        "arm": tiled_arm_name(mode, stride)
+                        if stride is not None
                         else f"tiled_{mode}",
                         "backend": "tiled",
                         # No memory_mode, no reg_micro_reg -- see VALIS_ONLY. The consumer
@@ -150,9 +151,9 @@ def _registration_arms(cfg: dict) -> list[dict]:
                         "memory_mode": "",
                         "reg_micro_reg": "",
                         "reg_tiled_mode": mode,
-                        "reg_tiled_gate_tre": "" if gate is None else gate,
+                        "reg_tiled_stride": "" if stride is None else int(stride),
                         "label": f"tiled (STARE, {mode}"
-                        + ("" if gate is None else f", gate {float(gate):g} px")
+                        + ("" if stride is None else f", stride {int(stride)} px")
                         + ")",
                     }
                 )
@@ -355,7 +356,7 @@ def _apply_qc_joint_cross(arms: list[dict], cfg: dict) -> list[dict]:
 def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
     """Base arms first, then the segmenter cross, then the pairing cross -- each applied
     to the BASE arms only (one instrument varied per cross arm) -- then the joint cells
-    (both varied), then the solver cross."""
+    (both varied)."""
     # Every base arm carries BOTH baseline instruments before either cross copies it,
     # or a segmenter-cross arm would be copied without the pairing column.
     baseline = cfg.get("baseline") or {}
@@ -370,40 +371,7 @@ def _apply_qc_crosses(arms: list[dict], cfg: dict) -> list[dict]:
         arms, cfg, "qc_pairing_cross", "seg_qc_pairing", "pair", "QC pairing"
     )
     joint = _apply_qc_joint_cross(arms, cfg)
-    solver = _apply_solver_cross(arms, cfg)
-    return arms + seg + pair + joint + solver
-
-
-def _apply_solver_cross(arms: list[dict], cfg: dict) -> list[dict]:
-    """Cross the STARE base arms with the SOLVE stage (params.reg_tiled_solver).
-
-    Not a QC instrument: the solver changes the registration itself. It is still a
-    cross rather than a second STARE grid so that (a) the base arms keep their names
-    and the results they already produced -- they ARE the `legacy` solver, which is
-    byte-identical to the pre-2026-09-12 code -- and (b) the VALIS-vs-STARE draw
-    count guarded by test_registration_arms_are_symmetric_across_backends stays
-    equal. Applied to the tiled base arms only; VALIS rows carry an empty value.
-    A cross arm resumes its base arm, but the tile modules reference params in
-    their script blocks, so under -resume the tiled stages re-run: each solver
-    cross costs one STARE registration, never a whole cohort.
-    """
-    baseline = cfg.get("baseline") or {}
-    tiled = [a for a in arms if a.get("backend") == "tiled"]
-    for a in arms:
-        a.setdefault(
-            "reg_tiled_solver",
-            baseline.get("reg_tiled_solver") if a.get("backend") == "tiled" else "",
-        )
-    if not tiled:
-        return []
-    crosses = _apply_qc_cross(
-        tiled, cfg, "solver_cross", "reg_tiled_solver", "solver_", "SOLVE"
-    )
-    for a in crosses:
-        a["_cross"] = (
-            "solver"  # consumed by build_arm_plan: arm_kind=registration_solver
-        )
-    return crosses
+    return arms + seg + pair + joint
 
 
 # The one shared preprocessing run every registration arm resumes from.
@@ -480,13 +448,11 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                 # A QC cross arm is `registration_qc`: run_arms.sh runs that pass AFTER the
                 # registration pass and launches each one in its base arm's launch dir with
                 # -resume, so REGISTER is served from the cache and only the QC chain runs.
-                # A solver cross is `registration_solver`: launched in the same resumed
-                # pass, but it changes the REGISTRATION (the SOLVE stage), so it is neither
-                # a base arm nor a QC instrument and every guard that reasons about
-                # "one QC instrument varied" leaves it alone.
-                "arm_kind": "registration_solver"
-                if a.pop("_cross", None) == "solver"
-                else ("registration_qc" if a.get("resume_run") else "registration"),
+                # (STARE v1's `registration_solver` kind -- the SOLVE-stage cross -- was
+                # retired with the legacy/robust solvers in STARE v2.)
+                "arm_kind": "registration_qc"
+                if a.get("resume_run")
+                else "registration",
                 "resume_run": a.get("resume_run", ""),
                 "start": "registration",
                 "stop": "registration",
@@ -663,8 +629,7 @@ def arms_manifest_rows(plan: list[dict]) -> list[dict]:
             "label": _LABELS[r["arm"]],
         }
         for r in plan
-        if r["arm_kind"]
-        in ("registration", "registration_qc", "registration_solver", "external")
+        if r["arm_kind"] in ("registration", "registration_qc", "external")
     ]
 
 

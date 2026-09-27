@@ -53,9 +53,6 @@ baseline:
                                # Guarded by test_arms_baseline_values_match_the_pipeline_defaults.
   registration_method: valis
   seg_qc_pairing: lsa          # pipeline default; the QC nucleus-pairing rule unless crossed
-  reg_tiled_solver: legacy     # SOLVE stage the 9 STARE base arms ran: `legacy` is byte-identical to
-                               # the code that produced them before 2026-09-12, so those results stay
-                               # valid; `robust` enters as a solver cross (solver_cross below).
                                # below (bin/utils/cell_pairs.py: lsa | mutual_nn)
 
 # -----------------------------------------------------------------------------
@@ -103,19 +100,28 @@ registration_arms:
     # block that produces the manuscript's registration figure.
     #
     # THE TIER IS THE RIGHT GRANULARITY, not the individual knobs. reg_tiled_mode is what an
-    # operator actually picks, and each row of RegPresets.STARE moves all five tier-owned
-    # values (tile / halo / out_tile / coarse_max_dim / upsample) coherently -- and
+    # operator actually picks, and each row of RegPresets.STARE moves all four tier-owned
+    # values (tile / halo / out_tile / coarse_max_dim) coherently -- and
     # ParamUtils.validateRegPresets refuses a per-knob override under any tier but
     # `custom`, so those knobs cannot be crossed here anyway.
     #
-    # TIER x REFINEMENT GATE = 9 ARMS, THE MIRROR OF THE VALIS BLOCK (2026-09-10). Three
+    # TIER x STRIDE = 9 ARMS, THE MIRROR OF THE VALIS BLOCK (STARE v2, 2026-09-27). Three
     # tier-only arms against VALIS's nine gave VALIS three times the draws in a best-cell
-    # ranking. reg_tiled_gate_tre is STARE's refinement depth -- the rigid-stage TRE (px)
-    # above which a tile is non-rigidly refined; lower refines more tiles -- the counterpart
-    # of reg_micro_reg, ungated, so it is legal under every tier. Same shape as
-    # sweep.yaml's registration_method_grid.tiled.
-    reg_tiled_mode:     [low, medium, high]
-    reg_tiled_gate_tre: [0.5, 1.0, 2.0]   # brackets the default 1.0; 9 arms
+    # ranking. reg_tiled_stride is STARE's mesh RESOLUTION: REG_TILE measures one window
+    # displacement vector per stride px on a slide-global lattice, window W = 2*stride (50 %
+    # overlap), and SOLVE (dctpls) solves that lattice into the mesh -- finer stride = more,
+    # noisier vectors and a finer field; coarser = fewer, surer vectors. The counterpart of
+    # reg_micro_reg; not tier-owned, so legal under every tier. Arms are named
+    # tiled_<tier>_s<stride> (e.g. tiled_high_s128). Same shape as sweep.yaml's
+    # registration_method_grid.tiled.
+    #
+    # OLD STARE IS NOT RE-RUN HERE. Until STARE v2 this axis was reg_tiled_gate_tre
+    # {0.5, 1.0, 2.0} (arms tiled_<tier>_gate<g>) plus a 9-run legacy-vs-robust SOLVE cross;
+    # the TRE gate, both old solvers and that cross were removed with STARE v1. The head-to-head
+    # against old STARE reads those arms' results as already computed on the `benchmarking`
+    # branch.
+    reg_tiled_mode:   [low, medium, high]
+    reg_tiled_stride: [64, 128, 256]     # brackets the default 128; 9 arms
 
     # THE COARSE FRONT-END AXIS IS GONE. It declared the three classical front-ends and
     # deferred the learned matcher on three grounds -- a separate unpublished stare-ml image,
@@ -156,17 +162,16 @@ registration_arms:
 # ONE INSTRUMENT AT A TIME, NOT A FACTORIAL. Each cross varies its own axis off the base
 # arm's other instrument: segmenters at the baseline pairing, pairings at the baseline
 # segmenter. Per base arm that is 2 + 1 = 3 QC-only runs; over the 18 registration arms,
-# 54 per cohort -- plus the 9 solver crosses on the STARE arms (solver_cross below), 63. The two questions -- "does WHO found the nuclei change the ranking?" and
+# 54 per cohort. The two questions -- "does WHO found the nuclei change the ranking?" and
 # "does HOW they were paired change it?" -- are answered separately, which is what a
 # robustness claim needs. The interaction (5 runs per arm instead of 3) is qc_joint_cross
 # below, added 2026-09-23 so segmenter and pairing can be compared against each other.
 #
 # COST GATE. `cross: reference` runs the extra instruments against ONE arm
 # (`reference_arm`): 18 + 2 + 1 = 21 registration-step launches per cohort. `cross: all`
-# crosses every arm: 18 + 36 + 18 + 36 + 9 = 117 launches, of which 90 are QC-only
-# resumes (54 one-at-a-time + 36 joint) and 9 are solver crosses (a full STARE
-# registration each).
-# Guarded by test_cross_all_crosses_every_arm, test_tiled_arms_are_tier_x_gate,
+# crosses every arm: 18 + 36 + 18 + 36 = 108 launches, of which 90 are QC-only
+# resumes (54 one-at-a-time + 36 joint).
+# Guarded by test_cross_all_crosses_every_arm, test_tiled_arms_are_tier_x_stride,
 # test_valis_arms_are_preset_x_depth_not_a_grid_of_equals and
 # test_qc_cross_arms_resume_their_base_arm.
 qc_segmenter_cross:
@@ -195,21 +200,6 @@ qc_pairing_cross:
 qc_joint_cross:
   cross: all                               # reference | all | none
   reference_arm: valis_high_micro2
-
-# THE SOLVE-STAGE CROSS (2026-09-12). Unlike the two QC instruments above this changes the
-# REGISTRATION, not how it is measured: `robust` replaces the legacy median filter with
-# neighbour-consistency rejection, in-fill, Tikhonov smoothing and an invertibility check
-# (stare.solve, docs/parallel_registration_design.md §6b). It is a cross rather than a
-# second STARE grid so the base arms keep their names and their already-computed results
-# (they ARE the legacy solver), and the VALIS-vs-STARE draw count stays 9 vs 9. Applied to
-# the STARE base arms only -- VALIS has no solve stage. Each cross arm resumes its base
-# arm's launch dir; because the tile modules reference params in their script block, the
-# tiled stages re-run under -resume (a full STARE registration per cross, 9 launches),
-# and only preprocessing is served from the cache. Re-run after a SOLVE change with
-# `--changed solve` (benchmarks/impact.py).
-solver_cross:
-  cross: all                               # reference | all | none
-  reg_tiled_solver: [legacy, robust]       # the baseline (legacy) is the base arm itself
 
 # -----------------------------------------------------------------------------
 # ARM 2 — SEGMENTATION. Which backend segments real tissue best?

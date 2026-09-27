@@ -40,15 +40,14 @@ def build_tre_report(coarse_tre_px, n_inliers, tile_records, mesh_refined):
     ``tile_records`` is a list of per-tile dicts carrying at least ``ix, iy, cx, cy, tre_rigid``;
     if every record also has ``tre_after`` the post-refinement residual is summarised too.
 
-    **The percentile summaries cover ACCEPTED records only.** A control point rejected by the
-    confidence or range gate never reaches the mesh, and its ``tre_rigid`` is not a conservative
-    over-estimate of a real misalignment -- phase correlation always returns a peak, so the
-    number is an artefact of correlating against the wrong thing. Averaging it in describes a
-    registration that was never performed. ``tiles`` still carries every record, accepted or
-    not, because *where* points were dropped is exactly what the spatial heatmap is for.
+    **The percentile summaries cover ACCEPTED records only.** A tile that put no valid,
+    in-range vector into the lattice (``stare.solve.tile_accepted``) contributed nothing to the
+    mesh, and its ``tre_rigid`` -- the median of no valid vector -- is not a measurement of a
+    real misalignment. Averaging it in describes a registration that was never performed.
+    ``tiles`` still carries every record, accepted or not, because *where* tiles were dropped
+    is exactly what the spatial heatmap is for.
 
-    A record with no ``accepted`` key counts as accepted -- the same legacy contract
-    ``tiled_solve._accept`` applies to a control point written before confidence gating existed.
+    A record with no ``accepted`` key counts as accepted.
     """
     kept = [t for t in tile_records if bool(t.get("accepted", True))]
     report = {

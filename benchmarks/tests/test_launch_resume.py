@@ -127,7 +127,7 @@ def test_an_interrupted_base_arm_is_refused_without_the_switch_and_resumed_with_
 
 def test_a_twice_interrupted_arm_counts_its_attempts(arms):
     plan, root, run = arms
-    base = "tiled_low_gate1"
+    base = "tiled_low_s128"
     hist = root / ".launch" / base / ".nextflow" / "history"
     _interrupt(hist, f"arms-{base}")
     r, launches = run(ARMS_RESUME="1")

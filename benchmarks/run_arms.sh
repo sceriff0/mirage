@@ -476,8 +476,7 @@ launch_row() {
     # tiled-only, blank on every other arm -- the add_param blank-guard is what keeps a
     # VALIS arm from ever receiving --reg_tiled_mode "", which the schema enum rejects.
     add_param reg_tiled_mode       "$(col_val reg_tiled_mode "${vals[@]}")"
-    add_param reg_tiled_gate_tre   "$(col_val reg_tiled_gate_tre "${vals[@]}")"
-    add_param reg_tiled_solver     "$(col_val reg_tiled_solver "${vals[@]}")"
+    add_param reg_tiled_stride     "$(col_val reg_tiled_stride "${vals[@]}")"
     add_param seg_qc_pairing       "$(col_val seg_qc_pairing "${vals[@]}")"
     # KEEP work/. The pipeline's cleanup_work default deletes it after a successful run,
     # which would leave a completed base arm with nothing for its crosses to -resume from
@@ -546,7 +545,7 @@ run_qc_pass() {
   mkdir -p "$ROOT/.launch"
   sorted="$ROOT/.launch/_registration_qc.rows"
   tail -n +2 "$PLAN" | tr -d '\r' \
-    | awk -F, -v k="$kind_col" '$k == "registration_qc" || $k == "registration_solver"' \
+    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
     | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
 
   local base="" line b

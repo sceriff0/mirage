@@ -2,10 +2,11 @@
  * TILED_SOLVE - STARE fan-out step 3/4: assemble the manifest from per-tile control points.
  *
  * One cheap per-slide reduction (kilobytes): gathers every tile's control point and writes the
- * self-contained transform manifest (M0 + gated mesh) the stitch and reg_qc=2 warper consume.
- * Control points are gated on correlation CONFIDENCE (--max-error) and range (--max-disp)
- * before the TRE gate, which keeps background out of the deformation mesh. Tiles only PARTLY
- * on-section are a known remaining exposure -- see the note on _accept in bin/tiled_solve.py.
+ * self-contained transform manifest (M0 + mesh) the stitch and reg_qc=2 warper consume.
+ * SOLVE lays every tile's window vectors on the slide-global lattice, drops those at or beyond
+ * the range gate (--max-disp), and solves the mesh with dctpls (robust affine + robust DCT-PLS,
+ * stare.solve) -- the only solver since STARE v2. Background is kept out upstream: REG_TILE only
+ * emits foreground-masked vectors whose correlation peak ratio clears its floor.
  */
 process TILED_SOLVE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
@@ -27,20 +28,13 @@ process TILED_SOLVE {
     script:
     def prefix    = "${meta.patient_id}_${meta.channels.join('_')}"
     def slidename = meta.channels.join('_')
-    def gate      = params.reg_tiled_gate_tre
-    // --solver: which SOLVE algorithm builds the mesh from the gated control points
-    // ('dctpls' | 'robust' | 'legacy', see stare.solve; 'dctpls' ignores --gate-tre). A
-    // correctness knob like the gates, so it is a param rather than a tier value.
-    def solver    = params.reg_tiled_solver
-    // --max-error / --max-disp: the confidence and range gates on the control points, from
-    // conf/modules.config's ext.args for this process.
+    // --max-disp: the range gate on the window vectors, from conf/modules.config's ext.args
+    // for this process.
     def args      = task.ext.args ?: ''
     """
     tiled_solve.py \\
         --m0 ${m0} \\
         --controls 'ctrl_*/*_ctrl.json' \\
-        --gate-tre ${gate} \\
-        --solver ${solver} \\
         ${args} \\
         --moving-name '${slidename}' \\
         --out-manifest ${prefix}_manifest.json \\

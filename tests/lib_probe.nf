@@ -1397,7 +1397,7 @@ workflow {
     def sb = [memory_mode: 'high', reg_tiled_mode: 'custom',
               reg_valis_max_processed_dim: null, reg_valis_max_non_rigid_dim: null,
               reg_tiled_tile: null, reg_tiled_halo: null,
-              reg_tiled_upsample: null, reg_tiled_out_tile: null]
+              reg_tiled_out_tile: null]
     [null, 512, 256].each { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: it]) }
     [0, -1, 255, 16].each { bad ->
         def no = false

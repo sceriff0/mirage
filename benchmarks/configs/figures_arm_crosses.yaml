@@ -20,7 +20,7 @@
 # parameter sweeps stay out of it (see the group recipe at the bottom).
 arms:
   - {name: valis_high_micro2, dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/valis_high_micro2}
-  - {name: tiled_high_gate1,  dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/tiled_high_gate1}
+  - {name: tiled_high_s128,  dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/tiled_high_s128}
   # ONE ashlar column, so the mosaic is four rows: Before + VALIS + STARE + ASHLAR.
   #
   # s15 IS ASHLAR AT ITS OWN SHIPPED DEFAULT -- `ashlar --maximum-shift` defaults to 15 um
@@ -47,14 +47,14 @@ arms:
   #   - {name: ashlar_s1920, dir: .../arm_results/ashlar_t1024_s1920}
   # then add to figures.mosaic:
   #   groups:
-  #     - {name: backends,     arms: [valis_high_micro2, tiled_high_gate1, ashlar]}
+  #     - {name: backends,     arms: [valis_high_micro2, tiled_high_s128, ashlar]}
   #     - {name: ashlar_shift, arms: [ashlar, ashlar_s30, ashlar_s120, ashlar_s480, ashlar_s1920]}
   #
   # The other eight arms of the benchmark are available for parameter crosses --
   # add them here and give `figures.mosaic.groups` one entry per axis, e.g.
   #   groups:
   #     - {name: valis_micro, arms: [valis_high_micro0, valis_high_micro1, valis_high_micro2]}
-  #     - {name: stare_gate,  arms: [tiled_high_gate05, tiled_high_gate1, tiled_high_gate2]}
+  #     - {name: stare_stride,  arms: [tiled_high_s64, tiled_high_s128, tiled_high_s256]}
   # One axis per group: a mosaic is one column per arm, so ten in one figure is a
   # wall rather than a comparison.
 
@@ -85,7 +85,7 @@ figures:
                              # prints "Dice = NA  Δ = NA" rather than nothing.
 
   overlay:
-    arms: [valis_high_micro2, tiled_high_gate1, ashlar]
+    arms: [valis_high_micro2, tiled_high_s128, ashlar]
     field_um: [500, 2000]
     zoom_um: [60]            # the inset: top right, channel names bottom right,
                              # the numbers top left under the title
