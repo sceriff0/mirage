@@ -85,7 +85,9 @@ def test_shipped_defaults_fit_the_head_job(script, var):
         f"{script}: {heads} heads x ({heap} + {OVERHEAD_GB}) GB = {need} GB "
         f"exceeds #SBATCH --mem={mem} GB"
     )
-    assert heads >= 16, f"{script}: {heads} heads is not 'greatly increased'"
+    # 2026-09-27 user ruling: head jobs cut from 128G to 32G, so the default head count is
+    # 10 (10 x 2.75 GB fits). The floor keeps a default from silently collapsing to 1-2 heads.
+    assert heads >= 8, f"{script}: {heads} heads is too few for a default"
     assert cpus >= math.ceil(heads / 8), (
         f"{script}: {cpus} cpus for {heads} JVMs -- give at least one core per 8 heads"
     )

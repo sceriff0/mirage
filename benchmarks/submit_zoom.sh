@@ -2,7 +2,7 @@
 #SBATCH --job-name=mirage_zoom
 #SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/zoom_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/zoom_%j.err
-#SBATCH --time=72:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=24G             # one Nextflow head (-Xmx4g) + the render: whole-slide overview from a
                               # pyramid level, zoom and mask crop at full resolution

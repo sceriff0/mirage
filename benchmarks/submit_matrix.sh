@@ -2,7 +2,7 @@
 #SBATCH --job-name=mirage_matrix
 #SBATCH --output=logs/matrix_%j.out
 #SBATCH --error=logs/matrix_%j.err
-#SBATCH --time=24:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --partition=normal

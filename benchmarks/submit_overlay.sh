@@ -2,7 +2,7 @@
 #SBATCH --job-name=mirage_overlay
 #SBATCH --output=/hpcnfs/home/ieo7660/pipelines/logs/overlay_%j.out
 #SBATCH --error=/hpcnfs/home/ieo7660/pipelines/logs/overlay_%j.err
-#SBATCH --time=48:00:00
+#SBATCH --time=168:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G             # one Nextflow head (-Xmx4g) + the overlay render, which runs in this job
 #SBATCH --partition=normal
