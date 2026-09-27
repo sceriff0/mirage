@@ -115,9 +115,9 @@ baseline:
   reg_tiled_gate_tre: 1.0             # STARE per-tile non-rigid refine gate (px), pipeline default. Only live for
                                       # tiled runs; declared for column uniformity (crossed by registration_method_grid).
   # The COARSE front-end param is GONE, not merely unswept. :fire: 5f7f986 deleted the
-  # three classical front-ends and the param that selected them; COARSE is now
-  # unconditionally DISK+LightGlue (bin/utils/coarse_align.py::estimate_rigid is a thin
-  # reshape over _frontend_disk_lightglue). A baseline entry here would name nothing in
+  # three classical front-ends and the param that selected them; COARSE is now one
+  # fixed recipe (bin/utils/coarse_align.py: NCC rotation sweep with an internal ORB
+  # fallback, since 2026-09-27; DISK+LightGlue before). A baseline entry here would name nothing in
   # nextflow.config, which is what test_project_sweep_baseline_matches_pipeline_defaults
   # exists to catch.
   n_register_images: 2                # 1 reference + 1 moving (the classic pair)
@@ -140,9 +140,9 @@ baseline:
                                       # Live at this baseline (registration_method=valis); an OFAT
                                       # axis above, ungated so legal at every tier.
   reg_tiled_coarse_max_dim: null      # STARE coarse-anchor thumbnail, longest side (px). null = from
-                                      # reg_tiled_mode (high -> 2048, RegPresets.STARE), the pipeline
-                                      # default. The resolution M0 is solved at — STARE's counterpart to
-                                      # reg_max_image_dim. TIER-OWNED: it moves with reg_tiled_mode,
+                                      # reg_tiled_mode (high -> 1024, RegPresets.STARE), the pipeline
+                                      # default. The resolution M0 is refined at (the rotation sweep
+                                      # itself runs at 256 px). TIER-OWNED: it moves with reg_tiled_mode,
                                       # which registration_method_grid.tiled crosses, so it is never
                                       # set directly here (validateRegPresets would refuse it under a
                                       # tier). Declared for column uniformity; inert at this baseline.
@@ -385,9 +385,9 @@ segmentation_grid:
 # the two STARE control-point gates (see the baseline block: accuracy knobs with no cost
 # signature); reg_tiled_nuclear_index. There is no execution-shape axis -- STARE has ONE shape,
 # the per-tile fan-out TILED_COARSE -> TILED_REG_TILE -> TILED_SOLVE -> TILED_STITCH -- and no
-# coarse front-end axis: COARSE is unconditionally DISK+LightGlue (:fire: 5f7f986 deleted the
-# classical front-ends and the param that selected them), so this sweep cannot say what the
-# learned matcher bought over them; that is answerable only against pipeline history.
+# coarse front-end axis: COARSE is one fixed recipe (:fire: 5f7f986 deleted the classical
+# front-ends and the param that selected them; the NCC rotation sweep replaced DISK+LightGlue on
+# 2026-09-27), so this sweep cannot compare anchors; that is answerable only against history.
 registration_method_grid:
   valis:
     memory_mode:       [low, medium, high]    # the tier: 512 / 1024 / 2048 px, one matcher throughout

@@ -349,9 +349,10 @@ def test_project_tiers_are_crossed_on_the_same_rungs():
     each method's RESOLUTION KNOB (reg_max_image_dim / reg_tiled_coarse_max_dim) to be swept and to
     bracket its default -- correct while the grid crossed knobs under `custom`, and exactly what let
     the STARE PRESETS never run: `custom` starts from the high row, so no cell but (2048, 2048) was a
-    tier. The grid now crosses the tier itself. Since 60f624d7 both tiers are pure resolution
-    ladders on identical rungs (2048 / 1024 / 512 px, one matcher throughout on the VALIS side), so
-    `memory_mode=low` against `reg_tiled_mode=low` is the same question of both methods -- IF both
+    tier. The grid now crosses the tier itself. From 60f624d7 to 2026-09-27 both tiers were pure
+    resolution ladders on identical rungs (2048 / 1024 / 512 px); since STARE's COARSE became an
+    NCC rotation sweep its coarse_max_dim is only a refine resolution (1024 / 1024 / 512), so the
+    tiers are the same COST question of both methods rather than the same pixel count -- IF both
     entries list the same rungs. This asserts that they do, that the tier is the FIRST knob of each
     entry (so a reader of the plan sees the like-for-like axis first), that the tier axis carries
     all three shipped rungs and never `custom` (a `custom` cell would silently be `high` with edits),
@@ -390,22 +391,28 @@ def test_project_tiers_are_crossed_on_the_same_rungs():
         f"the two tier axes list different rungs or orders: {rungs}"
     )
 
-    # The rungs really are the same resolutions on both sides: RegPresets.STARE's coarse_max_dim
-    # per tier against valis_config.py's max_processed_image_dim_px per tier.
+    # The rungs are no longer the same RESOLUTIONS on both sides, deliberately (2026-09-27).
+    # STARE's coarse_max_dim stopped being a feature-detection resolution when COARSE's DISK
+    # anchor became an NCC rotation sweep: it is now only the REFINE resolution (the sweep is
+    # always 256 px), and high/medium share 1024 because above that it buys nothing the halo
+    # needs. What survives of the old guard is the ORDER: neither ladder may get more
+    # expensive going down a tier.
     valis_cfg = (
         Path(__file__).parents[2] / "bin" / "utils" / "valis_config.py"
     ).read_text()
-    for tier in shipped:
-        stare_px = stare_preset_row(tier)["coarse_max_dim"]
+    valis_px, stare_px = [], []
+    for tier in ("high", "medium", "low"):
         m = re.search(
             rf'"{tier}":\s*\{{[^}}]*?"max_processed_image_dim_px":\s*(\d+)',
             valis_cfg,
             re.S,
         )
         assert m, f"valis_config.py has no max_processed_image_dim_px for tier {tier}"
-        assert int(m.group(1)) == stare_px, (
-            f"tier {tier}: VALIS detects at {m.group(1)} px but STARE's coarse anchor is "
-            f"{stare_px} px -- the ladders have diverged, so tier-vs-tier is no longer like-for-like"
+        valis_px.append(int(m.group(1)))
+        stare_px.append(stare_preset_row(tier)["coarse_max_dim"])
+    for name, ladder in (("VALIS", valis_px), ("STARE", stare_px)):
+        assert ladder == sorted(ladder, reverse=True), (
+            f"{name}'s resolution ladder high/medium/low = {ladder} is not non-increasing"
         )
 
     # reg_max_image_dim left the cross for flat axes; it must not have left the sweep.

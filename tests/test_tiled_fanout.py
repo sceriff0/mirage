@@ -28,12 +28,6 @@ sys.path.insert(
 )
 pytest.importorskip("skimage")
 pytest.importorskip("scipy")
-# The COARSE anchor is the learned DISK+LightGlue matcher, so anything reaching
-# ``estimate_rigid`` needs torch + kornia. Without this it RuntimeErrors rather than skipping.
-# CI installs both (tests/test_disk_test_actually_runs.py pins that), so this is a
-# plain-checkout guard, not an escape hatch for CI.
-pytest.importorskip("torch")
-pytest.importorskip("kornia")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_coarse  # noqa: E402

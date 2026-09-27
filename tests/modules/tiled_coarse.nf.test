@@ -45,11 +45,11 @@ nextflow_process {
         // tests/modules/seg_qc_geojson.nf.test's "rendered command" case.
         //
         // This is the assertion with teeth for the OOM fix: --max-dim is what bounds the
-        // COARSE anchor to a thumbnail. Without it the module falls back to matching at
-        // native resolution, and the matcher is a U-Net whose activation memory is linear
-        // in area (GB ~= 1.1 + 7.3 * Mpx) -- thousands of GB on a 26k x 26k slide, against
-        // a request derived from this very flag. That is how patient 052 exhausted all four
-        // attempts with exit status 137. The pre-change module rendered no such flag at all.
+        // COARSE anchor to a thumbnail. Without it the anchor would warp and FFT the
+        // native-resolution plane ~50 times, against a memory request derived from this very
+        // flag. (When the anchor was a U-Net that was thousands of GB -- how patient 052
+        // exhausted all four attempts with exit status 137; the pre-change module rendered no
+        // such flag at all.) 1024 is the 'high' tier's refine resolution since 2026-09-27.
         //
         // The assertions read the rendered .command.sh rather than the process outcome, so
         // the case holds whether tiled_coarse.py itself succeeds; under `--profile test` no
@@ -79,8 +79,8 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_COARSE .command.sh found under the task work dir" },
-                { assert rendered.every { it.contains('--max-dim 2048') },
-                    "rendered command missing --max-dim (params.reg_tiled_coarse_max_dim default 2048): " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--max-dim 1024') },
+                    "rendered command missing --max-dim (params.reg_tiled_coarse_max_dim 'high' tier 1024): " + rendered.join(' --- ') },
                 // the pre-existing flags must survive the change
                 { assert rendered.every { it.contains('--tile 2048') },
                     "rendered command missing --tile: " + rendered.join(' --- ') },
@@ -263,7 +263,7 @@ nextflow_process {
                 // a very different contract.
                 { assert rendered.every { it.contains('--halo 256') },
                     "custom did not inherit halo from the high row: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--max-dim 2048') },
+                { assert rendered.every { it.contains('--max-dim 1024') },
                     "custom did not inherit max-dim from the high row: " + rendered.join(' --- ') }
             )
         }

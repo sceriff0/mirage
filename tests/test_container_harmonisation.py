@@ -656,7 +656,7 @@ def _first_party_packages_installed(container):
 def test_the_first_party_package_walker_follows_the_shim_into_the_package():
     """Non-vacuity for the package-aware walk: bin/tiled_coarse.py is a shim over
     stare.stages.coarse, and following it must reach the package's coarse_align.py --
-    the file the tiled image's torch/kornia REQUIRED_RUNTIME_IMPORTS entries live in."""
+    the file that holds the COARSE anchor (and whose imports this walk must therefore see)."""
     files, _, _ = _reachable_local_files("tiled_coarse.py")
     names = {p.name for p in files}
     assert "tiled_coarse.py" in names and "coarse.py" in names, sorted(names)
@@ -753,19 +753,11 @@ REQUIRED_RUNTIME_IMPORTS = {
         ),
     },
     "tiled": {
-        "torch": (
-            "stare/coarse_align.py's estimate_rigid (packages/stare; bin/tiled_coarse.py "
-            "is a shim over stare.stages.coarse) calls _frontend_disk_lightglue "
-            "unconditionally, which imports torch lazily (confined there by "
-            "test_tiled_container_torch_kornia_imports_are_confined_to_disk_lightglue "
-            "below). requirements/torch-cpu.txt installs the CPU wheel."
-        ),
-        "kornia": (
-            "same _frontend_disk_lightglue call as torch above (DISK+LightGlue feature "
-            "matching); requirements/kornia.txt installs it, deliberately AFTER torch "
-            "(see containers/tiled/Dockerfile's ordering note -- kornia drags the CUDA "
-            "torch wheel from PyPI otherwise)."
-        ),
+        # torch/kornia USED to be listed here: COARSE's anchor was DISK + LightGlue. Since
+        # 2026-09-27 it is an FFT NCC rotation sweep with a scikit-image ORB fallback and
+        # imports neither (test_tiled_coarse_imports_no_learned_stack below). The image still
+        # INSTALLS both until it is rebuilt -- a separate, user-approved step; see
+        # tests/test_no_unreachable_container_frameworks.py's PENDING_IMAGE_REBUILD.
         "zarr": (
             "stare/slide_io.py's open_lazy (tifffile's aszarr region-read view; the "
             "package's copy of bin/utils/tiled_io.py) is called directly by the coarse, "
@@ -1040,45 +1032,35 @@ def _torch_kornia_import_sites(path):
     return sites
 
 
-def test_tiled_container_torch_kornia_imports_are_confined_to_disk_lightglue():
-    """torch/kornia must be imported ONLY inside ``_frontend_disk_lightglue``, never at module
-    scope.
+def test_tiled_coarse_imports_no_learned_stack():
+    """COARSE's files must not import torch or kornia ANYWHERE -- not even lazily.
 
-    This began as the premise behind two exemptions from an older allowlist, back when
-    torch/kornia shipped in a separate image and the import inside :tiled was meant to fail.
-    :tiled now installs both (and ``REQUIRED_RUNTIME_IMPORTS["tiled"]`` declares them,
-    proven reached by ``test_required_runtime_imports_are_actually_reached`` above), but this
-    confinement rule survives that change on its OWN reasoning, independent of the walker
-    entirely: ``import torch`` at module scope in ``coarse_align.py`` would make the module --
-    and therefore ``bin/tiled_coarse.py`` -- UNIMPORTABLE anywhere torch is absent. That is not
-    hypothetical. ``coarse_align.py`` is imported by the tiled oracle
-    (``stare/pipeline.py``) and by this test suite, and it must keep importing on a
-    plain checkout with no ML stack, so that ``estimate_transform_from_matches``,
-    ``normalize_intensity``, ``scale_transform_to_full_res`` and every test that does not touch
-    DISK keep working. It is also what turns a torch-less environment into an actionable
-    RuntimeError at CALL time instead of an ImportError at import time.
-
-    The confinement is what lets ``_disk_models`` take the model classes as ARGUMENTS instead
-    of importing them; see the comment above it in coarse_align.py.
+    This replaced a confinement rule (imports allowed only inside ``_frontend_disk_lightglue``)
+    when the DISK + LightGlue anchor was retired for an NCC rotation sweep with an ORB fallback
+    (2026-09-27). The anchor now runs on numpy/scipy/scikit-image alone, so a reappearing
+    import is either a regression to the learned stack or dead weight, and either way it would
+    tie the tiled image back to ~1 GB of wheels it is about to drop.
     """
     offenders = []
     for rel in (
-        # the method's files, where the import actually lives ...
         "packages/stare/src/stare/coarse_align.py",
         "packages/stare/src/stare/stages/coarse.py",
-        # ... and the pipeline's shims over them, which must stay import-free
         "bin/utils/coarse_align.py",
         "bin/tiled_coarse.py",
     ):
         for fn, lineno in _torch_kornia_import_sites(REPO / rel):
-            if fn != "_frontend_disk_lightglue":
-                offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
+            offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
     assert not offenders, (
-        "torch/kornia is imported outside _frontend_disk_lightglue in a script the tiled "
-        f'container runs: {offenders}. The ("tiled", "torch")/("tiled", "kornia") '
-        "REQUIRED_RUNTIME_IMPORTS entries assume the import is confined there; a second "
-        "import site needs its own justification, not a free ride on this one."
+        f"torch/kornia is imported by a COARSE file again: {offenders}. The anchor is "
+        "numpy/scipy/scikit-image only; see stare/coarse_align.py's module docstring."
     )
+
+
+def test_the_torch_kornia_import_detector_still_fires(tmp_path):
+    """Non-vacuity for the rule above: a nested and a module-scope import are both found."""
+    probe = tmp_path / "probe.py"
+    probe.write_text("import torch\ndef f():\n    from kornia.feature import DISK\n")
+    assert _torch_kornia_import_sites(probe) == [(None, 1), ("f", 3)]
 
 
 @pytest.mark.parametrize(

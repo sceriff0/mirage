@@ -26,7 +26,7 @@ from stare import __version__
 # NO default (the pipeline resolves it from its preset tiers and passes it
 # explicitly); this is the value `stare register` uses when the caller does not
 # say, and it equals the pipeline's `high` STARE tier.
-DEFAULT_MAX_DIM = 2048
+DEFAULT_MAX_DIM = 1024
 
 
 def _slide_name(path) -> str:

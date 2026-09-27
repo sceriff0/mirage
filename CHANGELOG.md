@@ -31,6 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE's COARSE anchor is an NCC rotation sweep, not DISK + LightGlue.** `stare/coarse_align.py`
+  sweeps rotation over 0-360 deg in 3 deg steps on a 256 px tissue-masked thumbnail (FFT
+  cross-correlation), refines the two best distinct angles +-3 deg at `reg_tiled_coarse_max_dim`,
+  and takes sub-pixel translation from `phase_cross_correlation`. It is accepted only at peak
+  NCC >= 0.3 and best/second-distinct ratio >= 1.15; otherwise a scikit-image ORB + RANSAC
+  fallback runs, and if that is not trustworthy either **the task fails** naming both slides
+  and the scores instead of emitting an unverifiable M0. On the scout's hard cases (80 % nuclei
+  turnover, 25 % tissue loss, gamma 0.6, rotations 0/37/178/-95/133 deg) it recovers 10/10
+  (within 0.25 deg and 1.5 px at 1024 px; within the tests' 1 deg / 3 px at 512 px), where
+  DISK+LightGlue got 2/10 on the same 512 px pairs. Peak RSS of
+  the whole stage is 0.25-0.43 GB (was ~32 GB at 2048 px), so `TILED_COARSE` asks 2 GB and
+  `coarse_max_dim` is now a refine resolution: `high`/`medium` 1024, `low` 512. The M0 JSON
+  gains `coarse_method`, `coarse_peak_ncc`, `coarse_peak_ratio`, `coarse_angle_deg`;
+  `n_inliers` is 0 for the sweep and `coarse_tre` is its quantisation bound. torch/kornia are
+  no longer imported; the tiled image still carries them until it is rebuilt.
+
 - **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
   (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
   with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every

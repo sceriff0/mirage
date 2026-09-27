@@ -5,24 +5,21 @@ tile grid the downstream per-tile registration fans out over. One cheap task per
 
 The estimate runs on a **thumbnail**, as docs/parallel_registration_design.md always specified.
 Both slides are read lazily (zarr region reads, in row bands) and decimated by one shared integer
-factor, so peak memory is a band plus the thumbnail rather than the full-resolution plane. This
-matters more than it looks: the anchor's matcher (DISK, a U-Net) allocates activations over the
-WHOLE plane it is handed, at roughly ``GB ~= 1.1 + 7.3 * Mpx`` -- a 26k x 26k slide at native
-resolution would need thousands of GB, so the thumbnail bound is not a tuning knob but the thing
-that makes this step runnable at all.
+factor, so peak memory is a band plus the thumbnail rather than the full-resolution plane.
 
-``--max-dim`` is the accuracy/cost knob. The anchor only has to land the moving slide inside the
+The anchor itself is ``stare.coarse_align.estimate_anchor``: a brute-force rotation sweep with
+normalised cross-correlation at 256 px, refined at the ``--max-dim`` thumbnail, with an ORB
+fallback, and a loud REFUSAL when neither is trustworthy (see that module's docstring). It is
+FFT-based and its memory is a handful of thumbnail-sized canvases: measured peak RSS well under
+1 GB at 1024 px (the numbers are in conf/modules.config's TILED_COARSE note). It replaced a DISK +
+LightGlue matcher whose U-Net needed ~1.1 + 7.3 * Mpx GB (~32 GB at 2048 px).
+
+``--max-dim`` is the REFINE resolution. The anchor only has to land the moving slide inside the
 per-tile read halo (``--halo``, reference-frame px); the per-tile step refines the residual from
-there. A coarse fit residual of ``r`` thumbnail px becomes ``r * factor`` full-res px, so keep
-``max_dim`` large enough that ``factor`` stays comfortably under ``halo``.
-
-Raising it costs MEMORY, linearly in area, and that is the thing to know before tuning: DISK's
-activation memory measures at ``GB ~= 1.1 + 7.3 * Mpx`` on the pinned stack (3.03 GB at 512 px,
-8.78 GB at 1024 px), and TILED_COARSE's `memory` request in conf/modules.config is derived from
-this same bound. So ``--max-dim`` is not free: 4096 px NEEDS ~123 GB by that fit, and the
-request conf/modules.config derives carries a 1.5x headroom factor, so it would ASK for ~185 GB
--- which is why the STARE tier column tops out at 2048. Lower ``--max-dim`` when the step OOMs; raise it only if the
-logged residual approaches ``--halo``.
+there, and SOLVE's robust affine absorbs any global rotation left over. The sweep's quantisation
+bound (half a 0.25 deg step at the thumbnail's half-diagonal) is reported as ``coarse_tre`` in
+full-res px, so keep ``factor`` small enough that it stays comfortably under ``halo``. Raising it
+costs CPU (each of ~50 refine evaluations is a thumbnail warp + two FFTs), not meaningful memory.
 
 ``--max-dim`` is REQUIRED and has no default at the stage level. The mirage pipeline always passes
 it explicitly, resolved from ``RegPresets.STARE``; a default here would be a fourth, unpinned copy
@@ -44,7 +41,11 @@ from pathlib import Path
 
 import numpy as np
 
-from stare.coarse_align import estimate_rigid, scale_transform_to_full_res
+from stare.coarse_align import (
+    CoarseRefused,
+    estimate_anchor,
+    scale_transform_to_full_res,
+)
 from stare.log import configure_logging, get_logger
 from stare.slide_io import band_rows_for, decimation_factor, open_lazy, read_decimated
 from stare.tile_grid import tile_grid
@@ -62,11 +63,9 @@ def _size_gb(path) -> float:
 def _timed_read(src, index, factor, which):
     """Read one decimated DAPI plane, logging how long it took and what came back.
 
-    The intensity summary is not decoration. DISK is a learned matcher trained on images in
-    [0, 1], so a plane arriving in raw uint16 counts is ~4 orders of magnitude outside its
-    trained input range and matches far worse than it should, with no error raised (see the
-    note in bin/utils/coarse_align.py). Printing the observed range here is what makes that
-    class of regression visible in `.command.out` instead of presenting as a silently bad M0.
+    The intensity summary is not decoration: a blank or saturated nuclear plane (wrong
+    ``--nuclear-index``, an empty cycle) is the usual reason the anchor is REFUSED, and printing
+    the observed range here puts that diagnosis in `.command.out` next to the refusal.
     """
     t0 = time.perf_counter()
     plane = read_decimated(src, index, factor)
@@ -80,11 +79,18 @@ def _timed_read(src, index, factor, which):
     return plane
 
 
+def _finite_or_none(x):
+    """JSON has no Infinity: a sweep with no competing peak reports its ratio as null."""
+    x = float(x)
+    return x if np.isfinite(x) else None
+
+
 def main(argv=None) -> int:
     """CLI entry point: estimate STARE's global anchor M0 and emit the tile plan.
 
     Reads the nuclear/fiducial channel of both slides at a thumbnail bounded by
-    ``--coarse-max-dim``, matches with DISK+LightGlue, and writes the M0 JSON
+    ``--max-dim``, estimates the rigid anchor (NCC rotation sweep, ORB fallback, or a
+    refusal that fails the task), and writes the M0 JSON
     plus the tile-plan CSV that ``stare reg-tile`` fans out over.
 
     Returns
@@ -117,14 +123,14 @@ def main(argv=None) -> int:
         # passes it. A default here would be a fourth copy of the tier value that nothing pins.
         required=True,
         help=(
-            "longest thumbnail side (px) the anchor is estimated on. Must be >= 16. There is "
-            "deliberately NO 'disable decimation' value: the matcher is a U-Net whose memory "
-            "is linear in thumbnail area, so a full-resolution plane needs thousands of GB."
+            "longest thumbnail side (px) the anchor is refined on. Must be >= 16. There is "
+            "deliberately NO 'disable decimation' value: every refine step warps and FFTs the "
+            "whole thumbnail, so a full-resolution plane is hours of CPU and tens of GB."
         ),
     )
-    ap.add_argument(
-        "--model", default="euclidean", choices=["euclidean", "similarity", "affine"]
-    )
+    # Rigid only: SOLVE's robust affine absorbs any residual scale or shear, and a sweep over
+    # scale as well as angle would multiply the cost for nothing the per-tile stage needs.
+    ap.add_argument("--model", default="euclidean", choices=["euclidean"])
     ap.add_argument("--out-m0", required=True, help="output M0 JSON (+ reference dims)")
     ap.add_argument("--out-tiles", required=True, help="output tile-plan CSV")
     a = ap.parse_args(argv)
@@ -132,14 +138,13 @@ def main(argv=None) -> int:
     # The hazard gate for a HAND-RUN. On the pipeline path ParamUtils.validateRegPresets
     # enforces a 256 px floor before any task is instantiated; nothing guards this stage when
     # it is invoked directly. slide_io.decimation_factor() reads `max_dim <= 0` as "no
-    # decimation" and returns factor 1, handing DISK the full-resolution plane -- thousands of
-    # GB on a whole slide. 16 rather than 256 because DISK's U-Net downsamples by 16, and a
-    # small thumbnail is a legitimate thing for a test or a probe to ask for.
+    # decimation" and returns factor 1, handing the anchor the full-resolution plane. 16 rather
+    # than 256 because a small thumbnail is a legitimate thing for a test or a probe to ask for.
     if a.max_dim < 16:
         ap.error(
             f"--max-dim {a.max_dim} is below the 16 px floor. There is no value that disables "
-            "decimation: the anchor's matcher is a U-Net whose activation memory is linear in "
-            "thumbnail area, so the full-resolution plane is not a slow run, it is an OOM."
+            "decimation: the anchor warps and FFTs the whole plane it is handed, so the "
+            "full-resolution plane is not a slow run, it is an unschedulable one."
         )
 
     t_start = time.perf_counter()
@@ -160,9 +165,9 @@ def main(argv=None) -> int:
                 ref_src.shape
             )  # FULL-resolution reference dims: the tile plan's frame
             _mc, mh, mw = mov_src.shape
-            # ONE factor for both slides: the matcher matches descriptors across the two
-            # thumbnails, so a per-slide factor would introduce a scale change M0 cannot
-            # represent honestly.
+            # ONE factor for both slides: the anchor correlates the two thumbnails pixel for
+            # pixel, so a per-slide factor would introduce a scale change a rigid M0 cannot
+            # represent at all.
             factor = decimation_factor([(h, w), (mh, mw)], a.max_dim)
             logger.info(
                 f"coarse: reference {w}x{h} C={_c} {_ref_dtype} | "
@@ -187,8 +192,21 @@ def main(argv=None) -> int:
         ref_close()
 
     t0 = time.perf_counter()
-    m0_ds, coarse_tre_ds, n_inliers = estimate_rigid(ref_nuc, mov_nuc, model=a.model)
-    logger.info(f"coarse: anchor estimated in {time.perf_counter() - t0:.1f}s")
+    try:
+        anchor = estimate_anchor(ref_nuc, mov_nuc, model=a.model)
+    except CoarseRefused as exc:
+        # A wrong anchor fails NOTHING downstream -- the per-tile reads land in the wrong place
+        # and the slide is published mis-registered with exit 0 -- so an anchor nobody can
+        # vouch for fails the task here, naming both slides.
+        raise CoarseRefused(
+            f"coarse: REFUSED to anchor moving={Path(a.moving).name} onto "
+            f"reference={Path(a.reference).name} (nuclear_index={a.nuclear_index}, "
+            f"thumbnail 1/{factor}): {exc}"
+        ) from exc
+    logger.info(
+        f"coarse: anchor estimated in {time.perf_counter() - t0:.1f}s via {anchor.method}"
+    )
+    m0_ds, coarse_tre_ds, n_inliers = anchor.M, anchor.residual_px, anchor.n_inliers
     # The fit lives in thumbnail pixels; everything downstream (tile plan, per-tile source
     # regions, the stitch) is full-resolution, so lift both the map and its residual here.
     m0 = scale_transform_to_full_res(m0_ds, factor)
@@ -204,6 +222,13 @@ def main(argv=None) -> int:
                 "coarse_tre": float(coarse_tre),
                 "n_inliers": int(n_inliers),
                 "coarse_factor": int(factor),
+                # How the anchor was obtained and how sure it is. `coarse_tre` is the ORB
+                # inlier RMS for "orb", and the search grid's quantisation bound for
+                # "ncc_sweep" (which has no correspondences; n_inliers is 0 there).
+                "coarse_method": anchor.method,
+                "coarse_peak_ncc": float(anchor.peak_ncc),
+                "coarse_peak_ratio": _finite_or_none(anchor.peak_ratio),
+                "coarse_angle_deg": float(anchor.angle_deg),
             },
             indent=2,
         )
@@ -212,7 +237,9 @@ def main(argv=None) -> int:
     logger.info(
         f"coarse: M0 dx={m0[0, 2]:+.1f}px dy={m0[1, 2]:+.1f}px "
         f"rot={np.degrees(np.arctan2(m0[1, 0], m0[0, 0])):+.2f}deg | "
-        f"n_inliers={n_inliers} residual={coarse_tre:.2f}px full-res "
+        f"method={anchor.method} peak_ncc={anchor.peak_ncc:.3f} "
+        f"ratio={anchor.peak_ratio:.2f} n_inliers={n_inliers} "
+        f"residual={coarse_tre:.2f}px full-res "
         f"({coarse_tre_ds:.2f} thumbnail px x {factor})"
     )
     # The anchor's only job is to land the moving slide inside the per-tile read halo; the
@@ -227,7 +254,8 @@ def main(argv=None) -> int:
             f"not recover this. Raise --halo (reg_tiled_halo) or --max-dim "
             f"(reg_tiled_coarse_max_dim, currently decimating 1/{factor})"
         )
-    if n_inliers < 10:
+    # Only meaningful for the ORB fallback: the sweep has no correspondences and reports 0.
+    if anchor.method == "orb" and n_inliers < 10:
         logger.warning(
             f"coarse: only {n_inliers} inliers support M0 -- treat this slide's anchor as "
             f"unverified (low tissue texture, wrong --nuclear-index, or a failed match)"

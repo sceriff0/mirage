@@ -1,11 +1,11 @@
 """The ``stare`` command: subcommands dispatch, argv passes through, the row form of
 ``reg-tile`` addresses the tile the explicit form does.
 
-Deliberately small. The learned COARSE anchor needs torch + kornia, and the real
-coverage of the method -- the four-stage chain, the fan-out vs ``stare register``
+Deliberately small. The COARSE anchor has its own tests (``test_coarse_anchor.py``), and the
+real coverage of the method -- the four-stage chain, the fan-out vs ``stare register``
 parity, the solver's byte-for-byte legacy claim -- lives in the mirage suite
 (``tests/test_tiled_fanout.py``, ``tests/test_stare_package_parity.py``) and in
-``test_solve.py`` beside this file. What is pinned here needs no model: the CLI's
+``test_solve.py`` beside this file. What is pinned here is only the CLI's
 wiring, and the ``--plan/--row`` contract on a hand-written plan.
 """
 

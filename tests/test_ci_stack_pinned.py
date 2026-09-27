@@ -684,9 +684,11 @@ def test_the_module_scope_importorskip_scan_is_not_empty():
         "no longer finds them -- fix the walk rather than leaving the check below to pass "
         "over an empty set."
     )
-    # The three that must be there, because each is a package whose absence deselects tests
-    # with nothing in the output to show for it, and each has bitten this repo.
-    for dist in ("pyyaml", "opencv-python-headless", "kornia"):
+    # The ones that must be there, because each is a package whose absence deselects tests
+    # with nothing in the output to show for it, and each has bitten this repo. kornia left
+    # this list on 2026-09-27, deliberately: STARE's COARSE no longer uses it, and the tests
+    # that importorskip'd it (the DISK front-end and everything reaching it) no longer do.
+    for dist in ("pyyaml", "opencv-python-headless"):
         assert dist in found, (
             f"{dist} is no longer reached by the module-scope importorskip scan. It was "
             "found there when this check was written; if the suite genuinely stopped using "

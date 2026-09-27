@@ -123,7 +123,8 @@ registration_arms:
     # Every one of those has inverted: :fire: 5f7f986 deleted those three front-ends
     # and the param that selected them, and :package: 0f4c649 folded torch+kornia and the
     # DISK/LightGlue weights into the :tiled image (containers/stare-ml/ is deleted). COARSE
-    # is unconditionally DISK+LightGlue now, so the axis has one value, which is not an axis.
+    # is one fixed recipe (NCC rotation sweep + ORB fallback since 2026-09-27, DISK+LightGlue
+    # before), so the axis has one value, which is not an axis.
     # It was never expanded into per-arm fan-out, so this removes no arm: tiled is still 1.
 
 

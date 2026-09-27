@@ -7,9 +7,9 @@
  *
  * `high` is the shipped default and, with one exception, the historical behaviour: every value
  * in the `high` row below is what `nextflow.config` used to declare as that param's literal
- * default -- EXCEPT `coarse_max_dim`, whose whole column moved down one tier for v1.0.0 (`high`
- * is 2048, not the 4096 that used to ship). The long note on STARE below gives the measurement
- * that forced it. Do not restate this row as "unchanged".
+ * default -- EXCEPT `coarse_max_dim`, which is now the anchor's REFINE resolution (1024 at `high`
+ * and `medium`, 512 at `low`; it shipped as 4096, then 2048 while COARSE was a U-Net matcher). The
+ * long note on STARE below says why. Do not restate this row as "unchanged".
  * `medium` and `low` trade accuracy for memory and wall-clock. `custom` starts from `high` and
  * applies whichever individual knobs the user set; anything left unset stays at the `high` value.
  *
@@ -69,15 +69,19 @@ class RegPresets {
      * them to a cost tier would silently change which control points are accepted when a user
      * asked only to use less memory.
      *
-     * `coarse_max_dim` is one tier lower than the columns around it because DISK+LightGlue is a
-     * U-Net: activation memory is linear in thumbnail AREA, not nearly flat the way the classical
-     * corner detector it replaced was. Measured on the pinned stack: 3.03 GB at 512 px, 8.78 GB at
-     * 1024 px, i.e. `GB ~= 1.1 + 7.3 * Mpx` -- so 4096 px would ask ~123 GB. Accuracy is bought
-     * back by DISK's sub-pixel fit: a 0.99 px thumbnail residual at 1/13 decimation on a 26k slide
-     * is ~13 px full-res, well inside the 256 px `halo` the anchor only has to land within.
+     * `coarse_max_dim` is the resolution COARSE REFINES its rigid anchor at (stare/coarse_align.py:
+     * a 256 px NCC rotation sweep, then +-3 deg at this thumbnail, then sub-pixel translation). It
+     * is no longer a memory knob: the anchor is FFT-based and measured 0.25 / 0.43 / 0.40 GB peak
+     * RSS for the whole TILED_COARSE stage at 512 / 1024 / 2048 px, band reads of a 16k x 16k
+     * tiled OME-TIFF included (the retired DISK+LightGlue U-Net needed ~1.1 + 7.3 * Mpx GB, i.e.
+     * ~32 GB at 2048). Above 1024 it buys nothing the pipeline needs: the anchor only has to land
+     * inside the per-tile halo, and SOLVE's robust affine absorbs any rotation left over. At
+     * 1024 its quantisation bound (half a 0.25 deg step at the half-diagonal) is ~1.6 thumbnail
+     * px, i.e. ~65 px full-res on a 40k slide -- inside every tier's halo. So `high` and `medium`
+     * share 1024 and `low` keeps 512 (half the CPU of the ~50 refine evaluations).
      */
     static final Map<String, Map<String, Integer>> STARE = [
-        high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 2048, upsample: 10],
+        high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 1024, upsample: 10],
         medium: [tile: 1024, halo: 192, out_tile:  768, coarse_max_dim: 1024, upsample: 10],
         low   : [tile:  512, halo: 128, out_tile:  512, coarse_max_dim:  512, upsample:  5],
     ]

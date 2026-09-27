@@ -207,10 +207,10 @@ jobs:
       # with `|| true`, so total failure was swallowed. The root file is now a shim that
       # points at requirements/ci.txt and says so.
       #
-      # torch + kornia power STARE's DISK+LightGlue COARSE front-end
-      # (bin/utils/coarse_align.py). Without them tests/test_coarse_frontend.py's DISK
-      # cases importorskip and prove nothing -- which is how an unimplemented front-end
-      # shipped once already. tests/test_disk_test_actually_runs.py resolves this job
+      # torch + kornia powered STARE's DISK+LightGlue COARSE front-end until 2026-09-27;
+      # the anchor is now numpy/scipy/scikit-image only and tests/test_coarse_frontend.py
+      # needs neither. The installs stay until the tiled image drops them (same
+      # requirements files); the no-skip proof below still guards the COARSE tests. tests/test_disk_test_actually_runs.py resolves this job
       # through .github/actions/setup-python-env and asserts these two files are
       # installed, in this order, by every job that runs the suite.
       #

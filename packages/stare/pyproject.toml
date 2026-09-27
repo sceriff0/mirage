@@ -23,9 +23,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The learned coarse anchor (DISK + LightGlue). CPU wheels: install torch from the
-# CPU index first, then kornia, exactly as containers/tiled/Dockerfile does.
-anchor-disk = ["torch>=2.3", "kornia>=0.7.3"]
 test = ["pytest>=7"]
 
 [project.scripts]

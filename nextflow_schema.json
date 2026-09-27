@@ -328,7 +328,7 @@
                         "null"
                     ],
                     "minimum": 0,
-                    "description": "COARSE anchor thumbnail longest side (px). null = from reg_tiled_mode."
+                    "description": "COARSE anchor refine thumbnail longest side (px); the rotation sweep runs at 256 px. null = from reg_tiled_mode."
                 }
             }
         },

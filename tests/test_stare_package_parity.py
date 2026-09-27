@@ -21,8 +21,8 @@ against itself. The parity that can drift is between the two EXECUTORS, and that
 this file pins. The legacy solve's own byte-for-byte claim against the pre-package code is
 pinned separately, from a verbatim copy, in ``packages/stare/tests/test_solve.py``.
 
-Tagged like ``tests/test_tiled_fanout.py``: the COARSE anchor is DISK + LightGlue, so this
-needs torch and kornia (CI installs both; ``tests/test_disk_test_actually_runs.py`` pins it).
+The COARSE anchor is numpy/scipy/scikit-image only (NCC rotation sweep, ORB fallback), so
+this runs wherever the rest of the suite does.
 """
 
 from __future__ import annotations
@@ -47,8 +47,6 @@ sys.path.insert(
 )
 pytest.importorskip("skimage")
 pytest.importorskip("scipy")
-pytest.importorskip("torch")
-pytest.importorskip("kornia")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_coarse  # noqa: E402

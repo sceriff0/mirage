@@ -347,7 +347,10 @@ ALLOWED_LINES = {
         # 1231 -> 1240 (2026-09-27): TILED_REG_TILE's memory closure was re-derived for the
         # window-vector grid (read box = core + 3*stride), +9 comment/code lines above.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1240
-        1240: (
+        # 1240 -> 1232 (2026-09-27): TILED_COARSE's note and memory closure shrank when its
+        # anchor stopped being a U-Net (DISK) -- -8 lines above this one.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1232
+        1232: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

@@ -6,7 +6,6 @@ shared between rounds.
 
 ```bash
 pip install -e packages/stare            # from the mirage checkout
-pip install -e "packages/stare[anchor-disk]"   # + the learned coarse anchor (torch, kornia)
 
 stare register --reference ref.ome.tif --moving mov.ome.tif \
     --out mov_registered.ome.tif --manifest mov_manifest.json --workers 8

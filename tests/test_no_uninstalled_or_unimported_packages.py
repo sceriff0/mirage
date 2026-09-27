@@ -175,6 +175,18 @@ ALLOWED_UNIMPORTED = {
         "tifffile's codec backend: bin/export_spatialdata.py reads MERGE_AND_PYRAMID's "
         "zstd/LZW-compressed OME-TIFF through tifffile."
     ),
+    # --- pending an image rebuild -------------------------------------------------
+    **{
+        ("tiled", dist): (
+            "STARE's COARSE anchor stopped importing torch/kornia on 2026-09-27 (DISK + "
+            "LightGlue -> NCC rotation sweep + ORB fallback, stare/coarse_align.py). "
+            "bolt3x/mirage-tiled:1.0.0 still installs both; dropping requirements/"
+            "torch-cpu.txt and requirements/kornia.txt from containers/tiled/Dockerfile "
+            "needs a user-approved rebuild + publish. Delete this entry in that change -- "
+            "test_every_allowlist_entry_is_still_installed will insist."
+        )
+        for dist in ("torch", "kornia")
+    },
 }
 
 
