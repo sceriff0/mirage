@@ -153,9 +153,10 @@ def test_a_three_cell_bump_is_preserved_at_its_centre():
     indistinguishable from a coherent cluster of wrong vectors -- the case Garcia (2011)
     designs the bisquare to reject -- so the physically meaningful bump is a smooth one.
 
-    Pinned at the DEFAULT block CV (no buffer ring). With the true h-block ring
-    (``CV_BUFFER = 1``) a sigma = 1-cell bump is hidden from every training fit and smoothed
-    away (measured 0/3 seeds here) -- one of the reasons the ring is off by default.
+    Pinned at plain block CV (no buffer ring), which the adaptive rule picks on this white
+    noise. With the true h-block ring a sigma = 1-cell bump is hidden from every training fit
+    and smoothed away (measured 0/3 seeds here) -- one of the reasons the ring is kept only
+    for residuals that correlate.
     """
     centre = (4 * TILE + TILE / 2, 4 * TILE + TILE / 2)
 
@@ -220,9 +221,9 @@ def test_few_valid_cells_degrade_to_a_simpler_model(n_valid, selection):
 def test_block_cv_selects_s_on_a_large_enough_grid():
     controls = _controls(8, _rotation_about_centre(8), noise=0.1)
     report = _solve(controls)[3]
-    # the label says which CV ran: block CV by default, hblock_cv only with the ring
-    assert solve.CV_LABEL == ("hblock_cv" if solve.CV_BUFFER else "block_cv")
-    assert report["smoothing_selection"] == solve.CV_LABEL
+    # the label says which CV ran: white noise -> no ring, plain block CV
+    assert report["cv_buffer"] == 0 and report["smoothing_selection"] == "block_cv"
+    assert report["residual_lag1_rho"] < solve.CV_BUFFER_RHO
     assert report["holdout_rmse_px"] is not None and 0 < report["holdout_rmse_px"] < 1.0
 
 
@@ -239,6 +240,8 @@ def test_report_has_every_key_and_is_json_serialisable():
         "smoothing_s",
         "smoothing_selection",
         "holdout_rmse_px",
+        "residual_lag1_rho",
+        "cv_buffer",
         "lipschitz",
         "min_det_jacobian",
         "fold_certificate_ok",
@@ -418,8 +421,70 @@ def test_hblock_cv_with_a_buffer_ring_does_not_undersmooth_correlated_noise(seed
     assert err(s_ring) < 0.8 * err(s_plain), (err(s_ring), err(s_plain))
 
 
+def test_the_sign_lag1_statistic_reads_the_noise_it_is_given():
+    """The raw statistic on noise with no fit: iid ~0, Gaussian-filtered ~ its lag-1, and
+    one huge residual moves it by one sign at most."""
+    white = np.random.default_rng(0).normal(0, 1, (48, 48, 2))
+    assert abs(solve._sign_lag1(white, np.ones((48, 48)))) < 0.05
+    g, truth, Y = _correlated_noise_lattice(seed=0)
+    rho = solve._sign_lag1(Y - truth, np.ones((48, 48)))
+    assert 0.5 < rho < 0.7, rho  # sigma = 0.7 cells: exp(-1 / (4 * 0.49)) = 0.60
+    E = white.copy()
+    E[3, 3] = 1e6
+    assert abs(solve._sign_lag1(E, np.ones((48, 48)))) < 0.05
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_correlated_residuals_turn_the_hblock_buffer_on(seed):
+    """Noise correlated at lag 1 ~0.6 (the 50 %-overlap regime): the rule keeps the ring,
+    and the field is closer to the truth than plain block CV's undersmoothed one."""
+    g, truth, Y = _correlated_noise_lattice(seed=seed)
+    n = g.size
+    field, info = solve._dctpls_core(Y, np.ones((n, n)), g, g)
+    assert info["cv_buffer"] == 1 and info["smoothing_selection"] == "hblock_cv", info
+    assert info["residual_lag1_rho"] > solve.CV_BUFFER_RHO
+    Lam = solve._dct_eigenvalues(n, n, g, g)
+    s_plain, _ = solve._block_cv_select(Y, np.ones((n, n)), Lam, buffer=0)
+    plain, _ = solve._robust_pls(Y, np.ones((n, n)), Lam, s_plain)
+    rms = lambda F: float(np.sqrt(np.mean((F - truth) ** 2)))  # noqa: E731
+    assert info["smoothing_s"] > 100 * s_plain, (info["smoothing_s"], s_plain)
+    assert rms(field) < 0.8 * rms(plain), (rms(field), rms(plain))
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_white_residuals_keep_the_buffer_off(seed):
+    """Same field, iid noise: the ring would only cost accuracy, and the rule leaves it off."""
+    g = 128.0 * (np.arange(48) + 1)
+    GX, GY = np.meshgrid(g, g)
+    truth = np.stack(
+        [2 * np.sin(2 * np.pi * GY / 3000), 2 * np.cos(2 * np.pi * GX / 3000)], axis=-1
+    )
+    Y = truth + np.random.default_rng(seed).normal(0, 0.3, truth.shape)
+    _field, info = solve._dctpls_core(Y, np.ones((48, 48)), g, g)
+    assert info["cv_buffer"] == 0 and info["smoothing_selection"] == "block_cv", info
+    assert info["residual_lag1_rho"] < solve.CV_BUFFER_RHO
+
+
+def test_a_ring_that_flattens_lattice_scale_signal_is_refused():
+    """A near-noiseless wave of ~6 nodes period on a 15x15 lattice: the interpolating fit's
+    residuals correlate (signal, not noise), and the ring would hide a whole period and
+    choose the flattest field. The ring is refused and the wave kept."""
+    n = 15
+    g = 16.0 * (np.arange(n) + 1)
+    GX, GY = np.meshgrid(g, g)
+    truth = np.stack(
+        [3 * np.sin(2 * np.pi * GY / 90), 3 * np.cos(2 * np.pi * GX / 90)], axis=-1
+    )
+    Y = truth + np.random.default_rng(0).normal(0, 0.005, truth.shape)
+    field, info = solve._dctpls_core(Y, np.ones((n, n)), g, g)
+    assert info["residual_lag1_rho"] > solve.CV_BUFFER_RHO  # the confound is real
+    assert info["cv_buffer"] == 0 and info["smoothing_selection"] == "block_cv", info
+    assert np.abs(field - truth).max() < 0.1
+
+
 def test_the_calibrated_resolve_reuses_s_instead_of_rescanning(monkeypatch):
-    """'s chosen once' is true: the 1/sigma^2 re-solve calls no selector."""
+    """'s chosen once' is true: the 1/sigma^2 re-solve calls no selector (and on white noise
+    the first solve calls it once: plain block CV, whose residuals keep the ring off)."""
     calls = []
     real = solve._block_cv_select
 
@@ -432,7 +497,7 @@ def test_the_calibrated_resolve_reuses_s_instead_of_rescanning(monkeypatch):
     controls = _controls(12, fn, noise=0.1)
     gx, gy, Y, W0, _ = _lay_out(controls, 256)
     _f, info = solve._dctpls_core(Y, W0, gx, gy)
-    assert calls == [1] and info["smoothing_selection"] == solve.CV_LABEL
+    assert calls == [1] and info["smoothing_selection"] == "block_cv"
     W1 = np.where(W0 > 0, 0.25, 0.0)  # uniform weights at a different scale
     _f2, info2 = solve._dctpls_core(Y, W1, gx, gy, s_fixed=info["smoothing_s"])
     assert calls == [1] and info2["smoothing_selection"] == "fixed"

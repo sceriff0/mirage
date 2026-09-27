@@ -11,8 +11,10 @@ THE METHOD (research/stare-optimal-design-2026-09-27.md, section 1):
 1. **Preprocess** both thumbnails: robust [0, 1] intensity window, Gaussian blur (sigma 1 px),
    Otsu tissue mask on a tissue-scale blur (background set to 0, tissue keeps its intensity).
 2. **Sweep** at 256 px (longest side): rotate the moving image about its centre over 0-360 deg in
-   3 deg steps and, for each angle, take the peak of the FFT cross-correlation of the zero-padded,
-   zero-mean pair, normalised by the two images' norms. At 256 px this matches tissue SHAPE, which
+   3 deg steps and, for each angle, take the peak of the zero-mean, GLOBALLY normalised
+   cross-correlation of the zero-padded pair (FFT; divided by the two whole canvases' norms,
+   not by the local norms under each shift as in Lewis 1995's locally normalised NCC; "NCC"
+   below means this global form). At 256 px this matches tissue SHAPE, which
    survives nuclei turnover, tissue loss and a gamma change -- the cases that broke feature
    matching and log-polar spectrum registration in the scout's benchmark.
 3. **Refine** the best angle and the best DISTINCT runner-up at the ``--max-dim`` thumbnail over
@@ -30,6 +32,25 @@ THE METHOD (research/stare-optimal-design-2026-09-27.md, section 1):
 NumPy + SciPy + scikit-image only: no torch, no kornia, no OpenCV, no JVM. The tiled container
 already carries all three. Memory is a few FFT canvases of the thumbnail (well under 1 GB at the
 1024 px tier) instead of the ~48 GB the retired learned matcher needed at 2048 px.
+
+**Sweep step vs blur, measured (2026-09-27).** The nearest sweep angle is at most step/2 from
+the truth. The coarse NOTES' derivation (mean tissue radius ~85 px at 256 px) says a 3 deg step
+needs >= ~1.33 px of correlation length, which the sigma = 1 blur alone does not guarantee, so
+the correlation-vs-angle curve was measured on the ten hard synthetic geometries of
+``tests/test_coarse_anchor.py`` (5 rotations x {80 % nuclei turnover, same nuclei}; peak NCC
+0.63-0.78). Each cell is the worst, over the ten, of the NCC at that offset from the
+geometry's own peak as a fraction of the peak::
+
+    blur sigma | 0.5 deg | 1.0 deg (half of 2 deg) | 1.5 deg (half of 3 deg)
+    1.0        | 0.993   | 0.981                   | 0.963
+    1.5        | 0.996   | 0.985                   | 0.971
+    2.0        | 0.997   | 0.991                   | 0.981
+
+Every pair keeps >= 90 % of the peak at its half-step, so the cheapest stands: sigma 1 px
+(:data:`BLUR_SIGMA`) and 3 deg (:data:`SWEEP_STEP_DEG`; 120 angles against 180 at 2 deg, and
+the blur costs nothing either way). Tissue-scale structure does supply the correlation length
+the derivation asked for. Pinned by
+``test_half_a_sweep_step_off_the_peak_keeps_90_percent_of_the_correlation``.
 
 :func:`estimate_transform_from_matches` (points -> transform + RMS residual) stays the
 deterministic, unit-tested core of the ORB fallback.
@@ -64,6 +85,8 @@ _MIN_SAMPLES = {"euclidean": 2, "similarity": 2, "affine": 3}
 # nobody has measured is a way to ship a silently worse anchor.
 # ------------------------------------------------------------------------------------------
 SWEEP_SIDE = 256  # px, longest side of the rotation sweep's images
+# 3 deg at sigma 1: the cheapest step/blur pair whose half-step keeps >= 90 % of the peak
+# correlation on every test geometry -- the measured table is in the module docstring.
 SWEEP_STEP_DEG = 3.0
 REFINE_HALF_DEG = 3.0  # refine each sweep candidate over +-this ...
 REFINE_STEP_DEG = 0.25  # ... in this step
@@ -338,7 +361,8 @@ def _zero_mean(x):
 
 
 class _Correlator:
-    """FFT cross-correlation of a fixed reference canvas against rotated moving canvases.
+    """Globally normalised FFT cross-correlation of a fixed reference canvas against rotated
+    moving canvases.
 
     Both canvases are zero-mean over the WHOLE canvas (the prototype's normalisation): the
     masked background and the padding then carry the same constant, so neither the image

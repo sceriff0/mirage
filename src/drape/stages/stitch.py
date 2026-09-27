@@ -20,7 +20,13 @@ from drape.log import configure_logging, get_logger
 from drape.mesh_field import MeshField
 from drape.ome import ome_metadata, ome_tiff_writer, resolve_pixel_size
 from drape.slide_io import open_lazy
-from drape.warp import source_region, warp_image
+from drape.warp import (
+    INVERSE_MAX_ITERATIONS,
+    INVERSE_TOL_PX,
+    new_inverse_stats,
+    source_region,
+    warp_image,
+)
 
 logger = get_logger(__name__)
 
@@ -65,9 +71,13 @@ def _clamp(arr, dtype):
 
 
 def stream_tiles(
-    src, m0, mesh, margin, out_h, out_w, tile, dtype, field_step=FIELD_STEP
+    src, m0, mesh, margin, out_h, out_w, tile, dtype, field_step=FIELD_STEP, stats=None
 ):
-    """Yield tiled output in tifffile order (channel, row, col), warping one tile at a time."""
+    """Yield tiled output in tifffile order (channel, row, col), warping one tile at a time.
+
+    ``stats`` (``drape.warp.new_inverse_stats``), when given, accumulates the inverse map's
+    fixed-point convergence over every tile.
+    """
     c_n, h, w = src.shape
     for c in range(c_n):
         for ty in range(0, out_h, tile):
@@ -89,6 +99,7 @@ def stream_tiles(
                         out_origin=(tx, ty),
                         src_origin=(sx0, sy0),
                         field_step=field_step,
+                        stats=stats,
                     )
                     out_tile[:th, :tw] = _clamp(warped, dtype)
                 yield out_tile
@@ -175,6 +186,7 @@ def main(argv=None) -> int:
     out_h, out_w = entry["out_shape"]
 
     src, dtype, close = open_lazy(a.moving)  # lazy (C, H, W) — nothing loaded yet
+    inverse = new_inverse_stats()
     try:
         c_n = src.shape[0]
         # bigtiff is mandatory, not an optimisation: a registered slide is written
@@ -200,6 +212,7 @@ def main(argv=None) -> int:
                     a.out_tile,
                     dtype,
                     field_step=a.field_step or None,
+                    stats=inverse,
                 ),
                 shape=(c_n, out_h, out_w),
                 dtype=dtype,
@@ -236,7 +249,32 @@ def main(argv=None) -> int:
         f"streamed {name}: ({c_n}, {out_h}, {out_w}) -> {a.out} "
         f"(mesh={'yes' if mesh else 'no'}, tile={a.out_tile})"
     )
+    log_inverse(inverse)
     return 0
+
+
+def log_inverse(stats):
+    """Log the inverse map's convergence; WARN when any evaluation stopped at the cap.
+
+    A capped inverse means the field is outside SOLVE's fold certificate (Lipschitz >= 0.5,
+    where the fixed point converges slowly or not at all): pixels may sample the wrong
+    moving location by up to the logged step, and nothing downstream would notice.
+    """
+    if not stats["inverse_calls"]:
+        return
+    msg = (
+        f"inverse map: max fixed-point step {stats['inverse_residual_px']:.2e} px "
+        f"(tol {INVERSE_TOL_PX:g}), at most {stats['inverse_iterations_max']} iteration(s) "
+        f"over {stats['inverse_calls']} evaluation(s)"
+    )
+    if stats["inverse_cap_hits"]:
+        logger.warning(
+            f"{msg}; {stats['inverse_cap_hits']} stopped at the {INVERSE_MAX_ITERATIONS}-"
+            "iteration cap without converging -- the mesh is outside the fold certificate "
+            "and the stitched pixels there may be misplaced by up to that step"
+        )
+    else:
+        logger.info(msg)
 
 
 if __name__ == "__main__":
