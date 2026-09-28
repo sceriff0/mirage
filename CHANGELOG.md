@@ -46,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   column, using the retention CSVs above and the residual displacement/Dice
   join (see below); it republishes `quantification/merged_quant.csv` and also
   writes `quantification/<patient_id>_round_qc.csv` (the same values, long and
-  tidy: `label, round_id, markers, nuclear_retention, displacement_px,
+  tidy: `label, round_id, markers, nuclear_retention, nuclear_retention_raw
+  (the un-normalised ratio, round_qc.csv only), displacement_px,
   displacement_um, dice`) and `quantification/<patient_id>_rounds.json` (the
   round manifest: `round_id`, `is_reference`, `markers`). All three are a
   **FINAL** kind and survive `--cleanup_level final`. Registration

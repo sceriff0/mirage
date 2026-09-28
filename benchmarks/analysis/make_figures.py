@@ -433,6 +433,25 @@ def run(
                 ledger.finish_figure(fig, "figures/accuracy_vs_cost", int(mask.sum()))
                 plotting.save_fig(fig, figdir / "accuracy_vs_cost", formats=formats)
 
+    # Registration cost per backend x tier (Supplementary S5): registration processes
+    # only, per slide. Measured-only: a missing arm is a missing point, never a
+    # placeholder, because the figure's claim IS the measured cost.
+    reg_cost = quality.registration_cost_by_tier(runs_df, results_root)
+    reg_cost.to_csv(outdir / "registration_cost_by_tier.csv", index=False)
+    if not reg_cost.empty:
+        per_slide = reg_cost["n_slides"].notna().any()
+        unit = "per slide" if per_slide else "per run"
+        fig = plotting.cost_by_tier(
+            reg_cost,
+            [
+                "wall_h_per_slide" if per_slide else "reg_wall_h",
+                "reg_peak_rss_gb",
+                "cpu_hours_per_slide" if per_slide else "reg_cpu_hours",
+            ],
+            [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"],
+        )
+        plotting.save_fig(fig, figdir / "registration_cost_by_tier", formats=formats)
+
     quality_df.to_csv(outdir / "quality.csv", index=False)
     # Segmentation cross-method agreement (pairwise mask IoU + cell-count ratio) — best-effort.
     try:

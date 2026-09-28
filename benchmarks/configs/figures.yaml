@@ -45,7 +45,8 @@ segmentation:
   methods:                   # one pipeline run each; the zoom and crops show the difference
     - stardist               # what conf/ieo.config pins, with its model
     - instantseg             # the pipeline default; needs no extra assets
-    # - cellsam              # NEEDS ITS WEIGHTS ON DISK. With cellsam_model_path unset,
+    - cellsam                # ON since 2026-09-28 (weights provisioned on the cluster).
+                             # NEEDS ITS WEIGHTS ON DISK. With cellsam_model_path unset,
                              # cellSAM.get_model() fetches them from users.deepcell.org.
                              # At IEO that host is unreachable from the compute nodes AND
                              # from login01 (ConnectTimeout, 2026-09-21) even though
@@ -82,7 +83,9 @@ figures:
 
   zoom:                      # whole-slide overview + segmented cells
     field_um: [150, 300]     # 150 um = cells fill the panel; 300 um = some context
-    masks: [both]            # cell | nuclei | both (cells yellow, nuclei cyan)
+    masks: [both, cell, nuclei]  # cell | nuclei | both (cells yellow, nuclei cyan).
+                             # cell + nuclei separately are Supplementary S6's side-by-side
+                             # panels (native InstanSeg cell vs label-expansion boundary)
     crop: also               # none | also | only — `also` writes the crop beside the figure
 
   crop:                      # the segmented crop alone, for your own panels

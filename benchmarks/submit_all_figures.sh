@@ -75,7 +75,10 @@ SKIP_COMPOSITE_RUNS="${SKIP_COMPOSITE_RUNS:-0}"
 ANHIR_DIR="${ANHIR_DIR:-}"
 ANHIR_LEGS="${ANHIR_LEGS:-drape=results_drape/tiled_warped stare=results_stare/tiled_warped valis=results_valis/valis_warped initial=results_initial_warped bunwarpj=results_bunwarpj_warped}"
 IHC="${IHC:-}"; IHC_BUILD="${IHC_BUILD:-0}"
-IHC_PAGES="${IHC_PAGES:-registration_arms benchmark_registration benchmark_anhir benchmark_pipeline registration_run_qc run_resources paper_figures}"
+# molecular_massimo2 BEFORE paper_figures: its last chunk writes output/paired_deconv.rds,
+# which Fig 5(c) (and Supplementary S11) reads -- without it that panel prints "Needs ...".
+# marker_qc carries the cell-level QC (lineage leakage, marker exclusivity).
+IHC_PAGES="${IHC_PAGES:-registration_arms benchmark_registration benchmark_anhir benchmark_pipeline registration_run_qc run_resources marker_qc molecular_massimo2 paper_figures}"
 DRY_RUN="${DRY_RUN:-0}"
 # -------------------------------------------------------------------------------
 

@@ -326,6 +326,10 @@ echo "=== 4/5  one full run -> data/mirage/ ==="
 #   registration_run_qc.Rmd  (run_qc.R)      -> <patient>/qc/** and csv/*.csv
 #   the mirage cell pages    (mirage_cells.R)-> <patient>/quantification/merged_quant.csv
 #                                               <patient>/cell_properties/morphology.csv
+#   per-round retention/registration QC      -> <patient>/quantification/<pid>_round_qc.csv
+#                                               <patient>/quantification/<pid>_rounds.json
+#     (round_qc.csv rides the quantification/*.csv rule; rounds.json maps each
+#      round_id to its markers and needs its own rule)
 #                                               <patient>/phenotyping/phenotypes.csv (optional)
 # The filter carries all of them. Copying only qc/ — as this step used to — left
 # load_mirage_cells() finding no patient directories at all.
@@ -344,6 +348,7 @@ if [[ -n "$SRC_RUN" && -d "$SRC_RUN" ]]; then
     --include='**/qc/**' \
     --include='**/csv/*.csv' \
     --include='**/quantification/*.csv' \
+    --include='**/quantification/*_rounds.json' \
     --include='**/cell_properties/*.csv' \
     --include='**/cell_properties/**/*.csv' \
     --include='**/phenotyping/*.csv' \
