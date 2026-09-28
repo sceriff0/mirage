@@ -192,7 +192,9 @@ def before_after_box(df, cols, ylabel, title, log_scale=True):
 
 
 _TIER_ORDER = ("low", "medium", "high")
-_BACKEND_TITLE = {"valis": "VALIS", "tiled": "STARE (tiled)"}
+# benchmarking_new_method: the tiled backend on this line is DRAPE (the drape stats stage of
+# submit_all_figures.sh runs make_figures from this checkout). Branch-specific.
+_BACKEND_TITLE = {"valis": "VALIS", "tiled": "DRAPE (tiled)"}
 
 
 def cost_by_tier(frame, metrics, ylabels):
