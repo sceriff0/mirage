@@ -59,7 +59,7 @@ ROUNDS_EOF
     stub:
     """
     cp base/merged_quant.csv merged_quant.csv
-    printf 'label,round_id,markers,nuclear_retention,displacement_px,displacement_um,dice\\n' > ${meta.patient_id}_round_qc.csv
+    printf 'label,round_id,markers,nuclear_retention,nuclear_retention_raw,displacement_px,displacement_um,dice\\n' > ${meta.patient_id}_round_qc.csv
     echo '[]' > ${meta.patient_id}_rounds.json
     ${ProcessEnvelope.sizeLogStub(task.process, meta.patient_id, "${meta.patient_id}.CELL_QC.size.csv")}
 

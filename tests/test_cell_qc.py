@@ -131,7 +131,7 @@ def test_long_table_has_one_row_per_cell_and_moving_round(tmp_path):
     manifest = [{**r, "markers": [m for m in r["markers"] if m != "DAPI"]} for r in _rounds()]
     long = cell_qc.round_long_table(out, manifest, pixel_size=0.5)
     assert list(long.columns) == [
-        "label", "round_id", "markers", "nuclear_retention",
+        "label", "round_id", "markers", "nuclear_retention", "nuclear_retention_raw",
         "displacement_px", "displacement_um", "dice",
     ]
     assert len(long) == 4 and set(long["round_id"]) == {"mov1"}
@@ -161,6 +161,31 @@ def test_main_writes_three_outputs(tmp_path):
     assert json.loads((tmp_path / "P_rounds.json").read_text())[1] == {
         "round_id": "mov1", "is_reference": False, "markers": ["CD3", "CD8"],
     }
+
+
+def test_raw_retention_is_the_unnormalised_ratio_in_the_long_table_only(tmp_path):
+    # A globally dimmer round: the normalised value hides the drop by construction
+    # (median 1.0), the raw ratio keeps it -- that is the tissue-integrity gauge.
+    raw = {}
+    out = cell_qc.add_qc_columns(
+        _quant(), _rounds(), _retention(tmp_path, [500.0, 500.0, 5.0, 500.0]),
+        _residuals(tmp_path), pixel_size=0.5, join_max_px=5.0, nuclear_markers=NUC,
+        raw_out=raw,
+    )
+    assert out[RET].tolist() == pytest.approx([1.0, 1.0, 0.01, 1.0])
+    # Not a QC key: the FlowPath-facing table gains no column.
+    assert not [c for c in out.columns if "raw" in c.lower()]
+    manifest = [{**r, "markers": [m for m in r["markers"] if m != "DAPI"]} for r in _rounds()]
+    long = cell_qc.round_long_table(out, manifest, pixel_size=0.5, raw=raw)
+    assert long["nuclear_retention_raw"].tolist() == pytest.approx([0.5, 0.5, 0.005, 0.5])
+    assert long["nuclear_retention"].tolist() == pytest.approx([1.0, 1.0, 0.01, 1.0])
+
+
+def test_raw_retention_is_nan_without_the_raw_values(tmp_path):
+    out = _run(tmp_path, _rounds())
+    manifest = [{**r, "markers": [m for m in r["markers"] if m != "DAPI"]} for r in _rounds()]
+    long = cell_qc.round_long_table(out, manifest, pixel_size=0.5)
+    assert long["nuclear_retention_raw"].isna().all()
 
 
 def test_prior_round_columns_survive_a_new_round(tmp_path):
@@ -213,6 +238,11 @@ def test_main_merges_prior_rounds(tmp_path):
     assert len(old_rows) == 4
     assert old_rows["nuclear_retention"].tolist() == pytest.approx([0.9, 0.8, 0.7, 0.6])
     assert set(long["round_id"]) == {"old", "mov1"}
+    # The raw ratio is recomputed only for this run's rounds; a prior round's is not
+    # in the table it was carried over from, so it reads NaN (no evidence).
+    assert old_rows["nuclear_retention_raw"].isna().all()
+    new_rows = long[long["round_id"] == "mov1"]
+    assert new_rows["nuclear_retention_raw"].tolist() == pytest.approx([1.0, 1.0, 0.01, 1.0])
     merged = pd.read_csv(tmp_path / "merged_quant.csv")
     assert merged[prior_key].tolist() == pytest.approx([0.9, 0.8, 0.7, 0.6])
     assert RET in merged.columns

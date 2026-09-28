@@ -475,7 +475,10 @@ MORPH: <Name>[ <unit>]                       morphology
   the same reference-round median`, then **normalised by the round's own median
   ratio** so a typical cell reads ≈1.0 in every round — this removes a globally
   dimmer round's uniform intensity drop, leaving per-cell *relative* retention.
-  0 ≈ nucleus gone, ~1 ≈ intact, >1 possible. Both medians come from the same
+  0 ≈ nucleus gone, ~1 ≈ intact, >1 possible. **Because of that normalisation
+  the round median is 1.0 by construction, so this key cannot show a round-level
+  decline** — use `nuclear_retention_raw` in `<patient_id>_round_qc.csv` (below)
+  for that, or the per-round fraction of cells below a cutoff. Both medians come from the same
   function quantification itself uses
   (`quantify.compute_compartment_intensities`). A reference median of 0 or NaN
   reads NaN for that cell; a round whose ratio has no finite, positive median
@@ -518,9 +521,16 @@ mistake for a real reading.
   checkpoint — reads this one table. **There is no separate `cell_qc.csv`.**
 - **`quantification/<patient_id>_round_qc.csv`** — the same values in a long,
   tidy shape: one row per `(cell, moving round)`, columns `label, round_id,
-  markers, nuclear_retention, displacement_px, displacement_um, dice`. This is
-  the analysis-friendly form (R/pandas); the wide `QC: ...` keys are the
-  FlowPath form. Both are written by `CELL_QC` from the same arrays.
+  markers, nuclear_retention, nuclear_retention_raw, displacement_px,
+  displacement_um, dice`. This is the analysis-friendly form (R/pandas); the wide
+  `QC: ...` keys are the FlowPath form. Both are written by `CELL_QC` from the
+  same arrays. **`nuclear_retention_raw`** is the only value with no `QC: ...`
+  key: the same per-cell ratio `raw(c, r)` *before* the round-median
+  normalisation, so a globally dimmer round — progressive tissue loss, or
+  exposure/staining drift, which it cannot tell apart — stays visible; its
+  per-round median is the round-level retention gauge. It is NaN for an
+  `add_cycle` prior round, whose raw ratio is not in the table it is carried over
+  from.
 - **`quantification/<patient_id>_rounds.json`** — the round manifest: one entry
   per slide (`round_id`, `is_reference`, `markers` — its kept non-nuclear
   markers, sorted alphabetically). Maps a round key's marker list back to the

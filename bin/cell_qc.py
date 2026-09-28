@@ -73,6 +73,31 @@ def total_intensity(df: pd.DataFrame, nuclear_markers: List[str]) -> pd.Series:
     return df[cols].sum(axis=1, min_count=1)
 
 
+def raw_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
+    """Per-cell ``mov / ref``, UNnormalised; NaN where the reference is not positive.
+
+    This keeps a globally dimmer round's drop -- the round-level tissue-integrity
+    signal that ``normalised_retention`` removes on purpose. It is not a ``QC: ...``
+    key (FlowPath never sees it); it lands only in ``<pid>_round_qc.csv``.
+
+    Parameters
+    ----------
+    ref : np.ndarray
+        Reference-round nuclear intensities, per cell.
+    mov : np.ndarray
+        Moving-round nuclear intensities, per cell, same order.
+
+    Returns
+    -------
+    np.ndarray
+        The raw ratio, same shape as ``ref``.
+    """
+    ref = np.asarray(ref, dtype=float)
+    mov = np.asarray(mov, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(ref > 0, mov / ref, np.nan)
+
+
 def normalised_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
     """Per-cell ``mov / ref``, normalised by the round's own median ratio.
 
@@ -92,10 +117,7 @@ def normalised_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
     np.ndarray
         All-NaN if the round has no finite ratio or a non-positive median.
     """
-    ref = np.asarray(ref, dtype=float)
-    mov = np.asarray(mov, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        raw = np.where(ref > 0, mov / ref, np.nan)
+    raw = raw_retention(ref, mov)
     finite = raw[np.isfinite(raw)]
     if finite.size == 0:
         return np.full(raw.shape, np.nan)
@@ -125,6 +147,7 @@ def add_qc_columns(
     pixel_size: float,
     join_max_px: float,
     nuclear_markers: List[str],
+    raw_out: Optional[Dict[str, np.ndarray]] = None,
 ) -> pd.DataFrame:
     """Add every ``QC: ...`` column this run owns, replacing any of the same name.
 
@@ -150,6 +173,10 @@ def add_qc_columns(
         Max spatial-join radius handed to ``reg_residuals.join_one``.
     nuclear_markers : list of str
         Markers excluded from every round-level key and from total intensity.
+    raw_out : dict, optional
+        If given, filled with ``round_id -> raw_retention`` (row order of the
+        returned table) for every round whose retention was computed here, for
+        ``round_long_table``'s ``nuclear_retention_raw`` column.
 
     Returns
     -------
@@ -193,6 +220,8 @@ def add_qc_columns(
                 new[qc_key(QC_NUCLEAR_RETENTION, markers)] = pd.Series(
                     normalised_retention(ref, mov), index=out.index
                 )
+                if raw_out is not None:
+                    raw_out[r["round_id"]] = raw_retention(ref, mov)
             else:
                 logger.warning("%s: no retention values; no retention key for this round", r["round_id"])
         if r.get("residual_csv"):
@@ -210,7 +239,12 @@ def add_qc_columns(
     return pd.concat([out, pd.DataFrame(new, index=out.index)], axis=1)
 
 
-def round_long_table(table: pd.DataFrame, rounds: List[Dict], pixel_size: float) -> pd.DataFrame:
+def round_long_table(
+    table: pd.DataFrame,
+    rounds: List[Dict],
+    pixel_size: float,
+    raw: Optional[Dict[str, np.ndarray]] = None,
+) -> pd.DataFrame:
     """One row per (cell, moving round) with that round's QC values, wide-to-long.
 
     Reads the PUBLISHED manifest shape -- ``rounds`` entries whose ``markers``
@@ -225,12 +259,16 @@ def round_long_table(table: pd.DataFrame, rounds: List[Dict], pixel_size: float)
         Manifest entries; reference rounds and rounds with no markers are skipped.
     pixel_size : float
         µm/px, used to recover ``displacement_px`` from the stored µm column.
+    raw : dict, optional
+        ``round_id -> raw_retention`` from ``add_qc_columns(raw_out=...)``. A round
+        missing from it (e.g. an add_cycle prior round, whose raw ratio is not in
+        the table it was carried over from) reads NaN.
 
     Returns
     -------
     pd.DataFrame
-        Columns ``label, round_id, markers, nuclear_retention, displacement_px,
-        displacement_um, dice``. Empty (but correctly-columned) if no round
+        Columns ``label, round_id, markers, nuclear_retention,
+        nuclear_retention_raw, displacement_px, displacement_um, dice``. Empty (but correctly-columned) if no round
         contributed a row.
     """
     frames = []
@@ -251,11 +289,12 @@ def round_long_table(table: pd.DataFrame, rounds: List[Dict], pixel_size: float)
             "round_id": r["round_id"],
             "markers": "|".join(markers),
             "nuclear_retention": table.get(keys[QC_NUCLEAR_RETENTION], nan).to_numpy(),
+            "nuclear_retention_raw": (raw or {}).get(r["round_id"], nan.to_numpy()),
             "displacement_px": (disp_um / float(pixel_size)).to_numpy(),
             "displacement_um": disp_um.to_numpy(),
             "dice": table.get(keys[QC_REG_DICE], nan).to_numpy(),
         }))
-    cols = ["label", "round_id", "markers", "nuclear_retention",
+    cols = ["label", "round_id", "markers", "nuclear_retention", "nuclear_retention_raw",
             "displacement_px", "displacement_um", "dice"]
     return pd.concat(frames, ignore_index=True)[cols] if frames else pd.DataFrame(columns=cols)
 
@@ -285,9 +324,10 @@ def main(argv=None) -> int:
     a = parse_args(argv)
     rounds = json.loads(Path(a.rounds).read_text())
     quant = pd.read_csv(a.merged)
+    raw: Dict[str, np.ndarray] = {}
     table = add_qc_columns(
         quant, rounds, Path(a.retention_dir), Path(a.residual_dir),
-        a.pixel_size, a.join_max_px, a.nuclear_markers,
+        a.pixel_size, a.join_max_px, a.nuclear_markers, raw_out=raw,
     )
     manifest = [
         {"round_id": r["round_id"], "is_reference": bool(r.get("is_reference")),
@@ -299,7 +339,7 @@ def main(argv=None) -> int:
         manifest = [r for r in json.loads(Path(a.prior_rounds).read_text())
                     if r["round_id"] not in seen] + manifest
     table.to_csv(a.out_merged, index=False)
-    round_long_table(table, manifest, a.pixel_size).to_csv(a.out_round_qc, index=False)
+    round_long_table(table, manifest, a.pixel_size, raw=raw).to_csv(a.out_round_qc, index=False)
     Path(a.out_rounds).write_text(json.dumps(manifest, indent=2) + "\n")
     logger.info("%s: %d QC columns", a.patient_id, sum(is_qc_column(c) for c in table.columns))
     return 0
