@@ -189,3 +189,57 @@ def before_after_box(df, cols, ylabel, title, log_scale=True):
         ax.set_yscale("log")
     ax.set(ylabel=ylabel, title=title)
     return fig
+
+
+_TIER_ORDER = ("low", "medium", "high")
+_BACKEND_TITLE = {"valis": "VALIS", "tiled": "STARE (tiled)"}
+
+
+def cost_by_tier(frame, metrics, ylabels):
+    """Registration cost per backend x tier: one row of panels per metric, one column
+    per backend, x = tier (low -> high), one marker series per refinement depth
+    (VALIS reg_micro_reg, STARE reg_tiled_gate_tre), dodged so depths never overlap.
+    Rows share y, so the two backends read on one scale."""
+    backends = [b for b in ("valis", "tiled") if b in set(frame["backend"])]
+    fig, axes = plt.subplots(
+        len(metrics),
+        len(backends),
+        figsize=(3.2 * len(backends) + 0.8, 2.3 * len(metrics)),
+        sharey="row",
+        squeeze=False,
+    )
+    markers = "osD^v"
+    for j, b in enumerate(backends):
+        sub = frame[frame["backend"] == b]
+        depths = sorted(set(sub["depth"]), key=lambda d: (len(d), d))
+        off = np.linspace(-0.18, 0.18, len(depths)) if len(depths) > 1 else [0.0]
+        for i, (m, lab) in enumerate(zip(metrics, ylabels)):
+            ax = axes[i, j]
+            for k, d in enumerate(depths):
+                dd = sub[sub["depth"] == d]
+                x = [
+                    _TIER_ORDER.index(t) + off[k] if t in _TIER_ORDER else np.nan
+                    for t in dd["tier"]
+                ]
+                ax.plot(
+                    x,
+                    dd[m].to_numpy(dtype=float),
+                    markers[k % len(markers)],
+                    color=f"C{k}",
+                    label=d,
+                    ms=5,
+                )
+            ax.set_xticks(range(len(_TIER_ORDER)))
+            ax.set_xticklabels(_TIER_ORDER)
+            ax.set_xlim(-0.5, len(_TIER_ORDER) - 0.5)
+            ax.set_ylim(bottom=0)  # a cost axis starts at zero, or tiers look further apart
+            if j == 0:
+                ax.set_ylabel(lab)
+        axes[0, j].set_title(_BACKEND_TITLE.get(b, b))
+        axes[0, j].legend(
+            title="micro-reg depth" if b == "valis" else "gate TRE (px)",
+            fontsize=7,
+            title_fontsize=7,
+        )
+        axes[-1, j].set_xlabel("tier")
+    return fig

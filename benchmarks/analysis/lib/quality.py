@@ -305,60 +305,187 @@ def instance_f1(ma, mb, iou_thresh=0.5) -> dict:
     }
 
 
+def _agreement_row(ma, mb) -> dict | None:
+    """Pairwise agreement of two label masks of the same section, or None if they
+    are not the same shape. ``foreground_dice`` is the Dice of the same foreground
+    the IoU scores, by the exact identity Dice = 2J / (1 + J)."""
+    ma, mb = np.asarray(ma), np.asarray(mb)
+    if ma.shape != mb.shape:
+        return None
+    fa, fb = ma > 0, mb > 0
+    inter = int(np.logical_and(fa, fb).sum())
+    union = int(np.logical_or(fa, fb).sum())
+    iou = inter / union if union else float("nan")
+    na, nb = int(ma.max()), int(mb.max())
+    inst = instance_f1(ma, mb)  # IoU-matched per-cell agreement
+    return dict(
+        foreground_iou=iou,
+        foreground_dice=(2 * iou / (1 + iou) if union else float("nan")),
+        instance_f1=inst["f1"],
+        instance_precision=inst["precision"],
+        instance_recall=inst["recall"],
+        matched_cells=inst["matched"],
+        n_cells_a=na,
+        n_cells_b=nb,
+        cell_count_ratio=(na / nb if nb else float("nan")),
+    )
+
+
+def _pairs(by_method: dict, reader, ident: dict) -> list:
+    rows = []
+    methods = sorted(by_method)
+    for i in range(len(methods)):
+        for k in range(i + 1, len(methods)):
+            a, b = methods[i], methods[k]
+            try:
+                row = _agreement_row(reader(by_method[a]), reader(by_method[b]))
+            except Exception:
+                continue
+            if row is not None:
+                rows.append({**ident, "method_a": a, "method_b": b, **row})
+    return rows
+
+
+def _mask_patient(path) -> str:
+    name = Path(path).name
+    for suf in ("_cell_mask.tiff", "_cell_mask.tif"):
+        if name.endswith(suf):
+            return name[: -len(suf)]
+    return name
+
+
 def segmentation_agreement(results_root, run_plan_csv, reader=None) -> pd.DataFrame:
-    """Cross-method agreement on shared cells: for each (target_px, n_channels) segmented by >1 method,
-    compare each pair of methods' cell masks — foreground IoU (spatial agreement) + cell-count ratio
-    (over/under-segmentation rate). Uses one representative run per (cell, method). Best-effort."""
+    """Cross-method agreement: each pair of methods' cell masks of the SAME section --
+    foreground IoU and Dice (spatial agreement), IoU-matched instance F1, and the
+    cell-count ratio (over/under-segmentation). Best-effort.
+
+    Two plan shapes:
+
+      arms   (an ``arm_kind`` column) -- the ``arm_kind == "segmentation"`` arms that
+             resume the same ``from_arm`` registration, compared PER PATIENT (masks
+             matched on ``<patient>_cell_mask.tif``). A registration arm's
+             ``seg_method`` is its QC segmenter, not a candidate, and is never read.
+      sweep  one representative run per method at each (target_px, n_channels).
+    """
     if reader is None:
         import tifffile
 
         reader = tifffile.imread
     root = Path(results_root)
-    plan = pd.read_csv(run_plan_csv)
+    plan = pd.read_csv(run_plan_csv, dtype=str, keep_default_na=False)
     if "seg_method" not in plan.columns:
         return pd.DataFrame()
-    keys = [k for k in ("target_px", "n_channels") if k in plan.columns]
     rows = []
-    for cell, g in plan.groupby(keys):
+    if "arm_kind" in plan.columns:
+        seg = plan[plan["arm_kind"] == "segmentation"]
+        frm_col = "from_arm" if "from_arm" in seg.columns else None
+        for frm, g in seg.groupby(frm_col) if frm_col else [("", seg)]:
+            per_patient: dict = {}
+            for _, r in g.groupby("seg_method").head(1).iterrows():
+                for m in _cell_masks(_run_out(root, r["run_id"])):
+                    per_patient.setdefault(_mask_patient(m), {})[r["seg_method"]] = m
+            for pid in sorted(per_patient):
+                rows += _pairs(
+                    per_patient[pid], reader, {"from_arm": frm, "patient_id": pid}
+                )
+        return pd.DataFrame(rows)
+
+    keys = [k for k in ("target_px", "n_channels") if k in plan.columns]
+    groups = plan.groupby(keys) if keys else [((), plan)]
+    for cell, g in groups:
         by_method = {}
-        for _, r in (
-            g.groupby("seg_method").head(1).iterrows()
-        ):  # one run per method at this cell
+        for _, r in g.groupby("seg_method").head(1).iterrows():
             masks = _cell_masks(_run_out(root, r["run_id"]))
             if masks:
                 by_method[r["seg_method"]] = masks[0]
-        methods = sorted(by_method)
-        for i in range(len(methods)):
-            for k in range(i + 1, len(methods)):
-                a, b = methods[i], methods[k]
-                try:
-                    ma, mb = (
-                        np.asarray(reader(by_method[a])),
-                        np.asarray(reader(by_method[b])),
-                    )
-                except Exception:
-                    continue
-                if ma.shape != mb.shape:
-                    continue
-                fa, fb = ma > 0, mb > 0
-                inter = int(np.logical_and(fa, fb).sum())
-                union = int(np.logical_or(fa, fb).sum())
-                na, nb = int(ma.max()), int(mb.max())
-                inst = instance_f1(ma, mb)  # IoU-matched per-cell agreement
-                row = dict(zip(keys, cell if isinstance(cell, tuple) else (cell,)))
-                row.update(
-                    method_a=a,
-                    method_b=b,
-                    foreground_iou=(inter / union if union else float("nan")),
-                    instance_f1=inst["f1"],
-                    instance_precision=inst["precision"],
-                    instance_recall=inst["recall"],
-                    matched_cells=inst["matched"],
-                    n_cells_a=na,
-                    n_cells_b=nb,
-                    cell_count_ratio=(na / nb if nb else float("nan")),
-                )
-                rows.append(row)
+        ident = dict(zip(keys, cell if isinstance(cell, tuple) else (cell,)))
+        rows += _pairs(by_method, reader, ident)
+    return pd.DataFrame(rows)
+
+
+# ──────────────────────────────────────────── registration cost by tier ──
+# The processes that ARE registration, per backend. Everything else a registration
+# arm runs -- above all the reg_qc=2 QC layer (SEGMENT for the QC nuclei, WARP_SEG_QC,
+# GENERATE_REGISTRATION_QC), which was ~47% of a tiled run -- measures registration
+# and is not its cost.
+REGISTRATION_LEAVES = {
+    "valis": {"REGISTER"},
+    "tiled": {"TILED_COARSE", "TILED_REG_TILE", "TILED_SOLVE", "TILED_STITCH"},
+}
+# Each backend's tier and refinement-depth params (arms.yaml registration_arms).
+_TIER_COLS = {
+    "valis": ("memory_mode", "reg_micro_reg"),
+    "tiled": ("reg_tiled_mode", "reg_tiled_gate_tre"),
+}
+
+
+def _depth_label(backend, v) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if f != f:  # NaN
+        return ""
+    return str(int(f)) if backend == "valis" else str(f)
+
+
+def _n_slides(results_root, run_id) -> float:
+    """Slides the run registered: rows of its csv/registered.csv checkpoint (written at
+    cleanup_level=none, which the arms run at). NaN when absent -- per-slide values
+    are then NaN rather than silently per-run."""
+    p = Path(results_root) / str(run_id) / "csv" / "registered.csv"
+    try:
+        return float(len(pd.read_csv(p)))
+    except Exception:
+        return float("nan")
+
+
+def registration_cost_by_tier(runs_df: pd.DataFrame, results_root) -> pd.DataFrame:
+    """Per registration arm: the cost of REGISTRATION alone -- wall-clock (first
+    registration task start to last end), CPU-hours (realtime x cpus) and the largest
+    single-task peak RSS -- in total and per slide, keyed by backend / tier / depth.
+    One row per arm with ``arm_kind == "registration"``."""
+    if runs_df.empty or "registration_method" not in runs_df.columns:
+        return pd.DataFrame()
+    df = runs_df
+    if "arm_kind" in df.columns:
+        df = df[df["arm_kind"] == "registration"]
+    rows = []
+    for run, g in df.groupby("run_id"):
+        backend = str(g["registration_method"].iloc[0])
+        leaves = REGISTRATION_LEAVES.get(backend)
+        if not leaves:
+            continue
+        reg = g[g["process"].map(_leaf).isin(leaves)]
+        if reg.empty:
+            continue
+        tier_col, depth_col = _TIER_COLS[backend]
+        rt = reg["realtime_s"].fillna(0)
+        cpus = reg["cpus"].fillna(1) if "cpus" in reg else pd.Series(1, index=reg.index)
+        wall = float("nan")
+        if {"start_ts", "complete_ts"} <= set(reg.columns):
+            st, en = reg["start_ts"].dropna(), reg["complete_ts"].dropna()
+            if len(st) and len(en):
+                wall = (en.max() - st.min()).total_seconds() / 3600.0
+        n = _n_slides(results_root, run)
+        cpu_h = float((rt * cpus).sum() / 3600.0)
+        rows.append(
+            {
+                "run_id": run,
+                "backend": backend,
+                "tier": str(g[tier_col].iloc[0]) if tier_col in g else "",
+                "depth": _depth_label(backend, g[depth_col].iloc[0])
+                if depth_col in g
+                else "",
+                "n_slides": n,
+                "reg_wall_h": wall,
+                "reg_cpu_hours": cpu_h,
+                "reg_peak_rss_gb": float(reg["peak_rss_gb"].max()),
+                "wall_h_per_slide": wall / n,
+                "cpu_hours_per_slide": cpu_h / n,
+                "n_tasks": int(len(reg)),
+            }
+        )
     return pd.DataFrame(rows)
 
 

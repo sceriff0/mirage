@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from benchmarks.analysis.lib import quality
 
@@ -265,3 +267,144 @@ def test_segmentation_agreement_pairwise(tmp_path):
     # foreground: s = {(0,0),(0,1),(1,1)}=3px, c = {(0,0),(1,1)}=2px, inter=2, union=3
     assert abs(r["foreground_iou"] - 2 / 3) < 1e-9
     assert r["n_cells_a"] == 2 and r["n_cells_b"] == 2
+    # Dice of the same foreground, via the exact identity Dice = 2J / (1 + J).
+    assert abs(r["foreground_dice"] - 2 * (2 / 3) / (1 + 2 / 3)) < 1e-9
+
+
+def _mk_arm_seg(tmp_path, arm, patient):
+    # arms layout: <root>/<arm>/<patient>/..., no out/ segment (run_arms.sh)
+    d = tmp_path / arm / patient / "segment"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{patient}_cell_mask.tif").write_bytes(b"")
+
+
+def test_segmentation_agreement_on_arms_pairs_segmentation_arms_per_patient(tmp_path):
+    # An arm plan has no target_px/n_channels: the old grouping raised and the table
+    # came out empty. Only arm_kind=segmentation rows are compared, per patient, within
+    # one from_arm; a registration arm's seg_method is its QC segmenter, not a candidate.
+    plan = tmp_path / "arm_plan.csv"
+    pd.DataFrame(
+        {
+            "run_id": ["valis_high_micro2", "seg_instantseg", "seg_stardist", "seg_cellsam"],
+            "arm_kind": ["registration", "segmentation", "segmentation", "segmentation"],
+            "from_arm": ["", "valis_high_micro2", "valis_high_micro2", "valis_high_micro2"],
+            "seg_method": ["instantseg", "instantseg", "stardist", "cellsam"],
+        }
+    ).to_csv(plan, index=False)
+    for arm in ("valis_high_micro2", "seg_instantseg", "seg_stardist", "seg_cellsam"):
+        for pid in ("P1", "P2"):
+            _mk_arm_seg(tmp_path, arm, pid)
+    masks = {
+        "seg_instantseg": np.array([[1, 1], [0, 2]]),
+        "seg_stardist": np.array([[1, 0], [0, 2]]),
+        "seg_cellsam": np.array([[1, 1], [2, 2]]),
+    }
+
+    def reader(p):
+        arm = Path(p).parts[-4]
+        assert arm != "valis_high_micro2", "registration arm must not be read"
+        return masks[arm]
+
+    out = quality.segmentation_agreement(tmp_path, plan, reader=reader)
+    assert len(out) == 6  # 3 method pairs x 2 patients
+    assert set(out["patient_id"]) == {"P1", "P2"}
+    assert set(out["from_arm"]) == {"valis_high_micro2"}
+    pairs = {frozenset((a, b)) for a, b in zip(out["method_a"], out["method_b"])}
+    assert pairs == {
+        frozenset(("cellsam", "instantseg")),
+        frozenset(("cellsam", "stardist")),
+        frozenset(("instantseg", "stardist")),
+    }
+    r = out[(out["method_a"] == "instantseg") & (out["method_b"] == "stardist")].iloc[0]
+    assert abs(r["foreground_iou"] - 2 / 3) < 1e-9
+    assert abs(r["foreground_dice"] - 0.8) < 1e-9
+
+
+def _trace_rows(run, backend, tier, depth, procs):
+    # procs: (process, realtime_s, cpus, peak_rss_gb, start_s)
+    base = pd.Timestamp("2026-01-01")
+    return [
+        {
+            "run_id": run,
+            "arm_kind": "registration",
+            "registration_method": backend,
+            "memory_mode": tier if backend == "valis" else "",
+            "reg_micro_reg": depth if backend == "valis" else "",
+            "reg_tiled_mode": tier if backend == "tiled" else "",
+            "reg_tiled_gate_tre": depth if backend == "tiled" else "",
+            "seg_method": "instantseg",
+            "seg_qc_pairing": "lsa",
+            "process": f"MIRAGE:REGISTRATION:{p}",
+            "realtime_s": rt,
+            "cpus": c,
+            "peak_rss_gb": rss,
+            "start_ts": base + pd.Timedelta(seconds=st),
+            "complete_ts": base + pd.Timedelta(seconds=st + rt),
+        }
+        for p, rt, c, rss, st in procs
+    ]
+
+
+def _registered_csv(root, run, n):
+    d = root / run / "csv"
+    d.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"patient_id": ["P1"] * n, "image": [f"s{i}" for i in range(n)]}).to_csv(
+        d / "registered.csv", index=False
+    )
+
+
+def test_registration_cost_by_tier_counts_registration_processes_only(tmp_path):
+    rows = _trace_rows(
+        "valis_high_micro2", "valis", "high", "2",
+        [
+            ("REGISTER", 3600, 8, 40.0, 0),
+            # the reg_qc=2 QC layer: not registration cost, must not count
+            ("WARP_SEG_QC", 7200, 16, 90.0, 3600),
+            ("SEGMENT", 7200, 16, 99.0, 3600),
+        ],
+    ) + _trace_rows(
+        "stare_high", "tiled", "high", "1.0",
+        [
+            ("TILED_COARSE", 600, 4, 10.0, 0),
+            ("TILED_REG_TILE", 1200, 2, 5.0, 600),
+            ("TILED_REG_TILE", 1200, 2, 6.0, 600),
+            ("TILED_SOLVE", 300, 1, 2.0, 1800),
+            ("TILED_STITCH", 900, 4, 30.0, 2100),
+        ],
+    )
+    runs = pd.DataFrame(rows)
+    _registered_csv(tmp_path, "valis_high_micro2", 4)
+    _registered_csv(tmp_path, "stare_high", 4)
+    out = quality.registration_cost_by_tier(runs, tmp_path).set_index("run_id")
+
+    v = out.loc["valis_high_micro2"]
+    assert v["backend"] == "valis" and v["tier"] == "high" and v["depth"] == "2"
+    assert v["n_slides"] == 4
+    assert v["reg_peak_rss_gb"] == pytest.approx(40.0)  # QC's 99 GB excluded
+    assert v["reg_cpu_hours"] == pytest.approx(8.0)
+    assert v["reg_wall_h"] == pytest.approx(1.0)
+    assert v["cpu_hours_per_slide"] == pytest.approx(2.0)
+    assert v["wall_h_per_slide"] == pytest.approx(0.25)
+
+    s = out.loc["stare_high"]
+    assert s["backend"] == "tiled" and s["tier"] == "high" and s["depth"] == "1.0"
+    assert s["reg_wall_h"] == pytest.approx(3000 / 3600)  # first start -> last end
+    assert s["reg_cpu_hours"] == pytest.approx((2400 + 2400 + 2400 + 300 + 3600) / 3600)
+    assert s["reg_peak_rss_gb"] == pytest.approx(30.0)
+
+
+def test_registration_cost_by_tier_without_checkpoint_has_nan_per_slide(tmp_path):
+    runs = pd.DataFrame(
+        _trace_rows("valis_low_micro0", "valis", "low", "0", [("REGISTER", 3600, 4, 8.0, 0)])
+    )
+    out = quality.registration_cost_by_tier(runs, tmp_path)
+    assert len(out) == 1
+    assert np.isnan(out.iloc[0]["n_slides"])
+    assert np.isnan(out.iloc[0]["cpu_hours_per_slide"])
+    assert out.iloc[0]["reg_cpu_hours"] == pytest.approx(4.0)
+
+
+def test_registration_cost_by_tier_skips_non_registration_arms(tmp_path):
+    rows = _trace_rows("x", "valis", "high", "2", [("REGISTER", 60, 1, 1.0, 0)])
+    rows[0]["arm_kind"] = "segmentation"
+    assert quality.registration_cost_by_tier(pd.DataFrame(rows), tmp_path).empty

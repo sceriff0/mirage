@@ -11,7 +11,8 @@ It reads the pipeline's own trace + QC outputs and writes ``<outdir>/`` (default
   registration_valis_rtre.csv per (run, slide): VALIS's own feature-based registration error (rTRE / D)
                              from the summary CSVs it writes during register() — the independent, second
                              accuracy signal (also rendered in the pipeline's final QC report)
-  segmentation_agreement.csv per method-pair on a shared cell: instance-F1 + foreground IoU (stability)
+  segmentation_agreement.csv per method-pair on the same section (sweep cell, or arm patient):
+                             instance-F1 + foreground IoU/Dice (stability)
   param_matrix.csv           runs_master joined with the registration + segmentation-quality headlines —
                              every knob's cost AND quality in one wide table (for parameter tuning)
 
@@ -349,14 +350,23 @@ _DICTS = {
         ],
     ),
     "segmentation_agreement": (
-        "Cross-method segmentation stability on a shared input cell (no ground truth): each method pair "
-        "compared by IoU-matched instance-F1 and foreground IoU. Consensus = mean instance_f1.",
+        "Cross-method segmentation stability on the same section (no ground truth): each method pair "
+        "compared by IoU-matched instance-F1 and foreground IoU/Dice. Consensus = mean instance_f1. "
+        "Sweep: one row per pair per (target_px, n_channels). Arms: one row per pair per patient, "
+        "over the segmentation arms resuming one registration arm (from_arm).",
         [
-            ("target_px", "px", "Input edge length of the shared cell."),
-            ("n_channels", "-", "Channels of the shared cell."),
+            ("target_px", "px", "Sweep only: input edge length of the shared cell."),
+            ("n_channels", "-", "Sweep only: channels of the shared cell."),
+            ("from_arm", "-", "Arms only: the registration arm every compared segmentation resumed."),
+            ("patient_id", "-", "Arms only: the patient (whole section) compared."),
             ("method_a", "-", "First segmentation method."),
             ("method_b", "-", "Second segmentation method."),
             ("foreground_iou", "-", "Foreground-mask IoU between the two methods."),
+            (
+                "foreground_dice",
+                "-",
+                "Foreground-mask Dice between the two methods, = 2*IoU / (1 + IoU).",
+            ),
             (
                 "instance_f1",
                 "-",
