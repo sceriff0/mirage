@@ -256,7 +256,7 @@ jobs:
     # That is the end state; this workflow is where it waits, not where it belongs.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Nextflow and nf-test
         # The action pins Nextflow to the supported release by default: nf-test
@@ -267,7 +267,7 @@ jobs:
           nf-test-version: ${{ env.NFTEST_VERSION }}
 
       - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Generate test data
         uses: ./.github/actions/generate-testdata
@@ -278,7 +278,7 @@ jobs:
 
       - name: Upload nf-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nf-test-real-results
           path: |
@@ -300,7 +300,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Nextflow and nf-test
         # The action pins Nextflow to the supported release by default: nf-test
@@ -311,7 +311,7 @@ jobs:
           nf-test-version: ${{ env.NFTEST_VERSION }}
 
       - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Generate test data
         uses: ./.github/actions/generate-testdata
@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload nf-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nf-test-integration-results
           path: |

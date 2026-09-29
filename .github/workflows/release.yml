@@ -161,7 +161,7 @@ jobs:
           echo "Version format OK: $VERSION"
 
       - name: Checkout the ref that will be tagged
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.get_version.outputs.gate_ref }}
 
@@ -263,7 +263,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository (main, full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -335,7 +335,7 @@ jobs:
     if: github.event_name == 'release'
     steps:
       - name: Checkout the released tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.version }}
 
@@ -418,7 +418,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout the released tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.version }}
 
@@ -463,7 +463,7 @@ jobs:
           ls -lh "$ARCHIVE_NAME"
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-archive
           path: mirage-*.tar.gz
@@ -484,24 +484,24 @@ jobs:
       contents: write
     steps:
       - name: Checkout the released tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.validate.outputs.version }}
 
       - name: Download release archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-archive
 
       - name: Upload archive to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: mirage-*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update release body
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body: |
             ## MIRAGE Pipeline Release ${{ needs.validate.outputs.version }}
