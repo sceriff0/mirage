@@ -6,4 +6,4 @@
 #
 # Powers STARE's DISK + LightGlue COARSE front-end
 # (bin/utils/coarse_align.py::_frontend_disk_lightglue).
-kornia==0.7.3
+kornia==0.8.3
