@@ -192,17 +192,29 @@ def before_after_box(df, cols, ylabel, title, log_scale=True):
 
 
 _TIER_ORDER = ("low", "medium", "high")
-# benchmarking_new_method: the tiled backend on this line is DRAPE (the drape stats stage of
-# submit_all_figures.sh runs make_figures from this checkout). Branch-specific.
-_BACKEND_TITLE = {"valis": "VALIS", "tiled": "DRAPE (tiled)"}
+# Keyed on the plan's `method` (quality._family): one results root holds VALIS, STARE v1
+# (pinned-code arms) and DRAPE. `tiled` only appears for a plan without a `method` column,
+# which on this line is DRAPE.
+_BACKEND_TITLE = {
+    "valis": "VALIS",
+    "stare": "STARE v1",
+    "drape": "DRAPE",
+    "tiled": "DRAPE (tiled)",
+}
+_DEPTH_TITLE = {
+    "valis": "micro-reg depth",
+    "stare": "gate TRE (px)",
+    "drape": "stride (px)",
+    "tiled": "depth",
+}
 
 
 def cost_by_tier(frame, metrics, ylabels):
     """Registration cost per backend x tier: one row of panels per metric, one column
     per backend, x = tier (low -> high), one marker series per refinement depth
-    (VALIS reg_micro_reg, STARE reg_tiled_gate_tre), dodged so depths never overlap.
-    Rows share y, so the two backends read on one scale."""
-    backends = [b for b in ("valis", "tiled") if b in set(frame["backend"])]
+    (VALIS reg_micro_reg, STARE v1 reg_tiled_gate_tre, DRAPE reg_tiled_stride), dodged
+    so depths never overlap. Rows share y, so the backends read on one scale."""
+    backends = [b for b in _BACKEND_TITLE if b in set(frame["backend"])]
     fig, axes = plt.subplots(
         len(metrics),
         len(backends),
@@ -239,7 +251,7 @@ def cost_by_tier(frame, metrics, ylabels):
                 ax.set_ylabel(lab)
         axes[0, j].set_title(_BACKEND_TITLE.get(b, b))
         axes[0, j].legend(
-            title="micro-reg depth" if b == "valis" else "gate TRE (px)",
+            title=_DEPTH_TITLE.get(b, "depth"),
             fontsize=7,
             title_fontsize=7,
         )

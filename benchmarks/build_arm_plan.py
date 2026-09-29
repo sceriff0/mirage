@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 from pathlib import Path
 
 try:
@@ -65,6 +66,35 @@ EXTERNAL_ONLY = (
     "ext_max_shift_um",
     "ext_seg_method",
 )
+
+# THE METHOD A ROW BELONGS TO, and which code runs it. `backend`/`registration_method` cannot
+# say this on their own: STARE v1 and DRAPE both run registration_method=tiled. `method` is
+# what METHODS= selects on (submit_arms.sh) and what the analysis groups by; `code_ref` is
+# blank for the current checkout, or the commit a PINNED row runs from (benchmarks/
+# code_snapshot.py); `pinned_params` names, `;`-separated, the columns run_arms.sh forwards
+# for that row only -- params that exist in the pinned tree's nextflow.config but not in
+# this one (reg_tiled_gate_tre, reg_tiled_solver); `role=upstream` marks a row included
+# only because a selected row needs its output -- it is launched (a finished one is DONE at
+# once) but never moved aside by ARMS_REPLACE.
+ROW_META = ("method", "code_ref", "pinned_params", "role")
+
+# METHODS vocabulary. `stare` exists only as pinned rows (pinned_code_arms in arms.yaml).
+METHODS = ("preprocess", "valis", "drape", "stare", "ashlar", "seg", "compute")
+
+
+def _method_of(row: dict) -> str:
+    kind = row.get("arm_kind", "")
+    if kind == "preprocess":
+        return "preprocess"
+    if kind == "external":
+        return "ashlar"
+    if kind == "segmentation":
+        return "seg"
+    if kind == "compute":
+        return "compute"
+    # registration / registration_qc: this tree's tiled backend IS DRAPE.
+    return {"valis": "valis", "tiled": "drape"}.get(row.get("registration_method"), "")
+
 
 # ASHLAR_ONLY = ("reg_ashlar_tile", "reg_ashlar_overlap", "reg_ashlar_max_shift_um") is GONE
 # with the arm. Those three are not pipeline params any more -- nextflow.config declares none
@@ -603,7 +633,110 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                     }
                 )
                 n += 1
+    for r in rows:
+        r["method"] = _method_of(r)
+        r.update({k: "" for k in ROW_META if k != "method"})
     return rows
+
+
+# -----------------------------------------------------------------------------
+# PINNED-CODE ARMS (arms.yaml `pinned_code_arms`). Rows built BY THE PINNED TREE'S OWN
+# build_arm_plan.py from ITS OWN arms.yaml, so names, params and labels are exactly the
+# ones the results already on disk were launched with -- never re-derived here, where
+# the knobs they vary (reg_tiled_gate_tre, reg_tiled_solver) no longer exist.
+# -----------------------------------------------------------------------------
+def pinned_rows(
+    old_plan: list[dict],
+    old_labels: dict[str, str],
+    *,
+    method: str,
+    code_ref: str,
+    select: str,
+    current_columns: set[str],
+) -> list[dict]:
+    """The `select` component's closure in a pinned tree's plan, tagged to run from it.
+
+    `select` is an impact component evaluated on the OLD plan (`tiled` = every STARE base
+    arm, its QC crosses and its solver crosses). Columns the current plan lacks are kept
+    (the analysis reads them) and listed in `pinned_params`, which is what run_arms.sh
+    forwards for this row alone -- this tree's add_param list must name only params this
+    tree's nextflow.config declares.
+    """
+    sel = impact.affected_rows(old_plan, [select])
+    if not sel:
+        raise ValueError(
+            f"pinned_code_arms.{method}: component {select!r} selects no row of the plan "
+            f"built at {code_ref}"
+        )
+    bookkeeping = {"run_id", "arm_kind", "arm", "label", *ROW_META}
+    out = []
+    for r in sel:
+        row = {k: ("" if v is None else v) for k, v in r.items()}
+        extra = sorted(
+            k
+            for k, v in row.items()
+            if k not in current_columns and k not in bookkeeping and str(v) != ""
+        )
+        row.update(
+            method=method,
+            code_ref=code_ref,
+            pinned_params=";".join(extra),
+            role="",
+        )
+        _LABELS[row["arm"]] = old_labels.get(row["arm"], row["arm"])
+        out.append(row)
+    return out
+
+
+def check_pinned_params(rows: list[dict], schema_path: Path) -> list[str]:
+    """Every forwarded pinned param must be declared by the PINNED tree's schema."""
+    import json
+
+    declared: set[str] = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            declared.update((node.get("properties") or {}).keys())
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(json.loads(schema_path.read_text()))
+    return [
+        f"  {r['arm']}: {p} is not declared in {schema_path}"
+        for r in rows
+        for p in filter(None, str(r.get("pinned_params", "")).split(";"))
+        if p not in declared
+    ]
+
+
+def select_methods(
+    plan: list[dict],
+    methods: list[str],
+    changed: list[str] | None = None,
+    only: str | None = None,
+) -> list[dict]:
+    """Rows of the chosen methods (or, with changed/only, those seeds restricted to the
+    methods, then their dependants), plus everything upstream they read, as role=upstream."""
+    unknown = sorted(set(methods) - set(METHODS))
+    if unknown:
+        raise ValueError(f"unknown method(s) {unknown}; known: {list(METHODS)}")
+    want = set(methods)
+    if changed or only is not None:
+        seeds = [
+            r for r in impact.seeds(plan, changed or [], only) if r["method"] in want
+        ]
+    else:
+        seeds = [r for r in plan if r["method"] in want]
+    chosen = impact.closure(plan, seeds)
+    ids = {id(r) for r in chosen}
+    for r in impact.upstream(plan, chosen):
+        if id(r) not in ids:
+            r["role"] = "upstream"
+            ids.add(id(r))
+    return [r for r in plan if id(r) in ids]
 
 
 def arms_manifest_rows(plan: list[dict]) -> list[dict]:
@@ -629,7 +762,9 @@ def arms_manifest_rows(plan: list[dict]) -> list[dict]:
             "label": _LABELS[r["arm"]],
         }
         for r in plan
-        if r["arm_kind"] in ("registration", "registration_qc", "external")
+        # registration_solver: a pinned STARE v1 SOLVE-stage cross -- ranked like any arm.
+        if r["arm_kind"]
+        in ("registration", "registration_qc", "registration_solver", "external")
     ]
 
 
@@ -671,9 +806,12 @@ def validate_against_schema(plan: list[dict], schema_path: Path) -> list[str]:
     """
     enums = schema_enums(schema_path)
     bad = []
+    # Compared as TEXT: the plan is written as text anyway, and pinned-code rows come back
+    # from the pinned builder's CSV as strings ('2', never 2).
+    allowed = {k: {str(e) for e in v} for k, v in enums.items()}
     for r in plan:
         for k, v in r.items():
-            if k in enums and v not in ("", None) and v not in enums[k]:
+            if k in enums and v not in ("", None) and str(v) not in allowed[k]:
                 bad.append(f"  {r['arm']}: {k}={v!r} -- allowed: {enums[k]}")
     return bad
 
@@ -719,6 +857,90 @@ def read_input_patients(input_csv: Path) -> list[str]:
     return seen
 
 
+def _pinned_code_plan(
+    cfg: dict, input_csv: Path, code_root: Path, plan: list[dict]
+) -> list[dict]:
+    """Rows of every enabled `pinned_code_arms` entry, each built by its own snapshot."""
+    import subprocess
+    import sys
+    import tempfile
+
+    try:
+        from benchmarks import code_snapshot
+    except ModuleNotFoundError:
+        import code_snapshot  # type: ignore[no-redef]
+
+    out: list[dict] = []
+    current_columns = {k for r in plan for k in r}
+    taken = {r["run_id"] for r in plan}
+    for method, spec in (cfg.get("pinned_code_arms") or {}).items():
+        if not (spec or {}).get("enabled"):
+            continue
+        if method not in METHODS:
+            raise SystemExit(
+                f"pinned_code_arms.{method}: not a method name {list(METHODS)}"
+            )
+        ref = str(spec["code_ref"])
+        try:
+            snap = code_snapshot.materialise(
+                Path(__file__).resolve().parents[1], ref, code_root
+            )
+        except code_snapshot.SnapshotError as exc:
+            raise SystemExit(f"pinned_code_arms.{method}: {exc}") from exc
+        sha = (snap / code_snapshot.COMPLETE).read_text().strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            r = subprocess.run(
+                [
+                    sys.executable,
+                    str(snap / "benchmarks" / "build_arm_plan.py"),
+                    "--arms",
+                    str(snap / "benchmarks" / "configs" / "arms.yaml"),
+                    "--input",
+                    str(input_csv),
+                    "--out",
+                    f"{tmp}/plan.csv",
+                    "--results-root",
+                    tmp,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if r.returncode != 0:
+                raise SystemExit(
+                    f"pinned_code_arms.{method}: the plan builder at {sha[:12]} failed:\n"
+                    + r.stdout
+                    + r.stderr
+                )
+            with open(f"{tmp}/plan.csv", newline="") as fh:
+                old_plan = list(csv.DictReader(fh))
+            with open(f"{tmp}/arms.csv", newline="") as fh:
+                old_labels = {m["arm_dir"]: m["label"] for m in csv.DictReader(fh)}
+        rows = pinned_rows(
+            old_plan,
+            old_labels,
+            method=method,
+            code_ref=sha,
+            select=spec.get("select", "tiled"),
+            current_columns=current_columns,
+        )
+        clash = sorted({r["run_id"] for r in rows} & taken)
+        if clash:
+            raise SystemExit(
+                f"pinned_code_arms.{method}: run_ids already produced by this tree's "
+                f"plan: {clash}. Two codes must never write one arm directory."
+            )
+        bad = check_pinned_params(rows, snap / "nextflow_schema.json")
+        if bad:
+            raise SystemExit(
+                "pinned params the pinned tree does not declare:\n" + "\n".join(bad)
+            )
+        taken |= {r["run_id"] for r in rows}
+        print(f"Pinned {method}: {len(rows)} rows from {sha[:12]} ({snap})")
+        out += rows
+    return out
+
+
 def main():
     import yaml
 
@@ -757,14 +979,46 @@ def main():
         help="write only the rows whose arm or run_id matches this regex (re.search), "
         "plus the same closure. Combines with --changed (union).",
     )
+    ap.add_argument(
+        "--methods",
+        default="",
+        metavar="LIST",
+        help=f"comma list from {list(METHODS)}: write only those methods' rows, plus "
+        "every row they read from (role=upstream: launched, DONE at once if finished, "
+        "never moved by ARMS_REPLACE). With --changed/--only, restricts their seeds.",
+    )
+    ap.add_argument(
+        "--full-out",
+        type=Path,
+        default=None,
+        help="ALSO write the full plan here when --out is a subset: the analysis reads "
+        "the full plan, and it must list every method sharing the results root",
+    )
+    ap.add_argument(
+        "--code-root",
+        type=Path,
+        default=None,
+        help="where pinned-code snapshots live (default: <results-root>/.code, the "
+        "same place run_arms.sh looks)",
+    )
     a = ap.parse_args()
 
     cfg = yaml.safe_load(a.arms.read_text())
     plan = build_arm_plan(cfg)
+    root = a.results_root or a.out.parent
+    plan += _pinned_code_plan(cfg, a.input, a.code_root or root / ".code", plan)
     # The FULL plan is always what the schema check, the manifest and the header
     # come from; a subset is a selection over it, never a re-expansion.
-    subset = a.changed or a.only is not None
-    rows = impact.affected_rows(plan, a.changed, a.only) if subset else plan
+    # `+` as well as `,`: sbatch --export splits its value list on commas, so
+    # METHODS=stare,drape never reaches the job whole; METHODS=stare+drape does.
+    methods = [m for m in re.split(r"[,+\s]+", a.methods) if m]
+    subset = bool(a.changed or a.only is not None or methods)
+    if methods:
+        rows = select_methods(plan, methods, a.changed, a.only)
+    elif subset:
+        rows = impact.affected_rows(plan, a.changed, a.only)
+    else:
+        rows = plan
 
     # Fail before anything is written, so a stale plan is never left behind for
     # the launcher's non-empty check to accept.
@@ -796,7 +1050,15 @@ def main():
         )
     lead = ["run_id", "arm_kind", "arm"]
     _write_csv(a.out, rows, lead, fields=csv_fields(plan, lead))
-    root = a.results_root or a.out.parent
+    if a.full_out is not None and a.full_out.resolve() != a.out.resolve():
+        # Upstream marks are a property of one selection, not of the plan.
+        _write_csv(
+            a.full_out,
+            [dict(r, role="") for r in plan],
+            lead,
+            fields=csv_fields(plan, lead),
+        )
+        print(f"Wrote the full plan ({len(plan)} rows) to {a.full_out}")
     # arms.csv is the consumer's LABEL manifest and is written from the FULL plan
     # even for a subset: registration_arms.R walks <root> and labels every arm it
     # finds there, and a subset re-run leaves the unaffected arms' results in place.
@@ -815,8 +1077,14 @@ def main():
     if subset:
         print(
             f"Wrote {len(rows)} of {len(plan)} arm runs ({kinds}) to {a.out} "
-            f"-- SUBSET for --changed {a.changed} --only {a.only!r}"
+            f"-- SUBSET for --changed {a.changed} --only {a.only!r} --methods {methods}"
         )
+        up = sum(1 for r in rows if r.get("role") == "upstream")
+        if up:
+            print(
+                f"  {up} of them are upstream only (their output is read by a selected "
+                "row): DONE at once when finished, never moved by ARMS_REPLACE"
+            )
         print(
             "NOTE: point the analysis (make arm-tables) at the FULL plan, not this "
             "subset; the tables must cover every arm in the results root."

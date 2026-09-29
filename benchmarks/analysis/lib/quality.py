@@ -412,11 +412,27 @@ REGISTRATION_LEAVES = {
     "valis": {"REGISTER"},
     "tiled": {"TILED_COARSE", "TILED_REG_TILE", "TILED_SOLVE", "TILED_STITCH"},
 }
-# Each backend's tier and refinement-depth params (arms.yaml registration_arms).
+# Each METHOD's tier and refinement-depth params (arms.yaml registration_arms). Keyed on
+# the plan's `method` column, not on registration_method: STARE v1 (a pinned-code arm,
+# depth = TRE gate) and DRAPE (depth = vector-lattice stride) are both `tiled`, and one
+# results root holds both. `tiled` is the fallback for a plan without a `method` column.
 _TIER_COLS = {
     "valis": ("memory_mode", "reg_micro_reg"),
+    "stare": ("reg_tiled_mode", "reg_tiled_gate_tre"),
+    "drape": ("reg_tiled_mode", "reg_tiled_stride"),
     "tiled": ("reg_tiled_mode", "reg_tiled_gate_tre"),
 }
+_INTEGER_DEPTH = {"valis", "drape"}  # micro-reg depth and stride (px) are counts
+
+
+def _family(g: pd.DataFrame) -> str:
+    """The row group's method: the plan's `method` when it names a registration method,
+    else registration_method."""
+    if "method" in g.columns:
+        m = str(g["method"].iloc[0])
+        if m in _TIER_COLS:
+            return m
+    return str(g["registration_method"].iloc[0])
 
 
 def _depth_label(backend, v) -> str:
@@ -426,7 +442,7 @@ def _depth_label(backend, v) -> str:
         return str(v)
     if f != f:  # NaN
         return ""
-    return str(int(f)) if backend == "valis" else str(f)
+    return str(int(f)) if backend in _INTEGER_DEPTH else str(f)
 
 
 def _n_slides(results_root, run_id) -> float:
@@ -452,13 +468,13 @@ def registration_cost_by_tier(runs_df: pd.DataFrame, results_root) -> pd.DataFra
         df = df[df["arm_kind"] == "registration"]
     rows = []
     for run, g in df.groupby("run_id"):
-        backend = str(g["registration_method"].iloc[0])
-        leaves = REGISTRATION_LEAVES.get(backend)
+        leaves = REGISTRATION_LEAVES.get(str(g["registration_method"].iloc[0]))
         if not leaves:
             continue
         reg = g[g["process"].map(_leaf).isin(leaves)]
         if reg.empty:
             continue
+        backend = _family(g)
         tier_col, depth_col = _TIER_COLS[backend]
         rt = reg["realtime_s"].fillna(0)
         cpus = reg["cpus"].fillna(1) if "cpus" in reg else pd.Series(1, index=reg.index)

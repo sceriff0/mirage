@@ -177,6 +177,23 @@ def affected_rows(
     return closure(plan, seeds(plan, changed, only))
 
 
+def upstream(plan: list[Row], rows: Iterable[Row]) -> list[Row]:
+    """Every row that `rows` read from, transitively (the reverse of `closure`): the base
+    a cross resumes, the arm whose checkpoint a row starts from, the arm whose nuclei an
+    external arm scores on. What a METHODS= selection must also launch -- a finished one is
+    DONE at once -- or its first row would SKIP on a missing checkpoint in a fresh root."""
+    by_name = {_row_name(r): r for r in plan}
+    want = {_s(r, c) for r in rows for c in DEPENDENCY_COLUMNS} - {""}
+    seen: set[str] = set()
+    while want - seen:
+        name = (want - seen).pop()
+        seen.add(name)
+        r = by_name.get(name)
+        if r is not None:
+            want |= {_s(r, c) for c in DEPENDENCY_COLUMNS} - {""}
+    return [r for r in plan if _row_name(r) in seen]
+
+
 def dependants(plan: list[Row], name: str) -> list[Row]:
     """Rows that depend DIRECTLY on the arm/run named `name` (its QC crosses,
     the segmentation arms resuming its checkpoint, an external arm scoring

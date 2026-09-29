@@ -14,9 +14,16 @@
 # and the final build at the end:
 #
 #   stats       benchmarks.analysis.make_figures, once per results root:
-#                 arms   ARMS_RESULTS  + ARMS_PLAN      (benchmarking checkout, SRC_DIR)
+#                 arms   ARMS_RESULTS  + ARMS_PLAN      (SRC_DIR)
 #                 sweep  SWEEP_RESULTS + SWEEP_PLAN     (SRC_DIR)
-#                 drape  DRAPE_RESULTS + DRAPE_PLAN     (DRAPE_SRC, benchmarking_new_method)
+#                 drape  DRAPE_RESULTS + DRAPE_PLAN     (DRAPE_SRC) -- LEGACY, see below
+#
+#   ONE ROOT FOR EVERY METHOD (2026-09-29). submit_arms.sh on benchmarking_new_method now
+#   runs VALIS, DRAPE, STARE v1 (pinned-code arms), ASHLAR and seg into ONE results root,
+#   and arm_plan.csv carries a `method` column the analysis splits STARE from DRAPE by. So
+#   point SRC_DIR at the benchmarking_new_method checkout, ARMS_* at that root, and leave
+#   DRAPE_SRC/DRAPE_RESULTS/DRAPE_PLAN UNSET: the drape stage and the --append-arms
+#   hand-off exist only for the old two-root layout and would add the DRAPE arms twice.
 #               -> $OUT/stats/<name>/   (or $OUT/stats_preview/<name>/ with placeholders)
 #   composites  benchmarks/submit_figures.sh inline (mosaic, overlay, zoom, crop, channel),
 #               needs INPUT (samplesheet) and CONFIG (figures.yaml) -> $OUT/composites/
@@ -44,13 +51,11 @@
 # Submit (login node). Every knob in --export, NEVER as `VAR=x sbatch` (it does not reach
 # the job at this site), and no commas inside a value:
 #   B=/beegfs/scratch/ieo7660/ihc_method/benchmark
-#   DB=/beegfs/scratch/ieo7660/ihc_method/benchmark_drape
 #   mkdir -p /beegfs/scratch/ieo7660/ihc_method/figures_all && cd $_
 #   cp ~/pipelines/mirage/benchmarks/configs/figures.yaml .
 #   sbatch --export=ALL,PLACEHOLDER_MISSING=1,\
 #   ARMS_RESULTS=$B/arm_results,ARMS_PLAN=$B/arm_plan.csv,\
 #   SWEEP_RESULTS=$B/bench_results,SWEEP_PLAN=$B/bench_run_plan.csv,\
-#   DRAPE_SRC=$HOME/pipelines/mirage_drape,DRAPE_RESULTS=$DB/arm_results,DRAPE_PLAN=$DB/arm_plan.subset.csv,\
 #   INPUT=/beegfs/scratch/ieo7660/ihc_method/head_neck/input.csv,CONFIG=figures.yaml,\
 #   ANHIR_DIR=/beegfs/scratch/ieo7660/ihc_method/anhir,IHC=$HOME/ihc_method,IHC_BUILD=1 \
 #     ~/pipelines/mirage/benchmarks/submit_all_figures.sh
@@ -60,8 +65,8 @@
 
 # ---- knobs ---------------------------------------------------------------------
 OUT="${OUT:-${SLURM_SUBMIT_DIR:-$PWD}}"
-SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"            # `benchmarking` checkout
-DRAPE_SRC="${DRAPE_SRC:-}"                              # `benchmarking_new_method` checkout
+SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"            # the checkout that ran the arms
+DRAPE_SRC="${DRAPE_SRC:-}"                              # LEGACY two-root layout only; leave unset
 CONDA_ENV="${CONDA_ENV:-nf-env}"
 STAGES="${STAGES:-stats composites anhir handoff ihc}"
 PLACEHOLDER_MISSING="${PLACEHOLDER_MISSING:-0}"

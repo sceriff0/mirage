@@ -32,11 +32,14 @@
 # them from there. The SWEEP's equivalents land in benchmarks/_handoff/sweep --
 # separate roots, because the two experiments write the same filenames.
 #
-# Prereq (login node, once): the benchmark lives on the `benchmarking` branch, so
-# the checkout must be on it --
+# Prereq (login node, once): the ONE launcher for every method lives on
+# `benchmarking_new_method` (STARE v1 runs from a pinned snapshot it makes itself, so
+# no second checkout and no branch switching -- one checkout, one head, one root) --
 #   git -C ~/pipelines/mirage fetch origin
-#   git -C ~/pipelines/mirage checkout benchmarking
+#   git -C ~/pipelines/mirage checkout benchmarking_new_method
 #   git -C ~/pipelines/mirage pull
+# Never switch this checkout's branch while a head job runs: every launch reads its
+# code from here at launch time, not at submission.
 #
 # Submit:  cd /beegfs/scratch/ieo7660/ihc_method/benchmark
 #          mkdir -p logs && sbatch ~/pipelines/mirage/benchmarks/submit_arms.sh
@@ -97,8 +100,47 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # and PEAK_JOBS_TARGET can change between a stop and a resume without re-running anything:
 #   sbatch --export=ALL,ARMS_RESUME=1,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 \
 #          benchmarks/submit_arms.sh
+#
+# ONE BENCHMARK, EVERY METHOD. This results root holds VALIS, DRAPE (this tree's tiled
+# backend), STARE v1 (pinned_code_arms in arms.yaml: run from a snapshot of the commit
+# that last had it, under $RESULTS/.code/), ASHLAR and the segmentation arms. Choose:
+#   METHODS=valis+stare+drape+ashlar+seg+compute   (`+`-separated -- sbatch --export
+#                                                   splits on commas; empty = all)
+# A selection also launches what it reads (preprocess_shared, a cross's base, ASHLAR's
+# nuclei arm) as UPSTREAM rows: DONE at once when finished, never moved by ARMS_REPLACE.
+#   sbatch --export=ALL,ARMS_RESUME=1,METHODS=drape benchmarks/submit_arms.sh
+#
+# REDO WHAT GIVEN HEAD JOBS LAUNCHED. REDO_LAUNCHED_BY="7268624 7268693" reads those jobs'
+# logs ($ARMS_LOG_DIR/arms_<id>.out), takes every run they actually LAUNCHED ("[id] arm=")
+# -- not the ones they found DONE or skipped -- and relaunches exactly those plus their
+# dependants, moving the old results aside (ARMS_REPLACE=1, never deleted). For the
+# 2026-09-29 collision, when two heads on two branches shared this root and one checkout.
+#   sbatch --export=ALL,ARMS_RESUME=1,REDO_LAUNCHED_BY=7268624+7268693 benchmarks/submit_arms.sh
+# (`+` or space separates ids: sbatch --export splits on commas.)
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
+METHODS="${METHODS:-}"
+REDO_LAUNCHED_BY="${REDO_LAUNCHED_BY:-}"
+ARMS_LOG_DIR="${ARMS_LOG_DIR:-$HOME/pipelines/logs}"
+if [[ -n "$REDO_LAUNCHED_BY" ]]; then
+    if [[ -n "$ONLY" ]]; then
+        echo "ERROR: REDO_LAUNCHED_BY and ONLY both select rows; set one." >&2; exit 1
+    fi
+    _redo_ids=""
+    for _job in ${REDO_LAUNCHED_BY//+/ }; do
+        _log="$ARMS_LOG_DIR/arms_${_job}.out"
+        [[ -f "$_log" ]] || { echo "ERROR: no head log $_log (set ARMS_LOG_DIR)" >&2; exit 1; }
+        _redo_ids+=" $(sed -n 's/^\[\([^]]*\)\] arm=.*/\1/p' "$_log" | tr '\n' ' ')"
+    done
+    _redo_ids=$(printf '%s\n' $_redo_ids | sort -u | tr '\n' ' ')
+    if [[ -z "${_redo_ids// /}" ]]; then
+        echo "REDO_LAUNCHED_BY=$REDO_LAUNCHED_BY: those jobs launched no arm; nothing to redo." >&2
+        exit 0
+    fi
+    ONLY="^($(printf '%s\n' $_redo_ids | sed 's/[.]/\\./g' | paste -sd'|' -))\$"
+    export ARMS_REPLACE=1
+    echo "REDO_LAUNCHED_BY=$REDO_LAUNCHED_BY: relaunching what those jobs launched: $_redo_ids"
+fi
 # -------------------------------------------------------------------------------
 
 # NOTE: do NOT write SRC_DIR="~/..." — bash does tilde expansion BEFORE parameter
@@ -266,7 +308,7 @@ echo "Bench dir:  $BENCH_DIR"
 echo "Input:      $INPUT"
 echo "Results:    $RESULTS"
 echo "Profiles:   $PROFILES   Concurrency: $CONCURRENCY   CSE: $ENABLE_CSE"
-[ -n "$CHANGED$ONLY" ] && echo "Subset:     CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}'"
+[ -n "$CHANGED$ONLY$METHODS" ] && echo "Subset:     METHODS='$METHODS' CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}'"
 [ -n "${ARMS_RESUME:-}" ] && echo "Resume:     ARMS_RESUME=$ARMS_RESUME (finished arms skipped, interrupted ones continued from cache)"
 echo "ASHLAR:     solve via: $ASHLAR_EXEC"
 echo "            retile/stitch/seg QC via: $QC_EXEC"
@@ -275,23 +317,25 @@ echo "=================================================="
 
 # 1. Expand arms.yaml -> arm_plan.csv + the consumer's arms.csv (seconds, local).
 #    --results-root puts arms.csv where registration_arms.R looks for it.
-#    A SUBSET (CHANGED/ONLY set) is written to arm_plan.subset.csv so the FULL plan,
-#    which `make arm-tables` and pull_to_ihc_method.sh read, is never overwritten by
-#    a subset; arms.csv is written from the full plan either way.
+#    A SUBSET (METHODS/CHANGED/ONLY/REDO set) is written to arm_plan.subset.csv; the
+#    FULL plan, which `make arm-tables` and pull_to_ihc_method.sh read, is always
+#    (re)written to arm_plan.csv (--full-out), and arms.csv from the full plan too.
 PLAN_CSV="$BENCH_DIR/arm_plan.csv"
 SUBSET_ARGS=()
 for c in $CHANGED; do SUBSET_ARGS+=(--changed "$c"); done
 [ -n "$ONLY" ] && SUBSET_ARGS+=(--only "$ONLY")
+[ -n "$METHODS" ] && SUBSET_ARGS+=(--methods "$METHODS")
 if [ "${#SUBSET_ARGS[@]}" -gt 0 ]; then
     PLAN_CSV="$BENCH_DIR/arm_plan.subset.csv"
     rm -f "$PLAN_CSV"
-    echo "Subset plan: CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}' -> $PLAN_CSV"
+    echo "Subset plan: METHODS='$METHODS' CHANGED='$CHANGED' ONLY='$ONLY' ARMS_REPLACE='${ARMS_REPLACE:-}' -> $PLAN_CSV"
 fi
 "$PYTHON" "$SRC_DIR/benchmarks/build_arm_plan.py" \
     --arms         "$ARMS_YAML" \
     --input        "$INPUT" \
     --out          "$PLAN_CSV" \
     --results-root "$RESULTS" \
+    --full-out     "$BENCH_DIR/arm_plan.csv" \
     "${SUBSET_ARGS[@]+"${SUBSET_ARGS[@]}"}"
 
 # Checked explicitly because there is no `set -e` here: without this, a failed or

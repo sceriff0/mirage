@@ -50,8 +50,9 @@ CONCURRENCY="${ARMS_CONCURRENCY:-1}"
 
 # benchmark.config turns on enable_trace + enable_size_logs, which is what makes
 # every arm contribute cost rows to measurements.csv alongside its QC. It costs
-# nothing on the QC arms and is the whole point of the compute arm.
-BENCH_CONF="$PIPELINE_DIR/benchmarks/configs/benchmark.config"
+# nothing on the QC arms and is the whole point of the compute arm. Taken from the
+# tree the row runs from (launch(): "$pdir/benchmarks/configs/benchmark.config"), so a
+# pinned-code row gets the benchmark.config it was launched with.
 
 # Absolutize any -c/-config/-params-file in the pass-through args: each run is
 # launched from its own directory (isolated .nextflow/ so parallel Nextflow heads
@@ -110,6 +111,33 @@ col_val() {
 # schema rather than guessing from the text.
 PAIRS=()
 add_param() { if [[ -n "${2:-}" ]]; then PAIRS+=("$1=$2"); fi; }
+
+# ---------------------------------------------------------------------------
+# WHICH CODE RUNS A ROW. Blank code_ref = this checkout. A commit = a read-only snapshot
+# of the repository at that commit (benchmarks/code_snapshot.py, <root>/.code/<sha>),
+# which is how STARE v1 -- deleted from this tree, replaced by DRAPE under the same
+# registration_method=tiled -- shares one results root with it (arms.yaml pinned_code_arms).
+# Materialised ONCE, before any pass, so concurrent launches never race an extraction.
+#
+# Every launch records the commit that ran it in <launch dir>/code.<run_id>. For a pinned
+# row that record is ENFORCED: a finished or interrupted arm recorded under a different
+# commit is refused, never silently kept or resumed under other code. An arm with no
+# record (launched before records existed) is taken as it is.
+# ---------------------------------------------------------------------------
+CODE_ROOT="$ROOT/.code"
+HEAD_SHA="$(git -C "$PIPELINE_DIR" rev-parse HEAD 2>/dev/null)" || HEAD_SHA="unknown"
+code_dir_of() {                  # code_dir_of <code_ref> -> the directory to run from
+  if [[ -z "$1" ]]; then echo "$PIPELINE_DIR"; else echo "$CODE_ROOT/$1"; fi
+}
+_refs=$(tail -n +2 "$PLAN" | tr -d '\r' | awk -F, -v c="$(( $(col_index code_ref) + 1 ))" \
+  'c > 0 && $c != "" { print $c }' | sort -u)
+for _ref in $_refs; do
+  if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.code_snapshot --root "$CODE_ROOT" "$_ref" >/dev/null); then
+    echo "[code] could not materialise $_ref -- its rows will SKIP" >&2
+  else
+    echo "[code] $_ref ready at $CODE_ROOT/$_ref"
+  fi
+done
 
 # RESUME_RUN (env, optional): the run_id of a BASE arm whose Nextflow session this launch
 # resumes. Set for arm_kind=registration_qc rows -- the QC instrument crosses -- which
@@ -172,9 +200,21 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # base's cache (it was started with -resume <base session>) plus whatever QC it finished.
   local hist="$rundir/.nextflow/history" attempts=0 prev_name="" prev_status="" prev_sid=""
   local run_name="arms-$run_id" resuming=0
+  local code_ref="${CODE_REF:-}" pdir; pdir="$(code_dir_of "$code_ref")"
+  local code_rec="$rundir/code.$run_id"
+  if [[ -n "$code_ref" && ! -f "$pdir/.complete" ]]; then
+    echo "[$run_id] SKIP: code snapshot $code_ref is not available at $pdir" >&2
+    return 1
+  fi
   if [[ -f "$hist" ]]; then
     read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="arms-$run_id" \
       '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
+  fi
+  if (( attempts > 0 )) && [[ -n "$code_ref" && -f "$code_rec" ]] \
+       && [[ "$(cat "$code_rec")" != "$code_ref" ]]; then
+    echo "[$run_id] SKIP: this arm ran under commit $(cat "$code_rec"), but the plan pins $code_ref." \
+         "Its results must not be kept or resumed under other code: relaunch it with ARMS_REPLACE=1." >&2
+    return 1
   fi
   if (( attempts > 0 )); then
     if [[ "$prev_status" == "OK" ]]; then
@@ -194,6 +234,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
     fi
   fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
+  if [[ -n "$code_ref" ]]; then echo "$code_ref" > "$code_rec"; else echo "$HEAD_SHA" > "$code_rec"; fi
   # Typed params as JSON — see the add_param comment above for why this cannot be
   # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
   # shares its base arm's launch directory and must not overwrite the base's file.
@@ -227,7 +268,7 @@ PY
     if (( resuming )) && [[ -f "$run_params" ]]; then
       echo "[$run_id] params REGENERATED from the current plan (ARMS_RESUME_PARAMS=regenerate): tasks re-run only where a param they read changed value"
     fi
-    if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.params_json --out "$run_params" \
+    if ! (cd "$pdir" && python3 -m benchmarks.params_json --out "$run_params" \
             ${run_pairs[@]+"${run_pairs[@]}"}); then
       echo "[$run_id] SKIP: could not type its parameters against nextflow_schema.json" >&2
       return 1
@@ -236,9 +277,9 @@ PY
   echo "[$run_id] arm=$arm -> $outdir"
   (
     cd "$rundir"
-    nextflow -q run "$PIPELINE_DIR" \
+    nextflow -q run "$pdir" \
       -profile "$PROFILE" \
-      -c "$BENCH_CONF" \
+      -c "$pdir/benchmarks/configs/benchmark.config" \
       -work-dir "$rundir/work" \
       -name "$run_name" \
       "${resume_args[@]+"${resume_args[@]}"}" \
@@ -312,6 +353,9 @@ replace_previous_results() {
     resume_run=$(col_val resume_run "${vals[@]}")
     [[ -n "$run_id" ]] || continue
     plan_ids+="$run_id "
+    # An UPSTREAM row (METHODS= selection) is in the plan only so its output exists;
+    # replacing it would re-run every arm that reads it, which nobody selected.
+    [[ "$(col_val role "${vals[@]}")" == "upstream" ]] && continue
     if [[ -n "$resume_run" ]]; then crosses+=("$run_id|$resume_run"); else bases+=("$run_id"); fi
   done < <(tail -n +2 "$PLAN" | tr -d '\r')
 
@@ -483,6 +527,15 @@ launch_row() {
     # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
     # published artifact live under --outdir, so nothing the analysis reads is lost.
     PAIRS+=("cleanup_work=false")      # a literal, not a plan column (the plan guard reads add_param names)
+    # PINNED PARAMS: a pinned-code row's own knobs this tree's nextflow.config no longer
+    # declares (reg_tiled_gate_tre, reg_tiled_solver). Not add_param, whose names this
+    # tree's config must declare; build_arm_plan checked these against the PINNED schema,
+    # and params_json below types them against it (it runs inside the snapshot).
+    local pp p
+    pp=$(col_val pinned_params "${vals[@]}")
+    for p in ${pp//;/ }; do
+      [[ -n "$(col_val "$p" "${vals[@]}")" ]] && PAIRS+=("$p=$(col_val "$p" "${vals[@]}")")
+    done
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
     # all three. The external ashlar baseline is an arm_kind='external' row instead, and
@@ -508,7 +561,7 @@ launch_row() {
       filtered_sheet "$only_patient" "$in_csv" || return 1
     fi
 
-    RESUME_RUN="$(col_val resume_run "${vals[@]}")" \
+    RESUME_RUN="$(col_val resume_run "${vals[@]}")" CODE_REF="$(col_val code_ref "${vals[@]}")" \
       launch "$run_id" "$arm" "$in_csv" "$ROOT/$arm" ${PAIRS[@]+"${PAIRS[@]}"}
 }
 
@@ -545,7 +598,7 @@ run_qc_pass() {
   mkdir -p "$ROOT/.launch"
   sorted="$ROOT/.launch/_registration_qc.rows"
   tail -n +2 "$PLAN" | tr -d '\r' \
-    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
+    | awk -F, -v k="$kind_col" '$k == "registration_qc" || $k == "registration_solver"' \
     | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
 
   local base="" line b
