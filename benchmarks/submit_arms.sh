@@ -110,36 +110,48 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # nuclei arm) as UPSTREAM rows: DONE at once when finished, never moved by ARMS_REPLACE.
 #   sbatch --export=ALL,ARMS_RESUME=1,METHODS=drape benchmarks/submit_arms.sh
 #
-# REDO WHAT GIVEN HEAD JOBS LAUNCHED. REDO_LAUNCHED_BY="7268624 7268693" reads those jobs'
-# logs ($ARMS_LOG_DIR/arms_<id>.out), takes every run they actually LAUNCHED ("[id] arm=")
-# -- not the ones they found DONE or skipped -- and relaunches exactly those plus their
-# dependants, moving the old results aside (ARMS_REPLACE=1, never deleted). For the
-# 2026-09-29 collision, when two heads on two branches shared this root and one checkout.
+# REDO WHAT GIVEN HEAD JOBS LAUNCHED -- from the results root, not from logs.
+# REDO_LAUNCHED_BY=7268624+7268693 asks SLURM (sacct) when those jobs ran, then takes every
+# run whose .nextflow/history (under $RESULTS/.launch/) records a launch inside that window,
+# and relaunches exactly those plus their dependants, moving the old results aside
+# (ARMS_REPLACE=1, never deleted). A run another head launched while the window was open is
+# included too -- it ran during the collision. For the 2026-09-29 collision, when two heads
+# on two branches shared this root and one checkout.
 #   sbatch --export=ALL,ARMS_RESUME=1,REDO_LAUNCHED_BY=7268624+7268693 benchmarks/submit_arms.sh
-# (`+` or space separates ids: sbatch --export splits on commas.)
+# No sacct, or you know the times? Give the window yourself (history's format, local time):
+#   sbatch --export=ALL,ARMS_RESUME=1,REDO_SINCE="2026-09-29 10:00:00" benchmarks/submit_arms.sh
+#   (REDO_UNTIL= closes it; default: open-ended)
+# `+` or space separates job ids: sbatch --export splits on commas.
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 METHODS="${METHODS:-}"
 REDO_LAUNCHED_BY="${REDO_LAUNCHED_BY:-}"
-ARMS_LOG_DIR="${ARMS_LOG_DIR:-$HOME/pipelines/logs}"
-if [[ -n "$REDO_LAUNCHED_BY" ]]; then
+REDO_SINCE="${REDO_SINCE:-}"
+REDO_UNTIL="${REDO_UNTIL:-}"
+if [[ -n "$REDO_LAUNCHED_BY$REDO_SINCE" ]]; then
     if [[ -n "$ONLY" ]]; then
-        echo "ERROR: REDO_LAUNCHED_BY and ONLY both select rows; set one." >&2; exit 1
+        echo "ERROR: REDO_LAUNCHED_BY/REDO_SINCE and ONLY both select rows; set one." >&2; exit 1
     fi
-    _redo_ids=""
-    for _job in ${REDO_LAUNCHED_BY//+/ }; do
-        _log="$ARMS_LOG_DIR/arms_${_job}.out"
-        [[ -f "$_log" ]] || { echo "ERROR: no head log $_log (set ARMS_LOG_DIR)" >&2; exit 1; }
-        _redo_ids+=" $(sed -n 's/^\[\([^]]*\)\] arm=.*/\1/p' "$_log" | tr '\n' ' ')"
-    done
-    _redo_ids=$(printf '%s\n' $_redo_ids | sort -u | tr '\n' ' ')
+    # shellcheck disable=SC1091
+    source "$SRC_DIR/benchmarks/redo_window.sh"
+    if [[ -z "$REDO_SINCE" ]]; then
+        _win=$(job_window ${REDO_LAUNCHED_BY//+/ }) || {
+            echo "ERROR: sacct knows no start time for job(s) $REDO_LAUNCHED_BY." >&2
+            echo "       Give the window yourself: REDO_SINCE=\"YYYY-MM-DD HH:MM:SS\" [REDO_UNTIL=...]" >&2
+            exit 1
+        }
+        REDO_SINCE="${_win%%$'\t'*}"
+        REDO_UNTIL="${REDO_UNTIL:-${_win#*$'\t'}}"
+    fi
+    _redo_ids=$(launched_between "$RESULTS" "$REDO_SINCE" "$REDO_UNTIL" | tr '\n' ' ')
+    echo "Redo window: $REDO_SINCE .. ${REDO_UNTIL:-now} (${REDO_LAUNCHED_BY:+jobs $REDO_LAUNCHED_BY, }from $RESULTS/.launch/*/.nextflow/history)"
     if [[ -z "${_redo_ids// /}" ]]; then
-        echo "REDO_LAUNCHED_BY=$REDO_LAUNCHED_BY: those jobs launched no arm; nothing to redo." >&2
+        echo "No run was launched in that window; nothing to redo." >&2
         exit 0
     fi
     ONLY="^($(printf '%s\n' $_redo_ids | sed 's/[.]/\\./g' | paste -sd'|' -))\$"
     export ARMS_REPLACE=1
-    echo "REDO_LAUNCHED_BY=$REDO_LAUNCHED_BY: relaunching what those jobs launched: $_redo_ids"
+    echo "Relaunching what was launched in that window: $_redo_ids"
 fi
 # -------------------------------------------------------------------------------
 
