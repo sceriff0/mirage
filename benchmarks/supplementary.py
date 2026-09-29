@@ -1,0 +1,1066 @@
+#!/usr/bin/env python3
+"""supplementary.py -- EVERY supplementary figure (S2-S11 + the method mosaic) in one run.
+
+One results root holds every method (benchmarks/submit_arms.sh: VALIS, DRAPE, STARE v1
+as pinned-code arms, ASHLAR, the segmentation arms), and arm_plan.csv says which arm is
+which method. This module draws the manuscript's supplementary set FROM that root. It
+re-registers nothing and re-segments nothing: every picture is a re-render of slides
+already on disk, by the same renderers the figure grid uses (reg_mosaic, reg_overlay,
+reg_zoom, reg_crop), and every number comes from the reg_qc=2 scorer's JSONs and the
+Nextflow traces the arms already wrote.
+
+WHAT YOU CHOOSE BETWEEN. The comparisons are drawn in every combination, so the choice
+is made by looking, not by re-running:
+
+    method set   stare = Before | VALIS | STARE | ASHLAR
+                 drape = Before | VALIS | DRAPE | ASHLAR
+                 all   = Before | VALIS | STARE | DRAPE | ASHLAR
+    config       high  = each method's shipped high tier (supplementary.yaml `high:`)
+                 best  = each method's arm with the highest median final-stage matched
+                         Dice over the cohort (picks.csv says which, and by how much)
+    variant      v1..vN = different tissue, SAME tissue in every set and config: the
+                 anchor render picks the ROIs/crops once and every other render reuses
+                 them, so two panels differ only by the method that registered them
+
+Outputs (``-o OUT``):
+
+    OUT/picks.csv                   the arm behind every (method, config), with its numbers
+    OUT/mosaic/<set>_<config>/v<k>/ reg_mosaic per patient (overlay + checker), Dice in cells
+    OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE-or-DRAPE (+ASHLAR), matched insets
+    OUT/S5/                         registration cost by tier, three method subsets
+    OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
+    OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
+    OUT/S8/<set>_<config>/          Dice and displacement by case and by panel pair
+    OUT/S2/                         secondary-only controls at ONE fixed contrast (if given)
+    OUT/S3, S9, S10, S11            collected from ihc_method (submit_supplementary.sh)
+    OUT/index.html                  every variant of every figure on one page, to choose
+
+Run on the cluster through benchmarks/submit_supplementary.sh; locally::
+
+    python -m benchmarks.supplementary --results arm_results --plan arm_plan.csv \\
+        --config benchmarks/configs/supplementary.yaml -o supp --only mosaic,S4
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import html
+import json
+import os
+import shlex
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Registration methods, in the order their columns/rows are drawn.
+REG_METHODS = ("valis", "stare", "drape", "ashlar")
+TITLE = {"valis": "VALIS", "stare": "STARE", "drape": "DRAPE", "ashlar": "ASHLAR"}
+DEFAULT_SETS = {
+    "stare": ["valis", "stare", "ashlar"],
+    "drape": ["valis", "drape", "ashlar"],
+    "all": ["valis", "stare", "drape", "ashlar"],
+}
+# The arms that ARE a registration of their method. registration_qc rows re-score a base
+# arm with another QC instrument -- same registration, different ruler -- so ranking them
+# would pick a ruler, not a method configuration.
+_RANKED_KINDS = ("registration", "registration_solver", "external")
+FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
+
+
+# ------------------------------------------------------------------------ context --
+@dataclass
+class Ctx:
+    root: Path
+    plan: pd.DataFrame
+    plan_csv: Path
+    out: Path
+    cfg: dict
+    exec_prefix: list[str] = field(default_factory=list)
+    dry_run: bool = False
+    log: list[str] = field(default_factory=list)
+
+    def opt(self, *keys, default=None):
+        node = self.cfg
+        for k in keys:
+            if not isinstance(node, dict) or k not in node:
+                return default
+            node = node[k]
+        return default if node is None else node
+
+    @property
+    def formats(self) -> str:
+        return str(self.opt("options", "formats", default="png,pdf"))
+
+    @property
+    def dpi(self) -> int:
+        return int(self.opt("options", "dpi", default=150))
+
+    def arm_dir(self, arm: str) -> Path:
+        return self.root / arm
+
+    def render(self, tool: str, args: list[str]) -> bool:
+        """One renderer call, through the render container when one is given."""
+        cmd = [
+            *self.exec_prefix,
+            "python3",
+            "-m",
+            f"benchmarks.{tool}",
+            *map(str, args),
+        ]
+        self.log.append(shlex.join(cmd))
+        if self.dry_run:
+            print("[dry-run]", shlex.join(cmd))
+            return True
+        env = dict(os.environ)
+        for k in ("PYTHONPATH", "SINGULARITYENV_PYTHONPATH", "APPTAINERENV_PYTHONPATH"):
+            env[k] = str(REPO_ROOT)
+        r = subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=False)
+        if r.returncode != 0:
+            print(f"[supp] FAILED ({r.returncode}): {shlex.join(cmd)}", file=sys.stderr)
+        return r.returncode == 0
+
+
+def _patients_of(arm_dir: Path) -> list[str]:
+    p = arm_dir / "csv" / "registered.csv"
+    if not p.is_file():
+        return []
+    seen: list[str] = []
+    with open(p, newline="") as fh:
+        for r in csv.DictReader(fh):
+            pid = (r.get("patient_id") or "").strip()
+            if pid and pid not in seen:
+                seen.append(pid)
+    return seen
+
+
+def _registered(arm_dir: Path) -> bool:
+    return (arm_dir / "csv" / "registered.csv").is_file()
+
+
+# -------------------------------------------------------------------------- picks --
+def accuracy_long(ctx: Ctx) -> pd.DataFrame:
+    """Final-stage scorer numbers per (run, patient, moving slide)."""
+    from benchmarks.analysis.lib import quality
+
+    long = quality.harvest_registration_qc(ctx.root, ctx.plan_csv)
+    if long.empty:
+        return long
+    long["_rank"] = long["stage"].map(quality._STAGE_RANK).fillna(-1)
+    final = (
+        long.sort_values("_rank")
+        .groupby(["run_id", "patient_id", "moving"], as_index=False)
+        .tail(1)
+    )
+    native = long[long["stage"] == "native"][
+        ["run_id", "patient_id", "moving", "dice_matched", "displacement_um_p50"]
+    ].rename(
+        columns={
+            "dice_matched": "native_dice",
+            "displacement_um_p50": "native_disp_um",
+        }
+    )
+    return final.merge(native, on=["run_id", "patient_id", "moving"], how="left")
+
+
+def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
+    """One arm per (method, config): `high` from the config, `best` by median Dice."""
+    plan = ctx.plan
+    if "method" not in plan.columns:
+        raise SystemExit(
+            f"{ctx.plan_csv} has no `method` column: build it with this checkout's "
+            "benchmarks/build_arm_plan.py (submit_arms.sh does), which labels every row "
+            "valis/stare/drape/ashlar -- STARE and DRAPE are both registration_method=tiled"
+        )
+    cand = plan[plan["method"].isin(REG_METHODS) & plan["arm_kind"].isin(_RANKED_KINDS)]
+    per_run = pd.DataFrame(columns=["run_id", "dice", "disp_um", "n"])
+    if not final.empty:
+        per_run = final.groupby("run_id", as_index=False).agg(
+            dice=("dice_matched", "median"),
+            disp_um=("displacement_um_p50", "median"),
+            n=("dice_matched", "size"),
+        )
+    cand = cand.merge(per_run, on="run_id", how="left")
+    cand = cand[[_registered(ctx.arm_dir(a)) for a in cand["arm"]]]
+    rows = []
+    high_cfg = ctx.opt("high", default={}) or {}
+    for m in REG_METHODS:
+        c = cand[cand["method"] == m]
+        if c.empty:
+            continue
+        scored = c.dropna(subset=["dice"]).sort_values(
+            ["dice", "disp_um"], ascending=[False, True]
+        )
+        best = scored.iloc[0] if len(scored) else c.iloc[0]
+        want = high_cfg.get(m)
+        high = c[c["arm"] == want].iloc[0] if want in set(c["arm"]) else best
+        for config, r in (("high", high), ("best", best)):
+            rows.append(
+                {
+                    "method": m,
+                    "config": config,
+                    "arm": r["arm"],
+                    "median_dice": r.get("dice"),
+                    "median_disp_um": r.get("disp_um"),
+                    "n_slides": r.get("n"),
+                    "why": (
+                        f"highest median final-stage Dice of {len(scored)} scored arms"
+                        if config == "best" and len(scored)
+                        else (
+                            "configured high tier"
+                            if want == r["arm"]
+                            else "no score on disk: fell back to the first registered arm"
+                        )
+                    ),
+                }
+            )
+    picks = pd.DataFrame(rows)
+    ctx.out.mkdir(parents=True, exist_ok=True)
+    picks.to_csv(ctx.out / "picks.csv", index=False)
+    return picks
+
+
+def arm_for(picks: pd.DataFrame, method: str, config: str) -> str | None:
+    hit = picks[(picks["method"] == method) & (picks["config"] == config)]
+    return None if hit.empty else str(hit["arm"].iloc[0])
+
+
+def method_sets(ctx: Ctx, picks: pd.DataFrame) -> dict[str, list[str]]:
+    sets = ctx.opt("sets", default=None) or DEFAULT_SETS
+    have = set(picks["method"])
+    out = {}
+    for name, methods in sets.items():
+        ms = [m for m in methods if m in have]
+        if len(ms) >= 2:
+            out[name] = ms
+    return out
+
+
+def configs(ctx: Ctx) -> list[str]:
+    return list(ctx.opt("configs", default=["high", "best"]))
+
+
+def _label(method: str, arm: str, config: str) -> str:
+    return f"{TITLE[method]} ({config})"
+
+
+# ------------------------------------------------------------------------- mosaic --
+def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
+    """Before | VALIS | STARE-or-DRAPE | ASHLAR, Dice in every cell -- the priority figure.
+
+    The anchor (set `all`, config `high`) picks the ROIs; every other set and config is
+    drawn on exactly those ROIs (--rois-json), so a column differs only by its method."""
+    m = ctx.opt("mosaic", default={}) or {}
+    variants = int(m.get("variants", 2))
+    common = [
+        "--kinds",
+        ",".join(m.get("kinds", ["overlay", "checker"])),
+        "--numbers",
+        m.get("numbers", "scorer"),
+        "--patch-um",
+        m.get("patch_um", 200),
+        "--formats",
+        ctx.formats,
+    ]
+    if m.get("rows"):
+        common += ["--rows", m["rows"]]
+    for r in m.get("rounds", []) or []:
+        common += ["--rounds", r]
+    sets = method_sets(ctx, picks)
+    anchor_methods = sets.get("all") or next(iter(sets.values()))
+    anchor = ctx.out / "mosaic" / "_anchor"
+    for pid in patients:
+        arms = [arm_for(picks, mm, "high") for mm in anchor_methods]
+        ctx.render(
+            "reg_mosaic",
+            [
+                *(ctx.arm_dir(a) for a in arms),
+                "--patient",
+                pid,
+                "--variants",
+                variants,
+                "-o",
+                anchor,
+                *common,
+            ],
+        )
+        for set_name, methods in sets.items():
+            # The mosaic has its own config list (supplementary.yaml mosaic.configs); the
+            # other figures keep the global one.
+            for config in m.get("configs") or configs(ctx):
+                arms = [(mm, arm_for(picks, mm, config)) for mm in methods]
+                labels = []
+                for mm, a in arms:
+                    labels += ["--label", f"{a}={_label(mm, a, config)}"]
+                for v in range(1, variants + 1):
+                    rois = anchor / (
+                        f"{pid}_v{v}_rois.json" if variants > 1 else f"{pid}_rois.json"
+                    )
+                    if not rois.is_file() and not ctx.dry_run:
+                        continue
+                    ctx.render(
+                        "reg_mosaic",
+                        [
+                            *(ctx.arm_dir(a) for _, a in arms),
+                            "--patient",
+                            pid,
+                            "--rois-json",
+                            rois,
+                            *labels,
+                            "-o",
+                            ctx.out / "mosaic" / f"{set_name}_{config}" / f"v{v}",
+                            *common,
+                        ],
+                    )
+
+
+# ---------------------------------------------------------------------- S4 and S7 --
+def _overlay_panels(
+    ctx: Ctx, picks: pd.DataFrame, pid: str, fig: str, spec: dict
+) -> Path:
+    """Render every (method, config) on the anchor's crops; return the panels dir."""
+    variants = int(spec.get("variants", 3))
+    base = [
+        "--patient",
+        pid,
+        "--field-um",
+        spec.get("field_um", 500),
+        "--numbers",
+        spec.get("numbers", "scorer"),
+        "--formats",
+        "png",
+        "--dpi",
+        ctx.dpi,
+    ]
+    if spec.get("zoom_um"):
+        base += ["--zoom-um", spec["zoom_um"]]
+    rounds = spec.get("rounds") or []
+    if rounds:
+        base += ["--rounds", *rounds]
+    root = ctx.out / fig / pid if fig == "S7" else ctx.out / fig
+    anchor = root / "_anchor"
+    ctx.render(
+        "reg_overlay",
+        [
+            ctx.arm_dir(arm_for(picks, "valis", "high")),
+            "-o",
+            anchor,
+            "--variants",
+            variants,
+            *base,
+        ],
+    )
+    manifests = sorted(anchor.glob(f"{pid}_*_overlay.json"))
+    for mf in manifests:
+        man = json.loads(mf.read_text())
+        v = int(man.get("variant", 1))
+        pin = ["--roi", f"{man['crop']['y']},{man['crop']['x']}"]
+        if man.get("zoom"):
+            pin += ["--zoom-roi", f"{man['zoom']['y']},{man['zoom']['x']}"]
+        for method in REG_METHODS:
+            for config in configs(ctx):
+                arm = arm_for(picks, method, config)
+                if arm is None:
+                    continue
+                ctx.render(
+                    "reg_overlay",
+                    [
+                        ctx.arm_dir(arm),
+                        "-o",
+                        root / "panels" / f"{method}_{config}" / f"v{v}",
+                        "--rounds",
+                        man["round"],
+                        "--title",
+                        _label(method, arm, config),
+                        *pin,
+                        *[b for b in base if b != "--rounds" and b not in rounds],
+                    ],
+                )
+    return root
+
+
+def _compose_overlays(ctx: Ctx, picks, root: Path, pid: str, final: pd.DataFrame):
+    """Per (set, config, variant): Before | one After per method, numbers underneath."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.image as mpimg
+    import matplotlib.pyplot as plt
+
+    for set_name, methods in method_sets(ctx, picks).items():
+        for config in configs(ctx):
+            panel_dirs = {m: root / "panels" / f"{m}_{config}" for m in methods}
+            for vdir in sorted((panel_dirs[methods[0]]).glob("v*")):
+                v = vdir.name
+                cols, titles, notes = [], [], []
+                befores = sorted(vdir.glob(f"{pid}_*_before.png"))
+                if not befores:
+                    continue
+                cols.append(befores[0])
+                titles.append("Before")
+                notes.append(_numbers_note(vdir, "before"))
+                for m in methods:
+                    after = sorted((panel_dirs[m] / v).glob(f"{pid}_*_after.png"))
+                    if not after:
+                        continue
+                    cols.append(after[0])
+                    titles.append(_label(m, arm_for(picks, m, config), config))
+                    notes.append(_numbers_note(panel_dirs[m] / v, "after"))
+                fig, axes = plt.subplots(
+                    1, len(cols), figsize=(3.4 * len(cols), 3.9), squeeze=False
+                )
+                for ax, img, t, n in zip(axes[0], cols, titles, notes):
+                    ax.imshow(mpimg.imread(img))
+                    ax.set_title(t, fontsize=9)
+                    ax.set_xlabel(n, fontsize=7)
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                fig.suptitle(
+                    f"{pid} — {set_name} set, {config} configuration", fontsize=9
+                )
+                fig.tight_layout()
+                out = root / f"{set_name}_{config}" / v
+                out.mkdir(parents=True, exist_ok=True)
+                for fmt in ctx.formats.split(","):
+                    fig.savefig(
+                        out / f"{pid}_{set_name}_{config}_{v}.{fmt}", dpi=ctx.dpi
+                    )
+                plt.close(fig)
+                _values_table(picks, final, pid, methods, config).to_csv(
+                    out / f"{pid}_{set_name}_{config}_values.csv", index=False
+                )
+
+
+def _numbers_note(vdir: Path, which: str) -> str:
+    """`Dice = 0.92  Δ = 0.4 µm (ROI)` from reg_overlay's manifest: the scorer's matched
+    Dice for the slide, and the nucleus displacement inside THIS crop when it holds enough
+    nuclei (else the slide-level value, marked *)."""
+    for mf in vdir.glob("*_overlay.json"):
+        n = (json.loads(mf.read_text()).get("numbers") or {}).get(which)
+        if not isinstance(n, dict):
+            continue
+        parts = []
+        if n.get("dice_matched") is not None:
+            parts.append(f"Dice = {float(n['dice_matched']):.2f}")
+        if n.get("roi_displacement_um") is not None:
+            parts.append(f"Δ = {float(n['roi_displacement_um']):.1f} µm (ROI)")
+        elif n.get("slide_displacement_um") is not None:
+            parts.append(f"Δ = {float(n['slide_displacement_um']):.1f} µm*")
+        return "  ".join(parts) + (f"   [{n.get('stage')}]" if n.get("stage") else "")
+    return ""
+
+
+def _values_table(picks, final, pid, methods, config) -> pd.DataFrame:
+    """Per-mode slide-level numbers for the figure legend: the AUTHORS TO SUPPLY values."""
+    rows = []
+    for m in methods:
+        arm = arm_for(picks, m, config)
+        sub = (
+            final[
+                (final["run_id"] == arm) & (final["patient_id"].astype(str) == str(pid))
+            ]
+            if not final.empty
+            else pd.DataFrame()
+        )
+        rows.append(
+            {
+                "method": TITLE[m],
+                "config": config,
+                "arm": arm,
+                "patient": pid,
+                "median_dice_matched": sub["dice_matched"].median()
+                if len(sub)
+                else None,
+                "median_centroid_disp_um": sub["displacement_um_p50"].median()
+                if len(sub)
+                else None,
+                "native_dice": sub["native_dice"].median() if len(sub) else None,
+                "n_pairs": int(sub["n_pairs"].sum()) if len(sub) else None,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def fig_s4(ctx, picks, patients, final):
+    spec = ctx.opt("S4", default={}) or {}
+    pid = str(spec.get("patient") or patients[0])
+    root = _overlay_panels(ctx, picks, pid, "S4", spec)
+    if not ctx.dry_run:
+        _compose_overlays(ctx, picks, root, pid, final)
+
+
+def fig_s7(ctx, picks, patients, final):
+    spec = ctx.opt("S7", default={}) or {}
+    s4_pid = str((ctx.opt("S4", default={}) or {}).get("patient") or patients[0])
+    for pid in [
+        str(p) for p in (spec.get("patients") or [p for p in patients if p != s4_pid])
+    ]:
+        root = _overlay_panels(ctx, picks, pid, "S7", spec)
+        if not ctx.dry_run:
+            _compose_overlays(ctx, picks, root, pid, final)
+
+
+# ----------------------------------------------------------------------------- S5 --
+def fig_s5(ctx: Ctx):
+    """Registration cost by tier: every method, and each of STARE / DRAPE against VALIS."""
+    if ctx.dry_run:
+        print("[dry-run] S5: registration_cost_by_tier from the traces")
+        return
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from benchmarks.analysis.lib import load, plotting, quality
+
+    runs = load.load_runs(ctx.root, ctx.plan_csv)
+    cost = quality.registration_cost_by_tier(runs, ctx.root)
+    out = ctx.out / "S5"
+    out.mkdir(parents=True, exist_ok=True)
+    cost.to_csv(out / "registration_cost_by_tier.csv", index=False)
+    if cost.empty:
+        print("[supp] S5: no registration trace on disk", file=sys.stderr)
+        return
+    per_slide = cost["n_slides"].notna().any()
+    unit = "per slide" if per_slide else "per run"
+    metrics = [
+        "wall_h_per_slide" if per_slide else "reg_wall_h",
+        "reg_peak_rss_gb",
+        "cpu_hours_per_slide" if per_slide else "reg_cpu_hours",
+    ]
+    labels = [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"]
+    for name, keep in (
+        ("all", ("valis", "stare", "drape")),
+        ("valis_stare", ("valis", "stare")),
+        ("valis_drape", ("valis", "drape")),
+    ):
+        sub = cost[cost["backend"].isin(keep)]
+        if sub["backend"].nunique() < 1:
+            continue
+        fig = plotting.cost_by_tier(sub, metrics, labels)
+        plotting.save_fig(fig, out / f"S5_cost_by_tier_{name}", formats=ctx.formats)
+    (
+        cost.groupby(["backend", "tier"], as_index=False)[metrics]
+        .median()
+        .to_csv(out / "S5_values_median_by_tier.csv", index=False)
+    )
+
+
+# ----------------------------------------------------------------------------- S6 --
+def fig_s6(ctx: Ctx, patients: list[str]):
+    """Nuclear and whole-cell masks per backend on the same regions + pairwise Dice."""
+    spec = ctx.opt("S6", default={}) or {}
+    seg = ctx.plan[ctx.plan["arm_kind"] == "segmentation"]
+    methods = [
+        (str(r["seg_method"]), str(r["arm"]))
+        for _, r in seg.iterrows()
+        if (ctx.arm_dir(r["arm"]) / "csv" / "segmented.csv").is_file() or ctx.dry_run
+    ]
+    if not methods:
+        print("[supp] S6: no finished segmentation arm", file=sys.stderr)
+        return
+    pid = str(spec.get("patient") or patients[0])
+    field_um = spec.get("field_um", 150)
+    crop_px = spec.get("crop_px", 768)
+    out = ctx.out / "S6"
+    rois = [str(r) for r in spec.get("rois", []) or []]
+    if len(rois) < int(spec.get("regions", 2)):
+        # Auto regions: the reference arm's zoom picks one; the mosaic anchor's ROIs
+        # (same reference canvas) supply the rest -- tissue the mosaic already showed.
+        anchor = out / "_anchor"
+        ctx.render(
+            "reg_zoom",
+            [
+                ctx.arm_dir(methods[0][1]),
+                "--patient",
+                pid,
+                "--field-um",
+                field_um,
+                "--mask",
+                "both",
+                "--formats",
+                "png",
+                "-o",
+                anchor,
+            ],
+        )
+        zj = anchor / f"{pid}_zoom.json"
+        if zj.is_file():
+            z = json.loads(zj.read_text())["zoom"]
+            rois.append(f"{z['y']},{z['x']}")
+        for rj in sorted((ctx.out / "mosaic" / "_anchor").glob(f"{pid}*_rois.json")):
+            for r in json.loads(rj.read_text()).get("rois", []):
+                rois.append(f"{r['y']},{r['x']}")
+        rois = list(dict.fromkeys(rois))[: int(spec.get("regions", 2))]
+    for k, roi in enumerate(rois, 1):
+        for method, arm in methods:
+            for mask in ("nuclei", "cell", "both"):
+                ctx.render(
+                    "reg_zoom",
+                    [
+                        ctx.arm_dir(arm),
+                        "--patient",
+                        pid,
+                        "--roi",
+                        roi,
+                        "--field-um",
+                        field_um,
+                        "--mask",
+                        mask,
+                        "--crop",
+                        "only",
+                        "--crop-px",
+                        crop_px,
+                        "--title",
+                        method,
+                        "--formats",
+                        "png",
+                        "-o",
+                        out / f"r{k}" / f"{method}_{mask}",
+                    ],
+                )
+    if ctx.dry_run:
+        return
+    _compose_s6(ctx, out, pid, [m for m, _ in methods], len(rois))
+
+
+def _compose_s6(ctx, out: Path, pid: str, methods: list[str], n_regions: int):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.image as mpimg
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    from benchmarks.analysis.lib import quality
+
+    agree = quality.segmentation_agreement(ctx.root, ctx.plan_csv)
+    agree.to_csv(out / "S6_pairwise_agreement.csv", index=False)
+    mat = pd.DataFrame(np.eye(len(methods)), index=methods, columns=methods)
+    if not agree.empty and {"method_a", "method_b", "foreground_dice"} <= set(
+        agree.columns
+    ):
+        g = agree.groupby(["method_a", "method_b"])["foreground_dice"].median()
+        for (a, b), v in g.items():
+            if a in mat.index and b in mat.columns:
+                mat.loc[a, b] = mat.loc[b, a] = v
+    for layout in ("nuclei_cell", "both"):
+        masks = ("nuclei", "cell") if layout == "nuclei_cell" else ("both",)
+        ncol = len(methods) * len(masks) + 1
+        fig = plt.figure(figsize=(2.6 * ncol, 2.7 * n_regions))
+        gs = fig.add_gridspec(n_regions, ncol)
+        for k in range(1, n_regions + 1):
+            c = 0
+            for m in methods:
+                for mask in masks:
+                    ax = fig.add_subplot(gs[k - 1, c])
+                    c += 1
+                    crops = sorted(
+                        (out / f"r{k}" / f"{m}_{mask}").glob(f"{pid}_crop.png")
+                    )
+                    if crops:
+                        ax.imshow(mpimg.imread(crops[0]))
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    if k == 1:
+                        ax.set_title(f"{m}\n{mask}", fontsize=8)
+                    if c == 1:
+                        ax.set_ylabel(f"region {k}", fontsize=8)
+        ax = fig.add_subplot(gs[:, -1])
+        im = ax.imshow(mat.to_numpy(dtype=float), vmin=0, vmax=1, cmap="viridis")
+        ax.set_xticks(range(len(methods)), methods, rotation=45, fontsize=7)
+        ax.set_yticks(range(len(methods)), methods, fontsize=7)
+        for i in range(len(methods)):
+            for j in range(len(methods)):
+                ax.text(
+                    j,
+                    i,
+                    f"{mat.iat[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="w",
+                    fontsize=7,
+                )
+        ax.set_title("pairwise Dice\n(whole section)", fontsize=8)
+        fig.colorbar(im, ax=ax, fraction=0.046)
+        fig.tight_layout()
+        for fmt in ctx.formats.split(","):
+            fig.savefig(out / f"S6_{layout}.{fmt}", dpi=ctx.dpi)
+        plt.close(fig)
+
+
+# ----------------------------------------------------------------------------- S8 --
+def _pair_labels(ctx: Ctx, picks: pd.DataFrame) -> dict[str, str]:
+    """moving-slide name -> its panel (channel set), from every picked arm's checkpoint.
+    VALIS names a moving slide by file stem, the manifest backends by channel set."""
+    labels: dict[str, str] = {}
+    for arm in set(picks["arm"]):
+        p = ctx.arm_dir(arm) / "csv" / "registered.csv"
+        if not p.is_file():
+            continue
+        with open(p, newline="") as fh:
+            for r in csv.DictReader(fh):
+                key = (r.get("channels") or "").replace("|", "_")
+                for name in (r.get("id"), key, f"{r.get('patient_id')}_{key}"):
+                    if name:
+                        labels[name] = key
+    return labels
+
+
+def fig_s8(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame):
+    """Dice and displacement per arm, grouped by case and by panel pair."""
+    if ctx.dry_run:
+        print("[dry-run] S8: Dice/displacement by case and by panel pair")
+        return
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    out = ctx.out / "S8"
+    out.mkdir(parents=True, exist_ok=True)
+    if final.empty:
+        print("[supp] S8: no reg_qc=2 scorer JSON on disk", file=sys.stderr)
+        return
+    pairs = _pair_labels(ctx, picks)
+    df = final.copy()
+    df["panel_pair"] = df["moving"].map(lambda m: pairs.get(str(m), str(m)))
+    df.to_csv(out / "S8_values_per_slide.csv", index=False)
+    for set_name, methods in method_sets(ctx, picks).items():
+        for config in configs(ctx):
+            arms = {arm_for(picks, m, config): _label(m, "", config) for m in methods}
+            sub = df[df["run_id"].isin(arms)].assign(
+                method=lambda d: d["run_id"].map(arms)
+            )
+            if sub.empty:
+                continue
+            fig, axes = plt.subplots(2, 2, figsize=(11, 7), squeeze=False)
+            for row, (metric, ylab) in enumerate(
+                (
+                    ("dice_matched", "matched-pair Dice"),
+                    ("displacement_um_p50", "centroid displacement (µm, median)"),
+                )
+            ):
+                for col, (group, xlab) in enumerate(
+                    (
+                        ("patient_id", "case"),
+                        ("panel_pair", "panel pair (moving vs reference)"),
+                    )
+                ):
+                    ax = axes[row, col]
+                    groups = sorted(sub[group].astype(str).unique())
+                    ms = list(arms.values())
+                    w = 0.8 / max(len(ms), 1)
+                    for i, mname in enumerate(ms):
+                        data = [
+                            sub[
+                                (sub[group].astype(str) == g) & (sub["method"] == mname)
+                            ][metric]
+                            .dropna()
+                            .to_numpy()
+                            for g in groups
+                        ]
+                        pos = [
+                            j + (i - (len(ms) - 1) / 2) * w for j in range(len(groups))
+                        ]
+                        bp = ax.boxplot(
+                            [d if len(d) else [float("nan")] for d in data],
+                            positions=pos,
+                            widths=w * 0.9,
+                            patch_artist=True,
+                            showfliers=False,
+                        )
+                        for b in bp["boxes"]:
+                            b.set_facecolor(f"C{i}")
+                            b.set_alpha(0.6)
+                        for j, d in enumerate(data):
+                            ax.plot([pos[j]] * len(d), d, ".", color=f"C{i}", ms=3)
+                        ax.plot([], [], "s", color=f"C{i}", label=mname)
+                    ax.set_xticks(
+                        range(len(groups)), groups, rotation=45, ha="right", fontsize=7
+                    )
+                    ax.set_ylabel(ylab, fontsize=8)
+                    if row == 1:
+                        ax.set_xlabel(xlab, fontsize=8)
+                    if row == 0 and col == 0:
+                        ax.legend(fontsize=7)
+            fig.suptitle(
+                f"(a) by case   (b) by panel pair — {set_name} set, {config}",
+                fontsize=9,
+            )
+            fig.tight_layout()
+            d = out / f"{set_name}_{config}"
+            d.mkdir(exist_ok=True)
+            for fmt in ctx.formats.split(","):
+                fig.savefig(d / f"S8_{set_name}_{config}.{fmt}", dpi=ctx.dpi)
+            plt.close(fig)
+            (
+                sub.groupby(["method", "patient_id"])[
+                    ["dice_matched", "displacement_um_p50"]
+                ]
+                .median()
+                .to_csv(d / "S8_values_by_case.csv")
+            )
+            (
+                sub.groupby(["method", "panel_pair"])[
+                    ["dice_matched", "displacement_um_p50"]
+                ]
+                .median()
+                .to_csv(d / "S8_values_by_panel_pair.csv")
+            )
+
+
+# ----------------------------------------------------------------------------- S3 --
+def fig_s3a(ctx: Ctx):
+    """Per-round DAPI retention: the median over cells of `nuclear_retention_raw`, per case.
+
+    `nuclear_retention_raw` (bin/cell_qc.py) is a cell's DAPI in that round over its DAPI
+    in the reference round -- NOT the `QC: Nuclear retention` key, which is re-centred on
+    each round's median and so reads 1.0 in every round by construction and could never
+    show a decline. The normalisation is therefore "per cell, relative to the reference
+    round", which is what the legend should state."""
+    if ctx.dry_run:
+        print("[dry-run] S3a: per-round retention from */quantification/*_round_qc.csv")
+        return
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    spec = ctx.opt("S3", default={}) or {}
+    seg = ctx.plan[ctx.plan["arm_kind"].isin(["segmentation", "compute"])]
+    arms = [spec["from_arm"]] if spec.get("from_arm") else list(seg["arm"])
+    files = []
+    for arm in arms:
+        files = sorted(ctx.arm_dir(arm).glob("*/quantification/*_round_qc.csv"))
+        if files:
+            break
+    out = ctx.out / "S3"
+    out.mkdir(parents=True, exist_ok=True)
+    if not files:
+        print(
+            "[supp] S3a: no *_round_qc.csv under any full-pipeline arm", file=sys.stderr
+        )
+        return
+    rows = []
+    for f in files:
+        d = pd.read_csv(f)
+        if "nuclear_retention_raw" not in d.columns:
+            continue
+        pid = f.name[: -len("_round_qc.csv")]
+        g = d.groupby("round_id", sort=False)["nuclear_retention_raw"]
+        for rid, v in g:
+            rows.append(
+                {
+                    "patient_id": pid,
+                    "round_id": str(rid),
+                    "median": v.median(),
+                    "q25": v.quantile(0.25),
+                    "q75": v.quantile(0.75),
+                    "n_cells": int(v.notna().sum()),
+                }
+            )
+    tab = pd.DataFrame(rows)
+    tab.to_csv(out / "S3a_values.csv", index=False)
+    if tab.empty:
+        return
+    order = [str(r) for r in spec.get("round_order") or []] or list(
+        dict.fromkeys(tab["round_id"])
+    )
+    x = {r: i for i, r in enumerate(order)}
+    tab = tab[tab["round_id"].isin(x)]
+    for style in ("lines", "box"):
+        fig, ax = plt.subplots(figsize=(max(4.0, 0.55 * len(order) + 2), 3.2))
+        if style == "lines":
+            for i, (pid, g) in enumerate(tab.groupby("patient_id")):
+                g = g.assign(_x=g["round_id"].map(x)).sort_values("_x")
+                ax.plot(
+                    g["_x"],
+                    g["median"],
+                    "-o",
+                    ms=3,
+                    lw=1,
+                    color=f"C{i % 10}",
+                    label=pid,
+                )
+            ax.legend(fontsize=6, ncol=2, title="case", title_fontsize=6)
+        else:
+            data = [tab[tab["round_id"] == r]["median"].to_numpy() for r in order]
+            ax.boxplot(data, positions=range(len(order)), showfliers=False)
+            for i, d in enumerate(data):
+                ax.plot([i] * len(d), d, ".", color="k", ms=3)
+        ax.axhline(1.0, color="0.6", lw=0.8, ls="--")
+        ax.set_xticks(range(len(order)), order, rotation=45, ha="right", fontsize=7)
+        ax.set_ylabel("DAPI retention\n(cell / reference round, median)", fontsize=8)
+        ax.set_xlabel("round", fontsize=8)
+        ax.set_title(f"n = {tab['patient_id'].nunique()} cases", fontsize=8)
+        fig.tight_layout()
+        for fmt in ctx.formats.split(","):
+            fig.savefig(out / f"S3a_retention_{style}.{fmt}", dpi=ctx.dpi)
+        plt.close(fig)
+
+
+# ----------------------------------------------------------------------------- S2 --
+def fig_s2(ctx: Ctx):
+    """Secondary-only controls, one crop per (acquisition, channel), at ONE contrast.
+
+    The claim is ABSENCE of signal, so every panel of a channel shares a pinned black and
+    white point (`vmin`/`vmax`, or the first stripped acquisition's clean autoscale) --
+    re-stretching each crop would amplify background into apparent carry-over. The
+    acquisitions are listed in a checkpoint-shaped CSV (S2.csv: patient_id, id,
+    registered_image, channels, is_reference), because they are extra acquisitions the
+    arms never registered."""
+    spec = ctx.opt("S2", default={}) or {}
+    if not spec.get("csv"):
+        print(
+            "[supp] S2: SKIPPED (no S2.csv of secondary-only acquisitions in the config)"
+        )
+        return
+    out = ctx.out / "S2"
+    channels = spec.get("channels") or ["DAPI"]
+    for auto in spec.get("autoscale", ["pinned", "clean"]):
+        for ch in channels:
+            args = [
+                Path(spec["csv"]).parent,
+                "--csv",
+                spec["csv"],
+                "--channel",
+                ch,
+                "--field-um",
+                spec.get("field_um", 300),
+                "--crop-px",
+                spec.get("crop_px", 768),
+                "--formats",
+                "png",
+                "-o",
+                out / auto / ch,
+            ]
+            if spec.get("roi"):
+                args += ["--roi", spec["roi"]]
+            if auto == "pinned":
+                lim = (spec.get("limits") or {}).get(ch)
+                if not lim:
+                    continue  # no pinned limits for this channel: only the autoscale row
+                args += ["--vmin", lim[0], "--vmax", lim[1]]
+            else:
+                args += ["--autoscale", auto]
+            for pid in spec.get("patients") or [None]:
+                ctx.render("reg_crop", args + (["--patient", pid] if pid else []))
+
+
+# -------------------------------------------------------------------------- index --
+def write_index(out: Path) -> Path:
+    """One page listing every PNG under OUT, grouped by figure, to pick variants."""
+    parts = [
+        "<!doctype html><meta charset=utf-8><title>Supplementary figures</title>",
+        "<style>body{font:14px system-ui;margin:16px;background:#fff;color:#111}"
+        "figure{display:inline-block;margin:6px;vertical-align:top;max-width:420px}"
+        "img{max-width:420px;border:1px solid #ccc}figcaption{font-size:11px;"
+        "word-break:break-all}h2{border-top:2px solid #333;padding-top:8px}</style>",
+        "<h1>Supplementary figures — every variant</h1>",
+    ]
+    picks = out / "picks.csv"
+    if picks.is_file():
+        parts.append(
+            "<h2>Arm picks</h2><pre>" + html.escape(picks.read_text()) + "</pre>"
+        )
+    for fig in ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11"):
+        d = out / fig
+        if not d.is_dir():
+            continue
+        pngs = sorted(
+            p
+            for p in d.rglob("*.png")
+            if "_anchor" not in p.parts
+            and "panels" not in p.parts
+            and "_patches" not in str(p)
+        )
+        parts.append(f"<h2>{fig} ({len(pngs)} images)</h2>")
+        for p in pngs:
+            rel = p.relative_to(out).as_posix()
+            parts.append(
+                f'<figure><a href="{html.escape(rel)}"><img loading=lazy src="{html.escape(rel)}">'
+                f"</a><figcaption>{html.escape(rel)}</figcaption></figure>"
+            )
+    idx = out / "index.html"
+    idx.write_text("\n".join(parts))
+    return idx
+
+
+# --------------------------------------------------------------------------- main --
+def main(argv: list[str] | None = None) -> int:
+    import yaml
+
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--results", type=Path, required=True, help="the arm results root")
+    ap.add_argument("--plan", type=Path, required=True, help="the FULL arm_plan.csv")
+    ap.add_argument(
+        "--config",
+        type=Path,
+        default=REPO_ROOT / "benchmarks/configs/supplementary.yaml",
+    )
+    ap.add_argument("-o", "--out", type=Path, required=True)
+    ap.add_argument("--only", default="", help=f"comma list of {list(FIGURES)}")
+    ap.add_argument(
+        "--exec", default="", help="renderer command prefix (the container)"
+    )
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+
+    cfg = yaml.safe_load(a.config.read_text()) or {}
+    ctx = Ctx(
+        root=a.results.resolve(),
+        plan=pd.read_csv(a.plan, dtype=str).fillna(""),
+        plan_csv=a.plan.resolve(),
+        out=a.out.resolve(),
+        cfg=cfg,
+        exec_prefix=shlex.split(a.exec),
+        dry_run=a.dry_run,
+    )
+    only = [f.strip() for f in a.only.split(",") if f.strip()] or list(FIGURES)
+    bad = sorted(set(only) - set(FIGURES))
+    if bad:
+        raise SystemExit(f"unknown figure(s) {bad}; known: {list(FIGURES)}")
+
+    final = accuracy_long(ctx)
+    picks = pick_arms(ctx, final)
+    print(picks.to_string(index=False))
+    if picks.empty:
+        raise SystemExit("no registered arm of any method under --results")
+    patients = [
+        str(p) for p in (ctx.opt("patients", default=[]) or [])
+    ] or _patients_of(
+        ctx.arm_dir(arm_for(picks, "valis", "high") or picks["arm"].iloc[0])
+    )
+    status = {}
+    for name, fn in (
+        ("mosaic", lambda: fig_mosaic(ctx, picks, patients)),
+        ("S4", lambda: fig_s4(ctx, picks, patients, final)),
+        ("S7", lambda: fig_s7(ctx, picks, patients, final)),
+        ("S5", lambda: fig_s5(ctx)),
+        ("S6", lambda: fig_s6(ctx, patients)),
+        ("S8", lambda: fig_s8(ctx, picks, final)),
+        ("S2", lambda: fig_s2(ctx)),
+        ("S3", lambda: fig_s3a(ctx)),
+    ):
+        if name not in only:
+            continue
+        try:
+            fn()
+            status[name] = "OK"
+        except Exception as exc:  # one figure failing must not cost the others
+            status[name] = f"FAILED: {exc}"
+            print(f"[supp] {name} FAILED: {exc!r}", file=sys.stderr)
+    (ctx.out / "commands.txt").write_text("\n".join(ctx.log) + "\n")
+    idx = write_index(ctx.out)
+    for k, v in status.items():
+        print(f"  {k:7s} {v}")
+    print(f"index: {idx}")
+    return 0 if all(v == "OK" for v in status.values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

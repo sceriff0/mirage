@@ -1,0 +1,85 @@
+# =============================================================================
+# supplementary.yaml -- the manuscript's supplementary set, from ONE arm results root.
+#
+# Read by benchmarks/supplementary.py (run by benchmarks/submit_supplementary.sh). Nothing
+# here registers or segments: every figure re-renders the arms already on disk. Leave a
+# key out to take its default; the AUTHORS TO SUPPLY values of each legend are written
+# beside each figure as *_values.csv.
+#
+#   python3 -m benchmarks.supplementary --results <root> --plan <root>/../arm_plan.csv \
+#       -o supp --dry-run          # every render it would run, without running any
+# =============================================================================
+
+# The "high" configuration of each method: its shipped high tier. "best" is computed
+# (highest median final-stage matched Dice over the cohort) and written to picks.csv.
+# A name absent from the results root falls back to that method's best.
+high:
+  valis: valis_high_micro2        # memory_mode high, micro-registration 2 (shipped default)
+  stare: tiled_high_gate1         # STARE v1 high tier, TRE gate 1 px (its shipped default)
+  drape: tiled_high_s128          # DRAPE high tier, stride 128 px (its shipped default)
+  ashlar: ashlar_t1024_s240       # tile 1024, 240 um drift budget
+
+configs: [high, best]
+
+# Which methods sit side by side. Every set is drawn at every config; the anchor render
+# of `all` picks the tissue, so every set shows the SAME ROIs.
+sets:
+  stare: [valis, stare, ashlar]
+  drape: [valis, drape, ashlar]
+  all:   [valis, stare, drape, ashlar]
+
+patients: []                      # empty = every patient of the VALIS high arm
+
+# ---- the priority figure: Before | VALIS | STARE-or-DRAPE | ASHLAR, Dice per cell ----
+mosaic:
+  configs: [high]                 # the mosaic shows each method's high tier only
+  variants: 3                     # different tissue each; same tissue across sets/configs
+  kinds: [overlay, checker]
+  numbers: scorer                 # the reg_qc=2 matched Dice (Before = native-stage Dice)
+  patch_um: 200
+  rows: null                      # default: one row per (moving round, ROI)
+  rounds: []                      # e.g. [CD8, CD3]; empty = every moving round
+
+# ---- S4 (Fig 2b's panels, VALIS vs STARE/DRAPE) and S7 (another case) ---------------
+S4:
+  patient: null                   # the case of Figure 2b; null = the first patient
+  rounds: []                      # the two panels of Figure 2b: the MOVING round's marker
+  field_um: 500
+  zoom_um: 60                     # the single-cell inset, same tissue in every panel
+  variants: 3
+  numbers: scorer
+S7:
+  patients: []                    # empty = every case except S4's
+  rounds: []
+  field_um: 500
+  zoom_um: 60
+  variants: 2
+  numbers: scorer
+
+# ---- S6: segmentation backends ------------------------------------------------------
+S6:
+  patient: null
+  regions: 2                      # "Y,X" list below, topped up from the mosaic's ROIs
+  rois: []
+  field_um: 150
+  crop_px: 768
+
+# ---- S3a: per-round DAPI retention (quantification/<pid>_round_qc.csv) ---------------
+S3:
+  round_order: []                 # AUTHORS: the acquisition order; empty = as written
+  from_arm: null                  # a full-pipeline arm (a segmentation arm); null = the first
+
+# ---- S2: secondary-only controls (extra acquisitions, not in the arms) ---------------
+S2:
+  csv: null                       # checkpoint-shaped CSV: patient_id,id,registered_image,channels,is_reference
+  channels: [DAPI]                # + the secondary channels, e.g. [DAPI, AF488, AF555, AF647]
+  patients: []
+  roi: null                       # "Y,X" in the slides' own frame; null = auto
+  field_um: 300
+  crop_px: 768
+  autoscale: [pinned, clean]      # pinned = ONE black/white point per channel across rounds
+  limits: {}                      # e.g. {AF555: [100, 4000]} -- required for `pinned`
+
+options:
+  formats: png,pdf
+  dpi: 150
