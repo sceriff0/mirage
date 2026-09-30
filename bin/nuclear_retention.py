@@ -32,7 +32,9 @@ logger = get_logger(__name__)
 _NAME = "nuclear"
 
 
-def nuclear_channel_index(names: List[str], nuclear_markers: List[str]) -> Optional[int]:
+def nuclear_channel_index(
+    names: List[str], nuclear_markers: List[str]
+) -> Optional[int]:
     """Index of the first channel matching one of ``nuclear_markers``, via the shared rule.
 
     Delegates to ``metadata.is_nuclear`` (case-insensitive substring match), so
@@ -190,14 +192,18 @@ def main(argv=None) -> int:
             logger.warning(
                 "%s: no channel matches --nuclear-markers %s (channels: %s); writing an "
                 "empty table, so this round gets no retention key",
-                args.image, args.nuclear_markers, names,
+                args.image,
+                args.nuclear_markers,
+                names,
             )
             pd.DataFrame(columns=["label"]).to_csv(args.output, index=False)
             return 0
         plane = np.asarray(arr[idx, :, :])
     finally:
         close()
-    if np.issubdtype(plane.dtype, np.signedinteger) or np.issubdtype(plane.dtype, np.floating):
+    if np.issubdtype(plane.dtype, np.signedinteger) or np.issubdtype(
+        plane.dtype, np.floating
+    ):
         plane = np.clip(plane, 0, None)
     cell_mask = _load_mask(args.mask_file)
     nuclei_mask = _load_mask(args.nuclei_mask_file) if args.nuclei_mask_file else None

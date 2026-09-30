@@ -690,12 +690,21 @@ def test_per_cell_carries_the_final_stage_iou(tmp_path):
     ref = _write(tmp_path, "ref.geojson", _grid_fc())
     mov = _write(tmp_path, "mov.geojson", _grid_fc(dx=100.0))
     warp = _shift_warp(
-        {STAGE_NATIVE: 0.0, STAGE_RIGID: -96.0, STAGE_NON_RIGID: -99.0, STAGE_MICRO: -100.0}
+        {
+            STAGE_NATIVE: 0.0,
+            STAGE_RIGID: -96.0,
+            STAGE_NON_RIGID: -99.0,
+            STAGE_MICRO: -100.0,
+        }
     )
     out = wsq.run(
-        ref, mov, warp,
+        ref,
+        mov,
+        warp,
         [STAGE_NATIVE, STAGE_RIGID, STAGE_NON_RIGID, STAGE_MICRO],
-        ref_slide=REF, moving_slide=MOV, supersample=4,
+        ref_slide=REF,
+        moving_slide=MOV,
+        supersample=4,
     )
     per_cell = out["_per_cell"]
     assert per_cell["stage"] == STAGE_MICRO

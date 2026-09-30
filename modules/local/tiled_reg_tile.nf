@@ -1,14 +1,17 @@
 /*
  * TILED_REG_TILE - STARE fan-out step 2/4: one tile's residual (the little-process fan-out).
  *
- * One task per tile: rigid-warps just this tile's reference-frame window of the moving DAPI and
- * phase-correlates it against the reference window. `row` is a tile-plan CSV row from TILED_COARSE.
+ * One task per tile: rigid-warps this tile's reference-frame read box of the moving DAPI and
+ * measures a grid of window vectors on the slide-global lattice (stare.vector_grid: node k at
+ * W/2 + k*stride, W = 2*stride; the tile emits the nodes whose centre lies in its CORE, so
+ * every node is measured exactly once across tiles). `row` is a tile-plan CSV row from
+ * TILED_COARSE; its core columns x0/y0/x1/y1 are what makes the ownership exact.
  */
 process TILED_REG_TILE {
     tag "${meta.patient_id}:${row.ix}_${row.iy}"
     label 'process_low'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-stare:1.0.0'
 
     input:
     tuple val(meta), path(m0), path(reference, stageAs: 'ref/*'), path(moving, stageAs: 'mov/*'), val(row)
@@ -37,12 +40,9 @@ process TILED_REG_TILE {
             "patient ${meta.patient_id}. Configured nuclear_markers: " +
             "${MarkerUtils.markerList(params.nuclear_markers).join(', ')}. " +
             "Set params.reg_tiled_nuclear_index to override.")
-    // Tier-owned knobs: null means take the value from reg_tiled_mode's row in
-    // lib/RegPresets.groovy. Resolved via RegPresets so the tier table has one home;
-    // the mode and the override are passed as SCALARS, never the params map, because a
-    // script: block that hands `params` to a helper makes Nextflow hash the whole map
-    // and re-run the task on any unrelated parameter change (see CLAUDE.md).
-    def upsample   = RegPresets.stare(params.reg_tiled_mode, 'upsample', params.reg_tiled_upsample)
+    // NOT tier-owned: the lattice resolution is its own axis (crossed with the tiers in the
+    // arms). An itemised params.reg_tiled_stride reference, so only its value enters the hash.
+    def stride     = params.reg_tiled_stride
     """
     tiled_reg_tile.py \\
         --reference ${reference} \\
@@ -51,20 +51,24 @@ process TILED_REG_TILE {
         --nuclear-index ${nuclear_index} \\
         --ix ${row.ix} --iy ${row.iy} --cx ${row.cx} --cy ${row.cy} \\
         --rx0 ${row.rx0} --ry0 ${row.ry0} --rx1 ${row.rx1} --ry1 ${row.ry1} \\
-        --upsample ${upsample} \\
+        --x0 ${row.x0} --y0 ${row.y0} --x1 ${row.x1} --y1 ${row.y1} \\
+        --stride ${stride} \\
         --out ${prefix}_ctrl.json
 
     ${ProcessEnvelope.versions(task.process, [], task.container)}
     """
 
     stub:
-    // "error" is not decoration: tiled_solve._accept treats a control point WITHOUT it as
-    // legacy and accepts it unconditionally, so a stub that omits it made every stub run
-    // exercise the legacy path instead of the confidence gate. 0.0 models a confident match.
+    // "lattice"/"vectors" are not decoration: stare.solve's SOLVE solves only the vector
+    // lattice and REFUSES a control JSON without them, so a stub that omitted them would fail
+    // every stub run's TILED_SOLVE. One confident, in-range vector per tile, at node (ix, iy);
+    // the per-tile summary keys (dx/dy/tre/error, ref_fg/mov_fg) mirror the real script's.
     // Guarded by tests/test_stub_control_json_contract.py.
     def prefix = "${meta.patient_id}_${meta.channels.join('_')}_${row.ix}_${row.iy}"
+    def stride = params.reg_tiled_stride
+    def window = 2 * stride
     """
-    echo '{"ix":${row.ix},"iy":${row.iy},"cx":${row.cx},"cy":${row.cy},"dx":0,"dy":0,"tre":0,"error":0.0,"ref_fg":0.1,"mov_fg":0.1}' > ${prefix}_ctrl.json
+    echo '{"ix":${row.ix},"iy":${row.iy},"cx":${row.cx},"cy":${row.cy},"dx":0,"dy":0,"tre":0,"error":0.0,"ref_fg":0.1,"mov_fg":0.1,"lattice":{"stride":${stride},"window":${window},"origin":${stride}},"vectors":[[${row.ix},${row.iy},${row.cx},${row.cy},0.0,0.0,10.0,2.0,1.0]],"rejected":[]}' > ${prefix}_ctrl.json
     ${ProcessEnvelope.versionsStub(task.process, [], task.container)}
     """
 }

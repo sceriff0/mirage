@@ -550,6 +550,37 @@ with open(OUT_DIR / "invalid_no_ref.csv", "w") as f:
     f.write(f"P001,{TESTDATA_ABS}/P001_mov2.ome.tiff,false,DAPI|VIMENTIN|CD45\n")
 print("  Created invalid_no_ref.csv (no reference)")
 
+# 4b'. Two slides of one patient with the SAME channel set. Originally legal for
+# the tiled backend (meta rides along its fan-out) and fatal only for VALIS, which
+# pairs its renamed outputs back to metas by channel signature
+# (lib/RegisteredMatch.groovy) -- and used to discover that only AFTER REGISTER had
+# run the whole group (2026-09-11, patient 046 of the head_neck arm launch: 12
+# slides registered, then aborted). Since 2026-09-13 the sheet is refused on EVERY
+# backend anyway: rows 3 and 4 also share the non-nuclear channels CD3 and CD8, and
+# CsvUtils.validateInputSemantics's unconditional cross-slide rule (Rule A) refuses
+# that regardless of requireUniqueChannelSets. The VALIS-only signature rule (Rule
+# B) still fires first under VALIS and still has its own message.
+with open(OUT_DIR / "duplicate_channel_set.csv", "w") as f:
+    f.write("patient_id,path_to_file,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8\n")
+    f.write(
+        f"P001,{TESTDATA_ABS}/P001_mov2.ome.tiff,false,CD8|dapi|CD3\n"
+    )  # same SET as mov1
+print("  Created duplicate_channel_set.csv (two slides, one channel set)")
+# The same duplicate, as the registered.csv checkpoint a --start segmentation
+# re-entry reads. REGISTER does not run from there, so the VALIS-only signature
+# rule (Rule B) must not fire on this path -- but the unconditional cross-slide
+# rule (Rule A) still does, at every --start, so this sheet is refused here too.
+with open(OUT_DIR / "duplicate_channel_set_registered.csv", "w") as f:
+    f.write("patient_id,registered_image,is_reference,channels\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_ref.ome.tiff,true,DAPI|PANCK|SMA\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov1.ome.tiff,false,DAPI|CD3|CD8\n")
+    f.write(f"P001,{TESTDATA_ABS}/P001_mov2.ome.tiff,false,CD8|dapi|CD3\n")
+print(
+    "  Created duplicate_channel_set_registered.csv (same, as a registered checkpoint)"
+)
+
 # 4c. DAPI not in channel 0 (pre-converted OME-TIFF input)
 with open(OUT_DIR / "invalid_dapi_position.csv", "w") as f:
     f.write("patient_id,path_to_file,is_reference,channels\n")
@@ -656,6 +687,8 @@ print("  - test_input.csv")
 print("\nInvalid data (for validation testing):")
 print("  - invalid_multi_ref.csv")
 print("  - invalid_no_ref.csv")
+print("  - duplicate_channel_set.csv")
+print("  - duplicate_channel_set_registered.csv")
 print("  - invalid_dapi_position.csv")
 print("  - invalid_no_dapi.csv")
 print("  - invalid_checkpoint_missing_col.csv")

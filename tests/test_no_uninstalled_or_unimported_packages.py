@@ -41,8 +41,8 @@ from tests import test_container_harmonisation as harmonisation
 # NOTE ON WHAT DOES NOT NEED AN ENTRY HERE: `_unimported()` below counts
 # `REQUIRED_RUNTIME_IMPORTS[container]` (test_container_harmonisation.py) as reached, not
 # just module-scope imports. A package whose only importer is a LAZY import already
-# declared there -- containers/convert's bioio, h5py, scyjava; containers/tiled's torch,
-# kornia, zarr, scipy, skimage; containers/segeval's matplotlib; every name in
+# declared there -- containers/convert's bioio, h5py, scyjava; containers/stare's zarr,
+# scipy, skimage; containers/segeval's matplotlib; every name in
 # containers/spatialdata's REQUIRED_RUNTIME_IMPORTS entry -- is therefore never unimported
 # in the first place and must NOT be listed below: an entry here for one of those would
 # immediately fail test_every_allowlist_entry_is_still_unimported, because the package is
@@ -74,12 +74,12 @@ ALLOWED_UNIMPORTED = {
             "quantify",
             "regqc",
             "stardist",
-            "tiled",
+            "stare",
         )
     },
     # zarr 2 delegates every compression to numcodecs, and the two must move together:
     # a newer numcodecs drops blosc.cbuffer_sizes, which zarr 2.18 imports at module
-    # scope (requirements/tiled.txt records the same fact for the same reason).
+    # scope (requirements/stare.txt records the same fact for the same reason).
     **{
         (c, "numcodecs"): (
             "zarr 2.18's codec layer. Pinned beside zarr because the pair cannot split: "
@@ -94,7 +94,7 @@ ALLOWED_UNIMPORTED = {
             "quantify",
             "regqc",
             "stardist",
-            "tiled",
+            "stare",
         )
     },
     # --- per-image runtime dependencies -------------------------------------------
@@ -175,6 +175,9 @@ ALLOWED_UNIMPORTED = {
         "tifffile's codec backend: bin/export_spatialdata.py reads MERGE_AND_PYRAMID's "
         "zstd/LZW-compressed OME-TIFF through tifffile."
     ),
+    # --- pending an image rebuild -------------------------------------------------
+    # (empty since 2026-09-27: containers/tiled's torch/kornia entries went when the
+    # torch-free containers/stare replaced it)
 }
 
 
@@ -187,7 +190,7 @@ def _unimported(container):
     (runtime, not module-scope) import, each proven still genuine by
     ``test_required_runtime_imports_are_actually_reached`` in test_container_harmonisation.
     Without that union, every package a script needs only at runtime -- bioio, h5py and
-    scyjava for containers/convert; torch/kornia for containers/tiled; matplotlib for
+    scyjava for containers/convert; zarr/scipy/skimage for containers/stare; matplotlib for
     containers/segeval -- would read as unreached and demand an ALLOWED_UNIMPORTED entry
     duplicating a reason REQUIRED_RUNTIME_IMPORTS already states, which is exactly the kind
     of second copy of the same fact this repository's guards avoid (see
@@ -223,7 +226,7 @@ def test_the_scan_reaches_every_image_that_runs_a_script():
         "instanseg",
         "preprocess",
         "merge",
-        "tiled",
+        "stare",
         "segeval",
         "spatialdata",
     ):

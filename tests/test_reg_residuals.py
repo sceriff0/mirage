@@ -38,7 +38,9 @@ def test_two_pairs_on_one_cell_keep_the_worst_residual_and_its_iou(tmp_path):
 
 
 def test_residual_csv_without_iou_gives_nan_iou(tmp_path):
-    p = _csv(tmp_path, ["m,11,10,2.0,micro"], header="moving,ref_x,ref_y,residual_px,stage")
+    p = _csv(
+        tmp_path, ["m,11,10,2.0,micro"], header="moving,ref_x,ref_y,residual_px,stage"
+    )
     resid, iou, _ = join_one(p, CENTROIDS, 5.0)
     assert resid[0] == 2.0 and np.isnan(iou).all()
 

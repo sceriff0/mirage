@@ -1,17 +1,18 @@
 """The intrinsic-TRE report must describe the mesh it claims to describe.
 
-`bin/tiled_solve.py` gates control points on confidence and range before laying them on the
-mesh, but built its `--out-tre` report from *every* control point including the rejected ones.
-A rejected point's `tre` is not a conservative over-estimate of a real misalignment -- the
-correlation peak is an artefact by construction, so the number is about nothing. Summarising
-over it makes the reg_qc heatmap disagree with the mesh underneath it.
+`bin/tiled_solve.py` range-gates every tile's window vectors before laying them on the mesh
+lattice, but once built its `--out-tre` report from *every* tile including the ones the mesh
+took nothing from. Such a tile's `tre` is not a measurement of a real misalignment -- its peak
+is an artefact by construction, so the number is about nothing. Summarising over it makes the
+reg_qc heatmap disagree with the mesh underneath it. (Under STARE v1 the unit was one control
+point per tile, gated on correlation confidence too; since v2 a tile is "accepted" when at
+least one of its vectors is finite and in range -- `stare.solve.tile_accepted`.)
 
 These tests pin the contract: every record says whether it was accepted, the percentile summary
 covers accepted records only, and the spatial heatmap still carries every tile so QC can show
 *where* points were dropped.
 
-Backward compatibility: a record with no `accepted` key counts as accepted -- the same legacy
-contract `_accept` already applies to a control point with no `error` key.
+Backward compatibility: a record with no `accepted` key counts as accepted.
 """
 
 import json
@@ -34,6 +35,25 @@ pytest.importorskip("numpy")
 
 import tiled_solve  # noqa: E402
 from tre_report import build_tre_report  # noqa: E402
+
+S = 128
+
+
+def _ctrl(ix, dx, dy, tre):
+    """A v2 control JSON: one window vector at lattice node (ix, 0)."""
+    return {
+        "ix": ix,
+        "iy": 0,
+        "cx": float(ix * 100),
+        "cy": 0.0,
+        "dx": dx,
+        "dy": dy,
+        "tre": tre,
+        "error": 0.04,
+        "lattice": {"stride": S, "window": 2 * S, "origin": S},
+        "vectors": [[ix, 0, S * (ix + 1.0), float(S), dx, dy, 5.0, 2.0, 1.0]],
+        "rejected": [],
+    }
 
 
 def _rec(ix, iy, tre, accepted=None):
@@ -100,8 +120,8 @@ def test_records_with_no_accepted_key_are_all_counted():
     assert report["n_rejected"] == 0
 
 
-def test_solve_marks_a_low_confidence_control_as_rejected_in_the_tre_report(tmp_path):
-    """End to end: the point the gate drops from the mesh is the point the report calls rejected."""
+def test_solve_marks_an_out_of_range_tile_as_rejected_in_the_tre_report(tmp_path):
+    """End to end: the tile the gate drops from the mesh is the tile the report calls rejected."""
     m0 = tmp_path / "m0.json"
     m0.write_text(
         json.dumps(
@@ -116,27 +136,9 @@ def test_solve_marks_a_low_confidence_control_as_rejected_in_the_tre_report(tmp_
         )
     )
 
-    # Two tiles: one confident real match, one background tile whose peak is an artefact.
-    good = {
-        "ix": 0,
-        "iy": 0,
-        "cx": 0.0,
-        "cy": 0.0,
-        "dx": 2.0,
-        "dy": -1.0,
-        "tre": 2.24,
-        "error": 0.04,
-    }
-    bad = {
-        "ix": 1,
-        "iy": 0,
-        "cx": 100.0,
-        "cy": 0.0,
-        "dx": 60.0,
-        "dy": 8.0,
-        "tre": 60.5,
-        "error": 0.9999,
-    }
+    # Two tiles: one real match, one whose only vector is beyond the read window (an artefact).
+    good = _ctrl(0, 2.0, -1.0, 2.24)
+    bad = _ctrl(1, 60.0, 8.0, 60.5)
     (tmp_path / "ctrl_0.json").write_text(json.dumps(good))
     (tmp_path / "ctrl_1.json").write_text(json.dumps(bad))
 
@@ -147,10 +149,8 @@ def test_solve_marks_a_low_confidence_control_as_rejected_in_the_tre_report(tmp_
             str(m0),
             "--controls",
             str(tmp_path / "ctrl_*.json"),
-            "--gate-tre",
-            "1.0",
-            "--max-error",
-            "0.99",
+            "--max-disp",
+            "32",
             "--moving-name",
             "mov",
             "--out-manifest",
@@ -185,34 +185,8 @@ def test_solve_tre_summary_ignores_the_rejected_control(tmp_path):
             }
         )
     )
-    (tmp_path / "ctrl_0.json").write_text(
-        json.dumps(
-            {
-                "ix": 0,
-                "iy": 0,
-                "cx": 0.0,
-                "cy": 0.0,
-                "dx": 2.0,
-                "dy": -1.0,
-                "tre": 2.0,
-                "error": 0.04,
-            }
-        )
-    )
-    (tmp_path / "ctrl_1.json").write_text(
-        json.dumps(
-            {
-                "ix": 1,
-                "iy": 0,
-                "cx": 100.0,
-                "cy": 0.0,
-                "dx": 60.0,
-                "dy": 8.0,
-                "tre": 60.0,
-                "error": 0.9999,
-            }
-        )
-    )
+    (tmp_path / "ctrl_0.json").write_text(json.dumps(_ctrl(0, 2.0, -1.0, 2.0)))
+    (tmp_path / "ctrl_1.json").write_text(json.dumps(_ctrl(1, 60.0, 8.0, 60.0)))
 
     tre_f = tmp_path / "tre.json"
     tiled_solve.main(
@@ -221,10 +195,8 @@ def test_solve_tre_summary_ignores_the_rejected_control(tmp_path):
             str(m0),
             "--controls",
             str(tmp_path / "ctrl_*.json"),
-            "--gate-tre",
-            "1.0",
-            "--max-error",
-            "0.99",
+            "--max-disp",
+            "32",
             "--moving-name",
             "mov",
             "--out-manifest",

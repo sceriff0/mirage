@@ -6,13 +6,12 @@ full decode it matched at *native* resolution, which is how patient 052 exhauste
 attempts with exit 137. The design always specified this step as a THUMBNAIL feature-align to a
 global rigid M0, and the thumbnail is what these tests pin.
 
-The bound matters more now, not less: the matcher is DISK, a U-Net whose activation memory is
-linear in thumbnail AREA (``GB ~= 1.1 + 7.3 * Mpx``), and TILED_COARSE's memory request is
-derived from ``--max-dim`` for exactly that reason. An unbounded plane is not a slow run, it is
-an unschedulable one.
+The bound still matters: the anchor (NCC rotation sweep + refine, ORB fallback) warps and FFTs
+the whole plane it is handed ~50 times, and TILED_COARSE's memory request is derived from
+``--max-dim``. An unbounded plane is not a slow run, it is an unschedulable one.
 
 Properties pinned here:
-  1. The matcher never sees a full-resolution plane: the arrays handed to estimate_rigid have
+  1. The anchor never sees a full-resolution plane: the arrays handed to estimate_anchor have
      their longest side bounded by --max-dim. This is the test that fails against the
      pre-change code.
   2. No whole-slide array is ever materialised: every region read off either slide is a bounded
@@ -46,11 +45,6 @@ sys.path.insert(
 pytest.importorskip("skimage")
 pytest.importorskip("scipy")
 pytest.importorskip("zarr")
-# torch + kornia are NOT optional decoration here. Six cases below reach the real
-# estimate_rigid -- including the three that monkeypatch it, because each spy wraps `orig`
-# and CALLS THROUGH -- so without the learned matcher they would RuntimeError, not skip.
-pytest.importorskip("torch")
-pytest.importorskip("kornia")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_coarse  # noqa: E402
@@ -117,7 +111,7 @@ def _run(tmp_path, ref_f, mov_f, max_dim, nuclear_index=1, tile=256, halo=32):
 
 
 def test_the_matcher_never_sees_a_full_resolution_plane(tmp_path, monkeypatch):
-    """The arrays handed to estimate_rigid must be bounded by --max-dim.
+    """The arrays handed to estimate_anchor must be bounded by --max-dim.
 
     Fails against the pre-change code, which passed the native-resolution DAPI plane straight
     into the matcher (1024 px here, 8x over the 128 px bound).
@@ -126,16 +120,16 @@ def test_the_matcher_never_sees_a_full_resolution_plane(tmp_path, monkeypatch):
     ref_f, mov_f = _write_pair(tmp_path, n=n, shift=(16, -8))
 
     seen = []
-    orig = tiled_coarse.estimate_rigid
+    orig = tiled_coarse.estimate_anchor
 
     def spy(ref, mov, **kw):
         seen.append((ref.shape, mov.shape))
         return orig(ref, mov, **kw)
 
-    monkeypatch.setattr(tiled_coarse, "estimate_rigid", spy)
+    monkeypatch.setattr(tiled_coarse, "estimate_anchor", spy)
     _run(tmp_path, ref_f, mov_f, max_dim=max_dim)
 
-    assert seen, "estimate_rigid was never called"
+    assert seen, "estimate_anchor was never called"
     for ref_shape, mov_shape in seen:
         assert max(ref_shape) <= max_dim, (
             f"the matcher got a {ref_shape} reference plane, over the {max_dim}px "
@@ -260,7 +254,10 @@ def test_m0_is_written_in_full_resolution_coordinates(tmp_path):
     )
     # near-identity rotation/scale
     assert np.allclose(m0[:2, :2], np.eye(2), atol=0.02)
-    assert m0_doc["n_inliers"] > 0
+    # how the anchor was found is recorded, and it is the sweep on a clean pair
+    assert m0_doc["coarse_method"] == "ncc_sweep"
+    assert m0_doc["coarse_peak_ncc"] >= 0.3
+    assert abs(m0_doc["coarse_angle_deg"]) < 0.5
 
 
 def test_ref_dims_and_tile_plan_stay_full_resolution(tmp_path):
@@ -293,13 +290,17 @@ def test_reference_and_moving_share_one_decimation_factor(tmp_path, monkeypatch)
     ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
 
     seen = []
-    orig = tiled_coarse.estimate_rigid
 
+    # NOT a call-through spy: the two slides here are different random fields (a 512 px draw
+    # is not a crop of the 1024 px one), so the real anchor rightly REFUSES them. This case is
+    # about the shapes the anchor is handed, so it answers with an identity anchor.
     def spy(ref, mov, **kw):
         seen.append((ref.shape, mov.shape))
-        return orig(ref, mov, **kw)
+        from stare.coarse_align import Anchor
 
-    monkeypatch.setattr(tiled_coarse, "estimate_rigid", spy)
+        return Anchor(np.eye(3), 1.0, 0, "ncc_sweep", 1.0, 2.0, 0.0)
+
+    monkeypatch.setattr(tiled_coarse, "estimate_anchor", spy)
     _run(tmp_path, ref_f, mov_f, max_dim=128)
 
     ref_shape, mov_shape = seen[0]
@@ -317,16 +318,32 @@ def test_small_slide_is_not_decimated(tmp_path, monkeypatch):
     ref_f, mov_f = _write_pair(tmp_path, n=n, shift=(6, -4))
 
     seen = []
-    orig = tiled_coarse.estimate_rigid
+    orig = tiled_coarse.estimate_anchor
 
     def spy(ref, mov, **kw):
         seen.append((ref.shape, mov.shape))
         return orig(ref, mov, **kw)
 
-    monkeypatch.setattr(tiled_coarse, "estimate_rigid", spy)
+    monkeypatch.setattr(tiled_coarse, "estimate_anchor", spy)
     m0_doc, _ = _run(tmp_path, ref_f, mov_f, max_dim=4096, tile=128, halo=16)
 
     assert seen[0] == ((n, n), (n, n)), "small slide must not be decimated"
     m0 = np.asarray(m0_doc["M0"], dtype=float)
     assert m0[0, 2] == pytest.approx(-6, abs=1.0)
     assert m0[1, 2] == pytest.approx(4, abs=1.0)
+
+
+def test_an_unanchorable_pair_fails_the_task_naming_both_slides(tmp_path):
+    """Two unrelated slides must not produce an M0 at all: a wrong anchor fails nothing
+    downstream (tiles are simply read from the wrong place), so COARSE refuses, loudly, with
+    the slide names and the scores in the error, and writes no M0 JSON."""
+    from stare.coarse_align import CoarseRefused
+
+    # 512 vs 1024 draws of the textured field are different random fields, not a crop.
+    ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
+    with pytest.raises(CoarseRefused) as ei:
+        _run(tmp_path, ref_f, mov_f, max_dim=128)
+    msg = str(ei.value)
+    assert "REFUSED" in msg and "mov.ome.tiff" in msg and "ref.ome.tiff" in msg, msg
+    assert "peak" in msg and "ORB" in msg, msg
+    assert not (tmp_path / "m0.json").exists()

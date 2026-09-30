@@ -265,7 +265,7 @@
                         "integer",
                         "null"
                     ],
-                    "description": "tile core size (px); also the mesh grid resolution. null = from reg_tiled_mode.",
+                    "description": "tile core size (px): one TILED_REG_TILE task per tile (the mesh resolution is reg_tiled_stride). null = from reg_tiled_mode.",
                     "minimum": 16
                 },
                 "reg_tiled_halo": {
@@ -276,35 +276,20 @@
                     "description": "tile read halo (px). null = from reg_tiled_mode.",
                     "minimum": 0
                 },
-                "reg_tiled_gate_tre": {
-                    "type": "number",
-                    "description": "STARE only: refine only tiles whose rigid-stage TRE (px) exceeds this.",
-                    "default": 1.0,
-                    "minimum": 0
-                },
-                "reg_tiled_max_error": {
-                    "type": "number",
-                    "description": "STARE only: confidence gate. Drop a mesh control point whose phase-correlation error exceeds this (0 = perfect match, ~1 = no shared structure). Keeps background and section-edge tiles out of the deformation mesh.",
-                    "default": 0.99,
-                    "minimum": 0,
-                    "maximum": 1
-                },
                 "reg_tiled_max_disp": {
                     "type": [
                         "number",
                         "null"
                     ],
-                    "description": "STARE only: range gate. Drop a mesh control point whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
+                    "description": "STARE only: range gate. Drop a window vector whose displacement magnitude (px) is at or beyond this. null = use reg_tiled_halo, the read-window bound.",
                     "default": null,
                     "minimum": 0
                 },
-                "reg_tiled_upsample": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "description": "phase-correlation sub-pixel upsample factor. null = from reg_tiled_mode.",
-                    "minimum": 1
+                "reg_tiled_stride": {
+                    "type": "integer",
+                    "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
+                    "default": 128,
+                    "minimum": 16
                 },
                 "reg_tiled_out_tile": {
                     "type": [
@@ -321,7 +306,7 @@
                         "null"
                     ],
                     "minimum": 0,
-                    "description": "COARSE anchor thumbnail longest side (px). null = from reg_tiled_mode."
+                    "description": "COARSE anchor refine thumbnail longest side (px); the rotation sweep runs at 256 px. null = from reg_tiled_mode."
                 }
             }
         },

@@ -350,8 +350,16 @@ def run(
         s_ref, ar_ref, c_ref = _stage_geometry(warp, ref_slide, ref_native, stage)
         s_mov, ar_mov, c_mov = _stage_geometry(warp, moving_slide, mov_native, stage)
         rec, stage_iou = score_stage(
-            s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, idx_ref, idx_mov,
-            return_iou=True, **score_kwargs
+            s_ref,
+            s_mov,
+            c_ref,
+            c_mov,
+            ar_ref,
+            ar_mov,
+            idx_ref,
+            idx_mov,
+            return_iou=True,
+            **score_kwargs,
         )
         records[stage] = rec
         if stage == final_stage and idx_ref.size:
@@ -423,7 +431,9 @@ def write_per_cell_csv(path, per_cell, moving_name) -> int:
         stage = per_cell["stage"]
         for (x, y), d, i in zip(xy, dist, iou):
             iou_str = "" if not np.isfinite(i) else f"{i:.6f}"
-            w.writerow([moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", iou_str, stage])
+            w.writerow(
+                [moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", iou_str, stage]
+            )
         return int(dist.size)
 
 

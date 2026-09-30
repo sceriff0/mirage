@@ -25,9 +25,11 @@ PHASE 1 -- what this change does
 ---------------------------------
 Emit ``ref_fg`` and ``mov_fg`` on every control point. **Nothing gates on them.** That is
 deliberate: emitting first is cheap and reversible, makes the next phase measurable on real
-slides instead of synthetic tiles, and lets ``--out-tre`` say why a tile was dropped. A control
-JSON written before this change simply lacks the keys, and since no gate reads them, nothing
-falls back and nothing warns.
+slides instead of synthetic tiles, and lets ``--out-tre`` say why a tile was dropped.
+
+(The "accepted-but-wrong band" above was STARE v1's one-point-per-tile exposure. Since STARE v2
+the mesh is built from per-window vectors on a foreground mask with a peak-ratio floor; the
+per-tile ``ref_fg``/``mov_fg`` are still emitted and still gated on by nothing.)
 """
 
 import json
@@ -51,7 +53,6 @@ pytest.importorskip("skimage")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_reg_tile  # noqa: E402
-import tiled_solve  # noqa: E402
 from tile_residual import foreground_fraction  # noqa: E402
 
 
@@ -61,7 +62,7 @@ def _tissue(seed=1234, n=192):
     NOT a smooth filtered field. A smooth field is unimodal, and Otsu on a unimodal tile just
     splits it near the middle and reports ~0.50 -- which is what the first version of these
     tests used, and why they failed against a function that is behaving correctly. Modelled on
-    tests/test_tile_residual_confidence.py's own `_tissue_field`.
+    the `_tissue_field` of the STARE v1 confidence-gate tests (retired with the gate).
     """
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:n, 0:n]
@@ -208,7 +209,13 @@ def test_the_existing_control_point_keys_are_unchanged(tmp_path):
 
 
 def test_nothing_gates_on_the_foreground_fraction_yet():
-    """Phase 1 emits without gating -- deliberately, so the next phase stays measurable."""
+    """Phase 1 emits without gating -- deliberately, so the next phase stays measurable.
+
+    The per-tile ``ref_fg``/``mov_fg`` must not change what SOLVE takes from a tile: a tile's
+    acceptance (``stare.solve.tile_accepted``) reads only its vectors and the range gate.
+    """
+    from stare.solve import tile_accepted
+
     base = {
         "ix": 0,
         "iy": 0,
@@ -218,33 +225,16 @@ def test_nothing_gates_on_the_foreground_fraction_yet():
         "dy": 0.0,
         "tre": 1.0,
         "error": 0.04,
+        "lattice": {"stride": 128, "window": 256, "origin": 128},
+        "vectors": [[0, 0, 128.0, 128.0, 1.0, 0.0, 5.0, 2.0, 1.0]],
+        "rejected": [],
     }
 
-    accepted_without, _ = tiled_solve._accept(dict(base), max_error=0.99, max_disp=256)
-    accepted_with_zero, _ = tiled_solve._accept(
-        dict(base, ref_fg=0.9, mov_fg=0.0), max_error=0.99, max_disp=256
-    )
+    accepted_without = tile_accepted(dict(base), max_disp=256)
+    accepted_with_zero = tile_accepted(dict(base, ref_fg=0.9, mov_fg=0.0), max_disp=256)
 
     assert accepted_without is True
     assert accepted_with_zero is True, (
         "a gate started reading mov_fg. That is Phase 2 work and it changes registration "
         "output -- it needs the dense-sweep acceptance and a real-slide before/after first."
     )
-
-
-def test_a_control_point_without_the_keys_still_works(tmp_path):
-    """Backward compatibility: a resumed run's older control points must not warn or fail."""
-    legacy = {
-        "ix": 0,
-        "iy": 0,
-        "cx": 0.0,
-        "cy": 0.0,
-        "dx": 1.0,
-        "dy": 0.0,
-        "tre": 1.0,
-        "error": 0.04,
-    }
-
-    accepted, reason = tiled_solve._accept(legacy, max_error=0.99, max_disp=256)
-
-    assert accepted is True and reason is None

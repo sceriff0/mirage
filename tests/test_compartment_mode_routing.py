@@ -352,8 +352,17 @@ ALLOWED_LINES = {
         # 1275 -> 1281 (2026-09-16): the REGISTER withName block grew six lines when its
         # memory became 64 GB doubling with maxRetries pinned (:wrench: "REGISTER memory
         # starts at 64 GB and doubles"), which did not re-pin this entry.
-        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1281
-        1281: (
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1231
+        # 1231 -> 1240 (2026-09-27): TILED_REG_TILE's memory closure was re-derived for the
+        # window-vector grid (read box = core + 3*stride), +9 comment/code lines above.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1240
+        # 1240 -> 1232 (2026-09-27): TILED_COARSE's note and memory closure shrank when its
+        # anchor stopped being a U-Net (DISK) -- -8 lines above this one.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1232
+        # 1232 -> 1282 on dev (2026-09-30): the STARE port lands on dev's modules.config,
+        # which also carries add_cycle's and CELL_QC/NUCLEAR_RETENTION's blocks above it.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1282
+        1282: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

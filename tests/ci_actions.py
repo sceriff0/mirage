@@ -72,7 +72,7 @@ NOT A GENERAL YAML MODEL. It answers exactly the questions this repo's CI guards
 ask. Anything more would be a second parser with its own blind spots.
 
 Consumers: tests/test_ci_stack_pinned.py, tests/test_ci_job_hygiene.py,
-tests/test_disk_test_actually_runs.py, tests/test_release_workflow_graph.py.
+tests/test_release_workflow_graph.py.
 """
 
 from __future__ import annotations
@@ -604,7 +604,7 @@ def requirements_from_step(
 def requirement_files_installed(job: dict) -> list[str]:
     """Every requirements/*.txt file a JOB ends up installing, in order.
 
-    Duplicates are preserved: order is what makes the torch-before-kornia claim
+    Duplicates are preserved: order is what makes an install-order claim
     checkable, and de-duplicating would hide a file installed twice.
     """
     files: list[str] = []

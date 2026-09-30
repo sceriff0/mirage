@@ -121,35 +121,30 @@ STARE is an alternative registration backend that is **JVM-free** (no Bio-Format
 heap), tiles the slide internally, and runs fully in parallel. These params apply only when
 `--registration_method tiled`.
 
-**Sizing warning.** STARE is *not* a laptop backend at the shipped `high` tier. Every step
-except the coarse anchor is region-streamed and stays under a few GB, but `TILED_COARSE`
-matches with DISK — a U-Net whose peak is linear in thumbnail **area** — and asks **~48 GB**
-at `reg_tiled_coarse_max_dim` 2048. `--reg_tiled_mode low` (512 px, ~5 GB) is the
-workstation-viable tier. Because `max_memory` is a required parameter, a site sized from the
-older "≤8 GB / laptop-friendly" wording gets a clamp and then a deterministic OOM on
-`TILED_COARSE`, not a slow run.
+**Sizing.** Every STARE step is region-streamed and bounded by a parameter, not by the slide.
+`TILED_COARSE` estimates its rigid anchor with an FFT NCC rotation sweep (0.25–0.43 GB peak RSS
+measured at every tier, 2 GB requested); from v1.0.0 until 2026-09-27 it was a DISK U-Net that
+asked ~48 GB at the `high` tier, so sites sized for that can lower `max_memory` for STARE.
 
 | Parameter | Default | Description |
 |---|---|---|
 | `reg_tiled_mode` | `high` | Cost/accuracy tier: `high` \| `medium` \| `low` \| `custom`. Supplies every tier-owned knob below. `custom` starts from `high` and applies only the knobs you set. Table: `RegPresets.STARE` in `lib/RegPresets.groovy`. |
 | `reg_tiled_nuclear_index` | `null` | Nuclear/fiducial channel index used to estimate the transform. `null` resolves it from the slide's channel metadata against `nuclear_markers`; set an integer only to override. |
-| `reg_tiled_tile` | tier (`high`: 2048) | Tile core size (px); also the mesh-grid resolution. **Tier-owned** — only settable under `--reg_tiled_mode custom`. |
+| `reg_tiled_tile` | tier (`high`: 2048) | Tile core size (px): one `TILED_REG_TILE` task per tile. Not the mesh resolution since STARE v2 — that is `reg_tiled_stride`. **Tier-owned** — only settable under `--reg_tiled_mode custom`. |
 | `reg_tiled_halo` | tier (`high`: 256) | Per-tile read halo (px) for registration context. **Tier-owned.** |
-| `reg_tiled_gate_tre` | `1.0` | Refine only tiles whose rigid-stage TRE (px) exceeds this. Not tier-owned: it decides which control points are acceptable, which is a correctness question rather than a cost trade. |
-| `reg_tiled_max_error` | `0.99` | **Confidence gate.** Drop a mesh control point whose phase-correlation error exceeds this (`0` = perfect match, `~1` = no shared structure). This, and *not* displacement magnitude, is what keeps background and section-edge tiles out of the deformation mesh — those produce plausibly *small* displacements. Measured on the synthetic tiles in `tests/test_tile_residual_confidence.py`: real tissue `0.041`, background `0.9995`, section edge `0.99996`, empty crop `NaN`. Not tier-owned. |
-| `reg_tiled_max_disp` | `null` | **Range gate.** Drop a mesh control point whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. A cheap secondary net only; `reg_tiled_max_error` is the load-bearing gate. Not tier-owned. |
-| `reg_tiled_upsample` | tier (`high`: 10) | Phase-correlation sub-pixel upsample factor (per tile). **Tier-owned.** |
+| `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. Not tier-owned. (STARE v2 has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
+| `reg_tiled_stride` | `128` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. Not tier-owned: a resolution knob of its own. See `research/stare-optimal-design-2026-09-27.md` §2. |
 | `reg_tiled_out_tile` | tier (`high`: 1024) | Streaming stitch write-tile size (px) — gigapixel-safe. **Tier-owned.** |
-| `reg_tiled_coarse_max_dim` | tier (`high`: 2048) | Longest side (px) of the thumbnail the coarse anchor (M0) is estimated on. **This is what bounds COARSE memory**, not tile size: the anchor's matcher is DISK, a U-Net, so its peak is linear in thumbnail AREA — `GB ~= 1.1 + 7.3 * Mpx` (3.03 GB at 512 px, 8.78 GB at 1024 px, measured on the pinned stack). `TILED_COARSE`'s memory request in `conf/modules.config` is derived from this value, so raising it raises the reservation too. Lower = cheaper and coarser; the M0 residual grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateRegPresets` — anything below it (including `0`, which used to disable decimation and would now hand a full-resolution plane to a U-Net) aborts before any process is instantiated. Use 512 (the `low` tier) or higher. **Tier-owned.** |
+| `reg_tiled_coarse_max_dim` | tier (`high`: 1024) | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateRegPresets` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. **Tier-owned.** |
 
 ### Tiers
 
 Both registration backends take the same four values. `high` is the shipped default and, with
 **one exception**, is the behaviour that shipped before tiers existed; `medium` and `low` trade
 accuracy for memory and wall-clock; `custom` starts from `high` and applies only the knobs you
-set. The exception is `reg_tiled_coarse_max_dim`, which the whole column moved down one tier for
-v1.0.0 — `high` is **2048**, not the 4096 that used to ship — because COARSE's matcher became a
-U-Net and 4096 px extrapolates to ~123 GB of need (~185 GB of request). See
+set. The exception is `reg_tiled_coarse_max_dim` — 4096 shipped, then 2048 while COARSE's
+matcher was a U-Net, and since 2026-09-27 **1024 / 1024 / 512**, because it is now only the
+anchor's refine resolution and 1024 already lands M0 well inside every tier's halo. See
 `lib/RegPresets.groovy`.
 
 ```bash

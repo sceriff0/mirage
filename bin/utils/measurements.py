@@ -106,7 +106,7 @@ def parse_qc_key(key: str) -> Optional[Tuple[str, Optional[List[str]]]]:
     """Inverse of :func:`qc_key`; ``None`` for anything that is not a known QC key."""
     if not isinstance(key, str) or not key.startswith(QC_PREFIX):
         return None
-    rest = key[len(QC_PREFIX):]
+    rest = key[len(QC_PREFIX) :]
     if rest in QC_CELL_METRICS:
         return rest, None
     metric, sep, bracket = rest.partition(": [")

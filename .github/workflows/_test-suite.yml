@@ -194,8 +194,8 @@ jobs:
       # preference: the same pins used to be written twice -- once in this YAML and
       # once in the production image -- and a 42 KB guard test existed only to prove
       # the two copies were equal. requirements/ci.txt `-r`-includes
-      # requirements/segeval.txt and requirements/tiled.txt, the very files
-      # containers/segeval and containers/tiled build from, so there is one copy and
+      # requirements/segeval.txt and requirements/stare.txt, the very files
+      # containers/segeval and containers/stare build from, so there is one copy and
       # nothing left to prove equal. Read requirements/ci.txt: it documents what this
       # environment is, and the one place (anndata) where it honestly cannot match a
       # shipped image.
@@ -207,16 +207,11 @@ jobs:
       # with `|| true`, so total failure was swallowed. The root file is now a shim that
       # points at requirements/ci.txt and says so.
       #
-      # torch + kornia power STARE's DISK+LightGlue COARSE front-end
-      # (bin/utils/coarse_align.py). Without them tests/test_coarse_frontend.py's DISK
-      # cases importorskip and prove nothing -- which is how an unimplemented front-end
-      # shipped once already. tests/test_disk_test_actually_runs.py resolves this job
-      # through .github/actions/setup-python-env and asserts these two files are
-      # installed, in this order, by every job that runs the suite.
-      #
-      # The ordering and the one-invocation-per-line rule are documented on the action:
-      # torch-cpu.txt's --index-url must not leak into another resolve, and kornia drags
-      # the ~2.5 GB CUDA wheel if torch is not already satisfied.
+      # torch-cpu.txt is installed for tests/test_valis_matching_bounds.py (module-scope
+      # `import torch`, the VALIS matcher's no_grad wrapper). kornia and the "DISK front-end
+      # is not skipped" proof went on 2026-09-27 with the DISK + LightGlue COARSE front-end
+      # itself; the STARE image (containers/stare) carries neither. torch-cpu.txt's
+      # --index-url must not leak into another resolve, hence its own line (see the action).
       - name: Set up Python ${{ matrix.python-version }} and the CI stack
         uses: ./.github/actions/setup-python-env
         with:
@@ -225,7 +220,6 @@ jobs:
           requirements: |
             requirements/ci.txt
             requirements/torch-cpu.txt
-            requirements/kornia.txt
 
       - name: Generate test data
         # `setup-python: 'false'` -- requirements/ci.txt above is a superset of
@@ -235,23 +229,6 @@ jobs:
         with:
           setup-python: 'false'
 
-      # A skip is not a pass. tests/test_coarse_frontend.py's DISK+LightGlue cases
-      # guard themselves with importorskip("torch")/importorskip("kornia"), so a
-      # missing, broken or CUDA-only install turns them into silent skips -- which is
-      # how an unimplemented front-end shipped once already. This step proves both
-      # libraries import in the SAME interpreter pytest runs in, and then proves the
-      # file reports ZERO skips. tests/test_disk_test_actually_runs.py asserts this
-      # step exists in every job that runs the pytest suite.
-      - name: Assert the DISK front-end test is not skipped
-        run: |
-          set -euo pipefail
-          python -c "import torch, kornia; print(torch.__version__, kornia.__version__)"
-          pytest tests/test_coarse_frontend.py -rs -q | tee coarse_frontend.log
-          if grep -qi 'skipped' coarse_frontend.log; then
-            echo "::error::tests/test_coarse_frontend.py reported a SKIP -- the DISK+LightGlue case did not run"
-            exit 1
-          fi
-
       # MIRAGE_STRICT_SKIPS turns on tests/conftest.py's session floor: any skip
       # not in tests/expected_skips.txt fails the job by name, and the collected
       # count must clear tests/collected_floor.txt. Without it a degraded
@@ -259,9 +236,8 @@ jobs:
       # gate shipped for months missing three packages, and of the 43 tests that
       # stopped passing, 30 were silent.
       #
-      # STEP level, not job level, ON PURPOSE. The "Assert the DISK front-end
-      # test is not skipped" step above runs pytest over a single file, which
-      # collects far below the floor; a job-level env would fail it.
+      # STEP level, not job level: a single-file pytest step added to this job later
+      # would collect far below the floor, and a job-level env would fail it.
       # tests/coverage_floor.txt is a RATCHET on bin/'s line coverage, the same shape as
       # collected_floor.txt above: it may only go up. `--cov-fail-under` reads it via a bare
       # `$(cat ...)`, so the file holds nothing but the integer -- no header comment, unlike

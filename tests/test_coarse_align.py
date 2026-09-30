@@ -4,8 +4,9 @@ The COARSE step estimates one affine ``M0`` that places a whole moving slide int
 frame, absorbing inter-cycle rotation/translation. The numerically load-bearing core is
 ``estimate_transform_from_matches`` (given point correspondences, solve for the transform + a
 residual TRE); it is tested deterministically against transforms it did not compute the same way.
-The learned DISK+LightGlue front-end (``estimate_rigid``) is exercised as a smoke test on a
-synthetic image; those cases need torch and kornia and skip without them.
+The anchor itself (``estimate_rigid``: NCC rotation sweep + ORB fallback) is exercised as a
+smoke test on a synthetic image here; its hard cases live in
+packages/stare/tests/test_coarse_anchor.py.
 """
 
 from __future__ import annotations
@@ -70,8 +71,6 @@ def test_residual_reports_the_target_registration_error_of_the_fit():
 
 def test_estimate_rigid_smoke_recovers_a_translation_on_a_textured_image():
     pytest.importorskip("scipy")
-    pytest.importorskip("torch")
-    pytest.importorskip("kornia")
     from coarse_align import estimate_rigid
 
     rng = np.random.default_rng(0)
@@ -90,7 +89,7 @@ def test_estimate_rigid_smoke_recovers_a_translation_on_a_textured_image():
 
     M, residual, n_inliers = estimate_rigid(ref, mov)
     # M0 maps moving coords back onto the reference: recovers roughly (-dx, -dy)
-    assert n_inliers >= 4
+    assert np.isfinite(residual) and n_inliers >= 0
     np.testing.assert_allclose([M[0, 2], M[1, 2]], [-dx, -dy], atol=2.0)
 
 
@@ -98,18 +97,14 @@ def test_estimate_rigid_smoke_recovers_a_translation_on_a_textured_image():
 # Intensity normalisation of the front-end's input.
 #
 # `normalize_intensity` is the one place raw microscopy counts become the [0, 1] range every
-# consumer here needs. It matters for a LEARNED matcher because DISK was trained on [0, 1]
-# images, so a float plane carrying raw uint16 counts (what `tiled_io.read_decimated` returns)
-# is ~4 orders of magnitude outside the trained input range -- and nothing raises.
+# consumer here needs (the Otsu tissue mask, ORB's FAST threshold): a float plane carrying raw
+# uint16 counts is what `tiled_io.read_decimated` returns, and two cycles' exposures differ.
 #
 # The smoke test above could never have caught that: it normalises its own input to [0, 1], so
 # it only ever exercised the healthy regime. These tests pin the normalisation itself, which is
 # cheap and deterministic, plus one end-to-end case at production scale.
 #
-# A companion case used to pin the OLD classical detector's absolute-intensity threshold by
-# calling its private feature helper directly. It went with that front-end: DISK has no
-# absolute-intensity threshold, so there is no analogous invariant to pin at the detector level.
-# The end-to-end raw-scale case below is what survives of it.
+# The end-to-end raw-scale case below pins that the anchor is scale-invariant in practice.
 # ---------------------------------------------------------------------------------------------
 
 
@@ -146,8 +141,6 @@ def test_normalize_intensity_survives_a_constant_plane():
 def test_estimate_rigid_recovers_a_translation_on_raw_uint16_scale_input():
     """The smoke test above, but in the scale production actually feeds it."""
     pytest.importorskip("scipy")
-    pytest.importorskip("torch")
-    pytest.importorskip("kornia")
     from coarse_align import estimate_rigid
 
     ref = _textured(scale=65535.0)
@@ -157,6 +150,6 @@ def test_estimate_rigid_recovers_a_translation_on_raw_uint16_scale_input():
         max(0, -dy) : 256 - max(0, dy), max(0, -dx) : 256 - max(0, dx)
     ]
 
-    M, _residual, n_inliers = estimate_rigid(ref, mov)
-    assert n_inliers >= 4
+    M, residual, _n = estimate_rigid(ref, mov)
+    assert np.isfinite(residual)
     np.testing.assert_allclose([M[0, 2], M[1, 2]], [-dx, -dy], atol=2.0)

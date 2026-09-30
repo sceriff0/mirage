@@ -1,5 +1,11 @@
 """No reference to the deleted COARSE front-ends outside history and the allow-list.
 
+ORB IS NO LONGER ON THE LIST (2026-09-27). It came back, deliberately, as the FALLBACK of the
+new COARSE anchor (stare/coarse_align.py: NCC rotation sweep first, scikit-image ORB + RANSAC
+only when the sweep is ambiguous), so the word now names a live component and forbidding it
+repo-wide would forbid documenting the method. SIFT, the log-polar Fourier method and the
+`reg_tiled_frontend` dispatch knob stay deleted and stay forbidden.
+
 Spec 2026-08-28 Phase 2b. Scope is `git ls-files` -- the TRACKED tree -- deliberately,
 not Path.rglob: rglob ignores .gitignore and matched 107 untracked files (.nf-test work
 dirs, virtualenvs, .planning/, docs/superpowers/) including this guard's own plan.
@@ -19,7 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 # The pre-flight scan's counterexamples were re-run against THIS form: absorb, orbit,
 # absorbance, sifting, shift and drift still produce no match, so the fix costs nothing.
 PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(orb|sift|fourier[_ -]?mellin|reg_tiled_frontend)(?![A-Za-z0-9])",
+    r"(?<![A-Za-z0-9])(sift|fourier[_ -]?mellin|reg_tiled_frontend)(?![A-Za-z0-9])",
     re.I,
 )
 
@@ -27,15 +33,8 @@ EXCLUDE_PREFIXES = ("docs/_archive/", "tests/testdata/")
 ALLOW_FILES = {
     # History. Keeps its mentions by design.
     "CHANGELOG.md",
-    # reg_benchmark keeps skimage's ORB as an INDEPENDENT accuracy oracle -- a
-    # measurement tool, not a registration front-end. See this task's scope note.
-    "bin/utils/reg_benchmark.py",
-    "tests/test_reg_benchmark.py",
+    # This guard itself: its docstring and PATTERN name the terms it forbids.
     "tests/test_no_legacy_frontends.py",
-    # Its ALLOWLIST reason for reg_benchmark (dead-module guard, phase 02 task 5)
-    # repeats the same ORB-as-accuracy-oracle explanation as the entries above --
-    # same tool, same reason, different guard.
-    "tests/test_no_dead_bin_modules.py",
     # The COMPANION guard. test_the_deleted_frontends_are_really_gone names all eight
     # deleted symbols (`_frontend_orb`, `normalize_for_orb`, ...) in a hasattr sweep --
     # naming them is the whole point of it. It was passing the ORIGINAL \b pattern only
@@ -62,33 +61,10 @@ ALLOW_FILES = {
     # test_the_allowlist_has_no_dead_entries below is the fix for the class, not just
     # the instance -- an entry that stops matching now fails, so this cannot happen
     # again without someone deleting a test to allow it.
-    # Design/research records. NOT merely "historical" -- both are PUBLISHED (mkdocs.yml
-    # :18-19) and bin/tiled_coarse.py cites the design doc for the thumbnail rationale, so
-    # an uncorrected memory model in it is a live, operator-facing claim rather than an
-    # archived one.
-    #
-    # The stated reason here USED to be "its remaining ORB mentions are in that banner and
-    # in prose describing what the method USED to be". That was false when written: the
-    # design doc's §5 ASCII block ("COARSE thumbnail feature-align (ORB + RANSAC) ... ~1-2
-    # GB"), its primitive-split sentence ("COARSE **uses** feature matching (ORB/RANSAC)")
-    # and its §11 sparse-tissue note ("ORB on DAPI needs enough keypoints") were all in the
-    # PRESENT tense about the live method. An allow-list entry whose stated reason has
-    # counterexamples is the pattern CLAUDE.md names by hand, so those three were rewritten
-    # to DISK/LightGlue rather than the reason being softened around them.
-    #
-    # The reason now holds. What remains in the design doc is: the "superseded in part"
-    # banner, one past-tense OOM anecdote in §5 ("COARSE was in fact implemented with a
-    # full-resolution ORB ... before it was made to match this design"), one parenthetical
-    # in the §11 note recording what that note was written against, and the
-    # "Implementation status" phase list, which records what landed on
-    # `feat/tiled-registration` and names deleted files (`bin/tiled_register.py`,
-    # `modules/local/tiled_register.nf`) alongside it. All four are records of the past,
-    # which is exactly what an exemption is for. If a NEW present-tense mention appears,
-    # fix the doc -- do not widen this reason again.
-    #
-    # The research doc is a genuine survey of prior art -- ORB and SIFT are the names of
-    # the algorithms it surveys, and renaming them would be a lie.
-    "docs/parallel_registration_design.md",
+    # The research doc is a genuine survey of prior art -- SIFT and the log-polar Fourier
+    # method are names of the algorithms it surveys, and renaming them would be a lie. (The
+    # design doc and the reg_benchmark ORB-oracle files left this list on 2026-09-27: with ORB
+    # dropped from PATTERN they matched nothing.)
     "docs/parallel_registration_research.md",
 }
 

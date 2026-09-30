@@ -48,8 +48,8 @@ def test_recovers_a_known_subpixel_shift_as_the_control_displacement():
     # ref = mov - (col_s, row_s)  ->  F = (-col_s, -row_s)
     assert dx == pytest.approx(-col_s, abs=0.15)
     assert dy == pytest.approx(-row_s, abs=0.15)
-    # a genuine match is confident; the gating this feeds lives in
-    # tests/test_tile_residual_confidence.py
+    # a genuine match is confident (STARE v1 gated tiles on this error; v2 validates the
+    # per-window vectors by peak ratio and keeps this function as the whole-tile oracle)
     assert error < 0.5, (
         f"a real shift between two crops of one field scored error={error:.4f}"
     )

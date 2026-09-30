@@ -14,7 +14,7 @@ The measured inventory, at the time of writing:
     tile_for_basic.py                 yes     minisblack   none         none      yes
     apply_basic_profiles.py           yes     minisblack   zlib         2048      yes
     merge_channels_pyramid.py         yes     minisblack   zstd(param)  tile_size yes
-    tiled_stitch.py                   yes     minisblack   none         out_tile  yes
+    stare/stages/stitch.py            yes     minisblack   none         out_tile  yes
     split_multichannel.py             no      -            zlib         2048      yes
     segment.py / _cellsam / _instanseg no     -            zlib         none      NO
     extract_mask_series.py            no      -            zlib         none      yes
@@ -42,6 +42,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+from tests.stare_shims import source_of
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -84,7 +86,8 @@ PIXEL_WRITERS = {
         1,
         "the multi-site CZYX pseudo-FOV stack BASICPY fits on",
     ),
-    "bin/tiled_stitch.py": (1, "the STARE registered slide"),
+    # the STARE stitch stage; bin/tiled_stitch.py is a shim over it
+    "packages/stare/src/stare/stages/stitch.py": (1, "the STARE registered slide"),
     # The seam itself. The regex counts BOTH a def line and a call line whenever they share
     # a name -- `def ome_tiff_writer(` and `def write_ome_tiff(` each match their own pattern
     # too, not just their call sites -- so this is 3 def lines (ome_tiff_writer, write_ome_tiff,
@@ -110,7 +113,7 @@ MULTI_CHANNEL_WRITERS = (
     "bin/apply_basic_profiles.py",
     "bin/tile_for_basic.py",
     "bin/merge_channels_pyramid.py",
-    "bin/tiled_stitch.py",
+    "packages/stare/src/stare/stages/stitch.py",
 )
 
 # ... and the one that DELEGATES the flag. bin/convert_image.py hands its stack to
@@ -170,8 +173,13 @@ def _writer_sites(rel):
 
 
 def _all_writer_files():
+    """{repo-relative file: write-call count} over bin/, with each STARE shim resolved
+    to the package file it stands for (``tests.stare_shims.source_of``): the stitch's
+    writer lives in packages/stare/src/stare/stages/stitch.py, and bin/tiled_stitch.py
+    is a shim that names no writer at all."""
     found = {}
-    for path in sorted((REPO / "bin").rglob("*.py")):
+    for shim in sorted((REPO / "bin").rglob("*.py")):
+        path = source_of(shim)
         n = len(_write_call_pattern(path).findall(_strip_comments(path.read_text())))
         if n:
             found[path.relative_to(REPO).as_posix()] = n
@@ -343,7 +351,7 @@ TILE_FED_GENERATORS = {
     "_iter_tiles": "bin/utils/ome_io.py -- wraps _iter_planes and re-slices each plane",
     "_tiles": "bin/apply_basic_profiles.py -- channel-major, tile-major",
     "_plane_tiles": "bin/merge_channels_pyramid.py -- per-plane tile walk",
-    "stream_tiles": "bin/tiled_stitch.py -- warps and emits one out_tile at a time",
+    "stream_tiles": "packages/stare/src/stare/stages/stitch.py -- warps and emits one out_tile at a time",
 }
 
 

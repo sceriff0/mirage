@@ -437,6 +437,14 @@ def checkRegBackends() {
     assert !RegBackends.of('tiled').hasStageCheckpoint
     assert RegBackends.of('tiled').hasIntrinsicTre
 
+    // Which backend pairs its registered outputs back to metas by channel SET
+    // (RegisteredMatch), and so cannot accept two slides of one patient with the same
+    // set. VALIS renames its outputs; the tiled adapter carries the meta itself.
+    assert RegBackends.of('valis').pairsOutputsBySignature :
+        'VALIS pairs by signature -- that is what RegisteredMatch exists for'
+    assert !RegBackends.of('tiled').pairsOutputsBySignature :
+        'the tiled adapter keeps meta through its fan-out and never pairs by signature'
+
     // Which run modes each backend supports. add_cycle re-registers the new cycle
     // through the classic VALIS adapter only.
     assert RegBackends.supportsMode('valis', 'linear') :
@@ -708,19 +716,76 @@ def checkParamValidators() {
     println 'LIB PROBE: checkParamValidators passed'
 }
 
-/**
- * Layout's checkpoint-path rules and MarkerUtils' nuclear-marker rule.
- *
- * A TOP-LEVEL FUNCTION, not inline in `workflow {}`, for a mechanical reason: the
- * whole `workflow {}` body compiles to ONE JVM method, and a method's bytecode is
- * capped at 64 KB. On `dev` the block carries add_cycle's probes on top of every
- * probe `main` has, and measured 65514 bytes with these sections inline -- 22 bytes
- * under the cap, i.e. one more comment line away from `Method too large`. Moving a
- * self-contained section out buys ~1.9 KB of headroom and costs one call line.
- * Do the same to the next section rather than deleting probes.
- */
-def checkLayoutAndMarkers() {
+// CsvUtils.validateInputSemantics with requireUniqueChannelSets — the VALIS
+// channel-set rule at launch, alongside the cross-slide duplicate-channel rule
+// (Rule A, unconditional -- a NON-nuclear channel shared by two slides of one
+// patient is refused in the per-patient pass regardless of
+// requireUniqueChannelSets) that runs AFTER it (Rule B, opt-in via
+// requireUniqueChannelSets -- two slides sharing one whole channel SET, refused
+// before the per-patient pass). This sheet's rows 3 and 4 share both CD3 and
+// CD8 (non-nuclear) AND the same overall signature, so Rule A already refuses
+// it under `false` -- there is no longer an accepted case here for the VALIS
+// rule alone to distinguish; `true` still gets its own IllegalStateException
+// and message because Rule B runs first and wins.
+def checkUniqueChannelSets() {
+    def ref  = File.createTempFile('dupsig_ref', '.tiff'); ref.text = 'x'
+    def mov1 = File.createTempFile('dupsig_mov1', '.tiff'); mov1.text = 'x'
+    def mov2 = File.createTempFile('dupsig_mov2', '.tiff'); mov2.text = 'x'
+    def csv = File.createTempFile('dupsig', '.csv')
+    csv.text = """patient_id,path_to_file,is_reference,channels
+P7,${ref.path},true,DAPI|PANCK|SMA
+P7,${mov1.path},false,DAPI|CD3|CD8
+P7,${mov2.path},false,CD8|dapi|CD3
+"""
+    // default (false) and explicit false: Rule B (signature pairing) is not asked
+    // for here, but Rule A still fires -- CD3 is the first non-nuclear channel
+    // that repeats across a patient's slides in declaration order (DAPI repeats
+    // too, but it is the nuclear marker passed below, so it is the deliberate
+    // exception and is skipped).
+    [null, false].each { arg ->
+        def refusedA = false
+        def msgA = ''
+        try {
+            arg == null ? CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI')
+                        : CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', arg)
+        }
+        catch (IllegalArgumentException e) { refusedA = true; msgA = e.message }
+        assert refusedA : "Rule A must refuse shared non-nuclear channels even when requireUniqueChannelSets is ${arg.inspect()}"
+        assert msgA.contains("Channel 'CD3'")            : "must name CD3, the first non-nuclear repeat in declaration order: ${msgA}"
+        assert msgA.contains('patient P7')               : "must name the patient: ${msgA}"
+        assert msgA.contains('appears on 2 different slides') : "must use Rule A's wording: ${msgA}"
+        assert msgA.contains('row 3') && msgA.contains('row 4') : "must name both rows: ${msgA}"
+    }
 
+    def refused = false
+    def msg = ''
+    try { CsvUtils.validateInputSemantics(csv.path, 'preprocessing', false, 'DAPI', true) }
+    catch (IllegalStateException e) { refused = true; msg = e.message }
+    assert refused : 'two slides of one patient with one channel set must be refused when the backend pairs by signature'
+    assert msg.contains('patient P7')      : "must name the patient: ${msg}"
+    assert msg.contains('cd3|cd8|dapi')    : "must name the signature as RegisteredMatch computes it: ${msg}"
+    assert msg.contains('row 3') && msg.contains('row 4') : "must name both rows: ${msg}"
+    assert !msg.contains('row 2')          : "the reference has a different set and must not be named: ${msg}"
+
+    // a second patient with its own copy of the set is not a collision across patients
+    def csv2 = File.createTempFile('dupsig_two_patients', '.csv')
+    csv2.text = """patient_id,path_to_file,is_reference,channels
+P7,${ref.path},true,DAPI|CD3|CD8
+P8,${mov1.path},true,DAPI|CD3|CD8
+"""
+    CsvUtils.validateInputSemantics(csv2.path, 'preprocessing', false, 'DAPI', true)
+    [ref, mov1, mov2, csv, csv2]*.delete()
+}
+
+// The two sections below used to sit inline in the workflow {} block. They were
+// moved out on 2026-09-13 because the LEGACY (Nextflow 25) parser stores a workflow
+// body's source as ONE Java string constant, capped at 65,535 code units -- and the
+// block had reached 65,513. Adding three lines to it broke the probe on the
+// `NF 25.04.0 stub` leg only ("String too long"), while Nextflow 26 parsed it fine.
+// tests/test_lib_probe_parses_on_nf26.py now pins the block under the cap. New
+// checks go in a `def checkX()` above the block, never inline.
+
+def checkLayoutAndMarkerUtils() {
     // ------------------------------------------------------------------ //
     // Layout - checkpoint paths
     // ------------------------------------------------------------------ //
@@ -768,28 +833,11 @@ def checkLayoutAndMarkers() {
 
     assert MarkerUtils.hasNuclear(['CD3', 'DAPI'], ['DAPI'])
     assert !MarkerUtils.hasNuclear(['CD3', 'CD8'], ['DAPI'])
+
+
 }
 
-def checkPassthroughPath() {
-    // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
-    // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
-    // default) left CONVERT_IMAGE's output as the slide. Pinned to PREPROCESSED, it named a
-    // file that did not exist for every single-slide patient and STARE reference at the
-    // default (2026-09-17). A function, not inline: the workflow body is at Nextflow 25's
-    // 65,535-byte string-constant limit (tests/test_lib_probe_parses_on_nf26.py).
-    def fresh = file("/work/ab/${'c' * 30}/P001_ref.ome.tif")
-    assert Layout.passthroughPath('/out', 'P001', fresh, false) ==
-        Layout.publishedOrAsIs('/out', 'P001', Layout.PREPROCESSED, fresh)
-    assert Layout.passthroughPath('/out', 'P001', fresh, false) == '/out/P001/preprocessed/P001_ref.ome.tif'
-    assert Layout.passthroughPath('/out', 'P001', fresh, true) == '/out/P001/converted/P001_ref.ome.tif'
-    // an already-published path (a --start samplesheet) is recorded as is, whatever the kind
-    def prior = file('/prior/P002/preprocessed/P002_ref_corrected.ome.tif')
-    assert Layout.passthroughPath('/out', 'P002', prior, true) == prior.toString()
-    println "LIB PROBE: checkPassthroughPath passed"
-}
-
-workflow {
-    checkLayoutAndMarkers()
+def checkKeepSetRule() {
     // ------------------------------------------------------------------ //
     // CsvUtils.resolveKeptChannelsPerSlide - THE keep-set rule
     // ------------------------------------------------------------------ //
@@ -1004,6 +1052,33 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert dupWithinRowCounts['P9'] == dupWithinRowFlat.size()          // == emitted TIFF count (pyramid)
     assert dupWithinRowCounts['P9'] == dupWithinRowFlat.toSet().size()  // == distinct names     (quant)
     dupWithinRowCsv.delete()
+
+}
+
+def checkPassthroughPath() {
+    // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
+    // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
+    // default) left CONVERT_IMAGE's output as the slide. Pinned to PREPROCESSED, it named a
+    // file that did not exist for every single-slide patient and STARE reference at the
+    // default (2026-09-17). A function, not inline: the workflow body is at Nextflow 25's
+    // 65,535-byte string-constant limit (tests/test_lib_probe_parses_on_nf26.py).
+    def fresh = file("/work/ab/${'c' * 30}/P001_ref.ome.tif")
+    assert Layout.passthroughPath('/out', 'P001', fresh, false) ==
+        Layout.publishedOrAsIs('/out', 'P001', Layout.PREPROCESSED, fresh)
+    assert Layout.passthroughPath('/out', 'P001', fresh, false) == '/out/P001/preprocessed/P001_ref.ome.tif'
+    assert Layout.passthroughPath('/out', 'P001', fresh, true) == '/out/P001/converted/P001_ref.ome.tif'
+    // an already-published path (a --start samplesheet) is recorded as is, whatever the kind
+    def prior = file('/prior/P002/preprocessed/P002_ref_corrected.ome.tif')
+    assert Layout.passthroughPath('/out', 'P002', prior, true) == prior.toString()
+    println "LIB PROBE: checkPassthroughPath passed"
+}
+
+workflow {
+
+    // Layout checkpoint paths + MarkerUtils, and CsvUtils.resolveKeptChannelsPerSlide.
+    // See the two functions above the workflow block (and why they are there).
+    checkLayoutAndMarkerUtils()
+    checkKeepSetRule()
 
     // ------------------------------------------------------------------ //
     // ParamUtils - the step vocabulary
@@ -1324,7 +1399,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     def sb = [memory_mode: 'high', reg_tiled_mode: 'custom',
               reg_valis_max_processed_dim: null, reg_valis_max_non_rigid_dim: null,
               reg_tiled_tile: null, reg_tiled_halo: null,
-              reg_tiled_upsample: null, reg_tiled_out_tile: null]
+              reg_tiled_out_tile: null]
     [null, 512, 256].each { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: it]) }
     [0, -1, 255, 16].each { bad ->
         def no = false
@@ -1432,7 +1507,7 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     assert WarpBackends.methods().toSorted() == ['tiled', 'valis']
     // Digest-pinned (ruling R6): no tag, see tests/test_base_images_are_digest_pinned.py.
     assert WarpBackends.container('valis') == 'cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6'
-    assert WarpBackends.container('tiled') == 'bolt3x/mirage-tiled:1.0.0'
+    assert WarpBackends.container('tiled') == 'bolt3x/mirage-stare:1.0.0'
     assert WarpBackends.of('valis').stages == ['native', 'rigid', 'non_rigid', 'micro']
     assert WarpBackends.of('tiled').stages == ['native', 'rigid', 'refined']
 
@@ -1770,6 +1845,10 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
     checkCsvUtilsUnknownColumns()
 
     checkParamValidators()
+
+    // CsvUtils.validateInputSemantics(..., requireUniqueChannelSets).
+    // See checkUniqueChannelSets() above the workflow block.
+    checkUniqueChannelSets()
 
     // println, NOT log.info: nf-test's underlying `nextflow ... -quiet` run
     // suppresses log.info from stdout entirely (observed directly: a log.info

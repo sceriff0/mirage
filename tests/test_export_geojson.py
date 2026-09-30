@@ -457,12 +457,18 @@ def test_measurements_carry_qc_and_prefixed_morphology():
         "eccentricity": 0.5,
     }
     ms = eg.build_measurements(
-        row, ["CD3: Cell: Median"], 0.5,
+        row,
+        ["CD3: Cell: Median"],
+        0.5,
         qc_cols=["QC: Total intensity", "QC: Registration Dice: [CD3]"],
     )
     names = [m["name"] for m in ms]
     assert "QC: Total intensity" in names
-    assert "QC: Registration Dice: [CD3]" not in names          # NaN omitted
+    assert "QC: Registration Dice: [CD3]" not in names  # NaN omitted
     assert "MORPH: Area µm²" in names and "Area µm²" not in names
-    assert names.index("CD3: Cell: Median") < names.index("QC: Total intensity") < names.index("MORPH: Area µm²")
+    assert (
+        names.index("CD3: Cell: Median")
+        < names.index("QC: Total intensity")
+        < names.index("MORPH: Area µm²")
+    )
     assert next(m["value"] for m in ms if m["name"] == "MORPH: Area µm²") == 1.0

@@ -1,8 +1,8 @@
 """End-to-end test for bin/utils/tiled_pipeline.py — the STARE registration, in one process.
 
 ``register_slide`` chains the whole method: global rigid M0 (coarse_align) -> rigid pre-warp ->
-per-tile residuals (tile_grid + tile_residual) -> TRE-gated control grid (tiled_manifest) ->
-mesh warp (tiled_warp). This is the proof the pieces compose into a working registration: a
+per-tile window vectors (tile_grid + vector_grid) -> the dctpls mesh (stare.solve) -> mesh warp
+(tiled_warp). This is the proof the pieces compose into a working registration: a
 synthetically warped moving image is brought back into alignment with the reference, and the
 output is non-negative.
 """
@@ -23,12 +23,6 @@ sys.path.insert(
 )
 pytest.importorskip("skimage")
 pytest.importorskip("scipy")
-# The COARSE anchor is the learned DISK+LightGlue matcher, so anything reaching
-# ``estimate_rigid`` needs torch + kornia. Without this it RuntimeErrors rather than skipping.
-# CI installs both (tests/test_disk_test_actually_runs.py pins that), so this is a
-# plain-checkout guard, not an escape hatch for CI.
-pytest.importorskip("torch")
-pytest.importorskip("kornia")
 
 from tiled_pipeline import register_slide
 
@@ -57,32 +51,41 @@ def test_register_slide_realigns_a_synthetically_warped_moving_image():
     inner = (slice(96, -96), slice(96, -96))  # ignore rotation borders
     before = _corr(ref[inner], mov[inner])
 
-    result = register_slide(ref, mov, tile=128, halo=32, gate_tre=0.0, upsample=10)
+    result = register_slide(ref, mov, tile=128, halo=32, stride=32)
     registered = result["registered"]
 
     after = _corr(ref[inner], registered[inner])
     assert after > before  # registration improved alignment
     assert after > 0.9  # ...to near-perfect correlation
     assert registered.min() >= 0.0  # non-negativity preserved end-to-end
-    assert result["n_inliers"] >= 8  # the coarse anchor found a real consensus
+    # the coarse anchor found the rotation (NCC sweep: no correspondences, n_inliers 0)
+    m0 = np.asarray(result["entry"]["M0"])
+    # sk_warp's tform is the output->input map, i.e. exactly moving -> reference
+    assert abs(np.degrees(np.arctan2(m0[1, 0], m0[0, 0])) - 2.5) < 0.5
 
 
-def test_a_pure_rigid_shift_needs_no_mesh_the_coarse_anchor_absorbs_it():
-    """A global translation is fully captured by M0, so every tile is gated out (rigid-only)."""
+def test_a_pure_rigid_shift_leaves_the_mesh_near_zero_the_coarse_anchor_absorbs_it():
+    """A global translation is fully captured by M0, so the mesh has almost nothing to fix.
+
+    STARE v1 gated every tile out (``mesh is None``); v2 has no TRE dead zone, so the solved
+    field is a measurement of the residual -- sub-pixel, not exactly zero.
+    """
     ref = _textured(seed=1, n=256)
     from scipy.ndimage import shift as ndi_shift
 
     mov = ndi_shift(ref, (4.0, -6.0), order=1, mode="reflect").astype(np.float32)
-    result = register_slide(ref, mov, tile=128, halo=32, gate_tre=0.5)
+    result = register_slide(ref, mov, tile=128, halo=32, stride=32)
 
     assert np.asarray(result["entry"]["M0"]).shape == (3, 3)
-    assert result["entry"]["mesh"] is None  # nothing left for the mesh to fix
+    mesh = result["entry"]["mesh"]
+    if mesh is not None:  # nothing left for the mesh to fix beyond sub-pixel noise
+        assert np.abs(np.asarray(mesh["displacements"])).max() < 0.5
     assert len(result["tre_px"]) == len(result["tiles"])
     assert all(t >= 0 for t in result["tre_px"])
 
 
 def test_local_deformation_is_captured_by_the_mesh():
-    """A smooth non-rigid warp M0 cannot capture leaves tiles above the gate -> a mesh appears."""
+    """A smooth non-rigid warp M0 cannot capture leaves a residual -> a mesh appears."""
     from skimage.transform import warp as sk_warp
 
     ref = _textured(seed=2, n=256)
@@ -95,7 +98,7 @@ def test_local_deformation_is_captured_by_the_mesh():
         np.float32
     )
 
-    result = register_slide(ref, mov, tile=64, halo=32, gate_tre=0.5)
+    result = register_slide(ref, mov, tile=64, halo=32, stride=16)
     assert (
         result["entry"]["mesh"] is not None
     )  # local deformation -> refinement present

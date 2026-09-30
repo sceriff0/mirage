@@ -36,7 +36,10 @@ from tiled_warp import warp_image  # noqa: E402
 
 def _whole_image_reference(mov_chw, m0, mesh, out_shape, dtype):
     hwc = np.moveaxis(mov_chw, 0, -1).astype(float)
-    warped = warp_image(hwc, m0, mesh, out_shape)  # (H, W, C)
+    # at the stitch's own sub-grid step: its nodes are global, so streaming changes nothing
+    warped = warp_image(
+        hwc, m0, mesh, out_shape, field_step=tiled_stitch.FIELD_STEP
+    )  # (H, W, C)
     out = np.clip(warped, 0.0, None)
     info = np.iinfo(dtype)
     return np.moveaxis(np.clip(np.rint(out), info.min, info.max).astype(dtype), -1, 0)

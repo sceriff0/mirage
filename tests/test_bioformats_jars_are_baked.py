@@ -8,9 +8,10 @@ way bin/utils/jvm_cache.py's docstring records: jgo's `os.makedirs($HOME/.jgo)` 
 `OSError [Errno 30] Read-only file system`.
 
 This is a CONTAINER-ONLY fix. A git pull can never repair a missing jar. It is the same
-shape as containers/tiled's DISK/LightGlue bake, and this file is modelled on
-tests/test_disk_weights_are_baked.py -- including its comment-blindness, which is not a
-refinement but a defect found by breaking that file's guards before trusting them.
+shape as the retired containers/tiled's DISK/LightGlue bake, and this file was modelled on
+tests/test_disk_weights_are_baked.py (now tests/test_stare_image_is_slim.py) -- including
+its comment-blindness, which is not a refinement but a defect found by breaking that
+file's guards before trusting them.
 
 WHY /root AND NOT /opt. bin/utils/jvm_cache.point_jvm_cache_off_readonly_home() already
 searches `$MIRAGE_JVM_HOME` then `/root` for a `.jgo` directory and points scyjava's
