@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **DRAPE is renamed back to STARE** (Scalable Tile-parallel Alignment by Robust
+  Estimation), 2026-09-30. Same method and code as DRAPE 2.0.0 (vector lattice + robust
+  DCT-PLS SOLVE); only the name changes. The package is `stare-registration` **3.0.0**
+  in `packages/stare` (import `stare`, CLI `stare {coarse,reg-tile,solve,stitch,register}`;
+  no `drape` alias), `RegPresets.DRAPE` is `RegPresets.STARE`, and the image is
+  `bolt3x/mirage-stare:1.0.0` (build context `containers/stare`). **Unchanged:**
+  `registration_method='tiled'`, every `reg_tiled_*` parameter and the `TILED_*`
+  processes. The 0.1.x `stare-registration` (TRE gate, legacy/robust solvers) remains
+  retired; the entries below record the interim name DRAPE.
+
 - **DRAPE Phase 5e fixes** (`research/drape-step-support-oa-2026-09-27.md`). STITCH's inverse
   map iterates each point's fixed point to a 1e-3 px step (cap 50) instead of a fixed 3 steps,
   and logs the achieved step, warning when the cap is hit (at L = 0.45, |F| ≈ 90 px: 9.2 px
