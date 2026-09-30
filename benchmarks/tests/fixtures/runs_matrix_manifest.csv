@@ -1,3 +1,0 @@
-cell_id,target_px,width,height,n_channels,bytes,path
-px4096_ch2,4096,4096,2048,2,2147483648,/d/px4096_ch2.ome.tif
-px8192_ch2,8192,8192,4096,2,4294967296,/d/px8192_ch2.ome.tif

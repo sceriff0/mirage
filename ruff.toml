@@ -14,11 +14,7 @@ extend-exclude = [
     "notebooks",     # analysis notebooks, not pipeline
     "work",          # Nextflow runtime dir
     "site",          # generated docs
-    # benchmarks/ is deliberately NOT excluded. It was, with the comment
-    # "benchmarking scratch", left over from when the whole directory was
-    # gitignored. It is tracked now, it carries the analysis code that produces
-    # the paper's tables, and the exclusion was hiding 41 lint errors from a
-    # BLOCKING gate — 15 of them in the production analysis files.
+    "benchmarks",    # benchmarking scratch
 ]
 
 [lint]

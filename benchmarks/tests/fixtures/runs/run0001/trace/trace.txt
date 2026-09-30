@@ -1,3 +1,0 @@
-task_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	%cpu	cpus	memory	peak_rss	peak_vmem	rchar	wchar
-1	CONVERT_IMAGE	px8192_ch2	CONVERT_IMAGE (px8192_ch2)	COMPLETED	0	-	-	-	4m 0s	3m 40s	185%	4	100 GB	16 GB	18 GB	2 GB	2 GB
-2	SEGMENT	px8192_ch2	SEGMENT (px8192_ch2)	COMPLETED	0	-	-	-	10m 0s	9m 0s	205%	2	64 GB	40 GB	44 GB	4 GB	4 GB

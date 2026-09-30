@@ -63,38 +63,9 @@ name: CI
 
 on:
   push:
-    # `benchmarking` is here because it carries the WHOLE pipeline (it is dev plus
-    # benchmarks/), and until 2026-09-01 none of the pipeline's guards ran on it --
-    # only the benchmarks workflow did. Four pipeline guards broke there during the
-    # dev reconciliation (CI job timeouts, an unpinned imaging stack, references to
-    # deleted COARSE front-ends, fixture producers) and CI caught none of them; they
-    # were found by running pytest by hand. A branch that carries the pipeline needs
-    # the pipeline's gate. That reason is unchanged by the CI redesign; the sentence
-    # that USED to sit here describing how it stays cheap was not, and was rewritten
-    # rather than merged -- it named a job, a mechanism and a line number that the
-    # redesign deleted.
-    #
-    # This still does NOT pull in the expensive leg, but for a DIFFERENT reason than
-    # before. `nf-test-real` no longer lives in this file at all -- Phase 4 moved it,
-    # with `nf-test-integration`, into `.github/workflows/nightly.yml`, so there is no
-    # branch `if:` here to exempt `benchmarking` from. nightly.yml is triggered by
-    # `schedule:` and `workflow_dispatch:` only, and `schedule:` runs the DEFAULT
-    # BRANCH's workflow file against the DEFAULT BRANCH -- so the two-hour advisory
-    # suites can reach this branch only if a human dispatches them at it. Adding
-    # `benchmarking` here cannot start them.
-    #
-    # What this branch DOES get is the whole blocking gate: `all-tests` below needs
-    # `test-suite` and `containers`. `test-suite` is `.github/workflows/_test-suite.yml`,
-    # which is where Phase 5 moved the five blocking suites that this comment used to
-    # list by job name -- python-tests, nextflow-stub, nf-test-stub, security-tests,
-    # ruff -- and it enumerates them itself in its own `suite-gate`. `containers` is
-    # `containers.yml` at `scope: changed` (Phase 6): on a branch that touches no
-    # `containers/` build context it resolves to an empty matrix and costs nothing,
-    # and on one that does, a broken Dockerfile blocks the merge here instead of
-    # surfacing on the release path.
-    branches: [ main, dev, benchmarking ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, dev, benchmarking ]
+    branches: [ main, dev ]
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 # Least-privilege default token: read-only. Hardens against a compromised

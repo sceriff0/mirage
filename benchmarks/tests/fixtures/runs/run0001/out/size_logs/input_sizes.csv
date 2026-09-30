@@ -1,3 +1,0 @@
-process,sample_id,filename,bytes
-CONVERT_IMAGE,px8192_ch2,px8192_ch2.ome.tif,4294967296
-SEGMENT,px8192_ch2,merged.ome.tif,8589934592

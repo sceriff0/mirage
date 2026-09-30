@@ -1,4 +1,0 @@
-# Generated benchmark figures land here (populate via export_docs_figures.py).
-# Track the dir; ignore the (user-data-derived) PNGs until you commit specific ones.
-*.png
-!.gitignore
