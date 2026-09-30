@@ -31,6 +31,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **DRAPE is renamed back to STARE** (Scalable Tile-parallel Alignment by Robust
+  Estimation), 2026-09-30. Same method and code as DRAPE 2.0.0 (vector lattice + robust
+  DCT-PLS SOLVE); only the name changes. The package is `stare-registration` **3.0.0**
+  in `packages/stare` (import `stare`, CLI `stare {coarse,reg-tile,solve,stitch,register}`;
+  no `drape` alias), `RegPresets.DRAPE` is `RegPresets.STARE`, and the image is
+  `bolt3x/mirage-stare:1.0.0` (build context `containers/stare`). **Unchanged:**
+  `registration_method='tiled'`, every `reg_tiled_*` parameter and the `TILED_*`
+  processes. The 0.1.x `stare-registration` (TRE gate, legacy/robust solvers) remains
+  retired; the entries below record the interim name DRAPE.
+
+- **DRAPE Phase 5e fixes** (`research/drape-step-support-oa-2026-09-27.md`). STITCH's inverse
+  map iterates each point's fixed point to a 1e-3 px step (cap 50) instead of a fixed 3 steps,
+  and logs the achieved step, warning when the cap is hit (at L = 0.45, |F| ≈ 90 px: 9.2 px
+  error before, 3e-4 px after). SOLVE's h-block buffer ring is chosen per slide from the
+  imprint-corrected lag-1 noise correlation of the plain block-CV residuals (ring above 0.2,
+  refused when it would choose a flat field, s >= 1e5; new report keys `residual_lag1_rho`,
+  `cv_buffer`). COARSE's 3° sweep step at σ = 1 px is
+  kept, now backed by a measured step-vs-blur table and a test; the sweep is described as
+  *globally* normalised cross-correlation.
+
+- **STARE is renamed DRAPE** (Distributed Robust Alignment by Piecewise Estimation). The
+  package moved from `packages/stare` to `packages/drape` and is now `drape-registration`
+  2.0.0 (import `drape`, CLI `drape {coarse,reg-tile,solve,stitch,register}`); there is no
+  `stare` alias. `lib/RegPresets.STARE`/`stare()` are `RegPresets.DRAPE`/`drape()`,
+  `tests/stare_shims.py` is `tests/drape_shims.py`, and the docs say "DRAPE (formerly
+  STARE)". **Unchanged, on purpose:** `registration_method='tiled'`, every `reg_tiled_*`
+  parameter, the `TILED_*` process names, the `bin/tiled_*.py` shims (now over `drape`), and
+  the benchmark arm ids and data columns (`stare_high`, `stare_*_px`), which name results
+  already computed on the `benchmarking` branch. Entries below this one keep the name the
+  method had when they were written.
+
+- **The tiled backend's image is `bolt3x/mirage-drape:1.0.0`, and it is slim.** Built from
+  `containers/drape` (was `containers/tiled`, image `bolt3x/mirage-tiled:1.0.0`): the same
+  `python:3.11-slim` digest, `procps`, `requirements/drape.txt` (was `tiled.txt`) and the
+  `drape` package — no torch, no kornia, no libGL, no baked DISK/LightGlue weights, which
+  served only the COARSE front-end retired on 2026-09-27. Its smoke test fails the build if
+  torch is importable. Every `TILED_*` process and `WARP_SEG_QC`'s tiled backend use it.
+  `requirements/kornia.txt` is deleted; `requirements/torch-cpu.txt` is now CI-only (the
+  VALIS matcher tests import torch). **The image must be published before a
+  `registration_method='tiled'` run can pull it.**
+
+- **STARE SOLVE/ESTIMATE audit fixes** (`research/drape-step-support-2026-09-27.md`). The
+  robust scale of a residual vector's norm is now the Rayleigh one (`median |r| / 1.1774`;
+  Huber 2.448σ and bisquare 5.06σ from χ²₂) — the 1-D `1.4826 × MAD` made Huber down-weight
+  ~67 % of clean data, now 5 %. The smoothing selection is honestly labelled `block_cv`
+  (true h-block CV with a buffer ring is implemented, `CV_BUFFER`, but off: measured lag-1
+  error correlation 0.01–0.07 and +50 % field error with it). The σ re-solve reuses the
+  first `s`. `coverage_1sigma` and the new `rms_error_over_rms_sigma` are scored on folds
+  disjoint from the σ calibration. The fold certificate reads the cubic interpolant, and the
+  re-index reports its fixed-point residual (`reindex_residual_px`). REG_TILE fits its
+  3-point Gaussian after subtracting the local correlation minimum, computes sharpness on
+  absolute values, and records a per-tile `gauss_fallback_rate` in the control JSON.
+
+- **STARE v2: REG_TILE measures a grid of window vectors and SOLVE is `dctpls` only — the
+  old STARE surface is removed.** Each tile now emits one displacement vector per
+  `reg_tiled_stride` px (default 128; window 2 × stride) on a slide-global lattice
+  (`stare.vector_grid`), and SOLVE lays every tile's vectors on that lattice, drops those at
+  or beyond the range gate (`reg_tiled_max_disp`, default the halo), and solves them with
+  robust affine + robust DCT-PLS, per-vector σ calibrated by peak ratio, writing a cubic
+  B-spline mesh (`stare.solve.solve_dctpls`). There is no TRE dead zone and no
+  correlation-error gate. **Removed:** the `legacy` and `robust` solvers, the
+  one-control-point-per-tile solve path, and the parameters `reg_tiled_solver`,
+  `reg_tiled_gate_tre`, `reg_tiled_max_error` and `reg_tiled_upsample` (the last also leaves
+  `RegPresets.STARE`, whose rows now own four knobs); the matching `stare solve`
+  (`--gate-tre`, `--max-error`, `--solver`), `stare reg-tile` (`--upsample`) and
+  `stare register` flags are gone, and passing any of them is an argparse error. A run that
+  still sets one of those params is rejected by schema validation at launch. **Old control
+  files cannot be re-solved:** SOLVE refuses a control JSON without `vectors`/`lattice`
+  (written by a pre-v2 REG_TILE), naming the tiles — re-run REG_TILE (a `-resume` after the
+  upgrade does, since the task script changed). `stare.pipeline.register_slide` runs the same
+  vector-grid + dctpls method in process (`stride=` replaces `gate_tre=`/`upsample=`).
+  **Benchmarks:** the STARE arms are `reg_tiled_mode` {low, medium, high} ×
+  `reg_tiled_stride` {64, 128, 256} (arms `tiled_<tier>_s<stride>`), replacing × the gate;
+  the 9-run `solver_cross` (`arm_kind=registration_solver`) and the sweep's `solver_robust`
+  delta grid are deleted, and the sweep's tiled grid crosses the stride too. The
+  head-to-head against old STARE uses the arm results already computed on the
+  `benchmarking` branch. `--changed solve` now selects every STARE row.
+
+- **STARE's COARSE anchor is an NCC rotation sweep, not DISK + LightGlue.** `stare/coarse_align.py`
+  sweeps rotation over 0-360 deg in 3 deg steps on a 256 px tissue-masked thumbnail (FFT
+  cross-correlation), refines the two best distinct angles +-3 deg at `reg_tiled_coarse_max_dim`,
+  and takes sub-pixel translation from `phase_cross_correlation`. It is accepted only at peak
+  NCC >= 0.3 and best/second-distinct ratio >= 1.15; otherwise a scikit-image ORB + RANSAC
+  fallback runs, and if that is not trustworthy either **the task fails** naming both slides
+  and the scores instead of emitting an unverifiable M0. On the scout's hard cases (80 % nuclei
+  turnover, 25 % tissue loss, gamma 0.6, rotations 0/37/178/-95/133 deg) it recovers 10/10
+  (within 0.25 deg and 1.5 px at 1024 px; within the tests' 1 deg / 3 px at 512 px), where
+  DISK+LightGlue got 2/10 on the same 512 px pairs. Peak RSS of
+  the whole stage is 0.25-0.43 GB (was ~32 GB at 2048 px), so `TILED_COARSE` asks 2 GB and
+  `coarse_max_dim` is now a refine resolution: `high`/`medium` 1024, `low` 512. The M0 JSON
+  gains `coarse_method`, `coarse_peak_ncc`, `coarse_peak_ratio`, `coarse_angle_deg`;
+  `n_inliers` is 0 for the sweep and `coarse_tre` is its quantisation bound. torch/kornia are
+  no longer imported; the tiled image still carries them until it is rebuilt.
+
 - **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
   (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
   with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every

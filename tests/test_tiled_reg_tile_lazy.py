@@ -9,11 +9,14 @@ path must produce numerically identical output to the old full-decode path, whil
 bounding the region read.
 
 Three properties are pinned here:
-  1. Numerical equivalence: the lazy path's (dx, dy, tre) match an independently computed
-     "old style" oracle (full nuclear_channel/load_channels + whole-image warp_image) exactly.
-  2. Bounded read: for an interior tile that is 1/16 of the frame, the region actually read
-     off the moving slide is a small fraction (< 25%) of the full slide — this is the test
-     that fails against the pre-change code (it reads the whole slide, i.e. 100%).
+  1. Numerical equivalence: the lazy path's control point (the window-vector grid since the
+     vector estimator, and its median top level) matches an independently computed "old style"
+     oracle (full nuclear_channel/load_channels + whole-image warp_image, then the same
+     estimator on the same read box) exactly.
+  2. Bounded read: for an interior tile, the region actually read off the moving slide is a
+     small fraction (< 25%) of the full slide — this is the test that fails against the
+     pre-change code (it reads the whole slide, i.e. 100%). The read box is the core plus
+     3 x stride (vector_grid.read_box), so the slide must be several of those wide.
   3. Edge tiles: a tile whose source_region maps entirely outside the moving slide produces
      an all-zero moving tile without raising.
 """
@@ -42,9 +45,32 @@ pytest.importorskip("zarr")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_reg_tile  # noqa: E402
-from tile_residual import residual_displacement  # noqa: E402
+from stare.vector_grid import estimate_tile_vectors, read_box  # noqa: E402
 from tiled_io import load_channels, nuclear_channel  # noqa: E402
 from tiled_warp import warp_image  # noqa: E402
+
+# The pipeline's key set, pinned EXACTLY (not with `>=`) on purpose -- a control point is a
+# published artifact and a silent extra key is how two writers drift. ref_fg / mov_fg came
+# with Phase 1 of the foreground work; lattice / vectors / rejected / pass1 with the window-
+# vector grid (stare.vector_grid); gauss_fallback_rate with the Xue min-subtracted sub-pixel
+# fit (Phase 5b). Update deliberately, naming the new keys.
+CONTROL_KEYS = {
+    "ix",
+    "iy",
+    "cx",
+    "cy",
+    "dx",
+    "dy",
+    "tre",
+    "error",
+    "ref_fg",
+    "mov_fg",
+    "lattice",
+    "vectors",
+    "rejected",
+    "pass1",
+    "gauss_fallback_rate",
+}
 
 
 def _textured(seed, n):
@@ -89,82 +115,49 @@ def _write_pair(tmp_path, n=512, translation=(3.0, -2.0), rotation_deg=1.0):
     return ref_f, mov_f, m0_f, m0, ref, mov
 
 
-def _old_style_oracle(ref_f, mov_f, m0, nuclear_index, rx0, ry0, rx1, ry1, upsample=10):
-    """Reproduce the pre-change tiled_reg_tile.py logic verbatim: full decode, whole-image warp."""
+def _old_style_oracle(ref_f, mov_f, m0, nuclear_index, core, stride=128):
+    """Full decode + whole-image warp, then the same estimator on the same read box."""
     ref_nuc = nuclear_channel(load_channels(ref_f), nuclear_index)
     mov_nuc = nuclear_channel(load_channels(mov_f), nuclear_index)
-    ref_tile = ref_nuc[ry0:ry1, rx0:rx1]
+    bx0, by0, bx1, by1 = read_box(core, stride, ref_nuc.shape)
+    ref_tile = ref_nuc[by0:by1, bx0:bx1].astype(np.float32)
     mov_tile = warp_image(
-        mov_nuc, m0, None, (ry1 - ry0, rx1 - rx0), out_origin=(rx0, ry0)
-    )
-    return residual_displacement(ref_tile, mov_tile, upsample=upsample)
+        mov_nuc, m0, None, (by1 - by0, bx1 - bx0), out_origin=(bx0, by0)
+    ).astype(np.float32)
+    return estimate_tile_vectors(ref_tile, mov_tile, (bx0, by0), core, stride)
 
 
 def test_lazy_path_matches_old_full_decode_oracle(tmp_path):
     ref_f, mov_f, m0_f, m0, _ref, _mov = _write_pair(tmp_path)
     nuclear_index = 1
-    rx0, ry0, rx1, ry1 = 192, 192, 320, 320  # interior tile, well clear of any edge
+    core = (192, 192, 320, 320)  # interior tile, well clear of any edge
 
-    dx_old, dy_old, tre_old, _err_old = _old_style_oracle(
-        ref_f, mov_f, m0, nuclear_index, rx0, ry0, rx1, ry1
-    )
+    oracle = _old_style_oracle(ref_f, mov_f, m0, nuclear_index, core)
+    assert oracle["vectors"], "premise: the oracle measured at least one vector"
 
     out_f = tmp_path / "ctrl.json"
-    tiled_reg_tile.main(
-        [
-            "--reference",
-            str(ref_f),
-            "--moving",
-            str(mov_f),
-            "--m0",
-            str(m0_f),
-            "--nuclear-index",
-            str(nuclear_index),
-            "--ix",
-            "0",
-            "--iy",
-            "0",
-            "--cx",
-            "256.0",
-            "--cy",
-            "256.0",
-            "--rx0",
-            str(rx0),
-            "--ry0",
-            str(ry0),
-            "--rx1",
-            str(rx1),
-            "--ry1",
-            str(ry1),
-            "--out",
-            str(out_f),
-        ]
-    )
+    argv = ["--reference", str(ref_f), "--moving", str(mov_f), "--m0", str(m0_f)]
+    argv += ["--nuclear-index", str(nuclear_index), "--ix", "0", "--iy", "0"]
+    argv += ["--cx", "256.0", "--cy", "256.0"]
+    argv += ["--rx0", "160", "--ry0", "160", "--rx1", "352", "--ry1", "352"]
+    for k, v in zip(("x0", "y0", "x1", "y1"), core):
+        argv += [f"--{k}", str(v)]
+    tiled_reg_tile.main(argv + ["--out", str(out_f)])
     result = json.loads(out_f.read_text())
 
-    # keys and shape must be unchanged
-    # ref_fg / mov_fg were added by Phase 1 of the foreground work: EMITTED, gated on by
-    # nothing. The key set is pinned exactly (not with `>=`) on purpose -- a control point is a
-    # published artifact and a silent extra key is how two writers drift. Updated deliberately,
-    # with the new keys named. See tests/test_foreground_fraction.py.
-    assert set(result.keys()) == {
-        "ix",
-        "iy",
-        "cx",
-        "cy",
-        "dx",
-        "dy",
-        "tre",
-        "error",
-        "ref_fg",
-        "mov_fg",
-    }
+    assert set(result.keys()) == CONTROL_KEYS
     assert result["ix"] == 0 and result["iy"] == 0
     assert result["cx"] == 256.0 and result["cy"] == 256.0
 
-    assert result["dx"] == pytest.approx(dx_old, abs=1e-9)
-    assert result["dy"] == pytest.approx(dy_old, abs=1e-9)
-    assert result["tre"] == pytest.approx(tre_old, abs=1e-9)
+    got = np.asarray(result["vectors"], dtype=float)
+    want = np.asarray(oracle["vectors"], dtype=float)
+    assert got.shape == want.shape
+    # kx, ky, cx, cy exactly; dx, dy to the 4 decimals the JSON keeps; ratios to 3
+    assert np.array_equal(got[:, :4], want[:, :4])
+    np.testing.assert_allclose(got[:, 4:6], want[:, 4:6], atol=6e-5)
+    np.testing.assert_allclose(got[:, 6:8], want[:, 6:8], atol=6e-4)
+    assert result["dx"] == pytest.approx(float(np.median(want[:, 4])), abs=1e-4)
+    assert result["dy"] == pytest.approx(float(np.median(want[:, 5])), abs=1e-4)
 
 
 def test_moving_slide_region_read_is_bounded(tmp_path, monkeypatch):
@@ -174,12 +167,13 @@ def test_moving_slide_region_read_is_bounded(tmp_path, monkeypatch):
     decodes the *entire* slide on every tile invocation, so the read region would be 100% of
     the full slide, not < 25%.
     """
-    n = 512
+    n = 2048
     ref_f, mov_f, m0_f, _m0, _ref, mov = _write_pair(
         tmp_path, n=n, translation=(0.0, 0.0), rotation_deg=0.0
     )
-    # tile is 1/16 of the (512, 512) frame, well inside the slide
-    rx0, ry0, rx1, ry1 = 192, 192, 320, 320
+    # a 128 px core in the middle of the (2048, 2048) frame; its read box is the core plus
+    # 3 x 128 px each side = 896^2, ~19% of the slide
+    rx0, ry0, rx1, ry1 = 960, 960, 1088, 1088
 
     import tiled_io
 
@@ -236,6 +230,14 @@ def test_moving_slide_region_read_is_bounded(tmp_path, monkeypatch):
             str(rx1),
             "--ry1",
             str(ry1),
+            "--x0",
+            str(rx0),
+            "--y0",
+            str(ry0),
+            "--x1",
+            str(rx1),
+            "--y1",
+            str(ry1),
             "--out",
             str(out_f),
         ]
@@ -262,15 +264,14 @@ def test_edge_tile_outside_moving_slide_yields_zero_tile(tmp_path, monkeypatch):
     m0_f.write_text(json.dumps({"M0": huge_m0}))
 
     captured = {}
+    real = tiled_reg_tile.estimate_tile_vectors
 
-    def fake_residual_displacement(ref_tile, mov_tile, upsample=10):
+    def capture(ref_tile, mov_tile, *args, **kw):
         captured["ref_tile"] = ref_tile
         captured["mov_tile"] = mov_tile
-        return 0.0, 0.0, 0.0, 0.0
+        return real(ref_tile, mov_tile, *args, **kw)
 
-    monkeypatch.setattr(
-        tiled_reg_tile, "residual_displacement", fake_residual_displacement
-    )
+    monkeypatch.setattr(tiled_reg_tile, "estimate_tile_vectors", capture)
 
     out_f = tmp_path / "ctrl.json"
     # must not raise
@@ -307,25 +308,16 @@ def test_edge_tile_outside_moving_slide_yields_zero_tile(tmp_path, monkeypatch):
 
     assert "mov_tile" in captured
     mov_tile = captured["mov_tile"]
-    assert mov_tile.shape == (32, 32)
-    assert np.array_equal(mov_tile, np.zeros((32, 32)))
+    # the read box is the whole 64 px slide (core + 3 x stride, clamped)
+    assert mov_tile.shape == (64, 64)
+    assert np.array_equal(mov_tile, np.zeros((64, 64)))
     result = json.loads(out_f.read_text())
-    # ref_fg / mov_fg were added by Phase 1 of the foreground work: EMITTED, gated on by
-    # nothing. The key set is pinned exactly (not with `>=`) on purpose -- a control point is a
-    # published artifact and a silent extra key is how two writers drift. Updated deliberately,
-    # with the new keys named. See tests/test_foreground_fraction.py.
-    assert set(result.keys()) == {
-        "ix",
-        "iy",
-        "cx",
-        "cy",
-        "dx",
-        "dy",
-        "tre",
-        "error",
-        "ref_fg",
-        "mov_fg",
-    }
+    assert set(result.keys()) == CONTROL_KEYS
+    # nothing to correlate against: no vector, and the top level says "uncomputable" the way
+    # it always has -- a zero displacement with a NaN error, which `accept` rejects
+    assert result["vectors"] == []
+    assert result["dx"] == 0.0 and result["dy"] == 0.0
+    assert np.isnan(result["error"])
 
 
 def test_nuclear_index_out_of_range_raises_same_message(tmp_path):

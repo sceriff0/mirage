@@ -33,21 +33,35 @@ FRAMEWORKS = {
     "cucim": "cucim",
     "mesmer": "mesmer",
     "deepcell": "deepcell",
-    # containers/tiled installs these for STARE's DISK+LightGlue COARSE front-end
-    # (bin/utils/coarse_align.py::_frontend_disk_lightglue). They used to live in a separate
-    # containers/stare-ml image behind `-profile stare_ml`; that image was never published, so
-    # both it and the profile are gone and :tiled carries torch+kornia itself. Both are
-    # reachable (imported inside that function, guarded by try/except ImportError), so listing
-    # them here does not flag an offender -- it just keeps this guard honest about every
-    # heavyweight, selectable framework a container carries, per this file's own instruction to
-    # extend the list on a new one.
+    # containers/tiled installed these for STARE's DISK+LightGlue COARSE front-end, retired
+    # 2026-09-27 for an NCC rotation sweep with an ORB fallback that imports neither; its
+    # replacement, containers/stare, installs neither. Kept here so neither comes back.
     "torch": "torch",
     "kornia": "kornia",
 }
 
 # Frameworks the pipeline genuinely selects. Each must be reachable: named in seg_method's enum,
 # or imported by first-party code.
-CODE_DIRS = ("bin", "tests", "lib", "modules", "subworkflows", "workflows")
+CODE_DIRS = (
+    "bin",
+    "packages",  # packages/stare: the STARE method; bin/tiled_*.py are shims over it
+    "tests",
+    "benchmarks",
+    "lib",
+    "modules",
+    "subworkflows",
+    "workflows",
+)
+
+
+# (Dockerfile, dist) pairs that ARE unreachable, deliberately tolerated until the image they
+# sit in is rebuilt -- a user-approved step separate from the code change that orphaned them.
+# Each entry must still be a real offender (test_pending_rebuild_entries_are_still_offenders),
+# so the day the Dockerfile drops the wheel the entry fails and has to go.
+PENDING_IMAGE_REBUILD = {
+    # Empty since 2026-09-27: ("containers/tiled/Dockerfile", "kornia") went when the
+    # tiled image was replaced by the torch-free containers/stare.
+}
 
 
 def _dockerfiles():
@@ -108,6 +122,8 @@ def test_no_container_installs_a_framework_the_pipeline_cannot_reach():
                 continue
             if _module_is_imported(module):
                 continue
+            if (df.relative_to(REPO).as_posix(), dist) in PENDING_IMAGE_REBUILD:
+                continue
             offenders.append(f"{df.relative_to(REPO)} installs {dist!r}")
 
     assert not offenders, (
@@ -146,3 +162,18 @@ def test_the_detector_does_not_fire_on_a_substring():
 def test_a_selectable_framework_would_be_allowed():
     """The rule must permit what the pipeline can actually run, or it is just a denylist."""
     assert "stardist" in _seg_method_enum() or _module_is_imported("stardist")
+
+
+def test_pending_rebuild_entries_are_still_offenders():
+    """An allowance that allows nothing must go: each entry's wheel is still installed and
+    still imported by nothing."""
+    stale = []
+    for (rel, dist), _reason in PENDING_IMAGE_REBUILD.items():
+        path = REPO / rel
+        if not path.is_file() or dist not in _installed(path.read_text()):
+            stale.append(f"{rel} no longer installs {dist!r}")
+        elif _module_is_imported(FRAMEWORKS[dist]):
+            stale.append(f"{dist!r} is imported again, so {rel} is not an offender")
+    assert not stale, "PENDING_IMAGE_REBUILD entries to delete:\n  " + "\n  ".join(
+        stale
+    )

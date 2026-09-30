@@ -55,12 +55,11 @@ def test_a_misaligned_pair_scores_a_large_residual():
 def test_benchmark_shows_registration_reduced_the_residual():
     """The end-to-end accuracy claim, on synthetic ground truth: STARE lowers the TRE.
 
-    The only case in this file that runs a REGISTRATION rather than just scoring one, so it is
-    also the only one needing the learned COARSE matcher. The ORB oracle this module measures
-    with is deliberately classical and independent of it -- see the note in reg_benchmark.py.
+    The only case in this file that runs a REGISTRATION rather than just scoring one. It
+    needed torch/kornia while COARSE was DISK + LightGlue; the NCC anchor needs neither
+    (2026-09-27). The ORB oracle this module measures with is deliberately classical and
+    independent of the registration -- see the note in reg_benchmark.py.
     """
-    pytest.importorskip("torch")
-    pytest.importorskip("kornia")
     from tiled_pipeline import register_slide
 
     ref = _textured(seed=3)
@@ -69,7 +68,7 @@ def test_benchmark_shows_registration_reduced_the_residual():
 
     tform = EuclideanTransform(rotation=np.deg2rad(2.0), translation=(11.0, -7.0))
     mov = sk_warp(ref, tform, order=1, mode="reflect").astype(np.float32)
-    registered = register_slide(ref, mov, tile=128, halo=32, gate_tre=0.0)["registered"]
+    registered = register_slide(ref, mov, tile=128, halo=32, stride=32)["registered"]
 
     report = benchmark(ref, mov, registered)
     assert report["after"]["tre_px_median"] < report["before"]["tre_px_median"]

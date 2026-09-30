@@ -408,7 +408,6 @@ class ParamUtils {
         def stareBad = offenders('reg_tiled_mode', params.reg_tiled_mode, [
             reg_tiled_tile          : params.reg_tiled_tile,
             reg_tiled_halo          : params.reg_tiled_halo,
-            reg_tiled_upsample      : params.reg_tiled_upsample,
             reg_tiled_out_tile      : params.reg_tiled_out_tile,
             reg_tiled_coarse_max_dim: params.reg_tiled_coarse_max_dim,
         ])
@@ -424,30 +423,26 @@ class ParamUtils {
 
         // COARSE's thumbnail bound has a FLOOR, and it is not cosmetic. bin/utils/tiled_io.py's
         // decimation_factor() treats `max_dim <= 0` as "no decimation" and returns factor 1, so
-        // the matcher is handed the FULL-RESOLUTION plane -- and the matcher is DISK, a U-Net
-        // that allocates activations over the whole plane at ~1.1 + 7.3*Mpx GB. A 26k x 26k
-        // slide would need thousands of GB. That escape hatch was survivable when COARSE ran a
-        // classical corner detector; it is now a guaranteed OOM.
-        //
-        // Worse, TILED_COARSE's memory closure DERIVES its request from this same value, so 0
-        // computes 0 Mpx and asks for the 4 GB floor -- the smallest request in the table for
-        // the largest possible job. A negative value is arithmetically even more perverse: the
-        // closure squares it, so -1 yields a positive 0.000001 Mpx and again the floor.
+        // the anchor is handed the FULL-RESOLUTION plane: every one of its ~50 refine
+        // evaluations warps and FFTs that whole plane -- tens of GB and hours of CPU on a
+        // 26k x 26k slide, against a memory request derived from this same value (0 computes
+        // 0 Mpx and asks for the 2 GB floor). A negative value is arithmetically even more
+        // perverse: the closure squares it.
         //
         // The schema's `minimum: 0` blocks negatives on the pipeline path; this is the
         // cross-parameter half that blocks the rest, with a message that says why. 256 px is
-        // the floor because it is half of the 'low' tier (512) -- below that the anchor cannot
-        // land inside any realistic halo anyway, so there is no legitimate value down there.
+        // the floor because it is the anchor's own sweep resolution -- a refine thumbnail below
+        // it would be coarser than the sweep that seeds it -- and half of the 'low' tier (512).
         if (params.reg_tiled_coarse_max_dim != null &&
             (params.reg_tiled_coarse_max_dim as int) < 256) {
             throw new IllegalArgumentException(
                 "--reg_tiled_coarse_max_dim ${params.reg_tiled_coarse_max_dim} is below the " +
-                "256 px floor. COARSE's matcher is DISK, a U-Net whose activation memory is " +
-                "linear in thumbnail AREA (~1.1 + 7.3*Mpx GB), and a value of 0 or less " +
-                "disables decimation entirely -- handing it the full-resolution plane, which " +
-                "needs thousands of GB on a whole slide. TILED_COARSE's memory request is " +
-                "derived from this same value, so a too-small bound also under-reserves the " +
-                "task rather than merely slowing it. Use 512 (the 'low' tier) or higher, or " +
+                "256 px floor. The COARSE anchor sweeps rotations at 256 px and refines at this " +
+                "resolution, so a smaller refine thumbnail is coarser than its own seed, and a " +
+                "value of 0 or less disables decimation entirely -- handing it the " +
+                "full-resolution plane, which it warps and FFTs ~50 times. TILED_COARSE's " +
+                "memory request is derived from this same value, so that would also " +
+                "under-reserve the task. Use 512 (the 'low' tier) or higher, or " +
                 "drop the override and let --reg_tiled_mode pick the tier " +
                 "(table: lib/RegPresets.groovy, RegPresets.STARE).")
         }

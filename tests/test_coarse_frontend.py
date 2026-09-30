@@ -1,14 +1,16 @@
 """Tests for the COARSE global-alignment front-end in bin/utils/coarse_align.py.
 
-There is exactly ONE front-end now: DISK + LightGlue, reached through
-``estimate_rigid``. The three classical CPU alternatives and the ``estimate_affine``
-dispatch table that selected among them were deleted for v1.0.0 -- a dispatch table with
-one value is dead config, and the deleted three were never the method the paper describes.
-``test_the_deleted_frontends_are_really_gone`` below is what stops one coming back
+There is exactly ONE front-end, reached through ``estimate_rigid`` / ``estimate_anchor``: an
+FFT NCC rotation sweep refined at the thumbnail, with a scikit-image ORB fallback and a loud
+refusal (packages/stare/tests/test_coarse_anchor.py holds the hard-case and fallback tests).
+It replaced DISK + LightGlue on 2026-09-27. The three classical CPU alternatives and the
+``estimate_affine`` dispatch table deleted for v1.0.0 stay deleted -- the ORB of the fallback
+is a different, internal shape (``_orb_fallback``), not the old selectable front-end --
+and ``test_the_deleted_frontends_are_really_gone`` below is what stops one coming back
 without a decision.
 
-The learned matcher must raise a clear, actionable error when torch/kornia are
-unavailable rather than silently degrading.
+Nothing here skips: the anchor needs no torch (the STARE image, containers/stare, has none),
+and the suite step's MIRAGE_STRICT_SKIPS floor fails CI on any unexpected skip.
 
 Import note: coarse_align.py does ``from logger import get_logger`` at module scope (an
 unqualified import resolved against ``bin/utils`` on sys.path directly, the same convention
@@ -16,14 +18,8 @@ tests/test_coarse_align.py and tests/test_tiled_coarse_thumbnail.py already use)
 module is imported the same way those sibling test files do, rather than via
 ``bin.utils.coarse_align``, which would fail that inner import when this file is run alone.
 
-Fixture note: the roll signs below are ``(-7, +5)``, not the brief's literal ``(+7, -5)``.
-Verified against the untouched, pre-Task-5.1 ``estimate_rigid`` (git HEAD of that branch):
-with ``(+7, -5)`` the implementation recovers ``(m0[0, 2], m0[1, 2]) == (+4.9, -7.05)`` --
-the *opposite* sign of this file's assertions. The docstring of ``estimate_rigid`` is
-unambiguous ("M0 mapping mov onto ref"), so the implementation is correct and the brief's
-fixture had an inverted sign. Flipping the roll signs here (keeping the assertion values
-exactly as specified) reproduces the intended pure-shift recovery check without altering
-the real, production transform convention.
+Fixture note: the roll signs below are ``(-7, +5)``: M0 maps mov onto ref, so a moving image
+rolled by (+5 x, -7 y) is recovered as a (-5, +7) translation.
 """
 
 from __future__ import annotations
@@ -92,7 +88,8 @@ def test_the_deleted_frontends_are_really_gone():
         assert not hasattr(coarse_align, gone), f"coarse_align.{gone} still exists"
 
 
-def test_the_front_end_raises_a_clear_error_without_torch(pair, monkeypatch):
+def test_the_front_end_needs_no_torch(pair, monkeypatch):
+    """The anchor must work with torch/kornia unimportable -- the tiled image is dropping them."""
     import builtins
 
     real = builtins.__import__
@@ -104,41 +101,27 @@ def test_the_front_end_raises_a_clear_error_without_torch(pair, monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", no_torch)
     ref, mov = pair
-    with pytest.raises(RuntimeError, match="torch"):
-        estimate_rigid(ref, mov)
+    m0, _residual, _n = estimate_rigid(ref, mov)
+    np.testing.assert_allclose(m0[:2, 2], [-5, 7], atol=1.5)
 
 
-def test_disk_lightglue_recovers_a_pure_shift(pair):
-    """DISK+LightGlue must recover a pure shift.
-
-    Skipped when torch/kornia are absent. Task 2 adds them to CI's install, and
-    tests/test_disk_test_actually_runs.py then asserts this test is NOT skipped --
-    a skip that nobody notices is how an unimplemented front-end shipped once already.
-    """
-    pytest.importorskip("torch")
-    pytest.importorskip("kornia")
+def test_the_anchor_recovers_a_pure_shift(pair):
     ref, mov = pair
     m0, residual_px, n_inliers = estimate_rigid(ref, mov)
     np.testing.assert_allclose(m0[0, 2], -5, atol=1.5)
     np.testing.assert_allclose(m0[1, 2], 7, atol=1.5)
-    assert n_inliers > 50, f"only {n_inliers} inliers"
+    np.testing.assert_allclose(m0[:2, :2], np.eye(2), atol=0.01)
+    assert n_inliers == 0  # the NCC sweep carries no correspondences
     assert np.isfinite(residual_px) and residual_px < 2.0
 
 
-def test_disk_lightglue_recovers_a_pure_shift_on_a_rectangular_thumbnail(rect_pair):
-    """Regression test for the ``image_size`` (H, W) vs (W, H) ordering bug.
-
-    Every production thumbnail is non-square (``decimation_factor`` in
-    bin/utils/tiled_io.py applies one shared integer factor and preserves aspect
-    ratio), so the square ``pair`` fixture above cannot exercise this path -- it
-    passed even when ``image_size`` was fed to LightGlue as ``t.shape[-2:]`` (H, W)
-    instead of the (W, H) kornia's own fallback uses, which aborts on any real slide.
-    """
-    pytest.importorskip("torch")
-    pytest.importorskip("kornia")
+def test_the_anchor_recovers_a_pure_shift_on_a_rectangular_thumbnail(rect_pair):
+    """Every production thumbnail is non-square (one shared decimation factor preserves the
+    aspect ratio), so the square ``pair`` fixture cannot catch an (H, W) vs (W, H) mix-up in
+    the canvas placement or the shift unwrapping."""
     ref, mov = rect_pair
-    m0, residual_px, n_inliers = estimate_rigid(ref, mov)
+    m0, residual_px, _n = estimate_rigid(ref, mov)
     np.testing.assert_allclose(m0[0, 2], -5, atol=1.5)
     np.testing.assert_allclose(m0[1, 2], 7, atol=1.5)
-    assert n_inliers > 50, f"only {n_inliers} inliers"
+    np.testing.assert_allclose(m0[:2, :2], np.eye(2), atol=0.01)
     assert np.isfinite(residual_px) and residual_px < 2.0

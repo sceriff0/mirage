@@ -85,8 +85,8 @@ class WarpBackends {
             ] },
         ],
         tiled: [
-            // JVM-free slim image; no BioFormats.
-            container   : 'bolt3x/mirage-tiled:1.0.0',
+            // STARE's image: JVM-free and slim (no BioFormats, no torch).
+            container   : 'bolt3x/mirage-stare:1.0.0',
             stages      : ['native', 'rigid', 'refined'],
             versionTools: ['skimage', 'scipy'],
             flags       : { _ctx -> ['--method tiled'] },

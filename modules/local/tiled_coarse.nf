@@ -5,7 +5,7 @@ process TILED_COARSE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
     label 'process_low'
 
-    container 'bolt3x/mirage-tiled:1.0.0'
+    container 'bolt3x/mirage-stare:1.0.0'
 
     input:
     tuple val(meta), path(reference, stageAs: 'ref/*'), path(moving, stageAs: 'mov/*')
@@ -54,7 +54,7 @@ process TILED_COARSE {
         --out-m0 ${prefix}_m0.json \\
         --out-tiles ${prefix}_tiles.csv
 
-    ${ProcessEnvelope.versions(task.process, ['skimage', 'torch', 'kornia'], task.container)}
+    ${ProcessEnvelope.versions(task.process, ['skimage', 'scipy'], task.container)}
     """
 
     stub:
@@ -62,6 +62,6 @@ process TILED_COARSE {
     """
     echo '{"M0":[[1,0,0],[0,1,0],[0,0,1]],"ref_h":16,"ref_w":16,"ref_name":"ref","coarse_tre":0,"n_inliers":0}' > ${prefix}_m0.json
     printf 'ix,iy,cx,cy,x0,y0,x1,y1,rx0,ry0,rx1,ry1\\n0,0,8,8,0,0,16,16,0,0,16,16\\n' > ${prefix}_tiles.csv
-    ${ProcessEnvelope.versionsStub(task.process, ['skimage', 'torch', 'kornia'], task.container)}
+    ${ProcessEnvelope.versionsStub(task.process, ['skimage', 'scipy'], task.container)}
     """
 }

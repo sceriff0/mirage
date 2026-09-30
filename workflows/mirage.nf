@@ -170,11 +170,21 @@ workflow MIRAGE {
     // onto is not something the pipeline may choose on the operator's behalf, and at
     // every entry point after preprocessing the sheet is a checkpoint this pipeline
     // wrote, so a missing reference there means a corrupt or hand-edited file.
+    // The fifth argument: refuse, here, two slides of one patient with the same channel
+    // set when the backend that is about to run cannot tell them apart afterwards
+    // (RegBackends.pairsOutputsBySignature). Only when REGISTER will actually run --
+    // a --start past registration reads a checkpoint this pipeline wrote and pairs
+    // nothing. This is a second read of --registration_method on the linear path
+    // (registration.nf's is the one that selects the adapter); it selects nothing,
+    // it asks the table a yes/no question, and validateParameters() above has
+    // already confined the value to the schema's enum.
     CsvUtils.validateInputSemantics(
         params.input,
         params.start,
         false,
-        params.nuclear_markers
+        params.nuclear_markers,
+        ParamUtils.shouldRun('registration', params.start, effective_stop) &&
+            RegBackends.of(params.registration_method).pairsOutputsBySignature
     )
 
     if (params.dry_run) {

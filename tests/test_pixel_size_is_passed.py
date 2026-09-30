@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.stare_shims import source_of
+
 ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "bin"
 MODULES = ROOT / "modules" / "local"
@@ -35,9 +37,15 @@ STANDALONE = {"join_flowpath.py"}
 
 
 def _scripts_accepting_a_scale() -> dict[str, str]:
+    """{bin script name: the --pixel-size flag it declares}.
+
+    Read through ``tests.stare_shims.source_of``: ``bin/tiled_stitch.py`` is a shim over
+    ``stare.stages.stitch``, whose argparse is where the flag now lives. Keyed by the
+    SHIM's name, because that is what ``modules/local/tiled_stitch.nf`` invokes.
+    """
     out = {}
     for path in sorted(BIN.glob("*.py")):
-        m = FLAG_RE.search(path.read_text())
+        m = FLAG_RE.search(source_of(path).read_text())
         if m:
             out[path.name] = m.group(1)
     return out

@@ -686,7 +686,10 @@ def test_jobs_needing_verify_config_tolerate_it_being_skipped():
 # One entry per blocking check, keyed on the COMMAND rather than the job name.
 BLOCKING_CHECKS = [
     ("python unit suite", "pytest -v tests/"),
-    ("DISK front-end non-skip proof", "tests/test_coarse_frontend.py"),
+    # ("DISK front-end non-skip proof", "tests/test_coarse_frontend.py") was here until
+    # 2026-09-27: the DISK + LightGlue COARSE front-end it proved was not skipped is gone,
+    # the anchor imports no torch, and the whole-session MIRAGE_STRICT_SKIPS floor
+    # (tests/conftest.py) already fails the suite step on any unexpected skip.
     ("nf-test stub suite", "nf-test test --tag stub"),
     ("ruff lint", "ruff check ."),
     ("ruff format (blocking since release 1.0 phase 02)", "ruff format --check ."),

@@ -36,9 +36,24 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 from tests.ci_actions import strip_line_comment
 from tests.nfmodel import processes, strip_comments
+from tests.stare_shims import package_module_file
 
 REPO = Path(__file__).resolve().parent.parent
 CONTAINERS = REPO / "containers"
+
+# FIRST-PARTY PACKAGES: repository code that is pip-installed rather than staged onto
+# $PATH from bin/. `stare` (packages/stare) is the STARE registration method; the
+# bin/tiled_*.py scripts the tiled modules invoke are shims over its stages. The import
+# walker follows `from stare.x import y` INTO packages/stare/src (so the lazy torch/kornia
+# /zarr/scipy/skimage imports the tiled image's REQUIRED_RUNTIME_IMPORTS entries name are
+# still found where they now live), and never reports `stare` as a third-party
+# distribution -- what it must check instead is that an image whose scripts reach the
+# package INSTALLS it, which `test_image_whose_scripts_reach_a_first_party_package_installs_it`
+# does by reading the Dockerfile's COPY + pip install of the package directory.
+# {import name: (repo-relative source dir the Dockerfile COPYs, pip distribution name)}
+FIRST_PARTY_PACKAGES = {
+    "stare": ("packages/stare", "stare-registration"),
+}
 REQUIREMENTS = REPO / "requirements"
 CONSTRAINTS = REQUIREMENTS / "constraints.txt"
 
@@ -206,7 +221,8 @@ def _dockerfile_pip_tokens(text):
     while torch/kornia were missing from the counted set -- reporting a container "installs
     everything its scripts import" when the packages the DISK+LightGlue front-end actually
     needs were invisible to it. The defect was first found in the now-deleted containers/
-    stare-ml image; the same chained form is what containers/tiled uses today.
+    stare-ml image; containers/tiled used the same chained form until containers/stare
+    replaced it (2026-09-27).
     """
     joined = re.sub(r"\\\s*\n", " ", text)
     tokens = []
@@ -252,7 +268,7 @@ def _requirements_files_installed(text):
     The files moved out of ``containers/<c>/requirements.txt`` into ``requirements/<c>.txt``
     so a single ``constraints.txt`` could be shared with CI. This resolves them by the
     BASENAME the Dockerfile installs rather than by the container's own name, because
-    containers/tiled installs three (tiled.txt, torch-cpu.txt, kornia.txt) -- and reading only
+    the retired containers/tiled installed three (tiled.txt, torch-cpu.txt, kornia.txt) -- and reading only
     ``tiled.txt`` would have hidden torch and kornia from every check below, which is exactly
     the "counted set is smaller than the installed set" defect this module's parser docstring
     describes.
@@ -396,7 +412,7 @@ def _module_container_and_scripts():
     backend-dispatched way, via ``lib/WarpBackends.groovy``, but is deliberately NOT given
     the same treatment here. Its VALIS backend's image (``cdgatenbee/valis-wsi``) is not a
     first-party ``bolt3x/mirage-*`` image and has no ``containers/`` entry to check against;
-    its tiled backend's image (``bolt3x/mirage-tiled``) already gets script coverage from
+    its tiled backend's image (``bolt3x/mirage-stare``) already gets script coverage from
     tiled_coarse.nf / tiled_reg_tile.nf / etc above. Attributing ``warp_seg_qc.py`` itself to
     'tiled' would be unsound the way SEGMENT's attribution is not: SEGMENT has three separate
     per-backend entrypoint FILES (segment.py / segment_instantseg.py / segment_cellsam.py),
@@ -487,10 +503,26 @@ def _import_names(node, local_files, local_pkgs):
     vendored-package case -- has exactly one definition.
     """
     if isinstance(node, ast.Import):
-        return [a.name.split(".")[0] for a in node.names]
+        # `import stare.stages.coarse` -- the dotted name, so the walker can follow it
+        # into packages/stare/src; anything else is its top-level distribution name.
+        return [
+            a.name if package_module_file(a.name) else a.name.split(".")[0]
+            for a in node.names
+        ]
     if not isinstance(node, ast.ImportFrom):
         return []
     head = node.module.split(".")[0] if (node.level == 0 and node.module) else None
+    if head in FIRST_PARTY_PACKAGES:
+        # `from stare.stages import coarse as _impl` / `from stare.slide_io import
+        # open_lazy`: the module itself, plus any imported NAME that is a submodule.
+        # Everything else imported from it is a symbol, not a dependency.
+        names = [node.module]
+        names += [
+            f"{node.module}.{a.name}"
+            for a in node.names
+            if package_module_file(f"{node.module}.{a.name}")
+        ]
+        return names
     names = [head] if head else []
     # ``from utils.tiled_io import open_lazy`` -- follow into the submodule, but ONLY
     # when the head is itself local. Taking the last component unconditionally turned
@@ -547,13 +579,15 @@ def _reachable_local_files(script, root=None):
         if cur in seen:
             continue
         seen.add(cur)
-        path = local_files.get(Path(cur).stem)
+        # a dotted first-party-package name resolves to its file under packages/*/src;
+        # a bare name is a bin/ module stem, as before
+        path = package_module_file(cur) or local_files.get(Path(cur).stem)
         if path is None or not path.is_file():
             continue
         files.append(path)
         for node in ast.walk(ast.parse(path.read_text())):
             for n in _import_names(node, local_files, local_pkgs):
-                if n in local_files or n in local_pkgs:
+                if n in local_files or n in local_pkgs or package_module_file(n):
                     queue.append(n)
     return files, local_files, local_pkgs
 
@@ -577,11 +611,88 @@ def _third_party_imports(script, root=None):
     for path in files:
         for node in _module_level_imports(ast.parse(path.read_text())):
             for n in _import_names(node, local_files, local_pkgs):
-                if n in local_files or n in local_pkgs:
+                if n in local_files or n in local_pkgs or package_module_file(n):
                     continue
                 elif n not in _STDLIB_OK:
                     third.add(n)
     return third
+
+
+def _first_party_packages_reached(script):
+    """Import names from FIRST_PARTY_PACKAGES that ``script`` reaches at MODULE scope
+    (its own or a local file's), i.e. the packages the image running it must install."""
+    files, local_files, local_pkgs = _reachable_local_files(script)
+    reached = set()
+    for path in files:
+        for node in _module_level_imports(ast.parse(path.read_text())):
+            for n in _import_names(node, local_files, local_pkgs):
+                head = n.split(".")[0]
+                if head in FIRST_PARTY_PACKAGES and package_module_file(n):
+                    reached.add(head)
+    return reached
+
+
+def _first_party_packages_installed(container):
+    """Import names from FIRST_PARTY_PACKAGES this Dockerfile COPYs and pip-installs.
+
+    Read off the comment-stripped Dockerfile: a `COPY <src dir> <dest>` of the package's
+    repository directory followed by a `pip install ... <dest>` (any flags, the same
+    continuation-joined form ``_dockerfile_pip_tokens`` parses). Both halves are
+    required; a COPY that is never installed is a stray file, not a dependency.
+    """
+    text = re.sub(r"\\\s*\n", " ", _dockerfile(container))
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
+    body = "\n".join(lines)
+    found = set()
+    for name, (src_dir, _dist) in FIRST_PARTY_PACKAGES.items():
+        for m in re.finditer(rf"^\s*COPY\s+{re.escape(src_dir)}/?\s+(\S+)", body, re.M):
+            dest = m.group(1).rstrip("/")
+            if re.search(
+                rf"pip3?\s+install\b[^\n&]*\s{re.escape(dest)}/?(?:\s|$)", body
+            ):
+                found.add(name)
+    return found
+
+
+def test_the_first_party_package_walker_follows_the_shim_into_the_package():
+    """Non-vacuity for the package-aware walk: bin/tiled_coarse.py is a shim over
+    stare.stages.coarse, and following it must reach the package's coarse_align.py --
+    the file that holds the COARSE anchor (and whose imports this walk must therefore see)."""
+    files, _, _ = _reachable_local_files("tiled_coarse.py")
+    names = {p.name for p in files}
+    assert "tiled_coarse.py" in names and "coarse.py" in names, sorted(names)
+    assert "coarse_align.py" in names, sorted(names)
+    assert _first_party_packages_reached("tiled_coarse.py") == {"stare"}
+    assert "stare" not in _third_party_imports("tiled_coarse.py")
+
+
+@pytest.mark.parametrize("container", _container_dirs())
+def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
+    """The `stare` twin of the bioio rule: a shim that imports the package at module
+    scope fails at import in any image that did not pip-install packages/stare -- and
+    an image that installs it while none of its scripts reach it carries dead weight."""
+    reached = set()
+    for script in _module_container_and_scripts().get(container, set()):
+        reached |= _first_party_packages_reached(script)
+    installed = _first_party_packages_installed(container)
+    assert reached <= installed, (
+        f"containers/{container} runs scripts that import "
+        f"{sorted(reached - installed)} at module scope but its Dockerfile does not COPY "
+        "and pip-install that package directory (see FIRST_PARTY_PACKAGES)."
+    )
+    assert installed <= reached, (
+        f"containers/{container} installs first-party package(s) "
+        f"{sorted(installed - reached)} that none of its scripts import."
+    )
+
+
+def test_the_first_party_install_scan_reads_the_stare_dockerfile():
+    """Non-vacuity: the scan must find the one install that exists, and must NOT be
+    satisfied by a COPY alone (a probe Dockerfile with the COPY but no pip line)."""
+    assert _first_party_packages_installed("stare") == {"stare"}
+    probe = "COPY packages/stare /tmp/stare\nRUN echo no install\n"
+    text = re.sub(r"\\\s*\n", " ", probe)
+    assert not re.search(r"pip3?\s+install\b[^\n&]*\s/tmp/stare(?:\s|$)", text)
 
 
 def test_walker_ignores_imports_nested_in_function_bodies(tmp_path):
@@ -642,32 +753,24 @@ REQUIRED_RUNTIME_IMPORTS = {
             "is called, on every .svs/.qptiff/.vsi/.scn/.mrxs/.bif/.ims read."
         ),
     },
-    "tiled": {
-        "torch": (
-            "bin/utils/coarse_align.py's estimate_rigid -- tiled_coarse.py's single "
-            "coarse-alignment entry point -- calls _frontend_disk_lightglue "
-            "unconditionally, which imports torch lazily (confined there by "
-            "test_tiled_container_torch_kornia_imports_are_confined_to_disk_lightglue "
-            "below). requirements/torch-cpu.txt installs the CPU wheel."
-        ),
-        "kornia": (
-            "same _frontend_disk_lightglue call as torch above (DISK+LightGlue feature "
-            "matching); requirements/kornia.txt installs it, deliberately AFTER torch "
-            "(see containers/tiled/Dockerfile's ordering note -- kornia drags the CUDA "
-            "torch wheel from PyPI otherwise)."
-        ),
+    "stare": {
+        # torch/kornia USED to be listed here (for the retired containers/tiled): COARSE's
+        # anchor was DISK + LightGlue. Since 2026-09-27 it is an FFT NCC rotation sweep with a
+        # scikit-image ORB fallback and imports neither
+        # (test_tiled_coarse_imports_no_learned_stack below), and containers/stare installs
+        # neither.
         "zarr": (
-            "bin/utils/tiled_io.py's open_lazy (tifffile's aszarr region-read view) is "
-            "called directly by tiled_coarse.py, tiled_reg_tile.py and tiled_stitch.py "
-            "for every streamed tile read."
+            "stare/slide_io.py's open_lazy (tifffile's aszarr region-read view; the "
+            "package's copy of bin/utils/tiled_io.py) is called directly by the coarse, "
+            "reg_tile and stitch stages for every streamed tile read."
         ),
         "scipy": (
-            "bin/utils/tile_residual.py's residual_displacement -- called from "
-            "tiled_reg_tile.py's main flow -- imports scipy.ndimage.gaussian_filter."
+            "stare/tile_residual.py's residual_displacement -- called from the "
+            "reg_tile stage's main flow -- imports scipy.ndimage.gaussian_filter."
         ),
         "skimage": (
-            "bin/utils/tile_residual.py's foreground_fraction/residual_displacement "
-            "(both called from tiled_reg_tile.py) import skimage.filters/.registration."
+            "stare/tile_residual.py's foreground_fraction/residual_displacement "
+            "(both called from the reg_tile stage) import skimage.filters/.registration."
         ),
     },
     "cellsam": {
@@ -930,38 +1033,35 @@ def _torch_kornia_import_sites(path):
     return sites
 
 
-def test_tiled_container_torch_kornia_imports_are_confined_to_disk_lightglue():
-    """torch/kornia must be imported ONLY inside ``_frontend_disk_lightglue``, never at module
-    scope.
+def test_tiled_coarse_imports_no_learned_stack():
+    """COARSE's files must not import torch or kornia ANYWHERE -- not even lazily.
 
-    This began as the premise behind two exemptions from an older allowlist, back when
-    torch/kornia shipped in a separate image and the import inside :tiled was meant to fail.
-    :tiled now installs both (and ``REQUIRED_RUNTIME_IMPORTS["tiled"]`` declares them,
-    proven reached by ``test_required_runtime_imports_are_actually_reached`` above), but this
-    confinement rule survives that change on its OWN reasoning, independent of the walker
-    entirely: ``import torch`` at module scope in ``coarse_align.py`` would make the module --
-    and therefore ``bin/tiled_coarse.py`` -- UNIMPORTABLE anywhere torch is absent. That is not
-    hypothetical. ``coarse_align.py`` is imported by the tiled oracle
-    (``bin/utils/tiled_pipeline.py``) and by this test suite, and it must keep importing on a
-    plain checkout with no ML stack, so that ``estimate_transform_from_matches``,
-    ``normalize_intensity``, ``scale_transform_to_full_res`` and every test that does not touch
-    DISK keep working. It is also what turns a torch-less environment into an actionable
-    RuntimeError at CALL time instead of an ImportError at import time.
-
-    The confinement is what lets ``_disk_models`` take the model classes as ARGUMENTS instead
-    of importing them; see the comment above it in coarse_align.py.
+    This replaced a confinement rule (imports allowed only inside ``_frontend_disk_lightglue``)
+    when the DISK + LightGlue anchor was retired for an NCC rotation sweep with an ORB fallback
+    (2026-09-27). The anchor now runs on numpy/scipy/scikit-image alone, so a reappearing
+    import is either a regression to the learned stack or dead weight, and either way it would
+    tie the tiled image back to ~1 GB of wheels it is about to drop.
     """
     offenders = []
-    for rel in ("bin/utils/coarse_align.py", "bin/tiled_coarse.py"):
+    for rel in (
+        "packages/stare/src/stare/coarse_align.py",
+        "packages/stare/src/stare/stages/coarse.py",
+        "bin/utils/coarse_align.py",
+        "bin/tiled_coarse.py",
+    ):
         for fn, lineno in _torch_kornia_import_sites(REPO / rel):
-            if fn != "_frontend_disk_lightglue":
-                offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
+            offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
     assert not offenders, (
-        "torch/kornia is imported outside _frontend_disk_lightglue in a script the tiled "
-        f'container runs: {offenders}. The ("tiled", "torch")/("tiled", "kornia") '
-        "REQUIRED_RUNTIME_IMPORTS entries assume the import is confined there; a second "
-        "import site needs its own justification, not a free ride on this one."
+        f"torch/kornia is imported by a COARSE file again: {offenders}. The anchor is "
+        "numpy/scipy/scikit-image only; see stare/coarse_align.py's module docstring."
     )
+
+
+def test_the_torch_kornia_import_detector_still_fires(tmp_path):
+    """Non-vacuity for the rule above: a nested and a module-scope import are both found."""
+    probe = tmp_path / "probe.py"
+    probe.write_text("import torch\ndef f():\n    from kornia.feature import DISK\n")
+    assert _torch_kornia_import_sites(probe) == [(None, 1), ("f", 3)]
 
 
 @pytest.mark.parametrize(

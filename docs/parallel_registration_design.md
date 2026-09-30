@@ -1,15 +1,17 @@
-# STARE — a fully-parallel, tiled registration method for mirage
+# STARE (Scalable Tile-parallel Alignment by Robust Estimation) — a fully-parallel, tiled registration method for mirage
 
 > **Superseded in part.** This document records the design as it was implemented on
 > `feat/tiled-registration`, when COARSE's anchor was a classical corner detector. For
-> v1.0.0 that front-end was replaced by the learned DISK + LightGlue matcher and the three
-> classical alternatives were deleted outright, which changes COARSE's memory model from
-> nearly-flat to linear in thumbnail AREA.
+> v1.0.0 that front-end was replaced by the learned DISK + LightGlue matcher (a U-Net, ~48 GB
+> asked at the old 2048 px tier), and on 2026-09-27 THAT was replaced by an FFT NCC rotation
+> sweep at 256 px, refined at the `reg_tiled_coarse_max_dim` thumbnail, with a scikit-image ORB
+> fallback and a loud refusal (`packages/stare/src/stare/coarse_align.py`;
+> `research/stare-optimal-design-2026-09-27.md` §1). COARSE is small again: 0.25–0.43 GB peak
+> RSS for the whole stage at every tier, 2 GB requested.
 >
-> **What that invalidated, and has been corrected in place:** §5's memory table and
-> paragraph, §5's COARSE row and primitive-split sentence, §1's constraint 2, and every
-> "≤8 GB / laptop" claim that rested on the old front-end. STARE is **not** laptop-sized at
-> the shipped `high` tier — COARSE alone asks ~48 GB. Anything in this file still phrased in
+> **What those changes invalidated, and has been corrected in place:** §5's memory table and
+> paragraph, §5's COARSE row and primitive-split sentence, §1's constraint 2, and §11's
+> sparse-tissue note. Anything in this file still phrased in
 > the past tense about a corner detector (§5's OOM anecdote, the §"Implementation status"
 > phase list, §11's sparse-tissue note) is a record of what the method USED to be and is
 > left as written.
@@ -18,6 +20,24 @@
 > decomposition, the halo contract, the streaming reads, and everything downstream of
 > COARSE. `bin/tiled_coarse.py` cites this file for the thumbnail rationale, which still
 > holds — and holds harder now that the thumbnail bound is the memory knob.
+>
+> **Added 2026-09-12 — the SOLVE stage is no longer empty, and the method is a package.**
+> §6b below describes the `robust` solver (`stare.solve`: neighbour-consistency rejection,
+> in-fill, Tikhonov smoothing, invertibility check) that replaced "lay the translations on the
+> grid and zero-fill", selectable against the byte-identical `legacy` path by
+> `reg_tiled_solver`. §3's "no global solve" and §9.1's novelty claim are corrected in place.
+> The four stages now live in `packages/stare/` (`pip install -e packages/stare`, CLI `stare`);
+> `bin/tiled_*.py` are shims over it.
+>
+> **Added 2026-09-27 — STARE v2 replaced REG_TILE and SOLVE.** Each tile now measures a GRID
+> of window vectors on one slide-global lattice (`reg_tiled_stride`, window `2 × stride`;
+> `stare.vector_grid`) instead of one control point, and SOLVE is `dctpls` only: robust affine +
+> robust DCT-PLS on that lattice, per-vector σ calibrated by peak ratio, a cubic B-spline mesh,
+> no TRE dead zone. The `legacy` and `robust` solvers, the TRE gate (`reg_tiled_gate_tre`), the
+> confidence gate (`reg_tiled_max_error`), `reg_tiled_solver` and `reg_tiled_upsample` were
+> **removed**, and SOLVE refuses a control JSON without `vectors` — a pre-v2 run's control files
+> cannot be re-solved; re-run REG_TILE. §6's one-control-point-per-tile description and §6b's
+> gate/solver tables are kept below as history, marked superseded.
 
 **Status:** implemented on branch `feat/tiled-registration` (Phases 1–2 + Nextflow wiring, 56
 Python tests, JVM-free stub run green). Remaining: reg_qc=2 seg-QC Nextflow dispatch, the slim
@@ -47,11 +67,9 @@ A second `registration_method` alongside `valis` that is:
    process fits in ≤8 GB", on measured peaks of COARSE 0.91 GB, REG_TILE 1.31 GB,
    SOLVE <1.31 GB, STITCH 1.35 GB on a 16384² 2-channel slide.)* Everything downstream of the
    anchor still holds that bound and is region-streamed: REG_TILE, SOLVE and STITCH are all
-   well under 8 GB regardless of slide size. **COARSE is not**: its matcher is now DISK, a
-   U-Net whose activations scale with thumbnail area, so it asks **~48 GB at the shipped
-   `high` tier** (`reg_tiled_coarse_max_dim` 2048) and ~5 GB at `low` (512). STARE is
-   therefore a *cluster* backend at its default tier; `--reg_tiled_mode low` is what makes it
-   workstation-viable. (A single-task `TILED_REGISTER` alternative existed behind a flag; it
+   well under 8 GB regardless of slide size, and since 2026-09-27 so is COARSE again (its
+   anchor is an FFT NCC rotation sweep, 0.25–0.43 GB measured; from v1.0.0 until then it was a
+   DISK U-Net asking ~48 GB at the `high` tier, which made STARE a cluster-only backend). (A single-task `TILED_REGISTER` alternative existed behind a flag; it
    could not hold even the old bound — both whole slides plus an all-channel float32 copy and
    the full warped output live at once — so the flag and the process were removed rather than
    left as an unbounded opt-out.) No JVM, no BioFormats, no whole-slide-in-RAM step. The
@@ -99,6 +117,11 @@ and cyclic-IF re-stains the **same physical section** across cycles. Two consequ
 - **The reference is the global coordinate frame.** Any slide — or any *tile* — that registers to
   the corresponding reference region gets **absolute coordinates for free**. No inter-image or
   inter-tile reconciliation, hence **no tree, no global solve.**
+  *(Corrected 2026-09-12: no tree and no ordering problem, but there IS a small solve. ASHLAR's
+  spanning tree was never only a positioning device — it is also its cross-tile consistency
+  check, and dropping it dropped that check. §6b restores neighbour consistency on the control
+  grid without a tree: a per-tile measurement that disagrees with its neighbours is rejected and
+  bridged from them. The solve runs on kilobytes and never touches the fan-out.)*
 - **Topology is a star:** every moving slide → the reference, independently and in parallel.
 
 The whole design is: make that star *tiled* (for the ≤8 GB memory bound) and *TRE-instrumented*
@@ -146,9 +169,9 @@ shape for free.
 ```
 per patient  (patients already parallel)
  └─ per moving slide  (STAR: each slide → the fixed reference, independent)
-     COARSE    thumbnail match (DISK + LightGlue) → global rigid M₀    ~48 GB @ high
-               # learned features absorb inter-cycle ROTATION/scale; per slide.
-               # NOT cheap: peak is linear in thumbnail AREA -- see the table below
+     COARSE    thumbnail NCC rotation sweep (+ORB fallback) → rigid M₀  <0.5 GB
+               # 256 px sweep over 0-360 deg absorbs inter-cycle ROTATION; per slide;
+               # refined at reg_tiled_coarse_max_dim; REFUSES when ambiguous
      TILE      stream tiles from the tiled OME-TIFF (region reads, halo)      ~1 GB
                # low-mem split; no whole-slide load
      REG_TILE  per tile ∥: moving DAPI tile + reference region (placed by M₀) ≤8 GB
@@ -162,11 +185,16 @@ per patient  (patients already parallel)
  └─ emit: registered slide + intrinsic TRE (per-slide table + spatial heatmap)
 ```
 
-**Primitive split (falls out of the architecture):** COARSE uses feature matching — learned
-keypoints and a learned matcher (DISK + LightGlue) as of v1.0.0 — because inter-cycle
-repositioning can carry rotation and small scale; after M₀ the per-tile residual is
-near-pure-translation, so REG_TILE uses **phase-correlation** (ASHLAR's whitened, Hann-windowed
-`phase_cross_correlation`) — cheapest possible, no keypoints needed.
+**Primitive split (falls out of the architecture):** COARSE searches rotation exhaustively —
+a globally normalised cross-correlation (NCC) sweep over 0–360° in 3° steps on a 256 px tissue
+thumbnail (half a step off the peak keeps ≥ 96 % of the correlation on every synthetic test
+geometry at the σ = 1 px blur, measured in Phase 5e), refined at the anchor thumbnail, with
+ORB + RANSAC only as a fallback (DISK + LightGlue from v1.0.0 to 2026-09-27) — because
+inter-cycle repositioning can carry any rotation, including a 180° flip; SOLVE's robust affine
+absorbs residual scale/shear; after M₀ the per-tile residual is
+near-pure-translation, so REG_TILE uses plain **FFT cross-correlation** of Hann-windowed crops
+after a DoG high-pass (a Gaussian σ=3 subtracted), analogous to ASHLAR's Laplacian/LoG
+whitening — cheapest possible, no keypoints needed.
 
 **Memory, per step — and the knob that controls each.** *(This heading used to read "memory
 sanity-check (8 GB is generous)"; COARSE broke that premise, see below.)* This table
@@ -177,22 +205,19 @@ implemented with a full-resolution ORB over an eagerly decoded slide, and OOM-ki
 
 | step | peak driver | ~peak | knob | what you pay for cheapening it |
 |---|---|---|---|---|
-| COARSE | DISK + LightGlue over the anchor thumbnail | ~48 GB at the shipped tier | `--reg_tiled_coarse_max_dim` (2048) | M0 residual scales with the decimation factor; it must stay well inside `--reg_tiled_halo` |
+| COARSE | a few FFT canvases of the anchor thumbnail + 64 MB read bands | 0.25–0.43 GB (whole stage) | `--reg_tiled_coarse_max_dim` (1024) | M0 quantisation grows with the decimation factor; it must stay well inside `--reg_tiled_halo` |
 | REG_TILE | one DAPI tile + halo, both slides | ~50 MB | `--reg_tiled_tile` (2048), `--reg_tiled_halo` (256) | smaller tiles → finer mesh but more tasks; smaller halo → less tolerance for M0 error |
 | SOLVE | control points only (kB) | ~10 MB | — | — |
 | STITCH | one output write-tile, all channels | ~100 MB | `--reg_tiled_out_tile` (1024) | smaller tiles → more write calls, no accuracy cost |
 
-COARSE's memory is the term worth internalising, and it changed for v1.0.0. The anchor's matcher
-is now DISK, a U-Net, which allocates activations over the WHOLE plane it is handed: measured on
-the pinned stack (torch 2.3.1 / kornia 0.7.3, CPU) at **3.03 GB for a 512 px thumbnail and 8.78 GB
-for 1024 px**, a clean linear-in-megapixels fit of **`GB ≈ 1.1 + 7.3 · Mpx`**. That is ~20x the
-classical detector this design was written against, and *linear in area* rather than nearly flat —
-so `reg_tiled_coarse_max_dim` is no longer a mild accuracy/cost dial but the thing that decides
-whether the step runs at all. 4096 px extrapolates to ~123 GB, which is why the tier column tops
-out at 2048, and why `TILED_COARSE`'s memory request is derived from this same bound rather than
-being a flat constant. A native-resolution gigapixel plane is thousands of GB, which is why the
-anchor is estimated on a thumbnail and `reg_tiled_coarse_max_dim` — not tile size — is the knob
-that bounds COARSE. Everything else is genuinely region-streamed: `tiled_io.open_lazy` region reads for
+COARSE's memory changed twice. For v1.0.0 the anchor became DISK, a U-Net whose activations
+scale with thumbnail AREA (measured `GB ≈ 1.1 + 7.3 · Mpx`: 3.03 GB at 512 px, 8.78 GB at
+1024 px), which made `reg_tiled_coarse_max_dim` the thing that decided whether the step ran at
+all. On 2026-09-27 it became an FFT NCC rotation sweep (256 px) refined at that bound, whose
+working set is a few thumbnail-sized canvases: the whole TILED_COARSE stage measured 0.25 GB at
+512 px, 0.43 GB at 1024 and 0.40 GB at 2048, band reads of a 16k² tiled OME-TIFF pair
+included, so the bound is now a CPU knob. It is still what keeps a native-resolution plane
+away from the anchor. Everything else is genuinely region-streamed: `tiled_io.open_lazy` region reads for
 REG_TILE and STITCH, byte-budgeted row bands for COARSE's decimated read.
 
 Tile size *is* the mesh-grid resolution knob: smaller tiles → finer non-rigid but more tasks;
@@ -201,6 +226,12 @@ Tile size *is* the mesh-grid resolution knob: smaller tiles → finer non-rigid 
 ---
 
 ## 6. TRE + seam continuity (the two quality mechanisms)
+
+> **Superseded 2026-09-27 (STARE v2).** A tile no longer contributes one control point: it
+> contributes one window vector per lattice node it owns (`reg_tiled_stride` px apart), and
+> there is no TRE gate — SOLVE never writes `dᵢ = 0` for a small displacement. The seam
+> argument below still holds: the mesh is one continuous field (now cubic B-spline) that STITCH
+> and the reg_qc=2 warper both sample through `MeshField.from_spec`.
 
 **TRE — intrinsic, VALIS `error_df` semantics.** Each REG_TILE scores the residual of the
 phase-correlation match *after* applying its transform — a Target Registration Error per tile,
@@ -214,6 +245,85 @@ control-point** `dᵢ` at its centre `cᵢ`; the actual warp is a *single contin
 construction. WARP_TILE and the reg_qc=2 warper sample the **same** `F`, so QC measures exactly
 what shipped. Manifest = `M₀` + control grid (KB). TRE-gated tiles that don't refine just
 contribute `dᵢ = 0` — the interpolation stays smooth.
+
+---
+
+## 6b. The SOLVE stage (added 2026-09-12)
+
+> **Superseded 2026-09-27 (STARE v2).** Everything in this section up to "Since 2026-09-27"
+> describes solvers that were **removed**: the three gates, `robust` and `legacy`, and the
+> `reg_tiled_solver` / `reg_tiled_gate_tre` / `reg_tiled_max_error` parameters no longer exist.
+> SOLVE is `dctpls` on the vector lattice only; the one remaining gate is the range gate
+> (`reg_tiled_max_disp`, default the halo). Kept as the record of what was measured and why it
+> was replaced; the arm results for the old solvers live on the `benchmarking` branch.
+
+Until this date SOLVE contained no algorithm: after the three gates (confidence, range, TRE)
+it laid the accepted per-tile translations on the grid, median-filtered them over accepted
+cells only, and left every rejected or unmeasured cell at `[0, 0]` — a *step* in the field
+wherever a tile was dropped, and no defence against a **confident but wrong** tile (a partly
+blank crop that correlated against the wrong structure passes every single-tile score; see
+the "KNOWN, UNCLOSED EXPOSURE" note that used to sit in `bin/tiled_solve.py`). Every comparable
+method — approximating TPS, elastix FFD, RegWSI's diffusive solve, PIV — goes *reject →
+regularise → densify*. `stare.solve` now does the same, on the control grid, numpy/scipy only:
+
+| step | what | parameter | source |
+|---|---|---|---|
+| gates | confidence (`error ≤ max_error`), range (`|d| < max_disp`), TRE (`tre ≥ gate_tre`) | `reg_tiled_max_error`, `reg_tiled_max_disp`, `reg_tiled_gate_tre` | unchanged |
+| neighbour consistency | normalised median test: reject a cell whose displacement differs from the median of its accepted 8-neighbours by > 2.0 median-absolute-deviations (+ 0.1 px noise floor); cells with < 3 accepted neighbours are not judged | `nmt_threshold = 2.0`, `nmt_epsilon = 0.1` | Westerweel & Scarano 2005, *Exp. Fluids* 39 |
+| in-fill | a rejected or unmeasured cell takes the inverse-distance-weighted mean of accepted cells within 2 grid steps; beyond reach it stays 0, so the field decays into background instead of extrapolating | `infill_radius = 2` | — |
+| smoothing | Tikhonov: `argmin_u Σ wᵢ|uᵢ − dᵢ|² + λ Σ|∇u|²`, `wᵢ = 1 − errorᵢ` on measured cells, 0.25 on in-filled ones, sparse solve | `λ = 1.0` (grid units) | Rohr et al. approximating TPS; RegWSI's diffusive term |
+| invertibility | STITCH inverts `F` by fixed-point iteration, which converges when the field's Lipschitz constant is < 1 (Chen et al. 2008). The Jacobian of `u` on the grid is reported (max operator norm, min `det(I + J)`); if the norm reaches 0.9 the field is scaled to it and the manifest says so | `max_lipschitz = 0.9` | Chen et al. 2008; Kuang et al. 2019 |
+
+`reg_tiled_solver = 'robust'` selects this; `'legacy'` reproduces the pre-2026-09-12
+mesh byte-for-byte (`packages/stare/tests/test_solve.py` pins it against a verbatim copy of
+the old stage). The solver's name and diagnostics are recorded in the manifest and in
+`*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
+changes with the solver, the arm benchmark carries it as an axis rather than silently moving the
+default: `docs/benchmarks_real.md`, "Re-running a subset after a code change".
+
+**Since 2026-09-27 the default is `dctpls`**, not `robust`. On the 16-tile synthetic slide
+`robust` scored 8.7 px median against 2.2 px for the raw tile vectors, for conceptual rather
+than tuning reasons (`research/stare-optimal-design-2026-09-27.md` §0): the TRE gate
+hard-zeroes sub-gate vectors and those zeros poison the median test; a first-order Tikhonov
+penalty is not affine-invariant and shrinks M0's residual rotation; and `1 − error` weights
+have no fixed scale, so λ means a different amount of smoothing on every dataset. `dctpls`
+removes a Huber-IRLS affine first, then smooths the residual by robust DCT-PLS (Garcia 2010,
+thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block
+cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). Both robust steps
+scale a residual vector's NORM by its Rayleigh median (`median |r| / 1.1774`, not the 1-D
+`1.4826 × MAD`) and take their cutoffs from χ²₂ (Huber 2.448σ, bisquare 5.06σ): on clean
+Gaussian residuals Huber down-weights 5 %, not the 67 % the 1-D scale gave (Phase 5b,
+`research/stare-step-support-2026-09-27.md` S1). True h-block CV (a 1-cell buffer ring,
+Burman et al. 1994) is chosen per slide since Phase 5e (Valavi et al. 2019): the noise's lag-1
+correlation is estimated from the plain block-CV fit's residuals (sign correlation, corrected
+for the smoother's imprint against iid and 50 %-overlap reference noise) and the ring is used
+only above 0.2, and refused if it then picks a flat field (s ≥ 1e5: lattice-scale signal,
+not noise) (`residual_lag1_rho`, `cv_buffer`, `smoothing_selection` `hblock_cv` vs
+`block_cv`); on the synthetic slide it reads 0.06–0.09 and stays off, where it had raised the
+field error ~50 %. It has no TRE dead
+zone, weights a control by `1/σ²` when it carries `sigma` (else 1), fills unmeasured tiles
+from the smoother, and reports the field's Lipschitz constant and min `det(I + J)` as a fold
+certificate (`fold_certificate_ok` when L < 0.5) without ever rescaling the field.
+
+**STARE v2 (2026-09-27): the vector lattice, and dctpls only.** REG_TILE measures one window
+vector per `reg_tiled_stride` px (window `2 × stride`, 50 % overlap) on a slide-global lattice,
+foreground-masked, in two passes (quarter-resolution capture, then full resolution with a
+3-point Gaussian peak fit on the correlation minus its local minimum, Xue et al. 2014, with a
+parabolic fallback whose per-tile rate is recorded as `gauss_fallback_rate`), keeping a vector
+only when its correlation peak ratio clears 1.2.
+SOLVE lays every tile's vectors on that lattice, drops those at or beyond `reg_tiled_max_disp`,
+solves them with the `dctpls` core above, calibrates each vector's σ from block-CV held-out
+residuals binned by peak ratio on folds 0/2/4 and scores it on the disjoint folds 1/3
+(`coverage_1sigma`, `rms_error_over_rms_sigma`), re-solves once at `w = 1/σ²` with the same
+smoothing parameter, re-indexes the field to the moving frame STITCH evaluates it in (fixed
+point iterated to 1e-3 px, residual reported as `reindex_residual_px`), certifies folds on the
+cubic interpolant itself (Jacobian every stride/4), and writes a cubic B-spline mesh. STITCH
+inverts it by the fixed point `v = u − F(v)` iterated per point to a 1e-3 px step (cap 50,
+logged, and a WARNING if the cap is hit) rather than a fixed 3 steps, which left up to 12.5 px
+at the certificate's edge L = 0.5 (Phase 5e). The per-tile median of the
+vectors is still written as the tile's `dx`/`dy`/`tre` for the TRE heatmap; the correlation
+`error` is recorded but gates nothing. `legacy`, `robust` and the one-point-per-tile path were
+deleted with their parameters; SOLVE refuses a control JSON without `vectors`.
 
 ---
 
@@ -289,14 +399,17 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
 
 ## 9. What is genuinely new here
 
-1. **Reference-anchored tiled registration — tiling without a global solve.** ASHLAR must run an
-   MST to make tiles consistent because it has no reference; STARE registers each tile to the
-   reference region, so absolute position is free and there is no inter-tile solve. Tiling
-   composes with the star instead of needing a tree.
+1. ~~**Reference-anchored tiled registration — tiling without a global solve.**~~ **Retracted
+   2026-08-25 (research fleet) and corrected 2026-09-12.** ASHLAR's *cycle-registration* phase
+   has anchored later cycles' tiles to a fixed reference since 2021, so reference anchoring is
+   prior art; and its spanning tree is also its cross-tile consistency check, which STARE had
+   dropped rather than replaced. What survives as a differentiator is the combination in §9.2–4
+   plus a **non-rigid**, WSI-to-WSI solve that restores neighbour consistency on a grid without a
+   tree (§6b) — an engineering contribution, to be claimed as such.
 2. **Registration-as-a-DAG-of-≤8 GB-processes.** The archived tiled path tiled only the *warp*
    (monolithic VALIS `REG_PREP`); STARE tiles the *registration estimation* itself, JVM-free.
-3. **Intrinsic per-tile TRE → a spatial error heatmap** that doubles as the refinement gate —
-   quality metric and control signal are the same object.
+3. **Intrinsic per-tile TRE → a spatial error heatmap.** (Until STARE v2 it doubled as the
+   refinement gate; v2 retired the TRE gate, so the heatmap is a diagnostic only.)
 4. **Non-negativity by construction** (convex resample + convex blend), not post-hoc clipping.
 
 ---
@@ -328,9 +441,10 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
   viability failure. STARE differs fundamentally (JVM-free, per-*tile registration*, mesh-warp
   continuity). Confirm with the author whether any removal reason must be designed around.
 - **Sparse-fluorescence COARSE.** *(Written against the classical detector: ORB on DAPI needed
-  enough keypoints.)* DISK is a learned detector and finds keypoints on far sparser tissue, but
-  the concern is not retired — phase-correlation on the thumbnail remains the M₀ fallback if a
-  slide is sparse enough that even DISK under-matches.
+  enough keypoints.)* The anchor now matches tissue SHAPE by NCC at 256 px, which does not need
+  keypoints; a slide too sparse or too symmetric for a distinct correlation peak falls back to
+  ORB, and if that also fails COARSE REFUSES (the task fails naming both slides and the scores)
+  rather than emitting an unverifiable M₀.
 - **Output frame.** Anchor to the reference slide's native grid (identity for the reference), so
   registered pixel coordinates match what postprocessing/segmentation expects.
 - **OME channel manifest.** STITCH must still emit `channels_manifest.json` (filename → OME

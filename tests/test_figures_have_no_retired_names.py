@@ -46,7 +46,7 @@ FIGURES_DIR = REPO_ROOT / "docs" / "figures"
 RETIRED = {
     r"(?<![A-Za-z0-9])orb(?![A-Za-z0-9])": (
         "the classical ORB front-end is deleted",
-        "bin/utils/coarse_align.py has no _frontend_orb; the only front-end is "
+        "packages/stare/src/stare/coarse_align.py (bin/utils/coarse_align.py shims it) has no _frontend_orb; the only front-end is "
         "_frontend_disk_lightglue",
     ),
     r"(?<![A-Za-z0-9])sift(?![A-Za-z0-9])": (

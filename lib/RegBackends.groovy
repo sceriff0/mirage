@@ -71,6 +71,18 @@ class RegBackends {
      *                      asking the table.
      *   supportedModes     the run modes this backend may run under. Only 'linear'
      *                      exists on this branch; the dev branch adds 'add_cycle'.
+     *   pairsOutputsBySignature
+     *                      whether the backend returns its registered files WITHOUT the
+     *                      slide identity, so that the adapter must pair them back to
+     *                      their metas by OME channel SET (lib/RegisteredMatch.groovy).
+     *                      VALIS renames its outputs; the tiled adapter keeps each
+     *                      slide's meta through its fan-out. Read at LAUNCH by
+     *                      workflows/mirage.nf to refuse, before any task runs, a
+     *                      patient whose two slides share one channel set -- under such
+     *                      a backend they are indistinguishable after registration, and
+     *                      RegisteredMatch.pair used to be the first thing to say so,
+     *                      after REGISTER had already run the whole group (head_neck
+     *                      patient 046, 12 slides, 2026-09-11).
      *   warp               the lib/WarpBackends.groovy key for this method. Equal to the
      *                      method name today, and stated rather than assumed so that a
      *                      future backend reusing another's warp does not have to be
@@ -78,9 +90,11 @@ class RegBackends {
      */
     static final Map<String, Map> BACKENDS = [
         valis: [adapter: 'VALIS_ADAPTER', segQcJoin: 'per_patient', hasStageCheckpoint: true,
-                hasIntrinsicTre: false, supportedModes: ['linear'],              warp: 'valis'],
+                hasIntrinsicTre: false, supportedModes: ['linear'],              warp: 'valis',
+                pairsOutputsBySignature: true],
         tiled: [adapter: 'TILED_ADAPTER', segQcJoin: 'per_slide',   hasStageCheckpoint: false,
-                hasIntrinsicTre: true,  supportedModes: ['linear'],              warp: 'tiled'],
+                hasIntrinsicTre: true,  supportedModes: ['linear'],              warp: 'tiled',
+                pairsOutputsBySignature: false],
     ].asImmutable()
 
     /** The backend names this table knows, in declaration order. */

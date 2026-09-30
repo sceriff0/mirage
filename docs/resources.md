@@ -145,17 +145,15 @@ concurrency block, after the profiles) and its own error strategy — see
 
 ### Registration — tiled / STARE
 
-Small everywhere **except the coarse anchor**: the tiled backend is JVM-free and
-tile-streamed, so `TILED_REG_TILE`, `TILED_SOLVE` and `TILED_STITCH` need a few GB even for
-large slides. `TILED_COARSE` does not — its DISK matcher is a U-Net whose peak is linear in
-thumbnail **area**, so the row below asks **48 GB at the shipped `high` tier**
-(`reg_tiled_coarse_max_dim` 2048) and ~5 GB at `low` (512). Size `--max_memory` for that
-number, or the clamp turns it into an OOM; `--reg_tiled_mode low` is what makes
-`--registration_method tiled` workstation-viable.
+Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
+at most even for large slides. `TILED_COARSE`'s anchor is an FFT NCC rotation sweep (ORB
+fallback) on a thumbnail bounded by `reg_tiled_coarse_max_dim`: 0.25–0.43 GB peak RSS measured
+for the whole stage at 512–2048 px, so the row below asks 2 GB at every shipped tier. (From
+v1.0.0 until 2026-09-27 it was a DISK U-Net that asked 48 GB at the `high` tier.)
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner | `maxForks` |
 |---|---|---|---|---|---|
-| `TILED_COARSE` | `2` *(label)* | derived from `reg_tiled_coarse_max_dim`, `× attempt` *(withName)* — 48 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
+| `TILED_COARSE` | `2` *(label)* | derived from `reg_tiled_coarse_max_dim`, `× attempt` *(withName)* — 2 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
 | `TILED_REG_TILE` | `2` *(label)* | derived from `reg_tiled_tile` + 2×`reg_tiled_halo`, `× attempt` *(withName)* — 4 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
 | `TILED_SOLVE` | `1` *(label)* | `1 GB × attempt` *(withName)* | `8.h × attempt` *(label)* | partial | — |
 | `TILED_STITCH` | `4` *(label)* | derived from `reg_tiled_out_tile`, `× attempt` *(withName)* — 4 GB at defaults | `4.h × attempt` *(label)* | partial | `10` |
@@ -214,13 +212,11 @@ The STARE method's memory is bounded. Measured peak RSS on a 16384² 2-channel
 tiled OME-TIFF: `TILED_REG_TILE` 1.31 GB, `TILED_SOLVE` < 1.31 GB,
 `TILED_STITCH` 1.35 GB — each set by a parameter (`reg_tiled_tile` +
 `reg_tiled_halo`, `reg_tiled_out_tile`) rather than by slide dimensions.
-`TILED_COARSE` is bounded the same way, by `reg_tiled_coarse_max_dim`, but its
-magnitude is no longer small: the 0.91 GB figure measured above was the old
-classical feature detector, and the DISK matcher that replaced it is a U-Net
-whose activation memory is linear in thumbnail AREA — `GB ≈ 1.1 + 7.3 × Mpx`,
-i.e. 3.03 GB at 512 px and 8.78 GB at 1024 px, ~32 GB at the shipped 2048 px
-`high` tier. It stays bounded by a parameter; it is simply a much larger
-coefficient, which is why the tier column moved down (`lib/RegPresets.groovy`). A single-task `TILED_REGISTER` alternative used to exist behind a flag; it had
+`TILED_COARSE` is bounded the same way, by `reg_tiled_coarse_max_dim`, and is
+small again: its FFT NCC rotation-sweep anchor measured 0.25 GB at 512 px,
+0.43 GB at 1024 and 0.40 GB at 2048 on a 16384² tiled OME-TIFF pair
+(2026-09-27). The DISK U-Net it replaced needed `GB ≈ 1.1 + 7.3 × Mpx`
+(~32 GB at the old 2048 px `high` tier). A single-task `TILED_REGISTER` alternative used to exist behind a flag; it had
 no such bound (both whole slides, an all-channel float32 copy and the full warped output
 live at once, budgeted from file size), so it was removed rather than kept as an unbounded
 opt-out.
@@ -572,7 +568,7 @@ difference is the two new parameters. Guarded by `tests/test_concurrency_params.
 
 Every process pins a fixed image tag — never `:latest`. The `bolt3x/mirage-*` image
 NAMES (one Docker Hub repository per image, e.g. `bolt3x/mirage-preprocess`,
-`bolt3x/mirage-tiled`) are content-descriptive; the TAG on each is an immutable
+`bolt3x/mirage-stare`) are content-descriptive; the TAG on each is an immutable
 SemVer version (`1.0.0`), tied to `manifest.version` — see
 [Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
 
@@ -582,7 +578,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
 | `cdgatenbee/valis-wsi:1.0.0` | `REGISTER` |
-| `bolt3x/mirage-tiled:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
+| `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
 | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
 | `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` *(default)* |

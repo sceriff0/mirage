@@ -18,7 +18,7 @@ months missing three packages: **13 tests failed and 30 more silently
 vanished**, and only the 13 were ever visible. ``cv2``'s absence alone
 deselects 29 tests at module scope without producing a single failure.
 
-``tests/test_disk_test_actually_runs.py`` already invented the right mechanism
+``tests/test_disk_test_actually_runs.py`` (retired 2026-09-27 with the DISK front-end) invented the right mechanism
 -- run the file, grep the output for ``skipped``, fail if found -- for exactly
 ONE file. This generalises it to the whole session, in process, and adds the
 two things a grep cannot do:

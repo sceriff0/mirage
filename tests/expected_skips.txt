@@ -55,7 +55,6 @@ tests/test_ci_stack_pinned.py::test_image_installing_a_constrained_package_reads
 # --- test/benchmark oracle for the STARE registration path (CHANGELOG.md:487-488).
 # --- The skip comes from that file's own permanent allowlist, so this entry is
 # --- a pointer to a decision recorded elsewhere, not a second decision.
-tests/test_no_dead_bin_modules.py::test_bin_utils_module_has_a_real_importer[tiled_pipeline.py]
 
 # --- bin/utils/reg_benchmark.py lost its only production importer,
 # --- bin/registration_benchmark.py, deleted from this branch for release 1.0

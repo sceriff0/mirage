@@ -1,17 +1,12 @@
-# torch, CPU wheel. THE single copy of this pin — read by containers/tiled/Dockerfile and
-# by every CI job that runs the Python suite.
+# torch, CPU wheel, for CI ONLY. No image installs this file any more: bolt3x/mirage-tiled
+# did, for STARE's (then STARE's) DISK + LightGlue COARSE front-end, and that front-end was
+# retired on 2026-09-27 -- its replacement image, containers/stare, is torch-free and its
+# smoke.sh asserts so. What still needs torch in the Python suite is
+# tests/test_valis_matching_bounds.py, which imports it at module scope to exercise the
+# VALIS matcher's torch.no_grad wrapper (VALIS itself runs in its own upstream image).
 #
-# Install this file as its OWN `pip install -r` invocation, BEFORE requirements/kornia.txt.
-# Two reasons, both load-bearing:
-#   * `--index-url` below applies to the ENTIRE pip resolve, not just to the lines in this
-#     file, so this file must never be `-r`-included from another requirements file.
-#   * kornia pulls torch from PyPI (the ~2.5 GB CUDA wheel) if torch is not ALREADY
-#     satisfied, so the order matters.
-#
-# CPU-only deliberately: the cluster never guarantees a GPU-visible node for TILED_COARSE,
-# and containers/tiled/Dockerfile asserts `torch.cuda.is_available()` is False at build
-# time. tests/test_disk_test_actually_runs.py asserts every workflow that runs the pytest
-# suite installs this file, so tests/test_coarse_frontend.py's DISK cases cannot
-# importorskip away in the blocking gate.
+# Install this file as its OWN `pip install -r` invocation: `--index-url` below applies to
+# the ENTIRE pip resolve, not just to the lines in this file, so it must never be
+# `-r`-included from another requirements file.
 --index-url https://download.pytorch.org/whl/cpu
 torch==2.3.1

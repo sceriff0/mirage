@@ -209,14 +209,15 @@ def test_both_halves_of_the_phase_correlation_arrive_at_the_same_precision(
     )
 
     seen = {}
-    real = tiled_reg_tile.residual_displacement
+    # the correlation's two halves enter at the window-vector estimator (stare.vector_grid)
+    real = tiled_reg_tile.estimate_tile_vectors
 
-    def capture(ref_tile, mov_tile, **kw):
+    def capture(ref_tile, mov_tile, *args, **kw):
         seen["ref"] = ref_tile.dtype
         seen["mov"] = mov_tile.dtype
-        return real(ref_tile, mov_tile, **kw)
+        return real(ref_tile, mov_tile, *args, **kw)
 
-    monkeypatch.setattr(tiled_reg_tile, "residual_displacement", capture)
+    monkeypatch.setattr(tiled_reg_tile, "estimate_tile_vectors", capture)
 
     tiled_reg_tile.main(
         [

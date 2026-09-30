@@ -88,3 +88,44 @@ def test_the_scan_sees_the_probe():
         "lib_probe.nf no longer binds any closure, so the second check above "
         "has nothing to walk"
     )
+
+
+# ---------------------------------------------------------------------------
+# ... and on Nextflow 25, whose legacy parser caps a workflow body at 64 K
+# ---------------------------------------------------------------------------
+
+# Java's class-file format stores a string constant in at most 65,535 UTF-8 bytes,
+# and the LEGACY parser (Nextflow 25) keeps a `workflow {}` body's SOURCE as one such
+# constant. Measured 2026-09-13: the block stood at 65,513 bytes, three added lines
+# made it 65,676, and Nextflow 25.04.7 refused the whole script with
+#     Script compilation error - cause: String too long. The given string is 65663
+#     Unicode code units long, but only a maximum of 65535 is allowed.
+# while 26.04.6 (the v2 parser) compiled it fine -- the exact "green on one matrix
+# leg" failure this file exists for, in the other direction. Two sections were moved
+# into def check...() functions above the block (48,577 bytes after), and this pins a
+# margin so the NEXT inline addition fails here, with the reason, not in CI's
+# `NF 25.04.0 stub` leg with a message that names no line.
+WORKFLOW_BODY_CAP = 65_535
+WORKFLOW_BODY_MARGIN = 8_192
+
+
+def _workflow_block_bytes() -> int:
+    text = PROBE.read_text()
+    start = text.index("\nworkflow {\n") + 1
+    return len(text[start:].encode("utf-8"))
+
+
+def test_the_workflow_block_stays_well_under_the_legacy_parser_string_cap():
+    size = _workflow_block_bytes()
+    assert size < WORKFLOW_BODY_CAP - WORKFLOW_BODY_MARGIN, (
+        f"tests/lib_probe.nf's workflow {{}} block is {size} bytes; Nextflow 25's legacy "
+        f"parser stores it as ONE string constant capped at {WORKFLOW_BODY_CAP} and the "
+        f"probe then fails to COMPILE on the `NF 25.04.0 stub` leg (every assertion "
+        f"skipped). Put new checks in a `def checkX()` ABOVE the block and call it, "
+        f"as checkKeepSetRule() and the others do."
+    )
+
+
+def test_the_workflow_block_measure_sees_the_block():
+    """The cap test is only worth anything if the measure found the block."""
+    assert 10_000 < _workflow_block_bytes() < WORKFLOW_BODY_CAP
