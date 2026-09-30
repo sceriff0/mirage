@@ -11,7 +11,7 @@
 # EVERY SUPPLEMENTARY FIGURE, ONE JOB -- S2..S11 + the method mosaic
 # ============================================================================
 # Draws from what the arms ALREADY computed (benchmarks/submit_arms.sh: one results root
-# holding VALIS, STARE v1, DRAPE, ASHLAR and the segmentation arms). Registers nothing,
+# holding VALIS, DRAPE, ASHLAR and the segmentation arms). Registers nothing,
 # segments nothing, launches no pipeline: seconds-to-minutes per figure, so resubmit
 # freely after changing benchmarks/configs/supplementary.yaml.
 #

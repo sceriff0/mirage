@@ -32,11 +32,10 @@
 # them from there. The SWEEP's equivalents land in benchmarks/_handoff/sweep --
 # separate roots, because the two experiments write the same filenames.
 #
-# Prereq (login node, once): the ONE launcher for every method lives on
-# `benchmarking_new_method` (STARE v1 runs from a pinned snapshot it makes itself, so
-# no second checkout and no branch switching -- one checkout, one head, one root) --
+# Prereq (login node, once): the launcher lives on `benchmarking` (one checkout, one
+# head, one results root) --
 #   git -C ~/pipelines/mirage fetch origin
-#   git -C ~/pipelines/mirage checkout benchmarking_new_method
+#   git -C ~/pipelines/mirage checkout benchmarking
 #   git -C ~/pipelines/mirage pull
 # Never switch this checkout's branch while a head job runs: every launch reads its
 # code from here at launch time, not at submission.
@@ -101,10 +100,9 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 #   sbatch --export=ALL,ARMS_RESUME=1,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 \
 #          benchmarks/submit_arms.sh
 #
-# ONE BENCHMARK, EVERY METHOD. This results root holds VALIS, DRAPE (this tree's tiled
-# backend), STARE v1 (pinned_code_arms in arms.yaml: run from a snapshot of the commit
-# that last had it, under $RESULTS/.code/), ASHLAR and the segmentation arms. Choose:
-#   METHODS=valis+stare+drape+ashlar+seg+compute   (`+`-separated -- sbatch --export
+# ONE BENCHMARK, EVERY METHOD. This results root holds VALIS, DRAPE (the tiled backend),
+# ASHLAR and the segmentation arms. Choose:
+#   METHODS=valis+drape+ashlar+seg+compute   (`+`-separated -- sbatch --export
 #                                                   splits on commas; empty = all)
 # A selection also launches what it reads (preprocess_shared, a cross's base, ASHLAR's
 # nuclei arm) as UPSTREAM rows: DONE at once when finished, never moved by ARMS_REPLACE.

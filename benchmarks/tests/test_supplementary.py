@@ -29,7 +29,6 @@ ARMS = {
     # arm dir            source   method  kind
     "valis_high_micro2": ("armB", "valis", "registration"),
     "valis_low_micro0": ("armB", "valis", "registration"),
-    "tiled_high_gate1": ("armA", "stare", "registration"),
     "tiled_high_s128": ("armA", "drape", "registration"),
     "ashlar_t1024_s240": ("armB", "ashlar", "external"),
     # a QC cross re-scores its base: never a candidate for `best`, however high it scores
@@ -102,7 +101,6 @@ def test_best_is_the_top_scored_arm_and_high_the_configured_one(drawn):
     assert picks[("valis", "high")]["arm"] == "valis_high_micro2"
     assert picks[("valis", "best")]["arm"] == "valis_low_micro0"
     assert float(picks[("valis", "best")]["median_dice"]) == pytest.approx(0.88)
-    assert picks[("stare", "high")]["arm"] == "tiled_high_gate1"
     assert picks[("drape", "high")]["arm"] == "tiled_high_s128"
     assert all(p["arm"] != "valis_high_micro2_segstardist" for p in picks.values()), (
         "a QC cross is the same registration measured another way, never a config"
@@ -122,7 +120,7 @@ def test_every_mosaic_set_and_config_shows_the_same_tissue(drawn):
         ]
         assert list(d.glob("P1*_mosaic.png")), d
     names = {k[0] for k in rois}
-    assert names == {f"{s}_high" for s in ("stare", "drape", "all")}, (
+    assert names == {"all_high"}, (
         "the mosaic is drawn at the high tier only (mosaic.configs)"
     )
     for v in ("v1", "v2"):
@@ -132,10 +130,10 @@ def test_every_mosaic_set_and_config_shows_the_same_tissue(drawn):
 
 def test_s4_puts_before_and_each_method_on_one_crop_with_its_values(drawn):
     rc, out = drawn
-    figs = sorted((out / "S4" / "stare_high").glob("v*/P1_stare_high_v*.png"))
+    figs = sorted((out / "S4" / "all_high").glob("v*/P1_all_high_v*.png"))
     assert len(figs) == 2, figs
     crops = set()
-    for method in ("valis", "stare", "drape", "ashlar"):
+    for method in ("valis", "drape", "ashlar"):
         (j,) = list(
             (out / "S4" / "panels" / f"{method}_high" / "v1").glob("*_overlay.json")
         )
@@ -144,20 +142,18 @@ def test_s4_puts_before_and_each_method_on_one_crop_with_its_values(drawn):
     assert len(crops) == 1, f"one crop for every method, got {crops}"
     vals = list(
         csv.DictReader(
-            next((out / "S4" / "stare_high" / "v1").glob("*_values.csv")).open()
+            next((out / "S4" / "all_high" / "v1").glob("*_values.csv")).open()
         )
     )
-    assert [v["method"] for v in vals] == ["VALIS", "STARE", "ASHLAR"]
+    assert [v["method"] for v in vals] == ["VALIS", "DRAPE", "ASHLAR"]
     assert float(vals[1]["median_dice_matched"]) == pytest.approx(0.92)
 
 
 def test_s8_splits_the_scorer_by_case_and_by_panel_pair(drawn):
     rc, out = drawn
-    assert (out / "S8" / "drape_high" / "S8_drape_high.png").is_file()
+    assert (out / "S8" / "all_high" / "S8_all_high.png").is_file()
     by_pair = list(
-        csv.DictReader(
-            (out / "S8" / "drape_high" / "S8_values_by_panel_pair.csv").open()
-        )
+        csv.DictReader((out / "S8" / "all_high" / "S8_values_by_panel_pair.csv").open())
     )
     assert {r["panel_pair"] for r in by_pair} == {"DAPI_CD3", "DAPI_CD8"}, (
         "VALIS (file stem) and the manifest backends (channel set) name a moving slide "
@@ -195,7 +191,7 @@ def test_an_unnamed_tier_means_high_so_best_is_drawn_only_when_asked(
         )
         == 0
     )
-    assert (tmp_path / "o" / "S8" / "drape_best" / "S8_drape_best.png").is_file()
+    assert (tmp_path / "o" / "S8" / "all_best" / "S8_all_best.png").is_file()
 
 
 def test_a_missing_high_arm_falls_back_to_another_high_arm_never_a_lower_tier(
@@ -234,7 +230,7 @@ def test_a_missing_high_arm_falls_back_to_another_high_arm_never_a_lower_tier(
     assert "high tier" in picks[("valis", "high")]["why"]
     assert picks[("drape", "high")]["arm"] == "tiled_high_s128"
     assert sp.tier_of("valis_low_micro0") == "low"
-    assert sp.tier_of("tiled_high_gate1") == "high"
+    assert sp.tier_of("tiled_high_s128") == "high"
     assert sp.tier_of("ashlar_t1024_s240") == ""
 
 
@@ -285,7 +281,7 @@ def test_check_reports_every_figure_and_draws_nothing(unified, tmp_path):
 def test_the_index_lists_every_variant_and_not_the_working_files(drawn):
     rc, out = drawn
     page = (out / "index.html").read_text()
-    assert "mosaic/drape_high/v2/" in page and "S4/drape_high/v1/" in page
+    assert "mosaic/all_high/v2/" in page and "S4/all_high/v1/" in page
     assert "_anchor" not in page and "/panels/" not in page
 
 
@@ -452,3 +448,62 @@ def test_the_cohort_defaults_to_the_arms_samplesheet(unified, tmp_path):
     }
     d = chk["cohort"]["detail"]
     assert "--input samplesheet" in d and "'P7'" in d, d
+
+
+def test_s6_renders_every_backend_at_the_same_several_regions(
+    tmp_path_factory, tmp_path
+):
+    """S6: N regions picked ONCE on the reference, every backend x mask drawn there."""
+    from benchmarks.tests import test_reg_zoom as tz
+
+    src, _ = tz.seg_run.__wrapped__(tmp_path_factory)
+    root = tmp_path / "arm_results"
+    root.mkdir()
+    backends = ("instantseg", "stardist", "cellsam")
+    for m in backends:
+        shutil.copytree(src, root / f"seg_{m}")
+        seg = root / f"seg_{m}" / "csv" / "segmented.csv"
+        seg.write_text(seg.read_text().replace(str(src), str(root / f"seg_{m}")))
+    shutil.copytree(src, root / "valis_high_micro2")
+    plan = tmp_path / "arm_plan.csv"
+    with open(plan, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["run_id", "arm_kind", "arm", "method", "seg_method", "resume_run"])
+        w.writerow(
+            ["valis_high_micro2"] * 1
+            + ["registration", "valis_high_micro2", "valis", "instantseg", ""]
+        )
+        for m in backends:
+            w.writerow([f"seg_{m}", "segmentation", f"seg_{m}", "seg", m, ""])
+    cfg = yaml.safe_load(
+        (sp.REPO_ROOT / "benchmarks" / "configs" / "supplementary.yaml").read_text()
+    )
+    cfg["S6"].update(field_um=20, crop_px=64, regions=3)
+    cfg["options"].update(formats="png", dpi=50)
+    conf = tmp_path / "s.yaml"
+    conf.write_text(yaml.safe_dump(cfg))
+    out = tmp_path / "o"
+    sp.main(
+        [
+            "--results",
+            str(root),
+            "--plan",
+            str(plan),
+            "--config",
+            str(conf),
+            "-o",
+            str(out),
+            "--only",
+            "S6",
+        ]
+    )
+    regions = list(csv.DictReader((out / "S6" / "S6_regions.csv").open()))
+    assert len(regions) == 3
+    assert len({(r["y_px"], r["x_px"]) for r in regions}) == 3
+    for k in (1, 2, 3):
+        for m in backends:
+            for mask in ("nuclei", "cell", "both"):
+                assert (
+                    out / "S6" / f"r{k}" / f"{m}_{mask}" / "P1_crop.png"
+                ).is_file(), (k, m, mask)
+    assert (out / "S6" / "S6_nuclei_cell.png").is_file()

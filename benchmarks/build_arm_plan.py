@@ -67,19 +67,13 @@ EXTERNAL_ONLY = (
     "ext_seg_method",
 )
 
-# THE METHOD A ROW BELONGS TO, and which code runs it. `backend`/`registration_method` cannot
-# say this on their own: STARE v1 and DRAPE both run registration_method=tiled. `method` is
-# what METHODS= selects on (submit_arms.sh) and what the analysis groups by; `code_ref` is
-# blank for the current checkout, or the commit a PINNED row runs from (benchmarks/
-# code_snapshot.py); `pinned_params` names, `;`-separated, the columns run_arms.sh forwards
-# for that row only -- params that exist in the pinned tree's nextflow.config but not in
-# this one (reg_tiled_gate_tre, reg_tiled_solver); `role=upstream` marks a row included
-# only because a selected row needs its output -- it is launched (a finished one is DONE at
-# once) but never moved aside by ARMS_REPLACE.
-ROW_META = ("method", "code_ref", "pinned_params", "role")
+# THE METHOD A ROW BELONGS TO. `method` is what METHODS= selects on (submit_arms.sh) and
+# what the analysis groups by; `role=upstream` marks a row included only because a
+# selected row needs its output -- it is launched (a finished one is DONE at once) but
+# never moved aside by ARMS_REPLACE.
+ROW_META = ("method", "role")
 
-# METHODS vocabulary. `stare` exists only as pinned rows (pinned_code_arms in arms.yaml).
-METHODS = ("preprocess", "valis", "drape", "stare", "ashlar", "seg", "compute")
+METHODS = ("preprocess", "valis", "drape", "ashlar", "seg", "compute")
 
 
 def _method_of(row: dict) -> str:
@@ -112,8 +106,7 @@ def tiled_arm_name(mode: str, stride) -> str:
     # differed only by a column it failed to read would render as one replicated box.
     # Keeps the `tiled` substring the consumer's backend fallback keys on. The stride is an
     # integer pixel count (s64, s128, s256), so the name carries no dot a tool could read as
-    # an extension. (STARE v1's arms were `tiled_<tier>_gate<g>`; their results live on the
-    # `benchmarking` branch and are compared against these by name there.)
+    # an extension.
     return f"tiled_{mode}_s{int(stride)}"
 
 
@@ -478,8 +471,6 @@ def build_arm_plan(cfg: dict) -> list[dict]:
                 # A QC cross arm is `registration_qc`: run_arms.sh runs that pass AFTER the
                 # registration pass and launches each one in its base arm's launch dir with
                 # -resume, so REGISTER is served from the cache and only the QC chain runs.
-                # (STARE v1's `registration_solver` kind -- the SOLVE-stage cross -- was
-                # retired with the legacy/robust solvers in STARE v2.)
                 "arm_kind": "registration_qc"
                 if a.get("resume_run")
                 else "registration",
@@ -639,79 +630,6 @@ def build_arm_plan(cfg: dict) -> list[dict]:
     return rows
 
 
-# -----------------------------------------------------------------------------
-# PINNED-CODE ARMS (arms.yaml `pinned_code_arms`). Rows built BY THE PINNED TREE'S OWN
-# build_arm_plan.py from ITS OWN arms.yaml, so names, params and labels are exactly the
-# ones the results already on disk were launched with -- never re-derived here, where
-# the knobs they vary (reg_tiled_gate_tre, reg_tiled_solver) no longer exist.
-# -----------------------------------------------------------------------------
-def pinned_rows(
-    old_plan: list[dict],
-    old_labels: dict[str, str],
-    *,
-    method: str,
-    code_ref: str,
-    select: str,
-    current_columns: set[str],
-) -> list[dict]:
-    """The `select` component's closure in a pinned tree's plan, tagged to run from it.
-
-    `select` is an impact component evaluated on the OLD plan (`tiled` = every STARE base
-    arm, its QC crosses and its solver crosses). Columns the current plan lacks are kept
-    (the analysis reads them) and listed in `pinned_params`, which is what run_arms.sh
-    forwards for this row alone -- this tree's add_param list must name only params this
-    tree's nextflow.config declares.
-    """
-    sel = impact.affected_rows(old_plan, [select])
-    if not sel:
-        raise ValueError(
-            f"pinned_code_arms.{method}: component {select!r} selects no row of the plan "
-            f"built at {code_ref}"
-        )
-    bookkeeping = {"run_id", "arm_kind", "arm", "label", *ROW_META}
-    out = []
-    for r in sel:
-        row = {k: ("" if v is None else v) for k, v in r.items()}
-        extra = sorted(
-            k
-            for k, v in row.items()
-            if k not in current_columns and k not in bookkeeping and str(v) != ""
-        )
-        row.update(
-            method=method,
-            code_ref=code_ref,
-            pinned_params=";".join(extra),
-            role="",
-        )
-        _LABELS[row["arm"]] = old_labels.get(row["arm"], row["arm"])
-        out.append(row)
-    return out
-
-
-def check_pinned_params(rows: list[dict], schema_path: Path) -> list[str]:
-    """Every forwarded pinned param must be declared by the PINNED tree's schema."""
-    import json
-
-    declared: set[str] = set()
-
-    def walk(node):
-        if isinstance(node, dict):
-            declared.update((node.get("properties") or {}).keys())
-            for v in node.values():
-                walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                walk(v)
-
-    walk(json.loads(schema_path.read_text()))
-    return [
-        f"  {r['arm']}: {p} is not declared in {schema_path}"
-        for r in rows
-        for p in filter(None, str(r.get("pinned_params", "")).split(";"))
-        if p not in declared
-    ]
-
-
 def select_methods(
     plan: list[dict],
     methods: list[str],
@@ -762,9 +680,7 @@ def arms_manifest_rows(plan: list[dict]) -> list[dict]:
             "label": _LABELS[r["arm"]],
         }
         for r in plan
-        # registration_solver: a pinned STARE v1 SOLVE-stage cross -- ranked like any arm.
-        if r["arm_kind"]
-        in ("registration", "registration_qc", "registration_solver", "external")
+        if r["arm_kind"] in ("registration", "registration_qc", "external")
     ]
 
 
@@ -806,8 +722,7 @@ def validate_against_schema(plan: list[dict], schema_path: Path) -> list[str]:
     """
     enums = schema_enums(schema_path)
     bad = []
-    # Compared as TEXT: the plan is written as text anyway, and pinned-code rows come back
-    # from the pinned builder's CSV as strings ('2', never 2).
+    # Compared as TEXT: the plan is written as text anyway.
     allowed = {k: {str(e) for e in v} for k, v in enums.items()}
     for r in plan:
         for k, v in r.items():
@@ -855,90 +770,6 @@ def read_input_patients(input_csv: Path) -> list[str]:
         if p and p not in seen:
             seen.append(p)
     return seen
-
-
-def _pinned_code_plan(
-    cfg: dict, input_csv: Path, code_root: Path, plan: list[dict]
-) -> list[dict]:
-    """Rows of every enabled `pinned_code_arms` entry, each built by its own snapshot."""
-    import subprocess
-    import sys
-    import tempfile
-
-    try:
-        from benchmarks import code_snapshot
-    except ModuleNotFoundError:
-        import code_snapshot  # type: ignore[no-redef]
-
-    out: list[dict] = []
-    current_columns = {k for r in plan for k in r}
-    taken = {r["run_id"] for r in plan}
-    for method, spec in (cfg.get("pinned_code_arms") or {}).items():
-        if not (spec or {}).get("enabled"):
-            continue
-        if method not in METHODS:
-            raise SystemExit(
-                f"pinned_code_arms.{method}: not a method name {list(METHODS)}"
-            )
-        ref = str(spec["code_ref"])
-        try:
-            snap = code_snapshot.materialise(
-                Path(__file__).resolve().parents[1], ref, code_root
-            )
-        except code_snapshot.SnapshotError as exc:
-            raise SystemExit(f"pinned_code_arms.{method}: {exc}") from exc
-        sha = (snap / code_snapshot.COMPLETE).read_text().strip()
-        with tempfile.TemporaryDirectory() as tmp:
-            r = subprocess.run(
-                [
-                    sys.executable,
-                    str(snap / "benchmarks" / "build_arm_plan.py"),
-                    "--arms",
-                    str(snap / "benchmarks" / "configs" / "arms.yaml"),
-                    "--input",
-                    str(input_csv),
-                    "--out",
-                    f"{tmp}/plan.csv",
-                    "--results-root",
-                    tmp,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if r.returncode != 0:
-                raise SystemExit(
-                    f"pinned_code_arms.{method}: the plan builder at {sha[:12]} failed:\n"
-                    + r.stdout
-                    + r.stderr
-                )
-            with open(f"{tmp}/plan.csv", newline="") as fh:
-                old_plan = list(csv.DictReader(fh))
-            with open(f"{tmp}/arms.csv", newline="") as fh:
-                old_labels = {m["arm_dir"]: m["label"] for m in csv.DictReader(fh)}
-        rows = pinned_rows(
-            old_plan,
-            old_labels,
-            method=method,
-            code_ref=sha,
-            select=spec.get("select", "tiled"),
-            current_columns=current_columns,
-        )
-        clash = sorted({r["run_id"] for r in rows} & taken)
-        if clash:
-            raise SystemExit(
-                f"pinned_code_arms.{method}: run_ids already produced by this tree's "
-                f"plan: {clash}. Two codes must never write one arm directory."
-            )
-        bad = check_pinned_params(rows, snap / "nextflow_schema.json")
-        if bad:
-            raise SystemExit(
-                "pinned params the pinned tree does not declare:\n" + "\n".join(bad)
-            )
-        taken |= {r["run_id"] for r in rows}
-        print(f"Pinned {method}: {len(rows)} rows from {sha[:12]} ({snap})")
-        out += rows
-    return out
 
 
 def main():
@@ -994,23 +825,15 @@ def main():
         help="ALSO write the full plan here when --out is a subset: the analysis reads "
         "the full plan, and it must list every method sharing the results root",
     )
-    ap.add_argument(
-        "--code-root",
-        type=Path,
-        default=None,
-        help="where pinned-code snapshots live (default: <results-root>/.code, the "
-        "same place run_arms.sh looks)",
-    )
     a = ap.parse_args()
 
     cfg = yaml.safe_load(a.arms.read_text())
     plan = build_arm_plan(cfg)
     root = a.results_root or a.out.parent
-    plan += _pinned_code_plan(cfg, a.input, a.code_root or root / ".code", plan)
     # The FULL plan is always what the schema check, the manifest and the header
     # come from; a subset is a selection over it, never a re-expansion.
     # `+` as well as `,`: sbatch --export splits its value list on commas, so
-    # METHODS=stare,drape never reaches the job whole; METHODS=stare+drape does.
+    # METHODS=valis,seg never reaches the job whole; METHODS=valis+seg does.
     methods = [m for m in re.split(r"[,+\s]+", a.methods) if m]
     subset = bool(a.changed or a.only is not None or methods)
     if methods:

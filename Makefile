@@ -176,7 +176,7 @@ sweep-tables:
 # Before/after registration patch mosaic across ARMS -- the figure panel, not a
 # table. One column per arm directory, exactly MOSAIC_ROWS (round, ROI) rows,
 # read from the arms' csv/registered.csv and preprocess_shared/csv/preprocessed.csv.
-#   make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_gate1" MOSAIC_ROWS=6
+#   make arm-mosaic MOSAIC_ARMS="arm_results/valis_high_micro2 arm_results/tiled_high_s128" MOSAIC_ROWS=6
 # Extra flags (--patient, --rounds, --kinds overlay,checker, --label ARM=Title ...)
 # go in MOSAIC_ARGS. See docs/benchmarks_real.md, "Registration mosaics".
 MOSAIC_ARMS ?=

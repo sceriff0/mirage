@@ -114,12 +114,6 @@ registration_arms:
     # reg_micro_reg; not tier-owned, so legal under every tier. Arms are named
     # tiled_<tier>_s<stride> (e.g. tiled_high_s128). Same shape as sweep.yaml's
     # registration_method_grid.tiled.
-    #
-    # OLD STARE RUNS FROM ITS OWN CODE, not from this block. Until STARE v2 this axis was
-    # reg_tiled_gate_tre {0.5, 1.0, 2.0} (arms tiled_<tier>_gate<g>) plus a 9-run
-    # legacy-vs-robust SOLVE cross; the TRE gate and both old solvers are deleted from this
-    # tree. Those arms are `pinned_code_arms.stare` below: same results root, launched from a
-    # snapshot of the commit that last carried STARE v1.
     reg_tiled_mode:   [low, medium, high]
     reg_tiled_stride: [64, 128, 256]     # brackets the default 128; 9 arms
 
@@ -200,29 +194,6 @@ qc_pairing_cross:
 qc_joint_cross:
   cross: all                               # reference | all | none
   reference_arm: valis_high_micro2
-
-# -----------------------------------------------------------------------------
-# PINNED-CODE ARMS — methods this tree no longer contains, run from the commit that did.
-#
-# STARE v1 and DRAPE cannot coexist in one tree (both are registration_method=tiled; v1's
-# solvers and reg_tiled_gate_tre are deleted here). So ONE results root holds both, and
-# the STARE rows are built BY THE PINNED TREE'S OWN build_arm_plan.py + arms.yaml -- the
-# arm names, params and labels the results already on disk were launched with -- and each
-# is launched from a `git archive` snapshot at `code_ref` (benchmarks/code_snapshot.py,
-# under <results>/.code/<sha>). `select` is the impact component whose closure is taken
-# in THAT plan: `tiled` = the 9 tier x gate base arms, their QC crosses and the 9 SOLVE
-# crosses. Run ids must not collide with this tree's (build_arm_plan refuses).
-#
-# code_ref = the `benchmarking` tip, whose tiled backend is STARE v1 (legacy SOLVE pinned
-# byte-identical to the code before 2026-09-12). Every launch records its commit in
-# <results>/.launch/<run>/code.<run_id>; run_arms.sh refuses to keep (DONE) or resume a
-# pinned arm recorded under a different commit, so moving code_ref means relaunching those
-# arms with ARMS_REPLACE=1. Arms launched before records existed carry none and are kept.
-pinned_code_arms:
-  stare:
-    enabled: true
-    code_ref: 09be35d772756779e65ba83c3cd547cd09b30ffe
-    select: tiled
 
 # -----------------------------------------------------------------------------
 # ARM 2 — SEGMENTATION. Which backend segments real tissue best?

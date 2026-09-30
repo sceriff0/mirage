@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """supplementary.py -- EVERY supplementary figure (S2-S11 + the method mosaic) in one run.
 
-One results root holds every method (benchmarks/submit_arms.sh: VALIS, DRAPE, STARE v1
-as pinned-code arms, ASHLAR, the segmentation arms), and arm_plan.csv says which arm is
+One results root holds every method (benchmarks/submit_arms.sh: VALIS, DRAPE, ASHLAR,
+the segmentation arms), and arm_plan.csv says which arm is
 which method. This module draws the manuscript's supplementary set FROM that root. It
 re-registers nothing and re-segments nothing: every picture is a re-render of slides
 already on disk, by the same renderers the figure grid uses (reg_mosaic, reg_overlay,
@@ -12,9 +12,7 @@ Nextflow traces the arms already wrote.
 WHAT YOU CHOOSE BETWEEN. The comparisons are drawn in every combination, so the choice
 is made by looking, not by re-running:
 
-    method set   stare = Before | VALIS | STARE | ASHLAR
-                 drape = Before | VALIS | DRAPE | ASHLAR
-                 all   = Before | VALIS | STARE | DRAPE | ASHLAR
+    method set   all   = Before | VALIS | DRAPE | ASHLAR
     config       high  = each method's shipped high tier (supplementary.yaml `high:`).
                          THE DEFAULT: a legend that names no registration tier means the
                          high one (user ruling 2026-09-30). If the configured arm is not
@@ -31,7 +29,7 @@ Outputs (``-o OUT``):
 
     OUT/picks.csv                   the arm behind every (method, config), with its numbers
     OUT/mosaic/<set>_<config>/v<k>/ reg_mosaic per patient (overlay + checker), Dice in cells
-    OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE-or-DRAPE (+ASHLAR), matched insets
+    OUT/S4/<set>_<config>/v<k>/     Before | VALIS | DRAPE (+ASHLAR), matched insets
     OUT/S5/                         registration cost by tier, three method subsets
     OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
     OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
@@ -67,20 +65,16 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Registration methods, in the order their columns/rows are drawn.
-REG_METHODS = ("valis", "stare", "drape", "ashlar")
-TITLE = {"valis": "VALIS", "stare": "STARE", "drape": "DRAPE", "ashlar": "ASHLAR"}
-DEFAULT_SETS = {
-    "stare": ["valis", "stare", "ashlar"],
-    "drape": ["valis", "drape", "ashlar"],
-    "all": ["valis", "stare", "drape", "ashlar"],
-}
+REG_METHODS = ("valis", "drape", "ashlar")
+TITLE = {"valis": "VALIS", "drape": "DRAPE", "ashlar": "ASHLAR"}
+DEFAULT_SETS = {"all": ["valis", "drape", "ashlar"]}
 # The arms that ARE a registration of their method. registration_qc rows re-score a base
 # arm with another QC instrument -- same registration, different ruler -- so ranking them
 # would pick a ruler, not a method configuration.
-_RANKED_KINDS = ("registration", "registration_solver", "external")
+_RANKED_KINDS = ("registration", "external")
 FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
 # The tier is IN every tiered arm's name (build_arm_plan.py): valis_<tier>_micro<d>,
-# tiled_<tier>_s<stride> (DRAPE), tiled_<tier>_gate<g> (STARE v1). ASHLAR has no tier.
+# tiled_<tier>_s<stride> (DRAPE). ASHLAR has no tier.
 _TIER_RE = re.compile(r"^(?:valis|tiled)_(high|medium|low)_")
 DEFAULT_CONFIGS = ["high"]
 
@@ -222,7 +216,7 @@ def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
         raise SystemExit(
             f"{ctx.plan_csv} has no `method` column: build it with this checkout's "
             "benchmarks/build_arm_plan.py (submit_arms.sh does), which labels every row "
-            "valis/stare/drape/ashlar -- STARE and DRAPE are both registration_method=tiled"
+            "valis/drape/ashlar/seg"
         )
     cand = plan[plan["method"].isin(REG_METHODS) & plan["arm_kind"].isin(_RANKED_KINDS)]
     per_run = pd.DataFrame(columns=["run_id", "dice", "disp_um", "n"])
@@ -330,8 +324,8 @@ def method_sets(
 
     A comparison (mosaic, S4) needs two methods; a single-method figure (S7: one method
     before vs after; S8: per-arm scores) is drawn from whatever is there. A set cut down
-    to other than its configured methods is renamed after what it holds, so a `stare`
-    set holding only VALIS is never labelled STARE, and identical cuts collapse to one."""
+    to other than its configured methods is renamed after what it holds, so a set is never
+    labelled with a method it does not hold, and identical cuts collapse to one."""
     sets = ctx.opt("sets", default=None) or DEFAULT_SETS
     have = set(picks["method"])
     out: dict[str, list[str]] = {}
@@ -355,7 +349,7 @@ def _label(method: str, arm: str, config: str) -> str:
 
 # ------------------------------------------------------------------------- mosaic --
 def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
-    """Before | VALIS | STARE-or-DRAPE | ASHLAR, Dice in every cell -- the priority figure.
+    """Before | VALIS | DRAPE | ASHLAR, Dice in every cell -- the priority figure.
 
     The anchor (set `all`, config `high`) picks the ROIs; every other set and config is
     drawn on exactly those ROIs (--rois-json), so a column differs only by its method."""
@@ -616,7 +610,7 @@ def fig_s7(ctx, picks, patients, final):
 
 # ----------------------------------------------------------------------------- S5 --
 def fig_s5(ctx: Ctx):
-    """Registration cost by tier: every method, and each of STARE / DRAPE against VALIS."""
+    """Registration cost by tier, VALIS against DRAPE."""
     if ctx.dry_run:
         print("[dry-run] S5: registration_cost_by_tier from the traces")
         return
@@ -641,11 +635,7 @@ def fig_s5(ctx: Ctx):
         "cpu_hours_per_slide" if per_slide else "reg_cpu_hours",
     ]
     labels = [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"]
-    for name, keep in (
-        ("all", ("valis", "stare", "drape")),
-        ("valis_stare", ("valis", "stare")),
-        ("valis_drape", ("valis", "drape")),
-    ):
+    for name, keep in (("all", ("valis", "drape")),):
         sub = cost[cost["backend"].isin(keep)]
         if sub["backend"].nunique() < 1:
             continue
@@ -675,10 +665,12 @@ def fig_s6(ctx: Ctx, patients: list[str]):
     field_um = spec.get("field_um", 150)
     crop_px = spec.get("crop_px", 768)
     out = ctx.out / "S6"
+    n_regions = int(spec.get("regions", 4))
     rois = [str(r) for r in spec.get("rois", []) or []]
-    if len(rois) < int(spec.get("regions", 2)):
-        # Auto regions: the reference arm's zoom picks one; the mosaic anchor's ROIs
-        # (same reference canvas) supply the rest -- tissue the mosaic already showed.
+    if len(rois) < n_regions:
+        # Auto regions: picked ONCE on the reference (every backend segments the same
+        # reference slide, so the canvas is shared) and reused by every backend and mask
+        # below -- the panels of one region differ only by the segmenter.
         anchor = out / "_anchor"
         ctx.render(
             "reg_zoom",
@@ -688,22 +680,32 @@ def fig_s6(ctx: Ctx, patients: list[str]):
                 pid,
                 "--field-um",
                 field_um,
-                "--mask",
-                "both",
-                "--formats",
-                "png",
+                "--pick-rois",
+                n_regions,
                 "-o",
                 anchor,
             ],
         )
-        zj = anchor / f"{pid}_zoom.json"
-        if zj.is_file():
-            z = json.loads(zj.read_text())["zoom"]
-            rois.append(f"{z['y']},{z['x']}")
-        for rj in sorted((ctx.out / "mosaic" / "_anchor").glob(f"{pid}*_rois.json")):
-            for r in json.loads(rj.read_text()).get("rois", []):
-                rois.append(f"{r['y']},{r['x']}")
-        rois = list(dict.fromkeys(rois))[: int(spec.get("regions", 2))]
+        rj = anchor / f"{pid}_rois.json"
+        if rj.is_file():
+            rois += [f"{r['y']},{r['x']}" for r in json.loads(rj.read_text())["rois"]]
+        elif ctx.dry_run:
+            rois += [f"<roi {k}>" for k in range(len(rois) + 1, n_regions + 1)]
+        rois = list(dict.fromkeys(rois))[:n_regions]
+    if not ctx.dry_run:
+        out.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "region": k,
+                    "patient": pid,
+                    "y_px": r.split(",")[0],
+                    "x_px": r.split(",")[1],
+                    "field_um": field_um,
+                }
+                for k, r in enumerate(rois, 1)
+            ]
+        ).to_csv(out / "S6_regions.csv", index=False)
     for k, roi in enumerate(rois, 1):
         for method, arm in methods:
             for mask in ("nuclei", "cell", "both"):
@@ -1116,14 +1118,14 @@ def check(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame, ihc: Path | None):
         add("cohort", "ALL", f"patients: [] -> every case on disk: {patients}")
     s4 = ctx.opt("S4", default={}) or {}
     s4_pid = str(s4.get("patient") or (patients[0] if patients else ""))
-    # S4 compares VALIS with STARE and/or DRAPE; S7 and S8 need one method.
-    s4_ok = "valis" in have and ({"stare", "drape"} & set(have))
+    # S4 compares VALIS with DRAPE; S7 and S8 need one method.
+    s4_ok = "valis" in have and "drape" in have
     add(
         "S4",
         ("READY" if len(have) == len(REG_METHODS) else "PARTIAL")
         if s4_ok and s4_pid
         else "MISSING",
-        f"case {s4_pid or '?'}; needs VALIS + STARE/DRAPE; {reg_detail}",
+        f"case {s4_pid or '?'}; needs VALIS + DRAPE; {reg_detail}",
     )
     s7 = [p for p in patients if p != s4_pid]
     add(

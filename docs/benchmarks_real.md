@@ -72,11 +72,8 @@ changes the staged registration QC. **18 arms**, nine per backend:
   per-knob override under any tier but `custom`. The synthetic sweep crosses exactly the
   same two axes on synthetic images.
 
-  **Old STARE (v1) is not re-run.** Until 2026-09-27 the second DRAPE axis was the TRE
-  gate `reg_tiled_gate_tre` {0.5, 1.0, 2.0} (arms `tiled_<tier>_gate<g>`), plus a 9-run
-  SOLVE cross. Those parameters and solvers no longer exist on this branch; the head-to-head
-  against old STARE reads those arms' results as already computed on the `benchmarking`
-  branch.
+  Until 2026-09-27 the second axis was the TRE gate `reg_tiled_gate_tre` (retired with
+  the legacy/robust solvers); only the stride lattice is benchmarked now.
 ### 1b. ASHLAR — the external baseline, **6 runs**
 
 ASHLAR is not a *registration* arm: `v1.0.0` removed it as a backend
@@ -300,10 +297,16 @@ ARMS_PROFILE="singularity,ieo" ARMS_CONCURRENCY=4 \
   benchmarks/run_arms.sh arm_plan.csv real_input.csv arm_results -c conf/ieo.config
 ```
 
-Passes run in order — `preprocess`, `registration`, `segmentation`, `compute` —
-with a barrier between them. That order is a **dependency**: each pass resumes
-from a checkpoint the previous one wrote. The compute arm runs last and alone so
-it is not timed under contention from the QC arms.
+Runs go in five **waves**, in the order the supplementary figures need them, with a
+barrier only where a later wave reads an earlier one:
+
+1. `preprocess` — every registration arm resumes from its `preprocessed.csv`;
+2. the **reference** registration arm(s) — the rows other rows read
+   (`segmentation_arms.from_arm`, ASHLAR's `from_arm`: `valis_high_micro2`);
+3. the **segmentation** arms first in the queue, then the other registration arms
+   (high tier first), then ASHLAR — one wave, capped by `ARMS_CONCURRENCY`;
+4. `compute`, alone, so it is not timed under contention;
+5. the QC-instrument crosses (`registration_qc`), which feed no supplementary figure.
 
 !!! warning "`ARMS_CONCURRENCY` is heads, and heads share the head job's memory"
     Each concurrent arm is one Nextflow JVM. The `-Xmx32g` that suits a

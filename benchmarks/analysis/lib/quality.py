@@ -413,16 +413,13 @@ REGISTRATION_LEAVES = {
     "tiled": {"TILED_COARSE", "TILED_REG_TILE", "TILED_SOLVE", "TILED_STITCH"},
 }
 # Each METHOD's tier and refinement-depth params (arms.yaml registration_arms). Keyed on
-# the plan's `method` column, not on registration_method: STARE v1 (a pinned-code arm,
-# depth = TRE gate) and DRAPE (depth = vector-lattice stride) are both `tiled`, and one
-# results root holds both. `tiled` is the fallback for a plan without a `method` column.
+# the plan's `method` column; `tiled` is the fallback for a plan without one.
 _TIER_COLS = {
     "valis": ("memory_mode", "reg_micro_reg"),
-    "stare": ("reg_tiled_mode", "reg_tiled_gate_tre"),
     "drape": ("reg_tiled_mode", "reg_tiled_stride"),
-    "tiled": ("reg_tiled_mode", "reg_tiled_gate_tre"),
+    "tiled": ("reg_tiled_mode", "reg_tiled_stride"),
 }
-_INTEGER_DEPTH = {"valis", "drape"}  # micro-reg depth and stride (px) are counts
+_INTEGER_DEPTH = {"valis", "drape", "tiled"}  # micro-reg depth and stride (px) are counts
 
 
 def _family(g: pd.DataFrame) -> str:

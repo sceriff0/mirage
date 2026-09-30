@@ -285,9 +285,24 @@ def test_segmentation_agreement_on_arms_pairs_segmentation_arms_per_patient(tmp_
     plan = tmp_path / "arm_plan.csv"
     pd.DataFrame(
         {
-            "run_id": ["valis_high_micro2", "seg_instantseg", "seg_stardist", "seg_cellsam"],
-            "arm_kind": ["registration", "segmentation", "segmentation", "segmentation"],
-            "from_arm": ["", "valis_high_micro2", "valis_high_micro2", "valis_high_micro2"],
+            "run_id": [
+                "valis_high_micro2",
+                "seg_instantseg",
+                "seg_stardist",
+                "seg_cellsam",
+            ],
+            "arm_kind": [
+                "registration",
+                "segmentation",
+                "segmentation",
+                "segmentation",
+            ],
+            "from_arm": [
+                "",
+                "valis_high_micro2",
+                "valis_high_micro2",
+                "valis_high_micro2",
+            ],
             "seg_method": ["instantseg", "instantseg", "stardist", "cellsam"],
         }
     ).to_csv(plan, index=False)
@@ -331,7 +346,7 @@ def _trace_rows(run, backend, tier, depth, procs):
             "memory_mode": tier if backend == "valis" else "",
             "reg_micro_reg": depth if backend == "valis" else "",
             "reg_tiled_mode": tier if backend == "tiled" else "",
-            "reg_tiled_gate_tre": depth if backend == "tiled" else "",
+            "reg_tiled_stride": depth if backend == "tiled" else "",
             "seg_method": "instantseg",
             "seg_qc_pairing": "lsa",
             "process": f"MIRAGE:REGISTRATION:{p}",
@@ -348,14 +363,17 @@ def _trace_rows(run, backend, tier, depth, procs):
 def _registered_csv(root, run, n):
     d = root / run / "csv"
     d.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"patient_id": ["P1"] * n, "image": [f"s{i}" for i in range(n)]}).to_csv(
-        d / "registered.csv", index=False
-    )
+    pd.DataFrame(
+        {"patient_id": ["P1"] * n, "image": [f"s{i}" for i in range(n)]}
+    ).to_csv(d / "registered.csv", index=False)
 
 
 def test_registration_cost_by_tier_counts_registration_processes_only(tmp_path):
     rows = _trace_rows(
-        "valis_high_micro2", "valis", "high", "2",
+        "valis_high_micro2",
+        "valis",
+        "high",
+        "2",
         [
             ("REGISTER", 3600, 8, 40.0, 0),
             # the reg_qc=2 QC layer: not registration cost, must not count
@@ -363,7 +381,10 @@ def test_registration_cost_by_tier_counts_registration_processes_only(tmp_path):
             ("SEGMENT", 7200, 16, 99.0, 3600),
         ],
     ) + _trace_rows(
-        "stare_high", "tiled", "high", "1.0",
+        "stare_high",
+        "tiled",
+        "high",
+        "128",
         [
             ("TILED_COARSE", 600, 4, 10.0, 0),
             ("TILED_REG_TILE", 1200, 2, 5.0, 600),
@@ -387,7 +408,7 @@ def test_registration_cost_by_tier_counts_registration_processes_only(tmp_path):
     assert v["wall_h_per_slide"] == pytest.approx(0.25)
 
     s = out.loc["stare_high"]
-    assert s["backend"] == "tiled" and s["tier"] == "high" and s["depth"] == "1.0"
+    assert s["backend"] == "tiled" and s["tier"] == "high" and s["depth"] == "128"
     assert s["reg_wall_h"] == pytest.approx(3000 / 3600)  # first start -> last end
     assert s["reg_cpu_hours"] == pytest.approx((2400 + 2400 + 2400 + 300 + 3600) / 3600)
     assert s["reg_peak_rss_gb"] == pytest.approx(30.0)
@@ -395,7 +416,9 @@ def test_registration_cost_by_tier_counts_registration_processes_only(tmp_path):
 
 def test_registration_cost_by_tier_without_checkpoint_has_nan_per_slide(tmp_path):
     runs = pd.DataFrame(
-        _trace_rows("valis_low_micro0", "valis", "low", "0", [("REGISTER", 3600, 4, 8.0, 0)])
+        _trace_rows(
+            "valis_low_micro0", "valis", "low", "0", [("REGISTER", 3600, 4, 8.0, 0)]
+        )
     )
     out = quality.registration_cost_by_tier(runs, tmp_path)
     assert len(out) == 1

@@ -13,7 +13,7 @@ row it combines:
     .launch/<dir>/.nextflow/history     the last attempt's status (OK / ERR / '-' = open)
                                         -- a QC cross is logged in its BASE's launch dir
     <arm>/trace/trace.txt               tasks COMPLETED / FAILED / CACHED so far
-    .launch/<dir>/code.<run_id>         the commit that ran it (pinned STARE rows must match)
+    .launch/<dir>/code.<run_id>         the commit that ran it
     <arm>/.external_done                ASHLAR's own done marker (no Nextflow history)
     squeue (work dir column)            SLURM jobs in flight, attributed to their run
 
@@ -24,7 +24,6 @@ and prints one status per run:
     ACTIVE?      open attempt, no job queued, but its log moved in the last 20 min
     INTERRUPTED  open attempt ('-') and nothing moving: resume with ARMS_RESUME=1
     FAILED       last attempt ERR: see the log path printed
-    CODE≠        pinned row recorded under another commit: ARMS_REPLACE=1 to redo
     WAITING      never launched (its turn has not come, or its upstream is not done)
 """
 
@@ -41,7 +40,7 @@ from pathlib import Path
 
 DEFAULT_BENCH = "/beegfs/scratch/ieo7660/ihc_method/benchmark"
 ACTIVE_WINDOW_S = 20 * 60
-ORDER = ["RUNNING", "ACTIVE?", "FAILED", "CODE≠", "INTERRUPTED", "WAITING", "DONE"]
+ORDER = ["RUNNING", "ACTIVE?", "FAILED", "INTERRUPTED", "WAITING", "DONE"]
 
 
 def _history(hist: Path, run_id: str) -> dict | None:
@@ -169,15 +168,11 @@ def collect(bench: Path, results: Path, plan: Path) -> list[dict]:
             out.append(rec)
             continue
         h = _history(ld / ".nextflow" / "history", run_id)
-        code_rec = ld / f"code.{run_id}"
-        want = r.get("code_ref") or ""
         if h is None:
             rec["status"] = "WAITING"
         else:
             rec.update(attempts=h["attempts"], when=h["time"])
-            if want and code_rec.is_file() and code_rec.read_text().strip() != want:
-                rec["status"] = "CODE≠"
-            elif h["status"] == "OK":
+            if h["status"] == "OK":
                 rec["status"] = "DONE"
             elif h["status"] == "ERR":
                 rec["status"] = "FAILED"
@@ -267,7 +262,7 @@ def render(bench: Path, results: Path, recs: list[dict], show_all: bool) -> str:
                 f"{r['status']:<12}{r['method']:<11}{r['run_id'][:43]:<44}"
                 f"{r['attempts'] or '':>4}  {tasks:<22}{jobs:<10}{r['when']}"
             )
-    fails = [r for r in recs if r["status"] in ("FAILED", "CODE≠")]
+    fails = [r for r in recs if r["status"] == "FAILED"]
     if fails:
         lines += ["", "logs of failed runs:"]
         lines += [f"  {r['run_id']}: {r['log']}" for r in fails[:15]]
@@ -281,10 +276,6 @@ def render(bench: Path, results: Path, recs: list[dict], show_all: bool) -> str:
     if tot["FAILED"]:
         nxt.append(
             "failed runs: read the logs above; ARMS_RESUME=1 retries them from cache"
-        )
-    if tot["CODE≠"]:
-        nxt.append(
-            "CODE≠ runs: relaunch them with ARMS_REPLACE=1 (and ONLY=<their names>)"
         )
     if nxt:
         lines += ["", "next:"] + [f"  - {n}" for n in nxt]

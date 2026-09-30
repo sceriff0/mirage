@@ -381,14 +381,16 @@ def test_a_finished_ashlar_arm_is_done_and_not_rerun(tmp_path):
         )
 
 
-def test_the_ashlar_pass_runs_right_after_registration():
-    import re
-
-    code = "\n".join(
-        ln
+def test_the_ashlar_pass_runs_with_registration_and_before_the_qc_crosses():
+    """ASHLAR reads only the reference arm, so it runs in the wave after it, beside the
+    other registration arms -- never behind the QC crosses, where it waited days."""
+    code = [
+        ln.strip()
         for ln in (BENCH / "run_arms.sh").read_text().splitlines()
-        if not ln.lstrip().startswith("#")
-    )
-    order = re.search(r"^for kind in ([a-z_ ]+); do", code, re.M).group(1).split()
-    assert order.index("registration") + 1 == order.index("external"), order
-    assert order.index("external") < order.index("registration_qc"), order
+        if ln.strip().startswith("run_pass ")
+    ]
+    calls = [c.split(";")[0].strip() for c in code]
+    i = calls.index
+    assert i("run_pass registration ref") < i("run_pass external"), calls
+    assert i("run_pass external") < i("run_pass compute"), calls
+    assert i("run_pass external") < i("run_pass registration_qc"), calls

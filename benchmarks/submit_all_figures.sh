@@ -18,10 +18,10 @@
 #                 sweep  SWEEP_RESULTS + SWEEP_PLAN     (SRC_DIR)
 #                 drape  DRAPE_RESULTS + DRAPE_PLAN     (DRAPE_SRC) -- LEGACY, see below
 #
-#   ONE ROOT FOR EVERY METHOD (2026-09-29). submit_arms.sh on benchmarking_new_method now
-#   runs VALIS, DRAPE, STARE v1 (pinned-code arms), ASHLAR and seg into ONE results root,
-#   and arm_plan.csv carries a `method` column the analysis splits STARE from DRAPE by. So
-#   point SRC_DIR at the benchmarking_new_method checkout, ARMS_* at that root, and leave
+#   ONE ROOT FOR EVERY METHOD (2026-09-29). submit_arms.sh on benchmarking runs VALIS,
+#   DRAPE, ASHLAR and seg into ONE results root, and arm_plan.csv carries a `method`
+#   column the analysis groups by. So point SRC_DIR at the benchmarking checkout,
+#   ARMS_* at that root, and leave
 #   DRAPE_SRC/DRAPE_RESULTS/DRAPE_PLAN UNSET: the drape stage and the --append-arms
 #   hand-off exist only for the old two-root layout and would add the DRAPE arms twice.
 #               -> $OUT/stats/<name>/   (or $OUT/stats_preview/<name>/ with placeholders)

@@ -159,6 +159,27 @@ def render(opt) -> dict:
             f"resolution to show cells, so keep it under --max-zoom-px {opt.max_zoom_px} "
             f"(~{opt.max_zoom_px * px:.0f} um)"
         )
+    if opt.pick_rois:
+        # N separated tissue regions, written for a caller that renders several runs
+        # (one per segmentation backend) at the SAME places. Nothing is drawn.
+        picks = rm.select_rois(
+            low, factor, field_px, opt.pick_rois, opt.min_sep, opt.spread, (H, W)
+        )
+        opt.outdir.mkdir(parents=True, exist_ok=True)
+        out = opt.outdir / f"{pid}_rois.json"
+        out.write_text(
+            json.dumps(
+                {
+                    "patient": pid,
+                    "field_px": field_px,
+                    "pixel_size_um": px,
+                    "rois": [{"y": int(y), "x": int(x)} for y, x in picks],
+                },
+                indent=2,
+            )
+        )
+        log.info("%s: %d ROI(s) -> %s", pid, len(picks), out)
+        return {"patient": pid, "rois_json": out}
     if opt.roi:
         y, x = (int(v) for v in opt.roi.split(",")[:2])
     else:
@@ -310,6 +331,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("--max-zoom-px", type=int, default=4096)
     ap.add_argument(
+        "--pick-rois",
+        type=int,
+        default=0,
+        metavar="N",
+        help="write N separated tissue ROIs (top-left, reference frame, full-res px) to "
+        "OUTDIR/<pid>_rois.json and draw nothing",
+    )
+    ap.add_argument(
+        "--min-sep",
+        type=float,
+        default=0.15,
+        help="with --pick-rois: min ROI separation, fraction of the image diagonal",
+    )
+    ap.add_argument(
+        "--spread",
+        type=float,
+        default=1.0,
+        help="with --pick-rois: weight pushing later ROIs away from earlier ones",
+    )
+    ap.add_argument(
         "--overview-px", type=int, default=2400, help="overview long side in output px"
     )
     ap.add_argument(
@@ -389,6 +430,8 @@ def main(argv=None) -> int:
     for noisy in ("fontTools", "matplotlib", "PIL"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     m = render(opt)
+    if opt.pick_rois:
+        return 0
     written = ([] if opt.crop == "only" else [f"{m['patient']}_zoom"]) + (
         [] if opt.crop == "none" else [f"{m['patient']}_crop"]
     )

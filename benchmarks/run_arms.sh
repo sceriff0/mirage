@@ -50,9 +50,7 @@ CONCURRENCY="${ARMS_CONCURRENCY:-1}"
 
 # benchmark.config turns on enable_trace + enable_size_logs, which is what makes
 # every arm contribute cost rows to measurements.csv alongside its QC. It costs
-# nothing on the QC arms and is the whole point of the compute arm. Taken from the
-# tree the row runs from (launch(): "$pdir/benchmarks/configs/benchmark.config"), so a
-# pinned-code row gets the benchmark.config it was launched with.
+# nothing on the QC arms and is the whole point of the compute arm.
 
 # Absolutize any -c/-config/-params-file in the pass-through args: each run is
 # launched from its own directory (isolated .nextflow/ so parallel Nextflow heads
@@ -112,32 +110,9 @@ col_val() {
 PAIRS=()
 add_param() { if [[ -n "${2:-}" ]]; then PAIRS+=("$1=$2"); fi; }
 
-# ---------------------------------------------------------------------------
-# WHICH CODE RUNS A ROW. Blank code_ref = this checkout. A commit = a read-only snapshot
-# of the repository at that commit (benchmarks/code_snapshot.py, <root>/.code/<sha>),
-# which is how STARE v1 -- deleted from this tree, replaced by DRAPE under the same
-# registration_method=tiled -- shares one results root with it (arms.yaml pinned_code_arms).
-# Materialised ONCE, before any pass, so concurrent launches never race an extraction.
-#
-# Every launch records the commit that ran it in <launch dir>/code.<run_id>. For a pinned
-# row that record is ENFORCED: a finished or interrupted arm recorded under a different
-# commit is refused, never silently kept or resumed under other code. An arm with no
-# record (launched before records existed) is taken as it is.
-# ---------------------------------------------------------------------------
-CODE_ROOT="$ROOT/.code"
+# Every launch records the commit that ran it in <launch dir>/code.<run_id> (provenance:
+# arms_status.py prints it). Every row runs from this checkout.
 HEAD_SHA="$(git -C "$PIPELINE_DIR" rev-parse HEAD 2>/dev/null)" || HEAD_SHA="unknown"
-code_dir_of() {                  # code_dir_of <code_ref> -> the directory to run from
-  if [[ -z "$1" ]]; then echo "$PIPELINE_DIR"; else echo "$CODE_ROOT/$1"; fi
-}
-_refs=$(tail -n +2 "$PLAN" | tr -d '\r' | awk -F, -v c="$(( $(col_index code_ref) + 1 ))" \
-  'c > 0 && $c != "" { print $c }' | sort -u)
-for _ref in $_refs; do
-  if ! (cd "$PIPELINE_DIR" && python3 -m benchmarks.code_snapshot --root "$CODE_ROOT" "$_ref" >/dev/null); then
-    echo "[code] could not materialise $_ref -- its rows will SKIP" >&2
-  else
-    echo "[code] $_ref ready at $CODE_ROOT/$_ref"
-  fi
-done
 
 # RESUME_RUN (env, optional): the run_id of a BASE arm whose Nextflow session this launch
 # resumes. Set for arm_kind=registration_qc rows -- the QC instrument crosses -- which
@@ -200,21 +175,10 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # base's cache (it was started with -resume <base session>) plus whatever QC it finished.
   local hist="$rundir/.nextflow/history" attempts=0 prev_name="" prev_status="" prev_sid=""
   local run_name="arms-$run_id" resuming=0
-  local code_ref="${CODE_REF:-}" pdir; pdir="$(code_dir_of "$code_ref")"
-  local code_rec="$rundir/code.$run_id"
-  if [[ -n "$code_ref" && ! -f "$pdir/.complete" ]]; then
-    echo "[$run_id] SKIP: code snapshot $code_ref is not available at $pdir" >&2
-    return 1
-  fi
+  local pdir="$PIPELINE_DIR" code_rec="$rundir/code.$run_id"
   if [[ -f "$hist" ]]; then
     read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="arms-$run_id" \
       '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
-  fi
-  if (( attempts > 0 )) && [[ -n "$code_ref" && -f "$code_rec" ]] \
-       && [[ "$(cat "$code_rec")" != "$code_ref" ]]; then
-    echo "[$run_id] SKIP: this arm ran under commit $(cat "$code_rec"), but the plan pins $code_ref." \
-         "Its results must not be kept or resumed under other code: relaunch it with ARMS_REPLACE=1." >&2
-    return 1
   fi
   if (( attempts > 0 )); then
     if [[ "$prev_status" == "OK" ]]; then
@@ -234,7 +198,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
     fi
   fi
   mkdir -p "$rundir" "$outdir" "$outdir/trace"
-  if [[ -n "$code_ref" ]]; then echo "$code_ref" > "$code_rec"; else echo "$HEAD_SHA" > "$code_rec"; fi
+  echo "$HEAD_SHA" > "$code_rec"
   # Typed params as JSON — see the add_param comment above for why this cannot be
   # a list of --name value flags on Nextflow 26. Named per run_id: a resumed cross arm
   # shares its base arm's launch directory and must not overwrite the base's file.
@@ -527,15 +491,6 @@ launch_row() {
     # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
     # published artifact live under --outdir, so nothing the analysis reads is lost.
     PAIRS+=("cleanup_work=false")      # a literal, not a plan column (the plan guard reads add_param names)
-    # PINNED PARAMS: a pinned-code row's own knobs this tree's nextflow.config no longer
-    # declares (reg_tiled_gate_tre, reg_tiled_solver). Not add_param, whose names this
-    # tree's config must declare; build_arm_plan checked these against the PINNED schema,
-    # and params_json below types them against it (it runs inside the snapshot).
-    local pp p
-    pp=$(col_val pinned_params "${vals[@]}")
-    for p in ${pp//;/ }; do
-      [[ -n "$(col_val "$p" "${vals[@]}")" ]] && PAIRS+=("$p=$(col_val "$p" "${vals[@]}")")
-    done
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
     # all three. The external ashlar baseline is an arm_kind='external' row instead, and
@@ -561,20 +516,47 @@ launch_row() {
       filtered_sheet "$only_patient" "$in_csv" || return 1
     fi
 
-    RESUME_RUN="$(col_val resume_run "${vals[@]}")" CODE_REF="$(col_val code_ref "${vals[@]}")" \
+    RESUME_RUN="$(col_val resume_run "${vals[@]}")" \
       launch "$run_id" "$arm" "$in_csv" "$ROOT/$arm" ${PAIRS[@]+"${PAIRS[@]}"}
 }
 
-# run_pass <arm_kind>: every row of that kind, up to CONCURRENCY at once.
+# REFERENCE ARMS: the registration rows another row READS -- a segmentation arm's
+# from_arm, ASHLAR's ext_from_arm (valis_high_micro2). They run alone, before anything
+# else registers, so the segmentation arms (S6's masks, S3a's retention) and ASHLAR can
+# start the moment they finish instead of waiting behind every other registration arm.
+REF_IDS=" $(tail -n +2 "$PLAN" | tr -d '\r' | awk -F, \
+  -v k="$(( $(col_index arm_kind) + 1 ))" -v f="$(( $(col_index from_arm) + 1 ))" \
+  -v e="$(( $(col_index ext_from_arm) + 1 ))" \
+  '($k == "segmentation" && f > 0 && $f != "") { print $f }
+   ($k == "external" && e > 0 && $e != "") { print $e }' | sort -u | tr '\n' ' ') "
+
+# plan_rows [tiered]: the plan's data rows; `tiered` puts high-tier arms first, then
+# medium, then low (the tier is in every tiered arm's name: valis_<tier>_..., tiled_<tier>_...),
+# so the supplementary's high-tier figures are drawable before the rest of the grid ends.
+plan_rows() {
+  if [[ "${1:-}" == "tiered" ]]; then
+    tail -n +2 "$PLAN" | tr -d '\r' | awk '{
+      t = ($0 ~ /(^|,)(valis|tiled)_high_/) ? 0 : ($0 ~ /(^|,)(valis|tiled)_medium_/) ? 1 : 2
+      print t "\t" $0 }' | sort -s -t$'\t' -k1,1n | cut -f2-
+  else
+    tail -n +2 "$PLAN" | tr -d '\r'
+  fi
+}
+
+# run_pass <arm_kind> [ref|rest]: every row of that kind, up to CONCURRENCY at once.
+# `ref` / `rest` split registration into the reference arms and everything else.
 run_pass() {
-  local want_kind="$1"
+  local want_kind="$1" part="${2:-}" rid
   if [[ "$want_kind" == "registration_qc" ]]; then run_qc_pass; return; fi
   while IFS=',' read -r -a vals; do
     [[ "$(col_val arm_kind "${vals[@]}")" == "$want_kind" ]] || continue
+    rid=$(col_val run_id "${vals[@]}")
+    if [[ "$part" == "ref" && "$REF_IDS" != *" $rid "* ]]; then continue; fi
+    if [[ "$part" == "rest" && "$REF_IDS" == *" $rid "* ]]; then continue; fi
     reap
     launch_row "${vals[@]}" &
     pids+=($!)
-  done < <(tail -n +2 "$PLAN" | tr -d '\r')
+  done < <(plan_rows tiered)
 }
 
 # run_qc_pass: the QC instrument crosses, ONE CHAIN PER BASE ARM.
@@ -598,7 +580,7 @@ run_qc_pass() {
   mkdir -p "$ROOT/.launch"
   sorted="$ROOT/.launch/_registration_qc.rows"
   tail -n +2 "$PLAN" | tr -d '\r' \
-    | awk -F, -v k="$kind_col" '$k == "registration_qc" || $k == "registration_solver"' \
+    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
     | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
 
   local base="" line b
@@ -634,22 +616,42 @@ run_qc_pass() {
 # 63-cross QC pass it waited days at a low job ceiling. BEFORE compute, which is timed.
 # registration_qc AFTER registration: each QC cross resumes its base arm's session, so the
 # base must have finished -- the barrier below, and launch()'s base-status check, ensure it.
-for kind in preprocess registration external registration_qc segmentation compute; do
-  echo "=== pass: $kind ==="
-  run_pass "$kind"
-  # Barrier between passes: segmentation needs registration's checkpoint, and the
-  # compute arm should not contend with the QC arms for nodes while it is being
-  # timed — a cost measurement taken under self-inflicted contention is not the
-  # cost of the pipeline.
-  # Same as reap: report the status rather than discarding it, so a child that
-  # died without printing its own failure is still visible at the barrier.
+# Barrier: wait for every launched run. Same as reap: the status is reported rather
+# than discarded, so a child that died without printing its own failure is still visible.
+barrier() {
+  local p rc
   for p in "${pids[@]+"${pids[@]}"}"; do
     rc=0
     wait "$p" || rc=$?
     (( rc == 0 )) || echo "[barrier] pid $p exited $rc" >&2
   done
   pids=()
-done
+}
+
+# WAVES, in the order the supplementary figures need them (a barrier only where a
+# later wave READS an earlier one):
+#   1 preprocess               every registration arm resumes from its preprocessed.csv
+#   2 reference registration   REF_IDS (valis_high_micro2): what seg and ASHLAR read
+#   3 segmentation             S6 masks + S3a retention -- first in the queue, and in the
+#     registration (rest)      SAME wave as the other registration arms (high tier first)
+#     external (ASHLAR)        and ASHLAR, which reads only the reference arm
+#   4 compute                  timed ALONE: a cost measured under self-inflicted contention
+#                              is not the pipeline's cost
+#   5 registration_qc          the QC instrument crosses: they feed no supplementary
+#                              figure, so they go last; each resumes its (finished) base
+echo "=== wave 1: preprocess ==="
+run_pass preprocess; barrier
+echo "=== wave 2: reference registration (${REF_IDS# }) ==="
+run_pass registration ref; barrier
+echo "=== wave 3: segmentation, then the other registration arms (high tier first), then ASHLAR ==="
+run_pass segmentation
+run_pass registration rest
+run_pass external
+barrier
+echo "=== wave 4: compute ==="
+run_pass compute; barrier
+echo "=== wave 5: registration_qc ==="
+run_pass registration_qc; barrier
 
 echo
 echo "All arms finished. Results under $ROOT"

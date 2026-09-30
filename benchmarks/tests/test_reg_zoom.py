@@ -475,3 +475,18 @@ def test_the_numbers_sit_under_the_title_not_over_the_zoom(tmp_path, monkeypatch
     assert kw["xy"] == (0.02, 0.98)  # top LEFT, not (0.98, 0.98)
     assert kw["ha"] == "left" and kw["va"] == "top"
     assert kw["xytext"][1] < 0  # pushed down, under the title
+
+
+def test_pick_rois_writes_n_separated_rois_and_draws_nothing(seg_run, tmp_path):
+    """S6 renders every segmentation backend at the SAME places: reg_zoom picks them once
+    (--pick-rois N) and each backend's render reuses them via --roi."""
+    arm, _ = seg_run
+    argv = [str(arm), "-o", str(tmp_path), "--field-um", "20", "--overview-px", "160"]
+    assert rz.main([*argv, "--pick-rois", "3", "--min-sep", "0.05"]) == 0
+    got = json.loads((tmp_path / "P1_rois.json").read_text())
+    rois = [(r["y"], r["x"]) for r in got["rois"]]
+    assert len(rois) == 3 and len(set(rois)) == 3, rois
+    assert not list(tmp_path.glob("*.png")), "pick mode must not render"
+    assert rz.main([*argv, "--pick-rois", "3", "--min-sep", "0.05"]) == 0
+    again = json.loads((tmp_path / "P1_rois.json").read_text())["rois"]
+    assert [(r["y"], r["x"]) for r in again] == rois, "picks must be deterministic"
