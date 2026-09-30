@@ -554,3 +554,110 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
     assert list((out / "S5").glob("S5_cost_by_tier_all.png")), sorted(
         p.name for p in (out / "S5").iterdir()
     )
+
+
+def test_gallery_draws_every_arm_backend_and_channel_on_shared_tissue(
+    unified, tmp_path_factory, tmp_path
+):
+    """The gallery: per case, every registration method's high arm on the SAME crop per
+    moving round, every segmentation backend at the SAME regions, every channel of the
+    case at those regions too -- nothing picked independently per arm or backend."""
+    from benchmarks.tests import test_reg_zoom as tz
+
+    root, plan, conf = unified
+    work = tmp_path / "arm_results"
+    shutil.copytree(root, work)
+    seg_src, _ = tz.seg_run.__wrapped__(tmp_path_factory)
+    rows = list(csv.DictReader(plan.open()))
+    for m in ("instantseg", "stardist"):
+        d = work / f"seg_{m}"
+        shutil.copytree(seg_src, d)
+        seg = d / "csv" / "segmented.csv"
+        seg.write_text(seg.read_text().replace(str(seg_src), str(d)))
+        rows.append(
+            dict(
+                rows[0],
+                run_id=f"seg_{m}",
+                arm=f"seg_{m}",
+                arm_kind="segmentation",
+                method="seg",
+                seg_method=m,
+                resume_run="",
+            )
+        )
+    full = tmp_path / "plan.csv"
+    with open(full, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    cfg = yaml.safe_load(conf.read_text())
+    cfg["gallery"] = {
+        "overlay": {"field_um": [48], "zoom_um": 0, "variants": 2},
+        "zoom": {
+            "field_um": [20],
+            "masks": ["both", "nuclei"],
+            "regions": 2,
+            "crop_px": 64,
+        },
+        # the mosaic fixture's registered slides are empty stubs; seg_run's are real
+        "channels": {
+            "field_um": 20,
+            "crop_px": 64,
+            "autoscale": ["clean"],
+            "arm": "seg_instantseg",
+        },
+    }
+    c = tmp_path / "c.yaml"
+    c.write_text(yaml.safe_dump(cfg))
+    out = tmp_path / "o"
+    sp.main(
+        [
+            "--results",
+            str(work),
+            "--plan",
+            str(full),
+            "--config",
+            str(c),
+            "-o",
+            str(out),
+            "--only",
+            "gallery",
+        ]
+    )
+    g = out / "gallery"
+    # overlays: one crop per (round, variant), identical across the methods
+    crops = {}
+    for j in (g / "overlay").rglob("*_overlay.json"):
+        man = json.loads(j.read_text())
+        key = (man["round"], j.parent.name)
+        crops.setdefault(key, set()).add((man["crop"]["y"], man["crop"]["x"]))
+    arms = {p.name for p in (g / "overlay").iterdir()}
+    assert (
+        arms
+        == {
+            "valis_high_micro2",
+            "tiled_high_gate1",
+            "tiled_high_s128",
+            "ashlar_t1024_s240",
+        }
+        or len(arms) >= 3
+    ), arms
+    assert crops and all(len(v) == 1 for v in crops.values()), crops
+    assert {k[1] for k in crops} == {"v1", "v2"}
+    # segmentation: every backend x mask at each region, the regions shared
+    for k in ("r1", "r2"):
+        for m in ("instantseg", "stardist"):
+            for mask in ("both", "nuclei"):
+                assert list((g / "zoom" / m / f"f20_{mask}" / k).glob("P1_zoom.png"))
+                assert list(
+                    (g / "crops" / m / f"f20_p64_{mask}" / k).glob("P1_crop.png")
+                )
+    # channels: every channel the case carries, at the segmentation regions
+    chans = sp._slide_channels(work / "seg_instantseg", "P1")
+    assert len(chans) >= 2, chans
+    for k in ("r1", "r2"):
+        got = {
+            p.name
+            for p in (g / "crops" / "channels" / "f20_p64_clean" / k).glob("*_crop.png")
+        }
+        assert got == {f"P1_{ch}_crop.png" for ch in chans}, got

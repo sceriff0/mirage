@@ -23,6 +23,8 @@
 #     S5       registration cost by tier            (the Nextflow traces)
 #     S6       nuclei | cell masks per backend + pairwise Dice
 #     S8       Dice and displacement by case and by panel pair
+#     gallery  EVERY case: overlay per arm x round, zoom/crops per backend x mask,
+#              crops per channel -- same tissue across arms / backends / channels
 #   ihc half     benchmarks/ihc/supplementary.R, run IN the ihc_method checkout (IHC=)
 #     S3b      CD3+ among CD8+ per case    S9  every case by FlowPath phenotype
 #     S10      CD45+ per case + cold/intermediate/hot    S11  every deconvolution method
@@ -177,7 +179,7 @@ fi
 
 # ---- the mirage half ---------------------------------------------------------------
 MIRAGE_FIGS=()
-for f in mosaic S2 S3 S4 S5 S6 S7 S8; do wants "$f" && MIRAGE_FIGS+=("$f"); done
+for f in mosaic S2 S3 S4 S5 S6 S7 S8 gallery; do wants "$f" && MIRAGE_FIGS+=("$f"); done
 if (( ${#MIRAGE_FIGS[@]} > 0 )); then
   args=(--results "$RESULTS" --plan "$PLAN" --config "$CONFIG" -o "$OUT"
         --only "$(IFS=,; echo "${MIRAGE_FIGS[*]}")" --exec "$RENDER_EXEC")

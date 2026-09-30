@@ -45,7 +45,7 @@ mosaic:
   variants: 3                     # different tissue each; same tissue across sets/configs
   kinds: [overlay, checker]
   numbers: scorer                 # the reg_qc=2 matched Dice (Before = native-stage Dice)
-  patch_um: 200
+  patch_um: [200, 500]           # one mosaic per patch size (a list draws each)
   rows: null                      # default: one row per (moving round, ROI)
   rounds: []                      # e.g. [CD8, CD3]; empty = every moving round
 
@@ -78,6 +78,29 @@ S6:
 S3:
   round_order: []                 # AUTHORS: the acquisition order; empty = as written
   from_arm: null                  # a full-pipeline arm (a segmentation arm); null = the first
+
+# ---- gallery: the image set for EVERY case, per arm / backend / channel ----------------
+# Drawn from the arms on disk (no pipeline runs). Every registration method's high arm on
+# the SAME crop per moving round (one anchor pick), every segmentation backend at the SAME
+# regions, every channel of the case at those regions too. ~renders are in check.csv.
+gallery:
+  methods: [valis, stare, ashlar]  # the high arm of each, where it exists
+  overlay:
+    field_um: [500, 2000]          # 500 um reads as tissue; 2000 um shows the reach
+    zoom_um: 60                    # the single-cell inset beside each panel
+    variants: 2                    # different tissue each; same tissue for every method
+    numbers: auto                  # Dice/shift from the scorer if present, else the image
+  zoom:
+    field_um: [150, 300]           # 150 um = cells fill the panel; 300 um = context
+    masks: [both, cell, nuclei]
+    regions: 3                     # picked once per case and field, shared by backends
+    crop_px: 1024                  # the crop-alone file's side
+  channels:
+    names: []                      # empty = every channel the case's slides carry
+    arm: null                      # whose registered slides; null = the VALIS high arm
+    field_um: 150                  # reuses the 150 um segmentation regions when present
+    crop_px: 1024
+    autoscale: [clean, percentile]
 
 # ---- S2: secondary-only controls (extra acquisitions, not in the arms) ---------------
 S2:

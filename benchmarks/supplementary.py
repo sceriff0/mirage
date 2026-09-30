@@ -72,7 +72,7 @@ DEFAULT_SETS = {"all": ["valis", "stare", "ashlar"]}
 # arm with another QC instrument -- same registration, different ruler -- so ranking them
 # would pick a ruler, not a method configuration.
 _RANKED_KINDS = ("registration", "external")
-FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
+FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "gallery")
 # The tier is IN every tiered arm's name (build_arm_plan.py): valis_<tier>_micro<d>,
 # tiled_<tier>_s<stride> (STARE). ASHLAR has no tier.
 _TIER_RE = re.compile(r"^(?:valis|tiled)_(high|medium|low)_")
@@ -352,7 +352,18 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
     """Before | VALIS | STARE | ASHLAR, Dice in every cell -- the priority figure.
 
     The anchor (set `all`, config `high`) picks the ROIs; every other set and config is
-    drawn on exactly those ROIs (--rois-json), so a column differs only by its method."""
+    drawn on exactly those ROIs (--rois-json), so a column differs only by its method.
+    `patch_um` may be a list (e.g. [200, 500]): one mosaic per patch size, in
+    `<set>_<config>_p<patch>/` when there is more than one."""
+    m = ctx.opt("mosaic", default={}) or {}
+    patches = m.get("patch_um", 200)
+    patches = patches if isinstance(patches, list) else [patches]
+    for patch in patches:
+        suffix = f"_p{patch}" if len(patches) > 1 else ""
+        _mosaic_one(ctx, picks, patients, patch, suffix)
+
+
+def _mosaic_one(ctx: Ctx, picks, patients: list[str], patch, suffix: str) -> None:
     m = ctx.opt("mosaic", default={}) or {}
     variants = int(m.get("variants", 2))
     common = [
@@ -361,7 +372,7 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
         "--numbers",
         m.get("numbers", "scorer"),
         "--patch-um",
-        m.get("patch_um", 200),
+        patch,
         "--formats",
         ctx.formats,
     ]
@@ -371,7 +382,7 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
         common += ["--rounds", r]
     sets = method_sets(ctx, picks)
     anchor_methods = sets.get("all") or next(iter(sets.values()))
-    anchor = ctx.out / "mosaic" / "_anchor"
+    anchor = ctx.out / "mosaic" / f"_anchor{suffix}"
     for pid in patients:
         arms = [a for mm in anchor_methods if (a := arm_for(picks, mm, "high"))]
         ctx.render(
@@ -413,7 +424,10 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
                             rois,
                             *labels,
                             "-o",
-                            ctx.out / "mosaic" / f"{set_name}_{config}" / f"v{v}",
+                            ctx.out
+                            / "mosaic"
+                            / f"{set_name}_{config}{suffix}"
+                            / f"v{v}",
                             *common,
                         ],
                     )
@@ -1070,6 +1084,260 @@ def fig_s2(ctx: Ctx):
                 ctx.render("reg_crop", args + (["--patient", pid] if pid else []))
 
 
+# ------------------------------------------------------------------------ gallery --
+def _slide_channels(arm_dir: Path, pid: str) -> list[str]:
+    """Every channel of one patient's registered slides, reference first, deduplicated."""
+    p = arm_dir / "csv" / "registered.csv"
+    if not p.is_file():
+        return []
+    rows = [r for r in csv.DictReader(p.open()) if str(r.get("patient_id")) == pid]
+    rows.sort(key=lambda r: str(r.get("is_reference", "")).lower() != "true")
+    out: list[str] = []
+    for r in rows:
+        for ch in (r.get("channels") or "").split("|"):
+            if ch.strip() and ch.strip() not in out:
+                out.append(ch.strip())
+    return out
+
+
+def _pick_regions(ctx: Ctx, seg_arm: str, pid: str, field, n: int, out: Path) -> list:
+    """N separated regions of `field` um, picked ONCE per patient on the reference."""
+    ctx.render(
+        "reg_zoom",
+        [
+            ctx.arm_dir(seg_arm),
+            "--patient",
+            pid,
+            "--field-um",
+            field,
+            "--pick-rois",
+            n,
+            "-o",
+            out,
+        ],
+    )
+    rj = out / f"{pid}_rois.json"
+    if rj.is_file():
+        return [f"{r['y']},{r['x']}" for r in json.loads(rj.read_text())["rois"]]
+    return [f"<roi {k}>" for k in range(1, n + 1)] if ctx.dry_run else []
+
+
+def fig_gallery(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
+    """The image gallery, for EVERY patient, drawn from the arms already on disk:
+
+    overlay/<arm>/f<field>_z<zoom>/v<k>/       Before | After | locator, per moving round,
+                                               every registration method's high arm on the
+                                               SAME crop (one anchor pick per round x variant)
+    zoom/<backend>/f<field>_<mask>/r<k>/       overview + outlined zoom, per segmentation
+    crops/<backend>/f<field>_p<px>_<mask>/r<k>/  backend, the outlined crop alone; every
+                                               backend at the SAME regions
+    crops/channels/f<field>_p<px>_<scale>/r<k>/  every channel of the patient, at the same
+                                               regions as the segmentation crops
+    (the mosaic takes several patch sizes itself: mosaic.patch_um)
+
+    Nothing is registered or segmented; each file is one renderer call."""
+    g = ctx.opt("gallery", default={}) or {}
+    ov = g.get("overlay") or {}
+    zm = g.get("zoom") or {}
+    ch = g.get("channels") or {}
+    methods = [
+        m for m in (g.get("methods") or REG_METHODS) if arm_for(picks, m, "high")
+    ]
+    reg = [(m, arm_for(picks, m, "high")) for m in methods]
+    seg = ctx.plan[ctx.plan["arm_kind"] == "segmentation"]
+    backends = [
+        (str(r["seg_method"]), str(r["arm"]))
+        for _, r in seg.iterrows()
+        if (ctx.arm_dir(r["arm"]) / "csv" / "segmented.csv").is_file() or ctx.dry_run
+    ]
+    out = ctx.out / "gallery"
+    fields_ov = ov.get("field_um", [500, 2000])
+    zoom_um = ov.get("zoom_um", 60)
+    variants = int(ov.get("variants", 2))
+    numbers = ov.get("numbers", "auto")
+    fields_z = zm.get("field_um", [150, 300])
+    masks = zm.get("masks", ["both", "cell", "nuclei"])
+    n_regions = int(zm.get("regions", 3))
+    zoom_crop_px = zm.get("crop_px", 1024)
+    ch_field = ch.get("field_um", 150)
+    ch_px = ch.get("crop_px", 1024)
+    scales = ch.get("autoscale", ["clean", "percentile"])
+    ref_arm = arm_for(picks, "valis", "high") or (reg[0][1] if reg else None)
+    for pid in patients:
+        # ---- registration overlays: one anchor pick, every arm on the same crop ----
+        if reg:
+            for field in fields_ov:
+                tag = f"f{field}_z{zoom_um}"
+                anchor = out / "_anchor" / "overlay" / tag
+                ctx.render(
+                    "reg_overlay",
+                    [
+                        ctx.arm_dir(reg[0][1]),
+                        "--patient",
+                        pid,
+                        "--field-um",
+                        field,
+                        "--zoom-um",
+                        zoom_um,
+                        "--variants",
+                        variants,
+                        "--numbers",
+                        numbers,
+                        "--formats",
+                        "png",
+                        "-o",
+                        anchor,
+                    ],
+                )
+                mans = [
+                    json.loads(mf.read_text())
+                    for mf in sorted(anchor.glob(f"{pid}_*_overlay.json"))
+                ]
+                mans = [mm for mm in mans if str(mm.get("patient", pid)) == pid]
+                for man in mans:
+                    v = int(man.get("variant", 1))
+                    pin = ["--roi", f"{man['crop']['y']},{man['crop']['x']}"]
+                    if man.get("zoom"):
+                        pin += ["--zoom-roi", f"{man['zoom']['y']},{man['zoom']['x']}"]
+                    for m, arm in reg:
+                        ctx.render(
+                            "reg_overlay",
+                            [
+                                ctx.arm_dir(arm),
+                                "--patient",
+                                pid,
+                                "--rounds",
+                                man["round"],
+                                "--field-um",
+                                field,
+                                "--zoom-um",
+                                zoom_um,
+                                *pin,
+                                "--numbers",
+                                numbers,
+                                "--title",
+                                f"{TITLE[m]} (high)",
+                                "--formats",
+                                ctx.formats,
+                                "--dpi",
+                                ctx.dpi,
+                                "-o",
+                                out / "overlay" / arm / tag / f"v{v}",
+                            ],
+                        )
+        # ---- segmentation: N regions per field, every backend x mask there ----
+        regions_by_field: dict = {}
+        if backends:
+            for field in fields_z:
+                rois = _pick_regions(
+                    ctx,
+                    backends[0][1],
+                    pid,
+                    field,
+                    n_regions,
+                    out / "_anchor" / "zoom" / f"f{field}",
+                )
+                regions_by_field[field] = rois
+                for k, roi in enumerate(rois, 1):
+                    for method, arm in backends:
+                        for mask in masks:
+                            base = [
+                                ctx.arm_dir(arm),
+                                "--patient",
+                                pid,
+                                "--roi",
+                                roi,
+                                "--field-um",
+                                field,
+                                "--mask",
+                                mask,
+                                "--title",
+                                method,
+                                "--formats",
+                                ctx.formats,
+                            ]
+                            ctx.render(
+                                "reg_zoom",
+                                [
+                                    *base,
+                                    "--crop",
+                                    "also",
+                                    "-o",
+                                    out
+                                    / "zoom"
+                                    / method
+                                    / f"f{field}_{mask}"
+                                    / f"r{k}",
+                                ],
+                            )
+                            ctx.render(
+                                "reg_zoom",
+                                [
+                                    *base,
+                                    "--crop",
+                                    "only",
+                                    "--crop-px",
+                                    zoom_crop_px,
+                                    "-o",
+                                    out
+                                    / "crops"
+                                    / method
+                                    / f"f{field}_p{zoom_crop_px}_{mask}"
+                                    / f"r{k}",
+                                ],
+                            )
+        # ---- every channel, at the segmentation regions (else one auto region) ----
+        ch_arm = ch.get("arm") or ref_arm  # whose registered slides are cropped
+        if ch_arm:
+            chans = ch.get("names") or _slide_channels(ctx.arm_dir(ch_arm), pid)
+            rois = regions_by_field.get(ch_field) or [None]
+            for k, roi in enumerate(rois, 1):
+                for scale in scales:
+                    for name in chans:
+                        args = [
+                            ctx.arm_dir(ch_arm),
+                            "--patient",
+                            pid,
+                            "--channel",
+                            name,
+                            "--field-um",
+                            ch_field,
+                            "--crop-px",
+                            ch_px,
+                            "--autoscale",
+                            scale,
+                            "--colors",
+                            "white",
+                            "--title",
+                            "",
+                            "--formats",
+                            ctx.formats,
+                            "-o",
+                            out
+                            / "crops"
+                            / "channels"
+                            / f"f{ch_field}_p{ch_px}_{scale}"
+                            / f"r{k}",
+                        ]
+                        if roi:
+                            args += ["--roi", roi]
+                        ctx.render("reg_crop", args)
+                        if roi is None and not ctx.dry_run:
+                            # pin the rest to the first channel's auto pick: same tissue
+                            cj = (
+                                out
+                                / "crops"
+                                / "channels"
+                                / f"f{ch_field}_p{ch_px}_{scale}"
+                                / f"r{k}"
+                                / f"{pid}_{name}_crop.json"
+                            )
+                            if cj.is_file():
+                                c = json.loads(cj.read_text())["crop"]
+                                roi = f"{c['y']},{c['x']}"
+                                rois[k - 1] = roi
+
+
 # -------------------------------------------------------------------------- check --
 IHC_CHECK_CSV = Path("output") / "figures" / "supplementary" / "check_ihc.csv"
 
@@ -1198,6 +1466,33 @@ def check(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame, ihc: Path | None):
             "(needs a run on fdf042c0 or later)",
         )
 
+    g = ctx.opt("gallery", default={}) or {}
+    n_seg = len(done)
+    n_fields_ov = len((g.get("overlay") or {}).get("field_um", [500, 2000]))
+    n_var = int((g.get("overlay") or {}).get("variants", 2))
+    n_fields_z = len((g.get("zoom") or {}).get("field_um", [150, 300]))
+    n_masks = len((g.get("zoom") or {}).get("masks", ["both", "cell", "nuclei"]))
+    n_reg_z = int((g.get("zoom") or {}).get("regions", 3))
+    n_scales = len((g.get("channels") or {}).get("autoscale", ["clean", "percentile"]))
+    per_pid = []
+    for pid in patients:
+        rounds = max(len(_slide_channels(ctx.arm_dir(_anchor_arm(picks)), pid)) - 1, 1)
+        n = n_fields_ov * n_var * rounds * max(len(have), 1)
+        n += n_fields_z * n_reg_z * n_seg * n_masks * 2
+        n += (
+            n_reg_z
+            * n_scales
+            * len(_slide_channels(ctx.arm_dir(_anchor_arm(picks)), pid))
+        )
+        per_pid.append(n)
+    add(
+        "gallery",
+        "READY" if have and patients else "MISSING",
+        f"{len(patients)} case(s) x {list(have)} arms x {n_seg} seg backend(s): "
+        f"~{sum(per_pid)} renders (overlay per round, zoom/crops per backend x mask, "
+        "crops per channel)",
+    )
+
     s2 = ctx.opt("S2", default={}) or {}
     add(
         "S2",
@@ -1273,7 +1568,20 @@ def write_index(out: Path) -> Path:
         parts.append(
             "<h2>Arm picks</h2><pre>" + html.escape(picks.read_text()) + "</pre>"
         )
-    for fig in ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11"):
+    for fig in (
+        "mosaic",
+        "S2",
+        "S3",
+        "S4",
+        "S5",
+        "S6",
+        "S7",
+        "S8",
+        "S9",
+        "S10",
+        "S11",
+        "gallery",
+    ):
         d = out / fig
         if not d.is_dir():
             continue
@@ -1380,6 +1688,7 @@ def main(argv: list[str] | None = None) -> int:
         ("S8", lambda: fig_s8(ctx, picks, final)),
         ("S2", lambda: fig_s2(ctx)),
         ("S3", lambda: fig_s3a(ctx)),
+        ("gallery", lambda: fig_gallery(ctx, picks, patients)),
     ):
         if name not in only:
             continue
