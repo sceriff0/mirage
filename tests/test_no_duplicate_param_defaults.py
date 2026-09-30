@@ -36,10 +36,10 @@ import re
 import warnings
 from pathlib import Path
 
-from tests.drape_shims import shims, source_of
 from tests.nfmodel import block_extent as _block_extent
 from tests.nfmodel import strip_comments as _strip_comments
 from tests.nfmodel import strip_comments_and_strings as _strip_comments_and_strings
+from tests.stare_shims import shims, source_of
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "nextflow.config"
@@ -744,8 +744,8 @@ def find_argparse_default_sites():
     required: list[tuple[Path, str, str, str]] = []
     no_correspondence: list[tuple[Path, str]] = []
     for shim in sorted(BIN_DIR.rglob("*.py")):
-        # A DRAPE shim (bin/tiled_stitch.py etc.) carries no argparse of its own: its
-        # flags live in the packages/drape stage it re-exports. Read that file, but keep
+        # A STARE shim (bin/tiled_stitch.py etc.) carries no argparse of its own: its
+        # flags live in the packages/stare stage it re-exports. Read that file, but keep
         # the SHIM's name for the per-script map -- that is the name the module invokes.
         path = source_of(shim)
         try:
@@ -823,7 +823,7 @@ def test_no_duplicate_bin_argparse_defaults():
 
     offending = []
     for path, flag, key, python_default, via in matched:
-        # keyed by the SHIM's name for a DRAPE stage (`tiled_stitch.py:--pixel-size`),
+        # keyed by the SHIM's name for a STARE stage (`tiled_stitch.py:--pixel-size`),
         # the same name the module invokes and the per-script map is built from
         allowlist_key = f"{_shim_name(path)}:{flag}"
         if allowlist_key in ARGPARSE_DEFAULT_ALLOWLIST:

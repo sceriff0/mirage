@@ -128,7 +128,7 @@ def test_the_ome_header_records_the_physical_pixel_size(tmp_path):
 
 
 def test_the_tiff_resolution_tags_are_not_lost(tmp_path):
-    """The existing scale channel must survive -- consumers downstream of DRAPE read these."""
+    """The existing scale channel must survive -- consumers downstream of STARE read these."""
     out = _stitch(tmp_path)
 
     with tifffile.TiffFile(str(out)) as tif:

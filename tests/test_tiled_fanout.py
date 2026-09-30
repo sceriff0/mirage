@@ -83,7 +83,7 @@ def test_fanout_scripts_chain_into_a_registered_slide(tmp_path):
             "--halo",
             "32",
             # --max-dim is REQUIRED (no default): a default in bin/tiled_coarse.py would be a
-            # fourth, unpinned copy of RegPresets.DRAPE.high.coarse_max_dim. 256 keeps this
+            # fourth, unpinned copy of RegPresets.STARE.high.coarse_max_dim. 256 keeps this
             # fixture's 512 px planes at decimation factor 2, which is what the chain asserts.
             "--max-dim",
             "256",

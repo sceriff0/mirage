@@ -28,8 +28,8 @@ PLAN = [
         "valis",
         "valis_high_micro2",
     ),
-    ("tiled_high_s128", "registration", "drape", ""),
-    ("tiled_low_s64", "registration", "drape", ""),
+    ("tiled_high_s128", "registration", "stare", ""),
+    ("tiled_low_s64", "registration", "stare", ""),
     ("ashlar_t1024_s240", "external", "ashlar", ""),
     ("seg_cellsam", "segmentation", "seg", ""),
 ]
@@ -132,7 +132,7 @@ def test_the_report_summarises_by_method_and_says_what_to_do(bench, capsys):
 
 
 def test_method_filter_and_all(bench, capsys):
-    st.main([str(bench), "--method", "drape", "--all"])
+    st.main([str(bench), "--method", "stare", "--all"])
     out = capsys.readouterr().out
     assert "tiled_high_s128" in out and "tiled_low_s64" in out
     assert "valis_high_micro2" not in out

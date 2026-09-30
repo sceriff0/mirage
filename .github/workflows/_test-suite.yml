@@ -194,8 +194,8 @@ jobs:
       # preference: the same pins used to be written twice -- once in this YAML and
       # once in the production image -- and a 42 KB guard test existed only to prove
       # the two copies were equal. requirements/ci.txt `-r`-includes
-      # requirements/segeval.txt and requirements/drape.txt, the very files
-      # containers/segeval and containers/drape build from, so there is one copy and
+      # requirements/segeval.txt and requirements/stare.txt, the very files
+      # containers/segeval and containers/stare build from, so there is one copy and
       # nothing left to prove equal. Read requirements/ci.txt: it documents what this
       # environment is, and the one place (anndata) where it honestly cannot match a
       # shipped image.
@@ -210,7 +210,7 @@ jobs:
       # torch-cpu.txt is installed for tests/test_valis_matching_bounds.py (module-scope
       # `import torch`, the VALIS matcher's no_grad wrapper). kornia and the "DISK front-end
       # is not skipped" proof went on 2026-09-27 with the DISK + LightGlue COARSE front-end
-      # itself; the DRAPE image (containers/drape) carries neither. torch-cpu.txt's
+      # itself; the STARE image (containers/stare) carries neither. torch-cpu.txt's
       # --index-url must not leak into another resolve, hence its own line (see the action).
       - name: Set up Python ${{ matrix.python-version }} and the CI stack
         uses: ./.github/actions/setup-python-env

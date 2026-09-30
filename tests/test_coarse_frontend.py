@@ -2,14 +2,14 @@
 
 There is exactly ONE front-end, reached through ``estimate_rigid`` / ``estimate_anchor``: an
 FFT NCC rotation sweep refined at the thumbnail, with a scikit-image ORB fallback and a loud
-refusal (packages/drape/tests/test_coarse_anchor.py holds the hard-case and fallback tests).
+refusal (packages/stare/tests/test_coarse_anchor.py holds the hard-case and fallback tests).
 It replaced DISK + LightGlue on 2026-09-27. The three classical CPU alternatives and the
 ``estimate_affine`` dispatch table deleted for v1.0.0 stay deleted -- the ORB of the fallback
 is a different, internal shape (``_orb_fallback``), not the old selectable front-end --
 and ``test_the_deleted_frontends_are_really_gone`` below is what stops one coming back
 without a decision.
 
-Nothing here skips: the anchor needs no torch (the DRAPE image, containers/drape, has none),
+Nothing here skips: the anchor needs no torch (the STARE image, containers/stare, has none),
 and the suite step's MIRAGE_STRICT_SKIPS floor fails CI on any unexpected skip.
 
 Import note: coarse_align.py does ``from logger import get_logger`` at module scope (an

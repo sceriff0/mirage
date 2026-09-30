@@ -227,7 +227,7 @@ pairing itself is thin — check the rigid stage before trusting the later numbe
   `displacement_px_p50` when no pixel size was available), **one point per slide**.
   A directory holding both calibrated (µm) and uncalibrated (px) slides for the
   same stage is never mixed into one histogram: it is split into up to two plots,
-  one per unit actually present, each titled with its own unit — the DRAPE (formerly STARE)
+  one per unit actually present, each titled with its own unit — the STARE
   (tiled) backend is the common source of px-only slides, not an edge case. The
   JSON carries summary statistics, not per-cell values, so the distribution is
   across slides; a single-slide run renders a single bar and says `n=1`. The

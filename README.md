@@ -30,7 +30,7 @@ MIRAGE is a Nextflow DSL2 pipeline for whole slide image (WSI) processing. It su
    - **`valis`** (default) — graph-based whole-stack alignment via
      [VALIS](https://github.com/MathOnco/valis); rigid + non-rigid, with optional staged
      micro-registration.
-   - **`tiled`** (DRAPE, formerly STARE) — JVM-free, internally tiled and fully parallel; coarse NCC
+   - **`tiled`** (STARE) — JVM-free, internally tiled and fully parallel; coarse NCC
      rotation-sweep anchor (ORB fallback), per-tile refinement, global solve, tiled warp.
      Every step stays within a few GB, so it runs on a workstation.
 4. **Cell segmentation** (`SEGMENT`) — three interchangeable backends via `--seg_method`:

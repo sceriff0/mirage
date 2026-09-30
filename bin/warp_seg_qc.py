@@ -350,8 +350,16 @@ def run(
         s_ref, ar_ref, c_ref = _stage_geometry(warp, ref_slide, ref_native, stage)
         s_mov, ar_mov, c_mov = _stage_geometry(warp, moving_slide, mov_native, stage)
         rec, stage_iou = score_stage(
-            s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, idx_ref, idx_mov,
-            return_iou=True, **score_kwargs
+            s_ref,
+            s_mov,
+            c_ref,
+            c_mov,
+            ar_ref,
+            ar_mov,
+            idx_ref,
+            idx_mov,
+            return_iou=True,
+            **score_kwargs,
         )
         records[stage] = rec
         if stage == final_stage and idx_ref.size:
@@ -423,7 +431,9 @@ def write_per_cell_csv(path, per_cell, moving_name) -> int:
         stage = per_cell["stage"]
         for (x, y), d, i in zip(xy, dist, iou):
             iou_str = "" if not np.isfinite(i) else f"{i:.6f}"
-            w.writerow([moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", iou_str, stage])
+            w.writerow(
+                [moving_name, f"{x:.4f}", f"{y:.4f}", f"{d:.6f}", iou_str, stage]
+            )
         return int(dist.size)
 
 
@@ -651,17 +661,17 @@ def parse_args(argv=None):
         default="valis",
         choices=["valis", "tiled"],
         help="registration method that produced the transform. 'valis' (default) loads a registrar "
-        "pickle behind a BioFormats JVM; 'tiled' loads a DRAPE manifest (M0 + mesh) via "
+        "pickle behind a BioFormats JVM; 'tiled' loads a STARE manifest (M0 + mesh) via "
         "tiled_stage_warp and needs no JVM — the reg_qc=2 scorer is otherwise identical.",
     )
     return ap.parse_args(argv)
 
 
 def _main_tiled(a):
-    """JVM-free reg_qc=2 for the tiled ('DRAPE') method.
+    """JVM-free reg_qc=2 for the tiled ('STARE') method.
 
     The scorer is method-agnostic (it takes an injected ``warp``), so the only tiled-specific work
-    is building that warper from the DRAPE manifest instead of a VALIS registrar. The manifest is
+    is building that warper from the STARE manifest instead of a VALIS registrar. The manifest is
     self-contained: it names the reference and carries one moving slide, both reachable by the
     warper; stages are ``native/rigid/refined`` (no destructive micro composition, so always
     separable and no checkpoint needed).
@@ -728,7 +738,7 @@ def main(argv=None):
     a = parse_args(argv)
 
     # The manifest-based method carries no VALIS registrar and needs no JVM — score through
-    # the DRAPE manifest (M0 + mesh) instead. Equality rather than `!= "valis"` so a THIRD
+    # the STARE manifest (M0 + mesh) instead. Equality rather than `!= "valis"` so a THIRD
     # method has to declare which of the two readers it wants.
     if a.method == "tiled":
         return _main_tiled(a)

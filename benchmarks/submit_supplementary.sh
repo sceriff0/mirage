@@ -11,15 +11,15 @@
 # EVERY SUPPLEMENTARY FIGURE, ONE JOB -- S2..S11 + the method mosaic
 # ============================================================================
 # Draws from what the arms ALREADY computed (benchmarks/submit_arms.sh: one results root
-# holding VALIS, DRAPE, ASHLAR and the segmentation arms). Registers nothing,
+# holding VALIS, STARE, ASHLAR and the segmentation arms). Registers nothing,
 # segments nothing, launches no pipeline: seconds-to-minutes per figure, so resubmit
 # freely after changing benchmarks/configs/supplementary.yaml.
 #
 #   mirage half  benchmarks/supplementary.py (renders in bolt3x/mirage-quantify)
-#     mosaic   Before | VALIS | STARE-or-DRAPE | ASHLAR, Dice per cell     [priority]
+#     mosaic   Before | VALIS | STARE-or-STARE | ASHLAR, Dice per cell     [priority]
 #     S2       secondary-only controls at one pinned contrast   (S2.csv in the config)
 #     S3a      per-round DAPI retention             (quantification/*_round_qc.csv)
-#     S4, S7   Before | VALIS | STARE/DRAPE (| ASHLAR) on one crop + matched inset
+#     S4, S7   Before | VALIS | STARE/STARE (| ASHLAR) on one crop + matched inset
 #     S5       registration cost by tier            (the Nextflow traces)
 #     S6       nuclei | cell masks per backend + pairwise Dice
 #     S8       Dice and displacement by case and by panel pair
@@ -28,7 +28,7 @@
 #     S10      CD45+ per case + cold/intermediate/hot    S11  every deconvolution method
 #
 # EVERY COMPARISON IN EVERY COMBINATION -- you choose by looking at OUT/index.html:
-#   set    stare | drape | all      config  high | best (picks.csv)    variant  v1..vN
+#   set    stare | stare | all      config  high | best (picks.csv)    variant  v1..vN
 # and the SAME tissue in every set and config (one anchor render picks the ROIs).
 #
 # Submit (login node; every knob in --export, never `VAR=x sbatch`):
@@ -76,7 +76,7 @@ done
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)
 head -n1 "$PLAN" | tr ',' '\n' | grep -qx method || {
   echo "$PLAN has no \`method\` column: rebuild it with this checkout's submit_arms.sh" >&2
-  echo "(STARE and DRAPE are both registration_method=tiled; only \`method\` tells them apart)" >&2
+  echo "(STARE and STARE are both registration_method=tiled; only \`method\` tells them apart)" >&2
   exit 1
 }
 

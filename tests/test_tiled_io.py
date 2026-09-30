@@ -1,7 +1,7 @@
 """Tests for bin/utils/tiled_io.py's own primitives, independent of any particular caller.
 
 ``open_lazy`` is the shared entry point every lazy-zarr-view reader in this repo goes through
-(the DRAPE tiled fan-out, the illumination-correction tiling/apply pair, the two QC sites, the
+(the STARE tiled fan-out, the illumination-correction tiling/apply pair, the two QC sites, the
 segmentation readers). Its callers rely on different guarantees it makes --
 ``tests/test_tiled_coarse_thumbnail.py`` and ``tests/test_tiled_reg_tile_lazy.py`` already pin
 the region-read (bounded-memory) side. This file pins the OTHER guarantee: every call opens a

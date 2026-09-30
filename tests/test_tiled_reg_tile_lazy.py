@@ -45,14 +45,14 @@ pytest.importorskip("zarr")
 tifffile = pytest.importorskip("tifffile")
 
 import tiled_reg_tile  # noqa: E402
-from drape.vector_grid import estimate_tile_vectors, read_box  # noqa: E402
+from stare.vector_grid import estimate_tile_vectors, read_box  # noqa: E402
 from tiled_io import load_channels, nuclear_channel  # noqa: E402
 from tiled_warp import warp_image  # noqa: E402
 
 # The pipeline's key set, pinned EXACTLY (not with `>=`) on purpose -- a control point is a
 # published artifact and a silent extra key is how two writers drift. ref_fg / mov_fg came
 # with Phase 1 of the foreground work; lattice / vectors / rejected / pass1 with the window-
-# vector grid (drape.vector_grid); gauss_fallback_rate with the Xue min-subtracted sub-pixel
+# vector grid (stare.vector_grid); gauss_fallback_rate with the Xue min-subtracted sub-pixel
 # fit (Phase 5b). Update deliberately, naming the new keys.
 CONTROL_KEYS = {
     "ix",

@@ -74,7 +74,7 @@ def test_the_prose_copies_state_the_same_sizes():
 
 
 def test_no_copy_still_carries_the_old_non_rigid_column():
-    """4096 was the old `high`/`medium` non-rigid size; the DRAPE table has its own
+    """4096 was the old `high`/`medium` non-rigid size; the STARE table has its own
     4096 (a tile size), so the check is on the VALIS phrasings only."""
     stale = re.compile(r"2048/4096|1024/4096|256/1024|\[high: 4096|low: 256\]")
     for rel in (

@@ -463,7 +463,7 @@ def test_the_write_is_tiled(monkeypatch, tmp_path):
     ``write_ome_tiff`` used to write a STRIPED TIFF (tifffile's default): a plain
     ``tifffile.imread(path, aszarr=True)`` view of that reports ``chunks=(1, H, W)``, one
     chunk per whole plane, so a single "read just this 2048x2048 region" call downstream
-    (the BaSiC path, the DRAPE registration path, SPLIT_CHANNELS, the QC processes) has to
+    (the BaSiC path, the STARE registration path, SPLIT_CHANNELS, the QC processes) has to
     decode the ENTIRE plane to slice it out. Measured on a 6000x6000 uint16 plane: a single
     2048^2 region read peaks at 76.7 MiB striped vs 16.0 MiB tiled.
 

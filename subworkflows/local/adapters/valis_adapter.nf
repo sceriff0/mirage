@@ -25,7 +25,7 @@
         size_logs / versions
 
     `intrinsic_tre` is deliberately NOT named after any one method. Both shipped backends
-    estimate a TRE from their own registration -- VALIS a feature-distance CSV, DRAPE a
+    estimate a TRE from their own registration -- VALIS a feature-distance CSV, STARE a
     *_tre.json -- and the seam used to call the slot `summary` and then re-emit it as
     `valis_summary`, which pinned one method's name into the artifact vocabulary all the way
     out to the QC report. Formats are NOT normalised here; that is the reader's job.

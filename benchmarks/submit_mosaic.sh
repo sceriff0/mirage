@@ -147,7 +147,7 @@ ensure_sif() {                     # ensure_sif <registry/name:tag> -> prints th
   printf '%s' "$f"
 }
 export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(ensure_sif labsyspharm/ashlar:1.20.0)}"
-export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-drape:1.0.0)}"
+export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-stare:1.0.0)}"
 export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(ensure_sif bolt3x/mirage-regqc:1.0.0)}"
 # The figures need matplotlib + scikit-image + tifffile AND imagecodecs: the slides are LZW,
 # and the segeval image cannot decode them (job 6844142). The quantify image carries all four.

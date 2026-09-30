@@ -1,4 +1,4 @@
-"""Tests for bin/utils/tiled_warp.py — the image warp of the DRAPE method (the WARP_TILE core).
+"""Tests for bin/utils/tiled_warp.py — the image warp of the STARE method (the WARP_TILE core).
 
 Warps a moving image into the reference frame through the same transform the QC warper uses: the
 global affine ``M0`` plus the smooth mesh residual. Uses the inverse map + bilinear resampling, so

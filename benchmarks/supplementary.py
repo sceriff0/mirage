@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """supplementary.py -- EVERY supplementary figure (S2-S11 + the method mosaic) in one run.
 
-One results root holds every method (benchmarks/submit_arms.sh: VALIS, DRAPE, ASHLAR,
+One results root holds every method (benchmarks/submit_arms.sh: VALIS, STARE, ASHLAR,
 the segmentation arms), and arm_plan.csv says which arm is
 which method. This module draws the manuscript's supplementary set FROM that root. It
 re-registers nothing and re-segments nothing: every picture is a re-render of slides
@@ -12,7 +12,7 @@ Nextflow traces the arms already wrote.
 WHAT YOU CHOOSE BETWEEN. The comparisons are drawn in every combination, so the choice
 is made by looking, not by re-running:
 
-    method set   all   = Before | VALIS | DRAPE | ASHLAR
+    method set   all   = Before | VALIS | STARE | ASHLAR
     config       high  = each method's shipped high tier (supplementary.yaml `high:`).
                          THE DEFAULT: a legend that names no registration tier means the
                          high one (user ruling 2026-09-30). If the configured arm is not
@@ -29,7 +29,7 @@ Outputs (``-o OUT``):
 
     OUT/picks.csv                   the arm behind every (method, config), with its numbers
     OUT/mosaic/<set>_<config>/v<k>/ reg_mosaic per patient (overlay + checker), Dice in cells
-    OUT/S4/<set>_<config>/v<k>/     Before | VALIS | DRAPE (+ASHLAR), matched insets
+    OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE (+ASHLAR), matched insets
     OUT/S5/                         registration cost by tier, three method subsets
     OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
     OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
@@ -65,16 +65,16 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Registration methods, in the order their columns/rows are drawn.
-REG_METHODS = ("valis", "drape", "ashlar")
-TITLE = {"valis": "VALIS", "drape": "DRAPE", "ashlar": "ASHLAR"}
-DEFAULT_SETS = {"all": ["valis", "drape", "ashlar"]}
+REG_METHODS = ("valis", "stare", "ashlar")
+TITLE = {"valis": "VALIS", "stare": "STARE", "ashlar": "ASHLAR"}
+DEFAULT_SETS = {"all": ["valis", "stare", "ashlar"]}
 # The arms that ARE a registration of their method. registration_qc rows re-score a base
 # arm with another QC instrument -- same registration, different ruler -- so ranking them
 # would pick a ruler, not a method configuration.
 _RANKED_KINDS = ("registration", "external")
 FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
 # The tier is IN every tiered arm's name (build_arm_plan.py): valis_<tier>_micro<d>,
-# tiled_<tier>_s<stride> (DRAPE). ASHLAR has no tier.
+# tiled_<tier>_s<stride> (STARE). ASHLAR has no tier.
 _TIER_RE = re.compile(r"^(?:valis|tiled)_(high|medium|low)_")
 DEFAULT_CONFIGS = ["high"]
 
@@ -216,7 +216,7 @@ def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
         raise SystemExit(
             f"{ctx.plan_csv} has no `method` column: build it with this checkout's "
             "benchmarks/build_arm_plan.py (submit_arms.sh does), which labels every row "
-            "valis/drape/ashlar/seg"
+            "valis/stare/ashlar/seg"
         )
     cand = plan[plan["method"].isin(REG_METHODS) & plan["arm_kind"].isin(_RANKED_KINDS)]
     per_run = pd.DataFrame(columns=["run_id", "dice", "disp_um", "n"])
@@ -349,7 +349,7 @@ def _label(method: str, arm: str, config: str) -> str:
 
 # ------------------------------------------------------------------------- mosaic --
 def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
-    """Before | VALIS | DRAPE | ASHLAR, Dice in every cell -- the priority figure.
+    """Before | VALIS | STARE | ASHLAR, Dice in every cell -- the priority figure.
 
     The anchor (set `all`, config `high`) picks the ROIs; every other set and config is
     drawn on exactly those ROIs (--rois-json), so a column differs only by its method."""
@@ -610,7 +610,7 @@ def fig_s7(ctx, picks, patients, final):
 
 # ----------------------------------------------------------------------------- S5 --
 def fig_s5(ctx: Ctx):
-    """Registration cost by tier, VALIS against DRAPE."""
+    """Registration cost by tier, VALIS against STARE."""
     if ctx.dry_run:
         print("[dry-run] S5: registration_cost_by_tier from the traces")
         return
@@ -635,7 +635,7 @@ def fig_s5(ctx: Ctx):
         "cpu_hours_per_slide" if per_slide else "reg_cpu_hours",
     ]
     labels = [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"]
-    for name, keep in (("all", ("valis", "drape")),):
+    for name, keep in (("all", ("valis", "stare")),):
         sub = cost[cost["backend"].isin(keep)]
         if sub["backend"].nunique() < 1:
             continue
@@ -1118,14 +1118,14 @@ def check(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame, ihc: Path | None):
         add("cohort", "ALL", f"patients: [] -> every case on disk: {patients}")
     s4 = ctx.opt("S4", default={}) or {}
     s4_pid = str(s4.get("patient") or (patients[0] if patients else ""))
-    # S4 compares VALIS with DRAPE; S7 and S8 need one method.
-    s4_ok = "valis" in have and "drape" in have
+    # S4 compares VALIS with STARE; S7 and S8 need one method.
+    s4_ok = "valis" in have and "stare" in have
     add(
         "S4",
         ("READY" if len(have) == len(REG_METHODS) else "PARTIAL")
         if s4_ok and s4_pid
         else "MISSING",
-        f"case {s4_pid or '?'}; needs VALIS + DRAPE; {reg_detail}",
+        f"case {s4_pid or '?'}; needs VALIS + STARE; {reg_detail}",
     )
     s7 = [p for p in patients if p != s4_pid]
     add(

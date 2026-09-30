@@ -153,7 +153,7 @@ PROSE_HOMES = [
     PARAM_UTILS,
     REGISTRATION_SCHEMATIC,
 ]
-# `1(?![.\d])`, not `1\b`: registration-schematic.html states DRAPE's gate as "default 1.0 px",
+# `1(?![.\d])`, not `1\b`: registration-schematic.html states STARE's gate as "default 1.0 px",
 # and `\b` sits between the 1 and the dot.
 STALE_ONE_IS_DEFAULT = re.compile(
     r"micro-rigid (?:only )?(?:depth )?(?:\(default\)|\[default\]|by default|—\s*default)"

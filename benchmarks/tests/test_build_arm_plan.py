@@ -522,14 +522,22 @@ def test_run_arms_resolves_the_checkpoint_from_the_plan(plan):
     )
 
 
+def _pass_calls() -> list[str]:
+    """The `run_pass <kind> [part]` calls of run_arms.sh, in the order they run."""
+    return [
+        ln.strip().split(";")[0].strip()
+        for ln in (BENCH / "run_arms.sh").read_text().splitlines()
+        if ln.strip().startswith("run_pass ")
+    ]
+
+
 def test_preprocess_arm_runs_before_the_arms_that_resume_from_it():
-    """Pass order in run_arms.sh is a dependency, not a preference."""
-    script = (BENCH / "run_arms.sh").read_text()
-    m = re.search(r"for kind in ([\w ]+); do", script)
-    assert m, "could not find the pass loop"
-    order = m.group(1).split()
-    assert order.index("preprocess") < order.index("registration")
-    assert order.index("registration") < order.index("segmentation")
+    """Pass order in run_arms.sh is a dependency, not a preference: preprocess, then the
+    reference arm(s) segmentation reads, then segmentation."""
+    calls = _pass_calls()
+    i = calls.index
+    assert i("run_pass preprocess") < i("run_pass registration ref")
+    assert i("run_pass registration ref") < i("run_pass segmentation")
 
 
 def test_compute_arm_runs_the_whole_pipeline(plan):
@@ -1206,21 +1214,21 @@ def test_base_arms_carry_the_baseline_instruments(cfg, plan):
             ), r["arm"]
 
 
-def test_qc_pass_runs_after_registration_and_before_the_rest():
-    """registration_qc after registration: a cross resumes its base's finished session.
-    external (ASHLAR) right after registration and BEFORE the QC pass (2026-09-14): it
-    needs only its reference arm's published nuclei, and behind the 90-cross QC pass it
-    waited days at a low job ceiling. Both before segmentation and the timed compute arm."""
-    script = (BENCH / "run_arms.sh").read_text()
-    m = re.search(r"for kind in ([\w ]+); do", script)
-    order = m.group(1).split()
+def test_qc_pass_runs_last_after_everything_a_figure_needs():
+    """registration_qc resumes its base's finished session and feeds no supplementary
+    figure, so it runs LAST (2026-09-30); segmentation is queued before the other
+    registration arms, ASHLAR runs beside them, and the timed compute arm runs alone."""
+    calls = _pass_calls()
+    i = calls.index
     assert (
-        order.index("registration")
-        < order.index("external")
-        < order.index("registration_qc")
-        < order.index("segmentation")
-        < order.index("compute")
-    ), order
+        i("run_pass registration ref")
+        < i("run_pass segmentation")
+        < i("run_pass registration rest")
+        < i("run_pass external")
+        < i("run_pass compute")
+        < i("run_pass registration_qc")
+    ), calls
+    script = (BENCH / "run_arms.sh").read_text()
     for flag in ("seg_qc_pairing", "reg_tiled_stride"):
         assert f"add_param {flag} " in script, f"run_arms.sh does not forward --{flag}"
 

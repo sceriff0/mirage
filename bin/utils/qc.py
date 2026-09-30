@@ -128,7 +128,7 @@ def compose_on_reference_canvas(ref: NDArray, mov: NDArray) -> NDArray:
 
     Origin-aligned rather than centre-aligned because that is the convention
     both registration backends use: VALIS resolves slides into a shared space
-    whose origin is the reference's, and the tiled/DRAPE backend warps each
+    whose origin is the reference's, and the tiled/STARE backend warps each
     moving slide into the reference's shape from the same corner.
     """
     if ref.ndim != 2 or mov.ndim != 2:

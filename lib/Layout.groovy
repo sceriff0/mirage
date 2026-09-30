@@ -336,7 +336,7 @@ class Layout {
      * CONVERT_IMAGE's output, published under `<pid>/converted/`; only the BaSiC
      * branch's APPLY_PROFILES publishes under `<pid>/preprocessed/`. This used to be
      * pinned to PREPROCESSED, so at the default every single-slide patient's and
-     * every DRAPE reference's row named a file that does not exist (a real run,
+     * every STARE reference's row named a file that does not exist (a real run,
      * 2026-09-17) -- invisible to tests/checkpoint_manifest.nf.test until it gained
      * skip_preprocessing=true cases, because conf/test.config pins it false. The
      * same branch subworkflows/local/preprocess.nf takes for preprocessed.csv.

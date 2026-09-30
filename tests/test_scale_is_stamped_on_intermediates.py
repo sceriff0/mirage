@@ -84,7 +84,7 @@ def test_split_channels_warns_when_the_input_disagrees(tmp_path, caplog):
 
 
 def test_tiled_stitch_stamps_the_configured_scale(tmp_path):
-    """The DRAPE path's own writer, which dropped the scale on the whole slide."""
+    """The STARE path's own writer, which dropped the scale on the whole slide."""
     pytest.importorskip("scipy")
     pytest.importorskip("zarr")
     import tiled_stitch

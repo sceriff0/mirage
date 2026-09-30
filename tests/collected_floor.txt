@@ -350,7 +350,7 @@
 
 #
 #
-# RE-MEASURED 2026-09-02 on release/p09-qc-report, task 7 (replace the DRAPE
+# RE-MEASURED 2026-09-02 on release/p09-qc-report, task 7 (replace the STARE
 # per-slide TRE table with per-stage plots -- _tiled_tre_tables ->
 # _tiled_tre_plots): 1337 passed, 13 skipped, 0 failed -- 1350 collected, up
 # from the prior entry's 1349. tests/test_generate_qc_report.py lost two

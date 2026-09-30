@@ -1,4 +1,4 @@
-"""One results root, every method: VALIS, DRAPE, ASHLAR, seg, compute.
+"""One results root, every method: VALIS, STARE, ASHLAR, seg, compute.
 
 The properties the single-launcher design rests on:
 
@@ -26,7 +26,7 @@ from benchmarks.tests.test_subset_rerun_equivalence import _launch_cfg
 BENCH = Path(__file__).resolve().parents[1]
 
 
-def test_every_row_names_its_method_and_tiled_here_is_drape():
+def test_every_row_names_its_method_and_tiled_here_is_stare():
     plan = build_arm_plan(_launch_cfg())
     assert {r["method"] for r in plan} <= set(METHODS)
     assert all(r["method"] for r in plan), [
@@ -34,7 +34,7 @@ def test_every_row_names_its_method_and_tiled_here_is_drape():
     ]
     for r in plan:
         if r.get("registration_method") == "tiled":
-            assert r["method"] == "drape", r["run_id"]
+            assert r["method"] == "stare", r["run_id"]
         assert r["role"] == ""
 
 
@@ -101,7 +101,7 @@ def test_every_launch_records_the_commit_that_ran_it(launcher):
 def test_replace_never_moves_an_upstream_row(launcher):
     plan, root, run = launcher
     assert run(plan).returncode == 0
-    sub = select_methods(plan, ["drape"])
+    sub = select_methods(plan, ["stare"])
     assert [r["run_id"] for r in sub if r["role"] == "upstream"] == [
         "preprocess_shared"
     ]
@@ -142,7 +142,7 @@ def test_cost_by_tier_keys_each_method_on_its_own_depth():
     df = pd.DataFrame(
         rows(
             "tiled_high_s128",
-            "drape",
+            "stare",
             "tiled",
             reg_tiled_stride=128.0,
             reg_micro_reg=float("nan"),
@@ -156,7 +156,7 @@ def test_cost_by_tier_keys_each_method_on_its_own_depth():
         )
     )
     out = quality.registration_cost_by_tier(df, "/nonexistent").set_index("run_id")
-    assert out.loc["tiled_high_s128", "backend"] == "drape"
+    assert out.loc["tiled_high_s128", "backend"] == "stare"
     assert out.loc["tiled_high_s128", "depth"] == "128"
     assert out.loc["valis_high_micro2", "backend"] == "valis"
     assert out.loc["valis_high_micro2", "depth"] == "2"

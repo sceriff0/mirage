@@ -35,24 +35,24 @@ import pytest
 from packaging.requirements import InvalidRequirement, Requirement
 
 from tests.ci_actions import strip_line_comment
-from tests.drape_shims import package_module_file
 from tests.nfmodel import processes, strip_comments
+from tests.stare_shims import package_module_file
 
 REPO = Path(__file__).resolve().parent.parent
 CONTAINERS = REPO / "containers"
 
 # FIRST-PARTY PACKAGES: repository code that is pip-installed rather than staged onto
-# $PATH from bin/. `drape` (packages/drape) is the DRAPE registration method; the
+# $PATH from bin/. `stare` (packages/stare) is the STARE registration method; the
 # bin/tiled_*.py scripts the tiled modules invoke are shims over its stages. The import
-# walker follows `from drape.x import y` INTO packages/drape/src (so the lazy torch/kornia
+# walker follows `from stare.x import y` INTO packages/stare/src (so the lazy torch/kornia
 # /zarr/scipy/skimage imports the tiled image's REQUIRED_RUNTIME_IMPORTS entries name are
-# still found where they now live), and never reports `drape` as a third-party
+# still found where they now live), and never reports `stare` as a third-party
 # distribution -- what it must check instead is that an image whose scripts reach the
 # package INSTALLS it, which `test_image_whose_scripts_reach_a_first_party_package_installs_it`
 # does by reading the Dockerfile's COPY + pip install of the package directory.
 # {import name: (repo-relative source dir the Dockerfile COPYs, pip distribution name)}
 FIRST_PARTY_PACKAGES = {
-    "drape": ("packages/drape", "drape-registration"),
+    "stare": ("packages/stare", "stare-registration"),
 }
 REQUIREMENTS = REPO / "requirements"
 CONSTRAINTS = REQUIREMENTS / "constraints.txt"
@@ -221,7 +221,7 @@ def _dockerfile_pip_tokens(text):
     while torch/kornia were missing from the counted set -- reporting a container "installs
     everything its scripts import" when the packages the DISK+LightGlue front-end actually
     needs were invisible to it. The defect was first found in the now-deleted containers/
-    stare-ml image; containers/tiled used the same chained form until containers/drape
+    stare-ml image; containers/tiled used the same chained form until containers/stare
     replaced it (2026-09-27).
     """
     joined = re.sub(r"\\\s*\n", " ", text)
@@ -412,7 +412,7 @@ def _module_container_and_scripts():
     backend-dispatched way, via ``lib/WarpBackends.groovy``, but is deliberately NOT given
     the same treatment here. Its VALIS backend's image (``cdgatenbee/valis-wsi``) is not a
     first-party ``bolt3x/mirage-*`` image and has no ``containers/`` entry to check against;
-    its tiled backend's image (``bolt3x/mirage-drape``) already gets script coverage from
+    its tiled backend's image (``bolt3x/mirage-stare``) already gets script coverage from
     tiled_coarse.nf / tiled_reg_tile.nf / etc above. Attributing ``warp_seg_qc.py`` itself to
     'tiled' would be unsound the way SEGMENT's attribution is not: SEGMENT has three separate
     per-backend entrypoint FILES (segment.py / segment_instantseg.py / segment_cellsam.py),
@@ -503,8 +503,8 @@ def _import_names(node, local_files, local_pkgs):
     vendored-package case -- has exactly one definition.
     """
     if isinstance(node, ast.Import):
-        # `import drape.stages.coarse` -- the dotted name, so the walker can follow it
-        # into packages/drape/src; anything else is its top-level distribution name.
+        # `import stare.stages.coarse` -- the dotted name, so the walker can follow it
+        # into packages/stare/src; anything else is its top-level distribution name.
         return [
             a.name if package_module_file(a.name) else a.name.split(".")[0]
             for a in node.names
@@ -513,7 +513,7 @@ def _import_names(node, local_files, local_pkgs):
         return []
     head = node.module.split(".")[0] if (node.level == 0 and node.module) else None
     if head in FIRST_PARTY_PACKAGES:
-        # `from drape.stages import coarse as _impl` / `from drape.slide_io import
+        # `from stare.stages import coarse as _impl` / `from stare.slide_io import
         # open_lazy`: the module itself, plus any imported NAME that is a submodule.
         # Everything else imported from it is a symbol, not a dependency.
         names = [node.module]
@@ -656,20 +656,20 @@ def _first_party_packages_installed(container):
 
 def test_the_first_party_package_walker_follows_the_shim_into_the_package():
     """Non-vacuity for the package-aware walk: bin/tiled_coarse.py is a shim over
-    drape.stages.coarse, and following it must reach the package's coarse_align.py --
+    stare.stages.coarse, and following it must reach the package's coarse_align.py --
     the file that holds the COARSE anchor (and whose imports this walk must therefore see)."""
     files, _, _ = _reachable_local_files("tiled_coarse.py")
     names = {p.name for p in files}
     assert "tiled_coarse.py" in names and "coarse.py" in names, sorted(names)
     assert "coarse_align.py" in names, sorted(names)
-    assert _first_party_packages_reached("tiled_coarse.py") == {"drape"}
-    assert "drape" not in _third_party_imports("tiled_coarse.py")
+    assert _first_party_packages_reached("tiled_coarse.py") == {"stare"}
+    assert "stare" not in _third_party_imports("tiled_coarse.py")
 
 
 @pytest.mark.parametrize("container", _container_dirs())
 def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
-    """The `drape` twin of the bioio rule: a shim that imports the package at module
-    scope fails at import in any image that did not pip-install packages/drape -- and
+    """The `stare` twin of the bioio rule: a shim that imports the package at module
+    scope fails at import in any image that did not pip-install packages/stare -- and
     an image that installs it while none of its scripts reach it carries dead weight."""
     reached = set()
     for script in _module_container_and_scripts().get(container, set()):
@@ -686,13 +686,13 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     )
 
 
-def test_the_first_party_install_scan_reads_the_drape_dockerfile():
+def test_the_first_party_install_scan_reads_the_stare_dockerfile():
     """Non-vacuity: the scan must find the one install that exists, and must NOT be
     satisfied by a COPY alone (a probe Dockerfile with the COPY but no pip line)."""
-    assert _first_party_packages_installed("drape") == {"drape"}
-    probe = "COPY packages/drape /tmp/drape\nRUN echo no install\n"
+    assert _first_party_packages_installed("stare") == {"stare"}
+    probe = "COPY packages/stare /tmp/stare\nRUN echo no install\n"
     text = re.sub(r"\\\s*\n", " ", probe)
-    assert not re.search(r"pip3?\s+install\b[^\n&]*\s/tmp/drape(?:\s|$)", text)
+    assert not re.search(r"pip3?\s+install\b[^\n&]*\s/tmp/stare(?:\s|$)", text)
 
 
 def test_walker_ignores_imports_nested_in_function_bodies(tmp_path):
@@ -753,23 +753,23 @@ REQUIRED_RUNTIME_IMPORTS = {
             "is called, on every .svs/.qptiff/.vsi/.scn/.mrxs/.bif/.ims read."
         ),
     },
-    "drape": {
+    "stare": {
         # torch/kornia USED to be listed here (for the retired containers/tiled): COARSE's
         # anchor was DISK + LightGlue. Since 2026-09-27 it is an FFT NCC rotation sweep with a
         # scikit-image ORB fallback and imports neither
-        # (test_tiled_coarse_imports_no_learned_stack below), and containers/drape installs
+        # (test_tiled_coarse_imports_no_learned_stack below), and containers/stare installs
         # neither.
         "zarr": (
-            "drape/slide_io.py's open_lazy (tifffile's aszarr region-read view; the "
+            "stare/slide_io.py's open_lazy (tifffile's aszarr region-read view; the "
             "package's copy of bin/utils/tiled_io.py) is called directly by the coarse, "
             "reg_tile and stitch stages for every streamed tile read."
         ),
         "scipy": (
-            "drape/tile_residual.py's residual_displacement -- called from the "
+            "stare/tile_residual.py's residual_displacement -- called from the "
             "reg_tile stage's main flow -- imports scipy.ndimage.gaussian_filter."
         ),
         "skimage": (
-            "drape/tile_residual.py's foreground_fraction/residual_displacement "
+            "stare/tile_residual.py's foreground_fraction/residual_displacement "
             "(both called from the reg_tile stage) import skimage.filters/.registration."
         ),
     },
@@ -1044,8 +1044,8 @@ def test_tiled_coarse_imports_no_learned_stack():
     """
     offenders = []
     for rel in (
-        "packages/drape/src/drape/coarse_align.py",
-        "packages/drape/src/drape/stages/coarse.py",
+        "packages/stare/src/stare/coarse_align.py",
+        "packages/stare/src/stare/stages/coarse.py",
         "bin/utils/coarse_align.py",
         "bin/tiled_coarse.py",
     ):
@@ -1053,7 +1053,7 @@ def test_tiled_coarse_imports_no_learned_stack():
             offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
     assert not offenders, (
         f"torch/kornia is imported by a COARSE file again: {offenders}. The anchor is "
-        "numpy/scipy/scikit-image only; see drape/coarse_align.py's module docstring."
+        "numpy/scipy/scikit-image only; see stare/coarse_align.py's module docstring."
     )
 
 

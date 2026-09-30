@@ -10,7 +10,7 @@ process GENERATE_QC_REPORT {
     input:
     path(preprocess_qc_pngs, stageAs: 'preprocess_qc/*')
     path(registration_qc_pngs, stageAs: 'registration_qc/*')
-    // The registration method's own TRE estimate (VALIS *_summary.csv / DRAPE *_tre.json).
+    // The registration method's own TRE estimate (VALIS *_summary.csv / STARE *_tre.json).
     // Renaming this stageAs directory renames the matching folder inside the published
     // mirage_qc_data_*/ bundle — an accepted, deliberate change of published output.
     path(registration_tre_files, stageAs: 'registration_tre/*')

@@ -7,7 +7,7 @@
 # equal.
 #
 # HOW IT IS USED
-#   * Per-image files (drape.txt, segeval.txt, regqc.txt) open with `-c constraints.txt`;
+#   * Per-image files (stare.txt, segeval.txt, regqc.txt) open with `-c constraints.txt`;
 #     pip resolves that path relative to the file that names it, so the Dockerfiles COPY
 #     both into the same directory.
 #   * Dockerfiles that pin inline pass `-c /tmp/requirements/constraints.txt` on the
@@ -80,7 +80,7 @@ opencv-python-headless==4.10.0.82
 #                  would be forced to this version by a constraint it has no reason to meet.
 #
 #   torch       -> requirements/torch-cpu.txt (2.3.1, CPU index), installed by CI only since
-#                  the tiled image became the torch-free containers/drape (2026-09-27;
+#                  the tiled image became the torch-free containers/stare (2026-09-27;
 #                  kornia.txt went with it). NOT constrained globally: containers/cellsam and
 #                  containers/instanseg get a CUDA-matched torch from their
 #                  `pytorch/pytorch:2.6.0-cuda*` base and never pip-install it, so a global

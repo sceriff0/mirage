@@ -111,7 +111,7 @@ def test_registration_method_enum_matches_the_backend_table():
 def test_no_reg_ashlar_params_remain():
     raw = (REPO / "nextflow.config").read_text()
     code = strip_comments(raw)
-    # Proof the stripped view still holds the params block: a sibling DRAPE parameter
+    # Proof the stripped view still holds the params block: a sibling STARE parameter
     # that must survive. Without it, a strip that blanked the file would pass.
     assert "reg_tiled_tile" in code, (
         "reg_tiled_tile is missing from the comment-stripped nextflow.config -- the "

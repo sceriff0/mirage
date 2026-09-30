@@ -193,15 +193,15 @@ def before_after_box(df, cols, ylabel, title, log_scale=True):
 
 _TIER_ORDER = ("low", "medium", "high")
 # Keyed on the plan's `method` (quality._family). `tiled` only appears for a plan without
-# a `method` column, which is DRAPE.
+# a `method` column, which is STARE.
 _BACKEND_TITLE = {
     "valis": "VALIS",
-    "drape": "DRAPE",
-    "tiled": "DRAPE (tiled)",
+    "stare": "STARE",
+    "tiled": "STARE (tiled)",
 }
 _DEPTH_TITLE = {
     "valis": "micro-reg depth",
-    "drape": "stride (px)",
+    "stare": "stride (px)",
     "tiled": "stride (px)",
 }
 
@@ -209,7 +209,7 @@ _DEPTH_TITLE = {
 def cost_by_tier(frame, metrics, ylabels):
     """Registration cost per backend x tier: one row of panels per metric, one column
     per backend, x = tier (low -> high), one marker series per refinement depth
-    (VALIS reg_micro_reg, DRAPE reg_tiled_stride), dodged
+    (VALIS reg_micro_reg, STARE reg_tiled_stride), dodged
     so depths never overlap. Rows share y, so the backends read on one scale."""
     backends = [b for b in _BACKEND_TITLE if b in set(frame["backend"])]
     fig, axes = plt.subplots(
@@ -243,7 +243,9 @@ def cost_by_tier(frame, metrics, ylabels):
             ax.set_xticks(range(len(_TIER_ORDER)))
             ax.set_xticklabels(_TIER_ORDER)
             ax.set_xlim(-0.5, len(_TIER_ORDER) - 0.5)
-            ax.set_ylim(bottom=0)  # a cost axis starts at zero, or tiers look further apart
+            ax.set_ylim(
+                bottom=0
+            )  # a cost axis starts at zero, or tiers look further apart
             if j == 0:
                 ax.set_ylabel(lab)
         axes[0, j].set_title(_BACKEND_TITLE.get(b, b))

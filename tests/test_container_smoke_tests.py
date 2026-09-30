@@ -98,13 +98,13 @@ LOCALLY_COPIED_MODULES = {
 # {container: {import name: repo-relative package dir}} for a FIRST-PARTY PACKAGE a smoke
 # script imports -- repository code the Dockerfile COPYs as a directory and pip-installs
 # from that path, so `declared_distributions` (which reads requirement tokens and skips
-# path installs) cannot see it either. containers/drape is the case: `drape` is the DRAPE
-# method itself (packages/drape), which bin/tiled_*.py shim over.
+# path installs) cannot see it either. containers/stare is the case: `stare` is the STARE
+# method itself (packages/stare), which bin/tiled_*.py shim over.
 # `test_locally_installed_packages_are_actually_installed_by_name` keeps an entry honest
 # the same way LOCALLY_COPIED_MODULES' meta-test does: the Dockerfile must literally COPY
 # that directory AND pip-install the destination, and smoke.sh must actually import it.
 LOCALLY_INSTALLED_PACKAGES = {
-    "drape": {"drape": "packages/drape"},
+    "stare": {"stare": "packages/stare"},
 }
 
 
@@ -213,8 +213,8 @@ def declared_distributions(name: str) -> set[str]:
     """Distributions this image asks pip for, from its Dockerfile AND the
     requirements/ files that Dockerfile COPYs.
 
-    Both sources are needed and neither is enough: containers/drape installs
-    everything through `requirements/drape.txt`, containers/merge names every pin
+    Both sources are needed and neither is enough: containers/stare installs
+    everything through `requirements/stare.txt`, containers/merge names every pin
     inline, and containers/regqc does both.
     """
     # Join Dockerfile line continuations FIRST, so one `RUN pip install a \` + `b`

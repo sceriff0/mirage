@@ -177,7 +177,7 @@ ALLOWED_LINES = {
         # that this re-pin is the merge of both histories rather than a guess at one.
         # 1034 -> 1064 when the registration cost/accuracy presets landed: the three
         # TILED_* closures in conf/modules.config each gained an INLINED copy of the
-        # RegPresets.DRAPE table (+30 lines total), because conf/*.config cannot see
+        # RegPresets.STARE table (+30 lines total), because conf/*.config cannot see
         # lib/*.groovy and the tier params are null-declared. Same composition check as
         # above -- 1034 + 30 = 1064 -- and re-pinned from the file with the grep below,
         # not guessed.
@@ -204,7 +204,7 @@ ALLOWED_LINES = {
         # parameter it read, were deleted again for v1.0.0 -- see the 1277 -> 1298 entry
         # below. The line names are not quoted here any more because
         # tests/test_no_legacy_frontends.py forbids naming them outside its allow-list.)
-        # 1108 -> 1136 when Task 5.4 published the two DRAPE/VALIS benchmark-scoring
+        # 1108 -> 1136 when Task 5.4 published the two STARE/VALIS benchmark-scoring
         # artifacts: REGISTER's publishDir gained a third array entry for the VALIS
         # registrar pickle (+11), TILED_REG_TILE's shared block comment was rewritten
         # to explain why its control-point JSON is now published while TILED_COARSE's
@@ -251,7 +251,7 @@ ALLOWED_LINES = {
         # are not independent hunks stacked on the same base the way the earlier
         # entries were. Re-pinned directly from the merged file with the grep
         # below, not guessed or computed from the two counts above.
-        # 1136 (feat/drape-ultimate) and 1226 (dev) -> 1259 when the two were merged.
+        # 1136 (feat/stare-ultimate) and 1226 (dev) -> 1259 when the two were merged.
         # NOT the sum, and not either input: the branches changed DIFFERENT regions of
         # conf/modules.config above this line, and the merge also collapsed TILED_REG_TILE's
         # and TILED_COARSE's maxForks conflicts into one copy each. Composing the two
@@ -306,7 +306,7 @@ ALLOWED_LINES = {
         # enforced. Composition check: 1251 + 2 = 1253, and `wc -l conf/modules.config`
         # rose 1338 -> 1340, the same 2. Re-pinned directly from the file, not computed:
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1253
-        # 1253 -> 1265 on 2026-08-30 (fix/docs-truthfulness): +12 lines in the "DRAPE
+        # 1253 -> 1265 on 2026-08-30 (fix/docs-truthfulness): +12 lines in the "STARE
         # (tiled) per-task memory" header at the TOP of the file. That header asserted
         # "measured peak RSS is 1.3-2.0 GB per task" for EVERY tiled process; the band is
         # the per-tile tasks only and has not covered TILED_COARSE since its coarse anchor

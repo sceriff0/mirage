@@ -34,7 +34,7 @@
 #   ASHLAR_EXEC   command prefix for the alignment solve (needs the ashlar package:
 #                 labsyspharm/ashlar:1.20.0, amd64-only).
 #   QC_EXEC       command prefix for retile, the stitch and warp_seg_qc.py (the pipeline's
-#                 tiled image, bolt3x/mirage-drape:1.0.0 -- TILED_STITCH's and the tiled
+#                 tiled image, bolt3x/mirage-stare:1.0.0 -- TILED_STITCH's and the tiled
 #                 WARP_SEG_QC's container).
 #   REGQC_EXEC    command prefix for generate_registration_qc.py (bolt3x/mirage-regqc:1.0.0,
 #                 GENERATE_REGISTRATION_QC's container).
@@ -78,10 +78,10 @@ SEG_QC="${ASHLAR_SEG_QC:-1}"
 REG_QC="${ASHLAR_REG_QC:-1}"
 PIXEL_SIZE_OVERRIDE="${ASHLAR_PIXEL_SIZE_UM:-}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
-# the `stare` package (packages/drape), which the ASHLAR image does not install. Put the repo
+# the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
 # and the package source on the path, and hand the same value into the containers:
 # Singularity and Apptainer set SINGULARITYENV_X / APPTAINERENV_X as X inside.
-STEP_PYTHONPATH="$REPO:$REPO/packages/drape/src"
+STEP_PYTHONPATH="$REPO:$REPO/packages/stare/src"
 export PYTHONPATH="$STEP_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 export SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH" APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"
 

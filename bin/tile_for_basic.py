@@ -33,7 +33,7 @@ NOTHING SLIDE-SIZED IS EVER RESIDENT. The grid is laid out by ``fov_positions``,
 pure arithmetic on ``(H, W, n_fovs_y, n_fovs_x)`` and reads no pixels; each tile is then
 read as its own region through the lazy zarr view and written straight out. Peak is ONE
 padded tile, independent of both slide size and channel count. This is the same discipline
-as ``bin/tiled_stitch.py`` on the DRAPE path, and ``conf/modules.config``'s memory formula
+as ``bin/tiled_stitch.py`` on the STARE path, and ``conf/modules.config``'s memory formula
 for this process is derived from the tile size accordingly.
 
 An earlier version read and split a whole channel purely to learn ``positions`` and

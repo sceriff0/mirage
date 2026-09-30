@@ -26,7 +26,7 @@ Primary external sources:
 Entry point `subworkflows/local/registration.nf`. Steps, in order:
 
 1. **Images enter as-is** — no padding step. Both backends align inputs of differing sizes natively
-   (VALIS resolves them into a shared space; the tiled/DRAPE (formerly STARE) backend warps each moving slide into the
+   (VALIS resolves them into a shared space; the tiled/STARE backend warps each moving slide into the
    reference's shape), so no common-canvas step is needed.
 2. **Group by patient + identify reference** (`registration.nf:106-143`). Slides are grouped with
    a streaming `groupTuple(size: images_count)` keyed on `patient_id`; the reference is the item

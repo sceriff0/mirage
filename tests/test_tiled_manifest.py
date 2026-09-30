@@ -1,6 +1,6 @@
-"""Tests for bin/utils/tiled_manifest.py — assembling the DRAPE transform manifest.
+"""Tests for bin/utils/tiled_manifest.py — assembling the STARE transform manifest.
 
-SOLVE (``drape.solve.solve_dctpls``) produces the mesh; ``slide_entry`` wraps it with the slide's
+SOLVE (``stare.solve.solve_dctpls``) produces the mesh; ``slide_entry`` wraps it with the slide's
 M0, collapsing an all-zero field to a rigid-only entry. The manifest round-trips through JSON and
 is consumed unchanged by
 ``tiled_stage_warp.make_warper`` — the same object the reg_qc=2 scorer and the image warp read.

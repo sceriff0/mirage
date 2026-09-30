@@ -16,7 +16,7 @@ for exactly one stage.
 ```mermaid
 flowchart LR
     A[Raw multi-channel<br/>images + CSV] --> B[Preprocessing<br/>convert + illumination correct]
-    B --> C[Registration<br/>align panels: VALIS or tiled/DRAPE, formerly STARE]
+    B --> C[Registration<br/>align panels: VALIS or tiled/STARE]
     C --> D[Segmentation<br/>segment + extract properties]
     D --> E[Postprocessing<br/>quantify + export]
     E --> F[GeoJSON cells<br/>+ pyramidal OME-TIFF]
@@ -30,8 +30,8 @@ flowchart LR
   illumination correction. The correction is **off by default** (`skip_preprocessing` is `true`;
   set it `false` in a params file or profile to run it); the conversion always runs.
 - **Registration** — whole-slide alignment of every panel onto the reference panel, via
-  `--registration_method`: **VALIS** (default, graph-based) or **tiled/DRAPE**
-  (JVM-free, fully parallel — see [Parameters → Tiled / DRAPE](parameters.md#tiled-drape-registration_methodtiled)).
+  `--registration_method`: **VALIS** (default, graph-based) or **tiled/STARE**
+  (JVM-free, fully parallel — see [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
 - **Segmentation** — cell/nucleus segmentation on the reference panel + morphology/contour extraction.
 - **Postprocessing** — per-cell quantification + QuPath GeoJSON export + pyramidal OME-TIFF.
 

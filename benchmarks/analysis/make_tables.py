@@ -357,7 +357,11 @@ _DICTS = {
         [
             ("target_px", "px", "Sweep only: input edge length of the shared cell."),
             ("n_channels", "-", "Sweep only: channels of the shared cell."),
-            ("from_arm", "-", "Arms only: the registration arm every compared segmentation resumed."),
+            (
+                "from_arm",
+                "-",
+                "Arms only: the registration arm every compared segmentation resumed.",
+            ),
             ("patient_id", "-", "Arms only: the patient (whole section) compared."),
             ("method_a", "-", "First segmentation method."),
             ("method_b", "-", "Second segmentation method."),

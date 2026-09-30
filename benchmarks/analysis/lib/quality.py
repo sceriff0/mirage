@@ -416,10 +416,14 @@ REGISTRATION_LEAVES = {
 # the plan's `method` column; `tiled` is the fallback for a plan without one.
 _TIER_COLS = {
     "valis": ("memory_mode", "reg_micro_reg"),
-    "drape": ("reg_tiled_mode", "reg_tiled_stride"),
+    "stare": ("reg_tiled_mode", "reg_tiled_stride"),
     "tiled": ("reg_tiled_mode", "reg_tiled_stride"),
 }
-_INTEGER_DEPTH = {"valis", "drape", "tiled"}  # micro-reg depth and stride (px) are counts
+_INTEGER_DEPTH = {
+    "valis",
+    "stare",
+    "tiled",
+}  # micro-reg depth and stride (px) are counts
 
 
 def _family(g: pd.DataFrame) -> str:

@@ -16,21 +16,21 @@
 #   stats       benchmarks.analysis.make_figures, once per results root:
 #                 arms   ARMS_RESULTS  + ARMS_PLAN      (SRC_DIR)
 #                 sweep  SWEEP_RESULTS + SWEEP_PLAN     (SRC_DIR)
-#                 drape  DRAPE_RESULTS + DRAPE_PLAN     (DRAPE_SRC) -- LEGACY, see below
+#                 stare  STARE_RESULTS + STARE_PLAN     (STARE_SRC) -- LEGACY, see below
 #
 #   ONE ROOT FOR EVERY METHOD (2026-09-29). submit_arms.sh on benchmarking runs VALIS,
-#   DRAPE, ASHLAR and seg into ONE results root, and arm_plan.csv carries a `method`
+#   STARE, ASHLAR and seg into ONE results root, and arm_plan.csv carries a `method`
 #   column the analysis groups by. So point SRC_DIR at the benchmarking checkout,
 #   ARMS_* at that root, and leave
-#   DRAPE_SRC/DRAPE_RESULTS/DRAPE_PLAN UNSET: the drape stage and the --append-arms
-#   hand-off exist only for the old two-root layout and would add the DRAPE arms twice.
+#   STARE_SRC/STARE_RESULTS/STARE_PLAN UNSET: the stare stage and the --append-arms
+#   hand-off exist only for the old two-root layout and would add the STARE arms twice.
 #               -> $OUT/stats/<name>/   (or $OUT/stats_preview/<name>/ with placeholders)
 #   composites  benchmarks/submit_figures.sh inline (mosaic, overlay, zoom, crop, channel),
 #               needs INPUT (samplesheet) and CONFIG (figures.yaml) -> $OUT/composites/
 #   anhir       benchmarks.anhir.evaluate over every warped-landmark leg present under
 #               ANHIR_DIR (ANHIR_LEGS) -> $ANHIR_DIR/tables/
 #   handoff     benchmarks/pull_to_ihc_method.sh into IHC: arms + sweep from SRC_DIR,
-#               then DRAPE (--append-arms) + ANHIR from DRAPE_SRC. REAL data only.
+#               then STARE (--append-arms) + ANHIR from STARE_SRC. REAL data only.
 #   ihc         workflowr::wflow_build of the benchmark pages in IHC (IHC_BUILD=1)
 #
 # PLACEHOLDER_MISSING=1 (default 0) turns on the marked previews everywhere they exist:
@@ -66,7 +66,7 @@
 # ---- knobs ---------------------------------------------------------------------
 OUT="${OUT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"            # the checkout that ran the arms
-DRAPE_SRC="${DRAPE_SRC:-}"                              # LEGACY two-root layout only; leave unset
+STARE_SRC="${STARE_SRC:-}"                              # LEGACY two-root layout only; leave unset
 CONDA_ENV="${CONDA_ENV:-nf-env}"
 STAGES="${STAGES:-stats composites anhir handoff ihc}"
 PLACEHOLDER_MISSING="${PLACEHOLDER_MISSING:-0}"
@@ -74,11 +74,11 @@ PLACEHOLDER_SEED="${PLACEHOLDER_SEED:-0}"
 REG_EVAL="${REG_EVAL:-none}"
 ARMS_RESULTS="${ARMS_RESULTS:-}";   ARMS_PLAN="${ARMS_PLAN:-}"
 SWEEP_RESULTS="${SWEEP_RESULTS:-}"; SWEEP_PLAN="${SWEEP_PLAN:-}"
-DRAPE_RESULTS="${DRAPE_RESULTS:-}"; DRAPE_PLAN="${DRAPE_PLAN:-}"
+STARE_RESULTS="${STARE_RESULTS:-}"; STARE_PLAN="${STARE_PLAN:-}"
 INPUT="${INPUT:-}"; CONFIG="${CONFIG:-}"
 SKIP_COMPOSITE_RUNS="${SKIP_COMPOSITE_RUNS:-0}"
 ANHIR_DIR="${ANHIR_DIR:-}"
-ANHIR_LEGS="${ANHIR_LEGS:-drape=results_drape/tiled_warped stare=results_stare/tiled_warped valis=results_valis/valis_warped initial=results_initial_warped bunwarpj=results_bunwarpj_warped}"
+ANHIR_LEGS="${ANHIR_LEGS:-stare=results_stare/tiled_warped stare=results_stare/tiled_warped valis=results_valis/valis_warped initial=results_initial_warped bunwarpj=results_bunwarpj_warped}"
 IHC="${IHC:-}"; IHC_BUILD="${IHC_BUILD:-0}"
 # molecular_massimo2 BEFORE paper_figures: its last chunk writes output/paired_deconv.rds,
 # which Fig 5(c) (and Supplementary S11) reads -- without it that panel prints "Needs ...".
@@ -115,7 +115,7 @@ echo "All-figures job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  
 echo "Mode:     $(mode)   seed $PLACEHOLDER_SEED"
 echo "Stages:   $STAGES"
 echo "Out:      $OUT"
-echo "Checkout: $SRC_DIR   DRAPE: ${DRAPE_SRC:-<none>}"
+echo "Checkout: $SRC_DIR   STARE: ${STARE_SRC:-<none>}"
 echo "=================================================="
 
 # ---- stats -----------------------------------------------------------------------
@@ -130,7 +130,7 @@ if want stats; then
     stats_one() {                 # stats_one <name> <checkout> <results> <plan>
       local name="$1" src="$2" res="$3" plan="$4"
       if [[ -z "$res" || -z "$plan" ]]; then note "stats/$name: SKIPPED (results root or plan not given)"; return; fi
-      if [[ -z "$src" ]]; then note "stats/$name: SKIPPED (no checkout: set DRAPE_SRC)"; return; fi
+      if [[ -z "$src" ]]; then note "stats/$name: SKIPPED (no checkout: set STARE_SRC)"; return; fi
       if [[ "$DRY_RUN" != 1 && ( ! -d "$res" || ! -s "$plan" ) ]]; then
         note "stats/$name: SKIPPED (missing $res or $plan)"; return; fi
       if (cd "$src" && unset PLACEHOLDER_MISSING && \
@@ -143,7 +143,7 @@ if want stats; then
     }
     stats_one arms  "$SRC_DIR"   "$ARMS_RESULTS"  "$ARMS_PLAN"
     stats_one sweep "$SRC_DIR"   "$SWEEP_RESULTS" "$SWEEP_PLAN"
-    stats_one drape "$DRAPE_SRC" "$DRAPE_RESULTS" "$DRAPE_PLAN"
+    stats_one stare "$STARE_SRC" "$STARE_RESULTS" "$STARE_PLAN"
   fi
 fi
 
@@ -187,7 +187,7 @@ if want anhir; then
     done
     if (( ${#legs[@]} == 0 )); then
       note "anhir: SKIPPED (no warped leg under $ANHIR_DIR yet)"
-    elif (cd "${DRAPE_SRC:-$SRC_DIR}" && run "$PY" -m benchmarks.anhir.evaluate \
+    elif (cd "${STARE_SRC:-$SRC_DIR}" && run "$PY" -m benchmarks.anhir.evaluate \
             --dataset "$ANHIR_DIR/challenge/anhir/dataset_medium.csv" \
             --landmarks-root "$ANHIR_DIR/challenge/anhir/landmarks" --status training \
             "${legs[@]}" --out "$ANHIR_DIR/tables"); then
@@ -214,13 +214,13 @@ if want handoff; then
       out1="arms+sweep SKIPPED/FAILED"
     fi
     second=(--append-arms)
-    [[ -n "$DRAPE_PLAN" ]] && second+=(--arm-plan "$DRAPE_PLAN")
+    [[ -n "$STARE_PLAN" ]] && second+=(--arm-plan "$STARE_PLAN")
     [[ -n "$ANHIR_DIR" && ( "$DRY_RUN" == 1 || -d "$ANHIR_DIR/tables" ) ]] && second+=(--anhir "$ANHIR_DIR/tables")
-    if [[ -n "$DRAPE_SRC" && -n "$DRAPE_RESULTS" ]] && (cd "$DRAPE_SRC" && unset PLACEHOLDER_MISSING && run \
-          benchmarks/pull_to_ihc_method.sh "$DRAPE_RESULTS" "$IHC" "${second[@]}"); then
-      out2="drape+anhir OK"
+    if [[ -n "$STARE_SRC" && -n "$STARE_RESULTS" ]] && (cd "$STARE_SRC" && unset PLACEHOLDER_MISSING && run \
+          benchmarks/pull_to_ihc_method.sh "$STARE_RESULTS" "$IHC" "${second[@]}"); then
+      out2="stare+anhir OK"
     else
-      out2="drape+anhir SKIPPED/FAILED"
+      out2="stare+anhir SKIPPED/FAILED"
     fi
     note "handoff: $out1; $out2"
   fi

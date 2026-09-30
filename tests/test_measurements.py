@@ -200,15 +200,25 @@ def test_round_key_needs_markers_and_clean_names():
 def test_morph_key_and_export_table():
     assert morph_key("Area µm²") == "MORPH: Area µm²"
     assert [c for c, _, _ in MORPH_EXPORT] == [
-        "area", "eccentricity", "perimeter", "solidity",
-        "convex_area", "axis_major_length", "axis_minor_length",
+        "area",
+        "eccentricity",
+        "perimeter",
+        "solidity",
+        "convex_area",
+        "axis_major_length",
+        "axis_minor_length",
     ]
     assert MORPH_PREFIX == "MORPH: " and QC_PREFIX == "QC: "
 
 
 def test_qc_columns_are_not_markers():
     df = pd.DataFrame(
-        {"label": [1], "x": [1.0], "CD3: Cell: Median": [2.0], "QC: Total intensity": [5.0]}
+        {
+            "label": [1],
+            "x": [1.0],
+            "CD3: Cell: Median": [2.0],
+            "QC: Total intensity": [5.0],
+        }
     )
     assert is_qc_column("QC: Total intensity")
     assert not is_qc_column("CD3: Cell: Median")

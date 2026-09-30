@@ -12,7 +12,7 @@
  *     reg_qc >= 2, and reg_qc >= 2 is also what turns SEG_QC on, so no whole-pipeline
  *     stub run can ever reach the missing-checkpoint state. Calling SEG_QC directly can.
  *
- *  2. The tiled (DRAPE) branch at reg_qc = 2, which has no other nf-test coverage:
+ *  2. The tiled (STARE) branch at reg_qc = 2, which has no other nf-test coverage:
  *     registration.nf.test sets skip_registration_qc = true in every params block (so it
  *     never reaches reg_qc >= 1 at all) and add_cycle.nf.test is VALIS-only.
  *
@@ -186,7 +186,7 @@ nextflow_workflow {
                 input[1] = Channel.empty()
                 input[2] = Channel.empty()
 
-                // One DRAPE transform manifest per MOVING slide, keyed by meta.
+                // One STARE transform manifest per MOVING slide, keyed by meta.
                 input[3] = Channel.fromList([
                     [[patient_id: 'P001', id: 'P001_mov1', is_reference: false, channels: ['DAPI', 'CD3']],
                      file('$projectDir/tests/testdata/model_config_min.json')],

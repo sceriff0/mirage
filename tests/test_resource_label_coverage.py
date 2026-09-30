@@ -467,7 +467,7 @@ HOURS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\.\s*h\b")
 # holding the slide. Both used to ask for a flat multiple of the INPUT FILE's
 # size (`f x 3 GB` and `f x 7 GB`), which the numeric comparison could check.
 # Both now stream a tile at a time, so their requests are built from the
-# pseudo-FOV size the same way the two DRAPE rows are built from the tile and
+# pseudo-FOV size the same way the two STARE rows are built from the tile and
 # halo -- a profile-plane term of `2 x C x preproc_tile_size^2 x 8` bytes plus
 # write buffers, none of it computable here. Neither closure carries a file-size
 # term any more: CONVERT_IMAGE and SPLIT_CHANNELS now write tiled
@@ -1105,7 +1105,7 @@ def test_derived_memory_exemption_does_not_swallow_a_param_dependent_choice():
     The exemption skips the numeric comparison outright and asks only that the
     doc cell contain the source's name, so every expression it swallows is an
     expression nothing checks the magnitudes of. That is the right trade for the
-    two DRAPE closures -- their value genuinely cannot be computed from pytest --
+    two STARE closures -- their value genuinely cannot be computed from pytest --
     and the wrong trade for a param-dependent CHOICE between literal
     reservations, where the magnitudes are right there in the config and a doc
     cell stating neither of them should fail.
@@ -1140,7 +1140,7 @@ def test_derived_memory_param_allowlist_is_not_stale():
 
     An allowlist entry whose justification has evaporated is the failure mode
     this repo keeps rediscovering: it looks like coverage and checks nothing.
-    If a DRAPE closure stops reading one of these, drop it here too -- the row
+    If a STARE closure stops reading one of these, drop it here too -- the row
     then goes back through the numeric comparison, which is the safe direction.
     """
     memory_exprs = [

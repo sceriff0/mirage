@@ -1,11 +1,11 @@
-# DRAPE (Distributed Robust Alignment by Piecewise Estimation; formerly STARE) — a fully-parallel, tiled registration method for mirage
+# STARE (Scalable Tile-parallel Alignment by Robust Estimation) — a fully-parallel, tiled registration method for mirage
 
 > **Superseded in part.** This document records the design as it was implemented on
 > `feat/tiled-registration`, when COARSE's anchor was a classical corner detector. For
 > v1.0.0 that front-end was replaced by the learned DISK + LightGlue matcher (a U-Net, ~48 GB
 > asked at the old 2048 px tier), and on 2026-09-27 THAT was replaced by an FFT NCC rotation
 > sweep at 256 px, refined at the `reg_tiled_coarse_max_dim` thumbnail, with a scikit-image ORB
-> fallback and a loud refusal (`packages/drape/src/drape/coarse_align.py`;
+> fallback and a loud refusal (`packages/stare/src/stare/coarse_align.py`;
 > `research/stare-optimal-design-2026-09-27.md` §1). COARSE is small again: 0.25–0.43 GB peak
 > RSS for the whole stage at every tier, 2 GB requested.
 >
@@ -22,16 +22,16 @@
 > holds — and holds harder now that the thumbnail bound is the memory knob.
 >
 > **Added 2026-09-12 — the SOLVE stage is no longer empty, and the method is a package.**
-> §6b below describes the `robust` solver (`drape.solve`: neighbour-consistency rejection,
+> §6b below describes the `robust` solver (`stare.solve`: neighbour-consistency rejection,
 > in-fill, Tikhonov smoothing, invertibility check) that replaced "lay the translations on the
 > grid and zero-fill", selectable against the byte-identical `legacy` path by
 > `reg_tiled_solver`. §3's "no global solve" and §9.1's novelty claim are corrected in place.
-> The four stages now live in `packages/drape/` (`pip install -e packages/drape`, CLI `drape`);
+> The four stages now live in `packages/stare/` (`pip install -e packages/stare`, CLI `stare`);
 > `bin/tiled_*.py` are shims over it.
 >
 > **Added 2026-09-27 — STARE v2 replaced REG_TILE and SOLVE.** Each tile now measures a GRID
 > of window vectors on one slide-global lattice (`reg_tiled_stride`, window `2 × stride`;
-> `drape.vector_grid`) instead of one control point, and SOLVE is `dctpls` only: robust affine +
+> `stare.vector_grid`) instead of one control point, and SOLVE is `dctpls` only: robust affine +
 > robust DCT-PLS on that lattice, per-vector σ calibrated by peak ratio, a cubic B-spline mesh,
 > no TRE dead zone. The `legacy` and `robust` solvers, the TRE gate (`reg_tiled_gate_tre`), the
 > confidence gate (`reg_tiled_max_error`), `reg_tiled_solver` and `reg_tiled_upsample` were
@@ -43,7 +43,7 @@
 Python tests, JVM-free stub run green). Remaining: reg_qc=2 seg-QC Nextflow dispatch, the slim
 container, real-data accuracy validation, and the optional per-tile Nextflow fan-out (§5). See the
 status box after §10.
-**Working name:** **DRAPE** — *STar-Anchored Registration with Error (TRE)*.
+**Working name:** **STARE** — *STar-Anchored Registration with Error (TRE)*.
 **Method id:** `registration_method = 'tiled'`.
 **Companion:** `docs/parallel_registration_research.md` — primary-source notes on ASHLAR & VALIS.
 
@@ -69,7 +69,7 @@ A second `registration_method` alongside `valis` that is:
    anchor still holds that bound and is region-streamed: REG_TILE, SOLVE and STITCH are all
    well under 8 GB regardless of slide size, and since 2026-09-27 so is COARSE again (its
    anchor is an FFT NCC rotation sweep, 0.25–0.43 GB measured; from v1.0.0 until then it was a
-   DISK U-Net asking ~48 GB at the `high` tier, which made DRAPE a cluster-only backend). (A single-task `TILED_REGISTER` alternative existed behind a flag; it
+   DISK U-Net asking ~48 GB at the `high` tier, which made STARE a cluster-only backend). (A single-task `TILED_REGISTER` alternative existed behind a flag; it
    could not hold even the old bound — both whole slides plus an all-channel float32 copy and
    the full warped output live at once — so the flag and the process were removed rather than
    left as an unbounded opt-out.) No JVM, no BioFormats, no whole-slide-in-RAM step. The
@@ -82,7 +82,7 @@ A second `registration_method` alongside `valis` that is:
 6. **A drop-in adapter** — same subworkflow channel contract as `VALIS_ADAPTER`, selected by
    `params.registration_method`.
 
-ASHLAR is the reference point (phase-correlation + tiled mosaic). DRAPE reuses ASHLAR's tile +
+ASHLAR is the reference point (phase-correlation + tiled mosaic). STARE reuses ASHLAR's tile +
 phase-correlation machinery but, because mirage supplies a fixed reference, replaces ASHLAR's
 global MST solve with **reference-anchoring** — every tile lands in absolute coordinates on its
 own. That is the novel core (§9).
@@ -99,7 +99,7 @@ own. That is the novel core (§9).
 | Sequential per-slide warp | `register.py:843` | The embarrassingly-parallel part is serialized. |
 | Can emit **negative pixels**, patched downstream | `register.py:893` (clipped by `split_multichannel.py`) | Overshoot corrupts quantification unless clipped after the fact. |
 
-DRAPE removes every row: per-tile ≤8 GB tasks, no JVM (pure NumPy/OpenCV/scikit-image/tifffile),
+STARE removes every row: per-tile ≤8 GB tasks, no JVM (pure NumPy/OpenCV/scikit-image/tifffile),
 tiles fan out, and non-negativity is guaranteed at the source (§7).
 
 ---
@@ -136,7 +136,7 @@ The reg_qc=2 scorer in `bin/warp_seg_qc.py` **never imports VALIS**. Its core �
 `warp(slide_name, xy, stage) -> warped_xy`, and `write_report()` already accepts an injected
 `warp` + `stages` and skips the VALIS loader when they are provided (`warp_seg_qc.py:377-398`).
 
-So DRAPE does not reimplement QC. It supplies:
+So STARE does not reimplement QC. It supplies:
 
 1. A per-slide **transform manifest** — `M₀` (global rigid) + a **control-point grid** for the
    mesh field (KB). Replaces the VALIS `registrar.pickle`.
@@ -156,7 +156,7 @@ slide (or region) that stayed rigid reports `[native, rigid]`; a refined one rep
 `[native, rigid, refined]`. `plan_stages` already handles variable separability — this is more
 honest than faking an identity `refined` stage.
 
-Exact reg_qc=2 artifact DRAPE must keep producing (per moving slide):
+Exact reg_qc=2 artifact STARE must keep producing (per moving slide):
 `<outdir>/<patient>/qc/registration/<patient>_<slide>_seg_qc.json` with keys `iou_mean`,
 `iou_p10/p50/p90`, `frac_iou_ge_0.5`, `displacement_px_p50/p90/max` (+ `_um`), `dice_matched`,
 `delta_vs_anchor`, `stages_separable`, `matching{…}`, `counts{…}`. Reusing the scorer gives this
@@ -264,7 +264,7 @@ wherever a tile was dropped, and no defence against a **confident but wrong** ti
 blank crop that correlated against the wrong structure passes every single-tile score; see
 the "KNOWN, UNCLOSED EXPOSURE" note that used to sit in `bin/tiled_solve.py`). Every comparable
 method — approximating TPS, elastix FFD, RegWSI's diffusive solve, PIV — goes *reject →
-regularise → densify*. `drape.solve` now does the same, on the control grid, numpy/scipy only:
+regularise → densify*. `stare.solve` now does the same, on the control grid, numpy/scipy only:
 
 | step | what | parameter | source |
 |---|---|---|---|
@@ -275,7 +275,7 @@ regularise → densify*. `drape.solve` now does the same, on the control grid, n
 | invertibility | STITCH inverts `F` by fixed-point iteration, which converges when the field's Lipschitz constant is < 1 (Chen et al. 2008). The Jacobian of `u` on the grid is reported (max operator norm, min `det(I + J)`); if the norm reaches 0.9 the field is scaled to it and the manifest says so | `max_lipschitz = 0.9` | Chen et al. 2008; Kuang et al. 2019 |
 
 `reg_tiled_solver = 'robust'` selects this; `'legacy'` reproduces the pre-2026-09-12
-mesh byte-for-byte (`packages/drape/tests/test_solve.py` pins it against a verbatim copy of
+mesh byte-for-byte (`packages/stare/tests/test_solve.py` pins it against a verbatim copy of
 the old stage). The solver's name and diagnostics are recorded in the manifest and in
 `*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
 changes with the solver, the arm benchmark carries it as an axis rather than silently moving the
@@ -293,7 +293,7 @@ cross-validation (5 folds of 3×3-cell patches; GCV below 25 valid tiles). Both 
 scale a residual vector's NORM by its Rayleigh median (`median |r| / 1.1774`, not the 1-D
 `1.4826 × MAD`) and take their cutoffs from χ²₂ (Huber 2.448σ, bisquare 5.06σ): on clean
 Gaussian residuals Huber down-weights 5 %, not the 67 % the 1-D scale gave (Phase 5b,
-`research/drape-step-support-2026-09-27.md` S1). True h-block CV (a 1-cell buffer ring,
+`research/stare-step-support-2026-09-27.md` S1). True h-block CV (a 1-cell buffer ring,
 Burman et al. 1994) is chosen per slide since Phase 5e (Valavi et al. 2019): the noise's lag-1
 correlation is estimated from the plain block-CV fit's residuals (sign correlation, corrected
 for the smoother's imprint against iid and 50 %-overlap reference noise) and the ring is used
@@ -330,7 +330,7 @@ deleted with their parameters; SOLVE refuses a control JSON without `vectors`.
 ## 7. Non-negative output (guaranteed, not patched)
 
 Downstream quantification (per-cell mean/median marker intensity) is corrupted by negative
-pixels. DRAPE never generates them:
+pixels. STARE never generates them:
 
 - **WARP_TILE uses bilinear resampling only.** Bilinear is a convex combination of the four
   neighbouring source pixels, so the result lies in `[min, max]` of non-negative inputs → never
@@ -344,7 +344,7 @@ pixels. DRAPE never generates them:
   correct.
 
 Unlike the VALIS path, which relies on `split_multichannel.py` to clip negatives *after* warping
-(`register.py:893`), DRAPE's output is non-negative before it is ever written.
+(`register.py:893`), STARE's output is non-negative before it is ever written.
 
 ---
 
@@ -360,7 +360,7 @@ if (params.registration_method == 'tiled') {
     TILED_ADAPTER(ch_grouped_multi)                 // new: subworkflows/local/adapters/tiled_adapter.nf
     ch_registered       = TILED_ADAPTER.out.registered
     ch_registrar_pickle = TILED_ADAPTER.out.manifest   // transform manifest (M₀ + control grid), not a pickle
-    ch_stage_checkpoint = Channel.empty()              // DRAPE needs none (§4)
+    ch_stage_checkpoint = Channel.empty()              // STARE needs none (§4)
     …
 } else {
     VALIS_ADAPTER(ch_grouped_multi)
@@ -385,7 +385,7 @@ loader (`warp_seg_qc.py:105,377`). The scorer is untouched.
 Container: a slim `python + opencv + scikit-image + tifffile + numpy + scipy` image — **no JVM,
 no libvips-from-source**.
 
-Resource labels: DRAPE tasks genuinely need only a few GB, but the standard labels are
+Resource labels: STARE tasks genuinely need only a few GB, but the standard labels are
 cluster-sized (`process_low`=32 GB, `process_medium`=200 GB in `conf/modules.config`). Ship
 dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-capped profile like
 `conf/test.config` (pins `process_high`=6 GB). Under such a profile a 4-core/16 GB laptop runs
@@ -402,12 +402,12 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
 1. ~~**Reference-anchored tiled registration — tiling without a global solve.**~~ **Retracted
    2026-08-25 (research fleet) and corrected 2026-09-12.** ASHLAR's *cycle-registration* phase
    has anchored later cycles' tiles to a fixed reference since 2021, so reference anchoring is
-   prior art; and its spanning tree is also its cross-tile consistency check, which DRAPE had
+   prior art; and its spanning tree is also its cross-tile consistency check, which STARE had
    dropped rather than replaced. What survives as a differentiator is the combination in §9.2–4
    plus a **non-rigid**, WSI-to-WSI solve that restores neighbour consistency on a grid without a
    tree (§6b) — an engineering contribution, to be claimed as such.
 2. **Registration-as-a-DAG-of-≤8 GB-processes.** The archived tiled path tiled only the *warp*
-   (monolithic VALIS `REG_PREP`); DRAPE tiles the *registration estimation* itself, JVM-free.
+   (monolithic VALIS `REG_PREP`); STARE tiles the *registration estimation* itself, JVM-free.
 3. **Intrinsic per-tile TRE → a spatial error heatmap.** (Until STARE v2 it doubled as the
    refinement gate; v2 retired the TRE gate, so the heatmap is a diagnostic only.)
 4. **Non-negativity by construction** (convex resample + convex blend), not post-hoc clipping.
@@ -432,13 +432,13 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
 ## Risks / open questions
 
 - **Accuracy ceiling.** A coarse mesh non-rigid is weaker than VALIS optical-flow micro-
-  registration. DRAPE is deliberately the *fast/low-mem* option; VALIS stays the *high-accuracy*
+  registration. STARE is deliberately the *fast/low-mem* option; VALIS stays the *high-accuracy*
   option. The intrinsic TRE + reg_qc=2 quantify the gap so a user knows when to escalate.
 - **Mesh resolution ↔ parallelism tradeoff.** Finer control grid = better non-rigid but more
   tiles/tasks. Tile size is the knob; document the tradeoff, don't hide it.
 - **Archived path lessons.** `archive/tiled-valis-2026-07-24` (`REG_PREP→REG_WARP→REG_ASSEMBLE`,
   patched VALIS container) was removed 2026-07-24 — appears to be scope/publication cleanup, not a
-  viability failure. DRAPE differs fundamentally (JVM-free, per-*tile registration*, mesh-warp
+  viability failure. STARE differs fundamentally (JVM-free, per-*tile registration*, mesh-warp
   continuity). Confirm with the author whether any removal reason must be designed around.
 - **Sparse-fluorescence COARSE.** *(Written against the classical detector: ORB on DAPI needed
   enough keypoints.)* The anchor now matches tissue SHAPE by NCC at 256 px, which does not need
@@ -468,7 +468,7 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
   params, and a lean 8 GB resource block. **Stub run green** end-to-end, JVM-free.
   (The single-task `TILED_REGISTER` described here was later removed — see CHANGELOG.)
 - **reg_qc=2 seg-QC dispatch (done):** `warp_seg_qc.py --method tiled` builds the warper from the
-  DRAPE manifest (no JVM), and `WARP_SEG_QC_TILED` + the valis/tiled dispatch branch in
+  STARE manifest (no JVM), and `WARP_SEG_QC_TILED` + the valis/tiled dispatch branch in
   `subworkflows/local/seg_qc.nf` (called from `registration.nf`) feed it one manifest per moving
   slide. **Stub run green at reg_qc=2** — emits the `native/rigid/refined`
   `_seg_qc.json`. Unit-tested through the real CLI `main()`.
@@ -484,13 +484,13 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
 - **Intrinsic TRE (done — VALIS-analogous, emitted by both paths):** `_tre.json` carries
   `coarse_tre_px` (rigid feature-fit residual, like VALIS's rigid error), a per-tile `rigid_tre_px`
   **spatial heatmap** VALIS doesn't have, and — in the default monolithic path — `residual_after_px`,
-  the per-tile residual *after* the mesh (DRAPE's post-registration final-accuracy number, the
+  the per-tile residual *after* the mesh (STARE's post-registration final-accuracy number, the
   analogue of VALIS's non-rigid error; test: it beats the rigid residual). Built by the shared
   `bin/utils/tre_report.py`; the fan-out (`TILED_SOLVE`) now emits the rigid spatial heatmap too
   (previously dropped). The fan-out's final-accuracy residual comes from the reg_benchmark harness.
 - **Final QC-report integration (done):** the `_tre.json` already flowed into the report's
   `registration_tre/` input; `generate_qc_report.py` now renders it as a "Registration Accuracy
-  (DRAPE Tiled TRE)" subsection: a per-slide caption carrying the headline numbers
+  (STARE Tiled TRE)" subsection: a per-slide caption carrying the headline numbers
   (coarse / rigid p50-p90 / post-refinement final p50-p90 / refined / accepted-of-total
   tiles), a **per-stage error-distribution plot** for the rigid and post-refinement
   stages built from the accepted tiles, and the **per-tile SVG heatmap** of the spatial
@@ -498,7 +498,7 @@ dedicated lean `withName:'TILED_*'` overrides (2–8 GB) or pair with a memory-c
   plots. Unit-tested.
 - **Accuracy harness (done):** `bin/utils/reg_benchmark.py` — a ground-truth-free residual-TRE +
   correlation metric that runs on any method's output, so VALIS vs tiled is a direct
-  number-to-number comparison on the same slide. Validated on synthetic ground truth (DRAPE drops
+  number-to-number comparison on the same slide. Validated on synthetic ground truth (STARE drops
   the residual TRE below 2 px; a pure 11.66 px shift is fully removed). The CLI that wrapped it,
   `bin/registration_benchmark.py`, lives on the `benchmarking` branch with the sweep that drives
   it; on this branch the library is exercised by `tests/test_reg_benchmark.py` and

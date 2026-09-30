@@ -75,7 +75,7 @@ include { GENERATE_QC_REPORT  } from '../../modules/local/generate_qc_report'
 //
 // The registration_tre entry is the registration method's OWN target-registration-error
 // estimate. NOT named after a method: both backends produce one (VALIS a feature-distance
-// CSV, DRAPE a *_tre.json) and a backend that produced none would contribute nothing, which
+// CSV, STARE a *_tre.json) and a backend that produced none would contribute nothing, which
 // the .collect().ifEmpty([]) below already tolerates.
 
 // Pull one kind out of the tagged artifact stream. Nextflow channels are

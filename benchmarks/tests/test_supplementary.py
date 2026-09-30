@@ -1,7 +1,7 @@
 """The supplementary set is drawn from one arm root, with the choices made by looking.
 
 Through the real renderers, on the mosaic tests' synthetic arms (QC composites + reg_qc=2
-scorer JSONs), laid out as a unified results root: VALIS, STARE v1, DRAPE and ASHLAR arms
+scorer JSONs), laid out as a unified results root: VALIS, STARE v1, STARE and ASHLAR arms
 side by side, told apart only by the plan's `method` column. What is pinned:
 
   * `best` is the arm with the highest median final-stage Dice, `high` the configured
@@ -29,7 +29,7 @@ ARMS = {
     # arm dir            source   method  kind
     "valis_high_micro2": ("armB", "valis", "registration"),
     "valis_low_micro0": ("armB", "valis", "registration"),
-    "tiled_high_s128": ("armA", "drape", "registration"),
+    "tiled_high_s128": ("armA", "stare", "registration"),
     "ashlar_t1024_s240": ("armB", "ashlar", "external"),
     # a QC cross re-scores its base: never a candidate for `best`, however high it scores
     "valis_high_micro2_segstardist": ("armA", "valis", "registration_qc"),
@@ -101,7 +101,7 @@ def test_best_is_the_top_scored_arm_and_high_the_configured_one(drawn):
     assert picks[("valis", "high")]["arm"] == "valis_high_micro2"
     assert picks[("valis", "best")]["arm"] == "valis_low_micro0"
     assert float(picks[("valis", "best")]["median_dice"]) == pytest.approx(0.88)
-    assert picks[("drape", "high")]["arm"] == "tiled_high_s128"
+    assert picks[("stare", "high")]["arm"] == "tiled_high_s128"
     assert all(p["arm"] != "valis_high_micro2_segstardist" for p in picks.values()), (
         "a QC cross is the same registration measured another way, never a config"
     )
@@ -133,7 +133,7 @@ def test_s4_puts_before_and_each_method_on_one_crop_with_its_values(drawn):
     figs = sorted((out / "S4" / "all_high").glob("v*/P1_all_high_v*.png"))
     assert len(figs) == 2, figs
     crops = set()
-    for method in ("valis", "drape", "ashlar"):
+    for method in ("valis", "stare", "ashlar"):
         (j,) = list(
             (out / "S4" / "panels" / f"{method}_high" / "v1").glob("*_overlay.json")
         )
@@ -145,7 +145,7 @@ def test_s4_puts_before_and_each_method_on_one_crop_with_its_values(drawn):
             next((out / "S4" / "all_high" / "v1").glob("*_values.csv")).open()
         )
     )
-    assert [v["method"] for v in vals] == ["VALIS", "DRAPE", "ASHLAR"]
+    assert [v["method"] for v in vals] == ["VALIS", "STARE", "ASHLAR"]
     assert float(vals[1]["median_dice_matched"]) == pytest.approx(0.92)
 
 
@@ -203,7 +203,7 @@ def test_a_missing_high_arm_falls_back_to_another_high_arm_never_a_lower_tier(
     root, plan, conf = unified
     cfg = yaml.safe_load(conf.read_text())
     cfg["high"]["valis"] = "valis_high_micro9"  # not on disk
-    cfg["high"]["drape"] = "tiled_low_s64"  # not on disk; drape HAS a high arm
+    cfg["high"]["stare"] = "tiled_low_s64"  # not on disk; stare HAS a high arm
     c = tmp_path / "c.yaml"
     c.write_text(yaml.safe_dump(cfg))
     assert (
@@ -228,7 +228,7 @@ def test_a_missing_high_arm_falls_back_to_another_high_arm_never_a_lower_tier(
     }
     assert picks[("valis", "high")]["arm"] == "valis_high_micro2"
     assert "high tier" in picks[("valis", "high")]["why"]
-    assert picks[("drape", "high")]["arm"] == "tiled_high_s128"
+    assert picks[("stare", "high")]["arm"] == "tiled_high_s128"
     assert sp.tier_of("valis_low_micro0") == "low"
     assert sp.tier_of("tiled_high_s128") == "high"
     assert sp.tier_of("ashlar_t1024_s240") == ""

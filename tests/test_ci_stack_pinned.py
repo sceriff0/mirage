@@ -685,7 +685,7 @@ def test_the_module_scope_importorskip_scan_is_not_empty():
     )
     # The ones that must be there, because each is a package whose absence deselects tests
     # with nothing in the output to show for it, and each has bitten this repo. kornia left
-    # this list on 2026-09-27, deliberately: DRAPE's COARSE no longer uses it, and the tests
+    # this list on 2026-09-27, deliberately: STARE's COARSE no longer uses it, and the tests
     # that importorskip'd it (the DISK front-end and everything reaching it) no longer do.
     for dist in ("pyyaml", "opencv-python-headless"):
         assert dist in found, (

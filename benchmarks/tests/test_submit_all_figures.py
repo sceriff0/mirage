@@ -3,7 +3,7 @@
 What is pinned:
   * the stage plan (DRY_RUN=1): each stage runs only with its inputs, and says SKIPPED otherwise;
   * placeholder mode reaches make_figures and ihc_method, and never the hand-off;
-  * the hand-off runs benchmarking (replace) BEFORE drape (--append-arms), always;
+  * the hand-off runs benchmarking (replace) BEFORE stare (--append-arms), always;
   * a composite card is drawn only for a slot with no rendered file, is named PLACEHOLDER_*,
     is listed in PLACEHOLDER_COMPOSITES.csv, and `clear` removes every card and nothing else.
 """
@@ -40,9 +40,9 @@ def _dry(tmp_path: Path, **env) -> str:
 
 
 def _full(tmp_path: Path) -> dict:
-    (tmp_path / "drape").mkdir(exist_ok=True)
+    (tmp_path / "stare").mkdir(exist_ok=True)
     (tmp_path / "ihc").mkdir(exist_ok=True)
-    return {**FULL, "DRAPE_SRC": str(tmp_path / "drape"), "IHC": str(tmp_path / "ihc")}
+    return {**FULL, "STARE_SRC": str(tmp_path / "stare"), "IHC": str(tmp_path / "ihc")}
 
 
 FULL = {
@@ -50,9 +50,9 @@ FULL = {
     "ARMS_PLAN": "/b/arm_plan.csv",
     "SWEEP_RESULTS": "/b/bench_results",
     "SWEEP_PLAN": "/b/bench_run_plan.csv",
-    "DRAPE_SRC": "/drape",
-    "DRAPE_RESULTS": "/db/arm_results",
-    "DRAPE_PLAN": "/db/arm_plan.subset.csv",
+    "STARE_SRC": "/stare",
+    "STARE_RESULTS": "/db/arm_results",
+    "STARE_PLAN": "/db/arm_plan.subset.csv",
     "INPUT": "/in/input.csv",
     "CONFIG": "figures.yaml",
     "ANHIR_DIR": "/anhir",
@@ -66,7 +66,7 @@ def test_nothing_given_skips_every_stage_with_a_reason(tmp_path):
     for line in (
         "stats/arms: SKIPPED",
         "stats/sweep: SKIPPED",
-        "stats/drape: SKIPPED",
+        "stats/stare: SKIPPED",
         "composites: SKIPPED",
         "anhir: SKIPPED",
         "handoff: SKIPPED",
@@ -104,7 +104,7 @@ def test_placeholder_mode_reaches_stats_composites_and_ihc_but_not_the_hand_off(
     )
 
 
-def test_hand_off_order_is_benchmarking_then_drape_append(tmp_path):
+def test_hand_off_order_is_benchmarking_then_stare_append(tmp_path):
     out = _dry(tmp_path, **_full(tmp_path))
     hand = [ln for ln in out.splitlines() if "pull_to_ihc_method.sh" in ln]
     assert "/b/arm_results" in hand[0] and "--append-arms" not in hand[0]

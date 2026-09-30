@@ -1057,7 +1057,7 @@ def checkPassthroughPath() {
     // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
     // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
     // default) left CONVERT_IMAGE's output as the slide. Pinned to PREPROCESSED, it named a
-    // file that did not exist for every single-slide patient and DRAPE reference at the
+    // file that did not exist for every single-slide patient and STARE reference at the
     // default (2026-09-17). A function, not inline: the workflow body is at Nextflow 25's
     // 65,535-byte string-constant limit (tests/test_lib_probe_parses_on_nf26.py).
     def fresh = file("/work/ab/${'c' * 30}/P001_ref.ome.tif")
@@ -1505,7 +1505,7 @@ workflow {
     assert WarpBackends.methods().toSorted() == ['tiled', 'valis']
     // Digest-pinned (ruling R6): no tag, see tests/test_base_images_are_digest_pinned.py.
     assert WarpBackends.container('valis') == 'cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6'
-    assert WarpBackends.container('tiled') == 'bolt3x/mirage-drape:1.0.0'
+    assert WarpBackends.container('tiled') == 'bolt3x/mirage-stare:1.0.0'
     assert WarpBackends.of('valis').stages == ['native', 'rigid', 'non_rigid', 'micro']
     assert WarpBackends.of('tiled').stages == ['native', 'rigid', 'refined']
 
@@ -1524,7 +1524,7 @@ workflow {
     ).any { it.contains('--checkpoint-dir ckpt/') }
 
     def badMethod = false
-    try { WarpBackends.of('drape') }
+    try { WarpBackends.of('stare') }
     catch (IllegalArgumentException ignored) { badMethod = true }
     assert badMethod : 'WarpBackends.of must reject an unknown method'
 

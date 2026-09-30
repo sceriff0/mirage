@@ -64,7 +64,7 @@ nextflow_process {
                 { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--ix 0 --iy 0 --cx 8 --cy 8') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--rx0 0 --ry0 0 --rx1 16 --ry1 16') }, rendered.join(' --- ') },
-                // the core bounds: what makes the vector-lattice ownership exact (drape.vector_grid)
+                // the core bounds: what makes the vector-lattice ownership exact (stare.vector_grid)
                 { assert rendered.every { it.contains('--x0 0 --y0 0 --x1 16 --y1 16') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--stride 128') },
                     "reg_tiled_stride defaults to 128 and is not tier-owned: " + rendered.join(' --- ') },

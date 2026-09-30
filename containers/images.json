@@ -1,7 +1,7 @@
 [
   { "dir": "cellsam",     "tag": "cellsam" },
   { "dir": "convert",     "tag": "convert" },
-  { "dir": "drape",       "tag": "drape" },
+  { "dir": "stare",       "tag": "stare" },
   { "dir": "instanseg",   "tag": "instanseg" },
   { "dir": "merge",       "tag": "merge" },
   { "dir": "preprocess",  "tag": "preprocess" },

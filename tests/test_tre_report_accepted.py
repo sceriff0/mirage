@@ -6,7 +6,7 @@ took nothing from. Such a tile's `tre` is not a measurement of a real misalignme
 is an artefact by construction, so the number is about nothing. Summarising over it makes the
 reg_qc heatmap disagree with the mesh underneath it. (Under STARE v1 the unit was one control
 point per tile, gated on correlation confidence too; since v2 a tile is "accepted" when at
-least one of its vectors is finite and in range -- `drape.solve.tile_accepted`.)
+least one of its vectors is finite and in range -- `stare.solve.tile_accepted`.)
 
 These tests pin the contract: every record says whether it was accepted, the percentile summary
 covers accepted records only, and the spatial heatmap still carries every tile so QC can show

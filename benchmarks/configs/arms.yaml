@@ -100,7 +100,7 @@ registration_arms:
     # block that produces the manuscript's registration figure.
     #
     # THE TIER IS THE RIGHT GRANULARITY, not the individual knobs. reg_tiled_mode is what an
-    # operator actually picks, and each row of RegPresets.DRAPE moves all four tier-owned
+    # operator actually picks, and each row of RegPresets.STARE moves all four tier-owned
     # values (tile / halo / out_tile / coarse_max_dim) coherently -- and
     # ParamUtils.validateRegPresets refuses a per-knob override under any tier but
     # `custom`, so those knobs cannot be crossed here anyway.

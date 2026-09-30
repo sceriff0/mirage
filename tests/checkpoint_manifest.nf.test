@@ -255,7 +255,7 @@ nextflow_pipeline {
                 // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
                 // the slide and it is published under <pid>/converted/ -- and the passthrough
                 // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
-                // real single-slide run, 2026-09-17; the DRAPE reference is passed through the
+                // real single-slide run, 2026-09-17; the STARE reference is passed through the
                 // same way for every patient).
                 input               = "$projectDir/tests/testdata/single_sample.csv"
                 outdir              = "$outputDir"
@@ -291,7 +291,7 @@ nextflow_pipeline {
         }
     }
 
-    test("every path in every checkpoint CSV exists — tiled (DRAPE) reference, skip_preprocessing=true (the shipped default)") {
+    test("every path in every checkpoint CSV exists — tiled (STARE) reference, skip_preprocessing=true (the shipped default)") {
         tag "stub"
         options "-stub"
 
@@ -302,7 +302,7 @@ nextflow_pipeline {
                 // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
                 // the slide and it is published under <pid>/converted/ -- and the passthrough
                 // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
-                // real single-slide run, 2026-09-17; the DRAPE reference is passed through the
+                // real single-slide run, 2026-09-17; the STARE reference is passed through the
                 // same way for every patient).
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
@@ -338,7 +338,7 @@ nextflow_pipeline {
         }
     }
 
-    test("every path in every checkpoint CSV exists — tiled (DRAPE) method") {
+    test("every path in every checkpoint CSV exists — tiled (STARE) method") {
         tag "stub"
         options "-stub"
 
@@ -436,7 +436,7 @@ nextflow_pipeline {
 
         when {
             params {
-                // The DRAPE method is a per-tile fan-out ending in TILED_STITCH —
+                // The STARE method is a per-tile fan-out ending in TILED_STITCH —
                 // a different producer from VALIS's REGISTER, publishing into the
                 // same `registered/` subdirectory. Asserted separately so a change
                 // to either producer's output layout fails here.

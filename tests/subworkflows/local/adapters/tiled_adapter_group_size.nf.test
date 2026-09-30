@@ -11,7 +11,7 @@
  *
  * A true streaming-emission-order test (a slide's TILED_SOLVE starting before another slide's
  * TILED_REG_TILE tasks have all finished) is not reliably expressible via nf-test here: the
- * DRAPE tiled stub (tiled_coarse.nf's stub block) always writes exactly one tile row
+ * STARE tiled stub (tiled_coarse.nf's stub block) always writes exactly one tile row
  * regardless of input, and stub-mode scripts (`echo`/`printf`) complete effectively
  * instantaneously, so two patients' tasks finish within the same scheduler tick with no
  * controllable gap to assert an ordering against -- any such assertion would be indistinguishable

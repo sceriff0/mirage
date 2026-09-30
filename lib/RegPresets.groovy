@@ -9,7 +9,7 @@
  * in the `high` row below is what `nextflow.config` used to declare as that param's literal
  * default -- EXCEPT `coarse_max_dim`, which is now the anchor's REFINE resolution (1024 at `high`
  * and `medium`, 512 at `low`; it shipped as 4096, then 2048 while COARSE was a U-Net matcher). The
- * long note on DRAPE below says why. Do not restate this row as "unchanged".
+ * long note on STARE below says why. Do not restate this row as "unchanged".
  * `medium` and `low` trade accuracy for memory and wall-clock. `custom` starts from `high` and
  * applies whichever individual knobs the user set; anything left unset stays at the `high` value.
  *
@@ -24,7 +24,7 @@
  * block resolving `(mode == 'low') ? 111 : 999` still returned 999 under `--mode low`. Resolution
  * therefore has to happen after the CLI merge -- here, or inline in a config closure.
  *
- * WHY conf/modules.config DUPLICATES THE DRAPE TABLE
+ * WHY conf/modules.config DUPLICATES THE STARE TABLE
  * --------------------------------------------------
  * `conf/*.config` cannot see `lib/*.groovy` at all: the class name resolves silently against
  * ConfigObject and only fails when the closure runs. TILED_REG_TILE's and TILED_STITCH's
@@ -54,11 +54,11 @@ class RegPresets {
     static final String DEFAULT_MODE = 'high'
 
     /*
-     * DRAPE / tiled cost tiers.
+     * STARE / tiled cost tiers.
      *
      * `tile` + 2*`halo` is the per-task window that drives TILED_REG_TILE's memory request, and
      * `out_tile` drives TILED_STITCH's, so these three are the memory axis. `coarse_max_dim` is
-     * the resolution the global transform is solved at -- DRAPE's counterpart to VALIS's
+     * the resolution the global transform is solved at -- STARE's counterpart to VALIS's
      * `reg_max_image_dim`, and its dominant runtime-and-accuracy knob. (The guard that ties this
      * axis to VALIS's is benchmarks/tests/test_build_run_plan.py, which exists only on the
      * `benchmarking` branch -- there is no benchmarks/ directory on this one.)
@@ -68,7 +68,7 @@ class RegPresets {
      * vector, a correctness question, not a cost/accuracy trade; the stride is the mesh resolution
      * and is crossed with the tiers in the benchmark arms rather than tied to one.
      *
-     * `coarse_max_dim` is the resolution COARSE REFINES its rigid anchor at (drape/coarse_align.py:
+     * `coarse_max_dim` is the resolution COARSE REFINES its rigid anchor at (stare/coarse_align.py:
      * a 256 px NCC rotation sweep, then +-3 deg at this thumbnail, then sub-pixel translation). It
      * is no longer a memory knob: the anchor is FFT-based and measured 0.25 / 0.43 / 0.40 GB peak
      * RSS for the whole TILED_COARSE stage at 512 / 1024 / 2048 px, band reads of a 16k x 16k
@@ -79,23 +79,22 @@ class RegPresets {
      * px, i.e. ~65 px full-res on a 40k slide -- inside every tier's halo. So `high` and `medium`
      * share 1024 and `low` keeps 512 (half the CPU of the ~50 refine evaluations).
      */
-    // DRAPE was named STARE until the 2026-09-27 rename (was RegPresets.STARE / stare()).
-    static final Map<String, Map<String, Integer>> DRAPE = [
+    static final Map<String, Map<String, Integer>> STARE = [
         high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 1024],
         medium: [tile: 1024, halo: 192, out_tile:  768, coarse_max_dim: 1024],
         low   : [tile:  512, halo: 128, out_tile:  512, coarse_max_dim:  512],
     ]
 
-    /** The DRAPE knobs that a tier owns, i.e. the ones `--reg_tiled_mode` moves. */
-    static final List<String> DRAPE_KEYS = ['tile', 'halo', 'out_tile', 'coarse_max_dim']
+    /** The STARE knobs that a tier owns, i.e. the ones `--reg_tiled_mode` moves. */
+    static final List<String> STARE_KEYS = ['tile', 'halo', 'out_tile', 'coarse_max_dim']
 
     /**
-     * Map a DRAPE tier key to the pipeline param that overrides it.
+     * Map a STARE tier key to the pipeline param that overrides it.
      *
      * Kept explicit rather than derived by string concatenation so that renaming a param is a
      * compile-visible edit here instead of a silent lookup miss at runtime.
      */
-    static final Map<String, String> DRAPE_PARAM_OF = [
+    static final Map<String, String> STARE_PARAM_OF = [
         tile          : 'reg_tiled_tile',
         halo          : 'reg_tiled_halo',
         out_tile      : 'reg_tiled_out_tile',
@@ -103,7 +102,7 @@ class RegPresets {
     ]
 
     /**
-     * The DRAPE tier row for `mode`.
+     * The STARE tier row for `mode`.
      *
      * `custom` resolves to the `high` row, which is what makes "anything the user did not set
      * stays at the high value" true. An unrecognised or null mode also falls back to `high`
@@ -111,12 +110,12 @@ class RegPresets {
      * value means validation was bypassed, and a resource closure is the worst possible place to
      * raise (conf/modules.config's errorStrategy has an 'ignore' branch that would swallow it).
      */
-    private static Map<String, Integer> drapeRow(String mode) {
-        return DRAPE[(mode == 'custom' || !mode) ? DEFAULT_MODE : mode] ?: DRAPE[DEFAULT_MODE]
+    private static Map<String, Integer> stareRow(String mode) {
+        return STARE[(mode == 'custom' || !mode) ? DEFAULT_MODE : mode] ?: STARE[DEFAULT_MODE]
     }
 
     /**
-     * Resolve one DRAPE knob: the explicit override if the user set one, else the tier value.
+     * Resolve one STARE knob: the explicit override if the user set one, else the tier value.
      *
      * Takes the mode and the override as SCALARS, never the `params` map. A process `script:`
      * block that passes `params` into a helper makes Nextflow hash the whole map, so any
@@ -126,14 +125,14 @@ class RegPresets {
      * Uses an explicit null test rather than `?:` because `?:` is falsy-coalescing: a legitimate
      * `--reg_tiled_halo 0` would be silently rewritten to the tier value.
      */
-    static int drape(String mode, String key, Object override) {
+    static int stare(String mode, String key, Object override) {
         if (override != null) {
             return override as int
         }
-        def row = drapeRow(mode)
+        def row = stareRow(mode)
         if (!row.containsKey(key)) {
             throw new IllegalArgumentException(
-                "Unknown DRAPE preset key '${key}'. Known keys: ${DRAPE_KEYS.join(', ')}"
+                "Unknown STARE preset key '${key}'. Known keys: ${STARE_KEYS.join(', ')}"
             )
         }
         return row[key]

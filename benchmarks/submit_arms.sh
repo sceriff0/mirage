@@ -100,13 +100,13 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 #   sbatch --export=ALL,ARMS_RESUME=1,ARMS_CONCURRENCY=2,PEAK_JOBS_TARGET=10 \
 #          benchmarks/submit_arms.sh
 #
-# ONE BENCHMARK, EVERY METHOD. This results root holds VALIS, DRAPE (the tiled backend),
+# ONE BENCHMARK, EVERY METHOD. This results root holds VALIS, STARE (the tiled backend),
 # ASHLAR and the segmentation arms. Choose:
-#   METHODS=valis+drape+ashlar+seg+compute   (`+`-separated -- sbatch --export
+#   METHODS=valis+stare+ashlar+seg+compute   (`+`-separated -- sbatch --export
 #                                                   splits on commas; empty = all)
 # A selection also launches what it reads (preprocess_shared, a cross's base, ASHLAR's
 # nuclei arm) as UPSTREAM rows: DONE at once when finished, never moved by ARMS_REPLACE.
-#   sbatch --export=ALL,ARMS_RESUME=1,METHODS=drape benchmarks/submit_arms.sh
+#   sbatch --export=ALL,ARMS_RESUME=1,METHODS=stare benchmarks/submit_arms.sh
 #
 # REDO WHAT GIVEN HEAD JOBS LAUNCHED -- from the results root, not from logs.
 # REDO_LAUNCHED_BY=7268624+7268693 asks SLURM (sacct) when those jobs ran, then takes every
@@ -240,7 +240,7 @@ sif_or_docker() {                  # sif_or_docker <registry/name:tag>
   if [[ -f "$f" ]]; then printf '%s' "$f"; else printf 'docker://%s' "$ref"; fi
 }
 export ASHLAR_EXEC="${ASHLAR_EXEC:-singularity exec $SING_BINDS $(sif_or_docker labsyspharm/ashlar:1.20.0)}"
-export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-drape:1.0.0)}"
+export QC_EXEC="${QC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-stare:1.0.0)}"
 export REGQC_EXEC="${REGQC_EXEC:-singularity exec $SING_BINDS $(sif_or_docker bolt3x/mirage-regqc:1.0.0)}"
 
 # Concurrency is passed on the COMMAND LINE, not via benchmark.config. Every

@@ -2,7 +2,7 @@
 """arms_status.py -- where is the arm benchmark? One screen, from what is on disk + squeue.
 
     python3 ~/pipelines/mirage/benchmarks/arms_status.py            # the default bench dir
-    python3 .../arms_status.py /beegfs/.../benchmark --method drape # one method
+    python3 .../arms_status.py /beegfs/.../benchmark --method stare # one method
     python3 .../arms_status.py --all                                # every run, not only open ones
     python3 .../arms_status.py --watch 120                          # refresh every 2 min
 
@@ -290,7 +290,7 @@ def main(argv=None) -> int:
     ap.add_argument("--results", default=None, help="default: <bench>/arm_results")
     ap.add_argument("--plan", default=None, help="default: <bench>/arm_plan.csv")
     ap.add_argument(
-        "--method", default=None, help="only this method (valis, stare, drape, ...)"
+        "--method", default=None, help="only this method (valis, stare, stare, ...)"
     )
     ap.add_argument("--all", action="store_true", help="list DONE runs too")
     ap.add_argument(

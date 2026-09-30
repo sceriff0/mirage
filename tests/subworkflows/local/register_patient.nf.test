@@ -72,7 +72,7 @@ nextflow_workflow {
         }
     }
 
-    test("'tiled' selects the DRAPE backend") {
+    test("'tiled' selects the STARE backend") {
         tag "stub"
         options "-stub"
 

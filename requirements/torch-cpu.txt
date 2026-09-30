@@ -1,6 +1,6 @@
 # torch, CPU wheel, for CI ONLY. No image installs this file any more: bolt3x/mirage-tiled
-# did, for DRAPE's (then STARE's) DISK + LightGlue COARSE front-end, and that front-end was
-# retired on 2026-09-27 -- its replacement image, containers/drape, is torch-free and its
+# did, for STARE's (then STARE's) DISK + LightGlue COARSE front-end, and that front-end was
+# retired on 2026-09-27 -- its replacement image, containers/stare, is torch-free and its
 # smoke.sh asserts so. What still needs torch in the Python suite is
 # tests/test_valis_matching_bounds.py, which imports it at module scope to exercise the
 # VALIS matcher's torch.no_grad wrapper (VALIS itself runs in its own upstream image).

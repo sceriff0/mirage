@@ -37,7 +37,7 @@ either side.
 
 Case 3 is the one that surprises people: `TILED_SOLVE` carries
 `process_single` **and** a `withName:` block, but that block sets `memory`
-only — so the label still owns its `cpus` and `time`. All four tiled/DRAPE (formerly STARE)
+only — so the label still owns its `cpus` and `time`. All four tiled/STARE
 processes work this way, and so do `GENERATE_REGISTRATION_QC` (`withName` sets
 `cpus` and `memory`; the `process_high` label still owns `time`) and
 `EXPORT_SPATIALDATA` (`withName` sets `time` alone).
@@ -143,7 +143,7 @@ and the fields grow with its square. If a cohort climbs `REGISTER`'s ramp, pass
 concurrency block, after the profiles) and its own error strategy — see
 [Retry policy](#retry-policy) and [Execution & concurrency](#execution-concurrency).
 
-### Registration — tiled / DRAPE
+### Registration — tiled / STARE
 
 Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
 at most even for large slides. `TILED_COARSE`'s anchor is an FFT NCC rotation sweep (ORB
@@ -158,7 +158,7 @@ v1.0.0 until 2026-09-27 it was a DISK U-Net that asked 48 GB at the `high` tier.
 | `TILED_SOLVE` | `1` *(label)* | `1 GB × attempt` *(withName)* | `8.h × attempt` *(label)* | partial | — |
 | `TILED_STITCH` | `4` *(label)* | derived from `reg_tiled_out_tile`, `× attempt` *(withName)* — 4 GB at defaults | `4.h × attempt` *(label)* | partial | `10` |
 
-`TILED_COARSE` / `TILED_REG_TILE` / `TILED_SOLVE` / `TILED_STITCH` are the DRAPE method —
+`TILED_COARSE` / `TILED_REG_TILE` / `TILED_SOLVE` / `TILED_STITCH` are the STARE method —
 the only shape it has.
 
 `TILED_REG_TILE`, `TILED_STITCH`, `TILE_FOR_BASIC`, `APPLY_PROFILES` and
@@ -208,7 +208,7 @@ formulas, not independent constants — the **parameter names**, not the numbers
 are what `tests/test_resource_label_coverage.py` checks for all five of these
 param-derived rows.
 
-The DRAPE method's memory is bounded. Measured peak RSS on a 16384² 2-channel
+The STARE method's memory is bounded. Measured peak RSS on a 16384² 2-channel
 tiled OME-TIFF: `TILED_REG_TILE` 1.31 GB, `TILED_SOLVE` < 1.31 GB,
 `TILED_STITCH` 1.35 GB — each set by a parameter (`reg_tiled_tile` +
 `reg_tiled_halo`, `reg_tiled_out_tile`) rather than by slide dimensions.
@@ -570,7 +570,7 @@ difference is the two new parameters. Guarded by `tests/test_concurrency_params.
 
 Every process pins a fixed image tag — never `:latest`. The `bolt3x/mirage-*` image
 NAMES (one Docker Hub repository per image, e.g. `bolt3x/mirage-preprocess`,
-`bolt3x/mirage-drape`) are content-descriptive; the TAG on each is an immutable
+`bolt3x/mirage-stare`) are content-descriptive; the TAG on each is an immutable
 SemVer version (`1.0.0`), tied to `manifest.version` — see
 [Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
 
@@ -580,7 +580,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
 | `cdgatenbee/valis-wsi:1.0.0` | `REGISTER` |
-| `bolt3x/mirage-drape:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
+| `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
 | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
 | `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` *(default)* |

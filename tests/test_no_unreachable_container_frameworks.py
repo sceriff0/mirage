@@ -35,7 +35,7 @@ FRAMEWORKS = {
     "deepcell": "deepcell",
     # containers/tiled installed these for STARE's DISK+LightGlue COARSE front-end, retired
     # 2026-09-27 for an NCC rotation sweep with an ORB fallback that imports neither; its
-    # replacement, containers/drape, installs neither. Kept here so neither comes back.
+    # replacement, containers/stare, installs neither. Kept here so neither comes back.
     "torch": "torch",
     "kornia": "kornia",
 }
@@ -44,7 +44,7 @@ FRAMEWORKS = {
 # or imported by first-party code.
 CODE_DIRS = (
     "bin",
-    "packages",  # packages/drape: the DRAPE method; bin/tiled_*.py are shims over it
+    "packages",  # packages/stare: the STARE method; bin/tiled_*.py are shims over it
     "tests",
     "benchmarks",
     "lib",
@@ -60,7 +60,7 @@ CODE_DIRS = (
 # so the day the Dockerfile drops the wheel the entry fails and has to go.
 PENDING_IMAGE_REBUILD = {
     # Empty since 2026-09-27: ("containers/tiled/Dockerfile", "kornia") went when the
-    # tiled image was replaced by the torch-free containers/drape.
+    # tiled image was replaced by the torch-free containers/stare.
 }
 
 

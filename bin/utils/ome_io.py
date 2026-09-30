@@ -210,7 +210,7 @@ def require_reader(reader: str) -> None:
 #:
 #: tifffile's zarr view of a STRIPED (untiled) TIFF reports ``chunks=(1, H, W)``, one
 #: chunk per whole plane, so every "read just this region" call downstream -- the BaSiC
-#: path, the DRAPE registration path, SPLIT_CHANNELS, the QC processes -- decodes the
+#: path, the STARE registration path, SPLIT_CHANNELS, the QC processes -- decodes the
 #: entire plane to slice it. Measured on a 6000x6000 uint16 plane: a single 2048^2 region
 #: read peaks at 76.7 MiB striped vs 16.0 MiB tiled. CONVERT_IMAGE writes the pipeline's
 #: canonical intermediate, so an untiled write there is the origin of that cost for every

@@ -9,7 +9,7 @@ way bin/utils/jvm_cache.py's docstring records: jgo's `os.makedirs($HOME/.jgo)` 
 
 This is a CONTAINER-ONLY fix. A git pull can never repair a missing jar. It is the same
 shape as the retired containers/tiled's DISK/LightGlue bake, and this file was modelled on
-tests/test_disk_weights_are_baked.py (now tests/test_drape_image_is_slim.py) -- including
+tests/test_disk_weights_are_baked.py (now tests/test_stare_image_is_slim.py) -- including
 its comment-blindness, which is not a refinement but a defect found by breaking that
 file's guards before trusting them.
 

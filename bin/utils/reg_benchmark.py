@@ -1,4 +1,4 @@
-"""Registration accuracy harness for the DRAPE method (and any other).
+"""Registration accuracy harness for the STARE method (and any other).
 
 Quantifies how well a *registered* image aligns to the *reference* with two ground-truth-free
 measures, so it works on real WSIs exactly as on synthetic data:

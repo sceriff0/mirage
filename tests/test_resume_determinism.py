@@ -81,7 +81,7 @@ ORDERED_FAN_INS = {
     "tiled_adapter: TILED_SOLVE's control list and metas[0]": (
         "subworkflows/local/adapters/tiled_adapter.nf",
         r"\[metas,\s*controls\]\.transpose\(\)\.toSorted",
-        "Same metas[0] shape as quantify_markers, on the DRAPE backend.",
+        "Same metas[0] shape as quantify_markers, on the STARE backend.",
     ),
 }
 

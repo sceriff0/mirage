@@ -6,7 +6,7 @@
     through each registration stage and comparing per-pair IoU and centroid residual
     against a correspondence fixed at the rigid anchor. The SCORER is method-agnostic —
     bin/warp_seg_qc.py takes `--method` and builds its warper from either a VALIS
-    registrar pickle or a DRAPE transform manifest.
+    registrar pickle or a STARE transform manifest.
 
     The two PROCESSES were not. modules/local/warp_seg_qc.nf and warp_seg_qc_tiled.nf
     shared ~77% of their bodies — the whole output: block including its comment, the
@@ -85,8 +85,8 @@ class WarpBackends {
             ] },
         ],
         tiled: [
-            // DRAPE's image: JVM-free and slim (no BioFormats, no torch).
-            container   : 'bolt3x/mirage-drape:1.0.0',
+            // STARE's image: JVM-free and slim (no BioFormats, no torch).
+            container   : 'bolt3x/mirage-stare:1.0.0',
             stages      : ['native', 'rigid', 'refined'],
             versionTools: ['skimage', 'scipy'],
             flags       : { _ctx -> ['--method tiled'] },

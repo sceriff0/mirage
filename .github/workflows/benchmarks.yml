@@ -67,7 +67,7 @@ jobs:
       # pipeline entry point in CI any more. benchmarks/run_ashlar_arm.sh does, but
       # it runs on the cluster inside the images that already carry those deps --
       # see the note in the test file.
-      # (requirements/ci.txt pulls zarr in anyway via `-r drape.txt`; that is the cost
+      # (requirements/ci.txt pulls zarr in anyway via `-r stare.txt`; that is the cost
       # of reading one shared file instead of maintaining a seventh pin list.)
       - name: Install
         uses: ./.github/actions/setup-python-env

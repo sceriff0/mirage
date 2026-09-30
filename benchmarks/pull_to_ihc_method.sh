@@ -16,7 +16,7 @@
 #                        root wins on a clash) and the root's pre-aggregated arm
 #                        tables are NOT copied (they describe only this root).
 #                        Use it for a second arm experiment run into its own results
-#                        root, e.g. the DRAPE arms beside the benchmarking arms.
+#                        root, e.g. the STARE arms beside the benchmarking arms.
 #   -h | --help
 #
 # Local (both repos side by side under Github/):

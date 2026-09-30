@@ -129,7 +129,9 @@ def normalised_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
 
 
 def _round_markers(entry: Dict, nuclear_markers: List[str]) -> List[str]:
-    return sorted(m for m in entry.get("markers", []) if not is_nuclear(m, nuclear_markers))
+    return sorted(
+        m for m in entry.get("markers", []) if not is_nuclear(m, nuclear_markers)
+    )
 
 
 def _reference_nuclear(df: pd.DataFrame, nuclear_markers: List[str]) -> Optional[str]:
@@ -186,14 +188,19 @@ def add_qc_columns(
     out = quant.copy()
     owned = {qc_key(QC_TOTAL_INTENSITY)}
     moving = [
-        r for r in rounds
+        r
+        for r in rounds
         if not r.get("is_reference") and _round_markers(r, nuclear_markers)
     ]
     for r in moving:
-        owned.update(qc_key(m, _round_markers(r, nuclear_markers)) for m in QC_ROUND_METRICS)
+        owned.update(
+            qc_key(m, _round_markers(r, nuclear_markers)) for m in QC_ROUND_METRICS
+        )
     out = out.drop(columns=[c for c in out.columns if c in owned])
 
-    new: Dict[str, pd.Series] = {qc_key(QC_TOTAL_INTENSITY): total_intensity(out, nuclear_markers)}
+    new: Dict[str, pd.Series] = {
+        qc_key(QC_TOTAL_INTENSITY): total_intensity(out, nuclear_markers)
+    }
     ref_marker = _reference_nuclear(out, nuclear_markers)
     labels = out["label"].to_numpy()
     quant_xy = out  # centre-of-pixel x/y, straight off the table (see reg_residuals.py)
@@ -213,17 +220,24 @@ def add_qc_columns(
                 logger.info(
                     "%s: nuclear retention paired against reference column %s "
                     "(moving compartment %s)",
-                    r["round_id"], measurement_key(ref_marker, comp, "Median"), comp,
+                    r["round_id"],
+                    measurement_key(ref_marker, comp, "Median"),
+                    comp,
                 )
                 mov = ret.set_index("label")[comp].reindex(labels).to_numpy(dtype=float)
-                ref = out[measurement_key(ref_marker, comp, "Median")].to_numpy(dtype=float)
+                ref = out[measurement_key(ref_marker, comp, "Median")].to_numpy(
+                    dtype=float
+                )
                 new[qc_key(QC_NUCLEAR_RETENTION, markers)] = pd.Series(
                     normalised_retention(ref, mov), index=out.index
                 )
                 if raw_out is not None:
                     raw_out[r["round_id"]] = raw_retention(ref, mov)
             else:
-                logger.warning("%s: no retention values; no retention key for this round", r["round_id"])
+                logger.warning(
+                    "%s: no retention values; no retention key for this round",
+                    r["round_id"],
+                )
         if r.get("residual_csv"):
             resid, iou, stats = join_one(
                 str(Path(residual_dir) / r["residual_csv"]), centroids, join_max_px
@@ -284,19 +298,39 @@ def round_long_table(
         if not any(k in table.columns for k in keys.values()):
             continue
         disp_um = table.get(keys[QC_REG_DISPLACEMENT], nan)
-        frames.append(pd.DataFrame({
-            "label": table["label"].to_numpy(),
-            "round_id": r["round_id"],
-            "markers": "|".join(markers),
-            "nuclear_retention": table.get(keys[QC_NUCLEAR_RETENTION], nan).to_numpy(),
-            "nuclear_retention_raw": (raw or {}).get(r["round_id"], nan.to_numpy()),
-            "displacement_px": (disp_um / float(pixel_size)).to_numpy(),
-            "displacement_um": disp_um.to_numpy(),
-            "dice": table.get(keys[QC_REG_DICE], nan).to_numpy(),
-        }))
-    cols = ["label", "round_id", "markers", "nuclear_retention", "nuclear_retention_raw",
-            "displacement_px", "displacement_um", "dice"]
-    return pd.concat(frames, ignore_index=True)[cols] if frames else pd.DataFrame(columns=cols)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "label": table["label"].to_numpy(),
+                    "round_id": r["round_id"],
+                    "markers": "|".join(markers),
+                    "nuclear_retention": table.get(
+                        keys[QC_NUCLEAR_RETENTION], nan
+                    ).to_numpy(),
+                    "nuclear_retention_raw": (raw or {}).get(
+                        r["round_id"], nan.to_numpy()
+                    ),
+                    "displacement_px": (disp_um / float(pixel_size)).to_numpy(),
+                    "displacement_um": disp_um.to_numpy(),
+                    "dice": table.get(keys[QC_REG_DICE], nan).to_numpy(),
+                }
+            )
+        )
+    cols = [
+        "label",
+        "round_id",
+        "markers",
+        "nuclear_retention",
+        "nuclear_retention_raw",
+        "displacement_px",
+        "displacement_um",
+        "dice",
+    ]
+    return (
+        pd.concat(frames, ignore_index=True)[cols]
+        if frames
+        else pd.DataFrame(columns=cols)
+    )
 
 
 def parse_args(argv=None):
@@ -326,22 +360,38 @@ def main(argv=None) -> int:
     quant = pd.read_csv(a.merged)
     raw: Dict[str, np.ndarray] = {}
     table = add_qc_columns(
-        quant, rounds, Path(a.retention_dir), Path(a.residual_dir),
-        a.pixel_size, a.join_max_px, a.nuclear_markers, raw_out=raw,
+        quant,
+        rounds,
+        Path(a.retention_dir),
+        Path(a.residual_dir),
+        a.pixel_size,
+        a.join_max_px,
+        a.nuclear_markers,
+        raw_out=raw,
     )
     manifest = [
-        {"round_id": r["round_id"], "is_reference": bool(r.get("is_reference")),
-         "markers": _round_markers(r, a.nuclear_markers)}
+        {
+            "round_id": r["round_id"],
+            "is_reference": bool(r.get("is_reference")),
+            "markers": _round_markers(r, a.nuclear_markers),
+        }
         for r in rounds
     ]
     if a.prior_rounds:
         seen = {r["round_id"] for r in manifest}
-        manifest = [r for r in json.loads(Path(a.prior_rounds).read_text())
-                    if r["round_id"] not in seen] + manifest
+        manifest = [
+            r
+            for r in json.loads(Path(a.prior_rounds).read_text())
+            if r["round_id"] not in seen
+        ] + manifest
     table.to_csv(a.out_merged, index=False)
-    round_long_table(table, manifest, a.pixel_size, raw=raw).to_csv(a.out_round_qc, index=False)
+    round_long_table(table, manifest, a.pixel_size, raw=raw).to_csv(
+        a.out_round_qc, index=False
+    )
     Path(a.out_rounds).write_text(json.dumps(manifest, indent=2) + "\n")
-    logger.info("%s: %d QC columns", a.patient_id, sum(is_qc_column(c) for c in table.columns))
+    logger.info(
+        "%s: %d QC columns", a.patient_id, sum(is_qc_column(c) for c in table.columns)
+    )
     return 0
 
 

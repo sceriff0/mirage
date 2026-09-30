@@ -143,7 +143,7 @@ def test_seg_qc_stage_plots_on_an_empty_directory_is_a_notice(tmp_path):
 def test_seg_qc_stage_plots_never_mix_units_and_label_each_correctly(tmp_path):
     """A directory can hold a calibrated (VALIS, um) slide and an uncalibrated
 
-    (DRAPE, no pixel size -> px) slide for the same stage. The tiled WARP_SEG_QC
+    (STARE, no pixel size -> px) slide for the same stage. The tiled WARP_SEG_QC
     Nextflow process passes no pixel size on that path, bin/warp_seg_qc.py
     forwards None, and bin/utils/cell_pairs.py only emits displacement_um_* when
     a pixel size was given -- so px is the norm there, not an edge case. The two
@@ -668,7 +668,7 @@ def test_tiled_tre_plots_survive_a_null_tre_rigid_tile(tmp_path):
     assert "empty-notice" in out or "Could not parse" in out
 
 
-def test_registration_section_renders_drape_tre_from_valis_dir(tmp_path):
+def test_registration_section_renders_stare_tre_from_valis_dir(tmp_path):
     gqr = _load()
     valis = tmp_path / "registration_tre"
     valis.mkdir()
@@ -683,7 +683,7 @@ def test_registration_section_renders_drape_tre_from_valis_dir(tmp_path):
         ],
     )
     html = gqr.registration_qc_section(tmp_path / "reg", str(valis))
-    assert "DRAPE Tiled TRE" in html
+    assert "STARE Tiled TRE" in html
     assert "<svg" in html
     assert "No registration-accuracy summary found" not in html
 
@@ -700,7 +700,7 @@ def test_read_intrinsic_tre_valis_csv_shape_preserved(tmp_path):
     assert out["mov"]["premicro"] == {"rigid_D": 2.0, "non_rigid_D": 1.0}
 
 
-def test_read_intrinsic_tre_reads_drape_json(tmp_path):
+def test_read_intrinsic_tre_reads_stare_json(tmp_path):
     gqr = _load()
     d = tmp_path / "registration_tre"
     d.mkdir()
@@ -710,7 +710,7 @@ def test_read_intrinsic_tre_reads_drape_json(tmp_path):
     assert out["P1_DAPI"]["premicro"] == {}
 
 
-def test_reconcile_rows_from_drape_tre_json_are_nonempty(tmp_path):
+def test_reconcile_rows_from_stare_tre_json_are_nonempty(tmp_path):
     gqr = _load()
     d = tmp_path / "registration_tre"
     d.mkdir()
@@ -721,7 +721,7 @@ def test_reconcile_rows_from_drape_tre_json_are_nonempty(tmp_path):
     }
     assert rows  # non-empty: the JSON-only input still reconciles
     assert rows[("mov", "rigid")]["feature_tre_um"] == 2.0  # coarse_tre_px
-    # No premicro summary for DRAPE -> non_rigid falls back to final's non_rigid_D (0.5),
+    # No premicro summary for STARE -> non_rigid falls back to final's non_rigid_D (0.5),
     # same fallback path VALIS uses when micro_reg < 2.
     assert rows[("mov", "non_rigid")]["feature_tre_um"] == 0.5
     assert rows[("mov", "micro")]["feature_tre_um"] == 0.5
@@ -743,14 +743,14 @@ def test_reconciliation_section_neither_format_is_method_neutral_and_does_not_ra
     assert "found to reconcile" in html
 
 
-def test_reconcile_rows_merges_valis_csv_and_drape_json_rather_than_shadowing(tmp_path):
+def test_reconcile_rows_merges_valis_csv_and_stare_json_rather_than_shadowing(tmp_path):
     gqr = _load()
     d = tmp_path / "registration_tre"
     d.mkdir()
     (d / "P001_preprocessed_summary.csv").write_text(
         "from,rigid_D,non_rigid_D\nmov_valis,2.0,0.5\n"
     )
-    _write_tre(d, "mov_drape", coarse=1.5, rigid_p50=2.0, final_p50=0.3)
+    _write_tre(d, "mov_stare", coarse=1.5, rigid_p50=2.0, final_p50=0.3)
 
     seg_qc = tmp_path / "seg_qc"
     seg_qc.mkdir()
@@ -762,10 +762,10 @@ def test_reconcile_rows_merges_valis_csv_and_drape_json_rather_than_shadowing(tm
             }
         )
     )
-    (seg_qc / "mov_drape_seg_qc.json").write_text(
+    (seg_qc / "mov_stare_seg_qc.json").write_text(
         json.dumps(
             {
-                "moving": "mov_drape",
+                "moving": "mov_stare",
                 "stages": {"rigid": {"displacement_um_p50": 1.6}},
             }
         )
@@ -776,7 +776,7 @@ def test_reconcile_rows_merges_valis_csv_and_drape_json_rather_than_shadowing(tm
     }
     # Both slides are present: the CSV reader did not shadow the JSON reader, or vice versa.
     assert rows[("mov_valis", "rigid")]["feature_tre_um"] == 2.0
-    assert rows[("mov_drape", "rigid")]["feature_tre_um"] == 1.5
+    assert rows[("mov_stare", "rigid")]["feature_tre_um"] == 1.5
 
 
 def test_reconcile_rows_yields_a_comparable_point_on_the_committed_repo_fixtures():

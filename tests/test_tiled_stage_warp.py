@@ -1,8 +1,8 @@
-"""Tests for bin/utils/tiled_stage_warp.py — the reg_qc=2 stage warper for the tiled ('DRAPE')
+"""Tests for bin/utils/tiled_stage_warp.py — the reg_qc=2 stage warper for the tiled ('STARE')
 registration method.
 
 This is the seam that lets the tiled method reuse the reg_qc=2 scorer (bin/warp_seg_qc.py)
-unchanged: it turns a DRAPE transform manifest (a global rigid ``M0`` per slide + a control-grid
+unchanged: it turns a STARE transform manifest (a global rigid ``M0`` per slide + a control-grid
 mesh field) into the same ``warp(slide_name, xy, stage)`` callable the scorer injects for VALIS.
 Stages are ``native`` / ``rigid`` / ``refined`` — no destructive micro composition, so every
 stage is a first-class, independently reachable transform.

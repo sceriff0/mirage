@@ -208,7 +208,7 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_COARSE .command.sh found under the task work dir" },
-                // RegPresets.DRAPE.low
+                // RegPresets.STARE.low
                 { assert rendered.every { it.contains('--tile 512') },
                     "the 'low' tier did not reach --tile: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--halo 128') },

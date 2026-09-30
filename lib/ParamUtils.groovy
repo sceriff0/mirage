@@ -405,20 +405,20 @@ class ParamUtils {
                 "(table: bin/utils/valis_config.py, MEMORY_PRESETS).")
         }
 
-        def drapeBad = offenders('reg_tiled_mode', params.reg_tiled_mode, [
+        def stareBad = offenders('reg_tiled_mode', params.reg_tiled_mode, [
             reg_tiled_tile          : params.reg_tiled_tile,
             reg_tiled_halo          : params.reg_tiled_halo,
             reg_tiled_out_tile      : params.reg_tiled_out_tile,
             reg_tiled_coarse_max_dim: params.reg_tiled_coarse_max_dim,
         ])
-        if (drapeBad) {
+        if (stareBad) {
             throw new IllegalArgumentException(
-                "DRAPE knob override(s) ${drapeBad.join(', ')} were given, but " +
+                "STARE knob override(s) ${stareBad.join(', ')} were given, but " +
                 "--reg_tiled_mode is '${params.reg_tiled_mode}'. Per-knob overrides only apply " +
                 "under --reg_tiled_mode custom, which starts from the 'high' preset and keeps " +
                 "every knob you do not set. Either pass --reg_tiled_mode custom, or drop the " +
                 "override(s) and let the '${params.reg_tiled_mode}' preset supply them " +
-                "(table: lib/RegPresets.groovy, RegPresets.DRAPE).")
+                "(table: lib/RegPresets.groovy, RegPresets.STARE).")
         }
 
         // COARSE's thumbnail bound has a FLOOR, and it is not cosmetic. bin/utils/tiled_io.py's
@@ -444,7 +444,7 @@ class ParamUtils {
                 "memory request is derived from this same value, so that would also " +
                 "under-reserve the task. Use 512 (the 'low' tier) or higher, or " +
                 "drop the override and let --reg_tiled_mode pick the tier " +
-                "(table: lib/RegPresets.groovy, RegPresets.DRAPE).")
+                "(table: lib/RegPresets.groovy, RegPresets.STARE).")
         }
     }
 
