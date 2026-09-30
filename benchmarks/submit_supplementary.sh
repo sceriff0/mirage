@@ -34,7 +34,7 @@
 # Submit (login node; every knob in --export, never `VAR=x sbatch`):
 #   B=/beegfs/scratch/ieo7660/ihc_method/benchmark
 #   mkdir -p /beegfs/scratch/ieo7660/ihc_method/supplementary && cd $_
-#   sbatch --export=ALL,RESULTS=$B/arm_results,PLAN=$B/arm_plan.csv,IHC=$HOME/ihc_method \
+#   sbatch --export=ALL,RESULTS=$B/arm_results,PLAN=$B/arm_plan.csv,IHC=$HOME/workflowR/ihc_method \
 #     ~/pipelines/mirage/benchmarks/submit_supplementary.sh
 # Only some:   ONLY=mosaic+S4       (+ separated: --export splits on commas)
 # Check first: CHECK=1              (per figure READY/PARTIAL/MISSING + the AUTHORS TO
