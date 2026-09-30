@@ -35,7 +35,12 @@ sets:
   drape: [valis, drape, ashlar]
   all:   [valis, stare, drape, ashlar]
 
-patients: []                      # empty = every patient of the VALIS high arm
+# THE COHORT. Every figure uses these cases and only these: the arm picks, S8's boxes,
+# S4/S7's values, S3a and the drawn cases. Empty = the patient_id set of the arms'
+# samplesheet (INPUT= in submit_supplementary.sh, the same input.csv submit_arms.sh
+# launches on); set it only to narrow that further.
+# QUOTE EVERY ID: unquoted, YAML reads 046 as the octal number 38 (refused at launch).
+patients: []                      # e.g. ['033', '046', '052', '10338', ...]
 
 # ---- the priority figure: Before | VALIS | STARE-or-DRAPE | ASHLAR, Dice per cell ----
 mosaic:

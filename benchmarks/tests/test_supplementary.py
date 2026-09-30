@@ -387,3 +387,68 @@ def test_the_one_job_script_check_writes_check_csv_and_draws_nothing(unified, tm
     assert {"mosaic", "S8", "S11"} <= {x["figure"] for x in rows}
     assert not (tmp_path / "out" / "mosaic").exists()
     assert not (tmp_path / "out" / "S8").exists()
+
+
+def test_s7_and_s8_need_only_valis_but_s4_and_the_mosaic_need_a_comparator(
+    unified, tmp_path
+):
+    """S7 is ONE method before vs after, S8 the per-arm scores: VALIS alone draws both.
+    S4 and the mosaic compare methods, so with VALIS alone they stay MISSING."""
+    root, plan, conf = unified
+    rows = [r for r in csv.DictReader(plan.open()) if r["method"] == "valis"]
+    vplan = tmp_path / "valis_plan.csv"
+    with open(vplan, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    cfg = yaml.safe_load(conf.read_text())
+    cfg["S4"]["patient"] = "P0"  # so S7 ("every case except S4's") draws P1
+    cfg["S7"].update(field_um=48, zoom_um=0, variants=1, rounds=["CD3"])
+    c = tmp_path / "c.yaml"
+    c.write_text(yaml.safe_dump(cfg))
+    out = tmp_path / "o"
+    args = ["--results", str(root), "--plan", str(vplan), "--config", str(c)]
+    assert sp.main([*args, "-o", str(out), "--only", "S7,S8"]) == 0
+    chk = {r["figure"]: r["status"] for r in csv.DictReader((out / "check.csv").open())}
+    assert chk["S7"] == "READY" and chk["S8"] == "READY", chk
+    assert chk["S4"] == "MISSING" and chk["mosaic"] == "MISSING", chk
+    assert list((out / "S7" / "P1" / "valis_high").glob("v1/P1_valis_high_v1.png"))
+    assert (out / "S8" / "valis_high" / "S8_valis_high.png").is_file()
+
+
+def test_the_cohort_cuts_every_number_and_unquoted_ids_are_refused(unified, tmp_path):
+    root, plan, conf = unified
+    cfg = yaml.safe_load(conf.read_text())
+    cfg["patients"] = ["P1", "P9"]  # P9 is not on disk
+    c = tmp_path / "c.yaml"
+    c.write_text(yaml.safe_dump(cfg))
+    args = ["--results", str(root), "--plan", str(plan), "--config", str(c)]
+    assert sp.main([*args, "-o", str(tmp_path / "o"), "--check"]) == 0
+    chk = {
+        r["figure"]: r for r in csv.DictReader((tmp_path / "o" / "check.csv").open())
+    }
+    assert chk["cohort"]["status"] == "PARTIAL" and "'P9'" in chk["cohort"]["detail"]
+    cfg["patients"] = ["033", 46]  # 046 unquoted: YAML gives the int 38
+    c.write_text(yaml.safe_dump(cfg))
+    with pytest.raises(SystemExit, match="quote every case id"):
+        sp.main([*args, "-o", str(tmp_path / "p"), "--check"])
+
+
+def test_the_cohort_defaults_to_the_arms_samplesheet(unified, tmp_path):
+    root, plan, conf = unified
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,channel_1\n046,a.tif,DAPI\n046,b.tif,DAPI\n"
+    )
+    assert sp.read_input_patients(sheet) == ["046"], "ids stay strings, deduplicated"
+    sheet.write_text("patient_id,path_to_file\nP1,a.tif\nP7,b.tif\n")
+    args = ["--results", str(root), "--plan", str(plan), "--config", str(conf)]
+    assert (
+        sp.main([*args, "-o", str(tmp_path / "o"), "--check", "--input", str(sheet)])
+        == 0
+    )
+    chk = {
+        r["figure"]: r for r in csv.DictReader((tmp_path / "o" / "check.csv").open())
+    }
+    d = chk["cohort"]["detail"]
+    assert "--input samplesheet" in d and "'P7'" in d, d

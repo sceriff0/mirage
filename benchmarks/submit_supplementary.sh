@@ -60,6 +60,8 @@ RESULTS="${RESULTS:-/beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results}"
 PLAN="${PLAN:-$(dirname "$RESULTS")/arm_plan.csv}"
 CONFIG="${CONFIG:-$SRC_DIR/benchmarks/configs/supplementary.yaml}"
 IHC="${IHC:-}"
+# The arms' samplesheet (submit_arms.sh's INPUT): its patient_id set is the cohort.
+INPUT="${INPUT:-/beegfs/scratch/ieo7660/ihc_method/head_neck/input.csv}"
 ONLY="${ONLY:-}"
 DRY_RUN="${DRY_RUN:-0}"
 CHECK="${CHECK:-0}"
@@ -129,6 +131,7 @@ echo "Results: $RESULTS"
 echo "Plan:    $PLAN"
 echo "Config:  $CONFIG"
 echo "Out:     $OUT"
+echo "Input:   $INPUT (the cohort)"
 echo "IHC:     ${IHC:-<none: S3b, S9, S10, S11 skipped>}"
 echo "Render:  ${RENDER_EXEC:-<this env>}"
 echo "=================================================="
@@ -181,6 +184,11 @@ if (( ${#MIRAGE_FIGS[@]} > 0 )); then
   [[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
   [[ "$CHECK" == "1" ]] && args+=(--check)
   [[ -n "$IHC" ]] && args+=(--ihc "$IHC")
+  if [[ -s "$INPUT" ]]; then
+    args+=(--input "$INPUT")
+  else
+    echo "[supp] no samplesheet at $INPUT: cohort = every case on disk (set INPUT=)" >&2
+  fi
   if (cd "$SRC_DIR" && python3 -m benchmarks.supplementary "${args[@]}"); then
     STATUS+=("mirage: OK (${MIRAGE_FIGS[*]})")
   else

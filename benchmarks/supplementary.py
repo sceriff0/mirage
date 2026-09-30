@@ -102,6 +102,7 @@ class Ctx:
     exec_prefix: list[str] = field(default_factory=list)
     dry_run: bool = False
     log: list[str] = field(default_factory=list)
+    input_patients: list[str] = field(default_factory=list)
 
     def opt(self, *keys, default=None):
         node = self.cfg
@@ -118,6 +119,23 @@ class Ctx:
     @property
     def dpi(self) -> int:
         return int(self.opt("options", "dpi", default=150))
+
+    @property
+    def cohort(self) -> set[str] | None:
+        """THE case set of every figure: `patients:` from the config when given, else
+        the patient_id column of the arms' samplesheet (--input), else None (all)."""
+        ps = self.opt("patients", default=[]) or []
+        if not ps:
+            return set(self.input_patients) or None
+        bad = [p for p in ps if not isinstance(p, str)]
+        if bad:
+            # YAML reads 046 as the octal int 38 and 10338 as an int: a case would drop
+            # out of the cohort silently. Refuse instead.
+            raise SystemExit(
+                f"supplementary.yaml patients: quote every case id, e.g. ['046', "
+                f"'10338'] (unquoted, YAML parsed {bad} as numbers)"
+            )
+        return set(ps) or None
 
     def arm_dir(self, arm: str) -> Path:
         return self.root / arm
@@ -155,6 +173,17 @@ def _patients_of(arm_dir: Path) -> list[str]:
             if pid and pid not in seen:
                 seen.append(pid)
     return seen
+
+
+def read_input_patients(path: Path) -> list[str]:
+    """Distinct patient_id of a pipeline samplesheet, as STRINGS (046 stays 046)."""
+    with open(path, newline="") as fh:
+        r = csv.DictReader(fh)
+        if "patient_id" not in (r.fieldnames or []):
+            raise SystemExit(f"{path} has no patient_id column: not a samplesheet")
+        return list(
+            dict.fromkeys(x["patient_id"].strip() for x in r if x["patient_id"])
+        )
 
 
 def _registered(arm_dir: Path) -> bool:
@@ -294,14 +323,25 @@ def _anchor_arm(picks: pd.DataFrame) -> str:
     return str(picks["arm"].iloc[0])
 
 
-def method_sets(ctx: Ctx, picks: pd.DataFrame) -> dict[str, list[str]]:
+def method_sets(
+    ctx: Ctx, picks: pd.DataFrame, min_methods: int = 2
+) -> dict[str, list[str]]:
+    """The configured sets, cut to the methods with an arm on disk.
+
+    A comparison (mosaic, S4) needs two methods; a single-method figure (S7: one method
+    before vs after; S8: per-arm scores) is drawn from whatever is there. A set cut down
+    to other than its configured methods is renamed after what it holds, so a `stare`
+    set holding only VALIS is never labelled STARE, and identical cuts collapse to one."""
     sets = ctx.opt("sets", default=None) or DEFAULT_SETS
     have = set(picks["method"])
-    out = {}
+    out: dict[str, list[str]] = {}
     for name, methods in sets.items():
         ms = [m for m in methods if m in have]
-        if len(ms) >= 2:
-            out[name] = ms
+        if len(ms) < min_methods:
+            continue
+        key = name if ms == list(methods) else "_".join(ms)
+        if ms not in out.values():
+            out[key] = ms
     return out
 
 
@@ -450,7 +490,9 @@ def _overlay_panels(
     return root
 
 
-def _compose_overlays(ctx: Ctx, picks, root: Path, pid: str, final: pd.DataFrame):
+def _compose_overlays(
+    ctx: Ctx, picks, root: Path, pid: str, final: pd.DataFrame, min_methods: int = 2
+):
     """Per (set, config, variant): Before | one After per method, numbers underneath."""
     import matplotlib
 
@@ -458,7 +500,7 @@ def _compose_overlays(ctx: Ctx, picks, root: Path, pid: str, final: pd.DataFrame
     import matplotlib.image as mpimg
     import matplotlib.pyplot as plt
 
-    for set_name, methods in method_sets(ctx, picks).items():
+    for set_name, methods in method_sets(ctx, picks, min_methods).items():
         for config in configs(ctx):
             panel_dirs = {m: root / "panels" / f"{m}_{config}" for m in methods}
             for vdir in sorted((panel_dirs[methods[0]]).glob("v*")):
@@ -568,7 +610,8 @@ def fig_s7(ctx, picks, patients, final):
     ]:
         root = _overlay_panels(ctx, picks, pid, "S7", spec)
         if not ctx.dry_run:
-            _compose_overlays(ctx, picks, root, pid, final)
+            # S7 is ONE method before vs after (as Fig 4a): VALIS alone draws it.
+            _compose_overlays(ctx, picks, root, pid, final, min_methods=1)
 
 
 # ----------------------------------------------------------------------------- S5 --
@@ -795,7 +838,7 @@ def fig_s8(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame):
     df = final.copy()
     df["panel_pair"] = df["moving"].map(lambda m: pairs.get(str(m), str(m)))
     df.to_csv(out / "S8_values_per_slide.csv", index=False)
-    for set_name, methods in method_sets(ctx, picks).items():
+    for set_name, methods in method_sets(ctx, picks, min_methods=1).items():
         for config in configs(ctx):
             arms = {
                 a: _label(m, "", config)
@@ -921,6 +964,8 @@ def fig_s3a(ctx: Ctx):
         if "nuclear_retention_raw" not in d.columns:
             continue
         pid = f.name[: -len("_round_qc.csv")]
+        if ctx.cohort and pid not in ctx.cohort:
+            continue
         g = d.groupby("round_id", sort=False)["nuclear_retention_raw"]
         for rid, v in g:
             rows.append(
@@ -1055,15 +1100,41 @@ def check(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame, ihc: Path | None):
     reg_detail = tier_note + (f"; no high arm for {missing}" if missing else "")
     add("mosaic", reg_status, reg_detail)
     patients = _patients_of(ctx.arm_dir(_anchor_arm(picks))) if len(picks) else []
+    if ctx.cohort:
+        add(
+            "cohort",
+            "READY" if ctx.cohort <= set(patients) else "PARTIAL",
+            f"{len(ctx.cohort)} case(s) from "
+            f"{'the config' if ctx.opt('patients') else 'the --input samplesheet'}; "
+            "on disk "
+            f"{sorted(ctx.cohort & set(patients))}; absent "
+            f"{sorted(ctx.cohort - set(patients))}; left out "
+            f"{sorted(set(patients) - ctx.cohort)}",
+        )
+        patients = [p for p in patients if p in ctx.cohort]
+    else:
+        add("cohort", "ALL", f"patients: [] -> every case on disk: {patients}")
     s4 = ctx.opt("S4", default={}) or {}
     s4_pid = str(s4.get("patient") or (patients[0] if patients else ""))
+    # S4 compares VALIS with STARE and/or DRAPE; S7 and S8 need one method.
+    s4_ok = "valis" in have and ({"stare", "drape"} & set(have))
     add(
-        "S4", reg_status if s4_pid else "MISSING", f"case {s4_pid or '?'}; {reg_detail}"
+        "S4",
+        ("READY" if len(have) == len(REG_METHODS) else "PARTIAL")
+        if s4_ok and s4_pid
+        else "MISSING",
+        f"case {s4_pid or '?'}; needs VALIS + STARE/DRAPE; {reg_detail}",
     )
     s7 = [p for p in patients if p != s4_pid]
-    add("S7", reg_status if s7 else "MISSING", f"{len(s7)} other case(s): {s7}")
+    add(
+        "S7",
+        ("READY" if len(have) == 1 or not missing else "PARTIAL")
+        if s7 and have
+        else "MISSING",
+        f"{len(s7)} other case(s): {s7}; methods {list(have)}",
+    )
     n_scored = {m: scored.get(a, 0) for m, a in have.items()}
-    s8 = "READY" if sum(1 for v in n_scored.values() if v) >= 2 else "MISSING"
+    s8 = "READY" if any(n_scored.values()) else "MISSING"
     if s8 == "READY" and not all(n_scored.values()):
         s8 = "PARTIAL"
     add("S8", s8, f"reg_qc=2 scorer cases per high arm {n_scored} ({'+'.join(cfgs)})")
@@ -1245,6 +1316,13 @@ def main(argv: list[str] | None = None) -> int:
         help="report what each figure would be drawn from (OUT/check.csv), draw nothing",
     )
     ap.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="the arms' samplesheet: its patient_id set is the cohort unless the "
+        "config's `patients:` overrides it",
+    )
+    ap.add_argument(
         "--ihc", type=Path, default=None, help="ihc_method checkout, for S3b/S9-S11"
     )
     a = ap.parse_args(argv)
@@ -1258,6 +1336,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg=cfg,
         exec_prefix=shlex.split(a.exec),
         dry_run=a.dry_run,
+        input_patients=read_input_patients(a.input) if a.input else [],
     )
     only = [f.strip() for f in a.only.split(",") if f.strip()] or list(FIGURES)
     bad = sorted(set(only) - set(FIGURES))
@@ -1265,13 +1344,25 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"unknown figure(s) {bad}; known: {list(FIGURES)}")
 
     final = accuracy_long(ctx)
+    if ctx.cohort:
+        # The cohort cuts EVERY number, not only the drawn cases: the arm picks, S8's
+        # boxes, S4/S7's values and S3a all see the same case set.
+        on_disk = set(final["patient_id"].astype(str)) if not final.empty else set()
+        absent = sorted(ctx.cohort - on_disk)
+        if absent and not final.empty:
+            print(f"[supp] cohort cases with no scorer JSON: {absent}", file=sys.stderr)
+        if not final.empty:
+            final = final[final["patient_id"].astype(str).isin(ctx.cohort)]
     picks = pick_arms(ctx, final)
     print(picks.to_string(index=False))
     if picks.empty:
         raise SystemExit("no registered arm of any method under --results")
-    patients = [
-        str(p) for p in (ctx.opt("patients", default=[]) or [])
-    ] or _patients_of(ctx.arm_dir(_anchor_arm(picks)))
+    on_disk = _patients_of(ctx.arm_dir(_anchor_arm(picks)))
+    patients = (
+        [p for p in on_disk if p in ctx.cohort] + sorted(ctx.cohort - set(on_disk))
+        if ctx.cohort
+        else on_disk
+    )
     check(ctx, picks, final, a.ihc.resolve() if a.ihc else None)
     if a.check:
         return 0
