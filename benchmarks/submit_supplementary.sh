@@ -44,12 +44,17 @@
 # Tier:        a legend naming no registration tier means HIGH: the registration figures
 #              are drawn at each method's high arm only (configs: [high] in the config)
 # Own config:  CONFIG=supplementary.yaml   (copy benchmarks/configs/supplementary.yaml)
+# Python:      the ACTIVE env is used when it imports pandas/yaml/matplotlib; else
+#              CONDA_ENV (default nf-env) is activated. CONDA_ENV=<env> forces one.
+# R:           RSCRIPT=/path/to/Rscript when Rscript is not on PATH (e.g. a vizu node)
 # RNA (S11):   IHC_KNIT_MOLECULAR=1 knits analysis/molecular_massimo2.Rmd first, which
 #              writes output/paired_deconv.rds (slow: runs immunedeconv)
 # ============================================================================
 # No `set -u`: ~/.bashrc and `conda activate` read variables a batch job leaves unset.
 
-OUT="${OUT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+# $PWD, not $SLURM_SUBMIT_DIR: a batch job already starts in its submit dir, and inside
+# an interactive allocation (srun --pty) SLURM_SUBMIT_DIR is where THAT was started.
+OUT="${OUT:-$PWD}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"          # benchmarking_new_method checkout
 RESULTS="${RESULTS:-/beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results}"
 PLAN="${PLAN:-$(dirname "$RESULTS")/arm_plan.csv}"
@@ -58,7 +63,8 @@ IHC="${IHC:-}"
 ONLY="${ONLY:-}"
 DRY_RUN="${DRY_RUN:-0}"
 CHECK="${CHECK:-0}"
-CONDA_ENV="${CONDA_ENV:-nf-env}"
+CONDA_ENV="${CONDA_ENV:-}"        # empty: keep the active env if it has the packages
+RSCRIPT="${RSCRIPT:-Rscript}"      # the R whose library has ihc_method's packages
 
 [[ "$CONFIG" = /* ]] || CONFIG="$OUT/$CONFIG"
 for f in "$PLAN" "$CONFIG"; do
@@ -72,9 +78,21 @@ head -n1 "$PLAN" | tr ',' '\n' | grep -qx method || {
   exit 1
 }
 
-source ~/.bashrc
-conda activate "$CONDA_ENV"
-command -v python3 >/dev/null || { echo "python3 not on PATH (check CONDA_ENV)" >&2; exit 1; }
+# The orchestrator runs on the host (the renderers run in the container below), so this
+# python3 needs pandas + yaml + matplotlib. An already-active env that has them is kept
+# -- `bash submit_supplementary.sh` from a `conda activate`d shell -- and only otherwise
+# is CONDA_ENV (default nf-env) activated.
+py_ok() { python3 -c 'import pandas, yaml, matplotlib' >/dev/null 2>&1; }
+if [[ -n "$CONDA_ENV" ]] || ! py_ok; then
+  source ~/.bashrc
+  eval "$(conda shell.bash hook 2>/dev/null)"      # `conda` in a non-interactive shell
+  conda activate "${CONDA_ENV:-nf-env}"
+fi
+py_ok || {
+  echo "$(command -v python3 || echo 'no python3') cannot import pandas/yaml/matplotlib." >&2
+  echo "Activate an env that has them first, or pass CONDA_ENV=<env>." >&2
+  exit 1
+}
 
 # ---- the render container (same image and pull discipline as submit_figures.sh) ----
 export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-/hpcnfs/scratch/P_DIMA_ATTEND/users/vfassi/docker_images}"
@@ -120,22 +138,26 @@ wants() { [[ -z "$ONLY" ]] || [[ "+$ONLY+" == *"+$1+"* ]]; }
 
 # ---- the ihc half FIRST, so the index the mirage half writes lists it too -----------
 IHC_FIGS=()
+if [[ -n "$IHC" ]] && ! command -v "$RSCRIPT" >/dev/null; then
+  echo "[ihc] $RSCRIPT not found: pass RSCRIPT=/path/to/Rscript (the R you run ihc_method" \
+       "with; \`which Rscript\` there), or load its module first" >&2
+fi
 for f in S3 S9 S10 S11; do wants "$f" && IHC_FIGS+=("$f"); done
 if [[ -n "$IHC" && ${#IHC_FIGS[@]} -gt 0 ]]; then
   if [[ ! -f "$IHC/figures/_common.R" ]]; then
     STATUS+=("ihc: FAILED ($IHC is not an ihc_method checkout)")
   elif [[ "$CHECK" == "1" ]]; then
-    (cd "$IHC" && IHC_ROOT="$IHC" Rscript "$SRC_DIR/benchmarks/ihc/supplementary.R" --check) \
+    (cd "$IHC" && IHC_ROOT="$IHC" "$RSCRIPT" "$SRC_DIR/benchmarks/ihc/supplementary.R" --check) \
       && STATUS+=("ihc: CHECKED") || STATUS+=("ihc: CHECK FAILED (see the log above)")
   elif [[ "$DRY_RUN" == "1" ]]; then
-    echo "[dry-run] (cd $IHC && Rscript $SRC_DIR/benchmarks/ihc/supplementary.R ${IHC_FIGS[*]})"
+    echo "[dry-run] (cd $IHC && $RSCRIPT $SRC_DIR/benchmarks/ihc/supplementary.R ${IHC_FIGS[*]})"
   else
     if [[ "${IHC_KNIT_MOLECULAR:-0}" == "1" ]]; then
-      (cd "$IHC" && Rscript -e 'workflowr::wflow_build("analysis/molecular_massimo2.Rmd", view = FALSE)') \
+      (cd "$IHC" && "$RSCRIPT" -e 'workflowr::wflow_build("analysis/molecular_massimo2.Rmd", view = FALSE)') \
         || echo "[ihc] knitting molecular_massimo2 failed; S11 will be skipped" >&2
     fi
     # cd into the checkout: its .Rprofile activates renv, which is where the packages are.
-    if (cd "$IHC" && IHC_ROOT="$IHC" Rscript "$SRC_DIR/benchmarks/ihc/supplementary.R" "${IHC_FIGS[@]}"); then
+    if (cd "$IHC" && IHC_ROOT="$IHC" "$RSCRIPT" "$SRC_DIR/benchmarks/ihc/supplementary.R" "${IHC_FIGS[@]}"); then
       STATUS+=("ihc: OK (${IHC_FIGS[*]})")
     else
       STATUS+=("ihc: FAILED (see the log above)")
