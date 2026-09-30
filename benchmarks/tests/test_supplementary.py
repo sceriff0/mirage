@@ -507,3 +507,50 @@ def test_s6_renders_every_backend_at_the_same_several_regions(
                     out / "S6" / f"r{k}" / f"{m}_{mask}" / "P1_crop.png"
                 ).is_file(), (k, m, mask)
     assert (out / "S6" / "S6_nuclei_cell.png").is_file()
+
+
+def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
+    """S5 used to pass formats as a STRING to save_fig, which iterates it: 'png' became
+    'p', 'n', 'g' and every S5 draw failed. Only reachable with a trace on disk."""
+    root, plan, conf = unified
+    work = tmp_path / "arm_results"
+    shutil.copytree(root, work)
+    for arm in ("valis_high_micro2", "tiled_high_s128"):
+        t = work / arm / "trace" / "trace.txt"
+        t.parent.mkdir(parents=True, exist_ok=True)
+        proc = "REGISTER" if arm.startswith("valis") else "TILED_SOLVE"
+        t.write_text(
+            "task_id\tprocess\ttag\tstatus\texit\tpeak_rss\tpeak_vmem\trealtime\t"
+            "duration\tcpus\tstart\tcomplete\n"
+            f"1\tMIRAGE:REGISTRATION:{proc}\tP1\tCOMPLETED\t0\t4 GB\t5 GB\t600s\t605s\t2\t"
+            "2026-01-01 00:00:00\t2026-01-01 00:10:00\n"
+        )
+    # a real plan carries the backend and tier columns cost-by-tier keys on
+    rows = list(csv.DictReader(plan.open()))
+    tiers = {
+        "valis_high_micro2": dict(
+            registration_method="valis", memory_mode="high", reg_micro_reg="2"
+        ),
+        "tiled_high_s128": dict(
+            registration_method="tiled", reg_tiled_mode="high", reg_tiled_stride="128"
+        ),
+    }
+    cols = list(rows[0]) + [
+        "registration_method",
+        "memory_mode",
+        "reg_micro_reg",
+        "reg_tiled_mode",
+        "reg_tiled_stride",
+    ]
+    full = tmp_path / "plan.csv"
+    with open(full, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols, restval="")
+        w.writeheader()
+        for r in rows:
+            w.writerow({**r, **tiers.get(r["arm"], {})})
+    out = tmp_path / "o"
+    args = ["--results", str(work), "--plan", str(full), "--config", str(conf)]
+    assert sp.main([*args, "-o", str(out), "--only", "S5"]) == 0
+    assert list((out / "S5").glob("S5_cost_by_tier_all.png")), sorted(
+        p.name for p in (out / "S5").iterdir()
+    )

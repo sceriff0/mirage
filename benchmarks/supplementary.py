@@ -640,7 +640,9 @@ def fig_s5(ctx: Ctx):
         if sub["backend"].nunique() < 1:
             continue
         fig = plotting.cost_by_tier(sub, metrics, labels)
-        plotting.save_fig(fig, out / f"S5_cost_by_tier_{name}", formats=ctx.formats)
+        plotting.save_fig(
+            fig, out / f"S5_cost_by_tier_{name}", formats=ctx.formats.split(",")
+        )
     (
         cost.groupby(["backend", "tier"], as_index=False)[metrics]
         .median()
