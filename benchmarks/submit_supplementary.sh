@@ -37,7 +37,12 @@
 #   sbatch --export=ALL,RESULTS=$B/arm_results,PLAN=$B/arm_plan.csv,IHC=$HOME/ihc_method \
 #     ~/pipelines/mirage/benchmarks/submit_supplementary.sh
 # Only some:   ONLY=mosaic+S4       (+ separated: --export splits on commas)
+# Check first: CHECK=1              (per figure READY/PARTIAL/MISSING + the AUTHORS TO
+#                                   SUPPLY config items -> OUT/check.csv; draws nothing.
+#                                   Also written at the start of every drawing run.)
 # See first:   DRY_RUN=1            (prints every render; draws nothing)
+# Tier:        a legend naming no registration tier means HIGH: the registration figures
+#              are drawn at each method's high arm only (configs: [high] in the config)
 # Own config:  CONFIG=supplementary.yaml   (copy benchmarks/configs/supplementary.yaml)
 # RNA (S11):   IHC_KNIT_MOLECULAR=1 knits analysis/molecular_massimo2.Rmd first, which
 #              writes output/paired_deconv.rds (slow: runs immunedeconv)
@@ -52,6 +57,7 @@ CONFIG="${CONFIG:-$SRC_DIR/benchmarks/configs/supplementary.yaml}"
 IHC="${IHC:-}"
 ONLY="${ONLY:-}"
 DRY_RUN="${DRY_RUN:-0}"
+CHECK="${CHECK:-0}"
 CONDA_ENV="${CONDA_ENV:-nf-env}"
 
 [[ "$CONFIG" = /* ]] || CONFIG="$OUT/$CONFIG"
@@ -118,6 +124,9 @@ for f in S3 S9 S10 S11; do wants "$f" && IHC_FIGS+=("$f"); done
 if [[ -n "$IHC" && ${#IHC_FIGS[@]} -gt 0 ]]; then
   if [[ ! -f "$IHC/figures/_common.R" ]]; then
     STATUS+=("ihc: FAILED ($IHC is not an ihc_method checkout)")
+  elif [[ "$CHECK" == "1" ]]; then
+    (cd "$IHC" && IHC_ROOT="$IHC" Rscript "$SRC_DIR/benchmarks/ihc/supplementary.R" --check) \
+      && STATUS+=("ihc: CHECKED") || STATUS+=("ihc: CHECK FAILED (see the log above)")
   elif [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] (cd $IHC && Rscript $SRC_DIR/benchmarks/ihc/supplementary.R ${IHC_FIGS[*]})"
   else
@@ -148,6 +157,8 @@ if (( ${#MIRAGE_FIGS[@]} > 0 )); then
   args=(--results "$RESULTS" --plan "$PLAN" --config "$CONFIG" -o "$OUT"
         --only "$(IFS=,; echo "${MIRAGE_FIGS[*]}")" --exec "$RENDER_EXEC")
   [[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
+  [[ "$CHECK" == "1" ]] && args+=(--check)
+  [[ -n "$IHC" ]] && args+=(--ihc "$IHC")
   if (cd "$SRC_DIR" && python3 -m benchmarks.supplementary "${args[@]}"); then
     STATUS+=("mirage: OK (${MIRAGE_FIGS[*]})")
   else
@@ -157,6 +168,7 @@ fi
 
 echo "=================================================="
 printf '  %s\n' "${STATUS[@]}"
+echo "  inputs per figure: $OUT/check.csv"
 echo "  choose here: $OUT/index.html   (arm picks: $OUT/picks.csv)"
 echo "  legend values: $OUT/S*/**/*_values*.csv"
 echo "=================================================="

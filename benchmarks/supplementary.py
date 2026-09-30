@@ -15,9 +15,14 @@ is made by looking, not by re-running:
     method set   stare = Before | VALIS | STARE | ASHLAR
                  drape = Before | VALIS | DRAPE | ASHLAR
                  all   = Before | VALIS | STARE | DRAPE | ASHLAR
-    config       high  = each method's shipped high tier (supplementary.yaml `high:`)
+    config       high  = each method's shipped high tier (supplementary.yaml `high:`).
+                         THE DEFAULT: a legend that names no registration tier means the
+                         high one (user ruling 2026-09-30). If the configured arm is not
+                         on disk, another arm OF THE HIGH TIER stands in -- never a lower
+                         tier; a method with no high-tier arm is left out, loudly.
                  best  = each method's arm with the highest median final-stage matched
-                         Dice over the cohort (picks.csv says which, and by how much)
+                         Dice over the cohort (picks.csv says which, and by how much).
+                         Always in picks.csv; DRAWN only when `configs:` lists it
     variant      v1..vN = different tissue, SAME tissue in every set and config: the
                  anchor render picks the ROIs/crops once and every other render reuses
                  them, so two panels differ only by the method that registered them
@@ -34,6 +39,8 @@ Outputs (``-o OUT``):
     OUT/S2/                         secondary-only controls at ONE fixed contrast (if given)
     OUT/S3, S9, S10, S11            collected from ihc_method (submit_supplementary.sh)
     OUT/index.html                  every variant of every figure on one page, to choose
+    OUT/check.csv                   per figure: READY / PARTIAL / MISSING and what was found
+                                    (written on every run; ``--check`` stops there)
 
 Run on the cluster through benchmarks/submit_supplementary.sh; locally::
 
@@ -48,6 +55,7 @@ import csv
 import html
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -71,6 +79,16 @@ DEFAULT_SETS = {
 # would pick a ruler, not a method configuration.
 _RANKED_KINDS = ("registration", "registration_solver", "external")
 FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8")
+# The tier is IN every tiered arm's name (build_arm_plan.py): valis_<tier>_micro<d>,
+# tiled_<tier>_s<stride> (DRAPE), tiled_<tier>_gate<g> (STARE v1). ASHLAR has no tier.
+_TIER_RE = re.compile(r"^(?:valis|tiled)_(high|medium|low)_")
+DEFAULT_CONFIGS = ["high"]
+
+
+def tier_of(arm: str) -> str:
+    """`high` / `medium` / `low` from an arm name, `""` for an untiered arm (ASHLAR)."""
+    m = _TIER_RE.match(str(arm))
+    return m.group(1) if m else ""
 
 
 # ------------------------------------------------------------------------ context --
@@ -198,8 +216,41 @@ def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
         )
         best = scored.iloc[0] if len(scored) else c.iloc[0]
         want = high_cfg.get(m)
-        high = c[c["arm"] == want].iloc[0] if want in set(c["arm"]) else best
-        for config, r in (("high", high), ("best", best)):
+        tiers = c["arm"].map(tier_of)
+        if want in set(c["arm"]):
+            high, high_why = c[c["arm"] == want].iloc[0], "configured high tier"
+        elif tiers.eq("").all():
+            # An untiered method (ASHLAR): "high" has no meaning, its one config stands.
+            high, high_why = best, f"untiered method; configured {want!r} not on disk"
+        else:
+            # A legend naming no tier means HIGH: another high-tier arm stands in, the
+            # best-scored one; a lower tier never does.
+            h = scored[scored["arm"].map(tier_of) == "high"]
+            h = h if len(h) else c[tiers == "high"]
+            if h.empty:
+                high, high_why = None, ""
+                print(
+                    f"[supp] {m}: configured high arm {want!r} is not on disk and no "
+                    "other high-tier arm is: left out of every `high` figure",
+                    file=sys.stderr,
+                )
+            else:
+                high = h.iloc[0]
+                high_why = (
+                    f"configured {want!r} not on disk: best-scored other high tier arm"
+                )
+        for config, r, why in (
+            ("high", high, high_why),
+            (
+                "best",
+                best,
+                f"highest median final-stage Dice of {len(scored)} scored arms"
+                if len(scored)
+                else "no score on disk: fell back to the first registered arm",
+            ),
+        ):
+            if r is None:
+                continue
             rows.append(
                 {
                     "method": m,
@@ -208,18 +259,23 @@ def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
                     "median_dice": r.get("dice"),
                     "median_disp_um": r.get("disp_um"),
                     "n_slides": r.get("n"),
-                    "why": (
-                        f"highest median final-stage Dice of {len(scored)} scored arms"
-                        if config == "best" and len(scored)
-                        else (
-                            "configured high tier"
-                            if want == r["arm"]
-                            else "no score on disk: fell back to the first registered arm"
-                        )
-                    ),
+                    "tier": tier_of(r["arm"]),
+                    "why": why,
                 }
             )
-    picks = pd.DataFrame(rows)
+    picks = pd.DataFrame(
+        rows,
+        columns=[
+            "method",
+            "config",
+            "arm",
+            "median_dice",
+            "median_disp_um",
+            "n_slides",
+            "tier",
+            "why",
+        ],
+    )
     ctx.out.mkdir(parents=True, exist_ok=True)
     picks.to_csv(ctx.out / "picks.csv", index=False)
     return picks
@@ -228,6 +284,14 @@ def pick_arms(ctx: Ctx, final: pd.DataFrame) -> pd.DataFrame:
 def arm_for(picks: pd.DataFrame, method: str, config: str) -> str | None:
     hit = picks[(picks["method"] == method) & (picks["config"] == config)]
     return None if hit.empty else str(hit["arm"].iloc[0])
+
+
+def _anchor_arm(picks: pd.DataFrame) -> str:
+    """The arm whose crops every other panel reuses: VALIS high, else the first high."""
+    for m in REG_METHODS:
+        if a := arm_for(picks, m, "high"):
+            return a
+    return str(picks["arm"].iloc[0])
 
 
 def method_sets(ctx: Ctx, picks: pd.DataFrame) -> dict[str, list[str]]:
@@ -242,7 +306,7 @@ def method_sets(ctx: Ctx, picks: pd.DataFrame) -> dict[str, list[str]]:
 
 
 def configs(ctx: Ctx) -> list[str]:
-    return list(ctx.opt("configs", default=["high", "best"]))
+    return list(ctx.opt("configs", default=DEFAULT_CONFIGS))
 
 
 def _label(method: str, arm: str, config: str) -> str:
@@ -275,7 +339,7 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
     anchor_methods = sets.get("all") or next(iter(sets.values()))
     anchor = ctx.out / "mosaic" / "_anchor"
     for pid in patients:
-        arms = [arm_for(picks, mm, "high") for mm in anchor_methods]
+        arms = [a for mm in anchor_methods if (a := arm_for(picks, mm, "high"))]
         ctx.render(
             "reg_mosaic",
             [
@@ -293,7 +357,9 @@ def fig_mosaic(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
             # The mosaic has its own config list (supplementary.yaml mosaic.configs); the
             # other figures keep the global one.
             for config in m.get("configs") or configs(ctx):
-                arms = [(mm, arm_for(picks, mm, config)) for mm in methods]
+                arms = [(mm, a) for mm in methods if (a := arm_for(picks, mm, config))]
+                if len(arms) < 2:
+                    continue
                 labels = []
                 for mm, a in arms:
                     labels += ["--label", f"{a}={_label(mm, a, config)}"]
@@ -347,7 +413,7 @@ def _overlay_panels(
     ctx.render(
         "reg_overlay",
         [
-            ctx.arm_dir(arm_for(picks, "valis", "high")),
+            ctx.arm_dir(_anchor_arm(picks)),
             "-o",
             anchor,
             "--variants",
@@ -731,7 +797,11 @@ def fig_s8(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame):
     df.to_csv(out / "S8_values_per_slide.csv", index=False)
     for set_name, methods in method_sets(ctx, picks).items():
         for config in configs(ctx):
-            arms = {arm_for(picks, m, config): _label(m, "", config) for m in methods}
+            arms = {
+                a: _label(m, "", config)
+                for m in methods
+                if (a := arm_for(picks, m, config))
+            }
             sub = df[df["run_id"].isin(arms)].assign(
                 method=lambda d: d["run_id"].map(arms)
             )
@@ -951,6 +1021,167 @@ def fig_s2(ctx: Ctx):
                 ctx.render("reg_crop", args + (["--patient", pid] if pid else []))
 
 
+# -------------------------------------------------------------------------- check --
+IHC_CHECK_CSV = Path("output") / "figures" / "supplementary" / "check_ihc.csv"
+
+
+def check(ctx: Ctx, picks: pd.DataFrame, final: pd.DataFrame, ihc: Path | None):
+    """What each figure would be drawn FROM, without drawing it: READY / PARTIAL /
+    MISSING per figure, plus the legend items still left to the authors (TODO rows).
+    Written to OUT/check.csv on every run."""
+    rows: list[dict] = []
+
+    def add(fig, status, detail):
+        rows.append({"figure": fig, "status": status, "detail": detail})
+
+    cfgs = configs(ctx)
+    high = {m: arm_for(picks, m, "high") for m in REG_METHODS}
+    have = {m: a for m, a in high.items() if a}
+    scored = (
+        final.groupby("run_id")["patient_id"].nunique().to_dict()
+        if not final.empty
+        else {}
+    )
+    tier_note = (
+        "configs "
+        + "+".join(cfgs)
+        + "; high = "
+        + ", ".join(f"{m}:{a}" for m, a in have.items())
+    )
+    missing = [m for m in REG_METHODS if m not in have]
+    reg_status = "READY" if len(have) >= 2 else "MISSING"
+    if reg_status == "READY" and missing:
+        reg_status = "PARTIAL"
+    reg_detail = tier_note + (f"; no high arm for {missing}" if missing else "")
+    add("mosaic", reg_status, reg_detail)
+    patients = _patients_of(ctx.arm_dir(_anchor_arm(picks))) if len(picks) else []
+    s4 = ctx.opt("S4", default={}) or {}
+    s4_pid = str(s4.get("patient") or (patients[0] if patients else ""))
+    add(
+        "S4", reg_status if s4_pid else "MISSING", f"case {s4_pid or '?'}; {reg_detail}"
+    )
+    s7 = [p for p in patients if p != s4_pid]
+    add("S7", reg_status if s7 else "MISSING", f"{len(s7)} other case(s): {s7}")
+    n_scored = {m: scored.get(a, 0) for m, a in have.items()}
+    s8 = "READY" if sum(1 for v in n_scored.values() if v) >= 2 else "MISSING"
+    if s8 == "READY" and not all(n_scored.values()):
+        s8 = "PARTIAL"
+    add("S8", s8, f"reg_qc=2 scorer cases per high arm {n_scored} ({'+'.join(cfgs)})")
+
+    # S5: every tier by design (the legend names the three cost tiers).
+    try:
+        from benchmarks.analysis.lib import load, quality
+
+        cost = quality.registration_cost_by_tier(
+            load.load_runs(ctx.root, ctx.plan_csv), ctx.root
+        )
+        tiers = cost.groupby("backend")["tier"].nunique().to_dict() if len(cost) else {}
+        s5 = (
+            "MISSING"
+            if cost.empty
+            else ("READY" if all(v >= 3 for v in tiers.values()) else "PARTIAL")
+        )
+        add("S5", s5, f"traced tiers per backend {tiers} (all three tiers, by design)")
+    except Exception as exc:  # the check must not die on one unreadable input
+        add("S5", "MISSING", f"could not read the traces: {exc}")
+
+    seg = ctx.plan[ctx.plan["arm_kind"] == "segmentation"]
+    done = [
+        f"{r['seg_method']}<-{r.get('from_arm', '')}"
+        for _, r in seg.iterrows()
+        if (ctx.arm_dir(r["arm"]) / "csv" / "segmented.csv").is_file()
+    ]
+    add(
+        "S6",
+        "READY" if len(done) >= 3 else ("PARTIAL" if len(done) >= 2 else "MISSING"),
+        f"{len(done)}/{len(seg)} segmentation arms finished: {done}",
+    )
+
+    s3 = ctx.opt("S3", default={}) or {}
+    s3_arms = (
+        [s3["from_arm"]]
+        if s3.get("from_arm")
+        else list(
+            ctx.plan[ctx.plan["arm_kind"].isin(["segmentation", "compute"])]["arm"]
+        )
+    )
+    s3_files = []
+    for arm in s3_arms:
+        fs = sorted(ctx.arm_dir(arm).glob("*/quantification/*_round_qc.csv"))
+        fs = [f for f in fs if "nuclear_retention_raw" in f.open().readline()]
+        if fs:
+            s3_files = fs
+            add(
+                "S3a", "READY", f"{len(fs)} case(s) with nuclear_retention_raw in {arm}"
+            )
+            break
+    if not s3_files:
+        add(
+            "S3a",
+            "MISSING",
+            "no *_round_qc.csv with nuclear_retention_raw "
+            "(needs a run on fdf042c0 or later)",
+        )
+
+    s2 = ctx.opt("S2", default={}) or {}
+    add(
+        "S2",
+        "READY" if s2.get("csv") and Path(s2["csv"]).is_file() else "MISSING",
+        f"S2.csv = {s2.get('csv')}",
+    )
+
+    ihc_rows = {}
+    if ihc is not None and (ihc / IHC_CHECK_CSV).is_file():
+        for r in csv.DictReader((ihc / IHC_CHECK_CSV).open()):
+            ihc_rows[r["figure"]] = r
+    for fig, need in (
+        ("S3b", None),
+        ("S9", None),
+        ("S10", Path("data") / "clinical_data.xlsx"),
+        ("S11", Path("output") / "paired_deconv.rds"),
+    ):
+        if fig in ihc_rows:
+            add(
+                fig,
+                ihc_rows[fig]["status"],
+                "supplementary.R --check: " + ihc_rows[fig]["detail"],
+            )
+        elif ihc is None:
+            add(fig, "NOT CHECKED", "pass --ihc <ihc_method checkout>")
+        elif not (ihc / "figures" / "_common.R").is_file():
+            add(fig, "MISSING", f"{ihc} is not an ihc_method checkout")
+        elif need is not None and not (ihc / need).is_file():
+            add(fig, "MISSING", f"{ihc / need} absent")
+        else:
+            add(
+                fig,
+                "PARTIAL",
+                "files present; arm cells unverified "
+                "(run `Rscript benchmarks/ihc/supplementary.R --check` in the checkout)",
+            )
+
+    # The legends' AUTHORS TO SUPPLY items that live in the config, still unset.
+    for key, val, what in (
+        ("S4.patient", s4.get("patient"), "the case of Figure 2b"),
+        ("S4.rounds", s4.get("rounds"), "the two panels of Figure 2b"),
+        (
+            "S3.round_order",
+            s3.get("round_order"),
+            "the acquisition order of the rounds",
+        ),
+        ("S6.patient", (ctx.opt("S6", default={}) or {}).get("patient"), "S6's case"),
+    ):
+        if not val:
+            add("TODO", "AUTHORS", f"{key} unset in the config: {what}")
+
+    tab = pd.DataFrame(rows, columns=["figure", "status", "detail"])
+    ctx.out.mkdir(parents=True, exist_ok=True)
+    tab.to_csv(ctx.out / "check.csv", index=False)
+    with pd.option_context("display.max_colwidth", 110, "display.width", 200):
+        print(tab.to_string(index=False))
+    return tab
+
+
 # -------------------------------------------------------------------------- index --
 def write_index(out: Path) -> Path:
     """One page listing every PNG under OUT, grouped by figure, to pick variants."""
@@ -1008,6 +1239,14 @@ def main(argv: list[str] | None = None) -> int:
         "--exec", default="", help="renderer command prefix (the container)"
     )
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--check",
+        action="store_true",
+        help="report what each figure would be drawn from (OUT/check.csv), draw nothing",
+    )
+    ap.add_argument(
+        "--ihc", type=Path, default=None, help="ihc_method checkout, for S3b/S9-S11"
+    )
     a = ap.parse_args(argv)
 
     cfg = yaml.safe_load(a.config.read_text()) or {}
@@ -1032,9 +1271,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("no registered arm of any method under --results")
     patients = [
         str(p) for p in (ctx.opt("patients", default=[]) or [])
-    ] or _patients_of(
-        ctx.arm_dir(arm_for(picks, "valis", "high") or picks["arm"].iloc[0])
-    )
+    ] or _patients_of(ctx.arm_dir(_anchor_arm(picks)))
+    check(ctx, picks, final, a.ihc.resolve() if a.ihc else None)
+    if a.check:
+        return 0
     status = {}
     for name, fn in (
         ("mosaic", lambda: fig_mosaic(ctx, picks, patients)),

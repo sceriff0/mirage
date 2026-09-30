@@ -61,6 +61,31 @@ skip <- function(fig, why) message("  ", fig, ": SKIPPED (", why, ")")
 # --- the arm: cells, polygons, union metrics (the same sequence as figures/fig5.R) ----
 as_spec  <- arm_spec(ARM)
 have_arm <- dir.exists(as_spec$region_csv$path)
+
+# --- --check: what each figure would be drawn from, WITHOUT loading a cell ----------
+# Writes <OUT>/check_ihc.csv, which benchmarks/supplementary.py --ihc merges into its
+# own check.csv. Every test here is a file test, so it runs in seconds.
+if ("--check" %in% WANT) {
+  clin   <- file.path(root, "data", "clinical_data.xlsx")
+  paired <- file.path(root, "output", "paired_deconv.rds")
+  arm_detail <- paste0("arm ", ARM, " cells at ", as_spec$region_csv$path,
+                       if (have_arm) "" else " ABSENT")
+  row <- function(fig, ok, detail)
+    data.frame(figure = fig, status = if (ok) "READY" else "MISSING", detail = detail)
+  chk <- rbind(
+    row("S3b", have_arm, arm_detail),
+    row("S9",  have_arm, arm_detail),
+    row("S10", have_arm && file.exists(clin),
+        paste0(arm_detail, "; ", clin, if (file.exists(clin)) "" else " ABSENT",
+               " (category source ", HOTCOLD_SOURCE, ")")),
+    row("S11", file.exists(paired),
+        paste0(paired, if (file.exists(paired)) "" else
+          " ABSENT: knit analysis/molecular_massimo2.Rmd (IHC_KNIT_MOLECULAR=1)")))
+  dir.create(OUT, recursive = TRUE, showWarnings = FALSE)
+  utils::write.csv(chk, file.path(OUT, "check_ihc.csv"), row.names = FALSE)
+  print(chk, right = FALSE)
+  quit(save = "no", status = 0)
+}
 groups   <- NULL
 if (have_arm) {
   as_cells  <- arm_cells(as_spec)

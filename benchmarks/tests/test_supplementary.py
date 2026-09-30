@@ -153,16 +153,133 @@ def test_s4_puts_before_and_each_method_on_one_crop_with_its_values(drawn):
 
 def test_s8_splits_the_scorer_by_case_and_by_panel_pair(drawn):
     rc, out = drawn
-    assert (out / "S8" / "drape_best" / "S8_drape_best.png").is_file()
+    assert (out / "S8" / "drape_high" / "S8_drape_high.png").is_file()
     by_pair = list(
         csv.DictReader(
-            (out / "S8" / "drape_best" / "S8_values_by_panel_pair.csv").open()
+            (out / "S8" / "drape_high" / "S8_values_by_panel_pair.csv").open()
         )
     )
     assert {r["panel_pair"] for r in by_pair} == {"DAPI_CD3", "DAPI_CD8"}, (
         "VALIS (file stem) and the manifest backends (channel set) name a moving slide "
         "differently; both must land on one panel-pair label"
     )
+
+
+def test_an_unnamed_tier_means_high_so_best_is_drawn_only_when_asked(
+    drawn, unified, tmp_path
+):
+    """User ruling 2026-09-30: a legend that names no registration tier means the HIGH one.
+    `best` is still computed into picks.csv, but no figure is drawn at it by default."""
+    rc, out = drawn
+    drawn_dirs = {d.name for f in ("mosaic", "S4", "S8") for d in (out / f).glob("*_*")}
+    assert drawn_dirs and not {d for d in drawn_dirs if d.endswith("_best")}, drawn_dirs
+    root, plan, conf = unified
+    cfg = yaml.safe_load(conf.read_text())
+    cfg["configs"] = ["high", "best"]
+    both = tmp_path / "both.yaml"
+    both.write_text(yaml.safe_dump(cfg))
+    assert (
+        sp.main(
+            [
+                "--results",
+                str(root),
+                "--plan",
+                str(plan),
+                "--config",
+                str(both),
+                "-o",
+                str(tmp_path / "o"),
+                "--only",
+                "S8",
+            ]
+        )
+        == 0
+    )
+    assert (tmp_path / "o" / "S8" / "drape_best" / "S8_drape_best.png").is_file()
+
+
+def test_a_missing_high_arm_falls_back_to_another_high_arm_never_a_lower_tier(
+    unified, tmp_path
+):
+    """valis_low_micro0 scores best; if the configured high arm is absent the `high` pick
+    must stay on the high tier (valis_high_micro2), and a method with NO high-tier arm is
+    left out of `high` rather than silently drawn at a lower tier."""
+    root, plan, conf = unified
+    cfg = yaml.safe_load(conf.read_text())
+    cfg["high"]["valis"] = "valis_high_micro9"  # not on disk
+    cfg["high"]["drape"] = "tiled_low_s64"  # not on disk; drape HAS a high arm
+    c = tmp_path / "c.yaml"
+    c.write_text(yaml.safe_dump(cfg))
+    assert (
+        sp.main(
+            [
+                "--results",
+                str(root),
+                "--plan",
+                str(plan),
+                "--config",
+                str(c),
+                "-o",
+                str(tmp_path),
+                "--check",
+            ]
+        )
+        == 0
+    )
+    picks = {
+        (r["method"], r["config"]): r
+        for r in csv.DictReader((tmp_path / "picks.csv").open())
+    }
+    assert picks[("valis", "high")]["arm"] == "valis_high_micro2"
+    assert "high tier" in picks[("valis", "high")]["why"]
+    assert picks[("drape", "high")]["arm"] == "tiled_high_s128"
+    assert sp.tier_of("valis_low_micro0") == "low"
+    assert sp.tier_of("tiled_high_gate1") == "high"
+    assert sp.tier_of("ashlar_t1024_s240") == ""
+
+
+def test_check_reports_every_figure_and_draws_nothing(unified, tmp_path):
+    root, plan, conf = unified
+    assert (
+        sp.main(
+            [
+                "--results",
+                str(root),
+                "--plan",
+                str(plan),
+                "--config",
+                str(conf),
+                "-o",
+                str(tmp_path),
+                "--check",
+                "--ihc",
+                str(tmp_path / "no_ihc"),
+            ]
+        )
+        == 0
+    )
+    rows = {r["figure"]: r for r in csv.DictReader((tmp_path / "check.csv").open())}
+    expected = {
+        "mosaic",
+        "S2",
+        "S3a",
+        "S3b",
+        "S4",
+        "S5",
+        "S6",
+        "S7",
+        "S8",
+        "S9",
+        "S10",
+        "S11",
+    }
+    assert expected <= set(rows), set(rows)
+    assert rows["mosaic"]["status"] == "READY", rows["mosaic"]
+    assert rows["S8"]["status"] == "READY" and "high" in rows["S8"]["detail"]
+    assert rows["S6"]["status"] == "MISSING", "the fixture has no segmentation arm"
+    assert rows["S3a"]["status"] == "MISSING"
+    assert rows["S11"]["status"] == "MISSING"
+    assert not (tmp_path / "mosaic").exists() and not (tmp_path / "S8").exists()
 
 
 def test_the_index_lists_every_variant_and_not_the_working_files(drawn):
@@ -245,3 +362,28 @@ def test_the_one_job_script_dry_runs_both_halves(unified, tmp_path):
         text=True,
     )
     assert r.returncode == 1 and "no `method` column" in r.stderr
+
+
+def test_the_one_job_script_check_writes_check_csv_and_draws_nothing(unified, tmp_path):
+    import os
+    import subprocess
+
+    root, plan, conf = unified
+    env = dict(
+        os.environ,
+        OUT=str(tmp_path / "out"),
+        SRC_DIR=str(sp.REPO_ROOT),
+        RESULTS=str(root),
+        PLAN=str(plan),
+        CONFIG=str(conf),
+        IHC="",
+        CHECK="1",
+        RENDER_EXEC="",
+    )
+    script = sp.REPO_ROOT / "benchmarks" / "submit_supplementary.sh"
+    r = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rows = list(csv.DictReader((tmp_path / "out" / "check.csv").open()))
+    assert {"mosaic", "S8", "S11"} <= {x["figure"] for x in rows}
+    assert not (tmp_path / "out" / "mosaic").exists()
+    assert not (tmp_path / "out" / "S8").exists()

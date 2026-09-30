@@ -12,14 +12,21 @@
 
 # The "high" configuration of each method: its shipped high tier. "best" is computed
 # (highest median final-stage matched Dice over the cohort) and written to picks.csv.
-# A name absent from the results root falls back to that method's best.
+# A name absent from the results root falls back to ANOTHER HIGH-TIER arm of that method
+# (the best-scored one), never to a lower tier; with no high-tier arm the method is left
+# out of `high` and check.csv says so.
 high:
   valis: valis_high_micro2        # memory_mode high, micro-registration 2 (shipped default)
   stare: tiled_high_gate1         # STARE v1 high tier, TRE gate 1 px (its shipped default)
   drape: tiled_high_s128          # DRAPE high tier, stride 128 px (its shipped default)
   ashlar: ashlar_t1024_s240       # tile 1024, 240 um drift budget
 
-configs: [high, best]
+# What the registration figures (mosaic, S4, S7, S8) are DRAWN at. A legend that names no
+# tier means the high one (user ruling 2026-09-30), so only `high` by default; add `best`
+# to also draw each method's top-scored arm. S5 plots every tier regardless: its legend
+# names "the three cost tiers". S3a and S6 come from the segmentation arms, which resume
+# from valis_high_micro2 (arms.yaml segmentation_arms.from_arm) -- high already.
+configs: [high]
 
 # Which methods sit side by side. Every set is drawn at every config; the anchor render
 # of `all` picks the tissue, so every set shows the SAME ROIs.
