@@ -40,15 +40,22 @@ def _code(path, must_contain):
 
 
 def test_the_stare_dockerfile_installs_no_learned_stack():
-    code = _code(DOCKERFILE, ("FROM python:", "RUN pip install", "packages/stare"))
+    code = _code(
+        DOCKERFILE, ("FROM python:", "RUN pip install", "requirements/stare.txt")
+    )
     for banned in ("torch", "kornia", "TORCH_HOME", "libgl1", "libglib2.0"):
         assert banned not in code, (
             f"containers/stare/Dockerfile mentions {banned!r} outside a comment. The STARE "
             "image is torch-free by design; the learned COARSE front-end it served is gone."
         )
-    # and it still installs the method and the pin set it runs on
-    assert re.search(r"^COPY packages/stare /tmp/stare$", code, re.M)
+    # and it still installs the method and the pin set it runs on: STARE itself is a pinned
+    # release in requirements/stare.txt, never a copy of a repository directory
     assert "requirements/stare.txt" in code
+    assert "packages/stare" not in code
+    pins = (DOCKERFILE.parents[2] / "requirements" / "stare.txt").read_text()
+    assert re.search(
+        r"^stare-registration @ https://github\.com/sceriff0/stare/", pins, re.M
+    )
     assert "procps" in code, "Nextflow's task-metrics wrapper needs `ps`"
 
 

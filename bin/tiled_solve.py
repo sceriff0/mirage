@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shim: the STARE ``solve`` stage now lives in ``stare.stages.solve``.
 
-STARE's source of truth is ``packages/stare`` (``pip install -e packages/stare``);
+STARE's source of truth is github.com/sceriff0/stare (a pinned release, requirements/stare.txt);
 this file is what the Nextflow module invokes by name, so it keeps its shebang and
 its executable bit. When imported (the tests do ``import tiled_solve``) it replaces
 itself in ``sys.modules`` with the stage module, so a monkeypatch on

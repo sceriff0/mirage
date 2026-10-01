@@ -745,7 +745,7 @@ def find_argparse_default_sites():
     no_correspondence: list[tuple[Path, str]] = []
     for shim in sorted(BIN_DIR.rglob("*.py")):
         # A STARE shim (bin/tiled_stitch.py etc.) carries no argparse of its own: its
-        # flags live in the packages/stare stage it re-exports. Read that file, but keep
+        # flags live in the installed stare stage it re-exports. Read that file, but keep
         # the SHIM's name for the per-script map -- that is the name the module invokes.
         path = source_of(shim)
         try:

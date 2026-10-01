@@ -253,13 +253,6 @@ jobs:
           pytest -v tests/ --ignore=tests/testdata --ignore=tests/modules --ignore=tests/subworkflows --ignore=tests/integration \
             --cov=bin --cov-report=xml --cov-report=term-missing --cov-fail-under="$(cat tests/coverage_floor.txt)"
 
-      # The STARE package's own suite (SOLVE, vector lattice, mesh, CLI). Its own step, not
-      # appended to the line above: it imports `stare` (installed editable by
-      # requirements/ci.txt), not bin/, so it has no place in bin/'s coverage ratchet or in
-      # tests/'s collected-count floor. Until 2026-10-01 nothing ran it at all.
-      - name: Run STARE package tests
-        run: pytest -v packages/stare/tests
-
       - name: Upload coverage
         if: ${{ inputs.upload-coverage && matrix.python-version == '3.10' }}
         uses: codecov/codecov-action@v4

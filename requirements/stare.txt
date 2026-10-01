@@ -17,5 +17,12 @@ zarr==2.18.3          # lazy region reads for the streaming gigapixel stitch (ti
 numcodecs==0.13.1     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
 imagecodecs==2025.3.30 # zstd/LZW codecs for the stitched OME-TIFF
 
+# THE METHOD ITSELF: STARE, installed from its own repository at a pinned release. This is
+# its ONE pin in mirage: the image (containers/stare) and CI (requirements/ci.txt) both read
+# this file. sceriff0/stare is the method's only source since v1.0.0 (2026-10-01); a STARE
+# change is a new tag there, then this line. The release tarball, not git+, so the slim
+# image needs no git. Its dependencies are the constrained lines above.
+stare-registration @ https://github.com/sceriff0/stare/archive/refs/tags/v1.0.0.tar.gz
+
 # No torch, no kornia: they served the DISK + LightGlue COARSE front-end retired on
 # 2026-09-27, and containers/stare/smoke.sh asserts torch is not importable in the image.

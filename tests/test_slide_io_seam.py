@@ -42,9 +42,28 @@ from pathlib import Path
 
 import pytest
 
-from tests.stare_shims import source_of
+from tests.stare_shims import PACKAGE_SRC, source_of
 
 REPO = Path(__file__).resolve().parent.parent
+
+
+def _resolve(rel: str) -> Path:
+    """A declared writer's file. `stare:<path>` names a file of the INSTALLED stare package
+    (github.com/sceriff0/stare, pinned in requirements/stare.txt); anything else is
+    repository-relative."""
+    return (
+        PACKAGE_SRC / rel[len("stare:") :] if rel.startswith("stare:") else REPO / rel
+    )
+
+
+def _name(path: Path) -> str:
+    """Inverse of `_resolve`."""
+    path = path.resolve()
+    try:
+        return path.relative_to(REPO.resolve()).as_posix()
+    except ValueError:
+        return "stare:" + path.relative_to(PACKAGE_SRC).as_posix()
+
 
 # CLAUDE.md's "Verification reality" item 7: a POSITIVE text-matching guard ("does this
 # file still write pixels?") is satisfied by a `write_tiff(`/`tifffile.imwrite(` sitting
@@ -82,7 +101,7 @@ PIXEL_WRITERS = {
         "the multi-site CZYX pseudo-FOV stack BASICPY fits on",
     ),
     # the STARE stitch stage; bin/tiled_stitch.py is a shim over it
-    "packages/stare/src/stare/stages/stitch.py": (1, "the STARE registered slide"),
+    "stare:stare/stages/stitch.py": (1, "the STARE registered slide"),
     # The seam itself. The regex counts BOTH a def line and a call line whenever they share
     # a name -- `def ome_tiff_writer(` and `def write_ome_tiff(` each match their own pattern
     # too, not just their call sites -- so this is 3 def lines (ome_tiff_writer, write_ome_tiff,
@@ -108,7 +127,7 @@ MULTI_CHANNEL_WRITERS = (
     "bin/apply_basic_profiles.py",
     "bin/tile_for_basic.py",
     "bin/merge_channels_pyramid.py",
-    "packages/stare/src/stare/stages/stitch.py",
+    "stare:stare/stages/stitch.py",
 )
 
 # ... and the one that DELEGATES the flag. bin/convert_image.py hands its stack to
@@ -163,21 +182,21 @@ def _write_call_pattern(path):
 
 
 def _writer_sites(rel):
-    path = REPO / rel
+    path = _resolve(rel)
     return len(_write_call_pattern(path).findall(_strip_comments(path.read_text())))
 
 
 def _all_writer_files():
     """{repo-relative file: write-call count} over bin/, with each STARE shim resolved
     to the package file it stands for (``tests.stare_shims.source_of``): the stitch's
-    writer lives in packages/stare/src/stare/stages/stitch.py, and bin/tiled_stitch.py
+    writer lives in the installed stare package (stare/stages/stitch.py), and bin/tiled_stitch.py
     is a shim that names no writer at all."""
     found = {}
     for shim in sorted((REPO / "bin").rglob("*.py")):
         path = source_of(shim)
         n = len(_write_call_pattern(path).findall(_strip_comments(path.read_text())))
         if n:
-            found[path.relative_to(REPO).as_posix()] = n
+            found[_name(path)] = n
     return found
 
 
@@ -222,7 +241,7 @@ def test_every_multi_channel_writer_sets_photometric_minisblack(rel):
     samples, and both `key=` and `pages[i]` then raise IndexError. Every "read the page, not the
     plane" optimisation downstream depends on this silently.
     """
-    text = (REPO / rel).read_text()
+    text = _resolve(rel).read_text()
 
     assert 'photometric="minisblack"' in text, (
         f'{rel} writes a multi-channel stack without photometric="minisblack". tifffile will '
@@ -243,11 +262,11 @@ def test_a_delegating_multi_channel_writer_has_an_owner_that_sets_the_flag(rel, 
     when the real kwarg is changed to something else -- watched failing this way before
     being narrowed.
     """
-    assert 'photometric="minisblack"' not in (REPO / rel).read_text(), (
+    assert 'photometric="minisblack"' not in _resolve(rel).read_text(), (
         f"{rel} sets photometric itself, so it is not delegating -- move it back into "
         "MULTI_CHANNEL_WRITERS"
     )
-    assert 'photometric="minisblack",' in (REPO / owner).read_text(), (
+    assert 'photometric="minisblack",' in _resolve(owner).read_text(), (
         f"{rel} delegates its photometric flag to {owner}, which does not set it. Every "
         "per-page read downstream of the converted slide breaks silently."
     )
@@ -303,7 +322,7 @@ def test_every_mask_writer_compresses(rel):
     PERF-PLAN measures an uncompressed uint32 label mask against zstd-3 at 6.7x the write time,
     8.4x the read time, and vastly larger. There is no trade-off to weigh.
     """
-    assert 'compression="zlib"' in (REPO / rel).read_text(), (
+    assert 'compression="zlib"' in _resolve(rel).read_text(), (
         f"{rel} writes a label mask without compression"
     )
 
@@ -317,7 +336,7 @@ def test_every_mask_writer_sets_bigtiff(rel):
     mask under it -- usually is not a contract, and a mask with many labels and little run
     structure is exactly the case that compresses worst AND is largest.
     """
-    assert "bigtiff=True" in (REPO / rel).read_text(), (
+    assert "bigtiff=True" in _resolve(rel).read_text(), (
         f"{rel} writes a full-resolution label mask without bigtiff, while its siblings set it"
     )
 
@@ -344,7 +363,7 @@ TILE_FED_GENERATORS = {
     "_iter_tiles": "bin/utils/ome_io.py -- wraps _iter_planes and re-slices each plane",
     "_tiles": "bin/apply_basic_profiles.py -- channel-major, tile-major",
     "_plane_tiles": "bin/merge_channels_pyramid.py -- per-plane tile walk",
-    "stream_tiles": "packages/stare/src/stare/stages/stitch.py -- warps and emits one out_tile at a time",
+    "stream_tiles": "stare:stare/stages/stitch.py -- warps and emits one out_tile at a time",
 }
 
 
@@ -352,7 +371,7 @@ def _tiled_writes_with_a_generator():
     """(file, lineno, callee) for every write that sets tile= and is fed a call."""
     out = []
     for rel in sorted(set(PIXEL_WRITERS)):
-        path = REPO / rel
+        path = _resolve(rel)
         if not path.is_file():
             continue
         for node in ast.walk(ast.parse(path.read_text())):

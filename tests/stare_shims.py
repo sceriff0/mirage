@@ -1,6 +1,7 @@
 """Resolve a ``bin/`` STARE shim to the package source it stands for.
 
-Since the STARE method moved into ``packages/stare``, four scripts under ``bin/``
+STARE is an installed package (github.com/sceriff0/stare, pinned in requirements/stare.txt;
+it lived in ``packages/stare`` until 2026-10-01). Four scripts under ``bin/``
 (``tiled_coarse.py``, ``tiled_reg_tile.py``, ``tiled_solve.py``, ``tiled_stitch.py``)
 and nine modules under ``bin/utils/`` are SHIMS: a docstring, an import of the package
 module, and ``sys.modules[__name__] = _impl``. A guard that reads a bin script's source
@@ -20,15 +21,31 @@ Plain module, not a test; imported by guards under ``tests/``.
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BIN = REPO / "bin"
-PACKAGE_SRC = REPO / "packages" / "stare" / "src"
+
+
+def _installed_package_src() -> Path:
+    """The directory holding the INSTALLED `stare` package (site-packages, or an editable
+    checkout's src/). Guards read STARE's source from what is installed, which is exactly
+    what the pinned release put there -- never from a copy in this repository."""
+    spec = importlib.util.find_spec("stare")
+    if spec is None or not spec.origin:
+        raise ImportError(
+            "the `stare` package is not installed: pip install -r requirements/ci.txt "
+            "(it pins stare-registration from github.com/sceriff0/stare)"
+        )
+    return Path(spec.origin).resolve().parent.parent
+
+
+PACKAGE_SRC = _installed_package_src()
 
 
 def package_module_file(dotted: str) -> Path | None:
-    """The file under ``packages/stare/src`` a dotted module name resolves to, or None."""
+    """The installed file a dotted ``stare.*`` module name resolves to, or None."""
     if not dotted or dotted.split(".")[0] != "stare":
         return None
     base = PACKAGE_SRC.joinpath(*dotted.split("."))
