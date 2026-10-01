@@ -3,7 +3,8 @@
 #
 # Every arm below is a finished run of benchmarks/configs/arms.yaml, named by its
 # directory. NOTHING IS REGISTERED: those registrations are already on disk, so
-# this file costs only render time plus one segmentation per method.
+# this file costs only render time. NOTHING IS SEGMENTED either: segmentation.dirs
+# reads the arms' own seg_<method> runs, which segmented the same registered.csv.
 #
 #     python3 -m benchmarks.build_figure_plan --config <this file> --count
 #     sbatch --export=ALL,CONFIG=<this file> benchmarks/submit_figures.sh input.csv
@@ -63,10 +64,14 @@ arms:
 reference_arm: valis_high_micro2
 
 segmentation:
-  # One pipeline run each, all three segmenters. cellsam needs its weights on disk
-  # (~/.deepcell/models/cellsam_v1.2/) -- it reaches users.deepcell.org otherwise, which
-  # no node at this site can resolve.
+  # All three segmenters, READ from the arms benchmark's segmentation arms (seg_<method>,
+  # --start segmentation off valis_high_micro2's registered.csv -- exactly what a figure
+  # segmentation run would redo). Drop a method's dir to have the figures job segment it.
   methods: [stardist, instantseg, cellsam]
+  dirs:
+    stardist:   /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_stardist
+    instantseg: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_instantseg
+    cellsam:    /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_cellsam
   params: {}
 
 figures:

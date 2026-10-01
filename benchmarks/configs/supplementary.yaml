@@ -18,7 +18,7 @@
 high:
   valis: valis_high_micro2        # memory_mode high, micro-registration 2 (shipped default)
   stare: tiled_high_s128          # STARE high tier, stride 128 px (its shipped default)
-  ashlar: ashlar_t1024_s240       # tile 1024, 240 um drift budget
+  ashlar: ashlar_t1024_s15        # tile 1024, ASHLAR's own 15 um default (same arm as every figure)
 
 # What the registration figures (mosaic, S4, S7, S8) are DRAWN at. A legend that names no
 # tier means the high one (user ruling 2026-09-30), so only `high` by default; add `best`

@@ -453,3 +453,48 @@ def test_only_the_allow_missing_OPT_OUT_reaches_the_mosaic():
         _cfg(figures={"mosaic": {"patch_um": [200], "allow_missing_arms": False}})
     )
     assert "--no-allow-missing-arms" in rows[0][3]
+
+
+def test_a_segmentation_dir_must_name_a_listed_method():
+    cfg = _cfg(segmentation={"methods": ["stardist"], "dirs": {"cellsam": "/x"}})
+    with pytest.raises(SystemExit, match="segmentation.dirs"):
+        bfp.plan(cfg)
+
+
+def test_the_summary_counts_reused_segmentations_apart_from_runs():
+    cfg = _cfg(
+        segmentation={"methods": ["stardist", "instantseg"], "dirs": {"stardist": "/x"}}
+    )
+    text = bfp.summary(cfg, bfp.plan(cfg))
+    assert "1 segmentation run(s), 1 reused" in text
+
+
+# --- the shipped configs draw from the arms benchmark, they do not recompute it ------
+ARM_FIGURE_CONFIGS = [SHIPPED, REPO / "benchmarks" / "configs" / "figures_arm_crosses.yaml"]
+
+
+@pytest.mark.parametrize("path", ARM_FIGURE_CONFIGS, ids=lambda p: p.name)
+def test_the_shipped_figures_rebuild_no_arm_and_resegment_nothing(path):
+    """User ruling 2026-10-01. Every arm and every segmentation these configs draw already
+    exists in the arms benchmark's results root: a bare arm name re-registers (REGISTER has
+    been measured at 483 GB) and a method without a dir re-segments the whole cohort."""
+    cfg = bfp.load(path)
+    assert not [a for a in bfp.arm_names(cfg) if a not in bfp.arm_dirs(cfg)]
+    seg = cfg.get("segmentation") or {}
+    assert set(seg.get("methods") or []) == set((seg.get("dirs") or {}))
+
+
+def test_every_figure_draws_the_same_ashlar_arm_and_the_arm_plan_produces_it():
+    """User ruling 2026-10-01: ashlar_t1024_s15, ASHLAR's shipped 15 um default -- the tool
+    as published. figures_arm_crosses, figures and supplementary had drifted to s15, a built
+    s500 and s240, so the mosaic and the gallery showed different ASHLAR runs."""
+    from benchmarks import build_arm_plan as bap
+
+    want = "ashlar_t1024_s15"
+    arms_cfg = yaml.safe_load((REPO / "benchmarks/configs/arms.yaml").read_text())
+    assert want in {r["arm"] for r in bap._external_arms(arms_cfg)}
+    for path in ARM_FIGURE_CONFIGS:
+        dirs = bfp.arm_dirs(bfp.load(path))
+        assert Path(dirs["ashlar"]).name == want, path.name
+    supp = yaml.safe_load((REPO / "benchmarks/configs/supplementary.yaml").read_text())
+    assert all(tier["ashlar"] == want for tier in (supp[c] for c in supp["configs"]))

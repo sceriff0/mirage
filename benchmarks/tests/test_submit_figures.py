@@ -506,3 +506,43 @@ def test_building_arms_without_drawing_still_reports_a_failed_arm(tmp_path):
     block = mosaic[mosaic.index('if [[ "$DRAW" != "1" ]]') :][:400]
     assert "rc_valis == 0 && rc_stare == 0 && rc_ashlar == 0" in block
     assert "exit $?" in block
+
+
+def test_an_existing_segmentation_is_read_where_it_lives_and_never_rerun(tmp_path):
+    """segmentation.dirs points a method at a run you already have -- the arms benchmark's
+    seg_<method>, which segmented the SAME registered.csv. Re-segmenting it for the figures
+    is one whole-cohort GPU run per method for an identical mask, so nothing is launched:
+    PATH has no nextflow, and the run must still succeed and draw from the given dir."""
+    external = tmp_path / "arm_results" / "seg_stardist"
+    (external / "csv").mkdir(parents=True)
+    (external / "csv" / "segmented.csv").write_text("patient_id\nP1\n")
+    cfg = (
+        "arms: [valis_high_micro2]\nreference_arm: valis_high_micro2\n"
+        "segmentation:\n  methods: [stardist]\n"
+        f"  dirs: {{stardist: {external}}}\n"
+        "figures:\n  zoom:\n    field_um: [150]\n    masks: [cell]\n"
+    )
+    proc, calls, root = _run(tmp_path, cfg, env_over={"PATH": "/usr/bin:/bin"})
+    assert proc.returncode == 0, proc.stderr
+    assert "[seg:stardist] reused" in proc.stdout
+    zooms = [ln for ln in calls.splitlines() if "reg_zoom" in ln]
+    assert zooms and all(str(external) in ln for ln in zooms)
+    assert not (root / ".launch" / "seg_stardist").exists()  # never launched
+
+
+def test_a_reused_segmentation_without_its_checkpoint_costs_only_its_own_figures(tmp_path):
+    """A dir that has not finished (no csv/segmented.csv) is named and its figures skipped --
+    never silently re-segmented, and never drawn from a half-written run."""
+    external = tmp_path / "arm_results" / "seg_cellsam"
+    external.mkdir(parents=True)
+    cfg = (
+        "arms: [valis_high_micro2]\nreference_arm: valis_high_micro2\n"
+        "segmentation:\n  methods: [stardist, cellsam]\n"
+        f"  dirs: {{cellsam: {external}}}\n"
+        "figures:\n  zoom:\n    field_um: [150]\n    masks: [cell]\n"
+    )
+    proc, calls, root = _run(tmp_path, cfg, env_over={"PATH": "/usr/bin:/bin"})
+    assert "segmentation FAILED for: cellsam" in proc.stderr
+    assert str(external) in proc.stderr
+    assert str(root / "seg_stardist") in calls  # the pre-marked one still drew
+    assert str(external) not in calls

@@ -198,10 +198,25 @@ for e in cfg.get('arms') or []:
         print(e)
 " "$CONFIG")
 
+# segmentation.dirs: the same for segmentations -- {method: <an existing run>}, typically the
+# arms benchmark's seg_<method>, which segmented the very registered.csv phase 2 would. Such a
+# method is read in place and never launched (one whole-cohort GPU run per method saved).
+SEG_DIRS="$ROOT/.launch/seg_dirs.tsv"
+(cd "$SRC_DIR" && python3 -c "
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+for m, d in ((cfg.get('segmentation') or {}).get('dirs') or {}).items():
+    if d:
+        print(m, d, sep='\t')
+" "$CONFIG") > "$SEG_DIRS"
+seg_dir_of() { awk -F'\t' -v m="$1" '$1 == m { print $2; exit }' "$SEG_DIRS"; }
+
 resolve() {                        # resolve <run key> -> a directory
   local label existing
   case "$1" in
-    seg:*)  printf '%s' "$ROOT/seg_${1#seg:}" ;;
+    seg:*)  existing=$(seg_dir_of "${1#seg:}")
+            if [[ -n "$existing" ]]; then printf '%s' "$existing"
+            else printf '%s' "$ROOT/seg_${1#seg:}"; fi ;;
     arm:*)  label="${1#arm:}"
             existing=$(awk -F'\t' -v l="$label" '$1 == l { print $2; exit }' "$ARM_DIRS")
             if [[ -n "$existing" ]]; then printf '%s' "$existing"
@@ -234,7 +249,15 @@ common=(--formats "$FORMATS" --dpi "$DPI")
 
 # ---- 2. one segmentation per method, resuming from the reference arm --------------
 segment() {                        # segment <method>
-  local method="$1" run rundir rc=0 px=() ref
+  local method="$1" run rundir rc=0 px=() ref existing
+  existing=$(seg_dir_of "$method")
+  if [[ -n "$existing" ]]; then
+    # never re-segmented: a dir without its checkpoint is unfinished, not a cue to re-run
+    [[ -s "$existing/csv/segmented.csv" ]] \
+      || { echo "[seg:$method] no $existing/csv/segmented.csv -- has that run finished?" >&2; return 1; }
+    echo "[seg:$method] reused $existing"
+    return 0
+  fi
   ref="$(resolve "arm:$REF_ARM")/csv/registered.csv"
   run="$ROOT/seg_$method"; rundir="$ROOT/.launch/seg_$method"
   if [[ -f "$run/.done" ]]; then echo "[seg:$method] DONE already, skipping"; return 0; fi
@@ -273,7 +296,9 @@ methods=$(awk -F'\t' '$2 ~ /^seg:/ { sub(/^seg:/, "", $2); print $2 }' "$PLAN" |
 SEG_FAILED=""
 case " $methods " in
   *" cellsam "*)
-    if ensure_deepcell_token; then
+    if [[ -n "$(seg_dir_of cellsam)" ]]; then
+      :   # reused, never launched: no token needed
+    elif ensure_deepcell_token; then
       echo "[token] DEEPCELL_ACCESS_TOKEN is set (${#DEEPCELL_ACCESS_TOKEN} chars) and exported"
     else
       echo "[token] WARNING: cellsam is requested but DEEPCELL_ACCESS_TOKEN is EMPTY." >&2

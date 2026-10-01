@@ -31,11 +31,14 @@
 # ashlar), or {name: <label>, dir: <an existing run>} to draw from one you already
 # have. A reused arm is never re-registered, and if it ran at reg_qc=2 its
 # *_seg_qc.json is already there, so `numbers: scorer` costs nothing.
+#
+# THE DEFAULT IS REUSE (user ruling 2026-10-01): every arm below is a finished run of
+# configs/arms.yaml in its results root, so nothing is re-registered. To have this job
+# BUILD an arm instead (no arms benchmark yet), replace an entry by its bare name.
 arms:
-  - valis_high_micro2        # VALIS, memory_mode high, micro-registration 2 (shipped default)
-  - stare_high               # STARE tiled, high preset
-  - ashlar                   # the external comparator (tile/shift in options below)
-  # - {name: valis_m0, dir: /beegfs/scratch/ieo7660/arms/valis_high_micro0}
+  - {name: valis_high_micro2, dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/valis_high_micro2}   # VALIS high, micro 2 (shipped)
+  - {name: tiled_high_s128,  dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/tiled_high_s128}     # STARE high, stride 128 (shipped)
+  - {name: ashlar,           dir: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/ashlar_t1024_s15}    # ASHLAR at its own 15 um default
 
 # What everything downstream resumes from: segmentation, the channel crops, and the
 # overlays when `overlay.arms` is not given. Pick the one you ship.
@@ -59,6 +62,12 @@ segmentation:
                              # cellSAM extracts into $HOME/.deepcell/models -- the directory
                              # conf/ieo.config already binds. A copy placed there is found
                              # as cached data, so the host is never contacted at all.
+  # READ from the arms benchmark's segmentation arms, which segmented the same
+  # registered.csv: no figure segmentation runs. Remove a method's dir to segment it here.
+  dirs:
+    stardist:   /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_stardist
+    instantseg: /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_instantseg
+    cellsam:    /beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results/seg_cellsam
   params: {}                 # extra pipeline params for every segmentation run, e.g.
                              #   cellsam_model_path: /hpcnfs/.../models/cellsam/cellsam_base.pt
 
@@ -113,8 +122,10 @@ options:
                              # arms benchmark already ran, do NOT set this — point `arms:`
                              # at those directories and use `numbers: scorer` instead.
   ashlar_tile: 1024
-  ashlar_shift_um: 500       # ASHLAR's drift budget. Patient 033 measured ~386 um apart;
-                             # below the real drift ASHLAR silently discards tiles.
+  ashlar_shift_um: 15        # ASHLAR's drift budget, ONLY for a built `ashlar` arm. 15 um
+                             # is ASHLAR's own default and the arm every figure draws
+                             # (ashlar_t1024_s15, user ruling 2026-10-01). Patient 033
+                             # measured ~386 um apart, so expect discarded tiles.
   outline_color: "#ffd400"   # cell outlines
   nuclei_color: "#00e5ff"    # nuclear outlines under mask: both
   outline_width: 2

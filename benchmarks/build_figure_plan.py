@@ -202,7 +202,20 @@ def _validate_methods(cfg: dict) -> list[str]:
         )
     if len(set(methods)) != len(methods):
         raise SystemExit(f"segmentation.methods: repeated entries in {methods}")
+    stray = [m for m in seg_dirs(cfg) if m not in methods]
+    if stray:
+        raise SystemExit(
+            f"segmentation.dirs: {stray} not in segmentation.methods {methods} -- a dir "
+            "reuses the run of a method you draw, it does not add one"
+        )
     return methods
+
+
+def seg_dirs(cfg: dict) -> dict[str, str]:
+    """{method: directory} for segmentations that already exist and must never be re-run --
+    the arms benchmark's seg_<method>, which segmented the same registered.csv."""
+    dirs = (cfg.get("segmentation") or {}).get("dirs") or {}
+    return {str(m): str(d) for m, d in dirs.items() if d}
 
 
 def _mosaic_rows(add, mosaic, run, tag, variants, kinds, numbers, regions, pids):
@@ -412,11 +425,13 @@ def summary(cfg: dict, rows) -> str:
         kinds[row[0]] = kinds.get(row[0], 0) + 1
     external = arm_dirs(cfg)
     build = [a for a in arm_names(cfg) if a not in external]
-    methods = len(_validate_methods(cfg))
+    methods = _validate_methods(cfg)
+    reused = [m for m in methods if m in seg_dirs(cfg)]
     drawn = ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())) or "nothing"
     return (
         f"{len(build)} registration arm(s) to build, {len(external)} reused, "
-        f"{methods} segmentation run(s) -> {drawn} ({len(rows)} figure job(s))"
+        f"{len(methods) - len(reused)} segmentation run(s), {len(reused)} reused "
+        f"-> {drawn} ({len(rows)} figure job(s))"
     )
 
 
