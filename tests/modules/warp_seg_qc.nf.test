@@ -161,6 +161,9 @@ nextflow_process {
                     "no rendered WARP_SEG_QC .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--micro-reg') },
                     "valis rendered command missing --micro-reg: " + rendered.join(' --- ') },
+                // the frame REGISTER writes the slides in; never left to warp_seg_qc's default
+                { assert rendered.every { it.contains('--crop reference') },
+                    "valis rendered command missing --crop reference: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains("--checkpoint-dir") },
                     "valis rendered command missing --checkpoint-dir: " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('--method') },

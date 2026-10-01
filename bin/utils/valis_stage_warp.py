@@ -36,7 +36,7 @@ STAGE_NON_RIGID = "non_rigid"
 STAGE_MICRO = "micro"
 
 
-def slide_warp_params(slide, crop="overlap") -> dict:
+def slide_warp_params(slide, crop="reference") -> dict:
     """Parameters ``Slide.warp_geojson(pt_level=0, slide_level=0, crop=crop)`` would use.
 
     Mirrors registration.py's derivation term for term; ``shift_xy`` is the crop origin that
@@ -129,7 +129,7 @@ def to_numpy_field(field):
     return arr
 
 
-def make_warper(registrar, crop="overlap", clip=False, checkpoint=None):
+def make_warper(registrar, crop="reference", clip=False, checkpoint=None):
     """Build ``warp(slide_name, xy, stage) -> xy`` over a loaded registrar.
 
     ``checkpoint`` is the :class:`~stage_checkpoint.StageCheckpoint` written by REGISTER before

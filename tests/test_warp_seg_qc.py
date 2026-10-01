@@ -593,7 +593,7 @@ def test_parse_args_defaults_match_the_documented_behaviour():
     assert a.match_radius_px is None
     assert a.supersample == wsq.DEFAULT_SUPERSAMPLE
     assert a.iou_thresh == wsq.DEFAULT_IOU_THRESH
-    assert a.crop == "overlap"
+    assert a.crop == "reference"
     assert a.micro_reg is None  # unknown unless the caller passes it
     assert a.pairing == "lsa"
 

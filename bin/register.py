@@ -974,7 +974,9 @@ def valis_registration(
                     dst_f=out_path,
                     level=0,
                     non_rigid=use_non_rigid,
-                    crop=True,
+                    # explicit, not crop=True (which resolves to the registrar's
+                    # "reference"): the frame every warp of this registrar must also use
+                    crop="reference",
                     interp_method=interp_method,
                 )
                 warp_succeeded = True
