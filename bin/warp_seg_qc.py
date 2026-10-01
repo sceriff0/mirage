@@ -457,7 +457,7 @@ def write_report(
     reference_name=None,
     checkpoint_dir=None,
     loader=default_loader,
-    crop="overlap",
+    crop="reference",
     clip=False,
     pixel_size_um=None,
     warp=None,
@@ -570,7 +570,12 @@ def parse_args(argv=None):
         default=None,
         help="display filename for the reference slide",
     )
-    ap.add_argument("--crop", default="overlap")
+    # "reference": the frame REGISTER writes the registered slides in (valis_config's
+    # crop="reference"), i.e. the frame the cell mask is segmented in, so the per-cell
+    # residuals join onto the right cells. "overlap" shifted every point by the overlap
+    # box's origin -- harmless to Dice/displacement (both sides shift together), wrong
+    # for the residual join. lib/WarpBackends.groovy also passes it explicitly.
+    ap.add_argument("--crop", default="reference")
     ap.add_argument(
         "--clip-to-frame",
         action="store_true",
