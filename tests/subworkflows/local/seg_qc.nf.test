@@ -155,6 +155,60 @@ nextflow_workflow {
         }
     }
 
+    test("seg_qc_nuclei_dir: imported QC nuclei are warped and scored, nothing is segmented") {
+
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                outdir = "$outputDir"
+                registration_method = 'tiled'
+                seg_qc_nuclei_dir = "$outputDir/provider"
+            }
+            workflow {
+                """
+                // The provider run's published QC nuclei, named by SEG_QC_GEOJSON's slide rule
+                // (the native image name without .ome.tiff). Written here, not tracked: the
+                // test needs only their names and that they are read instead of re-made.
+                ['P001_ref', 'P001_mov1', 'P001_mov2'].each { s ->
+                    def gj = file("$outputDir/provider/P001/qc/registration/geojson/" + s + ".geojson")
+                    gj.parent.mkdirs()
+                    gj.text = '{"type": "FeatureCollection", "features": []}'
+                }
+                input[0] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001_ref',  is_reference: true,  channels: ['DAPI', 'PANCK']],
+                     file('$projectDir/tests/testdata/P001_ref.ome.tiff',  checkIfExists: true)],
+                    [[patient_id: 'P001', id: 'P001_mov1', is_reference: false, channels: ['DAPI', 'CD3']],
+                     file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)],
+                    [[patient_id: 'P001', id: 'P001_mov2', is_reference: false, channels: ['DAPI', 'VIMENTIN']],
+                     file('$projectDir/tests/testdata/P001_mov2.ome.tiff', checkIfExists: true)]
+                ])
+                input[1] = Channel.empty()
+                input[2] = Channel.empty()
+                input[3] = Channel.fromList([
+                    [[patient_id: 'P001', id: 'P001_mov1', is_reference: false, channels: ['DAPI', 'CD3']],
+                     file('$projectDir/tests/testdata/model_config_min.json')],
+                    [[patient_id: 'P001', id: 'P001_mov2', is_reference: false, channels: ['DAPI', 'VIMENTIN']],
+                     file('$projectDir/tests/testdata/model_config_min.json')]
+                ])
+                input[4] = 'tiled'
+                """
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                // every moving slide is still scored, from the imported nuclei
+                { assert workflow.out.metrics.collect { it[0].id }.toSorted() == ['P001_mov1', 'P001_mov2'] },
+                // and the segmentation never ran: that is the whole point of the param
+                { assert !workflow.trace.tasks().any { it.name.contains('SEG_QC_SEGMENT') || it.name.contains('SEG_QC_GEOJSON') } },
+                { assert workflow.trace.tasks().count { it.name.contains('WARP_SEG_QC') } == 2 }
+            )
+        }
+    }
+
     test("tiled: dispatches WARP_SEG_QC's tiled backend and joins one manifest per moving slide") {
 
         tag "stub"

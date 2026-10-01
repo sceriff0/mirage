@@ -64,6 +64,8 @@ workflow MIRAGE {
     // --cleanup_level against --mode. add_cycle must PRODUCE a re-enterable tree, so a
     // cleaning level is refused outright rather than discovered by the next cycle.
     ParamUtils.validateCleanup(params)
+    // --seg_qc_nuclei_dir: reg_qc=2 only, and an existing directory, before any process runs.
+    ParamUtils.validateSegQcNucleiDir(params)
     // Settings nextflow.config derives from params as SCALARS (cleanup, trace.*,
     // executor.queueSize, process.maxForks) froze when that file was parsed -- before
     // any `-c` file was merged. Refuse a run whose final params disagree with them,

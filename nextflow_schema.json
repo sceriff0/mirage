@@ -160,6 +160,11 @@
                     "description": "Scale factor for registration QC images.",
                     "default": 0.25
                 },
+                "seg_qc_nuclei_dir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "reg_qc=2: reuse another run's QC nuclei (its --outdir; <pid>/qc/registration/geojson/<slide>.geojson) instead of segmenting the native slides again. That run must have segmented the SAME native slides with the SAME seg_method. Unset = segment."
+                },
                 "seg_qc_pairing": {
                     "type": "string",
                     "description": "reg_qc=2 cell correspondence: 'lsa' (optimal one-to-one assignment within the match radius) or 'mutual_nn' (greedy mutual nearest neighbour).",

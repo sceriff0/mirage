@@ -1055,6 +1055,26 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
 
 }
 
+def checkSegQcNucleiDir() {
+    // unset: nothing to check
+    ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false])
+    // an existing directory at reg_qc=2: accepted
+    def d = File.createTempDir()
+    ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false, seg_qc_nuclei_dir: d.path])
+    // a missing directory: refused, naming it
+    def msg = ''
+    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false, seg_qc_nuclei_dir: d.path + '_nope']) }
+    catch (IllegalArgumentException e) { msg = e.message }
+    assert msg.contains('is not a directory') : "a missing --seg_qc_nuclei_dir must be refused: ${msg}"
+    // set below reg_qc=2: refused (nothing reads it)
+    msg = ''
+    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 1, skip_registration_qc: false, seg_qc_nuclei_dir: d.path]) }
+    catch (IllegalArgumentException e) { msg = e.message }
+    assert msg.contains('only reg_qc=2') : "seg_qc_nuclei_dir below reg_qc=2 must be refused: ${msg}"
+    d.deleteDir()
+    println "LIB PROBE: checkSegQcNucleiDir passed"
+}
+
 def checkPassthroughPath() {
     // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
     // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
@@ -1334,6 +1354,7 @@ workflow {
 
     // Layout.passthroughPath -- see checkPassthroughPath() above the workflow block.
     checkPassthroughPath()
+    checkSegQcNucleiDir()
 
     // ------------------------------------------------------------------ //
     // ParamUtils.compartmentMode / validateCompartmentQuant -- the
