@@ -56,22 +56,9 @@ logger = get_logger(__name__)
 
 INSTANCE_KEY = "label"
 SIGN_SUFFIX = "_sign"
-RAW_SUFFIX = "_raw"
 ZSCORE_SUFFIX = "_zscore"
 
 # Columns PhenotypeCsvExporter writes before the per-marker triplets.
-FLOWPATH_FIXED = (
-    "cell_id",
-    "phenotype",
-    "Out_of_annotation",
-    "Outlier",
-    "centroid_x",
-    "centroid_y",
-    "area",
-    "perimeter",
-    "eccentricity",
-    "solidity",
-)
 
 
 # ── FlowPath CSV parsing ───────────────────────────────────────────────────────
