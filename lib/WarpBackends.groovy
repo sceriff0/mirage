@@ -68,6 +68,10 @@ class WarpBackends {
                     "--moving-name '${ctx.moving_slide}'",
                     "--reference-name '${ctx.ref_slide}'",
                     "--micro-reg ${ctx.micro_reg}",
+                    // The frame REGISTER writes the slides in (crop="reference"), so the
+                    // per-cell residuals land on the cells of the mask. Always passed, never
+                    // left to a default.
+                    "--crop reference",
                 ]
                 if (ctx.stage_checkpoint) out << "--checkpoint-dir ${ctx.stage_checkpoint}"
                 // WARP_SEG_QC stages no TIFFs, so the auto-sizer in valis_config.init_jvm
