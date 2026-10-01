@@ -107,18 +107,44 @@ workflow SEG_QC {
     // stardist backend names masks after the image stem ('foo.ome'), instantseg and cellsam
     // after ext.prefix. Carrying it on meta rather than joining it back keeps the pairing
     // structural instead of dependent on Map equality holding across a process boundary.
-    ch_to_segment = ch_native_images.map { meta, img ->
-        tuple(meta + [qc_slide: img.name.replaceAll(/\.ome\.tiff?$/, '').replaceAll(/\.tiff?$/, '')],
-              img,
-              seg_params)
+    def slide_of = { img -> img.name.replaceAll(/\.ome\.tiff?$/, '').replaceAll(/\.tiff?$/, '') }
+    def ch_geojson
+    def ch_seg_size = Channel.empty()
+    def ch_seg_versions = Channel.empty()
+    if (params.seg_qc_nuclei_dir) {
+        // REUSE another run's QC nuclei (--seg_qc_nuclei_dir): its published
+        // <pid>/qc/registration/geojson/<qc_slide>.geojson, named by the SAME slide rule
+        // as SEG_QC_GEOJSON's own output, so WARP_SEG_QC finds the slide exactly as if it
+        // had been segmented here. Valid only when that run segmented the same native
+        // slides with the same seg_method -- the arm benchmark guarantees it (one shared
+        // preprocessing, one segmenter per provider arm). A missing slide is an error,
+        // never a silently smaller QC.
+        def src = params.seg_qc_nuclei_dir.toString()
+        ch_geojson = ch_native_images.map { meta, img ->
+            def slide = slide_of(img)
+            def gj = file("${src}/${meta.patient_id}/qc/registration/geojson/${slide}.geojson")
+            if (!gj.exists())
+                error "--seg_qc_nuclei_dir: no QC nuclei for slide '${slide}' of patient " +
+                      "${meta.patient_id} at ${gj}. That run must have segmented the same " +
+                      "native slides (reg_qc=2) with the same seg_method."
+            tuple(meta + [qc_slide: slide], gj)
+        }
+    } else {
+        ch_to_segment = ch_native_images.map { meta, img ->
+            tuple(meta + [qc_slide: slide_of(img)], img, seg_params)
+        }
+        SEG_QC_SEGMENT(ch_to_segment)
+
+        // Label image -> polygons. Backend-agnostic by construction: it reads a plain label
+        // TIFF, which all three backends emit under the same `*_cell_mask.tif` contract.
+        SEG_QC_GEOJSON(SEG_QC_SEGMENT.out.cell_mask)
+        ch_geojson = SEG_QC_GEOJSON.out.geojson
+        ch_seg_size = SEG_QC_SEGMENT.out.size_log.mix(SEG_QC_GEOJSON.out.size_log)
+        ch_seg_versions = SEG_QC_SEGMENT.out.versions.first()
+            .mix(SEG_QC_GEOJSON.out.versions.first())
     }
-    SEG_QC_SEGMENT(ch_to_segment)
 
-    // Label image -> polygons. Backend-agnostic by construction: it reads a plain label
-    // TIFF, which all three backends emit under the same `*_cell_mask.tif` contract.
-    SEG_QC_GEOJSON(SEG_QC_SEGMENT.out.cell_mask)
-
-    ch_gj = SEG_QC_GEOJSON.out.geojson.branch { meta, gj ->
+    ch_gj = ch_geojson.branch { meta, gj ->
         reference: meta.is_reference
         moving:    !meta.is_reference
     }
@@ -185,8 +211,6 @@ workflow SEG_QC {
     emit:
     metrics  = ch_metrics
     per_cell = ch_per_cell
-    size_log = SEG_QC_SEGMENT.out.size_log.mix(SEG_QC_GEOJSON.out.size_log).mix(ch_warp_size)
-    versions = SEG_QC_SEGMENT.out.versions.first()
-        .mix(SEG_QC_GEOJSON.out.versions.first())
-        .mix(ch_warp_versions.first())
+    size_log = ch_seg_size.mix(ch_warp_size)
+    versions = ch_seg_versions.mix(ch_warp_versions.first())
 }

@@ -312,6 +312,7 @@ the same masks, polygons, measurements and QC. Full store layout:
 | `cse_pixel_size_um` | `null` | Pixel size (µm) passed to CSE. `null` = infer from image metadata. |
 | `cse_max_pixels` | `50000000` | Bin image+masks so CSE scores at most this many pixels. `null` = full resolution. |
 | `skip_final_qc_report` | `false` | Skip the aggregated HTML QC report. |
+| `seg_qc_nuclei_dir` | `null` | `reg_qc=2` only: reuse another run's QC nuclei (that run's `--outdir`, read from `<pid>/qc/registration/geojson/<slide>.geojson`) instead of segmenting the native slides again. The other run must have segmented the **same native slides with the same `seg_method`**; a missing slide fails the run. Used by the arm benchmark so registration arms do not re-segment identical slides. |
 | `seg_qc_pairing` | `lsa` | Cell correspondence backend for `reg_qc=2`'s fixed anchor pairing: `lsa` = optimal one-to-one assignment (exact, per connected component), `mutual_nn` = the older mutual-nearest-centroid rule. See [Staged registration QC](registration_qc.md). |
 | `seg_qc_match_radius_factor` | `1.5` | Match radius for `reg_qc=2` pairing, in median nuclear radii. |
 
