@@ -228,3 +228,19 @@ def test_waves_put_the_reference_then_segmentation_first_and_qc_last(tmp_path):
     assert len(segs) == 2 and max(pos[x] for x in segs) < min(pos[x] for x in regs)
     assert "_high_" in regs[0] and "_low_" in regs[-1], regs
     assert qcs and min(pos[x] for x in qcs) > max(pos[x] for x in segs + regs)
+
+
+def test_arms_rerun_continues_a_finished_arm_from_its_own_session(launcher):
+    """ARMS_RERUN=<regex>: a FINISHED arm is resumed from its own session with params
+    regenerated (only tasks reading a changed param re-run), not skipped as DONE and not
+    moved aside like ARMS_REPLACE. Every other finished arm stays DONE."""
+    plan, root, run = launcher
+    assert run(plan).returncode == 0
+    r = run(plan, ARMS_RESUME="1", ARMS_RERUN="^preprocess_shared$")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[preprocess_shared] RERUN" in r.stdout, r.stdout
+    assert "arms-preprocess_shared-r2" in r.stdout
+    assert "params REGENERATED" in r.stdout
+    others = [x["run_id"] for x in plan if x["run_id"] != "preprocess_shared"]
+    assert all(f"[{o}] DONE" in r.stdout for o in others[:3]), r.stdout
+    assert (root / "preprocess_shared").is_dir(), "a rerun must not move results aside"

@@ -87,6 +87,11 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 # $RESULTS/.replaced/<timestamp>/ before launching (never deleted). Typical:
 #   sbatch --export=ALL,CHANGED=tiled,ARMS_REPLACE=1 benchmarks/submit_arms.sh
 #
+# RE-RUN FINISHED arms after a param change, from their own cache (only the tasks that
+# read a changed param re-run; ARMS_REPLACE would recompute everything):
+#   sbatch --export=ALL,ARMS_RESUME=1,ARMS_RESUME_PARAMS=regenerate,ARMS_RERUN='^valis_high_micro2$' \
+#          benchmarks/submit_arms.sh
+#
 # RESUME after an interruption (scancel of this head job and its process jobs):
 #   sbatch --export=ALL,ARMS_RESUME=1 benchmarks/submit_arms.sh
 # Every arm whose last attempt finished (OK in its .nextflow/history) is skipped;

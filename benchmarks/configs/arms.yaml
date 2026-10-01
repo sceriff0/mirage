@@ -42,7 +42,13 @@ baseline:
   reg_qc: 2                    # REQUIRED for every registration arm: reg_qc=2 is what
                                # emits the staged seg-overlap QC the arm ranking reads.
                                # An arm at reg_qc<2 produces no accuracy row at all.
-  seg_method: instantseg       # pipeline default; the QC segmenter unless crossed below
+  seg_method: stardist         # the QC segmenter unless crossed below. NOT the pipeline
+                               # default (instantseg): user ruling 2026-10-01 -- the site runs
+                               # StarDist with the IEO-trained model, and every arm loads it
+                               # from conf/ieo.config (-c), which pins seg_method='stardist',
+                               # segmentation_model and segmentation_model_dir. A params-file
+                               # seg_method beats -c, so this line is what makes the arms agree
+                               # with that config. Declared in DELIBERATE (test_build_arm_plan).
   memory_mode: high
   reg_micro_reg: 2             # tracks nextflow.config (2026-09-16 moved the shipped default
                                # back 1 -> 2, micro-rigid + micro non-rigid; :wrench: 25a232e

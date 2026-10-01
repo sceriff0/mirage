@@ -139,7 +139,7 @@ def test_a_twice_interrupted_arm_counts_its_attempts(arms):
 
 def test_an_interrupted_cross_resumes_its_own_session_not_its_base(arms):
     plan, root, run = arms
-    base, cross = "valis_high_micro2", "valis_high_micro2_segstardist"
+    base, cross = "valis_high_micro2", "valis_high_micro2_seginstantseg"
     hist = root / ".launch" / base / ".nextflow" / "history"
     cross_sid = _interrupt(hist, f"arms-{cross}")
     r, launches = run(ARMS_RESUME="1")
@@ -172,7 +172,7 @@ def test_a_resumed_base_arms_crosses_resume_its_latest_session(arms):
 
 def test_replace_still_recognises_a_resumed_cross_by_its_base_name(arms):
     plan, root, run = arms
-    base, cross = "valis_high_micro2", "valis_high_micro2_segstardist"
+    base, cross = "valis_high_micro2", "valis_high_micro2_seginstantseg"
     hist = root / ".launch" / base / ".nextflow" / "history"
     _interrupt(hist, f"arms-{cross}")
     run(ARMS_RESUME="1")  # leaves arms-<cross>-r2 in the base's history

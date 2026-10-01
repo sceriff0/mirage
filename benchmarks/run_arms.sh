@@ -180,11 +180,25 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
     read -r attempts prev_name prev_status prev_sid < <(awk -F'\t' -v n="arms-$run_id" \
       '$3 == n || index($3, n "-r") == 1 { c++; nm = $3; st = $4; sid = $6 } END { print c + 0, nm, st, sid }' "$hist")
   fi
+  local rerun=0
+  if [[ -n "${ARMS_RERUN:-}" ]] && [[ "$run_id" =~ ${ARMS_RERUN} ]]; then rerun=1; fi
   if (( attempts > 0 )); then
-    if [[ "$prev_status" == "OK" ]]; then
-      echo "[$run_id] DONE: $prev_name completed (OK in $hist); nothing to do -- ARMS_REPLACE=1 redoes it from scratch"
+    if [[ "$prev_status" == "OK" ]] && (( ! rerun )); then
+      echo "[$run_id] DONE: $prev_name completed (OK in $hist); nothing to do -- ARMS_REPLACE=1 redoes it from scratch, ARMS_RERUN=<regex> re-runs only what a changed param reads"
       return 0
     fi
+    if [[ "$prev_status" == "OK" ]]; then
+      # ARMS_RERUN: a FINISHED arm continued from its own session with params regenerated
+      # from the current plan, so only the tasks that read a changed param re-run (e.g. a
+      # new baseline seg_method: SEG_QC_SEGMENT + WARP_SEG_QC, never REGISTER). The
+      # cheap alternative to ARMS_REPLACE, which moves the cache aside and starts over.
+      run_name="arms-$run_id-r$((attempts + 1))"; resuming=1
+      if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
+      echo "[$run_id] RERUN: $prev_name was OK; ARMS_RERUN matches, continuing as $run_name from" \
+           "session ${prev_sid:-latest} with params regenerated -- only tasks reading a changed param run"
+    fi
+  fi
+  if (( attempts > 0 )) && [[ "$prev_status" != "OK" ]]; then
     if [[ "${ARMS_RESUME:-0}" == "1" ]]; then
       run_name="arms-$run_id-r$((attempts + 1))"; resuming=1
       if [[ -n "$prev_sid" ]]; then resume_args=(-resume "$prev_sid"); else resume_args=(-resume); fi
@@ -215,7 +229,7 @@ launch() {                       # launch <run_id> <arm> <input> <outdir> <name=
   # Everything else stays as launched, so an arms.yaml edit made after the launch cannot
   # quietly change what a half-finished arm IS. ARMS_RESUME_PARAMS=regenerate rebuilds the
   # file from the current plan instead: tasks re-run only where a param they read changed.
-  if (( resuming )) && [[ -f "$run_params" && "${ARMS_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
+  if (( resuming )) && (( ! rerun )) && [[ -f "$run_params" && "${ARMS_RESUME_PARAMS:-reuse}" != "regenerate" ]]; then
     if ! python3 - "$run_params" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -230,6 +244,7 @@ PY
     echo "[$run_id] params reused from the interrupted attempt ($run_params), cleanup_work pinned false (no task reads it: nothing re-hashes)"
   else
     if (( resuming )) && [[ -f "$run_params" ]]; then
+      (( rerun )) && echo "[$run_id] params REGENERATED for ARMS_RERUN"
       echo "[$run_id] params REGENERATED from the current plan (ARMS_RESUME_PARAMS=regenerate): tasks re-run only where a param they read changed value"
     fi
     if ! (cd "$pdir" && python3 -m benchmarks.params_json --out "$run_params" \

@@ -101,7 +101,10 @@ def test_arms_baseline_values_match_the_pipeline_defaults(cfg):
         (REPO_ROOT / "nextflow.config").read_text()
     )
     # param -> why arms.yaml deliberately pins something other than the shipped default.
-    DELIBERATE: dict[str, str] = {}
+    DELIBERATE: dict[str, str] = {
+        "seg_method": "user ruling 2026-10-01: the QC baseline is StarDist with the IEO "
+        "model (conf/ieo.config pins it); instantseg stays the shipped default",
+    }
     drift = []
     for k, v in cfg["baseline"].items():
         if k in DELIBERATE or k not in defaults:
