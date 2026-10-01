@@ -3,7 +3,7 @@
 What is pinned:
   * the stage plan (DRY_RUN=1): each stage runs only with its inputs, and says SKIPPED otherwise;
   * placeholder mode reaches make_figures and ihc_method, and never the hand-off;
-  * the hand-off runs benchmarking (replace) BEFORE stare (--append-arms), always;
+  * the hand-off is ONE pass (arms + sweep + ANHIR) from the one results root;
   * a composite card is drawn only for a slot with no rendered file, is named PLACEHOLDER_*,
     is listed in PLACEHOLDER_COMPOSITES.csv, and `clear` removes every card and nothing else.
 """
@@ -40,9 +40,8 @@ def _dry(tmp_path: Path, **env) -> str:
 
 
 def _full(tmp_path: Path) -> dict:
-    (tmp_path / "stare").mkdir(exist_ok=True)
     (tmp_path / "ihc").mkdir(exist_ok=True)
-    return {**FULL, "STARE_SRC": str(tmp_path / "stare"), "IHC": str(tmp_path / "ihc")}
+    return {**FULL, "IHC": str(tmp_path / "ihc")}
 
 
 FULL = {
@@ -50,9 +49,6 @@ FULL = {
     "ARMS_PLAN": "/b/arm_plan.csv",
     "SWEEP_RESULTS": "/b/bench_results",
     "SWEEP_PLAN": "/b/bench_run_plan.csv",
-    "STARE_SRC": "/stare",
-    "STARE_RESULTS": "/db/arm_results",
-    "STARE_PLAN": "/db/arm_plan.subset.csv",
     "INPUT": "/in/input.csv",
     "CONFIG": "figures.yaml",
     "ANHIR_DIR": "/anhir",
@@ -66,7 +62,6 @@ def test_nothing_given_skips_every_stage_with_a_reason(tmp_path):
     for line in (
         "stats/arms: SKIPPED",
         "stats/sweep: SKIPPED",
-        "stats/stare: SKIPPED",
         "composites: SKIPPED",
         "anhir: SKIPPED",
         "handoff: SKIPPED",
@@ -93,23 +88,23 @@ def test_placeholder_mode_reaches_stats_composites_and_ihc_but_not_the_hand_off(
     out = _dry(tmp_path, PLACEHOLDER_MISSING="1", **_full(tmp_path))
     lines = out.splitlines()
     stats = [ln for ln in lines if "benchmarks.analysis.make_figures" in ln]
-    assert len(stats) == 3 and all("--placeholder-missing" in ln for ln in stats)
+    assert len(stats) == 2 and all("--placeholder-missing" in ln for ln in stats)
     assert all("/stats_preview/" in ln for ln in stats)
     assert any("placeholder_card.py fill" in ln for ln in lines)
     assert "IHC_PLACEHOLDER_MISSING=1" in out
     hand = [ln for ln in lines if "pull_to_ihc_method.sh" in ln]
-    assert len(hand) == 2
+    assert len(hand) == 1
     assert all(
         "--placeholder" not in ln and "PLACEHOLDER_MISSING=1" not in ln for ln in hand
     )
 
 
-def test_hand_off_order_is_benchmarking_then_stare_append(tmp_path):
+def test_hand_off_is_one_pass_carrying_arms_sweep_and_anhir(tmp_path):
     out = _dry(tmp_path, **_full(tmp_path))
     hand = [ln for ln in out.splitlines() if "pull_to_ihc_method.sh" in ln]
+    assert len(hand) == 1, hand
     assert "/b/arm_results" in hand[0] and "--append-arms" not in hand[0]
-    assert "/db/arm_results" in hand[1] and "--append-arms" in hand[1]
-    assert "--anhir /anhir/tables" in hand[1]
+    assert "--anhir /anhir/tables" in hand[0], "ANHIR rode on the removed second pass"
 
 
 def test_rejects_a_non_boolean_placeholder_switch(tmp_path):

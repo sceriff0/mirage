@@ -75,9 +75,8 @@ def test_select_cases_filters_and_limits(anhir_root):
     assert len(ds.select_cases(cases, limit=1)) == 1
 
 
-def test_resolve_paths_join_the_archive_roots(anhir_root):
+def test_resolve_landmarks_joins_the_archive_root(anhir_root):
     c = anhir_root["cases"][0]
-    assert ds.resolve_image(c, anhir_root["images"], "source").name == "S1.jpg"
     assert ds.resolve_landmarks(c, anhir_root["landmarks"], "target").exists()
     assert not ds.resolve_landmarks(
         anhir_root["cases"][2], anhir_root["landmarks"], "target"

@@ -68,7 +68,6 @@ def _run_out(results_root, run_id) -> Path:
 
 # ─────────────────────────────────────────────────────────── registration accuracy ──
 # The anchor stage the staged QC reports deltas against (see docs/registration_qc.md).
-REG_QC_ANCHOR = "rigid"
 
 
 def _f(x):

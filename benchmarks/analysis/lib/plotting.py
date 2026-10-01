@@ -180,17 +180,6 @@ def strip_by_run(frame, run_col, metrics, titles, placeholder=None):
     return fig
 
 
-def before_after_box(df, cols, ylabel, title, log_scale=True):
-    fig, ax = plt.subplots()
-    ax.boxplot([df[c].dropna().to_numpy() for c in cols])
-    ax.set_xticks(range(1, len(cols) + 1))
-    ax.set_xticklabels(cols)
-    if log_scale:
-        ax.set_yscale("log")
-    ax.set(ylabel=ylabel, title=title)
-    return fig
-
-
 _TIER_ORDER = ("low", "medium", "high")
 # Keyed on the plan's `method` (quality._family). `tiled` only appears for a plan without
 # a `method` column, which is STARE.

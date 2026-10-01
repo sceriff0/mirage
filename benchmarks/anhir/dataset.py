@@ -19,7 +19,6 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-COL_ID = "case_id"
 COL_DIAGONAL = "Image diagonal [pixels]"
 COL_SIZE = "Image size [pixels]"
 COL_SOURCE = "Source image"
@@ -159,11 +158,6 @@ def select_cases(
             continue
         out.append(c)
     return out[:limit] if limit else out
-
-
-def resolve_image(case: Case, images_root, which: str) -> Path:
-    rel = case.source_image if which == "source" else case.target_image
-    return Path(images_root) / rel
 
 
 def resolve_landmarks(case: Case, landmarks_root, which: str) -> Path:

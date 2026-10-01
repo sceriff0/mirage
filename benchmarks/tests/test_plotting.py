@@ -3,7 +3,6 @@ import matplotlib
 matplotlib.use("Agg")  # headless
 
 import numpy as np
-import pandas as pd
 
 from benchmarks.analysis.lib import plotting
 
@@ -35,14 +34,6 @@ def test_scatter_with_fit_returns_figure(tmp_path):
     assert fig is not None
     plotting.save_fig(fig, tmp_path / "scatter")  # must not raise
     assert (tmp_path / "scatter.pdf").exists()
-
-
-def test_before_after_box_returns_figure():
-    df = pd.DataFrame({"original": [0.1, 0.2, 0.3], "registered": [0.02, 0.03, 0.04]})
-    fig = plotting.before_after_box(
-        df, cols=["original", "registered"], ylabel="rTRE", title="tiled"
-    )
-    assert fig is not None
 
 
 def test_save_fig_formats_arg_writes_only_requested(tmp_path):

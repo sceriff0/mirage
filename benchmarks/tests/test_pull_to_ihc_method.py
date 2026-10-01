@@ -5,7 +5,7 @@ Two defects this pins:
     documented command exited "unknown option" and the ANHIR tables never arrived.
   * a second arm experiment (the STARE arms, run into their own results root)
     REPLACED data/registration_arms/arms.csv, so the first root's arms lost their
-    labels. `--append-arms` merges the manifest by arm_dir instead.
+    labels.
 """
 
 import csv
@@ -76,53 +76,6 @@ def test_default_hand_off_replaces_the_manifest(tmp_path):
     assert _run(first, ihc, handoff=tmp_path / "h").returncode == 0
     assert _run(second, ihc, handoff=tmp_path / "h").returncode == 0
     assert _labels(ihc) == {"tiled_high_s128": "STARE high"}
-
-
-def test_append_arms_merges_the_manifest_by_arm_dir(tmp_path):
-    ihc = _ihc(tmp_path)
-    first = _arm_root(
-        tmp_path / "a",
-        {"tiled_high_gate2": "STARE high", "valis_high_micro2": "VALIS old"},
-    )
-    second = _arm_root(
-        tmp_path / "b",
-        {"tiled_high_s128": "STARE high", "valis_high_micro2": "VALIS new"},
-    )
-    assert _run(first, ihc, handoff=tmp_path / "h").returncode == 0
-
-    r = _run(second, ihc, "--append-arms", handoff=tmp_path / "h")
-
-    assert r.returncode == 0, r.stderr
-    assert _labels(ihc) == {
-        "tiled_high_gate2": "STARE high",  # first root's arm keeps its label
-        "tiled_high_s128": "STARE high",  # second root's arm is added
-        "valis_high_micro2": "VALIS new",  # a clash: the root being added wins
-    }
-    arms = ihc / "data" / "registration_arms"
-    assert (
-        arms / "tiled_high_gate2" / "P1" / "qc" / "registration" / "P1_seg_qc.json"
-    ).is_file()
-    assert (
-        arms / "tiled_high_s128" / "P1" / "qc" / "registration" / "P1_seg_qc.json"
-    ).is_file()
-
-
-def test_append_arms_does_not_overwrite_the_first_roots_arm_tables(tmp_path):
-    ihc = _ihc(tmp_path)
-    first = _arm_root(tmp_path / "a", {"tiled_high_gate2": "STARE high"})
-    second = _arm_root(tmp_path / "b", {"tiled_high_s128": "STARE high"})
-    h1, h2 = tmp_path / "h1", tmp_path / "h2"
-    (h1 / "arms").mkdir(parents=True)
-    (h1 / "arms" / "arm_summary.csv").write_text("first\n")
-    (h2 / "arms").mkdir(parents=True)
-    (h2 / "arms" / "arm_summary.csv").write_text("second\n")
-    assert _run(first, ihc, handoff=h1).returncode == 0
-
-    assert _run(second, ihc, "--append-arms", handoff=h2).returncode == 0
-
-    assert (
-        ihc / "data" / "registration_arms" / "arm_summary.csv"
-    ).read_text() == "first\n"
 
 
 def test_sweep_run_plan_is_handed_off(tmp_path):

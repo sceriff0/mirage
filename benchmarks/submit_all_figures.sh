@@ -16,21 +16,18 @@
 #   stats       benchmarks.analysis.make_figures, once per results root:
 #                 arms   ARMS_RESULTS  + ARMS_PLAN      (SRC_DIR)
 #                 sweep  SWEEP_RESULTS + SWEEP_PLAN     (SRC_DIR)
-#                 stare  STARE_RESULTS + STARE_PLAN     (STARE_SRC) -- LEGACY, see below
 #
-#   ONE ROOT FOR EVERY METHOD (2026-09-29). submit_arms.sh on benchmarking runs VALIS,
-#   STARE, ASHLAR and seg into ONE results root, and arm_plan.csv carries a `method`
-#   column the analysis groups by. So point SRC_DIR at the benchmarking checkout,
-#   ARMS_* at that root, and leave
-#   STARE_SRC/STARE_RESULTS/STARE_PLAN UNSET: the stare stage and the --append-arms
-#   hand-off exist only for the old two-root layout and would add the STARE arms twice.
+#   ONE ROOT FOR EVERY METHOD. submit_arms.sh runs VALIS, STARE, ASHLAR and seg into ONE
+#   results root, and arm_plan.csv carries a `method` column the analysis groups by. (The
+#   old two-root layout -- a second STARE checkout + root, a `stare` stats stage and an
+#   `--append-arms` hand-off -- was removed on 2026-10-01.)
 #               -> $OUT/stats/<name>/   (or $OUT/stats_preview/<name>/ with placeholders)
 #   composites  benchmarks/submit_figures.sh inline (mosaic, overlay, zoom, crop, channel),
 #               needs INPUT (samplesheet) and CONFIG (figures.yaml) -> $OUT/composites/
 #   anhir       benchmarks.anhir.evaluate over every warped-landmark leg present under
 #               ANHIR_DIR (ANHIR_LEGS) -> $ANHIR_DIR/tables/
-#   handoff     benchmarks/pull_to_ihc_method.sh into IHC: arms + sweep from SRC_DIR,
-#               then STARE (--append-arms) + ANHIR from STARE_SRC. REAL data only.
+#   handoff     benchmarks/pull_to_ihc_method.sh into IHC: arms + sweep + ANHIR from
+#               SRC_DIR, one pass. REAL data only.
 #   ihc         workflowr::wflow_build of the benchmark pages in IHC (IHC_BUILD=1)
 #
 # PLACEHOLDER_MISSING=1 (default 0) turns on the marked previews everywhere they exist:
@@ -66,7 +63,6 @@
 # ---- knobs ---------------------------------------------------------------------
 OUT="${OUT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"            # the checkout that ran the arms
-STARE_SRC="${STARE_SRC:-}"                              # LEGACY two-root layout only; leave unset
 CONDA_ENV="${CONDA_ENV:-nf-env}"
 STAGES="${STAGES:-stats composites anhir handoff ihc}"
 PLACEHOLDER_MISSING="${PLACEHOLDER_MISSING:-0}"
@@ -74,7 +70,6 @@ PLACEHOLDER_SEED="${PLACEHOLDER_SEED:-0}"
 REG_EVAL="${REG_EVAL:-none}"
 ARMS_RESULTS="${ARMS_RESULTS:-}";   ARMS_PLAN="${ARMS_PLAN:-}"
 SWEEP_RESULTS="${SWEEP_RESULTS:-}"; SWEEP_PLAN="${SWEEP_PLAN:-}"
-STARE_RESULTS="${STARE_RESULTS:-}"; STARE_PLAN="${STARE_PLAN:-}"
 INPUT="${INPUT:-}"; CONFIG="${CONFIG:-}"
 SKIP_COMPOSITE_RUNS="${SKIP_COMPOSITE_RUNS:-0}"
 ANHIR_DIR="${ANHIR_DIR:-}"
@@ -115,7 +110,7 @@ echo "All-figures job ${SLURM_JOB_ID:-local} on ${SLURM_NODELIST:-$(hostname)}  
 echo "Mode:     $(mode)   seed $PLACEHOLDER_SEED"
 echo "Stages:   $STAGES"
 echo "Out:      $OUT"
-echo "Checkout: $SRC_DIR   STARE: ${STARE_SRC:-<none>}"
+echo "Checkout: $SRC_DIR"
 echo "=================================================="
 
 # ---- stats -----------------------------------------------------------------------
@@ -130,7 +125,6 @@ if want stats; then
     stats_one() {                 # stats_one <name> <checkout> <results> <plan>
       local name="$1" src="$2" res="$3" plan="$4"
       if [[ -z "$res" || -z "$plan" ]]; then note "stats/$name: SKIPPED (results root or plan not given)"; return; fi
-      if [[ -z "$src" ]]; then note "stats/$name: SKIPPED (no checkout: set STARE_SRC)"; return; fi
       if [[ "$DRY_RUN" != 1 && ( ! -d "$res" || ! -s "$plan" ) ]]; then
         note "stats/$name: SKIPPED (missing $res or $plan)"; return; fi
       if (cd "$src" && unset PLACEHOLDER_MISSING && \
@@ -143,7 +137,6 @@ if want stats; then
     }
     stats_one arms  "$SRC_DIR"   "$ARMS_RESULTS"  "$ARMS_PLAN"
     stats_one sweep "$SRC_DIR"   "$SWEEP_RESULTS" "$SWEEP_PLAN"
-    stats_one stare "$STARE_SRC" "$STARE_RESULTS" "$STARE_PLAN"
   fi
 fi
 
@@ -187,7 +180,7 @@ if want anhir; then
     done
     if (( ${#legs[@]} == 0 )); then
       note "anhir: SKIPPED (no warped leg under $ANHIR_DIR yet)"
-    elif (cd "${STARE_SRC:-$SRC_DIR}" && run "$PY" -m benchmarks.anhir.evaluate \
+    elif (cd "$SRC_DIR" && run "$PY" -m benchmarks.anhir.evaluate \
             --dataset "$ANHIR_DIR/challenge/anhir/dataset_medium.csv" \
             --landmarks-root "$ANHIR_DIR/challenge/anhir/landmarks" --status training \
             "${legs[@]}" --out "$ANHIR_DIR/tables"); then
@@ -203,26 +196,17 @@ if want handoff; then
   if [[ -z "$IHC" ]]; then
     note "handoff: SKIPPED (IHC not given)"
   else
-    # Pass 1 REPLACES arms.csv, pass 2 MERGES into it: the order is load-bearing.
     first=(); [[ -n "$ARMS_PLAN" ]] && first+=(--arm-plan "$ARMS_PLAN")
+    [[ -n "$ANHIR_DIR" && ( "$DRY_RUN" == 1 || -d "$ANHIR_DIR/tables" ) ]] && first+=(--anhir "$ANHIR_DIR/tables")
     [[ -n "$SWEEP_RESULTS" ]] && first+=(--sweep "$SWEEP_RESULTS")
     [[ -n "$SWEEP_PLAN" ]] && first+=(--sweep-plan "$SWEEP_PLAN")
     if [[ -n "$ARMS_RESULTS" ]] && (cd "$SRC_DIR" && unset PLACEHOLDER_MISSING && run \
           benchmarks/pull_to_ihc_method.sh "$ARMS_RESULTS" "$IHC" "${first[@]+"${first[@]}"}" --build); then
-      out1="arms+sweep OK"
+      out1="arms+sweep+anhir OK"
     else
-      out1="arms+sweep SKIPPED/FAILED"
+      out1="arms+sweep+anhir SKIPPED/FAILED"
     fi
-    second=(--append-arms)
-    [[ -n "$STARE_PLAN" ]] && second+=(--arm-plan "$STARE_PLAN")
-    [[ -n "$ANHIR_DIR" && ( "$DRY_RUN" == 1 || -d "$ANHIR_DIR/tables" ) ]] && second+=(--anhir "$ANHIR_DIR/tables")
-    if [[ -n "$STARE_SRC" && -n "$STARE_RESULTS" ]] && (cd "$STARE_SRC" && unset PLACEHOLDER_MISSING && run \
-          benchmarks/pull_to_ihc_method.sh "$STARE_RESULTS" "$IHC" "${second[@]}"); then
-      out2="stare+anhir OK"
-    else
-      out2="stare+anhir SKIPPED/FAILED"
-    fi
-    note "handoff: $out1; $out2"
+    note "handoff: $out1"
   fi
 fi
 

@@ -236,8 +236,8 @@ segmentation_arms:
   #   cse        CellSegmentationEvaluator — a reference-free QUALITY score, so it
   #              can rank methods rather than only compare them. OPTIONAL and
   #              off by default: it needs the `segeval` container published and
-  #              params.skip_seg_quality_eval=false. See docs/benchmarks_real.md.
-  score_with: [agreement, cse]
+  #              params.skip_seg_quality_eval=false; submit_arms.sh turns it on with
+  #              ENABLE_CSE=true (the seg_quality profile). See docs/benchmarks_real.md.
 
 # -----------------------------------------------------------------------------
 # ARM 3 — COMPUTE PROFILE. What does a real slide actually cost, per process?

@@ -23,17 +23,6 @@ def test_fit_memory_model_too_few_points_is_flat_fallback():
     assert m["n"] == 1
 
 
-def test_buffered_prediction_adds_sigma_per_attempt():
-    m = {"slope": 3.0, "intercept": 2.0, "sigma": 1.0}
-    # input_gb=4 -> 14 base; attempt 1 -> +1 sigma = 15; attempt 2 -> +2 = 16
-    assert regress.buffered_prediction(m, input_gb=4.0, attempt=1) == pytest.approx(
-        15.0
-    )
-    assert regress.buffered_prediction(m, input_gb=4.0, attempt=2) == pytest.approx(
-        16.0
-    )
-
-
 def test_fit_per_process_groups_by_process():
     df = pd.DataFrame(
         {

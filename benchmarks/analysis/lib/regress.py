@@ -38,12 +38,6 @@ def fit_memory_model(x, y) -> dict:
     }
 
 
-def buffered_prediction(model: dict, input_gb: float, attempt: int = 1) -> float:
-    """base = slope*input + intercept; add `attempt` * sigma as retry headroom."""
-    base = model["slope"] * input_gb + model["intercept"]
-    return float(base + attempt * model.get("sigma", 0.0))
-
-
 def fit_per_process(
     df: pd.DataFrame, predictor: str = "input_gb", target: str = "peak_rss_gb"
 ) -> dict:

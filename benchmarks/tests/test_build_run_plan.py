@@ -846,7 +846,7 @@ NOT_SWEPT = {
     # metrics assume multiple cell types differing in channel expression, and the
     # matrix's extra channels are channel 0 duplicated with jitter. It is measured
     # on REAL slides by the segmentation arm in benchmarks/configs/arms.yaml
-    # (score_with: cse), which is where a segmentation-quality number is defensible.
+    # (CSE, ENABLE_CSE in submit_arms.sh), which is where a segmentation-quality number is defensible.
     "skip_seg_quality_eval": "opt-in scorer; exercised by arms.yaml's segmentation arm, not the synthetic sweep",
     "cse_pixel_size_um": "an image property, not a knob — inferred from metadata when null",
     "cse_max_pixels": (

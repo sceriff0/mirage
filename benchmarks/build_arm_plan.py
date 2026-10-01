@@ -171,8 +171,7 @@ def _registration_arms(cfg: dict) -> list[dict]:
                         # keys "is this the tiled backend" off the `backend` column when
                         # arms.csv is present, and off the substring `tiled`/`stare` when it
                         # is not; the name satisfies both so the fallback path stays correct.
-                        "memory_mode": "",
-                        "reg_micro_reg": "",
+                        **{k: "" for k in VALIS_ONLY},
                         "reg_tiled_mode": mode,
                         "reg_tiled_stride": "" if stride is None else int(stride),
                         "label": f"tiled (STARE, {mode}"
