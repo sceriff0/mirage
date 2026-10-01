@@ -217,18 +217,3 @@ class PhaseReporter:
                 log_progress(f"    {phase_name}: {duration:.1f}s")
                 total += duration
             log_progress(f"    Total: {total:.1f}s")
-
-    def get_phase_duration(self, phase_name: str) -> Optional[float]:
-        """Get duration of a completed phase.
-
-        Parameters
-        ----------
-        phase_name : str
-            Phase ID to query
-
-        Returns
-        -------
-        float or None
-            Duration in seconds, or None if phase not completed
-        """
-        return self._phase_durations.get(phase_name)

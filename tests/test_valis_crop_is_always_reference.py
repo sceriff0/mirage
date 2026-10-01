@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.nfmodel import strip_comments
+
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
     "bin/register.py",
@@ -41,5 +43,7 @@ def test_no_valis_crop_other_than_reference():
 
 
 def test_the_pipeline_passes_crop_reference_explicitly():
-    text = (ROOT / "lib" / "WarpBackends.groovy").read_text()
+    # comments stripped, strings kept: the flag is a string literal, and a commented-out
+    # one must not satisfy this
+    text = strip_comments((ROOT / "lib" / "WarpBackends.groovy").read_text())
     assert '"--crop reference"' in text

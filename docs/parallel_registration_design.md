@@ -250,6 +250,13 @@ contribute `dᵢ = 0` — the interpolation stays smooth.
 
 ## 6b. The SOLVE stage (added 2026-09-12)
 
+> **Historical.** This section describes the `robust`/`legacy` solvers of 2026-09-12. STARE v2
+> (2026-09-27) replaced them with a single `dctpls` solve on the vector lattice (robust affine +
+> robust DCT-PLS), and retired `reg_tiled_solver`, `reg_tiled_gate_tre`, `reg_tiled_max_error`
+> and `reg_tiled_upsample`. The current SOLVE is documented in the STARE repository
+> ([sceriff0/stare](https://github.com/sceriff0/stare)). Kept as the record of what the earlier
+> arms ran.
+
 > **Superseded 2026-09-27 (STARE v2).** Everything in this section up to "Since 2026-09-27"
 > describes solvers that were **removed**: the three gates, `robust` and `legacy`, and the
 > `reg_tiled_solver` / `reg_tiled_gate_tre` / `reg_tiled_max_error` parameters no longer exist.

@@ -995,10 +995,10 @@
         </table>
         <h4>Tuning notes</h4>
         <table class="pr">
-          <tr><td class="k">coarse slow / OOMing?</td><td class="d" colspan="2"><b>Lower</b> <code>coarse_max_dim</code> — DISK activation memory scales with thumbnail <b>area</b>, so this is the memory knob, not just the time knob.</td></tr>
+          <tr><td class="k">coarse slow / OOMing?</td><td class="d" colspan="2"><b>Lower</b> <code>coarse_max_dim</code> — the NCC rotation sweep works on the thumbnail, whose cost scales with its <b>area</b>, so this is the memory knob, not just the time knob.</td></tr>
           <tr><td class="k">residual ≥ halo?</td><td class="d" colspan="2"><b>Raise</b> <code>halo</code> (costs memory per tile) <i>or</i> <b>raise</b> <code>coarse_max_dim</code> (costs COARSE time).</td></tr>
           <tr><td class="k">mesh too coarse?</td><td class="d" colspan="2"><b>Lower</b> <code>tile</code> — more control points, more tasks, same memory each.</td></tr>
-          <tr><td class="k">mesh is null?</td><td class="d" colspan="2">Every tile scored under <code>gate_tre</code>: the slide genuinely needed no deformation. Lower the gate only if you trust sub-pixel measurements on your tissue.</td></tr>
+          <tr><td class="k">mesh is null?</td><td class="d" colspan="2">Every measured displacement was zero after the rigid anchor, so no mesh was emitted (a mesh is written only for a non-zero field): the slide genuinely needed no deformation.</td></tr>
         </table>
       </div>
     </div>
