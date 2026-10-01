@@ -1,6 +1,6 @@
 """Shim: ``tre_report`` now lives in the ``stare`` package as ``stare.tre_report``.
 
-STARE's source of truth is ``packages/stare`` (``pip install -e packages/stare``).
+STARE's source of truth is github.com/sceriff0/stare (a pinned release, requirements/stare.txt).
 This file exists so the pipeline's flat import convention
 (``from tre_report import ...`` after a ``sys.path.insert(0, .../bin/utils)``) keeps
 resolving. It replaces itself in ``sys.modules`` with the package module rather

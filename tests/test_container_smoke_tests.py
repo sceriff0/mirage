@@ -71,6 +71,7 @@ IN_IMAGE_PATH = "/usr/local/bin/mirage-smoke.sh"
 # transitive install -- an install nothing in the Dockerfile names is invisible to
 # test_container_harmonisation.py too.
 IMPORT_TO_DISTRIBUTION = {
+    "stare": "stare-registration",  # github.com/sceriff0/stare, pinned in requirements/stare.txt
     "skimage": "scikit-image",
     "sklearn": "scikit-learn",
     "cv2": "opencv-python",
@@ -99,12 +100,14 @@ LOCALLY_COPIED_MODULES = {
 # script imports -- repository code the Dockerfile COPYs as a directory and pip-installs
 # from that path, so `declared_distributions` (which reads requirement tokens and skips
 # path installs) cannot see it either. containers/stare is the case: `stare` is the STARE
-# method itself (packages/stare), which bin/tiled_*.py shim over.
+# method itself (github.com/sceriff0/stare), which bin/tiled_*.py shim over.
 # `test_locally_installed_packages_are_actually_installed_by_name` keeps an entry honest
 # the same way LOCALLY_COPIED_MODULES' meta-test does: the Dockerfile must literally COPY
 # that directory AND pip-install the destination, and smoke.sh must actually import it.
-LOCALLY_INSTALLED_PACKAGES = {
-    "stare": {"stare": "packages/stare"},
+LOCALLY_INSTALLED_PACKAGES: dict[str, dict[str, str]] = {
+    # empty since 2026-10-01: `stare` is a pinned requirement (requirements/stare.txt,
+    # `stare-registration @ <release URL>`), seen by declared_distributions like any other
+    # pin rather than exempted as a COPY'd repository directory.
 }
 
 
@@ -248,6 +251,11 @@ def declared_distributions(name: str) -> set[str]:
         for line in _strip_hash_comments(path.read_text()).splitlines():
             token = line.split("#")[0].strip()
             if not token or token.startswith("-"):
+                continue
+            if re.match(r"^[A-Za-z0-9._-]+\s*@\s*\S", token):
+                # PEP 508 direct reference (`name @ url`): the name is the distribution;
+                # the URL is not a second one (its last segment read as `v1.0.0.tar.gz`).
+                declared.add(token.split("@", 1)[0].strip())
                 continue
             declared |= _tokens_from_pip_line(token)
 

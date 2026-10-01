@@ -12,8 +12,9 @@ pipeline's Python stack is installed. Pinned here:
     solve, and bind the data filesystems Nextflow's autoMounts would have bound;
   * sif_or_docker prefers Nextflow's cached image over a fresh pull;
   * each step in run_ashlar_arm.sh uses the prefix that matches its image;
-  * the repo and packages/stare/src are on PYTHONPATH inside the containers, because
-    the bin/utils shims import `stare` and the ASHLAR image does not install it.
+  * the repo and the PINNED STARE release (requirements/stare.txt's URL, downloaded once) are
+    on PYTHONPATH inside the containers, because the solve imports stare.manifest and the
+    ASHLAR image does not install it; nothing of STARE is read from the checkout.
 """
 
 from __future__ import annotations
@@ -117,7 +118,8 @@ def test_each_step_uses_the_prefix_of_its_image():
 def test_the_repo_and_the_stare_package_are_on_the_path_inside_the_containers():
     code = _code(BENCH / "run_ashlar_arm.sh")
     m = re.search(r'^STEP_PYTHONPATH="([^"]+)"$', code, re.M)
-    assert m and m.group(1) == "$REPO:$REPO/packages/stare/src", m and m.group(1)
+    assert m and m.group(1) == "$REPO:$STARE_SRC", m and m.group(1)
+    assert "requirements/stare.txt" in code and "packages/stare" not in code
     assert 'export PYTHONPATH="$STEP_PYTHONPATH' in code
     assert 'SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH"' in code
     assert 'APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"' in code

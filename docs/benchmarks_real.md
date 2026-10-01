@@ -141,7 +141,7 @@ Nextflow's singularity cache when the pipeline already pulled it:
 | registration QC composite | `bolt3x/mirage-regqc:1.0.0` | `REGQC_EXEC` |
 | alignment solve | `labsyspharm/ashlar:1.20.0` | `ASHLAR_EXEC` |
 
-The repo and `packages/stare/src` are put on `PYTHONPATH` inside every container, because
+The repo and the pinned STARE release (downloaded once from github.com/sceriff0/stare, the URL in `requirements/stare.txt`) are put on `PYTHONPATH` inside every container, because
 the `bin/utils` shims import `stare` and the ASHLAR image does not install it. A finished
 ASHLAR arm leaves `<arm>/.external_done`, so a relaunch reports it DONE instead of redoing
 it; `ARMS_REPLACE=1` moves the arm, marker included, aside. Its steps share the head job's

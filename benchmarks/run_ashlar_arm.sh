@@ -78,10 +78,30 @@ SEG_QC="${ASHLAR_SEG_QC:-1}"
 REG_QC="${ASHLAR_REG_QC:-1}"
 PIXEL_SIZE_OVERRIDE="${ASHLAR_PIXEL_SIZE_UM:-}"
 # The steps run `python3 -m benchmarks.ashlar.*` and bin/ scripts whose bin/utils shims import
-# the `stare` package (packages/stare), which the ASHLAR image does not install. Put the repo
-# and the package source on the path, and hand the same value into the containers:
-# Singularity and Apptainer set SINGULARITYENV_X / APPTAINERENV_X as X inside.
-STEP_PYTHONPATH="$REPO:$REPO/packages/stare/src"
+# the `stare` package. The retile, the stitch and the seg QC run in the STARE image, which
+# installs it; the SOLVE needs the `ashlar` package and therefore runs in ASHLAR's image,
+# which does not -- and the solve imports stare.manifest (two numpy-only functions). So the
+# PINNED STARE release (the one URL in requirements/stare.txt, the version the STARE image
+# installs) is downloaded once from GitHub into $ROOT/.cache/ and put on the path. Nothing
+# is read from the checkout. Singularity and Apptainer set SINGULARITYENV_X /
+# APPTAINERENV_X as X inside, so the same value reaches every container.
+STARE_URL=$(grep -oE 'https://github\.com/sceriff0/stare/archive/refs/tags/[^[:space:]]+\.tar\.gz' \
+  "$REPO/requirements/stare.txt" | head -1)
+[[ -n "$STARE_URL" ]] || { echo "no STARE release URL in $REPO/requirements/stare.txt" >&2; exit 1; }
+STARE_SRC="$ROOT/.cache/stare-$(basename "$STARE_URL" .tar.gz)/src"
+if [[ ! -f "$STARE_SRC/stare/manifest.py" ]]; then
+  _tmp=$(mktemp -d "$ROOT/.cache.XXXXXX" 2>/dev/null || { mkdir -p "$ROOT/.cache" && mktemp -d "$ROOT/.cache/dl.XXXXXX"; })
+  if curl -fsSL "$STARE_URL" | tar -xz -C "$_tmp" --strip-components=1; then
+    mkdir -p "$(dirname "$STARE_SRC")"
+    # atomic: concurrent ASHLAR arms race to create it; the loser keeps the winner's copy
+    # (its mv fails because the target exists, which is the expected outcome, and the
+    # manifest.py check below is what decides success)
+    if ! mv -n "$_tmp/src" "$STARE_SRC" 2>/dev/null; then :; fi
+  fi
+  rm -rf "$_tmp"
+  [[ -f "$STARE_SRC/stare/manifest.py" ]] || { echo "could not fetch STARE from $STARE_URL" >&2; exit 1; }
+fi
+STEP_PYTHONPATH="$REPO:$STARE_SRC"
 export PYTHONPATH="$STEP_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 export SINGULARITYENV_PYTHONPATH="$STEP_PYTHONPATH" APPTAINERENV_PYTHONPATH="$STEP_PYTHONPATH"
 

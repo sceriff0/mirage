@@ -203,6 +203,10 @@ def _unimported(container):
         for name in harmonisation._third_party_imports(script):
             reached.add(harmonisation._IMPORT_TO_DIST.get(name, name).lower())
             reached.add(name.lower())
+        # our own pinned packages (stare): the walker follows them rather than reporting
+        # them as third-party, so their distribution is reached through the first-party map
+        for name in harmonisation._first_party_packages_reached(script):
+            reached.add(harmonisation.FIRST_PARTY_PACKAGES[name].lower())
     for name in harmonisation.REQUIRED_RUNTIME_IMPORTS.get(container, {}):
         reached.add(harmonisation._IMPORT_TO_DIST.get(name, name).lower())
         reached.add(name.lower())
