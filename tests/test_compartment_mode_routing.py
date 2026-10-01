@@ -362,7 +362,9 @@ ALLOWED_LINES = {
         # 1232 -> 1282 on dev (2026-09-30): the STARE port lands on dev's modules.config,
         # which also carries add_cycle's and CELL_QC/NUCLEAR_RETENTION's blocks above it.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1282
-        1282: (
+        # 1282 -> 1273 (2026-10-01): the ten `overwrite: true` lines left the publishDir
+        # rules above this one (tests/test_publish_never_overwrites_on_resume.py).
+        1273: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."
