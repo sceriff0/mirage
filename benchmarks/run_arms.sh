@@ -83,6 +83,13 @@ col_index() {
 # the same contract run_sweep.sh relies on. benchmarks/tests/test_build_arm_plan.py
 # asserts it, because a comma sneaking into a value would shift every later column
 # on that row and silently launch the wrong configuration.
+# plan_col_of <run_id> <column>: one column of another row of the plan.
+plan_col_of() {
+  local c; c=$(( $(col_index "$2") + 1 )); (( c > 0 )) || { echo ""; return; }
+  tail -n +2 "$PLAN" | tr -d '\r' | awk -F, -v id="$(( $(col_index run_id) + 1 ))" \
+    -v want="$1" -v c="$c" '$id == want { print $c; exit }'
+}
+
 col_val() {
   local name="$1"; shift
   local idx; idx=$(col_index "$name")
@@ -505,9 +512,30 @@ launch_row() {
     # provider arm already segmented from the same native slides, instead of re-segmenting.
     local nuclei_from; nuclei_from=$(col_val seg_qc_nuclei_from "${vals[@]}")
     if [[ -n "$nuclei_from" ]]; then
+      # The provider must have FINISHED its latest attempt (a failed or partial re-run would
+      # leave a mix of old and new geojsons under the same names) and with THIS row's
+      # segmenter (its params file says which) -- never "some geojsons exist".
+      local p_dir p_hist p_status p_seg want_seg
+      p_dir="$(plan_col_of "$nuclei_from" resume_run)"; p_dir="${p_dir:-$nuclei_from}"
+      p_hist="$ROOT/.launch/$p_dir/.nextflow/history"
+      p_status=$( [[ -f "$p_hist" ]] && awk -F'\t' -v n="arms-$nuclei_from" \
+        '$3 == n || index($3, n "-r") == 1 { st = $4 } END { print st }' "$p_hist" )
+      p_seg=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("seg_method",""))' \
+        "$ROOT/.launch/$p_dir/params.$nuclei_from.json" 2>/dev/null)
+      want_seg=$(col_val seg_method "${vals[@]}")
+      if [[ "$p_status" != "OK" ]]; then
+        echo "[$run_id] SKIP: its QC nuclei come from '$nuclei_from', whose last attempt is" \
+             "'${p_status:-never launched}', not OK -- its geojsons may be stale or partial" >&2
+        return 1
+      fi
+      if [[ "$p_seg" != "$want_seg" ]]; then
+        echo "[$run_id] SKIP: '$nuclei_from' segmented with '${p_seg:-unknown}', this row scores" \
+             "'$want_seg' nuclei -- re-run the provider (ARMS_RERUN) before importing" >&2
+        return 1
+      fi
       if ! compgen -G "$ROOT/$nuclei_from/*/qc/registration/geojson/*.geojson" >/dev/null; then
         echo "[$run_id] SKIP: its QC nuclei come from '$nuclei_from', which has published none" \
-             "yet ($ROOT/$nuclei_from/<pid>/qc/registration/geojson/) -- it did not complete" >&2
+             "($ROOT/$nuclei_from/<pid>/qc/registration/geojson/)" >&2
         return 1
       fi
       PAIRS+=("seg_qc_nuclei_dir=$ROOT/$nuclei_from")  # derived, not a plan column (the plan guard reads add_param names)
@@ -516,7 +544,13 @@ launch_row() {
     # which would leave a completed base arm with nothing for its crosses to -resume from
     # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
     # published artifact live under --outdir, so nothing the analysis reads is lost.
-    PAIRS+=("cleanup_work=false")      # a literal, not a plan column (the plan guard reads add_param names)
+    PAIRS+=("cleanup_work=false")
+    # A QC CROSS publishes only what it re-measures: its registration is its base's, cached,
+    # and at cleanup_level=none every cross would copy every registered whole-slide image
+    # into its own tree again. At 'final' the QC JSONs (ungated) still publish; nothing
+    # reads a cross's registered/ or checkpoint CSVs. Hash-neutral for the expensive tasks
+    # (only CHECKPOINT_WRITER reads cleanup_level).
+    if [[ "$kind" == "registration_qc" ]]; then PAIRS+=("cleanup_level=final"); fi      # a literal, not a plan column (the plan guard reads add_param names)
     # THE THREE reg_ashlar_* FLAGS ARE GONE. ashlar stopped being a pipeline backend at
     # :fire: 6a54479, so nextflow.config declares none of them and the schema would reject
     # all three. The external ashlar baseline is an arm_kind='external' row instead, and

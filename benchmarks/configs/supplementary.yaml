@@ -77,7 +77,7 @@ S6:
 # ---- S3a: per-round DAPI retention (quantification/<pid>_round_qc.csv) ---------------
 S3:
   round_order: []                 # AUTHORS: the acquisition order; empty = as written
-  from_arm: null                  # a full-pipeline arm (a segmentation arm); null = the first
+  from_arm: seg_stardist          # the baseline segmenter's full-pipeline arm (null = the first)
 
 # ---- gallery: the image set for EVERY case, per arm / backend / channel ----------------
 # Drawn from the arms on disk (no pipeline runs). Every registration method's high arm on

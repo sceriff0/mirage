@@ -296,3 +296,64 @@ def test_importing_rows_get_the_provider_nuclei_and_run_after_it(tmp_path):
             assert pos[src] < pos[row["run_id"]], (row["run_id"], src, order)
         elif row["arm_kind"] in ("registration", "registration_qc"):
             assert "seg_qc_nuclei_dir" not in params, row["run_id"]
+        # a QC cross publishes only its QC (its registration is its base's, cached)
+        if row["arm_kind"] == "registration_qc":
+            assert params.get("cleanup_level") == "final", row["run_id"]
+        else:
+            assert params.get("cleanup_level", "none") == "none", row["run_id"]
+
+
+def test_an_importer_refuses_a_provider_that_segmented_with_another_method(tmp_path):
+    """Audit 2026-10-01 (C1): the provider's geojsons exist, but from another segmenter.
+    An importing row checks the provider's own params and SKIPs instead of importing."""
+    cfg = _launch_cfg()
+    cfg["registration_arms"]["valis"]["memory_mode"] = ["low", "high"]
+    cfg["registration_arms"]["valis"]["reg_micro_reg"] = [2]
+    cfg["registration_arms"]["tiled"]["reg_tiled_mode"] = ["low"]
+    cfg["qc_nuclei_reuse"] = {"enabled": True, "provider": "valis_high_micro2"}
+    plan = build_arm_plan(cfg)
+    root = tmp_path / "arm_results"
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,is_reference,channels\nP1,/x/a.tif,true,DAPI\n"
+    )
+    _fake_nextflow(tmp_path / "bin", tmp_path / "launches.log")
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        ARMS_CONCURRENCY="2",
+    )
+    for k in ("ARMS_REPLACE", "ARMS_RESUME"):
+        env.pop(k, None)
+
+    def run(rows):
+        p = tmp_path / "plan.csv"
+        p.write_text(_plan_csv(rows))
+        return subprocess.run(
+            ["bash", str(BENCH / "run_arms.sh"), str(p), str(sheet), str(root)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+
+    first = [
+        r for r in plan if r["run_id"] in ("preprocess_shared", "valis_high_micro2")
+    ]
+    assert run(first).returncode == 0
+    pj = root / ".launch" / "valis_high_micro2" / "params.valis_high_micro2.json"
+    d = json.loads(pj.read_text())
+    d["seg_method"] = "instantseg"  # the provider ran with ANOTHER segmenter
+    pj.write_text(json.dumps(d))
+    r = run([x for x in plan if x["arm_kind"] in ("preprocess", "registration")])
+    importers = [
+        x["run_id"]
+        for x in plan
+        if x["arm_kind"] == "registration" and x["seg_qc_nuclei_from"]
+    ]
+    assert importers
+    for rid in importers:
+        assert (
+            f"[{rid}] SKIP: 'valis_high_micro2' segmented with 'instantseg'" in r.stderr
+        ), r.stderr[-2000:]
+        assert not (root / ".launch" / rid / f"params.{rid}.json").exists(), rid

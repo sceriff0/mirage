@@ -1,7 +1,7 @@
 """The supplementary set is drawn from one arm root, with the choices made by looking.
 
 Through the real renderers, on the mosaic tests' synthetic arms (QC composites + reg_qc=2
-scorer JSONs), laid out as a unified results root: VALIS, STARE v1, STARE and ASHLAR arms
+scorer JSONs), laid out as a unified results root: VALIS, STARE and ASHLAR arms
 side by side, told apart only by the plan's `method` column. What is pinned:
 
   * `best` is the arm with the highest median final-stage Dice, `high` the configured

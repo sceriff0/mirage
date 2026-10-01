@@ -57,7 +57,7 @@
 # $PWD, not $SLURM_SUBMIT_DIR: a batch job already starts in its submit dir, and inside
 # an interactive allocation (srun --pty) SLURM_SUBMIT_DIR is where THAT was started.
 OUT="${OUT:-$PWD}"
-SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"          # benchmarking_new_method checkout
+SRC_DIR="${SRC_DIR:-$HOME/pipelines/mirage}"          # benchmarking checkout
 RESULTS="${RESULTS:-/beegfs/scratch/ieo7660/ihc_method/benchmark/arm_results}"
 PLAN="${PLAN:-$(dirname "$RESULTS")/arm_plan.csv}"
 CONFIG="${CONFIG:-$SRC_DIR/benchmarks/configs/supplementary.yaml}"
