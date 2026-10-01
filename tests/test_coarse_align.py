@@ -6,7 +6,7 @@ frame, absorbing inter-cycle rotation/translation. The numerically load-bearing 
 residual TRE); it is tested deterministically against transforms it did not compute the same way.
 The anchor itself (``estimate_rigid``: NCC rotation sweep + ORB fallback) is exercised as a
 smoke test on a synthetic image here; its hard cases live in
-packages/stare/tests/test_coarse_anchor.py.
+tests/test_coarse_anchor.py in github.com/sceriff0/stare.
 """
 
 from __future__ import annotations

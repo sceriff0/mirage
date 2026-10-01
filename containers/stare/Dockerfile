@@ -3,7 +3,7 @@
 # STARE (Scalable Tile-parallel Alignment by Robust Estimation) is the fully
 # parallel, JVM-free registration method behind registration_method='tiled'. This image runs
 # TILED_COARSE, TILED_REG_TILE, TILED_SOLVE, TILED_STITCH and WARP_SEG_QC's tiled backend
-# (lib/WarpBackends.groovy). The method is the `stare` package (packages/stare), installed
+# (lib/WarpBackends.groovy). The method is the `stare` package (github.com/sceriff0/stare), installed
 # below; bin/tiled_*.py are shims over its stages.
 #
 # SLIM, AND THAT IS THE POINT OF A NEW IMAGE. It replaces bolt3x/mirage-tiled:1.0.0, which
@@ -45,18 +45,12 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY requirements/constraints.txt requirements/stare.txt /tmp/requirements/
 RUN pip install --no-cache-dir -r /tmp/requirements/stare.txt
 
-# THE METHOD ITSELF. STARE's source of truth is the `stare` package under packages/stare
-# (its stages, the solve, the streaming stitch); the bin/tiled_*.py scripts the modules
-# invoke are shims over it, so the image must carry it or every TILED_* task fails at
-# import. Installed AFTER the requirements with --no-deps: its pyproject dependencies are
-# all already satisfied at the constrained versions, so this step resolves nothing new (and
-# must not -- a version it pulled on its own would be a second copy of a pin). The build
-# context is the repository root, which is why `packages/stare` is COPY-able at all.
-# Guarded by tests/test_container_harmonisation.py's first-party-package check and by
-# tests/test_container_smoke_tests.py (smoke.sh imports it).
-COPY packages/stare /tmp/stare
-RUN pip install --no-cache-dir --no-deps /tmp/stare \
-    && rm -rf /tmp/stare
+# THE METHOD ITSELF comes with the requirements above: stare.txt pins `stare-registration`
+# to a release of github.com/sceriff0/stare, the method's only source since v1.0.0, so the
+# image no longer copies anything of STARE out of this repository. The bin/tiled_*.py
+# scripts the modules invoke are shims over it, so every TILED_* task fails at import
+# without it -- smoke.sh imports it. Guarded by tests/test_container_harmonisation.py and
+# tests/test_stare_image_is_slim.py.
 
 # The final verification: the same smoke.sh .github/workflows/containers.yml runs with
 # `docker run` against the built image, so one definition runs at build time and in CI.

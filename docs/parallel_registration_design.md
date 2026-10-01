@@ -5,7 +5,7 @@
 > v1.0.0 that front-end was replaced by the learned DISK + LightGlue matcher (a U-Net, ~48 GB
 > asked at the old 2048 px tier), and on 2026-09-27 THAT was replaced by an FFT NCC rotation
 > sweep at 256 px, refined at the `reg_tiled_coarse_max_dim` thumbnail, with a scikit-image ORB
-> fallback and a loud refusal (`packages/stare/src/stare/coarse_align.py`;
+> fallback and a loud refusal (`stare/coarse_align.py` in [sceriff0/stare](https://github.com/sceriff0/stare);
 > `research/stare-optimal-design-2026-09-27.md` §1). COARSE is small again: 0.25–0.43 GB peak
 > RSS for the whole stage at every tier, 2 GB requested.
 >
@@ -26,7 +26,7 @@
 > in-fill, Tikhonov smoothing, invertibility check) that replaced "lay the translations on the
 > grid and zero-fill", selectable against the byte-identical `legacy` path by
 > `reg_tiled_solver`. §3's "no global solve" and §9.1's novelty claim are corrected in place.
-> The four stages now live in `packages/stare/` (`pip install -e packages/stare`, CLI `stare`);
+> The four stages live in the `stare` package, [sceriff0/stare](https://github.com/sceriff0/stare), pinned by mirage in `requirements/stare.txt` (CLI `stare`);
 > `bin/tiled_*.py` are shims over it.
 >
 > **Added 2026-09-27 — STARE v2 replaced REG_TILE and SOLVE.** Each tile now measures a GRID
@@ -275,7 +275,7 @@ regularise → densify*. `stare.solve` now does the same, on the control grid, n
 | invertibility | STITCH inverts `F` by fixed-point iteration, which converges when the field's Lipschitz constant is < 1 (Chen et al. 2008). The Jacobian of `u` on the grid is reported (max operator norm, min `det(I + J)`); if the norm reaches 0.9 the field is scaled to it and the manifest says so | `max_lipschitz = 0.9` | Chen et al. 2008; Kuang et al. 2019 |
 
 `reg_tiled_solver = 'robust'` selects this; `'legacy'` reproduces the pre-2026-09-12
-mesh byte-for-byte (`packages/stare/tests/test_solve.py` pins it against a verbatim copy of
+mesh byte-for-byte (the STARE repository's `tests/test_solve.py` pins it against a verbatim copy of
 the old stage). The solver's name and diagnostics are recorded in the manifest and in
 `*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
 changes with the solver, the arm benchmark carries it as an axis rather than silently moving the

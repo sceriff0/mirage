@@ -36,23 +36,23 @@ from packaging.requirements import InvalidRequirement, Requirement
 
 from tests.ci_actions import strip_line_comment
 from tests.nfmodel import processes, strip_comments
-from tests.stare_shims import package_module_file
+from tests.stare_shims import PACKAGE_SRC, package_module_file
 
 REPO = Path(__file__).resolve().parent.parent
 CONTAINERS = REPO / "containers"
 
-# FIRST-PARTY PACKAGES: repository code that is pip-installed rather than staged onto
-# $PATH from bin/. `stare` (packages/stare) is the STARE registration method; the
-# bin/tiled_*.py scripts the tiled modules invoke are shims over its stages. The import
-# walker follows `from stare.x import y` INTO packages/stare/src (so the lazy torch/kornia
-# /zarr/scipy/skimage imports the tiled image's REQUIRED_RUNTIME_IMPORTS entries name are
-# still found where they now live), and never reports `stare` as a third-party
-# distribution -- what it must check instead is that an image whose scripts reach the
-# package INSTALLS it, which `test_image_whose_scripts_reach_a_first_party_package_installs_it`
-# does by reading the Dockerfile's COPY + pip install of the package directory.
-# {import name: (repo-relative source dir the Dockerfile COPYs, pip distribution name)}
+# FIRST-PARTY PACKAGES: our own packages that pipeline scripts import, installed from their
+# own repositories at a pinned release. `stare` is the STARE registration method
+# (github.com/sceriff0/stare); the bin/tiled_*.py scripts the tiled modules invoke are shims
+# over its stages. The import walker follows `from stare.x import y` INTO the INSTALLED
+# package (tests/stare_shims.PACKAGE_SRC), so the zarr/scipy/skimage imports the tiled
+# image's REQUIRED_RUNTIME_IMPORTS name are still found where they live, and never reports
+# `stare` as an unpinned third-party distribution -- what it checks instead is that an
+# image whose scripts reach the package INSTALLS it: a requirements/<file>.txt the
+# Dockerfile copies pins the distribution (requirements/stare.txt: `stare-registration @ ...`).
+# {import name: pip distribution name}
 FIRST_PARTY_PACKAGES = {
-    "stare": ("packages/stare", "stare-registration"),
+    "stare": "stare-registration",
 }
 REQUIREMENTS = REPO / "requirements"
 CONSTRAINTS = REQUIREMENTS / "constraints.txt"
@@ -504,7 +504,7 @@ def _import_names(node, local_files, local_pkgs):
     """
     if isinstance(node, ast.Import):
         # `import stare.stages.coarse` -- the dotted name, so the walker can follow it
-        # into packages/stare/src; anything else is its top-level distribution name.
+        # into the installed package; anything else is its top-level distribution name.
         return [
             a.name if package_module_file(a.name) else a.name.split(".")[0]
             for a in node.names
@@ -632,24 +632,30 @@ def _first_party_packages_reached(script):
     return reached
 
 
-def _first_party_packages_installed(container):
-    """Import names from FIRST_PARTY_PACKAGES this Dockerfile COPYs and pip-installs.
+def _pins_distribution(requirements_text, dist):
+    """True when a requirements file pins ``dist`` (``dist @ url``, ``dist==x``, ``dist>=x``)
+    on a non-comment line."""
+    pat = re.compile(rf"^\s*{re.escape(dist)}\s*(?:@|==|>=|~=|\[)", re.I)
+    return any(
+        pat.match(ln)
+        for ln in requirements_text.splitlines()
+        if not ln.lstrip().startswith("#")
+    )
 
-    Read off the comment-stripped Dockerfile: a `COPY <src dir> <dest>` of the package's
-    repository directory followed by a `pip install ... <dest>` (any flags, the same
-    continuation-joined form ``_dockerfile_pip_tokens`` parses). Both halves are
-    required; a COPY that is never installed is a stray file, not a dependency.
-    """
+
+def _first_party_packages_installed(container):
+    """Import names from FIRST_PARTY_PACKAGES this Dockerfile installs: a
+    requirements/<file>.txt it COPYs (and pip-installs with -r, like every pin file) pins
+    the package's distribution."""
     text = re.sub(r"\\\s*\n", " ", _dockerfile(container))
-    lines = [ln for ln in text.splitlines() if not ln.strip().startswith("#")]
-    body = "\n".join(lines)
+    body = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
     found = set()
-    for name, (src_dir, _dist) in FIRST_PARTY_PACKAGES.items():
-        for m in re.finditer(rf"^\s*COPY\s+{re.escape(src_dir)}/?\s+(\S+)", body, re.M):
-            dest = m.group(1).rstrip("/")
-            if re.search(
-                rf"pip3?\s+install\b[^\n&]*\s{re.escape(dest)}/?(?:\s|$)", body
-            ):
+    for req in set(re.findall(r"requirements/([A-Za-z0-9._-]+\.txt)", body)):
+        path = REQUIREMENTS / req
+        if not path.is_file():
+            continue
+        for name, dist in FIRST_PARTY_PACKAGES.items():
+            if _pins_distribution(path.read_text(), dist):
                 found.add(name)
     return found
 
@@ -669,8 +675,9 @@ def test_the_first_party_package_walker_follows_the_shim_into_the_package():
 @pytest.mark.parametrize("container", _container_dirs())
 def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     """The `stare` twin of the bioio rule: a shim that imports the package at module
-    scope fails at import in any image that did not pip-install packages/stare -- and
-    an image that installs it while none of its scripts reach it carries dead weight."""
+    scope fails at import in any image that does not pin stare-registration -- and
+    an image that installs it while none of its scripts reach it carries dead weight.
+    (A shim importing `stare` fails in any image whose requirements do not pin it.)"""
     reached = set()
     for script in _module_container_and_scripts().get(container, set()):
         reached |= _first_party_packages_reached(script)
@@ -678,7 +685,8 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     assert reached <= installed, (
         f"containers/{container} runs scripts that import "
         f"{sorted(reached - installed)} at module scope but its Dockerfile does not COPY "
-        "and pip-install that package directory (see FIRST_PARTY_PACKAGES)."
+        "and pip-install it (pin its distribution in a requirements file it COPYs; see "
+        "FIRST_PARTY_PACKAGES)."
     )
     assert installed <= reached, (
         f"containers/{container} installs first-party package(s) "
@@ -688,11 +696,17 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
 
 def test_the_first_party_install_scan_reads_the_stare_dockerfile():
     """Non-vacuity: the scan must find the one install that exists, and must NOT be
-    satisfied by a COPY alone (a probe Dockerfile with the COPY but no pip line)."""
+    satisfied by a commented-out or merely mentioned pin."""
     assert _first_party_packages_installed("stare") == {"stare"}
-    probe = "COPY packages/stare /tmp/stare\nRUN echo no install\n"
-    text = re.sub(r"\\\s*\n", " ", probe)
-    assert not re.search(r"pip3?\s+install\b[^\n&]*\s/tmp/stare(?:\s|$)", text)
+    assert _pins_distribution(
+        "stare-registration @ https://x/v1.tar.gz\n", "stare-registration"
+    )
+    assert not _pins_distribution(
+        "# stare-registration @ https://x\n", "stare-registration"
+    )
+    assert not _pins_distribution(
+        "numpy==1.26.4  # needed by stare-registration\n", "stare-registration"
+    )
 
 
 def test_walker_ignores_imports_nested_in_function_bodies(tmp_path):
@@ -1043,13 +1057,14 @@ def test_tiled_coarse_imports_no_learned_stack():
     tie the tiled image back to ~1 GB of wheels it is about to drop.
     """
     offenders = []
-    for rel in (
-        "packages/stare/src/stare/coarse_align.py",
-        "packages/stare/src/stare/stages/coarse.py",
-        "bin/utils/coarse_align.py",
-        "bin/tiled_coarse.py",
+    for rel, path in (
+        ("stare/coarse_align.py", PACKAGE_SRC / "stare" / "coarse_align.py"),
+        ("stare/stages/coarse.py", PACKAGE_SRC / "stare" / "stages" / "coarse.py"),
+        ("bin/utils/coarse_align.py", REPO / "bin/utils/coarse_align.py"),
+        ("bin/tiled_coarse.py", REPO / "bin/tiled_coarse.py"),
     ):
-        for fn, lineno in _torch_kornia_import_sites(REPO / rel):
+        assert path.is_file(), path
+        for fn, lineno in _torch_kornia_import_sites(path):
             offenders.append(f"{rel}:{lineno} (in {fn or 'module scope'})")
     assert not offenders, (
         f"torch/kornia is imported by a COARSE file again: {offenders}. The anchor is "

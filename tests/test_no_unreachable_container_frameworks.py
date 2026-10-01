@@ -44,7 +44,7 @@ FRAMEWORKS = {
 # or imported by first-party code.
 CODE_DIRS = (
     "bin",
-    "packages",  # packages/stare: the STARE method; bin/tiled_*.py are shims over it
+    "packages",  # first-party packages, if any (STARE moved to github.com/sceriff0/stare)
     "tests",
     "benchmarks",
     "lib",

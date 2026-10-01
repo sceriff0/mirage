@@ -29,7 +29,7 @@ PY="$(command -v python || command -v python3)"
 "$PY" -c "import numpy, scipy, skimage, tifffile, zarr, imagecodecs; \
 print('stare image OK:', numpy.__version__, scipy.__version__, skimage.__version__, tifffile.__version__, zarr.__version__, imagecodecs.__version__)"
 
-# The method itself: the `stare` package (packages/stare, pip-installed by the Dockerfile),
+# The method itself: the `stare` package (github.com/sceriff0/stare, a pinned release from requirements/stare.txt),
 # which bin/tiled_*.py shim over. A stage module that stops importing is a broken image
 # just as a missing wheel is; importing all four proves the package AND its stage graph.
 "$PY" -c "import stare, stare.stages.coarse, stare.stages.reg_tile, stare.stages.solve, stare.stages.stitch; \

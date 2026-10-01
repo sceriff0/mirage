@@ -1,6 +1,6 @@
 """The `stare` package's copies of pipeline helpers cannot drift from the originals.
 
-``packages/stare`` must import nothing from the pipeline (it is installed on its own,
+The STARE package (github.com/sceriff0/stare) must import nothing from the pipeline (it is installed on its own,
 in containers/tiled and, eventually, from its own repository), so it carries COPIES of
 the few helpers its stages reached into ``bin/utils`` for:
 
@@ -40,9 +40,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.stare_shims import PACKAGE_SRC
+
 REPO = Path(__file__).resolve().parent.parent
 BIN_UTILS = REPO / "bin" / "utils"
-STARE = REPO / "packages" / "stare" / "src" / "stare"
+STARE = PACKAGE_SRC / "stare"  # the INSTALLED release (requirements/stare.txt)
 
 sys.path.insert(0, str(REPO / "bin"))
 sys.path.insert(0, str(BIN_UTILS))
@@ -140,7 +142,7 @@ def test_slide_io_is_the_whole_tiled_io_file():
     a = (STARE / "slide_io.py").read_text()
     b = (BIN_UTILS / "tiled_io.py").read_text()
     assert a == b, (
-        "packages/stare/src/stare/slide_io.py and bin/utils/tiled_io.py differ. They are "
+        "stare/slide_io.py (the installed STARE release) and bin/utils/tiled_io.py differ. They are "
         "one module kept in two places (the package must not import the pipeline, and the "
         "pipeline's other images must not need the package); copy the change to the other."
     )

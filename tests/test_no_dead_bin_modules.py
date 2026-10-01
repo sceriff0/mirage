@@ -104,7 +104,7 @@ ALLOWLIST: dict[str, dict[str, str]] = {
             "tests/test_reg_benchmark.py import it. It is a deliberate "
             "test/benchmark oracle for the STARE registration path, documented "
             "at CHANGELOG.md:487-488 -- not dead code, just never called from "
-            "a production script. (Since the move into packages/stare the bin/utils "
+            "a production script. (Since STARE became a package the bin/utils "
             "file is a shim over stare.pipeline and is exempt via _candidate_modules; "
             "this entry stays so test_allowlisted_tiled_pipeline_has_no_production_"
             "importer keeps the oracle's test-only status checked.)"
@@ -133,7 +133,7 @@ def _candidate_modules() -> list[Path]:
 
     A SHIM (`tests/stare_shims.py`: a docstring, `from stare... import x as _impl`,
     `sys.modules[__name__] = _impl`, nothing else) is not a module with a body that could
-    be dead code -- it is a compatibility name over `packages/stare`, kept so the flat
+    be dead code -- it is a compatibility name over the `stare` package, kept so the flat
     `from mesh_field import MeshField` convention the tests, bin/warp_seg_qc.py and
     benchmarks/anhir/warp.py use keeps resolving. The production-importer rule below
     would flag six of them (their former production importers moved into the package
