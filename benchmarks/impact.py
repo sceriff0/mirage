@@ -40,7 +40,7 @@ Predicate = Callable[[Row], bool]
 
 # The columns through which one row depends on another. Each names the ARM (and,
 # on every arm-plan row, arm == run_id) whose output the row consumes.
-DEPENDENCY_COLUMNS = ("resume_run", "from_arm", "ext_from_arm")
+DEPENDENCY_COLUMNS = ("resume_run", "from_arm", "ext_from_arm", "seg_qc_nuclei_from")
 
 
 def _s(row: Row, key: str) -> str:

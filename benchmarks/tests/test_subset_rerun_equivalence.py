@@ -692,6 +692,9 @@ def _launch_cfg():
     cfg["segmentation_arms"]["seg_method"] = []
     cfg["qc_segmenter_cross"]["cross"] = "all"
     cfg["qc_pairing_cross"]["cross"] = "all"
+    # Replace/subset mechanics are tested without QC nuclei reuse (whose upstream edge
+    # would pull the provider into every selection); reuse has its own tests.
+    cfg["qc_nuclei_reuse"]["enabled"] = False
     return cfg
 
 

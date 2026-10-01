@@ -501,6 +501,17 @@ launch_row() {
     add_param reg_tiled_mode       "$(col_val reg_tiled_mode "${vals[@]}")"
     add_param reg_tiled_stride     "$(col_val reg_tiled_stride "${vals[@]}")"
     add_param seg_qc_pairing       "$(col_val seg_qc_pairing "${vals[@]}")"
+    # QC nuclei REUSE (arms.yaml qc_nuclei_reuse): this row warps and scores the nuclei the
+    # provider arm already segmented from the same native slides, instead of re-segmenting.
+    local nuclei_from; nuclei_from=$(col_val seg_qc_nuclei_from "${vals[@]}")
+    if [[ -n "$nuclei_from" ]]; then
+      if ! compgen -G "$ROOT/$nuclei_from/*/qc/registration/geojson/*.geojson" >/dev/null; then
+        echo "[$run_id] SKIP: its QC nuclei come from '$nuclei_from', which has published none" \
+             "yet ($ROOT/$nuclei_from/<pid>/qc/registration/geojson/) -- it did not complete" >&2
+        return 1
+      fi
+      PAIRS+=("seg_qc_nuclei_dir=$ROOT/$nuclei_from")  # derived, not a plan column (the plan guard reads add_param names)
+    fi
     # KEEP work/. The pipeline's cleanup_work default deletes it after a successful run,
     # which would leave a completed base arm with nothing for its crosses to -resume from
     # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
@@ -541,17 +552,31 @@ launch_row() {
 # start the moment they finish instead of waiting behind every other registration arm.
 REF_IDS=" $(tail -n +2 "$PLAN" | tr -d '\r' | awk -F, \
   -v k="$(( $(col_index arm_kind) + 1 ))" -v f="$(( $(col_index from_arm) + 1 ))" \
-  -v e="$(( $(col_index ext_from_arm) + 1 ))" \
+  -v e="$(( $(col_index ext_from_arm) + 1 ))" -v q="$(( $(col_index seg_qc_nuclei_from) + 1 ))" \
   '($k == "segmentation" && f > 0 && $f != "") { print $f }
-   ($k == "external" && e > 0 && $e != "") { print $e }' | sort -u | tr '\n' ' ') "
+   ($k == "external" && e > 0 && $e != "") { print $e }
+   ($k == "registration" && q > 0 && $q != "") { print $q }' | sort -u | tr '\n' ' ') "
+
+# QC PROVIDER BASES: the base arms whose QC crosses OTHER rows import nuclei from (a
+# registration_qc row's seg_qc_nuclei_from names a cross; its resume_run is the base).
+# Their whole cross chain runs before every other chain, so the nuclei exist when read.
+QC_PROVIDER_BASES=" $(tail -n +2 "$PLAN" | tr -d '\r' | awk -F, \
+  -v k="$(( $(col_index arm_kind) + 1 ))" -v q="$(( $(col_index seg_qc_nuclei_from) + 1 ))" \
+  -v id="$(( $(col_index run_id) + 1 ))" -v rr="$(( $(col_index resume_run) + 1 ))" \
+  'q > 0 { src[$q] = 1; kind[$id] = $k; base[$id] = $rr }
+   END { for (s in src) if (kind[s] == "registration_qc" && base[s] != "") print base[s] }' \
+  | sort -u | tr '\n' ' ') "
 
 # plan_rows [tiered]: the plan's data rows; `tiered` puts high-tier arms first, then
 # medium, then low (the tier is in every tiered arm's name: valis_<tier>_..., tiled_<tier>_...),
 # so the supplementary's high-tier figures are drawable before the rest of the grid ends.
 plan_rows() {
   if [[ "${1:-}" == "tiered" ]]; then
-    tail -n +2 "$PLAN" | tr -d '\r' | awk '{
-      t = ($0 ~ /(^|,)(valis|tiled)_high_/) ? 0 : ($0 ~ /(^|,)(valis|tiled)_medium_/) ? 1 : 2
+    # The tier is read from the run_id COLUMN only: other columns name arms too (from_arm,
+    # seg_qc_nuclei_from=valis_high_micro2 on every importing row), so matching the whole
+    # line made every row look high-tier.
+    tail -n +2 "$PLAN" | tr -d '\r' | awk -F, -v id="$(( $(col_index run_id) + 1 ))" '{
+      t = ($id ~ /^(valis|tiled)_high_/) ? 0 : ($id ~ /^(valis|tiled)_medium_/) ? 1 : 2
       print t "\t" $0 }' | sort -s -t$'\t' -k1,1n | cut -f2-
   else
     tail -n +2 "$PLAN" | tr -d '\r'
@@ -562,7 +587,7 @@ plan_rows() {
 # `ref` / `rest` split registration into the reference arms and everything else.
 run_pass() {
   local want_kind="$1" part="${2:-}" rid
-  if [[ "$want_kind" == "registration_qc" ]]; then run_qc_pass; return; fi
+  if [[ "$want_kind" == "registration_qc" ]]; then run_qc_pass "$part"; return; fi
   while IFS=',' read -r -a vals; do
     [[ "$(col_val arm_kind "${vals[@]}")" == "$want_kind" ]] || continue
     rid=$(col_val run_id "${vals[@]}")
@@ -585,6 +610,7 @@ run_pass() {
 # reported and the chain continues: the next cross arm resumes the same base session
 # and is independent of the one that failed.
 run_qc_pass() {
+  local part="${1:-}"             # ref = the QC provider bases' chains only; rest = the others
   local kind_col resume_col sorted
   kind_col=$(( $(col_index arm_kind) + 1 ))
   resume_col=$(( $(col_index resume_run) + 1 ))
@@ -595,7 +621,8 @@ run_qc_pass() {
   mkdir -p "$ROOT/.launch"
   sorted="$ROOT/.launch/_registration_qc.rows"
   tail -n +2 "$PLAN" | tr -d '\r' \
-    | awk -F, -v k="$kind_col" '$k == "registration_qc"' \
+    | awk -F, -v k="$kind_col" -v r="$resume_col" -v part="$part" -v provs="$QC_PROVIDER_BASES" \
+        '$k == "registration_qc" && (part == "" || (part == "ref") == (index(provs, " " $r " ") > 0))' \
     | sort -t, -k"$resume_col,$resume_col" -s > "$sorted"
 
   local base="" line b
@@ -653,7 +680,9 @@ barrier() {
 #   4 compute                  timed ALONE: a cost measured under self-inflicted contention
 #                              is not the pipeline's cost
 #   5 registration_qc          the QC instrument crosses: they feed no supplementary
-#                              figure, so they go last; each resumes its (finished) base
+#                              figure, so they go last; each resumes its (finished) base.
+#                              The QC PROVIDER's crosses first (qc_nuclei_reuse: they
+#                              segment the nuclei every other cross imports), then the rest
 echo "=== wave 1: preprocess ==="
 run_pass preprocess; barrier
 echo "=== wave 2: reference registration (${REF_IDS# }) ==="
@@ -666,7 +695,8 @@ barrier
 echo "=== wave 4: compute ==="
 run_pass compute; barrier
 echo "=== wave 5: registration_qc ==="
-run_pass registration_qc; barrier
+run_pass registration_qc ref; barrier    # the provider's crosses: the nuclei others import
+run_pass registration_qc rest; barrier
 
 echo
 echo "All arms finished. Results under $ROOT"

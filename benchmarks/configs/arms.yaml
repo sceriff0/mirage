@@ -183,6 +183,17 @@ qc_segmenter_cross:
   # method here if it cannot run at your site; instantseg is the one that runs on
   # a fresh clone, and it is the pipeline default.
 
+# QC NUCLEI REUSE (2026-10-01). The QC segments the NATIVE slides, shared by every arm, so
+# with one segmenter the nuclei are the same in every arm. The provider segments once per
+# segmenter (its base run: the baseline segmenter; its segmenter crosses: the others) and
+# every other registration arm and cross imports them (--seg_qc_nuclei_dir) and only warps
+# and scores: 3 whole-slide segmentations per slide instead of 54. run_arms.sh runs the
+# provider and its crosses before anything that imports from them. compute_all still
+# segments (it times the pipeline). build_arm_plan.py: _apply_qc_nuclei_reuse.
+qc_nuclei_reuse:
+  enabled: true
+  provider: valis_high_micro2
+
 qc_pairing_cross:
   cross: all                               # reference | all | none
   reference_arm: valis_high_micro2

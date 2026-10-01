@@ -1229,7 +1229,8 @@ def test_qc_pass_runs_last_after_everything_a_figure_needs():
         < i("run_pass registration rest")
         < i("run_pass external")
         < i("run_pass compute")
-        < i("run_pass registration_qc")
+        < i("run_pass registration_qc ref")
+        < i("run_pass registration_qc rest")
     ), calls
     script = (BENCH / "run_arms.sh").read_text()
     for flag in ("seg_qc_pairing", "reg_tiled_stride"):
@@ -1270,7 +1271,7 @@ fi
 # Hold the session for long enough that two launches of one base issued within the same
 # second MUST overlap; a shorter hold let a sabotaged (unchained) launcher pass by luck.
 sleep 2
-mkdir -p "$outdir/csv"; echo "patient_id" > "$outdir/csv/preprocessed.csv"
+mkdir -p "$outdir/csv" "$outdir/P1/qc/registration/geojson"; echo "patient_id" > "$outdir/csv/preprocessed.csv"; echo '{}' > "$outdir/P1/qc/registration/geojson/P1_ref.geojson"
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' now 1s "$name" OK - "$sid" "nextflow ${args[*]}" >> .nextflow/history
 echo "$(pwd)|$name|${resume:-}|$outdir" >> "$LOG"
 rmdir "$lock"
@@ -1430,3 +1431,29 @@ def test_run_arms_relaunch_reaches_nextflow_for_nothing_it_already_holds(tmp_pat
         )
         assert "ARMS_RESUME=1" in line and "ARMS_REPLACE=1" in line, line
         assert "rm -rf" not in line, line
+
+
+def test_qc_nuclei_reuse_assigns_one_provider_per_segmenter():
+    """Every registration arm and cross but the provider's own imports QC nuclei from the
+    provider for ITS segmenter; the provider and its crosses segment (or reuse their own
+    session); seg and compute rows import nothing."""
+    cfg = yaml.safe_load((BENCH / "configs" / "arms.yaml").read_text())
+    plan = build_arm_plan(cfg)
+    prov = cfg["qc_nuclei_reuse"]["provider"]
+    by_id = {r["run_id"]: r for r in plan}
+    p = by_id[prov]
+    for r in plan:
+        src = r["seg_qc_nuclei_from"]
+        if r["arm_kind"] not in ("registration", "registration_qc"):
+            assert src == "", r["run_id"]
+        elif r["run_id"] == prov or r["resume_run"] == prov:
+            assert src == "", f"{r['run_id']}: the provider's own rows must not import"
+        else:
+            s = by_id[src]
+            assert s["seg_method"] == r["seg_method"], (r["run_id"], src)
+            assert src == prov or s["resume_run"] == prov, (r["run_id"], src)
+            assert s["seg_qc_pairing"] == p["seg_qc_pairing"], (r["run_id"], src)
+    importing = [r for r in plan if r["seg_qc_nuclei_from"]]
+    assert len(importing) > 50, "the whole grid should import, not segment again"
+    cfg["qc_nuclei_reuse"]["enabled"] = False
+    assert not any(r["seg_qc_nuclei_from"] for r in build_arm_plan(cfg))

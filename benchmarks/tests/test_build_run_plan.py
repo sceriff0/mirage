@@ -864,6 +864,7 @@ NOT_SWEPT = {
     "dry_run": "dry_run does not execute the pipeline",
     "enable_trace": "held ON — the sweep's own measurement plumbing (size_logs feed the regression)",
     "trace_dir": "trace output path",
+    "seg_qc_nuclei_dir": "a path to another run's QC nuclei: an efficiency switch (skip re-segmenting identical slides), not a tunable -- set by the ARM launcher, never swept",
     # --- gated behind a backend/method choice: a flat OFAT run would be a no-op. ---
     # Same rule test_project_sweep_has_no_dead_axes enforces: pin the gate, cross the knob.
     "seg_pmin": "seg_method=stardist only (starDistCommonFlags) — belongs in segmentation_grid.stardist",

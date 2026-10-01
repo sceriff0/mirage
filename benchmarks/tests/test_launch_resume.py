@@ -393,4 +393,4 @@ def test_the_ashlar_pass_runs_with_registration_and_before_the_qc_crosses():
     i = calls.index
     assert i("run_pass registration ref") < i("run_pass external"), calls
     assert i("run_pass external") < i("run_pass compute"), calls
-    assert i("run_pass external") < i("run_pass registration_qc"), calls
+    assert i("run_pass external") < i("run_pass registration_qc ref"), calls

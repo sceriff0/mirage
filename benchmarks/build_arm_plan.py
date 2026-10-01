@@ -627,7 +627,57 @@ def build_arm_plan(cfg: dict) -> list[dict]:
     for r in rows:
         r["method"] = _method_of(r)
         r.update({k: "" for k in ROW_META if k != "method"})
+    _apply_qc_nuclei_reuse(rows, cfg)
     return rows
+
+
+def _apply_qc_nuclei_reuse(rows: list[dict], cfg: dict) -> None:
+    """`seg_qc_nuclei_from`: the arm whose QC nuclei a row imports (--seg_qc_nuclei_dir).
+
+    The QC segments the NATIVE slides, which every arm shares (one preprocess_shared), so
+    with one segmenter the nuclei are identical in every arm. Without this each of the
+    registration arms re-segmented every slide, and each segmenter cross again: 18 x 3
+    whole-slide segmentations per slide where 3 suffice. With it the PROVIDER segments
+    once per segmenter -- its base run for the baseline segmenter, its own segmenter
+    crosses for the others -- and every other registration arm and cross only warps and
+    scores. The provider's own crosses import nothing: they resume its session, where the
+    segmentations are cached. The compute arm imports nothing: it TIMES the pipeline.
+    """
+    spec = cfg.get("qc_nuclei_reuse") or {}
+    for r in rows:
+        r["seg_qc_nuclei_from"] = ""
+    if not spec.get("enabled"):
+        return
+    prov = spec.get("provider")
+    by_id = {r["run_id"]: r for r in rows}
+    if prov not in by_id or by_id[prov]["arm_kind"] != "registration":
+        raise ValueError(
+            f"qc_nuclei_reuse.provider={prov!r} is not a registration arm of this plan"
+        )
+    p = by_id[prov]
+    # The provider's segmenter crosses, keyed by segmenter, at the provider's pairing: the
+    # nuclei depend on the segmenter only, so the pairing-cross variants are not providers.
+    seg_src = {p["seg_method"]: prov}
+    for r in rows:
+        if (
+            r["arm_kind"] == "registration_qc"
+            and r.get("resume_run") == prov
+            and r["seg_qc_pairing"] == p["seg_qc_pairing"]
+            and r["seg_method"] != p["seg_method"]
+        ):
+            seg_src[r["seg_method"]] = r["run_id"]
+    for r in rows:
+        if r["run_id"] == prov or r.get("resume_run") == prov:
+            continue
+        if r["arm_kind"] not in ("registration", "registration_qc"):
+            continue
+        src = seg_src.get(r["seg_method"])
+        if src is None:
+            raise ValueError(
+                f"{r['run_id']}: seg_method={r['seg_method']!r} has no provider row "
+                f"(qc_nuclei_reuse needs {prov}'s cross for that segmenter)"
+            )
+        r["seg_qc_nuclei_from"] = src
 
 
 def select_methods(

@@ -10,6 +10,7 @@ The properties the single-launcher design rests on:
 from __future__ import annotations
 
 import csv
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -244,3 +245,54 @@ def test_arms_rerun_continues_a_finished_arm_from_its_own_session(launcher):
     others = [x["run_id"] for x in plan if x["run_id"] != "preprocess_shared"]
     assert all(f"[{o}] DONE" in r.stdout for o in others[:3]), r.stdout
     assert (root / "preprocess_shared").is_dir(), "a rerun must not move results aside"
+
+
+def test_importing_rows_get_the_provider_nuclei_and_run_after_it(tmp_path):
+    """qc_nuclei_reuse at launch: a row with seg_qc_nuclei_from is launched with
+    --seg_qc_nuclei_dir <root>/<provider>, and only after the provider (and, for a cross,
+    the provider's matching cross) has run."""
+    cfg = _launch_cfg()
+    cfg["registration_arms"]["valis"]["memory_mode"] = ["low", "high"]
+    cfg["registration_arms"]["valis"]["reg_micro_reg"] = [2]
+    cfg["registration_arms"]["tiled"]["reg_tiled_mode"] = ["low"]
+    cfg["qc_nuclei_reuse"] = {"enabled": True, "provider": "valis_high_micro2"}
+    plan = build_arm_plan(cfg)
+    root = tmp_path / "arm_results"
+    sheet = tmp_path / "input.csv"
+    sheet.write_text(
+        "patient_id,path_to_file,is_reference,channels\nP1,/x/a.tif,true,DAPI\n"
+    )
+    log = tmp_path / "launches.log"
+    _fake_nextflow(tmp_path / "bin", log)
+    p = tmp_path / "plan.csv"
+    p.write_text(_plan_csv(plan))
+    env = dict(
+        os.environ,
+        PATH=f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+        ARMS_CONCURRENCY="2",
+    )
+    for k in ("ARMS_REPLACE", "ARMS_RESUME"):
+        env.pop(k, None)
+    r = subprocess.run(
+        ["bash", str(BENCH / "run_arms.sh"), str(p), str(sheet), str(root)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
+    order = [
+        ln.split("|")[1].removeprefix("arms-") for ln in log.read_text().splitlines()
+    ]
+    pos = {rid: i for i, rid in enumerate(order)}
+    for row in plan:
+        src = row["seg_qc_nuclei_from"]
+        launch_dir = row["resume_run"] or row["run_id"]
+        params = json.loads(
+            (root / ".launch" / launch_dir / f"params.{row['run_id']}.json").read_text()
+        )
+        if src:
+            assert params.get("seg_qc_nuclei_dir") == str(root / src), row["run_id"]
+            assert pos[src] < pos[row["run_id"]], (row["run_id"], src, order)
+        elif row["arm_kind"] in ("registration", "registration_qc"):
+            assert "seg_qc_nuclei_dir" not in params, row["run_id"]
