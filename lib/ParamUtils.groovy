@@ -212,6 +212,26 @@ class ParamUtils {
     }
 
     /**
+     * --seg_qc_nuclei_dir: reuse another run's reg_qc=2 QC nuclei. Only meaningful at
+     * reg_qc=2 (the QC that reads them), and the directory must exist now -- a typo would
+     * otherwise surface only after registration, when SEG_QC looks for the first slide.
+     * Per-slide presence is checked in subworkflows/local/seg_qc.nf, where the slide names
+     * are known.
+     */
+    static void validateSegQcNucleiDir(Map params) {
+        def dir = params.seg_qc_nuclei_dir
+        if (!dir) return
+        if (regQcLevel(params) != 2)
+            throw new IllegalArgumentException(
+                "--seg_qc_nuclei_dir is set but reg_qc is ${regQcLevel(params)}: only reg_qc=2 " +
+                "reads QC nuclei. Unset it, or run at reg_qc=2.")
+        if (!new File(dir.toString()).isDirectory())
+            throw new IllegalArgumentException(
+                "--seg_qc_nuclei_dir '${dir}' is not a directory. It must be the --outdir of a " +
+                "run that segmented the same native slides with the same seg_method.")
+    }
+
+    /**
      * Cross-parameter rules for --cleanup_level.
      *
      * The per-value enum is the schema's job (nextflow_schema.json); this layer
