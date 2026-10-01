@@ -1457,3 +1457,46 @@ def test_qc_nuclei_reuse_assigns_one_provider_per_segmenter():
     assert len(importing) > 50, "the whole grid should import, not segment again"
     cfg["qc_nuclei_reuse"]["enabled"] = False
     assert not any(r["seg_qc_nuclei_from"] for r in build_arm_plan(cfg))
+
+
+def test_every_arm_skips_the_outputs_no_arm_consumer_reads():
+    """User ruling 2026-10-01: the preprocess / postprocessing QC thumbnails and the
+    SpatialData export are not needed for the arms. Each held a process_medium node (4 CPU,
+    200 GB) per image or per patient, and nothing under benchmarks/ reads them. CELL_QC,
+    which writes the <pid>_round_qc.csv S3 reads, is NOT behind skip_postprocessing_qc."""
+    defaults = _param_checker().extract_config_defaults(
+        (REPO_ROOT / "nextflow.config").read_text()
+    )
+    script = (BENCH / "run_arms.sh").read_text()
+    # compute_all times the WHOLE pipeline, so the pins sit inside the not-compute branch.
+    gate = 'if [[ "$kind" != "compute" ]]; then'
+    assert script.count(gate) == 1, "run_arms.sh must exempt arm_kind=compute exactly once"
+    block = script[script.index(gate) : script.index("\n    fi\n", script.index(gate))]
+    for flag in ("skip_preprocess_qc", "skip_postprocessing_qc", "skip_spatialdata_export"):
+        assert flag in defaults, flag
+        assert f'PAIRS+=("{flag}=true")' in block, f"run_arms.sh does not pin {flag} outside compute"
+        assert script.count(f'PAIRS+=("{flag}=true")') == 1, f"{flag} pinned outside the gate too"
+    post = (REPO_ROOT / "subworkflows/local/postprocess.nf").read_text()
+    gated = post[post.index("if (!params.skip_postprocessing_qc)") :]
+    assert "CELL_QC(" not in gated.split("}")[0]
+    assert post.index("CELL_QC(") < post.index("if (!params.skip_postprocessing_qc)")
+
+
+def test_segmentation_arms_switch_off_pyramid_and_geojson_benchmark_only():
+    """User ruling 2026-10-01: a segmentation arm is read for its masks and quantification
+    only (reg_zoom / reg_crop read csv/segmented.csv), so benchmarks/configs/seg_arms.config
+    switches off MERGE_AND_PYRAMID and EXPORT_GEOJSON via ext.when -- no main/dev change.
+    Stub-verified 2026-10-01: exit 0, quantification/ and <pid>_round_qc.csv still written,
+    neither process in the trace; without the file both run."""
+    cfg = (BENCH / "configs" / "seg_arms.config").read_text()
+    assert "withName: 'MERGE_AND_PYRAMID|EXPORT_GEOJSON'" in cfg
+    assert "ext.when = false" in cfg
+    # ext.when is inert unless the module consults it.
+    for mod in ("merge_and_pyramid", "export_geojson"):
+        src = (REPO_ROOT / "modules" / "local" / f"{mod}.nf").read_text()
+        assert "task.ext.when == null || task.ext.when" in src, f"{mod}.nf ignores ext.when"
+    script = (BENCH / "run_arms.sh").read_text()
+    assert ('if [[ "$kind" == "segmentation" ]]; then '
+            'arm_config="$PIPELINE_DIR/benchmarks/configs/seg_arms.config"; fi') in script
+    assert 'ARM_CONFIG="$arm_config"' in script
+    assert '${ARM_CONFIG:+-c "$ARM_CONFIG"}' in script

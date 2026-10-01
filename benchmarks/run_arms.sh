@@ -266,6 +266,7 @@ PY
     nextflow -q run "$pdir" \
       -profile "$PROFILE" \
       -c "$pdir/benchmarks/configs/benchmark.config" \
+      ${ARM_CONFIG:+-c "$ARM_CONFIG"} \
       -work-dir "$rundir/work" \
       -name "$run_name" \
       "${resume_args[@]+"${resume_args[@]}"}" \
@@ -545,6 +546,16 @@ launch_row() {
     # and an interrupted arm nothing to continue from (ARMS_RESUME=1). The trace and every
     # published artifact live under --outdir, so nothing the analysis reads is lost.
     PAIRS+=("cleanup_work=false")
+    # NOTHING UNDER benchmarks/ READS these three (user ruling 2026-10-01), and each held a
+    # process_medium node per image or per patient. compute_all keeps them: it times the
+    # whole pipeline, so it must run the whole pipeline. CELL_QC -- the <pid>_round_qc.csv S3
+    # reads -- is NOT behind skip_postprocessing_qc. Literals, not plan columns (the plan
+    # guard reads add_param names).
+    if [[ "$kind" != "compute" ]]; then
+      PAIRS+=("skip_preprocess_qc=true")
+      PAIRS+=("skip_postprocessing_qc=true")
+      PAIRS+=("skip_spatialdata_export=true")
+    fi
     # A QC CROSS publishes only what it re-measures: its registration is its base's, cached,
     # and at cleanup_level=none every cross would copy every registered whole-slide image
     # into its own tree again. At 'final' the QC JSONs (ungated) still publish; nothing
@@ -576,7 +587,12 @@ launch_row() {
       filtered_sheet "$only_patient" "$in_csv" || return 1
     fi
 
-    RESUME_RUN="$(col_val resume_run "${vals[@]}")" \
+    # A segmentation arm is read for its masks and quantification only: seg_arms.config
+    # switches off the pyramid and the GeoJSON (benchmark-only, via ext.when).
+    local arm_config=""
+    if [[ "$kind" == "segmentation" ]]; then arm_config="$PIPELINE_DIR/benchmarks/configs/seg_arms.config"; fi
+
+    ARM_CONFIG="$arm_config" RESUME_RUN="$(col_val resume_run "${vals[@]}")" \
       launch "$run_id" "$arm" "$in_csv" "$ROOT/$arm" ${PAIRS[@]+"${PAIRS[@]}"}
 }
 
