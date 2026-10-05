@@ -122,6 +122,29 @@ cases, stops a cell with no true partner pairing with whatever happens to be nea
 tunable (`params.seg_qc_match_radius_factor` / `--match-radius-factor`, or an absolute
 `--match-radius-px`).
 
+## The headline: paired after the whole transform
+
+The ladder's final-stage record is **conditional on the rigid stage**. A nucleus that rigid
+left outside the match radius is never paired, so it is missing from the final-stage Dice
+however well the non-rigid stages place it -- and two backends with different rigid stages
+are scored on different subsets of cells.
+
+`full_transform` is therefore reported next to the ladder: both polygon sets are warped
+through the **complete** transform (`micro`, or `non_rigid` when micro did not run, or
+`refined` for the manifest backends), the cells are paired **there** by the same rule
+(same `seg_qc_pairing`, same radius factor, radius sized from the cells in that frame), and
+those pairs are scored by the same per-pair scorer. It carries the same metric keys as a
+stage record, its own `matching` block (`anchor_stage` = the final stage, its own
+`pair_fraction`), and no deltas: its pairs are not the rigid stage's pairs, so a difference
+against `rigid` would not be a registration effect.
+
+**Quote `full_transform` for "how well aligned is what the run ships"; read the ladder for
+"which stage bought it".** The per-cell `*_reg_residuals.csv` holds these pairs too, so a
+residual is bounded by the match radius: **a cell the registration left far from its
+partner has no row at all**, and a failed region shows as missing rows and a low
+`full_transform.matching.pair_fraction`, not as large residuals. Read the pair fraction
+next to the Dice.
+
 ## Metrics
 
 Per stage, over the fixed pairs:
@@ -193,6 +216,11 @@ that and the QC omits the `micro` stage rather than reporting a byte-for-byte du
   },
   "delta_vs_anchor": {
     "micro": { "iou_mean": 0.36, "displacement_px_p50": -3.0 }
+  },
+  "full_transform": {
+    "stage": "micro", "n_pairs": 189877, "iou_mean": 0.79, "dice_matched": 0.88,
+    "displacement_px_p50": 1.1, "displacement_um_p50": 0.36,
+    "matching": { "method": "lsa_centroid", "anchor_stage": "micro", "n_pairs": 189877, "pair_fraction": 0.96 }
   },
   "counts": { "features_ref": 201884, "features_moving": 198110 }
 }
