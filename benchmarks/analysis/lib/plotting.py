@@ -232,9 +232,6 @@ def cost_by_tier(frame, metrics, ylabels):
             ax.set_xticks(range(len(_TIER_ORDER)))
             ax.set_xticklabels(_TIER_ORDER)
             ax.set_xlim(-0.5, len(_TIER_ORDER) - 0.5)
-            ax.set_ylim(
-                bottom=0
-            )  # a cost axis starts at zero, or tiers look further apart
             if j == 0:
                 ax.set_ylabel(lab)
         axes[0, j].set_title(_BACKEND_TITLE.get(b, b))
@@ -244,4 +241,10 @@ def cost_by_tier(frame, metrics, ylabels):
             title_fontsize=7,
         )
         axes[-1, j].set_xlabel("tier")
+    # A cost axis starts at zero, or tiers look further apart. Set ONCE PER ROW, after
+    # every backend is drawn: set_ylim turns autoscaling off, and the row shares y, so
+    # doing it inside the loop froze the axis at the first backend's range and every
+    # larger value of a later backend was drawn outside the panel.
+    for i in range(len(metrics)):
+        axes[i, 0].set_ylim(bottom=0)
     return fig

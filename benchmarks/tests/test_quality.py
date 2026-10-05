@@ -431,3 +431,49 @@ def test_registration_cost_by_tier_skips_non_registration_arms(tmp_path):
     rows = _trace_rows("x", "valis", "high", "2", [("REGISTER", 60, 1, 1.0, 0)])
     rows[0]["arm_kind"] = "segmentation"
     assert quality.registration_cost_by_tier(pd.DataFrame(rows), tmp_path).empty
+
+
+def test_full_transform_row_is_the_headline_and_the_deltas_stay_on_the_ladder(tmp_path):
+    """The scorer's `full_transform` record (final stage, paired after the whole transform)
+    becomes its own row and is what the per-run reduction quotes; the *_vs_rigid deltas are
+    only defined on the rigid-anchored ladder and keep coming from its last stage."""
+    plan = tmp_path / "plan.csv"
+    pd.DataFrame({"run_id": ["r0", "old"]}).to_csv(plan, index=False)
+    stages = {
+        "rigid": {"n_pairs": 1000, "dice_matched": 0.55, "displacement_um_p50": 1.33},
+        "micro": {"n_pairs": 1000, "dice_matched": 0.80, "displacement_um_p50": 0.52},
+    }
+    deltas = {"micro": {"dice_matched": 0.25, "displacement_um_p50": -0.81}}
+    _write_seg_qc(tmp_path, "r0", "P001", "cycle2", stages, deltas, pair_fraction=0.70)
+    _write_seg_qc(tmp_path, "old", "P001", "cycle2", stages, deltas, pair_fraction=0.70)
+    js = next((tmp_path / "r0").rglob("*_seg_qc.json"))
+    d = json.loads(js.read_text())
+    d["full_transform"] = {
+        "stage": "micro",
+        "n_pairs": 1300,
+        "dice_matched": 0.86,
+        "displacement_um_p50": 0.40,
+        "matching": {"anchor_stage": "micro", "pair_fraction": 0.95},
+    }
+    js.write_text(json.dumps(d))
+
+    long = quality.harvest_registration_qc(tmp_path, plan)
+    full = long[long["stage"] == quality.FULL_TRANSFORM_STAGE]
+    assert list(full["run_id"]) == ["r0"]  # a JSON without the record gets no such row
+    row = full.iloc[0]
+    assert (row["dice_matched"], row["n_pairs"], row["pair_fraction"]) == (
+        0.86,
+        1300,
+        0.95,
+    )
+    assert row["paired_at"] == "micro"
+    assert np.isnan(row["delta_dice_vs_rigid"])
+
+    per_run = quality.registration_accuracy_per_run(long).set_index("run_id")
+    assert per_run.loc["r0", "reg_dice_matched"] == 0.86
+    assert per_run.loc["r0", "reg_displacement_um_p50"] == 0.40
+    assert per_run.loc["r0", "reg_pair_fraction"] == 0.95
+    assert per_run.loc["r0", "reg_delta_dice_vs_rigid"] == 0.25
+    # no record -> the ladder's last stage, as before
+    assert per_run.loc["old", "reg_dice_matched"] == 0.80
+    assert per_run.loc["old", "reg_pair_fraction"] == 0.70

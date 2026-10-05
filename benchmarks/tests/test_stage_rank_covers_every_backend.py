@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from benchmarks.analysis.lib.quality import _STAGE_RANK
+from benchmarks.analysis.lib.quality import _STAGE_RANK, FULL_TRANSFORM_STAGE
 
 REPO = Path(__file__).resolve().parents[2]
 WARP_BACKENDS = REPO / "lib" / "WarpBackends.groovy"
@@ -59,8 +59,13 @@ def test_every_backend_stage_is_ranked():
 
 
 def test_no_stale_rank_entries():
-    """The other direction: a rank for a stage nothing emits is a stale claim."""
-    stale = sorted(set(_STAGE_RANK) - backend_stages())
+    """The other direction: a rank for a stage nothing emits is a stale claim.
+
+    `full_transform` is the one entry that is not a backend stage: it is the scorer's
+    final-stage record PAIRED AFTER the whole transform (bin/warp_seg_qc.py), which the
+    harvest turns into a row of its own.
+    """
+    stale = sorted(set(_STAGE_RANK) - backend_stages() - {FULL_TRANSFORM_STAGE})
     assert not stale, (
         f"_STAGE_RANK ranks stages no backend emits: {stale}. Remove them, or the table "
         "documents a vocabulary the pipeline does not have."
@@ -75,3 +80,9 @@ def test_native_is_the_lowest_and_terminal_stages_outrank_rigid():
             f"{terminal} must outrank rigid, or the reduction reports the rigid stage as the "
             "headline accuracy for the backend whose terminal stage it is."
         )
+
+
+def test_the_full_transform_row_outranks_every_backend_stage():
+    """It is the headline: every 'final stage' reduction must pick it when it exists."""
+    others = [r for s, r in _STAGE_RANK.items() if s != FULL_TRANSFORM_STAGE]
+    assert _STAGE_RANK[FULL_TRANSFORM_STAGE] > max(others)

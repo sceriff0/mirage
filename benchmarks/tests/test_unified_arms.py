@@ -357,3 +357,33 @@ def test_an_importer_refuses_a_provider_that_segmented_with_another_method(tmp_p
             f"[{rid}] SKIP: 'valis_high_micro2' segmented with 'instantseg'" in r.stderr
         ), r.stderr[-2000:]
         assert not (root / ".launch" / rid / f"params.{rid}.json").exists(), rid
+
+
+def test_cost_by_tier_keeps_a_later_backends_larger_values_inside_the_axis():
+    """The rows share y. Fixing the lower limit per panel froze the axis at the FIRST
+    backend's range, so a second backend costing more was drawn outside it (S5 showed no
+    STARE wall-clock at all)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    from benchmarks.analysis.lib import plotting
+
+    frame = pd.DataFrame(
+        {
+            "backend": ["valis", "valis", "stare"],
+            "tier": ["low", "high", "high"],
+            "depth": ["0", "0", "64"],
+            "wall": [0.04, 0.10, 2.5],
+        }
+    )
+    fig = plotting.cost_by_tier(frame, ["wall"], ["wall-clock h"])
+    try:
+        for ax in fig.axes:
+            lo, hi = ax.get_ylim()
+            assert lo == 0
+            assert hi > 2.5
+    finally:
+        plt.close(fig)

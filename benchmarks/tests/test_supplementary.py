@@ -661,3 +661,41 @@ def test_gallery_draws_every_arm_backend_and_channel_on_shared_tissue(
             for p in (g / "crops" / "channels" / "f20_p64_clean" / k).glob("*_crop.png")
         }
         assert got == {f"P1_{ch}_crop.png" for ch in chans}, got
+
+
+def test_a_panels_caption_reads_that_panels_own_manifest(tmp_path):
+    """A variant directory holds one render per moving round. The caption under a panel
+    must come from the manifest written with THAT panel, not from whichever manifest the
+    directory lists first (S4 printed 0.12 in the image and 0.46 under it)."""
+    from benchmarks import supplementary as supp
+
+    for rnd, dice in (("A_first", 0.46), ("Z_last", 0.12)):
+        (tmp_path / f"046_{rnd}_after.png").write_bytes(b"")
+        (tmp_path / f"046_{rnd}_overlay.json").write_text(
+            json.dumps(
+                {
+                    "numbers": {
+                        "after": {
+                            "dice_matched": dice,
+                            "slide_displacement_px": 38.2,
+                            "stage": "refined",
+                        }
+                    }
+                }
+            )
+        )
+    note = supp._numbers_note(tmp_path / "046_Z_last_after.png", "after")
+    assert note == "Dice = 0.12  Δ = 38.2 px*   [refined]"
+    assert supp._numbers_note(tmp_path / "046_missing_after.png", "after") == ""
+
+
+def test_cell_note_gives_micrometres_when_the_scorer_reported_pixels_only():
+    """The manifest backends' scorer has no pixel size and reports px; the figure does."""
+    from benchmarks import reg_mosaic as rm
+
+    qc = rm.SegQC(
+        stage="refined", dice=0.5, displacement_um=None, displacement_px=10.0, n_pairs=9
+    )
+    note, vals = rm.cell_note(qc, 0, 0, 100, 0.5, 5)
+    assert "5.0 µm" in note and "px" not in note
+    assert vals["slide_displacement_um"] == 5.0

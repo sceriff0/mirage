@@ -629,7 +629,9 @@ def _read_seg_qc(path: Path) -> tuple[str, dict]:
     final = order[-1] if order else None
     return d.get("moving", ""), {
         "stage": final,
-        "final": stages.get(final) or {},
+        # Paired after the whole transform where the scorer wrote that record; the
+        # rigid-anchored ladder's last stage for a JSON older than it.
+        "final": d.get("full_transform") or stages.get(final) or {},
         "native": stages.get(NATIVE_STAGE) or {},
     }
 
@@ -1265,7 +1267,12 @@ def cell_note(
         "stage": qc.stage,
         "dice_matched": qc.dice,
         "slide_displacement_um": qc.displacement_um,
+        "slide_displacement_px": qc.displacement_px,
     }
+    # The manifest backends' scorer is given no pixel size, so it reports px only. The
+    # figure knows the pixel size: convert, so every method's Δ is in the same unit.
+    if qc.displacement_um is None and qc.displacement_px is not None and px:
+        vals["slide_displacement_um"] = qc.displacement_px * px
     local_px, n = qc.local_displacement_px(y, x, size, size, min_nuclei)
     vals["n_nuclei_in_roi"] = n
     unit, slide_level = "µm" if px else "px", False
@@ -1273,8 +1280,8 @@ def cell_note(
         vals["roi_displacement_px"] = local_px
         vals["roi_displacement_um"] = local_px * px if px else None
         delta = local_px * px if px else local_px
-    elif qc.displacement_um is not None:
-        delta, unit, slide_level = qc.displacement_um, "µm", True
+    elif vals["slide_displacement_um"] is not None:
+        delta, unit, slide_level = vals["slide_displacement_um"], "µm", True
     elif qc.displacement_px is not None:
         delta, unit, slide_level = qc.displacement_px, "px", True
     else:
@@ -1457,7 +1464,9 @@ def draw_overview_zoom(
     zx = (wo + gap) / fig_w
     zy = (fig_h - gap * 0.5 - zoom_disp) / fig_h
     ax_z = fig.add_axes([zx, zy, zoom_disp / fig_w, zoom_disp / fig_h])
-    ax_z.imshow(zoom, interpolation="none")
+    # A 60 µm inset is ~180 source px drawn ~5x larger: nearest-neighbour ("none") shows
+    # that as blocks. Bicubic when the inset is ENLARGED; untouched when it is not.
+    ax_z.imshow(zoom, interpolation="bicubic" if zoom_disp > z else "none")
     ax_z.set_xticks([])
     ax_z.set_yticks([])
     for spine in ax_z.spines.values():

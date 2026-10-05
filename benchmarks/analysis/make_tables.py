@@ -261,8 +261,10 @@ _DICTS = {
     ),
     "registration_accuracy": (
         "Landmark-free registration accuracy from the staged DAPI-nuclei QC (reg_qc=2). One row per "
-        "(run, moving slide, transform stage). Quote dice_matched and displacement_um together; the "
-        "*_vs_rigid deltas isolate the registration effect from segmentation noise.",
+        "(run, moving slide, transform stage), plus one full_transform row per slide: the final stage "
+        "paired after the whole transform, which is the number to quote (dice_matched and "
+        "displacement_um together). The rigid-anchored rows and their *_vs_rigid deltas say which "
+        "stage bought it.",
         [
             ("run_id", "-", "Run identifier."),
             ("patient_id", "-", "Patient."),
@@ -273,7 +275,9 @@ _DICTS = {
                 "Transform stage. The backends do NOT share a vocabulary: VALIS emits "
                 "native / rigid / non_rigid / micro, the manifest backends (tiled/STARE, ashlar) emit "
                 "native / rigid / refined. Only native and rigid are shared as both a spelling and a "
-                "meaning, so each arm is ranked on ITS OWN final stage.",
+                "meaning, so each arm is ranked on ITS OWN final stage. `full_transform` is that "
+                "final stage PAIRED AFTER the whole transform (the headline row); every other row "
+                "is paired at the rigid anchor.",
             ),
             ("n_pairs", "-", "Matched nucleus pairs at this stage."),
             (
@@ -319,6 +323,12 @@ _DICTS = {
                 "delta_disp_px_p50_vs_rigid",
                 "px",
                 "displacement_px_p50 minus rigid (negative = improvement).",
+            ),
+            (
+                "paired_at",
+                "-",
+                "Stage whose frame the nuclei were paired in: rigid for the ladder rows, the "
+                "final stage for the full_transform row.",
             ),
         ],
     ),

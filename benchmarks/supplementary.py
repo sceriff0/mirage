@@ -184,6 +184,10 @@ def _registered(arm_dir: Path) -> bool:
     return (arm_dir / "csv" / "registered.csv").is_file()
 
 
+# Ceiling on the dpi a panel composite is saved at (a 3-panel row is then ~9000 px wide).
+PANEL_DPI_CAP = 900
+
+
 # -------------------------------------------------------------------------- picks --
 def accuracy_long(ctx: Ctx) -> pd.DataFrame:
     """Final-stage scorer numbers per (run, patient, moving slide)."""
@@ -519,19 +523,22 @@ def _compose_overlays(
                     continue
                 cols.append(befores[0])
                 titles.append("Before")
-                notes.append(_numbers_note(vdir, "before"))
+                notes.append(_numbers_note(befores[0], "before"))
                 for m in methods:
                     after = sorted((panel_dirs[m] / v).glob(f"{pid}_*_after.png"))
                     if not after:
                         continue
                     cols.append(after[0])
                     titles.append(_label(m, arm_for(picks, m, config), config))
-                    notes.append(_numbers_note(panel_dirs[m] / v, "after"))
+                    notes.append(_numbers_note(after[0], "after"))
                 fig, axes = plt.subplots(
                     1, len(cols), figsize=(3.4 * len(cols), 3.9), squeeze=False
                 )
+                panel_w = 0
                 for ax, img, t, n in zip(axes[0], cols, titles, notes):
-                    ax.imshow(mpimg.imread(img))
+                    pixels = mpimg.imread(img)
+                    panel_w = max(panel_w, pixels.shape[1])
+                    ax.imshow(pixels)
                     ax.set_title(t, fontsize=9)
                     ax.set_xlabel(n, fontsize=7)
                     ax.set_xticks([])
@@ -542,24 +549,33 @@ def _compose_overlays(
                 fig.tight_layout()
                 out = root / f"{set_name}_{config}" / v
                 out.mkdir(parents=True, exist_ok=True)
+                # Saved at the dpi that gives a panel ITS OWN pixels: at options.dpi a
+                # 2600 px panel was squeezed into ~480 px and the single-cell inset into
+                # ~180, which is what made the zoom unreadable.
+                ax_in = axes[0][0].get_position().width * fig.get_figwidth()
+                dpi = min(PANEL_DPI_CAP, max(ctx.dpi, int(-(-panel_w // ax_in))))
                 for fmt in ctx.formats.split(","):
-                    fig.savefig(
-                        out / f"{pid}_{set_name}_{config}_{v}.{fmt}", dpi=ctx.dpi
-                    )
+                    fig.savefig(out / f"{pid}_{set_name}_{config}_{v}.{fmt}", dpi=dpi)
                 plt.close(fig)
                 _values_table(picks, final, pid, methods, config).to_csv(
                     out / f"{pid}_{set_name}_{config}_values.csv", index=False
                 )
 
 
-def _numbers_note(vdir: Path, which: str) -> str:
-    """`Dice = 0.92  Δ = 0.4 µm (ROI)` from reg_overlay's manifest: the scorer's matched
-    Dice for the slide, and the nucleus displacement inside THIS crop when it holds enough
-    nuclei (else the slide-level value, marked *)."""
-    for mf in vdir.glob("*_overlay.json"):
+def _numbers_note(panel: Path, which: str) -> str:
+    """`Dice = 0.92  Δ = 0.4 µm (ROI)` from the manifest reg_overlay wrote FOR THIS PANEL:
+    the scorer's matched Dice for the slide, and the nucleus displacement inside this crop
+    when it holds enough nuclei (else the slide-level value, marked *).
+
+    The manifest is the panel's own (`<stem>_overlay.json` beside `<stem>_<which>.png`). A
+    directory holds one per moving round, and taking "the first manifest" captioned a panel
+    with another round's numbers (S4, 2026-10-05: 0.12 in the image, 0.46 under it).
+    """
+    mf = panel.with_name(panel.name[: -len(f"_{which}.png")] + "_overlay.json")
+    if mf.is_file():
         n = (json.loads(mf.read_text()).get("numbers") or {}).get(which)
         if not isinstance(n, dict):
-            continue
+            return ""
         parts = []
         if n.get("dice_matched") is not None:
             parts.append(f"Dice = {float(n['dice_matched']):.2f}")
@@ -567,6 +583,8 @@ def _numbers_note(vdir: Path, which: str) -> str:
             parts.append(f"Δ = {float(n['roi_displacement_um']):.1f} µm (ROI)")
         elif n.get("slide_displacement_um") is not None:
             parts.append(f"Δ = {float(n['slide_displacement_um']):.1f} µm*")
+        elif n.get("slide_displacement_px") is not None:
+            parts.append(f"Δ = {float(n['slide_displacement_px']):.1f} px*")
         return "  ".join(parts) + (f"   [{n.get('stage')}]" if n.get("stage") else "")
     return ""
 
@@ -642,6 +660,17 @@ def fig_s5(ctx: Ctx):
         print("[supp] S5: no registration trace on disk", file=sys.stderr)
         return
     per_slide = cost["n_slides"].notna().any()
+    if per_slide:
+        # An arm still running has a partial trace and no csv/registered.csv yet: its
+        # peak RSS and CPU-h are those of the tasks finished SO FAR, not the arm's. It is
+        # in the CSV (n_slides empty) and not in the figure.
+        running = cost["n_slides"].isna()
+        if running.any():
+            print(
+                f"[supp] S5: {int(running.sum())} arm(s) not drawn, registration "
+                f"unfinished: {sorted(cost.loc[running, 'run_id'])}",
+                file=sys.stderr,
+            )
     unit = "per slide" if per_slide else "per run"
     metrics = [
         "wall_h_per_slide" if per_slide else "reg_wall_h",
@@ -651,6 +680,8 @@ def fig_s5(ctx: Ctx):
     labels = [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"]
     for name, keep in (("all", ("valis", "stare")),):
         sub = cost[cost["backend"].isin(keep)]
+        if per_slide:
+            sub = sub[sub["n_slides"].notna()]
         if sub["backend"].nunique() < 1:
             continue
         fig = plotting.cost_by_tier(sub, metrics, labels)

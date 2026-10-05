@@ -81,7 +81,10 @@ def _f(x):
 def harvest_registration_qc(results_root, run_plan_csv) -> pd.DataFrame:
     """Per-(run, moving-slide, stage) registration accuracy from the staged QC JSONs (reg_qc=2).
 
-    One row per registration stage (native/rigid/non_rigid/micro) of each moving slide of each run.
+    One row per registration stage (native/rigid/non_rigid/micro) of each moving slide of each run,
+    paired at the rigid anchor, PLUS one `full_transform` row: the final stage paired in its own
+    frame, which is the headline (a JSON written before that record existed has no such row, and
+    `paired_at` says which pairing every row used).
     dice_matched and centroid displacement are the co-headline accuracy metrics; the *_vs_rigid
     deltas isolate the registration effect from segmentation noise (docs/registration_qc.md).
     Missing/unparseable JSONs are skipped (best-effort)."""
@@ -97,6 +100,7 @@ def harvest_registration_qc(results_root, run_plan_csv) -> pd.DataFrame:
             stages = d.get("stages") or {}
             deltas = d.get("delta_vs_anchor") or {}
             pair_fraction = _f((d.get("matching") or {}).get("pair_fraction"))
+            anchor = (d.get("matching") or {}).get("anchor_stage")
             for stage in d.get("stage_order") or list(stages):
                 s = stages.get(stage) or {}
                 dv = deltas.get(stage) or {}
@@ -119,6 +123,37 @@ def harvest_registration_qc(results_root, run_plan_csv) -> pd.DataFrame:
                         "delta_dice_vs_rigid": _f(dv.get("dice_matched")),
                         "delta_disp_um_p50_vs_rigid": _f(dv.get("displacement_um_p50")),
                         "delta_disp_px_p50_vs_rigid": _f(dv.get("displacement_px_p50")),
+                        "paired_at": anchor,
+                    }
+                )
+            # The headline row: the final stage, paired in ITS OWN frame (the scorer's
+            # `full_transform` record). No *_vs_rigid deltas -- its pairs are not the
+            # rigid stage's pairs, so the difference is not a registration effect.
+            full = d.get("full_transform") or {}
+            if full:
+                nan = float("nan")
+                rows.append(
+                    {
+                        "run_id": run_id,
+                        "patient_id": d.get("patient_id"),
+                        "moving": d.get("moving"),
+                        "stage": FULL_TRANSFORM_STAGE,
+                        "n_pairs": int(full.get("n_pairs") or 0),
+                        "pair_fraction": _f(
+                            (full.get("matching") or {}).get("pair_fraction")
+                        ),
+                        "iou_mean": _f(full.get("iou_mean")),
+                        "iou_p50": _f(full.get("iou_p50")),
+                        "frac_iou_ge_0.5": _f(full.get("frac_iou_ge_0.5")),
+                        "dice_matched": _f(full.get("dice_matched")),
+                        "displacement_px_p50": _f(full.get("displacement_px_p50")),
+                        "displacement_px_p90": _f(full.get("displacement_px_p90")),
+                        "displacement_um_p50": _f(full.get("displacement_um_p50")),
+                        "displacement_um_p90": _f(full.get("displacement_um_p90")),
+                        "delta_dice_vs_rigid": nan,
+                        "delta_disp_um_p50_vs_rigid": nan,
+                        "delta_disp_px_p50_vs_rigid": nan,
+                        "paired_at": full.get("stage"),
                     }
                 )
     return pd.DataFrame(rows)
@@ -139,12 +174,25 @@ def harvest_registration_qc(results_root, run_plan_csv) -> pd.DataFrame:
 #
 # Ranked, not derived: the ranks encode "how much registration has been applied", which is a
 # fact about the backends, not about the data in any one table.
-_STAGE_RANK = {"native": 0, "rigid": 1, "non_rigid": 2, "refined": 2, "micro": 3}
+#
+# `full_transform` is not a further stage: it is the final stage again, PAIRED AFTER the whole
+# transform instead of at the rigid anchor. It ranks last so that every "final stage" reduction
+# reads it as the headline, and falls back to the ladder's last stage for a JSON without it.
+FULL_TRANSFORM_STAGE = "full_transform"
+_STAGE_RANK = {
+    "native": 0,
+    "rigid": 1,
+    "non_rigid": 2,
+    "refined": 2,
+    "micro": 3,
+    FULL_TRANSFORM_STAGE: 4,
+}
 
 
 def registration_accuracy_per_run(reg_qc_long: pd.DataFrame) -> pd.DataFrame:
     """Reduce the per-(run, moving, stage) QC table to ONE headline row per run: the final
-    (most-registered) stage of each moving slide, then the median across moving slides. Columns:
+    (most-registered) stage of each moving slide -- the `full_transform` row where the scorer wrote
+    one -- then the median across moving slides. Columns:
     run_id, reg_dice_matched, reg_displacement_um_p50, reg_delta_disp_um_p50_vs_rigid,
     reg_delta_dice_vs_rigid, reg_pair_fraction. Empty in -> empty out."""
     if reg_qc_long.empty:
@@ -158,11 +206,21 @@ def registration_accuracy_per_run(reg_qc_long: pd.DataFrame) -> pd.DataFrame:
     agg = final.groupby("run_id", as_index=False).agg(
         reg_dice_matched=("dice_matched", "median"),
         reg_displacement_um_p50=("displacement_um_p50", "median"),
-        reg_delta_disp_um_p50_vs_rigid=("delta_disp_um_p50_vs_rigid", "median"),
-        reg_delta_dice_vs_rigid=("delta_dice_vs_rigid", "median"),
         reg_pair_fraction=("pair_fraction", "median"),
     )
-    return agg
+    # The *_vs_rigid deltas exist only on the rigid-anchored ladder (fixed pairs), so they
+    # come from ITS last stage, never from the full_transform row.
+    ladder = df[df["stage"] != FULL_TRANSFORM_STAGE]
+    ladder_final = (
+        ladder.sort_values("_rank")
+        .groupby(["run_id", "moving"], as_index=False)
+        .tail(1)
+    )
+    deltas = ladder_final.groupby("run_id", as_index=False).agg(
+        reg_delta_disp_um_p50_vs_rigid=("delta_disp_um_p50_vs_rigid", "median"),
+        reg_delta_dice_vs_rigid=("delta_dice_vs_rigid", "median"),
+    )
+    return agg.merge(deltas, on="run_id", how="left")
 
 
 # ─────────────────────────────────────────────────── registration accuracy (VALIS rTRE) ──
