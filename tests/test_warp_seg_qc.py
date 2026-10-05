@@ -683,3 +683,101 @@ def test_reg_qc2_tiled_cli_scores_through_a_manifest_without_a_jvm(tmp_path):
     assert s["refined"]["displacement_px_p50"] == pytest.approx(0.0, abs=1e-9)
     assert s["rigid"]["iou_mean"] < s["refined"]["iou_mean"]
     assert rec["matching"]["n_pairs"] == 6
+
+
+# ── the headline: paired after the whole transform ─────────────────────────────
+def test_full_transform_pairs_after_the_whole_transform_not_at_the_anchor(tmp_path):
+    """A cell the rigid stage leaves outside the match radius is absent from the ladder at
+    every stage (the pairing is fixed there) and present in ``full_transform``, which pairs
+    in the final stage's frame."""
+    ref = _write(tmp_path, "ref.geojson", _grid_fc())
+    mov = _write(tmp_path, "mov.geojson", _grid_fc())
+
+    def warp(slide_name, xy, stage):
+        xy = np.asarray(xy, dtype=float).copy()
+        # Rigid leaves the LAST moving cell (x >= 200) 15 px off -- beyond the 1.5-radius
+        # gate (~8.5 px for a 10 px square) -- and the final stage puts it back.
+        if slide_name == MOV and stage == STAGE_RIGID:
+            xy[xy[:, 0] >= 200, 0] += 15.0
+        return xy
+
+    out = wsq.run(
+        ref,
+        mov,
+        warp,
+        [STAGE_NATIVE, STAGE_RIGID, STAGE_MICRO],
+        ref_slide=REF,
+        moving_slide=MOV,
+    )
+
+    assert out["matching"]["n_pairs"] == 5
+    assert out["stages"][STAGE_MICRO]["n_pairs"] == 5
+    full = out["full_transform"]
+    assert full["stage"] == STAGE_MICRO
+    assert full["matching"]["anchor_stage"] == STAGE_MICRO
+    assert full["n_pairs"] == full["matching"]["n_pairs"] == 6
+    assert full["matching"]["pair_fraction"] == pytest.approx(1.0)
+    assert full["dice_matched"] == pytest.approx(1.0)
+    assert full["displacement_px_p50"] == pytest.approx(0.0)
+    # the per-cell residuals are THESE pairs, the rescued cell included
+    assert out["_per_cell"]["stage"] == STAGE_MICRO
+    assert out["_per_cell"]["residual_px"].shape == (6,)
+    assert "_per_cell" not in full  # arrays never reach the serialized record
+
+
+def test_full_transform_scores_the_final_geometry_not_the_anchors(tmp_path):
+    """Its Dice is measured where the pairs are made: a final stage that is still 2 px off
+    reads as 2 px off, whatever the rigid stage looked like."""
+    ref = _write(tmp_path, "ref.geojson", _grid_fc())
+    mov = _write(tmp_path, "mov.geojson", _grid_fc())
+    warp = _shift_warp({STAGE_NATIVE: 0.0, STAGE_RIGID: 0.0, STAGE_MICRO: 2.0})
+
+    out = wsq.run(
+        ref,
+        mov,
+        warp,
+        [STAGE_NATIVE, STAGE_RIGID, STAGE_MICRO],
+        ref_slide=REF,
+        moving_slide=MOV,
+    )
+
+    full = out["full_transform"]
+    assert full["displacement_px_p50"] == pytest.approx(2.0)
+    assert full["dice_matched"] == pytest.approx(0.8, abs=0.02)  # 8x10 of 10x10
+    assert full["dice_matched"] == pytest.approx(
+        out["stages"][STAGE_MICRO]["dice_matched"]
+    )  # same pairs here, so the two agree
+
+
+def test_full_transform_is_the_anchor_pairing_when_the_anchor_is_final(tmp_path):
+    ref = _write(tmp_path, "ref.geojson", _grid_fc())
+    mov = _write(tmp_path, "mov.geojson", _grid_fc(dx=1.0))
+    warp = _shift_warp({STAGE_RIGID: 0.0})
+
+    out = wsq.run(ref, mov, warp, [STAGE_RIGID], ref_slide=REF, moving_slide=MOV)
+
+    full = out["full_transform"]
+    assert full["stage"] == STAGE_RIGID
+    assert full["n_pairs"] == out["stages"][STAGE_RIGID]["n_pairs"] == 6
+    assert full["dice_matched"] == pytest.approx(
+        out["stages"][STAGE_RIGID]["dice_matched"]
+    )
+
+
+def test_full_transform_reaches_the_written_report(tmp_path):
+    ref = _write(tmp_path, "ref.geojson", _grid_fc())
+    mov = _write(tmp_path, "mov.geojson", _grid_fc())
+    out_json = tmp_path / "qc.json"
+    wsq.write_report(
+        None,
+        REF,
+        MOV,
+        ref,
+        mov,
+        str(out_json),
+        warp=_shift_warp({STAGE_NATIVE: 0.0, STAGE_RIGID: 0.0, STAGE_MICRO: 0.0}),
+        stages=[STAGE_NATIVE, STAGE_RIGID, STAGE_MICRO],
+    )
+    rec = json.loads(out_json.read_text())
+    assert rec["full_transform"]["stage"] == STAGE_MICRO
+    assert rec["full_transform"]["matching"]["n_pairs"] == 6

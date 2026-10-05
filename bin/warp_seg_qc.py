@@ -33,6 +33,13 @@ Two metrics per stage, both over the fixed pairs:
     the way a thresholded IoU does, and "residual error is 1.4 µm after non-rigid" is a
     number that can be quoted.
 
+**The headline number is separate, and is paired after the whole transform.** The ladder's
+final-stage record is conditional on the rigid stage: a cell rigid left outside the match
+radius is never paired, however well the later stages place it. ``full_transform`` applies
+the same pairing rule and the same per-pair scorer once, in the final stage's frame, and is
+the Dice/displacement to quote for "how good is what the run ships". The ladder remains the
+diagnostic for "which stage bought it".
+
 Deltas are reported against the anchor, so ``delta_vs_anchor.micro.displacement_px_p50`` reads
 directly as "what the non-rigid and micro stages bought over rigid alone" — and, when it has
 the wrong sign, as a warning that a stage made things worse.
@@ -203,6 +210,85 @@ def _stage_line(rec) -> str:
     )
 
 
+# ── the headline: pair and score AFTER the whole transform ─────────────────────
+FULL_TRANSFORM_KEY = "full_transform"
+
+
+def score_full_transform(
+    stage,
+    ps_ref,
+    ps_mov,
+    cent_ref,
+    cent_mov,
+    area_ref,
+    area_mov,
+    match_radius_factor=DEFAULT_MATCH_RADIUS_FACTOR,
+    match_radius_px=None,
+    pairing=cp.DEFAULT_PAIRING,
+    **score_kwargs,
+) -> dict:
+    """Pair the cells in the FINAL stage's frame and score those pairs there.
+
+    The staged ladder fixes its pairing at the rigid anchor, which is what makes its
+    between-stage deltas pure geometry -- and also what makes its final-stage number
+    conditional on the rigid stage: a cell that rigid left outside the match radius is
+    never paired, so it is absent from the final Dice even when the later stages put it
+    exactly on its partner. This record asks the other question, "how good is what the
+    run ships", with the same rule (same pairing backend, same radius factor, same
+    per-pair scorer) applied once, after the complete transform. The match radius is
+    sized from the cells as they are in this frame, the way the anchor sizes its own.
+    """
+    cell_radius = cp.median_equivalent_radius(np.concatenate([area_ref, area_mov]))
+    radius = (
+        float(match_radius_px)
+        if match_radius_px
+        else float(match_radius_factor) * cell_radius
+    )
+    idx_ref, idx_mov, _, pairing_stats = cp.match_cells(
+        cent_ref, cent_mov, radius, method=pairing
+    )
+    rec = score_stage(
+        ps_ref,
+        ps_mov,
+        cent_ref,
+        cent_mov,
+        area_ref,
+        area_mov,
+        idx_ref,
+        idx_mov,
+        **score_kwargs,
+    )
+    n_ref, n_mov = int(len(area_ref)), int(len(area_mov))
+    # Per-pair residuals of THESE pairs -- the per-cell CSV. Popped by run() before the
+    # record is serialized. Reference centroids are in the final stage's frame, which is
+    # the frame SEGMENT ran on, so the downstream join onto cell_mask is a spatial one.
+    per_cell = (
+        {
+            "stage": stage,
+            "ref_xy": np.asarray(cent_ref, dtype=float)[idx_ref],
+            "residual_px": cp.centroid_distance(cent_ref, cent_mov, idx_ref, idx_mov),
+        }
+        if idx_ref.size
+        else None
+    )
+    return {
+        "_per_cell": per_cell,
+        "stage": stage,
+        **rec,
+        "matching": {
+            **pairing_stats,
+            "anchor_stage": stage,
+            "radius_px": radius,
+            "radius_factor": None if match_radius_px else float(match_radius_factor),
+            "median_cell_radius_px": cell_radius,
+            "n_pairs": int(idx_ref.size),
+            "pair_fraction": float(idx_ref.size) / (min(n_ref, n_mov) or 1),
+            "pair_fraction_ref": float(idx_ref.size) / (n_ref or 1),
+            "pair_fraction_moving": float(idx_ref.size) / (n_mov or 1),
+        },
+    }
+
+
 # ── orchestration ──────────────────────────────────────────────────────────────
 def run(
     ref_geojson,
@@ -318,27 +404,30 @@ def run(
     }
     _log(f"stage '{ANCHOR_STAGE}': {_stage_line(records[ANCHOR_STAGE])}", t0)
 
-    # See the note on `per_cell` below. Captured here, before the anchor arrays are
-    # released, for the degenerate single-stage plan where the anchor IS the final stage.
-    per_cell = None
-    if stages[-1] == ANCHOR_STAGE and idx_ref.size:
-        per_cell = {
-            "stage": ANCHOR_STAGE,
-            "ref_xy": np.asarray(a_cent_ref, dtype=float)[idx_ref],
-            "residual_px": cp.centroid_distance(
-                a_cent_ref, a_cent_mov, idx_ref, idx_mov
-            ),
-        }
+    full_kwargs = dict(
+        match_radius_factor=match_radius_factor,
+        match_radius_px=match_radius_px,
+        pairing=pairing,
+        **score_kwargs,
+    )
+    # The final stage re-paired in its own frame (see score_full_transform). Built from the
+    # geometry the ladder already warped, so it costs no extra warp. When the anchor IS
+    # the final stage this is the anchor's own pairing, computed the same way.
+    full = None
+    if stages[-1] == ANCHOR_STAGE:
+        full = score_full_transform(
+            ANCHOR_STAGE,
+            a_ref,
+            a_mov,
+            a_cent_ref,
+            a_cent_mov,
+            a_area_ref,
+            a_area_mov,
+            **full_kwargs,
+        )
 
     del a_ref, a_mov, a_cent_ref, a_cent_mov, a_area_ref, a_area_mov
 
-    # Per-cell residuals for the FINAL stage — the fully-registered state. Retained
-    # (rather than aggregated away like every other stage) because this is the only
-    # per-cell registration-confidence signal the pipeline produces, and downstream
-    # consumers join it onto the quantification table. Reference centroids are taken
-    # in the final stage's frame, which is the frame SEGMENT ran on, so the join is a
-    # spatial one against cell_mask centroids — the QC segmentation here is a separate
-    # native-image StarDist run and shares no label space with cell_mask.
     final_stage = stages[-1]
 
     for stage in stages:
@@ -347,16 +436,34 @@ def run(
         s_ref, ar_ref, c_ref = _stage_geometry(warp, ref_slide, ref_native, stage)
         s_mov, ar_mov, c_mov = _stage_geometry(warp, moving_slide, mov_native, stage)
         records[stage] = score_stage(
-            s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, idx_ref, idx_mov, **score_kwargs
+            s_ref,
+            s_mov,
+            c_ref,
+            c_mov,
+            ar_ref,
+            ar_mov,
+            idx_ref,
+            idx_mov,
+            **score_kwargs,
         )
-        if stage == final_stage and idx_ref.size:
-            per_cell = {
-                "stage": stage,
-                "ref_xy": np.asarray(c_ref, dtype=float)[idx_ref],
-                "residual_px": cp.centroid_distance(c_ref, c_mov, idx_ref, idx_mov),
-            }
         _log(f"stage '{stage}': {_stage_line(records[stage])}", t0)
+        if stage == final_stage:
+            full = score_full_transform(
+                stage, s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov, **full_kwargs
+            )
         del s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov
+
+    # The per-cell residuals are the full-transform pairs': the only per-cell
+    # registration-confidence signal the pipeline produces, joined downstream onto the
+    # quantification table. They used to be the rigid-anchored pairs at the final stage,
+    # which left out every cell the rigid stage had not already brought within reach.
+    per_cell = full.pop("_per_cell")
+    _log(
+        f"full transform ('{full['stage']}', paired there): "
+        f"{full['matching']['n_pairs']} pairs | {_stage_line(full)} "
+        f"dice_matched={full.get('dice_matched', float('nan')):.4f}",
+        t0,
+    )
 
     anchor_rec = records[ANCHOR_STAGE]
     deltas = {
@@ -373,6 +480,9 @@ def run(
         "stage_order": list(stages),
         "stages": records,
         "delta_vs_anchor": deltas,
+        # The headline accuracy: paired AND scored after the complete transform. The
+        # `stages` ladder above stays the per-stage diagnostic (pairing fixed at rigid).
+        FULL_TRANSFORM_KEY: full,
         # Not serialized into the QC JSON (it is per-cell, not per-slide); the caller
         # writes it to a separate CSV when --per-cell-csv is given.
         "_per_cell": per_cell,
@@ -391,7 +501,7 @@ def run(
 
 
 def write_per_cell_csv(path, per_cell, moving_name) -> int:
-    """Write the final-stage per-pair registration residuals as CSV.
+    """Write the per-pair registration residuals of the full-transform pairing as CSV.
 
     Columns are ``moving,ref_x,ref_y,residual_px,stage``. ``ref_x``/``ref_y`` are
     reference-cell centroids **in the final stage's frame** — i.e. the frame the
@@ -532,8 +642,8 @@ def parse_args(argv=None):
         "--per-cell-csv",
         default=None,
         help=(
-            "Optional path for final-stage per-pair registration residuals "
-            "(moving,ref_x,ref_y,residual_px,stage). ref_x/ref_y are in the registered "
+            "Optional path for the per-pair registration residuals of the full-transform "
+            "pairing (moving,ref_x,ref_y,residual_px,stage). ref_x/ref_y are in the registered "
             "reference frame, for spatial joining onto cell_mask downstream."
         ),
     )

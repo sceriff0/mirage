@@ -9,7 +9,9 @@
  * component — see bin/utils/cell_pairs.py's match_lsa; the older mutual-nearest-centroid
  * rule remains selectable via params.seg_qc_pairing) and then held fixed, so each
  * stage's per-pair IoU and centroid residual describe the same cells and the deltas are
- * pure registration effects.
+ * pure registration effects. The headline accuracy is a separate `full_transform`
+ * record: the same pairing rule applied once in the FINAL stage's frame, so it does not
+ * inherit the rigid stage's misses.
  *
  * The pre-micro stage checkpoint from REGISTER is optional but load-bearing on the
  * VALIS path: VALIS composes the micro residual into the same displacement field, so
@@ -102,6 +104,9 @@ ${backend_flags}
         stage_order     : stages,
         stages          : stages.collectEntries { [(it): stage_stub] },
         delta_vs_anchor : (stages - 'rigid').collectEntries { [(it): [:]] },
+        // The headline record: the final stage, paired in its own frame (bin/warp_seg_qc.py).
+        full_transform  : [stage: stages[-1]] + stage_stub +
+                          [matching: [method: 'lsa_centroid', anchor_stage: stages[-1], n_pairs: 0]],
         matching        : [method: 'lsa_centroid', anchor_stage: 'rigid', n_pairs: 0],
         counts          : [features_ref: 0, features_moving: 0],
     ]
