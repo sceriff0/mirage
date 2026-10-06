@@ -337,12 +337,15 @@ def test_small_slide_is_not_decimated(tmp_path, monkeypatch):
 def test_an_unanchorable_pair_is_anchored_unverified_with_a_warning(tmp_path, caplog):
     """STARE >= 1.1.0 is permissive by default: two unrelated slides still get an M0 (the
     best guess), but a wrong anchor fails nothing downstream (tiles are simply read from the
-    wrong place), so the M0 JSON says `coarse_trusted: false` and the log names both slides."""
+    wrong place), so the M0 JSON says `coarse_trusted: false` and the log names both slides.
+    Since 1.2.0 the candidates are first checked at full resolution (`coarse_probe`); on
+    unrelated slides that check confirms none."""
     # 512 vs 1024 draws of the textured field are different random fields, not a crop.
     ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
     with caplog.at_level("WARNING"):
         m0_doc = _run(tmp_path, ref_f, mov_f, max_dim=128)[0]
     assert m0_doc["coarse_trusted"] is False
+    assert m0_doc["coarse_probe"]["verified"] is False
     warned = [
         r.getMessage() for r in caplog.records if "UNVERIFIED ANCHOR" in r.getMessage()
     ]

@@ -9,10 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **STARE is pinned to v1.1.0, whose COARSE stage no longer fails a slide it cannot anchor
-  with confidence.** When neither the NCC sweep nor the ORB fallback passes its gate,
-  `TILED_COARSE` continues with the best guess, logs `UNVERIFIED ANCHOR` naming both
-  slides, and writes `coarse_trusted: false` into the M0 JSON. Such a slide can come out
+- **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
+  on each axis: one displacement vector every 64 px from a 128 px window. That is four
+  times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows
+  holding fewer nuclei. REG_TILE's first pass captures +-stride px, so the anchor error a
+  tile can recover is halved to +-64 px. Memory is unchanged at the `high` tier (the read
+  margin is `max(halo, 3 * stride)`). Pass `reg_tiled_stride: 128` to keep the old lattice.
+- **STARE is pinned to v1.2.1, whose COARSE stage no longer fails a slide it cannot anchor
+  with confidence.** A slide whose anchor passes its gates is unchanged. When neither the
+  NCC sweep nor the ORB fallback passes, `TILED_COARSE` checks every candidate at full
+  resolution on up to 8 small nuclear patches. A confirmed candidate is used as trusted,
+  with its measured offset removed; otherwise the stage continues with the best guess, logs
+  `UNVERIFIED ANCHOR` naming both slides, and writes `coarse_trusted: false` into the M0
+  JSON (`coarse_probe` holds the per-candidate counts). An unverified slide can come out
   mis-registered with exit 0, so check its registration QC. Only a blank nuclear plane is
   still refused. `bolt3x/mirage-stare:1.0.0` is republished with it: delete a cached
   Singularity `.img` so it is pulled again.
