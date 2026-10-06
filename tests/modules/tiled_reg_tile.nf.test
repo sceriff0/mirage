@@ -66,8 +66,8 @@ nextflow_process {
                 { assert rendered.every { it.contains('--rx0 0 --ry0 0 --rx1 16 --ry1 16') }, rendered.join(' --- ') },
                 // the core bounds: what makes the vector-lattice ownership exact (stare.vector_grid)
                 { assert rendered.every { it.contains('--x0 0 --y0 0 --x1 16 --y1 16') }, rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--stride 128') },
-                    "reg_tiled_stride defaults to 128 and is not tier-owned: " + rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--stride 64') },
+                    "reg_tiled_stride defaults to 64 and is not tier-owned: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--m0 tiled_m0.json') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--out P001_DAPI_PANCK_SMA_0_0_ctrl.json') }, rendered.join(' --- ') }
             )
@@ -92,7 +92,7 @@ nextflow_process {
             }
             assertAll(
                 { assert rendered.size() >= 1 },
-                { assert rendered.every { it.contains('--stride 128') }, rendered.join(' --- ') },
+                { assert rendered.every { it.contains('--stride 64') }, rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') }
             )
         }
@@ -105,7 +105,7 @@ nextflow_process {
         when {
             params {
                 reg_tiled_mode = 'low'
-                reg_tiled_stride = 64
+                reg_tiled_stride = 256
             }
             process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
         }
@@ -117,7 +117,7 @@ nextflow_process {
             }
             assertAll(
                 { assert rendered.size() >= 1 },
-                { assert rendered.every { it.contains('--stride 64') }, rendered.join(' --- ') }
+                { assert rendered.every { it.contains('--stride 256') }, rendered.join(' --- ') }
             )
         }
     }

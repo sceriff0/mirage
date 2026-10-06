@@ -115,7 +115,7 @@ def _write_pair(tmp_path, n=512, translation=(3.0, -2.0), rotation_deg=1.0):
     return ref_f, mov_f, m0_f, m0, ref, mov
 
 
-def _old_style_oracle(ref_f, mov_f, m0, nuclear_index, core, stride=128):
+def _old_style_oracle(ref_f, mov_f, m0, nuclear_index, core, stride=64):
     """Full decode + whole-image warp, then the same estimator on the same read box."""
     ref_nuc = nuclear_channel(load_channels(ref_f), nuclear_index)
     mov_nuc = nuclear_channel(load_channels(mov_f), nuclear_index)

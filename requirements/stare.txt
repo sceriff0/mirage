@@ -22,7 +22,7 @@ imagecodecs==2025.3.30 # zstd/LZW codecs for the stitched OME-TIFF
 # this file. sceriff0/stare is the method's only source since v1.0.0 (2026-10-01); a STARE
 # change is a new tag there, then this line. The release tarball, not git+, so the slim
 # image needs no git. Its dependencies are the constrained lines above.
-stare-registration @ https://github.com/sceriff0/stare/archive/refs/tags/v1.1.0.tar.gz
+stare-registration @ https://github.com/sceriff0/stare/archive/refs/tags/v1.2.1.tar.gz
 
 # No torch, no kornia: they served the DISK + LightGlue COARSE front-end retired on
 # 2026-09-27, and containers/stare/smoke.sh asserts torch is not importable in the image.
