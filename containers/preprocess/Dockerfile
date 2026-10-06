@@ -3,7 +3,7 @@
 # produce a different image than the one that generated the published results. Resolved
 # 2026-09-02; Dependabot updates the digest in place. Guarded by
 # tests/test_base_images_are_digest_pinned.py.
-FROM ubuntu:22.04@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 
 LABEL maintainer="mirage team"
 LABEL description="Docker image for mirage image conversion and illumination-correction tiling"
