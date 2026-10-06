@@ -293,7 +293,7 @@
                 "reg_tiled_stride": {
                     "type": "integer",
                     "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
-                    "default": 128,
+                    "default": 64,
                     "minimum": 16
                 },
                 "reg_tiled_out_tile": {

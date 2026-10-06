@@ -389,7 +389,7 @@
                 <code>reg_tiled_mode</code>'s row, because Nextflow evaluates the <code>params{}</code> block
                 <i>before</i> merging CLI arguments, so a preset lookup written there could never see
                 <code>--reg_tiled_mode low</code>.</div>
-              <div class="pp" style="margin-top:6px"><span>mode <b>high</b></span><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>coarse_max_dim <b>2048</b></span><span>stride <b>128</b></span></div></div>
+              <div class="pp" style="margin-top:6px"><span>mode <b>high</b></span><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>coarse_max_dim <b>2048</b></span><span>stride <b>64</b></span></div></div>
           </div>
           <div class="mod"><div class="n">GENERATE_REGISTRATION_QC <span class="tag tag-on">reg_qc≥1</span></div>
             <div class="x">Nuclear-channel overlay, registered vs reference.</div></div>
@@ -801,7 +801,7 @@
           <tr><td class="k">reg_tiled_tile</td><td class="v nul">null</td><td class="d">tile core + mesh (px) — tier: 2048/1024/512</td></tr>
           <tr><td class="k">reg_tiled_halo</td><td class="v nul">null</td><td class="d">per-tile read halo (px) — tier: 256/192/128</td></tr>
           <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="v nul">null</td><td class="d">anchor thumbnail (px) — tier: 2048/1024/512</td></tr>
-          <tr><td class="k">reg_tiled_stride</td><td class="v">128</td><td class="d">one vector per stride px (mesh res.)</td></tr>
+          <tr><td class="k">reg_tiled_stride</td><td class="v">64</td><td class="d">one vector per stride px (mesh res.)</td></tr>
         </table>
       </div>
       <div class="pcol">
