@@ -49,6 +49,6 @@ runs:
     # with "dest already exists". Every nf-test job in the repo goes red.
     # tests/test_ci_cache_keys.py fails on both halves of that shape.
     - name: Install nf-test
-      uses: nf-core/setup-nf-test@v1
+      uses: nf-core/setup-nf-test@v2
       with:
         version: ${{ inputs.nf-test-version }}
