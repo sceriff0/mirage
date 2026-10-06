@@ -84,8 +84,9 @@ figures:
                              # run; use `scorer` for arms that already ran at reg_qc=2
 
   overlay:
-    field_um: [500, 2000]    # 500 um reads as tissue; 2000 um shows how far registration
-                             # holds across a section
+    field_um: [500, 2000, 10000]  # 500 um reads as tissue; 2000 um shows how far
+                             # registration holds across a section; 10000 um is the whole
+                             # section for most cases (clamped to the slide when larger)
     zoom_um: [60]            # the inset that keeps single cells visible at 2000 um
                              # (0 = none); drawn for every field above
     variants: 3              # one crop is one roll of the dice
