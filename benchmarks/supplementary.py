@@ -785,26 +785,122 @@ def fig_s6(ctx: Ctx, patients: list[str]):
     _compose_s6(ctx, out, pid, [m for m, _ in methods], len(rois))
 
 
+def agreement_matrix(agree, methods=None, value="foreground_dice", patient=None):
+    """The backend x backend matrix of ``value``: the median over patients, or one
+    patient's own values with ``patient``. Diagonal 1; a pair with no row is NaN.
+    Returns (matrix, number of patients behind it)."""
+    import numpy as np
+
+    need = {"method_a", "method_b", value}
+    if agree is None or agree.empty or not need <= set(agree.columns):
+        methods = list(methods or [])
+        mat = pd.DataFrame(np.eye(len(methods)), index=methods, columns=methods)
+        return mat, 0
+    if patient is not None and "patient_id" in agree.columns:
+        agree = agree[agree["patient_id"].astype(str) == str(patient)]
+    methods = list(methods or sorted(set(agree["method_a"]) | set(agree["method_b"])))
+    mat = pd.DataFrame(np.nan, index=methods, columns=methods)
+    for m in methods:
+        mat.loc[m, m] = 1.0
+    vals = pd.to_numeric(agree[value], errors="coerce")
+    for (a, b), v in (
+        vals.groupby([agree["method_a"], agree["method_b"]]).median().items()
+    ):
+        if a in mat.index and b in mat.columns:
+            mat.loc[a, b] = mat.loc[b, a] = v
+    n = agree["patient_id"].nunique() if "patient_id" in agree.columns else len(agree)
+    return mat, int(n)
+
+
+def _draw_agreement(ax, mat, title, fontsize=7):
+    import numpy as np
+
+    arr = mat.to_numpy(dtype=float)
+    im = ax.imshow(np.ma.masked_invalid(arr), vmin=0, vmax=1, cmap="viridis")
+    names = list(mat.index)
+    ax.set_xticks(range(len(names)), names, rotation=45, ha="right", fontsize=fontsize)
+    ax.set_yticks(range(len(names)), names, fontsize=fontsize)
+    for i in range(len(names)):
+        for j in range(len(names)):
+            v = arr[i, j]
+            if np.isfinite(v):
+                # white on the dark end of viridis, black on the yellow end
+                ax.text(
+                    j,
+                    i,
+                    f"{v:.2f}",
+                    ha="center",
+                    va="center",
+                    color="k" if v > 0.7 else "w",
+                    fontsize=fontsize,
+                )
+    ax.set_title(title, fontsize=fontsize + 1)
+    return im
+
+
+def agreement_heatmap(
+    agree,
+    stem,
+    formats="png,pdf",
+    dpi=300,
+    methods=None,
+    value="foreground_dice",
+    patient=None,
+):
+    """S6's pairwise-agreement matrix as a figure of its own: <stem>.<fmt>. ``agree`` is
+    the S6_pairwise_agreement.csv frame (or its path). Nothing is written when the
+    table has no usable row."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if not isinstance(agree, pd.DataFrame):
+        agree = pd.read_csv(agree, dtype={"patient_id": str})
+    mat, n = agreement_matrix(agree, methods, value, patient)
+    if not n or mat.empty:
+        return []
+    label = {"foreground_dice": "pairwise Dice"}.get(value, value.replace("_", " "))
+    scope = f"patient {patient}" if patient is not None else f"median of {n} section(s)"
+    fig, ax = plt.subplots(figsize=(3.4, 3.0))
+    im = _draw_agreement(ax, mat, f"{label}, whole section\n({scope})", fontsize=8)
+    fig.colorbar(im, ax=ax, fraction=0.046)
+    fig.tight_layout()
+    written = []
+    for fmt in str(formats).split(","):
+        path = Path(f"{stem}.{fmt.strip()}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi)
+        written.append(path)
+    plt.close(fig)
+    return written
+
+
 def _compose_s6(ctx, out: Path, pid: str, methods: list[str], n_regions: int):
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.image as mpimg
     import matplotlib.pyplot as plt
-    import numpy as np
 
     from benchmarks.analysis.lib import quality
 
     agree = quality.segmentation_agreement(ctx.root, ctx.plan_csv)
     agree.to_csv(out / "S6_pairwise_agreement.csv", index=False)
-    mat = pd.DataFrame(np.eye(len(methods)), index=methods, columns=methods)
-    if not agree.empty and {"method_a", "method_b", "foreground_dice"} <= set(
-        agree.columns
-    ):
-        g = agree.groupby(["method_a", "method_b"])["foreground_dice"].median()
-        for (a, b), v in g.items():
-            if a in mat.index and b in mat.columns:
-                mat.loc[a, b] = mat.loc[b, a] = v
+    mat, n_sections = agreement_matrix(agree, methods)
+    # The matrix alone, for a figure laid out by hand: over the cohort, and for the one
+    # section the crops are drawn from (what a legend saying "this section" needs).
+    agreement_heatmap(
+        agree, out / "S6_pairwise_agreement", ctx.formats, ctx.dpi, methods
+    )
+    agreement_heatmap(
+        agree,
+        out / f"S6_pairwise_agreement_{pid}",
+        ctx.formats,
+        ctx.dpi,
+        methods,
+        patient=pid,
+    )
     for layout in ("nuclei_cell", "both"):
         masks = ("nuclei", "cell") if layout == "nuclei_cell" else ("both",)
         ncol = len(methods) * len(masks) + 1
@@ -828,21 +924,8 @@ def _compose_s6(ctx, out: Path, pid: str, methods: list[str], n_regions: int):
                     if c == 1:
                         ax.set_ylabel(f"region {k}", fontsize=8)
         ax = fig.add_subplot(gs[:, -1])
-        im = ax.imshow(mat.to_numpy(dtype=float), vmin=0, vmax=1, cmap="viridis")
-        ax.set_xticks(range(len(methods)), methods, rotation=45, fontsize=7)
-        ax.set_yticks(range(len(methods)), methods, fontsize=7)
-        for i in range(len(methods)):
-            for j in range(len(methods)):
-                ax.text(
-                    j,
-                    i,
-                    f"{mat.iat[i, j]:.2f}",
-                    ha="center",
-                    va="center",
-                    color="w",
-                    fontsize=7,
-                )
-        ax.set_title("pairwise Dice\n(whole section)", fontsize=8)
+        scope = f"median of {n_sections}" if n_sections else "whole section"
+        im = _draw_agreement(ax, mat, f"pairwise Dice\n({scope})")
         fig.colorbar(im, ax=ax, fraction=0.046)
         fig.tight_layout()
         for fmt in ctx.formats.split(","):

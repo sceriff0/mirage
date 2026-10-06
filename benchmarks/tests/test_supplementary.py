@@ -699,3 +699,52 @@ def test_cell_note_gives_micrometres_when_the_scorer_reported_pixels_only():
     note, vals = rm.cell_note(qc, 0, 0, 100, 0.5, 5)
     assert "5.0 µm" in note and "px" not in note
     assert vals["slide_displacement_um"] == 5.0
+
+
+def _agreement_frame():
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            ("P1", "cellsam", "instantseg", 0.80),
+            ("P1", "cellsam", "stardist", 0.60),
+            ("P1", "instantseg", "stardist", 0.70),
+            ("P2", "cellsam", "instantseg", 0.90),
+            ("P2", "cellsam", "stardist", 0.40),
+        ],
+        columns=["patient_id", "method_a", "method_b", "foreground_dice"],
+    )
+
+
+def test_agreement_matrix_is_the_cohort_median_or_one_patients_own_values():
+    """The matrix is symmetric with a unit diagonal; over the cohort it is the median per
+    pair, with `patient` it is that section alone, and a pair nobody scored stays NaN
+    instead of reading as perfect agreement or as zero."""
+    import numpy as np
+
+    from benchmarks import supplementary as sp
+
+    order = ["stardist", "instantseg", "cellsam"]
+    mat, n = sp.agreement_matrix(_agreement_frame(), order)
+    assert n == 2 and list(mat.index) == order
+    assert mat.loc["cellsam", "instantseg"] == pytest.approx(0.85)
+    assert mat.loc["instantseg", "cellsam"] == pytest.approx(0.85)
+    assert mat.loc["stardist", "cellsam"] == pytest.approx(0.50)
+    assert all(mat.loc[m, m] == 1.0 for m in order)
+
+    one, n1 = sp.agreement_matrix(_agreement_frame(), order, patient="P2")
+    assert n1 == 1 and one.loc["cellsam", "instantseg"] == pytest.approx(0.90)
+    assert np.isnan(one.loc["instantseg", "stardist"])  # P2 has no such row
+
+
+def test_agreement_heatmap_writes_the_matrix_as_its_own_figure(tmp_path):
+    from benchmarks import supplementary as sp
+
+    csv_path = tmp_path / "S6_pairwise_agreement.csv"
+    _agreement_frame().to_csv(csv_path, index=False)
+    written = sp.agreement_heatmap(csv_path, tmp_path / "heat", formats="png,pdf")
+    assert [p.name for p in written] == ["heat.png", "heat.pdf"]
+    assert all(p.stat().st_size > 0 for p in written)
+    # no usable row: nothing is written rather than an identity matrix posing as data
+    assert sp.agreement_heatmap(_agreement_frame().iloc[0:0], tmp_path / "none") == []
+    assert not (tmp_path / "none.png").exists()
