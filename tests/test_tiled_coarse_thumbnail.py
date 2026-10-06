@@ -84,7 +84,7 @@ def _write_pair(tmp_path, n=1024, shift=(16, -12), ref_n=None):
     return ref_f, mov_f
 
 
-def _run(tmp_path, ref_f, mov_f, max_dim, nuclear_index=1, tile=256, halo=32):
+def _run(tmp_path, ref_f, mov_f, max_dim, nuclear_index=1, tile=256, halo=32, extra=()):
     m0_f = tmp_path / "m0.json"
     tiles_f = tmp_path / "tiles.csv"
     tiled_coarse.main(
@@ -105,6 +105,7 @@ def _run(tmp_path, ref_f, mov_f, max_dim, nuclear_index=1, tile=256, halo=32):
             str(m0_f),
             "--out-tiles",
             str(tiles_f),
+            *extra,
         ]
     )
     return json.loads(m0_f.read_text()), tiles_f
@@ -333,16 +334,30 @@ def test_small_slide_is_not_decimated(tmp_path, monkeypatch):
     assert m0[1, 2] == pytest.approx(4, abs=1.0)
 
 
-def test_an_unanchorable_pair_fails_the_task_naming_both_slides(tmp_path):
-    """Two unrelated slides must not produce an M0 at all: a wrong anchor fails nothing
-    downstream (tiles are simply read from the wrong place), so COARSE refuses, loudly, with
-    the slide names and the scores in the error, and writes no M0 JSON."""
-    from stare.coarse_align import CoarseRefused
-
+def test_an_unanchorable_pair_is_anchored_unverified_with_a_warning(tmp_path, caplog):
+    """STARE >= 1.1.0 is permissive by default: two unrelated slides still get an M0 (the
+    best guess), but a wrong anchor fails nothing downstream (tiles are simply read from the
+    wrong place), so the M0 JSON says `coarse_trusted: false` and the log names both slides."""
     # 512 vs 1024 draws of the textured field are different random fields, not a crop.
     ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
+    with caplog.at_level("WARNING"):
+        m0_doc = _run(tmp_path, ref_f, mov_f, max_dim=128)[0]
+    assert m0_doc["coarse_trusted"] is False
+    warned = [
+        r.getMessage() for r in caplog.records if "UNVERIFIED ANCHOR" in r.getMessage()
+    ]
+    assert any("mov.ome.tiff" in m and "ref.ome.tiff" in m for m in warned), caplog.text
+    assert any("peak" in m and "ORB" in m for m in warned), caplog.text
+
+
+def test_strict_anchor_fails_the_unanchorable_pair_naming_both_slides(tmp_path):
+    """`--strict-anchor` restores the refusal: no M0 JSON, the slide names and the scores in
+    the error."""
+    from stare.coarse_align import CoarseRefused
+
+    ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
     with pytest.raises(CoarseRefused) as ei:
-        _run(tmp_path, ref_f, mov_f, max_dim=128)
+        _run(tmp_path, ref_f, mov_f, max_dim=128, extra=("--strict-anchor",))
     msg = str(ei.value)
     assert "REFUSED" in msg and "mov.ome.tiff" in msg and "ref.ome.tiff" in msg, msg
     assert "peak" in msg and "ORB" in msg, msg
