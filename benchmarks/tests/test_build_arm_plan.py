@@ -1083,13 +1083,14 @@ def test_tiled_arms_are_tier_x_stride(plan):
     assert all("." not in r["arm"] for r in tiled)
 
 
-def test_the_stride_axis_brackets_the_shipped_default(cfg):
-    """The middle stride is the pipeline's default, so one arm per tier IS what ships."""
+def test_the_stride_axis_contains_the_shipped_default(cfg):
+    """The pipeline's default stride is on the axis, so one arm per tier IS what ships. (It
+    was the MIDDLE value until the default moved from 128 to 64 on 2026-10-06.)"""
     defaults = _param_checker().extract_config_defaults(
         (REPO_ROOT / "nextflow.config").read_text()
     )
     strides = cfg["registration_arms"]["tiled"]["reg_tiled_stride"]
-    assert str(sorted(strides)[1]) == str(defaults["reg_tiled_stride"]), strides
+    assert str(defaults["reg_tiled_stride"]) in {str(s) for s in strides}, strides
 
 
 def test_no_arm_carries_a_retired_stare_v1_column(plan):

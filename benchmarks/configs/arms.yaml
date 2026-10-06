@@ -121,7 +121,7 @@ registration_arms:
     # tiled_<tier>_s<stride> (e.g. tiled_high_s128). Same shape as sweep.yaml's
     # registration_method_grid.tiled.
     reg_tiled_mode:   [low, medium, high]
-    reg_tiled_stride: [64, 128, 256]     # brackets the default 128; 9 arms
+    reg_tiled_stride: [64, 128, 256]     # contains the default 64; 9 arms
 
     # THE COARSE FRONT-END AXIS IS GONE. It declared the three classical front-ends and
     # deferred the learned matcher on three grounds -- a separate unpublished stare-ml image,

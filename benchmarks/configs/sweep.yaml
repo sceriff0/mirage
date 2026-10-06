@@ -151,7 +151,7 @@ baseline:
   # reg_tiled_gate_tre, reg_tiled_solver and reg_tiled_upsample; their baseline entries went
   # with them, and so did the `solver_robust` delta grid that re-ran the old STARE cells.)
   reg_tiled_max_disp: null            # RANGE gate; null = fall back to reg_tiled_halo
-  reg_tiled_stride: 128               # REG_TILE vector-lattice stride (px), pipeline default: one window
+  reg_tiled_stride: 64                # REG_TILE vector-lattice stride (px), pipeline default: one window
                                       # vector per stride px, window 2*stride. NOT resource-neutral: the
                                       # read box is core + 3*stride and REG_TILE's memory closure derives
                                       # from it. Crossed with the tiers by registration_method_grid.tiled.
