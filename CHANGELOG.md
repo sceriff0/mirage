@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **STARE is pinned to v1.1.0, whose COARSE stage no longer fails a slide it cannot anchor
+  with confidence.** When neither the NCC sweep nor the ORB fallback passes its gate,
+  `TILED_COARSE` continues with the best guess, logs `UNVERIFIED ANCHOR` naming both
+  slides, and writes `coarse_trusted: false` into the M0 JSON. Such a slide can come out
+  mis-registered with exit 0, so check its registration QC. Only a blank nuclear plane is
+  still refused. `bolt3x/mirage-stare:1.0.0` is republished with it: delete a cached
+  Singularity `.img` so it is pulled again.
+
 ### Added
 
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
