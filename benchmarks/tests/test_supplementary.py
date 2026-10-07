@@ -812,7 +812,7 @@ def test_every_method_is_drawn_at_the_anchors_own_crop_size(tmp_path, monkeypatc
                     {
                         "round": "CD3",
                         "variant": 1,
-                        "crop": {"y": 10, "x": 20, "size_px": 5120},
+                        "crop": {"y": -120, "x": 20, "size_px": 5120},
                         "zoom": {"y": 30, "x": 40},
                     }
                 )
@@ -826,9 +826,10 @@ def test_every_method_is_drawn_at_the_anchors_own_crop_size(tmp_path, monkeypatc
     monkeypatch.setattr(sp, "_anchor_arm", lambda picks: "valis_high")
     monkeypatch.setattr(sp, "arm_for", lambda picks, m, c: f"{m}_{c}")
     sp._overlay_panels(ctx, None, "046", "S4", {"field_um": 10000, "zoom_um": 60})
-    pinned = [c for c in calls if "--roi" in c]
+    pinned = [c for c in calls if "--field-px" in c]
     assert len(pinned) == len(sp.REG_METHODS)
     for c in pinned:
-        assert c[c.index("--roi") + 1] == "10,20"
+        # one token each: a fitted field's corner can be negative, and argparse would
+        # read a separate "-120,40" as an option
+        assert "--roi=-120,20" in c and "--zoom-roi=30,40" in c
         assert c[c.index("--field-px") + 1] == "5120"
-        assert c[c.index("--zoom-roi") + 1] == "30,40"

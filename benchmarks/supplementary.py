@@ -480,10 +480,12 @@ def _overlay_panels(
         man = json.loads(mf.read_text())
         v = int(man.get("variant", 1))
         # the anchor's OWN size: a field fitted to the tissue is smaller than field_um
-        pin = ["--roi", f"{man['crop']['y']},{man['crop']['x']}"]
+        # (`--roi=`: a fitted field may start left of or above the slide, and argparse
+        # reads a separate "-120,40" as an option)
+        pin = [f"--roi={man['crop']['y']},{man['crop']['x']}"]
         pin += ["--field-px", man["crop"]["size_px"]]
         if man.get("zoom"):
-            pin += ["--zoom-roi", f"{man['zoom']['y']},{man['zoom']['x']}"]
+            pin += [f"--zoom-roi={man['zoom']['y']},{man['zoom']['x']}"]
         for method in REG_METHODS:
             for config in configs(ctx):
                 arm = arm_for(picks, method, config)
@@ -1390,10 +1392,10 @@ def fig_gallery(ctx: Ctx, picks: pd.DataFrame, patients: list[str]) -> None:
                 mans = [mm for mm in mans if str(mm.get("patient", pid)) == pid]
                 for man in mans:
                     v = int(man.get("variant", 1))
-                    pin = ["--roi", f"{man['crop']['y']},{man['crop']['x']}"]
+                    pin = [f"--roi={man['crop']['y']},{man['crop']['x']}"]
                     pin += ["--field-px", man["crop"]["size_px"]]
                     if man.get("zoom"):
-                        pin += ["--zoom-roi", f"{man['zoom']['y']},{man['zoom']['x']}"]
+                        pin += [f"--zoom-roi={man['zoom']['y']},{man['zoom']['x']}"]
                     for m, arm in reg:
                         ctx.render(
                             "reg_overlay",

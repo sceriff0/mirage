@@ -444,10 +444,15 @@ def test_a_field_larger_than_the_tissue_is_fitted_to_it():
     assert abs(y1 - 480) <= 12 and abs(x1 - 720) <= 12
     y, x, side = ro.fit_to_tissue(low, factor, 1600, (H, W), margin=0.1)
     assert side == pytest.approx(480 * 1.2, abs=30)  # the long side + 10% each way
-    # the tissue's centre (320, 480) is the field's centre, where the slide allows it
+    # the tissue's centre (320, 480) is the field's centre -- even where that puts the
+    # field's corner outside the slide (here above it): the readers pad with black
     assert x + side / 2 == pytest.approx(480, abs=12)
-    assert y == 0 or y + side / 2 == pytest.approx(320, abs=12)
-    assert 0 <= y <= H - side and 0 <= x <= W - side
+    assert y + side / 2 == pytest.approx(320, abs=12)
+    # the field AS ASKED may exceed the slide: a tissue wider than the slide is tall
+    wide = _sparse(shape=(100, 600), box=(20, 30, 80, 570))
+    wy, wx, wside = ro.fit_to_tissue(wide, 4, 100000, (400, 2400))
+    assert wside > 400 and wy < 0  # a square around all of it, taller than the slide
+    assert wx <= 30 * 4 and wx + wside >= 570 * 4
     # a field the tissue is larger than is not touched: select_rois picks the window
     assert ro.fit_to_tissue(low, factor, 300, (H, W)) is None
     import numpy as np
@@ -460,3 +465,27 @@ def test_the_fit_is_recorded_and_can_be_switched_off(arm_root, tmp_path):
     assert "fitted_to_tissue" in on["crop"]
     off = _overlay(arm_root / "armB", tmp_path / "off", "--no-fit-tissue")
     assert off["crop"]["fitted_to_tissue"] is False
+
+
+def test_a_whole_tissue_field_reaches_past_the_slide_and_a_pinned_copy_matches(
+    arm_root, tmp_path
+):
+    """End to end: a field no slide reaches is fitted to the tissue; the pinned re-render
+    of it (as the supplementary composer does, corner possibly negative) is the same crop."""
+    import matplotlib.image as mpimg
+
+    a = _overlay(arm_root / "armB", tmp_path / "a", "--field-px", "100000")
+    crop = a["crop"]
+    assert crop["fitted_to_tissue"] is True and crop["size_px"] < 100000
+    b = _overlay(
+        arm_root / "armB",
+        tmp_path / "b",
+        f"--roi={crop['y']},{crop['x']}",
+        "--field-px",
+        str(crop["size_px"]),
+    )
+    assert b["crop"]["size_px"] == crop["size_px"]
+    assert (b["crop"]["y"], b["crop"]["x"]) == (crop["y"], crop["x"])
+    pa = mpimg.imread(tmp_path / "a" / "P1_CD3_after.png")
+    pb = mpimg.imread(tmp_path / "b" / "P1_CD3_after.png")
+    assert pa.shape == pb.shape and (pa == pb).all()

@@ -53,9 +53,10 @@ mosaic:
 S4:
   patient: null                   # the case of Figure 2b; null = the first patient
   rounds: []                      # the two panels of Figure 2b: the MOVING round's marker
-  field_um: 10000                 # the big panel: the WHOLE TISSUE. A field larger than
+  field_um: 50000                 # the big panel: the WHOLE TISSUE. A field larger than
                                   # the tissue is shrunk to it (plus a margin) and centred
-                                  # on it, so 10 mm means "all of it"; 500 = a closer view
+                                  # on it, so a value no section reaches means "all of
+                                  # it" (10000 cut a 10 mm section); 500 = a closer view
   zoom_um: 300                    # the inset, same tissue in every panel, read at FULL
                                   # resolution (300 um = 923 px at 0.325 um/px, one slide
                                   # pixel per drawn pixel; 60 = a few cells, enlarged)
@@ -68,7 +69,7 @@ S4:
 S7:
   patients: []                    # empty = every case except S4's
   rounds: []
-  field_um: 10000                 # as S4
+  field_um: 50000                 # as S4
   zoom_um: 300
   variants: 2
   numbers: scorer

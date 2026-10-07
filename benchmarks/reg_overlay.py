@@ -252,6 +252,11 @@ def fit_to_tissue(low, factor, field_px: int, full_shape, margin: float = 0.08):
     centred on the SLIDE, which put the tissue in a corner of a black panel. Such a field
     is shrunk to the tissue's box plus ``margin`` on each side and centred on it. A field
     the tissue is larger than is left to select_rois, which picks the best window.
+
+    ``field_px`` is the field AS ASKED, not clamped to the slide, and the fitted square may
+    reach past the slide's edge (a negative corner included): the tissue of a 9 x 5 mm
+    section needs a 9 mm square, and the crop readers fill what lies outside with black.
+    Clamping it to the slide's short side would cut the tissue instead.
     """
     box = rm.tissue_box(low, factor, full_shape)
     if box is None:
@@ -262,9 +267,7 @@ def fit_to_tissue(low, factor, field_px: int, full_shape, margin: float = 0.08):
     if side >= field_px:
         return None
     side = max(side, 1)
-    y = (y0 + y1) // 2 - side // 2
-    x = (x0 + x1) // 2 - side // 2
-    return min(max(y, 0), max(H - side, 0)), min(max(x, 0), max(W - side, 0)), side
+    return (y0 + y1) // 2 - side // 2, (x0 + x1) // 2 - side // 2, side
 
 
 def render(
@@ -301,11 +304,12 @@ def render(
         field_px = int(round(opt.field_um / px))
     else:
         raise SystemExit("pixel size unknown; pass --pixel-size-um or --field-px")
-    field_px = min(field_px, H, W)
-
     fitted = None
     if not opt.roi and opt.fit_tissue:
         fitted = fit_to_tissue(*lowres(opt.lowres_um), field_px, (H, W), opt.fit_margin)
+    if not opt.roi or not opt.field_px:
+        # a pinned crop given in px is another render's own (possibly fitted) field
+        field_px = min(field_px, H, W)
     if opt.roi:
         y, x = (int(v) for v in opt.roi.split(",")[:2])
     elif fitted is not None:

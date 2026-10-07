@@ -84,8 +84,8 @@ figures:
                              # run; use `scorer` for arms that already ran at reg_qc=2
 
   overlay:
-    field_um: [500, 2000, 10000]  # 500 um reads as tissue; 2000 um shows how far
-                             # registration holds across a section; 10000 um is the WHOLE
+    field_um: [500, 2000, 50000]  # 500 um reads as tissue; 2000 um shows how far
+                             # registration holds across a section; 50000 um is the WHOLE
                              # TISSUE (a field larger than the tissue is fitted to it)
     zoom_um: [60, 300]       # the full-resolution inset (0 = none), drawn for every field
                              # above: 60 um = a few cells, 300 um = a neighbourhood
