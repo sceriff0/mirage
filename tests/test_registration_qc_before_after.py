@@ -607,3 +607,45 @@ def test_create_registration_qc_without_pixel_size_um_leaves_output_unstamped(tm
         assert tags["ResolutionUnit"].value != RESUNIT.MICROMETER
         assert tags["XResolution"].value == (1, 1)
         assert "unit=um" not in tags["ImageDescription"].value
+
+
+def test_a_fullres_composite_too_large_for_a_classic_tiff_is_written_as_bigtiff(
+    tmp_path, monkeypatch
+):
+    """An ImageJ TIFF cannot be BigTIFF, so a whole-slide composite overflowed its 32-bit
+    offsets (``'I' format requires 0 <= number <= 4294967295``) and failed the run. Above
+    the payload threshold the same pixels and scale are written as an OME BigTIFF."""
+    p = _write_triplet(tmp_path)
+
+    def _fullres(name, threshold):
+        out = tmp_path / f"{name}_QC_RGB.tif"
+        if threshold is not None:
+            monkeypatch.setattr(qc, "BIGTIFF_THRESHOLD_BYTES", threshold)
+        qc.create_registration_qc(
+            reference_path=p["reference"],
+            registered_path=p["registered"],
+            output_path=out,
+            scale_factor=1.0,
+            save_fullres=True,
+            save_png=False,
+            save_tiff=False,
+            native_path=p["native"],
+            pixel_size_um=0.5,
+        )
+        return tmp_path / f"{name}_QC_RGB_fullres.tif"
+
+    small = _fullres("small", None)
+    large = _fullres("large", 1)
+
+    with tifffile.TiffFile(str(small)) as tf:
+        assert tf.is_imagej and not tf.is_bigtiff
+        small_px = tf.asarray()
+        small_res = tf.pages[0].tags["XResolution"].value
+    with tifffile.TiffFile(str(large)) as tf:
+        assert tf.is_bigtiff and tf.is_ome
+        assert 'PhysicalSizeX="0.5"' in tf.ome_metadata
+        large_px = tf.asarray()
+        large_res = tf.pages[0].tags["XResolution"].value
+
+    assert np.array_equal(small_px, large_px)
+    assert small_res == large_res
