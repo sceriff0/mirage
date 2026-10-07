@@ -1245,6 +1245,7 @@ def draw_legend(ax, entries, font, x=0.97, y=0.03, spacing=1.25, ha="right"):
             va="bottom",
             fontsize=font,
             color=color,
+            gid="label:legend",
         )
         _outline(t)
         texts.append(t)
@@ -1307,6 +1308,51 @@ def _mpl():
     return plt
 
 
+LABEL_MODES = ("burned", "none")
+
+
+def collect_labels(fig, hide: bool = False) -> list[dict]:
+    """Every tagged text of ``fig`` as data, and -- with ``hide`` -- not drawn at all.
+
+    A label drawn into a panel is pixels in the PNG, and an outlined one (_outline) is
+    PATHS even in a PDF, so neither can be edited in the assembled figure. This returns
+    what was written and where, as fractions of the figure, so a composer can lay the same
+    labels over the bare image as real text. Only texts carrying a ``label:<role>`` gid
+    are taken (title, note, bar, legend): an axes also owns tick labels nobody drew.
+    """
+    from matplotlib.colors import to_hex
+    from matplotlib.text import Text
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    fw, fh = fig.bbox.width, fig.bbox.height
+    out = []
+    for t in fig.findobj(Text):
+        gid = t.get_gid() or ""
+        if not gid.startswith("label:") or not t.get_text().strip():
+            continue
+        bb = t.get_window_extent(renderer)
+        ha, va = t.get_ha(), t.get_va()
+        out.append(
+            {
+                "role": gid[len("label:") :],
+                "text": t.get_text(),
+                "x": {"left": bb.x0, "right": bb.x1}.get(ha, (bb.x0 + bb.x1) / 2) / fw,
+                "y": {"top": bb.y1, "bottom": bb.y0}.get(va, (bb.y0 + bb.y1) / 2) / fh,
+                "ha": ha,
+                "va": va if va in ("top", "bottom") else "center",
+                # font size as a fraction of the figure's height, so it scales with the
+                # panel wherever the panel is redrawn
+                "size": t.get_fontsize() / (fig.get_figheight() * 72.0),
+                "color": to_hex(t.get_color()),
+                "weight": str(t.get_fontweight()),
+            }
+        )
+        if hide:
+            t.set_visible(False)
+    return out
+
+
 def _outline(t):
     from matplotlib import patheffects
 
@@ -1327,6 +1373,7 @@ def draw_scalebar(ax, h, w, bar_px, label, font, thick=0.014, color="white"):
             ha="center",
             va="bottom",
             fontsize=font,
+            gid="label:bar",
         )
     )
 
@@ -1432,6 +1479,7 @@ def draw_overview_zoom(
     facecolor="black",
     bar_over_um: float | None = None,
     bar_zoom_um: float | None = None,
+    labels: str = "burned",
 ) -> dict:
     """Overview left, framed zoom top right, funnel between, legend bottom right.
 
@@ -1508,6 +1556,7 @@ def draw_overview_zoom(
                 fontsize=font * 1.1,
                 color="white",
                 fontweight="bold",
+                gid="label:title",
             )
         )
     if note:
@@ -1525,6 +1574,7 @@ def draw_overview_zoom(
                 va="top",
                 fontsize=font * 0.95,
                 color="white",
+                gid="label:note",
             )
         )
     bar_over = bar_over_um or auto_scalebar_um(wo * factor * px)
@@ -1553,6 +1603,9 @@ def draw_overview_zoom(
         legend_ax = fig.add_axes([zx, 0.0, zoom_disp / fig_w, max(0.02, zy - 0.02)])
         legend_ax.set_axis_off()
         draw_legend(legend_ax, list(legend), font * 1.3, x=1.0, y=0.05)
+    # the canvas is exactly the figure (below), so a label's figure fraction is its
+    # fraction of the saved image
+    placed = collect_labels(fig, hide=labels == "none")
     for fmt in formats:
         # this layout is hand-placed in figure coordinates, so the canvas must be exactly the
         # figure: a globally-set savefig.bbox="tight" (analysis/lib/plotting.py's theme) would
@@ -1565,7 +1618,7 @@ def draw_overview_zoom(
             pad_inches=0,
         )
     plt.close(fig)
-    return {"overview_um": bar_over, "zoom_um": bar_zoom}
+    return {"overview_um": bar_over, "zoom_um": bar_zoom, "labels": placed}
 
 
 def assemble_figure(

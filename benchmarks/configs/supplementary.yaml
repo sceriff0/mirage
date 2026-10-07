@@ -62,6 +62,10 @@ S4:
                                   # less magnification)
   variants: 3
   numbers: scorer
+  labels: editable                # the words INSIDE a panel (scale-bar text, channel
+                                  # names): editable = real text in the PDF, which a
+                                  # vector editor can change; burned = pixels of the
+                                  # panel, as before; none = nothing written inside
 S7:
   patients: []                    # empty = every case except S4's
   rounds: []
@@ -69,6 +73,7 @@ S7:
   zoom_um: 60
   variants: 2
   numbers: scorer
+  labels: editable                # as S4
 
 # ---- S6: segmentation backends ------------------------------------------------------
 S6:

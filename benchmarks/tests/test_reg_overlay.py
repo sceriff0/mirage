@@ -385,3 +385,39 @@ def test_the_zoom_panel_is_drawn_in_reg_zooms_layout(arm_root, tmp_path, monkeyp
         ]
         assert k["title"] in ("Before", "After (armB)")
         assert k["zoom_fraction"] == 0.62 and k["frame_color"] == "white"
+
+
+@pytest.mark.parametrize("zoom", [(), ("--zoom-um", "20")])
+def test_labels_none_leaves_the_words_out_of_the_image_but_in_the_manifest(
+    arm_root, tmp_path, zoom
+):
+    """A label drawn into a panel is pixels, and uneditable in the assembled figure.
+
+    `--labels none` renders the same panel without them; the manifest carries what each
+    said and where (as fractions of the image) in BOTH modes, identically, so a composer
+    can set them as real text over the bare panel.
+    """
+    import matplotlib.image as mpimg
+
+    burned = _overlay(arm_root / "armB", tmp_path / "burned", *zoom)
+    bare = _overlay(arm_root / "armB", tmp_path / "bare", *zoom, "--labels", "none")
+    assert burned["labels_drawn"] is True and bare["labels_drawn"] is False
+    assert burned["labels"] == bare["labels"]
+    after = bare["labels"]["after"]
+    assert {lab["role"] for lab in after} == {"title", "note", "bar", "legend"}
+    assert [lab["text"] for lab in after if lab["role"] == "legend"] == [
+        "reference DAPI",
+        "moving DAPI",
+    ]
+    assert all(0 <= lab["x"] <= 1 and 0 <= lab["y"] <= 1 for lab in after)
+    if zoom:  # the hand-placed layout: the canvas is the figure in both modes
+        a = mpimg.imread(tmp_path / "burned" / "P1_CD3_after.png")
+        b = mpimg.imread(tmp_path / "bare" / "P1_CD3_after.png")
+        assert a.shape == b.shape
+        assert (a != b).any(), "the words were still drawn"
+        # the difference is confined to where the labels were recorded
+        ys, xs = (a != b).any(axis=2).nonzero()
+        h, w = a.shape[:2]
+        title = next(lab for lab in after if lab["role"] == "title")
+        assert ys.min() >= (1 - title["y"]) * h - 3
+        assert xs.min() >= title["x"] * w - 3

@@ -748,3 +748,48 @@ def test_agreement_heatmap_writes_the_matrix_as_its_own_figure(tmp_path):
     # no usable row: nothing is written rather than an identity matrix posing as data
     assert sp.agreement_heatmap(_agreement_frame().iloc[0:0], tmp_path / "none") == []
     assert not (tmp_path / "none.png").exists()
+
+
+def test_label_mode_is_one_of_three_and_defaults_to_the_historical_figure():
+    assert sp._label_mode({}) == "burned"
+    assert sp._label_mode({"labels": "editable"}) == "editable"
+    with pytest.raises(SystemExit, match="labels"):
+        sp._label_mode({"labels": "vector"})
+
+
+def test_inner_labels_are_set_as_real_text_where_the_panel_recorded_them(tmp_path):
+    """The composed PDF's words must be TEXT a vector editor can retype: TrueType, not
+    matplotlib's default Type 3, and placed where reg_overlay's manifest put them."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    sp._editable_fonts(plt)
+    assert plt.rcParams["pdf.fonttype"] == 42
+    labels = [
+        {"role": "title", "text": "After (VALIS)", "x": 0.02, "y": 0.98, "size": 0.05},
+        {
+            "role": "bar",
+            "text": "100 µm",
+            "x": 0.1,
+            "y": 0.1,
+            "ha": "center",
+            "va": "bottom",
+            "size": 0.04,
+            "color": "#cccccc",
+        },
+        {"role": "legend", "text": "moving DAPI", "x": 0.9, "y": 0.02, "size": 0.06},
+    ]
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ax.imshow(np.zeros((50, 100, 3)))
+    # title and numbers are written OUTSIDE the panel by the composer: not repeated inside
+    assert sp._draw_inner_labels(ax, labels) == 2
+    bar = next(t for t in ax.texts if t.get_text() == "100 µm")
+    assert bar.get_position() == (0.1, 0.1) and bar.get_transform() is ax.transAxes
+    # 0.04 of the panel's DRAWN height (a 2:1 image in a square axes), in points
+    height_pt = ax.get_position().height * fig.get_figheight() * 72
+    assert bar.get_fontsize() == pytest.approx(0.04 * height_pt)
+    assert height_pt < 0.6 * 4 * 72
+    plt.close(fig)

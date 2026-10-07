@@ -457,6 +457,8 @@ def _overlay_panels(
     ]
     if spec.get("zoom_um"):
         base += ["--zoom-um", spec["zoom_um"]]
+    if _label_mode(spec) != "burned":
+        base += ["--labels", "none"]
     rounds = spec.get("rounds") or []
     if rounds:
         base += ["--rounds", *rounds]
@@ -502,8 +504,73 @@ def _overlay_panels(
     return root
 
 
+OVERLAY_LABELS = ("burned", "editable", "none")
+
+
+def _label_mode(spec: dict) -> str:
+    """`labels:` of an overlay figure's options: how the words inside a panel are set.
+
+    burned   = drawn into the panel's pixels by reg_overlay (the historical figure)
+    editable = the panel is rendered bare and the composer sets scale-bar text and channel
+               names over it as real text, which a vector editor can change or delete
+    none     = bare panels, nothing written inside them
+    """
+    mode = str(spec.get("labels") or "burned")
+    if mode not in OVERLAY_LABELS:
+        raise SystemExit(f"labels: {mode!r} is not one of {', '.join(OVERLAY_LABELS)}")
+    return mode
+
+
+def _editable_fonts(plt) -> None:
+    """Text in a PDF/SVG stays TEXT: TrueType (42), not matplotlib's default Type 3, which
+    a vector editor opens as outlines it cannot retype."""
+    plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "none"})
+
+
+def _panel_manifest(panel: Path, which: str) -> dict:
+    """The manifest reg_overlay wrote FOR THIS PANEL (`<stem>_overlay.json` beside
+    `<stem>_<which>.png`); {} when there is none."""
+    mf = panel.with_name(panel.name[: -len(f"_{which}.png")] + "_overlay.json")
+    return json.loads(mf.read_text()) if mf.is_file() else {}
+
+
+# Inside a panel the composer re-sets only what it does not already write outside it: the
+# method is the column title and the numbers are the line underneath.
+INNER_ROLES = ("bar", "legend")
+
+
+def _draw_inner_labels(ax, labels: list[dict], roles=INNER_ROLES) -> int:
+    """Lay a panel's recorded labels over its image as real text; returns how many."""
+    ax.apply_aspect()  # the axes box as the image actually fills it
+    fig = ax.figure
+    height_pt = ax.get_position().height * fig.get_figheight() * 72.0
+    n = 0
+    for lab in labels:
+        if lab.get("role") not in roles:
+            continue
+        ax.text(
+            lab["x"],
+            lab["y"],
+            lab["text"],
+            transform=ax.transAxes,
+            ha=lab.get("ha", "left"),
+            va=lab.get("va", "bottom"),
+            fontsize=lab["size"] * height_pt,
+            color=lab.get("color", "white"),
+            fontweight=lab.get("weight", "normal"),
+        )
+        n += 1
+    return n
+
+
 def _compose_overlays(
-    ctx: Ctx, picks, root: Path, pid: str, final: pd.DataFrame, min_methods: int = 2
+    ctx: Ctx,
+    picks,
+    root: Path,
+    pid: str,
+    final: pd.DataFrame,
+    min_methods: int = 2,
+    labels: str = "burned",
 ):
     """Per (set, config, variant): Before | one After per method, numbers underneath."""
     import matplotlib
@@ -512,18 +579,21 @@ def _compose_overlays(
     import matplotlib.image as mpimg
     import matplotlib.pyplot as plt
 
+    _editable_fonts(plt)
+
     for set_name, methods in method_sets(ctx, picks, min_methods).items():
         for config in configs(ctx):
             panel_dirs = {m: root / "panels" / f"{m}_{config}" for m in methods}
             for vdir in sorted((panel_dirs[methods[0]]).glob("v*")):
                 v = vdir.name
-                cols, titles, notes = [], [], []
+                cols, titles, notes, inner = [], [], [], []
                 befores = sorted(vdir.glob(f"{pid}_*_before.png"))
                 if not befores:
                     continue
                 cols.append(befores[0])
                 titles.append("Before")
                 notes.append(_numbers_note(befores[0], "before"))
+                inner.append(_panel_manifest(befores[0], "before"))
                 for m in methods:
                     after = sorted((panel_dirs[m] / v).glob(f"{pid}_*_after.png"))
                     if not after:
@@ -531,6 +601,7 @@ def _compose_overlays(
                     cols.append(after[0])
                     titles.append(_label(m, arm_for(picks, m, config), config))
                     notes.append(_numbers_note(after[0], "after"))
+                    inner.append(_panel_manifest(after[0], "after"))
                 fig, axes = plt.subplots(
                     1, len(cols), figsize=(3.4 * len(cols), 3.9), squeeze=False
                 )
@@ -547,6 +618,11 @@ def _compose_overlays(
                     f"{pid} — {set_name} set, {config} configuration", fontsize=9
                 )
                 fig.tight_layout()
+                if labels == "editable":
+                    for ax, man, which in zip(
+                        axes[0], inner, ["before"] + ["after"] * len(inner)
+                    ):
+                        _draw_inner_labels(ax, (man.get("labels") or {}).get(which, []))
                 out = root / f"{set_name}_{config}" / v
                 out.mkdir(parents=True, exist_ok=True)
                 # Saved at the dpi that gives a panel ITS OWN pixels: at options.dpi a
@@ -571,9 +647,9 @@ def _numbers_note(panel: Path, which: str) -> str:
     directory holds one per moving round, and taking "the first manifest" captioned a panel
     with another round's numbers (S4, 2026-10-05: 0.12 in the image, 0.46 under it).
     """
-    mf = panel.with_name(panel.name[: -len(f"_{which}.png")] + "_overlay.json")
-    if mf.is_file():
-        n = (json.loads(mf.read_text()).get("numbers") or {}).get(which)
+    man = _panel_manifest(panel, which)
+    if man:
+        n = (man.get("numbers") or {}).get(which)
         if not isinstance(n, dict):
             return ""
         parts = []
@@ -625,7 +701,7 @@ def fig_s4(ctx, picks, patients, final):
     pid = str(spec.get("patient") or patients[0])
     root = _overlay_panels(ctx, picks, pid, "S4", spec)
     if not ctx.dry_run:
-        _compose_overlays(ctx, picks, root, pid, final)
+        _compose_overlays(ctx, picks, root, pid, final, labels=_label_mode(spec))
 
 
 def fig_s7(ctx, picks, patients, final):
@@ -637,7 +713,9 @@ def fig_s7(ctx, picks, patients, final):
         root = _overlay_panels(ctx, picks, pid, "S7", spec)
         if not ctx.dry_run:
             # S7 is ONE method before vs after (as Fig 4a): VALIS alone draws it.
-            _compose_overlays(ctx, picks, root, pid, final, min_methods=1)
+            _compose_overlays(
+                ctx, picks, root, pid, final, min_methods=1, labels=_label_mode(spec)
+            )
 
 
 # ----------------------------------------------------------------------------- S5 --

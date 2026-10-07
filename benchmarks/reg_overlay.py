@@ -59,12 +59,16 @@ def draw_panel(
     legend,
     size_in=None,
     zoom=None,
+    labels="burned",
 ):
     """One panel: the crop, or -- with ``zoom`` -- the crop beside a framed zoom of it.
 
     The zoom layout is reg_mosaic.draw_overview_zoom, the same function reg_zoom draws its
     segmentation figure with, so the two look like one family: image left, framed zoom top
     right, funnel between, channel names bottom right under the zoom.
+
+    Returns the panel's labels as data (reg_mosaic.collect_labels); ``labels="none"``
+    leaves them out of the image, for a composer that sets them as editable text.
     """
     if zoom is not None:
         return rm.draw_overview_zoom(
@@ -83,7 +87,8 @@ def draw_panel(
             note=note,
             frame_color=zoom["color"],
             bar_over_um=scalebar[2] if scalebar else None,
-        )
+            labels=labels,
+        )["labels"]
     plt = rm._mpl()
     h, w = img.shape[:2]
     # one image pixel per output pixel unless a size is forced: a smaller figure downsamples
@@ -104,6 +109,7 @@ def draw_panel(
             fontsize=font,
             color="white",
             fontweight="bold",
+            gid="label:title",
         )
     )
     if note:
@@ -117,6 +123,7 @@ def draw_panel(
                 va="top",
                 fontsize=font * 0.85,
                 color="white",
+                gid="label:note",
             )
         )
     if scalebar:
@@ -125,9 +132,18 @@ def draw_panel(
         legend
     ):  # channel names in their colours, lower right (the numbers sit top right)
         rm.draw_legend(ax, legend, font * 1.1)
+    placed = rm.collect_labels(fig, hide=labels == "none")
     for fmt in formats:
-        fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, bbox_inches="tight", pad_inches=0.02)
+        # the axes fill the figure, so untrimmed the image IS the canvas: saved that way
+        # when the labels are handed on as data, whose positions are figure fractions
+        if labels == "none":
+            fig.savefig(f"{out_stem}.{fmt}", dpi=dpi, bbox_inches=None, pad_inches=0)
+        else:
+            fig.savefig(
+                f"{out_stem}.{fmt}", dpi=dpi, bbox_inches="tight", pad_inches=0.02
+            )
     plt.close(fig)
+    return placed
 
 
 def load_avoid(path: Path | None, reference: Path) -> list[tuple[int, int, int]]:
@@ -356,12 +372,13 @@ def render(
     stem = f"{arm.patient}_{key}{tag}"
     moving_rgb, reference_rgb = rm.PALETTES[opt.palette]
     legend = [("reference DAPI", reference_rgb), ("moving DAPI", moving_rgb)]
+    placed = {}
     for name, title in (
         ("before", "Before"),
         ("after", f"After ({opt.title or arm.name})"),
     ):
         img, note, _ = panels[name]
-        draw_panel(
+        placed[name] = draw_panel(
             img,
             title,
             note,
@@ -371,6 +388,7 @@ def render(
             opt.dpi,
             legend,
             zoom=zoom["panel"][name] if zoom is not None else None,
+            labels=opt.labels,
         )
     low, f = lowres(opt.lowres_um)
     rm.save_locator(
@@ -416,6 +434,10 @@ def render(
         "stretch": {"pmin": opt.pmin, "pmax": opt.pmax, "gamma": opt.gamma},
         "scalebar_um": scalebar and float(scalebar[2]),
         "numbers": {k: v[2] for k, v in panels.items()},
+        # what each panel says and where, as fractions of its image: written whether or
+        # not the labels were drawn, so the panel can be re-labelled without re-rendering
+        "labels_drawn": opt.labels != "none",
+        "labels": placed,
     }
     (outdir / f"{stem}_overlay.json").write_text(json.dumps(manifest, indent=2))
     return manifest
@@ -535,6 +557,14 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--pixel-size-um", type=float, default=None)
     ap.add_argument("--lowres-um", type=float, default=5.0)
     ap.add_argument("--dpi", type=int, default=300)
+    ap.add_argument(
+        "--labels",
+        choices=list(rm.LABEL_MODES),
+        default="burned",
+        help="burned = title, numbers, scale-bar text and channel names drawn into the "
+        "panel; none = image, frame and bars only. Either way the manifest records every "
+        "label and its position, so a composer can set them as editable text",
+    )
     ap.add_argument("--formats", default="png,pdf")
     ap.add_argument("-v", "--verbose", action="store_true")
     return ap
