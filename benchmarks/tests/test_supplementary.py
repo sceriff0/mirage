@@ -60,8 +60,11 @@ def unified(tmp_path_factory):
     )
     cfg["high"]["ashlar"] = "ashlar_t1024_s240"
     cfg["mosaic"].update(variants=2, patch_um=32, rows=2, kinds=["overlay"])
-    cfg["S4"].update(field_um=48, zoom_um=0, variants=2, rounds=["CD3"])
-    cfg["S7"]["patients"] = []
+    # keep_panels: these tests read the single panels and their manifests
+    cfg["S4"].update(
+        field_um=48, zoom_um=0, variants=2, rounds=["CD3"], keep_panels=True
+    )
+    cfg["S7"].update(patients=[], keep_panels=True)
     cfg["options"].update(formats="png", dpi=50)
     conf = root.parent / "supplementary.yaml"
     conf.write_text(yaml.safe_dump(cfg))
@@ -987,3 +990,49 @@ def test_s6agree_writes_the_agreement_and_heatmaps_without_drawing_a_crop(
     assert "reg_zoom" not in (out / "commands.txt").read_text()
     # not part of an unnamed (everything) run, which draws S6 whole
     assert "S6agree" not in sp.FIGURES
+
+
+def test_only_the_finished_pdfs_are_kept_unless_the_panels_are_asked_for(tmp_path):
+    """`keep_panels: false` removes _anchor/ and panels/ once the figures exist and leaves
+    the crop positions in a CSV; unset, nothing is deleted. `formats:` of the figure
+    replaces options.formats for it."""
+
+    def tree(root):
+        (root / "_anchor").mkdir(parents=True)
+        (root / "panels" / "valis_high" / "v1").mkdir(parents=True)
+        (root / "before_after").mkdir()
+        (root / "before_after" / "046_CD3_v1.pdf").write_bytes(b"%PDF")
+        (root / "_anchor" / "046_CD3_v1_overlay.json").write_text(
+            json.dumps(
+                {
+                    "round": "CD3",
+                    "variant": 1,
+                    "crop": {"y": -5, "x": 7, "size_px": 900, "size_um": 292.5},
+                    "zoom": {"y": 30, "x": 40, "size_um": 300.0},
+                }
+            )
+        )
+        return root
+
+    kept = tree(tmp_path / "kept")
+    sp._drop_panels(kept, "046", {})
+    assert (kept / "_anchor").is_dir() and (kept / "panels").is_dir()
+
+    lean = tree(tmp_path / "lean")
+    sp._drop_panels(lean, "046", {"keep_panels": False})
+    assert not (lean / "_anchor").exists() and not (lean / "panels").exists()
+    assert (lean / "before_after" / "046_CD3_v1.pdf").is_file()
+    row = next(csv.DictReader((lean / "046_crops.csv").open()))
+    assert (row["round"], row["crop_y_px"], row["zoom_x_px"]) == ("CD3", "-5", "40")
+
+    ctx = sp.Ctx(
+        root=tmp_path,
+        plan=None,
+        plan_csv=tmp_path / "p.csv",
+        out=tmp_path,
+        cfg={"options": {"formats": "png,pdf", "dpi": 200}},
+    )
+    assert sp._figure_ctx(ctx, {}) is ctx
+    only_pdf = sp._figure_ctx(ctx, {"formats": "pdf"})
+    assert only_pdf.formats == "pdf" and ctx.formats == "png,pdf"
+    assert only_pdf.dpi == ctx.dpi and only_pdf.log is ctx.log

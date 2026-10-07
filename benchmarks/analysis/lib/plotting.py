@@ -259,6 +259,7 @@ _PHASE_COLOUR = {
     "TILED_SOLVE": "#009E73",
     "TILED_STITCH": "#CC79A7",
 }
+_TOTAL_COLOUR = "#B8C4CE"
 _PHASE_LABEL = {
     "REGISTER": "register (one task)",
     "TILED_COARSE": "coarse alignment",
@@ -268,11 +269,8 @@ _PHASE_LABEL = {
 }
 
 
-_DOTS = dict(ls="", marker="o", ms=4, mfc="white", mec="#222222", mew=0.9, zorder=3)
-
-
 def _arm_axes(arms, labels, legend: bool = False):
-    # a legend sits in its own strip to the right of the axes, never over a bar
+    # a legend sits in its own strip to the right of the axes, never over the data
     fig, ax = plt.subplots(
         figsize=(1.7 * len(arms) + 2.2 + (1.6 if legend else 0), 3.4)
     )
@@ -283,70 +281,64 @@ def _arm_axes(arms, labels, legend: bool = False):
     return fig, ax
 
 
-def _annotate(ax, xs, ys, patients, note):
-    """A small note (e.g. the patient's image size) right of each dot."""
-    for x, y, p in zip(xs, ys, patients):
-        if note and note.get(str(p)) and np.isfinite(y):
-            ax.annotate(
-                note[str(p)],
-                (x, y),
-                xytext=(4, 0),
-                textcoords="offset points",
-                fontsize=5,
-                color="0.15",
-                va="center",
-                # legible over a coloured bar as well as over the background
-                bbox=dict(fc="white", ec="none", alpha=0.75, pad=0.4),
-            )
+def _box(ax, x, values, width, colour):
+    """One box of the patients' values: median line, quartile box, whiskers to the
+    furthest patient within 1.5 IQR, patients beyond them as small open circles."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if not v.size:
+        return
+    ax.boxplot(
+        [v],
+        positions=[x],
+        widths=width,
+        patch_artist=True,
+        boxprops=dict(facecolor=colour, edgecolor="#222222", linewidth=0.8),
+        medianprops=dict(color="#222222", linewidth=1.4),
+        whiskerprops=dict(color="#222222", linewidth=0.8),
+        capprops=dict(color="#222222", linewidth=0.8),
+        flierprops=dict(marker="o", ms=3, mfc="none", mec="#222222", mew=0.7),
+        manage_ticks=False,
+    )
 
 
-def _jitter(patients):
-    rng = np.random.default_rng(0)
-    return {p: float(rng.uniform(-0.12, 0.12)) for p in sorted(set(patients))}
-
-
-def cost_by_phase(frame, phase_order, value, ylabel, labels=None, note=None):
-    """One cost of a few arms side by side, split by phase, one dot per patient.
+def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
+    """One cost of a few arms side by side as boxplots over the patients, per phase.
 
     ``frame`` is quality.registration_cost_by_patient's long table restricted to the arms
     to draw (in the order of first appearance) and ``value`` one of its per-slide columns.
-    The bar is the MEDIAN patient's total; its segments are each phase's share of the
-    arm's total over all patients; the dots are the patients' own totals. ``note`` is
-    {patient: text} written small beside that patient's dot.
+    Each arm has a wide grey box for the patients' TOTALS and, when it has more than one
+    phase, a narrow coloured box per phase beside it; a one-phase arm's single box takes
+    that phase's colour, being both.
     """
     arms = list(dict.fromkeys(frame["run_id"]))
-    per = (
-        frame.groupby(["run_id", "patient_id"])[value]
-        .sum(min_count=1)
-        .rename("total")
-        .reset_index()
-    )
     phases = [p for p in phase_order if p in set(frame["phase"])]
     colour = {p: _PHASE_COLOUR.get(p, f"C{i}") for i, p in enumerate(phases)}
     fig, ax = _arm_axes(arms, labels, legend=True)
-    jitter = _jitter(per["patient_id"])
+    total_drawn = False
     for i, arm in enumerate(arms):
-        sub, tot = frame[frame["run_id"] == arm], per[per["run_id"] == arm]
-        height = (
-            float(np.nanmedian(tot["total"])) if tot["total"].notna().any() else np.nan
-        )
-        share = sub.groupby("phase")[value].sum()
-        share = share / share.sum() if share.sum() else share
-        bottom = 0.0
-        for ph in phases:
-            if ph not in share.index or not np.isfinite(height):
-                continue
-            h = height * float(share[ph])
-            ax.bar(i, h, 0.55, bottom=bottom, color=colour[ph], ec="white", lw=0.6)
-            bottom += h
-        xs = [i + jitter[p] for p in tot["patient_id"]]
-        ax.plot(xs, tot["total"], **_DOTS)
-        _annotate(ax, xs, tot["total"], tot["patient_id"], note)
+        sub = frame[frame["run_id"] == arm]
+        mine = [p for p in phases if p in set(sub["phase"])]
+        totals = sub.groupby("patient_id")[value].sum(min_count=1)
+        if len(mine) <= 1:
+            _box(ax, i, totals, 0.4, colour[mine[0]] if mine else _TOTAL_COLOUR)
+            continue
+        total_drawn = True
+        slots = np.linspace(-0.36, 0.36, len(mine) + 1)
+        w = 0.72 / (len(mine) + 1) * 0.8
+        _box(ax, i + slots[0], totals, w, _TOTAL_COLOUR)
+        for x, ph in zip(slots[1:], mine):
+            _box(ax, i + x, sub[sub["phase"] == ph][value], w, colour[ph])
     ax.set_ylim(bottom=0)
     ax.set_ylabel(ylabel)
+    handles = [plt.Rectangle((0, 0), 1, 1, fc=colour[p], ec="#222222") for p in phases]
+    names = [_PHASE_LABEL.get(p, p) for p in phases]
+    if total_drawn:
+        handles.insert(0, plt.Rectangle((0, 0), 1, 1, fc=_TOTAL_COLOUR, ec="#222222"))
+        names.insert(0, "total (all phases)")
     ax.legend(
-        handles=[plt.Rectangle((0, 0), 1, 1, color=colour[p]) for p in phases],
-        labels=[_PHASE_LABEL.get(p, p) for p in phases],
+        handles=handles,
+        labels=names,
         fontsize=7,
         frameon=False,
         loc="upper left",
@@ -357,19 +349,13 @@ def cost_by_phase(frame, phase_order, value, ylabel, labels=None, note=None):
     return fig
 
 
-def cost_peak_memory(frame, ylabel, labels=None, note=None):
-    """The largest single task's peak memory per arm: bar = median patient, dots = patients."""
+def cost_peak_memory(frame, ylabel, labels=None):
+    """The largest single task's peak memory per arm, as a boxplot over the patients."""
     arms = list(dict.fromkeys(frame["run_id"]))
     per = frame.groupby(["run_id", "patient_id"])["peak_rss_gb"].max().reset_index()
     fig, ax = _arm_axes(arms, labels)
-    jitter = _jitter(per["patient_id"])
     for i, arm in enumerate(arms):
-        tot = per[per["run_id"] == arm]
-        peak = float(np.nanmedian(tot["peak_rss_gb"])) if len(tot) else np.nan
-        ax.bar(i, peak, 0.55, color="#B8C4CE", ec="white", lw=0.6)
-        xs = [i + jitter[p] for p in tot["patient_id"]]
-        ax.plot(xs, tot["peak_rss_gb"], **_DOTS)
-        _annotate(ax, xs, tot["peak_rss_gb"], tot["patient_id"], note)
+        _box(ax, i, per[per["run_id"] == arm]["peak_rss_gb"], 0.4, _TOTAL_COLOUR)
     ax.set_ylim(bottom=0)
     ax.set_ylabel(ylabel)
     fig.tight_layout()

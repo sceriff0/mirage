@@ -66,6 +66,12 @@ S4:
                                   # names): editable = real text in the PDF, which a
                                   # vector editor can change; burned = pixels of the
                                   # panel, as before; none = nothing written inside
+  # formats: pdf                  # the finished figures ONLY as PDF. Off by default: the
+                                  # index.html to choose variants from shows the PNGs
+  keep_panels: false              # delete _anchor/ and panels/ (every single panel as a
+                                  # PNG, textless under labels: editable) once the
+                                  # figures are assembled; <patient>_crops.csv keeps
+                                  # where each crop and inset is
 S7:
   patients: []                    # empty = every case except S4's
   rounds: []
@@ -74,6 +80,7 @@ S7:
   variants: 2
   numbers: scorer
   labels: editable                # as S4
+  keep_panels: false
 
 # ---- S5: registration cost -----------------------------------------------------------
 # These arms side by side, one dot per patient, one figure per measure, each stacked by

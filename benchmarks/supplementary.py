@@ -766,13 +766,61 @@ def _values_table(picks, final, pid, methods, config) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _figure_ctx(ctx: Ctx, spec: dict) -> Ctx:
+    """ctx with the figure's own `formats:` (e.g. `pdf`) in place of options.formats."""
+    from dataclasses import replace
+
+    fmts = spec.get("formats")
+    if not fmts:
+        return ctx
+    options = {**(ctx.cfg.get("options") or {}), "formats": str(fmts)}
+    return replace(ctx, cfg={**ctx.cfg, "options": options})
+
+
+def _drop_panels(root: Path, pid: str, spec: dict) -> None:
+    """Remove what the finished figures were assembled from, unless `keep_panels: true`.
+
+    `_anchor/` and `panels/` hold every single panel as its own PNG plus a locator per
+    round: hundreds of files nobody opens once the PDFs exist, and bare of any text under
+    `labels: editable`. Where each crop and inset sits is kept, in `<pid>_crops.csv`.
+    """
+    import shutil
+
+    if spec.get("keep_panels", True):
+        return
+    rows = []
+    for mf in sorted((root / "_anchor").glob(f"{pid}_*_overlay.json")):
+        man = json.loads(mf.read_text())
+        crop, zoom = man.get("crop") or {}, man.get("zoom") or {}
+        rows.append(
+            {
+                "patient": pid,
+                "round": man.get("round"),
+                "variant": man.get("variant", 1),
+                "crop_y_px": crop.get("y"),
+                "crop_x_px": crop.get("x"),
+                "crop_size_px": crop.get("size_px"),
+                "crop_size_um": crop.get("size_um"),
+                "zoom_y_px": zoom.get("y"),
+                "zoom_x_px": zoom.get("x"),
+                "zoom_size_um": zoom.get("size_um"),
+            }
+        )
+    if rows:
+        pd.DataFrame(rows).to_csv(root / f"{pid}_crops.csv", index=False)
+    for d in ("_anchor", "panels"):
+        shutil.rmtree(root / d, ignore_errors=True)
+
+
 def fig_s4(ctx, picks, patients, final):
     spec = ctx.opt("S4", default={}) or {}
     pid = str(spec.get("patient") or patients[0])
     root = _overlay_panels(ctx, picks, pid, "S4", spec)
     if not ctx.dry_run:
-        _compose_overlays(ctx, picks, root, pid, final, labels=_label_mode(spec))
-        _compose_pairs(ctx, root, pid, _label_mode(spec))
+        fctx = _figure_ctx(ctx, spec)
+        _compose_overlays(fctx, picks, root, pid, final, labels=_label_mode(spec))
+        _compose_pairs(fctx, root, pid, _label_mode(spec))
+        _drop_panels(root, pid, spec)
 
 
 def fig_s7(ctx, picks, patients, final):
@@ -784,10 +832,12 @@ def fig_s7(ctx, picks, patients, final):
         root = _overlay_panels(ctx, picks, pid, "S7", spec)
         if not ctx.dry_run:
             # S7 is ONE method before vs after (as Fig 4a): VALIS alone draws it.
+            fctx = _figure_ctx(ctx, spec)
             _compose_overlays(
-                ctx, picks, root, pid, final, min_methods=1, labels=_label_mode(spec)
+                fctx, picks, root, pid, final, min_methods=1, labels=_label_mode(spec)
             )
-            _compose_pairs(ctx, root, pid, _label_mode(spec))
+            _compose_pairs(fctx, root, pid, _label_mode(spec))
+            _drop_panels(root, pid, spec)
 
 
 # ----------------------------------------------------------------------------- S5 --
@@ -897,10 +947,9 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
         for a, m in zip(sub["run_id"], sub["backend"])
     }
     fmts = ctx.formats.split(",")
-    # the patient's image set, small beside its dot: GiB of slide files (reference
-    # included), where a size log recorded it
+    # the patient's image set (GiB of slide files, reference included), where a size log
+    # recorded it: a column of S5_time_on_cores.csv, not drawn
     size = quality.patient_input_gb(ctx.root, [*arms, *sorted(have)])
-    note = {p: f"{gb:.0f} GB" for p, gb in size.items()}
     for stem, col, ylabel in S5_COSTS:
         if not sub[col].notna().any():
             # e.g. no %cpu field in the traces: nothing measured to draw
@@ -908,13 +957,9 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
                 f"[supp] S5: {stem} not drawn, no {col} in the traces", file=sys.stderr
             )
             continue
-        fig = plotting.cost_by_phase(
-            sub, quality.PHASE_ORDER, col, ylabel, labels, note
-        )
+        fig = plotting.cost_by_phase(sub, quality.PHASE_ORDER, col, ylabel, labels)
         plotting.save_fig(fig, out / stem, formats=fmts)
-    fig = plotting.cost_peak_memory(
-        sub, "Peak memory of the largest task (GB)", labels, note
-    )
+    fig = plotting.cost_peak_memory(sub, "Peak memory of the largest task (GB)", labels)
     plotting.save_fig(fig, out / "S5_peak_memory", formats=fmts)
     # "on a machine with N cores, how long?" -- an estimate from the measured tasks
     est = quality.time_on_cores(sub)
