@@ -40,7 +40,13 @@ import numpy as np
 from logger import get_logger
 from metadata import extract_channel_names_from_ome, pick_nuclear_index
 from numpy.typing import NDArray
-from ome_io import ome_metadata, read_info, read_plane, write_tiff
+from ome_io import (
+    BIGTIFF_THRESHOLD_BYTES,
+    ome_metadata,
+    read_info,
+    read_plane,
+    write_tiff,
+)
 from registration_utils import autoscale
 from skimage.transform import rescale
 from tiled_io import decimation_factor, open_lazy, read_decimated
@@ -668,14 +674,32 @@ def create_registration_qc(
             ref_nuc, native_nuc, reg_nuc, scale_factor=1.0
         )
         fullres_output_path = output_path.with_name(output_path.stem + "_fullres.tif")
-        write_tiff(
-            str(fullres_output_path),
-            rgb_stack_full,
-            imagej=True,
-            metadata=fullres_metadata,
-            compression="zlib",
-            **fullres_resolution_kwargs,
-        )
+        # An ImageJ TIFF is a CLASSIC TIFF (tifffile refuses imagej + bigtiff), so its
+        # 32-bit offsets overflow on a whole-slide composite: "'I' format requires
+        # 0 <= number <= 4294967295", ten minutes into the write. Above the same payload
+        # threshold ome_io uses, write the composite as an OME BigTIFF instead -- the
+        # format the preview below already has -- with the same pixels and scale.
+        if rgb_stack_full.nbytes > BIGTIFF_THRESHOLD_BYTES:
+            fullres_ome_metadata = ome_metadata(None, pixel_size_um, axes="CYX")
+            fullres_ome_metadata["mode"] = "composite"
+            write_tiff(
+                str(fullres_output_path),
+                rgb_stack_full,
+                ome=True,
+                bigtiff=True,
+                metadata=fullres_ome_metadata,
+                compression="zlib",
+                **fullres_resolution_kwargs,
+            )
+        else:
+            write_tiff(
+                str(fullres_output_path),
+                rgb_stack_full,
+                imagej=True,
+                metadata=fullres_metadata,
+                compression="zlib",
+                **fullres_resolution_kwargs,
+            )
         logger.info(f"  Saved full-res QC TIFF: {fullres_output_path}")
         del rgb_stack_full
 
