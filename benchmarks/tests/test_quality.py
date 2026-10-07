@@ -547,3 +547,48 @@ def test_registration_cost_by_patient_splits_phases_and_drops_failed_attempts(tm
     assert s.loc["TILED_REG_TILE", "peak_rss_gb"] == pytest.approx(6.0)
     assert s["cpu_hours"].sum() == pytest.approx((2400 + 4800 + 300 + 3600) / 3600)
     assert s["n_failed_attempts"].sum() == 0
+
+
+def test_mask_agreement_is_banded_and_bounded_by_the_pairs_that_exist():
+    """S6 was killed computing this on a real section: the label pairs were counted with
+    a histogram as long as the largest (a, b) key, ~10^12 entries for ~10^6 cells. The
+    banded pass gives the same numbers as a brute-force count, whatever the band size,
+    and label values in the millions cost nothing."""
+    rng = np.random.default_rng(0)
+    ma = np.zeros((90, 120), np.uint32)
+    mb = np.zeros((90, 120), np.uint32)
+    for i in range(1, 40):
+        y, x = rng.integers(0, 80), rng.integers(0, 110)
+        ma[y : y + 8, x : x + 8] = i
+        dy, dx = rng.integers(-3, 4, 2)
+        mb[max(y + dy, 0) : y + dy + 8, max(x + dx, 0) : x + dx + 8] = i
+    # brute force, straight from the definitions
+    fa, fb = ma > 0, mb > 0
+    iou = (fa & fb).sum() / (fa | fb).sum()
+    pairs = {}
+    for a, b in zip(ma[fa & fb].tolist(), mb[fa & fb].tolist()):
+        pairs[(a, b)] = pairs.get((a, b), 0) + 1
+
+    whole = quality._overlap_counts(ma, mb, band_rows=10_000)
+    for rows in (1, 7, 64):
+        ov = quality._overlap_counts(ma, mb, band_rows=rows)
+        assert ov["fg_inter"] == (fa & fb).sum() and ov["fg_union"] == (fa | fb).sum()
+        got = dict(
+            zip(zip(ov["pair_a"].tolist(), ov["pair_b"].tolist()), ov["pair_inter"])
+        )
+        assert got == pairs
+        assert (ov["area_a"] == np.bincount(ma.ravel(), minlength=ov["na"] + 1)).all()
+        assert quality._instance_f1_from(ov, 0.5) == quality._instance_f1_from(
+            whole, 0.5
+        )
+    row = quality._agreement_row(ma, mb)
+    assert row["foreground_iou"] == pytest.approx(iou)
+    assert row["foreground_dice"] == pytest.approx(2 * iou / (1 + iou))
+    assert row["instance_f1"] == quality.instance_f1(ma, mb)["f1"]
+
+    # label VALUES in the millions: the old key histogram would be 9e12 entries long
+    big_a = np.where(ma > 0, ma + 3_000_000, 0).astype(np.uint32)
+    big_b = np.where(mb > 0, mb + 3_000_000, 0).astype(np.uint32)
+    big = quality._agreement_row(big_a, big_b)
+    assert big["foreground_iou"] == pytest.approx(iou)
+    assert big["matched_cells"] == row["matched_cells"]

@@ -18,6 +18,7 @@ no rows) — so the analysis + plots keep working when some runs fail.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -312,13 +313,57 @@ def harvest_segmentation_counts(
     return pd.DataFrame(rows)
 
 
-def instance_f1(ma, mb, iou_thresh=0.5) -> dict:
-    """Instance-level agreement between two label masks by GREEDY IoU matching (the standard detection
-    metric — far more meaningful than foreground IoU). Returns {f1, precision, recall, matched, n_a, n_b}.
-    Efficient: intersections via a flat (a,b) label histogram, not an N×N matrix."""
-    a = np.asarray(ma).ravel().astype(np.int64)
-    b = np.asarray(mb).ravel().astype(np.int64)
-    na, nb = int(a.max()) if a.size else 0, int(b.max()) if b.size else 0
+def _overlap_counts(ma, mb, band_rows: int = 1024) -> dict:
+    """Everything the agreement of two label masks needs, in ONE banded pass.
+
+    A whole-slide mask is ~10^9 pixels holding ~10^6 cells. The earlier one-shot version
+    cast both masks to int64, and counted (a, b) label pairs with ``np.bincount`` on the
+    key ``a * (nb + 1) + b`` -- an array as long as the LARGEST KEY, i.e. ~10^12 entries
+    for a real section. That is what killed S6 (2026-10-07, "Killed" after the last crop).
+    Here the masks are read a band of rows at a time and the pairs are counted with
+    ``np.unique``, whose cost is the number of pairs that EXIST (a few per cell).
+    """
+    ma, mb = np.asarray(ma), np.asarray(mb)
+    if ma.ndim == 1:  # a flat mask is one row
+        ma, mb = ma[None, :], mb[None, :]
+    na, nb = (int(ma.max()) if ma.size else 0), (int(mb.max()) if mb.size else 0)
+    area_a = np.zeros(na + 1, np.int64)
+    area_b = np.zeros(nb + 1, np.int64)
+    inter = union = 0
+    keys, counts = [], []
+    for r in range(0, ma.shape[0], band_rows):
+        a = ma[r : r + band_rows].reshape(-1).astype(np.int64)
+        b = mb[r : r + band_rows].reshape(-1).astype(np.int64)
+        area_a += np.bincount(a, minlength=na + 1)
+        area_b += np.bincount(b, minlength=nb + 1)
+        fa, fb = a > 0, b > 0
+        both = fa & fb
+        inter += int(both.sum())
+        union += int((fa | fb).sum())
+        if both.any():
+            k, c = np.unique(a[both] * (nb + 1) + b[both], return_counts=True)
+            keys.append(k)
+            counts.append(c)
+    if keys:
+        k, inv = np.unique(np.concatenate(keys), return_inverse=True)
+        c = np.bincount(inv, weights=np.concatenate(counts)).astype(np.float64)
+    else:
+        k, c = np.zeros(0, np.int64), np.zeros(0, np.float64)
+    return {
+        "na": na,
+        "nb": nb,
+        "area_a": area_a.astype(np.float64),
+        "area_b": area_b.astype(np.float64),
+        "fg_inter": inter,
+        "fg_union": union,
+        "pair_a": k // (nb + 1),
+        "pair_b": k % (nb + 1),
+        "pair_inter": c,
+    }
+
+
+def _instance_f1_from(ov: dict, iou_thresh: float) -> dict:
+    na, nb = ov["na"], ov["nb"]
     nan = float("nan")
     if na == 0 or nb == 0:
         return {
@@ -329,15 +374,8 @@ def instance_f1(ma, mb, iou_thresh=0.5) -> dict:
             "n_a": na,
             "n_b": nb,
         }
-    fg = (a > 0) & (b > 0)
-    pair = a[fg] * (nb + 1) + b[fg]  # unique key per (a_label, b_label)
-    counts = np.bincount(pair)
-    idx = np.nonzero(counts)[0]
-    inter = counts[idx].astype(np.float64)
-    al, bl = idx // (nb + 1), idx % (nb + 1)
-    area_a = np.bincount(a, minlength=na + 1).astype(np.float64)
-    area_b = np.bincount(b, minlength=nb + 1).astype(np.float64)
-    iou = inter / (area_a[al] + area_b[bl] - inter)
+    al, bl, inter = ov["pair_a"], ov["pair_b"], ov["pair_inter"]
+    iou = inter / (ov["area_a"][al] + ov["area_b"][bl] - inter)
     used_a, used_b, matched = set(), set(), 0
     for k in np.argsort(-iou):  # greedy, highest IoU first
         if iou[k] < iou_thresh:
@@ -362,6 +400,14 @@ def instance_f1(ma, mb, iou_thresh=0.5) -> dict:
     }
 
 
+def instance_f1(ma, mb, iou_thresh=0.5) -> dict:
+    """Instance-level agreement between two label masks by GREEDY IoU matching (the standard detection
+    metric — far more meaningful than foreground IoU). Returns {f1, precision, recall, matched, n_a, n_b}.
+    Memory is bounded by the pairs of labels that overlap, not by the label range
+    (_overlap_counts)."""
+    return _instance_f1_from(_overlap_counts(ma, mb), iou_thresh)
+
+
 def _agreement_row(ma, mb) -> dict | None:
     """Pairwise agreement of two label masks of the same section, or None if they
     are not the same shape. ``foreground_dice`` is the Dice of the same foreground
@@ -369,12 +415,11 @@ def _agreement_row(ma, mb) -> dict | None:
     ma, mb = np.asarray(ma), np.asarray(mb)
     if ma.shape != mb.shape:
         return None
-    fa, fb = ma > 0, mb > 0
-    inter = int(np.logical_and(fa, fb).sum())
-    union = int(np.logical_or(fa, fb).sum())
-    iou = inter / union if union else float("nan")
-    na, nb = int(ma.max()), int(mb.max())
-    inst = instance_f1(ma, mb)  # IoU-matched per-cell agreement
+    ov = _overlap_counts(ma, mb)  # one pass feeds the foreground AND the instances
+    union = ov["fg_union"]
+    iou = ov["fg_inter"] / union if union else float("nan")
+    na, nb = ov["na"], ov["nb"]
+    inst = _instance_f1_from(ov, 0.5)  # IoU-matched per-cell agreement
     return dict(
         foreground_iou=iou,
         foreground_dice=(2 * iou / (1 + iou) if union else float("nan")),
@@ -396,7 +441,11 @@ def _pairs(by_method: dict, reader, ident: dict) -> list:
             a, b = methods[i], methods[k]
             try:
                 row = _agreement_row(reader(by_method[a]), reader(by_method[b]))
-            except Exception:
+            except Exception as exc:
+                print(
+                    f"[agreement] {ident} {a} vs {b}: skipped ({type(exc).__name__}: {exc})",
+                    file=sys.stderr,
+                )
                 continue
             if row is not None:
                 rows.append({**ident, "method_a": a, "method_b": b, **row})
