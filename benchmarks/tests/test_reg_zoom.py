@@ -490,3 +490,46 @@ def test_pick_rois_writes_n_separated_rois_and_draws_nothing(seg_run, tmp_path):
     assert rz.main([*argv, "--pick-rois", "3", "--min-sep", "0.05"]) == 0
     again = json.loads((tmp_path / "P1_rois.json").read_text())["rois"]
     assert [(r["y"], r["x"]) for r in again] == rois, "picks must be deterministic"
+
+
+def test_seg_zoom_rois_draws_every_backend_at_the_same_regions(seg_run, tmp_path):
+    """benchmarks/seg_zoom_rois.sh: N regions picked ONCE, each drawn for every backend at
+    the same place, one directory per region and backend; a second run redraws nothing."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    arm, _ = seg_run
+    results = tmp_path / "arm_results"
+    results.mkdir()
+    for b in ("stardist", "cellsam"):
+        (results / f"seg_{b}").symlink_to(arm)
+    repo = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "RESULTS": str(results),
+        "BACKENDS": "stardist cellsam",
+        "N": "2",
+        "OUT": str(tmp_path / "out"),
+        "SRC_DIR": str(repo),
+        "PIXEL_SIZE": "auto",
+        "FIELD_UM": "30",
+        "MIN_SEP": "0.05",
+        "FORMATS": "png",
+        "ZOOM_ARGS": "--overview-px 160 --dpi 50",
+        "RENDER_EXEC": "env",  # no container: the same python
+    }
+    script = str(repo / "benchmarks" / "seg_zoom_rois.sh")
+    run = subprocess.run(["bash", script], env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    out = tmp_path / "out"
+    picked = json.loads((out / "P1_rois.json").read_text())["rois"]
+    assert len(picked) == 2
+    for k, roi in enumerate(picked, start=1):
+        for b in ("stardist", "cellsam"):
+            dest = out / f"roi{k}" / b
+            assert (dest / "P1_zoom.png").is_file()
+            zoom = json.loads((dest / "P1_zoom.json").read_text())
+            assert roi == {"y": zoom["zoom"]["y"], "x": zoom["zoom"]["x"]}
+    again = subprocess.run(["bash", script], env=env, capture_output=True, text=True)
+    assert again.returncode == 0 and again.stdout.count("already drawn") == 4
