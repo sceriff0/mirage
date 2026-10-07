@@ -287,9 +287,10 @@ def _cell_masks_by_patient(run_out_dir) -> dict:
 
     From the arm's own checkpoint (csv/segmented.csv, column ``cell_mask``) when it has
     one: that is where the pipeline says the mask IS, and it need not be under the arm's
-    directory -- an arm that reuses another run's segmentation publishes the checkpoint
-    and not the file, which is how every StarDist pair went missing from S6 (2026-10-07).
-    Else the masks found under the directory, keyed by their file name.
+    directory, and its file name need not be `<patient>_cell_mask.tif`: StarDist's is
+    `<patient>_<channels>_registered.ome_cell_mask.tif`, which keyed it under a patient no
+    other backend had and left every StarDist pair out of S6 (2026-10-07).
+    Else (no checkpoint) the masks found under the directory, keyed by their file name.
     """
     root = Path(run_out_dir)
     out: dict = {}
@@ -303,6 +304,11 @@ def _cell_masks_by_patient(run_out_dir) -> dict:
             for pid, path in zip(rows["patient_id"], rows["cell_mask"]):
                 if path and Path(path).is_file():
                     out.setdefault(str(pid), Path(path))
+    if out:
+        # The checkpoint is the whole answer. Adding the files found under the directory
+        # as well keyed StarDist's `<pid>_<channels>_registered.ome_cell_mask.tif` as a
+        # second, phantom patient that no other backend had (S6, 2026-10-07).
+        return out
     for m in _cell_masks(root):
         out.setdefault(_mask_patient(m), m)
     return out

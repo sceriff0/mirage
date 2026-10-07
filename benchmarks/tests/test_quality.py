@@ -646,6 +646,10 @@ def test_agreement_finds_a_mask_the_arm_names_but_does_not_hold(tmp_path, capsys
     pd.DataFrame({"patient_id": ["P1"], "cell_mask": [str(elsewhere)]}).to_csv(
         chk / "segmented.csv", index=False
     )
+    # ... and a mask file under its own name convention, which is not a second patient
+    odd = tmp_path / "seg_stardist" / "P1" / "segmentation"
+    odd.mkdir(parents=True)
+    (odd / "P1_DAPI_CD3_registered.ome_cell_mask.tif").write_bytes(b"")
     (tmp_path / "seg_cellsam").mkdir()  # finished nothing: no checkpoint, no mask
 
     def reader(p):
@@ -665,6 +669,7 @@ def test_agreement_finds_a_mask_the_arm_names_but_does_not_hold(tmp_path, capsys
     err = capsys.readouterr().err
     assert "cellsam: no cell mask found for arm seg_cellsam" in err
     assert "patient P1: no cell mask from ['cellsam']" in err
+    assert "registered.ome" not in err  # no phantom patient from the file's name
 
 
 def test_time_on_cores_is_bounded_by_the_longest_task_and_by_the_work(tmp_path):
