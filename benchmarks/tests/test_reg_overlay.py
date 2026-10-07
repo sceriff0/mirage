@@ -489,3 +489,45 @@ def test_a_whole_tissue_field_reaches_past_the_slide_and_a_pinned_copy_matches(
     pa = mpimg.imread(tmp_path / "a" / "P1_CD3_after.png")
     pb = mpimg.imread(tmp_path / "b" / "P1_CD3_after.png")
     assert pa.shape == pb.shape and (pa == pb).all()
+
+
+def test_before_after_sh_draws_and_assembles_every_patient_of_one_arm(
+    arm_root, tmp_path
+):
+    """benchmarks/before_after.sh: per patient, VARIANTS insets per round of one arm's
+    Before/After, assembled into figures; a second run redraws nothing."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    env = {
+        **os.environ,
+        "RESULTS": str(arm_root),
+        "ARM": "armB",
+        "ROUNDS": "CD3",
+        "VARIANTS": "2",
+        "ZOOM_UM": "20",
+        "OUT": str(tmp_path / "out"),
+        "SRC_DIR": str(repo),
+        "FORMATS": "pdf",
+        "OVERLAY_ARGS": "--dpi 50",
+        "RENDER_EXEC": "env",  # no container: the same python
+    }
+    script = str(repo / "benchmarks" / "before_after.sh")
+    run = subprocess.run(["bash", script], env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr + run.stdout
+    figs = sorted((tmp_path / "out" / "P1" / "before_after").glob("*.pdf"))
+    assert [f.name for f in figs] == ["P1_CD3_v1.pdf", "P1_CD3_v2.pdf"]
+    v1, v2 = (
+        json.loads(
+            (
+                tmp_path / "out" / "P1" / "_anchor" / f"P1_CD3_v{k}_overlay.json"
+            ).read_text()
+        )
+        for k in (1, 2)
+    )
+    assert v1["labels_drawn"] is False  # bare panels: the words are text in the PDF
+    assert (v1["zoom"]["y"], v1["zoom"]["x"]) != (v2["zoom"]["y"], v2["zoom"]["x"])
+    again = subprocess.run(["bash", script], env=env, capture_output=True, text=True)
+    assert again.returncode == 0 and "figures exist, skipped" in again.stdout
