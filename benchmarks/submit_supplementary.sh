@@ -180,6 +180,9 @@ fi
 # ---- the mirage half ---------------------------------------------------------------
 MIRAGE_FIGS=()
 for f in mosaic S2 S3 S4 S5 S6 S7 S8 gallery; do wants "$f" && MIRAGE_FIGS+=("$f"); done
+# S6agree = S6's pairwise-agreement table and heatmaps WITHOUT the crops. Only when named:
+# a run of everything already writes them as part of S6.
+[[ "+$ONLY+" == *"+S6agree+"* ]] && MIRAGE_FIGS+=(S6agree)
 if (( ${#MIRAGE_FIGS[@]} > 0 )); then
   args=(--results "$RESULTS" --plan "$PLAN" --config "$CONFIG" -o "$OUT"
         --only "$(IFS=,; echo "${MIRAGE_FIGS[*]}")" --exec "$RENDER_EXEC")

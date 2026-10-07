@@ -922,3 +922,47 @@ def test_the_before_after_pair_is_two_panels_with_editable_words_and_no_method(
     assert sp._plain_title("bar", "1 mm (approx)") == "1 mm (approx)"
     # burned panels are pasted as they are; nothing is written twice over them
     assert sp._compose_pairs(ctx, tmp_path, "046", "burned")
+
+
+def test_s6agree_writes_the_agreement_and_heatmaps_without_drawing_a_crop(
+    unified, tmp_path, monkeypatch
+):
+    """`--only S6agree`: the pairwise table and its heatmaps, and not one render -- the
+    crops are the slow half of S6, and the heatmap should not have to wait for them."""
+    root, plan, conf = unified
+    from benchmarks.analysis.lib import quality
+
+    monkeypatch.setattr(
+        quality,
+        "segmentation_agreement",
+        lambda *_a, **_k: _agreement_frame(),
+    )
+    work = tmp_path / "arm_results"
+    shutil.copytree(root, work)
+    rows = list(csv.DictReader(plan.open()))
+    cols = list(dict.fromkeys([*rows[0], "seg_method"]))
+    for m in (
+        "stardist",
+        "cellsam",
+    ):  # finished segmentation arms, as far as S6 can tell
+        arm = f"seg_{m}"
+        rows.append(
+            {"run_id": arm, "arm": arm, "arm_kind": "segmentation", "seg_method": m}
+        )
+        (work / arm / "csv").mkdir(parents=True, exist_ok=True)
+        (work / arm / "csv" / "segmented.csv").write_text("patient_id\n")
+    full = tmp_path / "plan.csv"
+    with open(full, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=cols, restval="")
+        w.writeheader()
+        w.writerows(rows)
+    out = tmp_path / "o"
+    args = ["--results", str(work), "--plan", str(full), "--config", str(conf)]
+    assert sp.main([*args, "-o", str(out), "--only", "S6agree"]) == 0
+    s6 = out / "S6"
+    assert (s6 / "S6_pairwise_agreement.csv").is_file()
+    assert list(s6.glob("S6_pairwise_agreement.p*"))
+    assert not list(s6.glob("r*")) and not list(s6.glob("S6_nuclei_cell.*"))
+    assert "reg_zoom" not in (out / "commands.txt").read_text()
+    # not part of an unnamed (everything) run, which draws S6 whole
+    assert "S6agree" not in sp.FIGURES

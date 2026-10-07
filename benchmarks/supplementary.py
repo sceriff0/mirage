@@ -74,6 +74,8 @@ DEFAULT_SETS = {"all": ["valis", "stare", "ashlar"]}
 # would pick a ruler, not a method configuration.
 _RANKED_KINDS = ("registration", "external")
 FIGURES = ("mosaic", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "gallery")
+# Drawn only when named in --only: a part of a figure above, on its own.
+ON_REQUEST = ("S6agree",)
 # The tier is IN every tiered arm's name (build_arm_plan.py): valis_<tier>_micro<d>,
 # tiled_<tier>_s<stride> (STARE). ASHLAR has no tier.
 _TIER_RE = re.compile(r"^(?:valis|tiled)_(high|medium|low)_")
@@ -1000,6 +1002,53 @@ def fig_s6(ctx: Ctx, patients: list[str]):
     _compose_s6(ctx, out, pid, [m for m, _ in methods], len(rois))
 
 
+def fig_s6_agreement(ctx: Ctx, patients: list[str]) -> None:
+    """S6's agreement half ALONE (`--only S6agree`): the table and the heatmaps, no crop.
+
+    The crops are 3 backends x 3 masks x N regions of rendering; the agreement reads the
+    masks once. Asked for on its own it does not wait for (or redo) the crops.
+    """
+    spec = ctx.opt("S6", default={}) or {}
+    seg = ctx.plan[ctx.plan["arm_kind"] == "segmentation"]
+    methods = [
+        str(r["seg_method"])
+        for _, r in seg.iterrows()
+        if (ctx.arm_dir(r["arm"]) / "csv" / "segmented.csv").is_file()
+    ]
+    if ctx.dry_run or not methods:
+        print(
+            "[supp] S6agree: "
+            + ("dry run" if ctx.dry_run else "no finished segmentation arm")
+        )
+        return
+    out = ctx.out / "S6"
+    out.mkdir(parents=True, exist_ok=True)
+    _write_agreement(ctx, out, str(spec.get("patient") or patients[0]), methods)
+
+
+def _write_agreement(ctx: Ctx, out: Path, pid: str, methods: list[str]):
+    """S6_pairwise_agreement.csv and its heatmaps (cohort median, and ``pid`` alone);
+    returns the table."""
+    from benchmarks.analysis.lib import quality
+
+    agree = quality.segmentation_agreement(ctx.root, ctx.plan_csv)
+    agree.to_csv(out / "S6_pairwise_agreement.csv", index=False)
+    # The matrix alone, for a figure laid out by hand: over the cohort, and for the one
+    # section the crops are drawn from (what a legend saying "this section" needs).
+    agreement_heatmap(
+        agree, out / "S6_pairwise_agreement", ctx.formats, ctx.dpi, methods
+    )
+    agreement_heatmap(
+        agree,
+        out / f"S6_pairwise_agreement_{pid}",
+        ctx.formats,
+        ctx.dpi,
+        methods,
+        patient=pid,
+    )
+    return agree
+
+
 def agreement_matrix(agree, methods=None, value="foreground_dice", patient=None):
     """The backend x backend matrix of ``value``: the median over patients, or one
     patient's own values with ``patient``. Diagonal 1; a pair with no row is NaN.
@@ -1098,24 +1147,8 @@ def _compose_s6(ctx, out: Path, pid: str, methods: list[str], n_regions: int):
     import matplotlib.image as mpimg
     import matplotlib.pyplot as plt
 
-    from benchmarks.analysis.lib import quality
-
-    agree = quality.segmentation_agreement(ctx.root, ctx.plan_csv)
-    agree.to_csv(out / "S6_pairwise_agreement.csv", index=False)
+    agree = _write_agreement(ctx, out, pid, methods)
     mat, n_sections = agreement_matrix(agree, methods)
-    # The matrix alone, for a figure laid out by hand: over the cohort, and for the one
-    # section the crops are drawn from (what a legend saying "this section" needs).
-    agreement_heatmap(
-        agree, out / "S6_pairwise_agreement", ctx.formats, ctx.dpi, methods
-    )
-    agreement_heatmap(
-        agree,
-        out / f"S6_pairwise_agreement_{pid}",
-        ctx.formats,
-        ctx.dpi,
-        methods,
-        patient=pid,
-    )
     for layout in ("nuclei_cell", "both"):
         masks = ("nuclei", "cell") if layout == "nuclei_cell" else ("both",)
         ncol = len(methods) * len(masks) + 1
@@ -1947,7 +1980,9 @@ def main(argv: list[str] | None = None) -> int:
         default=REPO_ROOT / "benchmarks/configs/supplementary.yaml",
     )
     ap.add_argument("-o", "--out", type=Path, required=True)
-    ap.add_argument("--only", default="", help=f"comma list of {list(FIGURES)}")
+    ap.add_argument(
+        "--only", default="", help=f"comma list of {list(FIGURES + ON_REQUEST)}"
+    )
     ap.add_argument(
         "--exec", default="", help="renderer command prefix (the container)"
     )
@@ -1981,7 +2016,7 @@ def main(argv: list[str] | None = None) -> int:
         input_patients=read_input_patients(a.input) if a.input else [],
     )
     only = [f.strip() for f in a.only.split(",") if f.strip()] or list(FIGURES)
-    bad = sorted(set(only) - set(FIGURES))
+    bad = sorted(set(only) - set(FIGURES) - set(ON_REQUEST))
     if bad:
         raise SystemExit(f"unknown figure(s) {bad}; known: {list(FIGURES)}")
 
@@ -2015,6 +2050,7 @@ def main(argv: list[str] | None = None) -> int:
         ("S7", lambda: fig_s7(ctx, picks, patients, final)),
         ("S5", lambda: fig_s5(ctx)),
         ("S6", lambda: fig_s6(ctx, patients)),
+        ("S6agree", lambda: fig_s6_agreement(ctx, patients)),
         ("S8", lambda: fig_s8(ctx, picks, final)),
         ("S2", lambda: fig_s2(ctx)),
         ("S3", lambda: fig_s3a(ctx)),
