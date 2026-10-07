@@ -875,6 +875,37 @@ def test_every_method_is_drawn_at_the_anchors_own_crop_size(tmp_path, monkeypatc
     sp._overlay_panels(ctx, None, "046", "S4", {"field_um": 10000, "zoom_um": 60})
     pinned = [c for c in calls if "--field-px" in c]
     assert len(pinned) == len(sp.REG_METHODS)
+
+    # bare panels (labels: editable): the anchor's own arm is NOT drawn a second time,
+    # its panels are copied; and with keep_panels: false only the composed round is
+    # re-rendered for the other methods
+    calls.clear()
+    lean = tmp_path / "lean"
+    ctx2 = SimpleNamespace(out=lean, dpi=300, render=render, arm_dir=lambda a: lean / a)
+    monkeypatch.setattr(sp, "_anchor_arm", lambda picks: "valis_high")
+
+    def render2(tool, args):
+        ok = render(tool, args)
+        out = args[args.index("-o") + 1]
+        if out.name == "_anchor":  # a second round, and the panels the anchor drew
+            m = json.loads((out / "046_CD3_overlay.json").read_text())
+            (out / "046_ZZZ_overlay.json").write_text(json.dumps({**m, "round": "ZZZ"}))
+            for r in ("CD3", "ZZZ"):
+                (out / f"046_{r}_before.png").write_bytes(b"b")
+                (out / f"046_{r}_after.png").write_bytes(b"a")
+        return ok
+
+    ctx2.render = render2
+    sp._overlay_panels(
+        ctx2, None, "046", "S4", {"labels": "editable", "keep_panels": False}
+    )
+    pinned = [c for c in calls if "--field-px" in c]
+    assert len(pinned) == len(sp.REG_METHODS) - 1  # every method but the anchor's
+    assert all(c[c.index("--rounds") + 1] == "CD3" for c in pinned)  # not ZZZ
+    reused = lean / "S4" / "panels" / "valis_high" / "v1"
+    assert (reused / "046_CD3_after.png").read_bytes() == b"a"
+    assert (reused / "046_CD3_overlay.json").is_file()
+    assert not (reused / "046_ZZZ_after.png").exists()
     for c in pinned:
         # one token each: a fitted field's corner can be negative, and argparse would
         # read a separate "-120,40" as an option

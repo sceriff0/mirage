@@ -481,9 +481,20 @@ def _overlay_panels(
         ],
     )
     manifests = sorted(anchor.glob(f"{pid}_*_overlay.json"))
+    anchor_arm = _anchor_arm(picks)
+    bare = _label_mode(spec) != "burned"
+    lean = not spec.get("keep_panels", True)
+    # The side-by-side figure shows ONE round per variant (the first by name); the other
+    # rounds are drawn by the anchor alone, for before_after/. When the panels are not
+    # kept, re-rendering every method on every other round is work that is then deleted.
+    composed = min(
+        (json.loads(m.read_text())["round"] for m in manifests), default=None
+    )
     for mf in manifests:
         man = json.loads(mf.read_text())
         v = int(man.get("variant", 1))
+        if lean and man["round"] != composed:
+            continue
         # the anchor's OWN size: a field fitted to the tissue is smaller than field_um
         # (`--roi=`: a fitted field may start left of or above the slide, and argparse
         # reads a separate "-120,40" as an option)
@@ -496,12 +507,18 @@ def _overlay_panels(
                 arm = arm_for(picks, method, config)
                 if arm is None:
                     continue
+                dest = root / "panels" / f"{method}_{config}" / f"v{v}"
+                if arm == anchor_arm and bare:
+                    # the anchor already drew exactly this panel (same arm, same crop,
+                    # and no title in the pixels to differ by): reuse it, do not redraw
+                    _reuse_anchor_panel(mf, dest, pid, man["round"])
+                    continue
                 ctx.render(
                     "reg_overlay",
                     [
                         ctx.arm_dir(arm),
                         "-o",
-                        root / "panels" / f"{method}_{config}" / f"v{v}",
+                        dest,
                         "--rounds",
                         man["round"],
                         "--title",
@@ -511,6 +528,19 @@ def _overlay_panels(
                     ],
                 )
     return root
+
+
+def _reuse_anchor_panel(manifest: Path, dest: Path, pid: str, rnd: str) -> None:
+    """Copy the anchor's Before/After panels and manifest of one round and variant into
+    ``dest`` under the names a pinned render of that round would have written."""
+    import shutil
+
+    stem = manifest.name[: -len("_overlay.json")]
+    dest.mkdir(parents=True, exist_ok=True)
+    for suffix in ("_before.png", "_after.png", "_overlay.json"):
+        src = manifest.with_name(stem + suffix)
+        if src.is_file():
+            shutil.copyfile(src, dest / f"{pid}_{rnd}{suffix}")
 
 
 OVERLAY_LABELS = ("burned", "editable", "none")
