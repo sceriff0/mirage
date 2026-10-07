@@ -78,11 +78,13 @@ S7:
 # ---- S6: segmentation backends ------------------------------------------------------
 S6:
   patient: null
-  regions: 4                      # separated tissue regions, picked ONCE on the reference
-                                  # and reused by every backend (S6/S6_regions.csv has them)
+  regions: 10                     # separated tissue regions, picked ONCE on the reference
+                                  # and reused by every backend (S6/S6_regions.csv has
+                                  # them): ten to choose from, then pin the ones the
+                                  # figure shows with rois: ["y,x", ...] and regions: N
   rois: []
-  field_um: 150
-  crop_px: 768
+  field_um: 300                   # the crop's side: a neighbourhood of cells (150 = closer)
+  crop_px: 1024                   # 300 um is 923 px at 0.325 um/px: drawn about 1:1
 
 # ---- S3a: per-round DAPI retention (quantification/<pid>_round_qc.csv) ---------------
 S3:
