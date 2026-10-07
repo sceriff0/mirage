@@ -282,6 +282,32 @@ def _cell_masks(run_out_dir):
     return sorted(set(p.rglob("*_cell_mask.tif")) | set(p.rglob("*_cell_mask.tiff")))
 
 
+def _cell_masks_by_patient(run_out_dir) -> dict:
+    """patient -> that arm's cell mask.
+
+    From the arm's own checkpoint (csv/segmented.csv, column ``cell_mask``) when it has
+    one: that is where the pipeline says the mask IS, and it need not be under the arm's
+    directory -- an arm that reuses another run's segmentation publishes the checkpoint
+    and not the file, which is how every StarDist pair went missing from S6 (2026-10-07).
+    Else the masks found under the directory, keyed by their file name.
+    """
+    root = Path(run_out_dir)
+    out: dict = {}
+    chk = root / "csv" / "segmented.csv"
+    if chk.is_file():
+        try:
+            rows = pd.read_csv(chk, dtype=str, keep_default_na=False)
+        except Exception:
+            rows = pd.DataFrame()
+        if {"patient_id", "cell_mask"} <= set(rows.columns):
+            for pid, path in zip(rows["patient_id"], rows["cell_mask"]):
+                if path and Path(path).is_file():
+                    out.setdefault(str(pid), Path(path))
+    for m in _cell_masks(root):
+        out.setdefault(_mask_patient(m), m)
+    return out
+
+
 def _n_cells(path, reader):
     # Count DISTINCT non-zero labels (exact even if labels aren't a contiguous 1..N range — max-label
     # would over-count with gaps).
@@ -495,10 +521,25 @@ def segmentation_agreement(results_root, run_plan_csv, reader=None) -> pd.DataFr
         frm_col = "from_arm" if "from_arm" in seg.columns else None
         for frm, g in seg.groupby(frm_col) if frm_col else [("", seg)]:
             per_patient: dict = {}
+            methods = []
             for _, r in g.groupby("seg_method").head(1).iterrows():
-                for m in _cell_masks(_run_out(root, r["run_id"])):
-                    per_patient.setdefault(_mask_patient(m), {})[r["seg_method"]] = m
+                methods.append(r["seg_method"])
+                found = _cell_masks_by_patient(_run_out(root, r["run_id"]))
+                if not found:
+                    print(
+                        f"[agreement] {r['seg_method']}: no cell mask found for arm "
+                        f"{r['run_id']} (csv/segmented.csv, or *_cell_mask.tif under it)",
+                        file=sys.stderr,
+                    )
+                for pid, m in found.items():
+                    per_patient.setdefault(pid, {})[r["seg_method"]] = m
             for pid in sorted(per_patient):
+                absent = [m for m in methods if m not in per_patient[pid]]
+                if absent:
+                    print(
+                        f"[agreement] patient {pid}: no cell mask from {absent}",
+                        file=sys.stderr,
+                    )
                 rows += _pairs(
                     per_patient[pid], reader, {"from_arm": frm, "patient_id": pid}
                 )

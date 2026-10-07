@@ -619,3 +619,49 @@ def test_a_backend_pair_that_cannot_be_compared_says_why(capsys):
     assert rows == []
     assert "a vs b: skipped, the masks differ in shape ((4, 4) vs (4, 5))" in err
     assert "a vs c: skipped (ValueError: cannot decode)" in err
+
+
+def test_agreement_finds_a_mask_the_arm_names_but_does_not_hold(tmp_path, capsys):
+    """An arm's cell mask is where its csv/segmented.csv says, which need not be under the
+    arm's directory (an arm reusing another run's segmentation). Searching the directory
+    alone left that backend out of every pair, with no message. A backend with no mask at
+    all is named on stderr."""
+    plan = tmp_path / "arm_plan.csv"
+    arms = ["seg_instantseg", "seg_stardist", "seg_cellsam"]
+    pd.DataFrame(
+        {
+            "run_id": arms,
+            "arm_kind": ["segmentation"] * 3,
+            "from_arm": ["valis_high_micro2"] * 3,
+            "seg_method": ["instantseg", "stardist", "cellsam"],
+        }
+    ).to_csv(plan, index=False)
+    _mk_arm_seg(tmp_path, "seg_instantseg", "P1")
+    # stardist's mask lives in ANOTHER run; its arm holds only the checkpoint
+    elsewhere = tmp_path / "other_run" / "P1" / "segmentation" / "P1_cell_mask.tif"
+    elsewhere.parent.mkdir(parents=True)
+    elsewhere.write_bytes(b"")
+    chk = tmp_path / "seg_stardist" / "csv"
+    chk.mkdir(parents=True)
+    pd.DataFrame({"patient_id": ["P1"], "cell_mask": [str(elsewhere)]}).to_csv(
+        chk / "segmented.csv", index=False
+    )
+    (tmp_path / "seg_cellsam").mkdir()  # finished nothing: no checkpoint, no mask
+
+    def reader(p):
+        return (
+            np.array([[1, 0], [0, 2]])
+            if "other_run" in str(p)
+            else np.array([[1, 1], [0, 2]])
+        )
+
+    out = quality.segmentation_agreement(tmp_path, plan, reader=reader)
+    assert len(out) == 1
+    assert {out.iloc[0]["method_a"], out.iloc[0]["method_b"]} == {
+        "instantseg",
+        "stardist",
+    }
+    assert abs(out.iloc[0]["foreground_iou"] - 2 / 3) < 1e-9
+    err = capsys.readouterr().err
+    assert "cellsam: no cell mask found for arm seg_cellsam" in err
+    assert "patient P1: no cell mask from ['cellsam']" in err
