@@ -544,8 +544,9 @@ def _panel_manifest(panel: Path, which: str) -> dict:
 INNER_ROLES = ("bar", "legend")
 
 
-def _draw_inner_labels(ax, labels: list[dict], roles=INNER_ROLES) -> int:
-    """Lay a panel's recorded labels over its image as real text; returns how many."""
+def _draw_inner_labels(ax, labels: list[dict], roles=INNER_ROLES, rename=None) -> int:
+    """Lay a panel's recorded labels over its image as real text; returns how many.
+    ``rename(role, text)`` rewrites what a label says."""
     ax.apply_aspect()  # the axes box as the image actually fills it
     fig = ax.figure
     height_pt = ax.get_position().height * fig.get_figheight() * 72.0
@@ -556,7 +557,7 @@ def _draw_inner_labels(ax, labels: list[dict], roles=INNER_ROLES) -> int:
         ax.text(
             lab["x"],
             lab["y"],
-            lab["text"],
+            rename(lab["role"], lab["text"]) if rename else lab["text"],
             transform=ax.transAxes,
             ha=lab.get("ha", "left"),
             va=lab.get("va", "bottom"),
@@ -566,6 +567,66 @@ def _draw_inner_labels(ax, labels: list[dict], roles=INNER_ROLES) -> int:
         )
         n += 1
     return n
+
+
+PAIR_ROLES = ("title", "bar", "legend")
+
+
+def _plain_title(role: str, text: str) -> str:
+    """`After (valis_high_micro2)` -> `After`: the pair figure names no method."""
+    return text.split(" (")[0] if role == "title" else text
+
+
+def _compose_pairs(ctx: Ctx, root: Path, pid: str, labels: str) -> list[Path]:
+    """`before_after/<pid>_<round>_v<k>`: the anchor's Before and After of one crop, side
+    by side and nothing else -- titled Before / After, with the scale bars and the channel
+    names, and no method name and no numbers.
+
+    With `labels: editable` the panels are bare and every word is real text in the PDF;
+    with `burned` they carry their own words (method name included) as pixels; `none`
+    writes nothing.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.image as mpimg
+    import matplotlib.pyplot as plt
+
+    _editable_fonts(plt)
+    written = []
+    for mf in sorted((root / "_anchor").glob(f"{pid}_*_overlay.json")):
+        man = json.loads(mf.read_text())
+        stem = mf.name[: -len("_overlay.json")]
+        panels = [mf.with_name(f"{stem}_{w}.png") for w in ("before", "after")]
+        if not all(p.is_file() for p in panels):
+            continue
+        imgs = [mpimg.imread(p) for p in panels]
+        h, w = imgs[0].shape[:2]
+        width_in = 7.2
+        gap = 0.004  # a hairline between the two, as a fraction of the figure's width
+        pw = (1.0 - gap) / 2.0
+        fig = plt.figure(figsize=(width_in, width_in * pw * h / w), facecolor="white")
+        for k, (img, which) in enumerate(zip(imgs, ("before", "after"))):
+            ax = fig.add_axes([k * (pw + gap), 0.0, pw, 1.0])
+            ax.imshow(img, interpolation="none", aspect="auto")
+            ax.set_axis_off()
+            if labels == "editable":
+                _draw_inner_labels(
+                    ax,
+                    (man.get("labels") or {}).get(which, []),
+                    roles=PAIR_ROLES,
+                    rename=_plain_title,
+                )
+        out = root / "before_after"
+        out.mkdir(parents=True, exist_ok=True)
+        # each panel at its own pixels, as _compose_overlays
+        dpi = min(PANEL_DPI_CAP, max(ctx.dpi, int(-(-w // (width_in * pw)))))
+        for fmt in ctx.formats.split(","):
+            path = out / f"{stem}.{fmt}"
+            fig.savefig(path, dpi=dpi)
+            written.append(path)
+        plt.close(fig)
+    return written
 
 
 def _compose_overlays(
@@ -707,6 +768,7 @@ def fig_s4(ctx, picks, patients, final):
     root = _overlay_panels(ctx, picks, pid, "S4", spec)
     if not ctx.dry_run:
         _compose_overlays(ctx, picks, root, pid, final, labels=_label_mode(spec))
+        _compose_pairs(ctx, root, pid, _label_mode(spec))
 
 
 def fig_s7(ctx, picks, patients, final):
@@ -721,6 +783,7 @@ def fig_s7(ctx, picks, patients, final):
             _compose_overlays(
                 ctx, picks, root, pid, final, min_methods=1, labels=_label_mode(spec)
             )
+            _compose_pairs(ctx, root, pid, _label_mode(spec))
 
 
 # ----------------------------------------------------------------------------- S5 --

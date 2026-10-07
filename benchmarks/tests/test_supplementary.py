@@ -856,3 +856,69 @@ def test_every_method_is_drawn_at_the_anchors_own_crop_size(tmp_path, monkeypatc
         # read a separate "-120,40" as an option
         assert "--roi=-120,20" in c and "--zoom-roi=30,40" in c
         assert c[c.index("--field-px") + 1] == "5120"
+
+
+def test_the_before_after_pair_is_two_panels_with_editable_words_and_no_method(
+    tmp_path,
+):
+    """`before_after/`: the anchor's Before | After alone. Titles say Before / After (the
+    arm's name is dropped), the bar text and channel names are kept, the numbers are not,
+    and all of it is real text in the PDF."""
+    from types import SimpleNamespace
+
+    import matplotlib.image as mpimg
+    import numpy as np
+
+    anchor = tmp_path / "_anchor"
+    anchor.mkdir()
+
+    def labs(title):
+        return [
+            {
+                "role": "title",
+                "text": title,
+                "x": 0.02,
+                "y": 0.98,
+                "va": "top",
+                "size": 0.06,
+            },
+            {"role": "note", "text": "Dice = 0.83", "x": 0.02, "y": 0.9, "size": 0.05},
+            {
+                "role": "bar",
+                "text": "1 mm",
+                "x": 0.1,
+                "y": 0.1,
+                "ha": "center",
+                "size": 0.04,
+            },
+            {
+                "role": "legend",
+                "text": "moving DAPI",
+                "x": 0.9,
+                "y": 0.03,
+                "size": 0.06,
+            },
+        ]
+
+    for which in ("before", "after"):
+        mpimg.imsave(anchor / f"046_CD3_v1_{which}.png", np.zeros((60, 100, 3)))
+    (anchor / "046_CD3_v1_overlay.json").write_text(
+        json.dumps(
+            {
+                "labels": {
+                    "before": labs("Before"),
+                    "after": labs("After (valis_high_micro2)"),
+                }
+            }
+        )
+    )
+    ctx = SimpleNamespace(dpi=100, formats="pdf,png")
+    written = sp._compose_pairs(ctx, tmp_path, "046", "editable")
+    assert {p.name for p in written} == {"046_CD3_v1.pdf", "046_CD3_v1.png"}
+    pdf = (tmp_path / "before_after" / "046_CD3_v1.pdf").read_bytes()
+    # text a vector editor can retype: an embedded TrueType font, not Type 3 outlines
+    assert b"/Type3" not in pdf and b"/CIDFontType2" in pdf
+    assert sp._plain_title("title", "After (valis_high_micro2)") == "After"
+    assert sp._plain_title("bar", "1 mm (approx)") == "1 mm (approx)"
+    # burned panels are pasted as they are; nothing is written twice over them
+    assert sp._compose_pairs(ctx, tmp_path, "046", "burned")
