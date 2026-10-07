@@ -665,3 +665,71 @@ def test_agreement_finds_a_mask_the_arm_names_but_does_not_hold(tmp_path, capsys
     err = capsys.readouterr().err
     assert "cellsam: no cell mask found for arm seg_cellsam" in err
     assert "patient P1: no cell mask from ['cellsam']" in err
+
+
+def test_time_on_cores_is_bounded_by_the_longest_task_and_by_the_work(tmp_path):
+    """The estimate of 'how long on a machine with N cores': per phase the larger of its
+    longest task and its reserved core-hours / N, summed over phases. A one-task method is
+    flat; a many-task one falls until its longest tasks set the floor; below the widest
+    task's cores an arm could not run as measured and has no estimate."""
+    per = pd.DataFrame(
+        [
+            # VALIS: one 2 h task on 8 cores
+            dict(
+                run_id="v",
+                backend="valis",
+                patient_id="P1",
+                phase="REGISTER",
+                cpu_hours=16.0,
+                longest_task_hours=2.0,
+                max_cpus=8,
+            ),
+            # STARE: 100 tile tasks of 0.1 h on 2 cores (20 core-h), then a 0.5 h stitch on 4
+            dict(
+                run_id="s",
+                backend="stare",
+                patient_id="P1",
+                phase="TILED_REG_TILE",
+                cpu_hours=20.0,
+                longest_task_hours=0.1,
+                max_cpus=2,
+            ),
+            dict(
+                run_id="s",
+                backend="stare",
+                patient_id="P1",
+                phase="TILED_STITCH",
+                cpu_hours=2.0,
+                longest_task_hours=0.5,
+                max_cpus=4,
+            ),
+        ]
+    )
+    est = quality.time_on_cores(per, cores=(2, 4, 8, 16, 1000))
+    t = est.set_index(["run_id", "n_cores"])["est_hours"]
+    assert np.isnan(t[("v", 4)]) and np.isnan(t[("s", 2)])  # narrower than a task
+    assert t[("v", 8)] == t[("v", 1000)] == pytest.approx(2.0)  # flat: one task
+    assert t[("s", 4)] == pytest.approx(20 / 4 + 0.5)  # the work bound, then the stitch
+    assert t[("s", 16)] == pytest.approx(20 / 16 + 0.5)
+    assert t[("s", 1000)] == pytest.approx(0.1 + 0.5)  # the floor: the longest tasks
+    assert quality.time_on_cores(per.iloc[:0]).empty
+
+
+def test_patient_input_gb_reads_the_register_rows_of_a_size_log(tmp_path):
+    d = tmp_path / "valis_high_micro2" / "size_logs"
+    d.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "process": [
+                "MIRAGE:REGISTRATION:REGISTER",
+                "MIRAGE:REGISTRATION:REGISTER",
+                "X:SEGMENT",
+            ],
+            "sample_id": ["046", "052", "046"],
+            "filename": ["inputs/", "inputs/", "a.tif"],
+            "bytes": [3 * 2**30, 2**30, 9 * 2**30],
+        }
+    ).to_csv(d / "input_sizes.csv", index=False)
+    got = quality.patient_input_gb(tmp_path, ["missing_arm", "valis_high_micro2"])
+    assert got == {"046": pytest.approx(3.0), "052": pytest.approx(1.0)}
+    assert quality.patient_input_gb(tmp_path, ["missing_arm"]) == {}

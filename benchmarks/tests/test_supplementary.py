@@ -565,8 +565,20 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
     out2 = tmp_path / "o2"
     args = ["--results", str(work), "--plan", str(full), "--config", str(conf2)]
     assert sp.main([*args, "-o", str(out2), "--only", "S5"]) == 0
-    for stem in ("S5_cpu_reserved", "S5_cpu_used", "S5_task_time", "S5_peak_memory"):
+    for stem in (
+        "S5_cpu_reserved",
+        "S5_cpu_used",
+        "S5_task_time",
+        "S5_peak_memory",
+        "S5_time_on_cores",
+    ):
         assert (out2 / "S5" / f"{stem}.png").is_file(), stem
+    est = list(csv.DictReader((out2 / "S5" / "S5_time_on_cores.csv").open()))
+    # the config's arm order, and one 600 s task on 2 cores: flat from 2 cores up
+    assert est[0]["run_id"] == "valis_high_micro2"
+    assert {r["est_hours"] for r in est if r["run_id"] == "valis_high_micro2"} == {
+        str(600 / 3600)
+    }
     vals = {
         r["arm"]: r for r in csv.DictReader((out2 / "S5" / "S5_values_high.csv").open())
     }

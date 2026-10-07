@@ -80,6 +80,8 @@ S7:
 # phase: S5_cpu_reserved (run time x cores requested), S5_cpu_used (run time x cores
 # measured busy), S5_task_time (run times summed, cores ignored); and S5_peak_memory (the
 # largest task). Attempts that ran out of memory and were retried are not counted.
+# S5_time_on_cores is an ESTIMATE of the time per patient on a machine with N cores, from
+# the measured tasks (each phase takes max(longest task, core-hours / N)).
 # S5_cost_by_tier_all keeps every tier.
 S5:
   arms: [valis_high_micro2, tiled_high_s64]

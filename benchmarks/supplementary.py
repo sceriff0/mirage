@@ -32,7 +32,8 @@ Outputs (``-o OUT``):
     OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE (+ASHLAR), matched insets
     OUT/S5/                         registration cost of the two high arms, per patient and
                                     phase: S5_cpu_reserved, S5_cpu_used, S5_task_time,
-                                    S5_peak_memory; S5_cost_by_tier_all keeps every tier
+                                    S5_peak_memory; S5_time_on_cores (estimated time against
+                                    the cores available); S5_cost_by_tier_all (every tier)
     OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
     OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
     OUT/S8/<set>_<config>/          Dice and displacement by case and by panel pair
@@ -896,6 +897,10 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
         for a, m in zip(sub["run_id"], sub["backend"])
     }
     fmts = ctx.formats.split(",")
+    # the patient's image set, small beside its dot: GiB of slide files (reference
+    # included), where a size log recorded it
+    size = quality.patient_input_gb(ctx.root, [*arms, *sorted(have)])
+    note = {p: f"{gb:.0f} GB" for p, gb in size.items()}
     for stem, col, ylabel in S5_COSTS:
         if not sub[col].notna().any():
             # e.g. no %cpu field in the traces: nothing measured to draw
@@ -903,10 +908,25 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
                 f"[supp] S5: {stem} not drawn, no {col} in the traces", file=sys.stderr
             )
             continue
-        fig = plotting.cost_by_phase(sub, quality.PHASE_ORDER, col, ylabel, labels)
+        fig = plotting.cost_by_phase(
+            sub, quality.PHASE_ORDER, col, ylabel, labels, note
+        )
         plotting.save_fig(fig, out / stem, formats=fmts)
-    fig = plotting.cost_peak_memory(sub, "Peak memory of the largest task (GB)", labels)
+    fig = plotting.cost_peak_memory(
+        sub, "Peak memory of the largest task (GB)", labels, note
+    )
     plotting.save_fig(fig, out / "S5_peak_memory", formats=fmts)
+    # "on a machine with N cores, how long?" -- an estimate from the measured tasks
+    est = quality.time_on_cores(sub)
+    order = {a: i for i, a in enumerate(arms)}  # the config's order, as the bar figures
+    est = est.sort_values(
+        "run_id", key=lambda c: c.map(order), kind="stable"
+    ).reset_index(drop=True)
+    est["input_gb"] = est["patient_id"].map(size)
+    est.to_csv(out / "S5_time_on_cores.csv", index=False)
+    if est["est_hours"].notna().any():
+        fig = plotting.time_on_cores(est, labels)
+        plotting.save_fig(fig, out / "S5_time_on_cores", formats=fmts)
     tot = (
         sub.groupby(["run_id", "backend", "patient_id"])
         .agg(

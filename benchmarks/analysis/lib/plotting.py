@@ -10,6 +10,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 
 _THEME = {
     "figure.figsize": (5.0, 3.5),
@@ -270,8 +271,11 @@ _PHASE_LABEL = {
 _DOTS = dict(ls="", marker="o", ms=4, mfc="white", mec="#222222", mew=0.9, zorder=3)
 
 
-def _arm_axes(arms, labels):
-    fig, ax = plt.subplots(figsize=(1.7 * len(arms) + 2.2, 3.4))
+def _arm_axes(arms, labels, legend: bool = False):
+    # a legend sits in its own strip to the right of the axes, never over a bar
+    fig, ax = plt.subplots(
+        figsize=(1.7 * len(arms) + 2.2 + (1.6 if legend else 0), 3.4)
+    )
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xticks(range(len(arms)))
     ax.set_xticklabels([(labels or {}).get(a, a) for a in arms])
@@ -279,18 +283,36 @@ def _arm_axes(arms, labels):
     return fig, ax
 
 
+def _annotate(ax, xs, ys, patients, note):
+    """A small note (e.g. the patient's image size) right of each dot."""
+    for x, y, p in zip(xs, ys, patients):
+        if note and note.get(str(p)) and np.isfinite(y):
+            ax.annotate(
+                note[str(p)],
+                (x, y),
+                xytext=(4, 0),
+                textcoords="offset points",
+                fontsize=5,
+                color="0.15",
+                va="center",
+                # legible over a coloured bar as well as over the background
+                bbox=dict(fc="white", ec="none", alpha=0.75, pad=0.4),
+            )
+
+
 def _jitter(patients):
     rng = np.random.default_rng(0)
     return {p: float(rng.uniform(-0.12, 0.12)) for p in sorted(set(patients))}
 
 
-def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
+def cost_by_phase(frame, phase_order, value, ylabel, labels=None, note=None):
     """One cost of a few arms side by side, split by phase, one dot per patient.
 
     ``frame`` is quality.registration_cost_by_patient's long table restricted to the arms
     to draw (in the order of first appearance) and ``value`` one of its per-slide columns.
     The bar is the MEDIAN patient's total; its segments are each phase's share of the
-    arm's total over all patients; the dots are the patients' own totals.
+    arm's total over all patients; the dots are the patients' own totals. ``note`` is
+    {patient: text} written small beside that patient's dot.
     """
     arms = list(dict.fromkeys(frame["run_id"]))
     per = (
@@ -301,7 +323,7 @@ def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
     )
     phases = [p for p in phase_order if p in set(frame["phase"])]
     colour = {p: _PHASE_COLOUR.get(p, f"C{i}") for i, p in enumerate(phases)}
-    fig, ax = _arm_axes(arms, labels)
+    fig, ax = _arm_axes(arms, labels, legend=True)
     jitter = _jitter(per["patient_id"])
     for i, arm in enumerate(arms):
         sub, tot = frame[frame["run_id"] == arm], per[per["run_id"] == arm]
@@ -317,7 +339,9 @@ def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
             h = height * float(share[ph])
             ax.bar(i, h, 0.55, bottom=bottom, color=colour[ph], ec="white", lw=0.6)
             bottom += h
-        ax.plot([i + jitter[p] for p in tot["patient_id"]], tot["total"], **_DOTS)
+        xs = [i + jitter[p] for p in tot["patient_id"]]
+        ax.plot(xs, tot["total"], **_DOTS)
+        _annotate(ax, xs, tot["total"], tot["patient_id"], note)
     ax.set_ylim(bottom=0)
     ax.set_ylabel(ylabel)
     ax.legend(
@@ -325,12 +349,15 @@ def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
         labels=[_PHASE_LABEL.get(p, p) for p in phases],
         fontsize=7,
         frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
     )
     fig.tight_layout()
     return fig
 
 
-def cost_peak_memory(frame, ylabel, labels=None):
+def cost_peak_memory(frame, ylabel, labels=None, note=None):
     """The largest single task's peak memory per arm: bar = median patient, dots = patients."""
     arms = list(dict.fromkeys(frame["run_id"]))
     per = frame.groupby(["run_id", "patient_id"])["peak_rss_gb"].max().reset_index()
@@ -340,8 +367,69 @@ def cost_peak_memory(frame, ylabel, labels=None):
         tot = per[per["run_id"] == arm]
         peak = float(np.nanmedian(tot["peak_rss_gb"])) if len(tot) else np.nan
         ax.bar(i, peak, 0.55, color="#B8C4CE", ec="white", lw=0.6)
-        ax.plot([i + jitter[p] for p in tot["patient_id"]], tot["peak_rss_gb"], **_DOTS)
+        xs = [i + jitter[p] for p in tot["patient_id"]]
+        ax.plot(xs, tot["peak_rss_gb"], **_DOTS)
+        _annotate(ax, xs, tot["peak_rss_gb"], tot["patient_id"], note)
     ax.set_ylim(bottom=0)
     ax.set_ylabel(ylabel)
+    fig.tight_layout()
+    return fig
+
+
+_ARM_COLOUR = ("#0072B2", "#D55E00", "#009E73", "#CC79A7")
+
+
+def time_on_cores(frame, labels=None):
+    """Estimated time to register one patient against the cores available.
+
+    ``frame`` is quality.time_on_cores: per arm the line is the MEDIAN patient and the
+    band spans the patients (min to max). Both axes are logarithmic: a method whose time
+    halves when the cores double falls on a straight diagonal, a method that cannot use
+    more cores is flat.
+    """
+    arms = list(dict.fromkeys(frame["run_id"]))
+    fig, ax = plt.subplots(figsize=(4.6 + 1.9, 3.4))
+    ax.spines[["top", "right"]].set_visible(False)
+    for i, arm in enumerate(arms):
+        wide = frame[frame["run_id"] == arm].pivot(
+            index="n_cores", columns="patient_id", values="est_hours"
+        )
+        wide = wide.dropna(how="all")
+        if wide.empty:
+            continue
+        c = _ARM_COLOUR[i % len(_ARM_COLOUR)]
+        x = wide.index.to_numpy(dtype=float)
+        ax.fill_between(
+            x, wide.min(axis=1), wide.max(axis=1), color=c, alpha=0.18, lw=0
+        )
+        ax.plot(
+            x,
+            wide.median(axis=1),
+            "-o",
+            color=c,
+            ms=4,
+            label=(labels or {}).get(arm, arm).replace("\n", " "),
+        )
+    cores = sorted(set(frame["n_cores"]))
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_xticks(cores)
+    ax.set_xticklabels([str(c) for c in cores])
+    # hours written out (0.5, 1, 2, 5): a log axis left to itself labels only 10^0
+    plain = FuncFormatter(lambda v, _: f"{v:g}")
+    ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+    ax.yaxis.set_major_formatter(plain)
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlabel("CPU cores available")
+    ax.set_ylabel("Estimated time per patient (hours)")
+    ax.legend(
+        fontsize=7,
+        frameon=False,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1.0),
+        borderaxespad=0.0,
+        title="line: median patient\nband: all patients",
+        title_fontsize=6,
+    )
     fig.tight_layout()
     return fig

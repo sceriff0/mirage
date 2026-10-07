@@ -764,11 +764,77 @@ def registration_cost_by_patient(runs_df: pd.DataFrame, results_root) -> pd.Data
                     "cpu_hours_used_per_slide": used_h / n,
                     "task_hours_per_slide": task_h / n,
                     "peak_rss_gb": float(ok["peak_rss_gb"].max()),
+                    # what time_on_cores needs: the phase's longest task and widest task
+                    "longest_task_hours": float(rt.max() / 3600.0),
+                    "max_cpus": float(cpus.max()),
                     "n_tasks": int(len(ok)),
                     "n_failed_attempts": int((~t["_ok"]).sum()),
                 }
             )
     return pd.DataFrame(rows)
+
+
+TIME_ON_CORES = (2, 4, 8, 16, 32, 64, 128)
+
+
+def time_on_cores(per_patient: pd.DataFrame, cores=TIME_ON_CORES) -> pd.DataFrame:
+    """ESTIMATED hours to register one patient on a machine with N cores, per arm.
+
+    A model on the measured tasks, not a measurement. From registration_cost_by_patient's
+    rows, each phase (run in order, the next starting when the previous has finished) takes
+
+        max( its longest task ,  its reserved core-hours / N )
+
+    -- it cannot finish before its longest task does, nor do more than N cores' work per
+    hour -- and a patient's time is the sum over its phases. Every task keeps the cores and
+    the run time it was measured with: nothing is assumed about how a task would speed up
+    or slow down on other hardware. So a one-task method is a flat line (more cores do not
+    help it as measured), and an arm is NaN below its widest task's core count, where it
+    could not run as measured. Memory is not modelled: N cores are assumed to come with
+    the memory the tasks running together need. Queueing and job start-up are not in it.
+    """
+    rows = []
+    if per_patient.empty:
+        return pd.DataFrame(rows)
+    for (run, pid), g in per_patient.groupby(["run_id", "patient_id"]):
+        widest = float(g["max_cpus"].max())
+        for n in cores:
+            hours = (
+                float(np.maximum(g["longest_task_hours"], g["cpu_hours"] / n).sum())
+                if n >= widest
+                else float("nan")
+            )
+            rows.append(
+                {
+                    "run_id": run,
+                    "backend": g["backend"].iloc[0],
+                    "patient_id": pid,
+                    "n_cores": int(n),
+                    "est_hours": hours,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def patient_input_gb(results_root, run_ids) -> dict:
+    """patient -> GiB of slide files registered for it (reference included), read from the
+    first of ``run_ids`` whose size log has REGISTER rows: REGISTER takes all of a
+    patient's slides at once, so its logged input IS the patient's image set. File size on
+    disk (compressed), not pixels. {} when no such log exists."""
+    for run in run_ids:
+        for p in (
+            Path(results_root) / str(run) / "size_logs" / "input_sizes.csv",
+            Path(results_root) / str(run) / "out" / "size_logs" / "input_sizes.csv",
+        ):
+            try:
+                df = pd.read_csv(p, dtype={"sample_id": str})
+            except Exception:
+                continue
+            reg = df[df["process"].map(_leaf) == "REGISTER"]
+            if len(reg):
+                gb = reg.groupby("sample_id")["bytes"].sum() / 2**30
+                return {str(k): float(v) for k, v in gb.items()}
+    return {}
 
 
 # ─────────────────────────────────────────────────────────── per-run cost ──
