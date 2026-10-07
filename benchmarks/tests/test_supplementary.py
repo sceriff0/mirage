@@ -1067,3 +1067,41 @@ def test_only_the_finished_pdfs_are_kept_unless_the_panels_are_asked_for(tmp_pat
     only_pdf = sp._figure_ctx(ctx, {"formats": "pdf"})
     assert only_pdf.formats == "pdf" and ctx.formats == "png,pdf"
     assert only_pdf.dpi == ctx.dpi and only_pdf.log is ctx.log
+
+
+def test_before_after_pairs_script_builds_the_figures_from_an_existing_anchor(tmp_path):
+    """benchmarks/before_after_pairs.py: one command, no rendering, the patient read from
+    the manifests; a directory without an _anchor is skipped with a message."""
+    import subprocess
+    import sys
+
+    import matplotlib.image as mpimg
+    import numpy as np
+
+    root = tmp_path / "S4"
+    (root / "_anchor").mkdir(parents=True)
+    for which in ("before", "after"):
+        mpimg.imsave(
+            root / "_anchor" / f"046_CD3_v1_{which}.png", np.zeros((40, 60, 3))
+        )
+    lab = [{"role": "bar", "text": "1 mm", "x": 0.1, "y": 0.1, "size": 0.05}]
+    (root / "_anchor" / "046_CD3_v1_overlay.json").write_text(
+        json.dumps({"patient": "046", "labels": {"before": lab, "after": lab}})
+    )
+    script = sp.REPO_ROOT / "benchmarks" / "before_after_pairs.py"
+    run = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(root),
+            str(tmp_path / "none"),
+            "--formats",
+            "pdf",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,  # from anywhere: the script finds the package itself
+    )
+    assert run.returncode == 0, run.stderr
+    assert (root / "before_after" / "046_CD3_v1.pdf").is_file()
+    assert "1 file(s) for 046" in run.stdout and "no _anchor/" in run.stderr
