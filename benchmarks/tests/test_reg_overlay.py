@@ -421,3 +421,42 @@ def test_labels_none_leaves_the_words_out_of_the_image_but_in_the_manifest(
         title = next(lab for lab in after if lab["role"] == "title")
         assert ys.min() >= (1 - title["y"]) * h - 3
         assert xs.min() >= title["x"] * w - 3
+
+
+def _sparse(shape=(400, 600), box=(40, 60, 120, 180)):
+    """A slide that is mostly empty: tissue only inside ``box`` (y0, x0, y1, x1)."""
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    img = rng.normal(100, 2, shape).astype(np.float32)
+    y0, x0, y1, x1 = box
+    img[y0:y1, x0:x1] += rng.uniform(300, 900, (y1 - y0, x1 - x0))
+    return img
+
+
+def test_a_field_larger_than_the_tissue_is_fitted_to_it():
+    """10 mm asked on a small biopsy: the field was the slide's centre and the tissue sat
+    in a corner of a black panel. It is shrunk to the tissue plus a margin and centred."""
+    low, factor = _sparse(), 4
+    H, W = 1600, 2400
+    y0, x0, y1, x1 = rm.tissue_box(low, factor, (H, W))
+    assert abs(y0 - 160) <= 12 and abs(x0 - 240) <= 12
+    assert abs(y1 - 480) <= 12 and abs(x1 - 720) <= 12
+    y, x, side = ro.fit_to_tissue(low, factor, 1600, (H, W), margin=0.1)
+    assert side == pytest.approx(480 * 1.2, abs=30)  # the long side + 10% each way
+    # the tissue's centre (320, 480) is the field's centre, where the slide allows it
+    assert x + side / 2 == pytest.approx(480, abs=12)
+    assert y == 0 or y + side / 2 == pytest.approx(320, abs=12)
+    assert 0 <= y <= H - side and 0 <= x <= W - side
+    # a field the tissue is larger than is not touched: select_rois picks the window
+    assert ro.fit_to_tissue(low, factor, 300, (H, W)) is None
+    import numpy as np
+
+    assert rm.tissue_box(np.zeros((50, 50), np.float32), 4, (200, 200)) is None
+
+
+def test_the_fit_is_recorded_and_can_be_switched_off(arm_root, tmp_path):
+    on = _overlay(arm_root / "armB", tmp_path / "on")
+    assert "fitted_to_tissue" in on["crop"]
+    off = _overlay(arm_root / "armB", tmp_path / "off", "--no-fit-tissue")
+    assert off["crop"]["fitted_to_tissue"] is False

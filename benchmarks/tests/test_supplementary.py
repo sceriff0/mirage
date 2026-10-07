@@ -793,3 +793,42 @@ def test_inner_labels_are_set_as_real_text_where_the_panel_recorded_them(tmp_pat
     assert bar.get_fontsize() == pytest.approx(0.04 * height_pt)
     assert height_pt < 0.6 * 4 * 72
     plt.close(fig)
+
+
+def test_every_method_is_drawn_at_the_anchors_own_crop_size(tmp_path, monkeypatch):
+    """The anchor may shrink its field to the tissue; a panel pinned to its corner but
+    drawn at the configured field_um would show different tissue per method."""
+    from types import SimpleNamespace
+
+    calls = []
+
+    def render(tool, args):
+        calls.append([str(a) for a in args])
+        out = args[args.index("-o") + 1]
+        if out.name == "_anchor":
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "046_CD3_overlay.json").write_text(
+                json.dumps(
+                    {
+                        "round": "CD3",
+                        "variant": 1,
+                        "crop": {"y": 10, "x": 20, "size_px": 5120},
+                        "zoom": {"y": 30, "x": 40},
+                    }
+                )
+            )
+        return True
+
+    ctx = SimpleNamespace(
+        out=tmp_path, dpi=300, render=render, arm_dir=lambda a: tmp_path / a
+    )
+    monkeypatch.setattr(sp, "configs", lambda ctx: ["high"])
+    monkeypatch.setattr(sp, "_anchor_arm", lambda picks: "valis_high")
+    monkeypatch.setattr(sp, "arm_for", lambda picks, m, c: f"{m}_{c}")
+    sp._overlay_panels(ctx, None, "046", "S4", {"field_um": 10000, "zoom_um": 60})
+    pinned = [c for c in calls if "--roi" in c]
+    assert len(pinned) == len(sp.REG_METHODS)
+    for c in pinned:
+        assert c[c.index("--roi") + 1] == "10,20"
+        assert c[c.index("--field-px") + 1] == "5120"
+        assert c[c.index("--zoom-roi") + 1] == "30,40"

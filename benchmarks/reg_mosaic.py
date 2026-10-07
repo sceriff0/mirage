@@ -1099,6 +1099,32 @@ def image_note(ref, mov, px: float | None) -> tuple[str, dict]:
     return format_note(dice, delta, "µm" if px else "px"), vals
 
 
+def tissue_box(low: np.ndarray, factor: float, full_shape, trim: float = 0.5):
+    """(y0, x0, y1, x1) of the tissue on a low-res nuclear image, in full-res px; None when
+    no tissue is found.
+
+    The same foreground select_rois scores (Otsu on the log image). The box spans the
+    ``trim``..100-``trim`` percentiles of the tissue pixels' coordinates, not their min and
+    max, so a speck of debris at the slide's edge does not stretch it.
+    """
+    H, W = full_shape
+    img = np.asarray(low, np.float32)
+    f = np.log1p(np.maximum(img - float(np.percentile(img, 1.0)), 0.0))
+    rng = float(f.max() - f.min()) or 1.0
+    fg = _otsu_mask(((f - f.min()) * (255.0 / rng)).astype(np.uint8), 1.5)
+    if not fg.any():
+        return None
+    ys, xs = np.nonzero(fg)
+    y0, y1 = np.percentile(ys, (trim, 100.0 - trim))
+    x0, x1 = np.percentile(xs, (trim, 100.0 - trim))
+    return (
+        max(int(y0 * factor), 0),
+        max(int(x0 * factor), 0),
+        min(int(np.ceil((y1 + 1) * factor)), H),
+        min(int(np.ceil((x1 + 1) * factor)), W),
+    )
+
+
 def select_rois(
     low: np.ndarray,
     factor: float,

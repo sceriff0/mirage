@@ -170,13 +170,19 @@ def load_avoid(path: Path | None, reference: Path) -> list[tuple[int, int, int]]
     return [(int(r["y"]), int(r["x"]), size) for r in d["rois"]]
 
 
-def zoom_region(arm: rm.Arm, key: str, opt, crop, ref_panel, step: int, px):
+def zoom_region(
+    arm: rm.Arm, key: str, opt, crop, ref_panel, step: int, px, rank: int = 1
+):
     """The inset's region and its FULL-resolution pixels, or None when --zoom-um is off.
 
     The region is chosen inside the crop by the same tissue x texture score that picked the
     crop itself (on the panel already in memory, so no extra read), unless --zoom-roi names
     it. Both panels are read at step 1: the point of the inset is to show cells the strided
     panel cannot resolve.
+
+    ``rank`` is which of the crop's best regions to take (1 = the best): a variant whose
+    crop is the SAME as an earlier one's -- a field fitted to the tissue has only one
+    place to be -- shows a different inset instead of a copy.
     """
     if not opt.zoom_um:
         return None
@@ -197,8 +203,16 @@ def zoom_region(arm: rm.Arm, key: str, opt, crop, ref_panel, step: int, px):
     if opt.zoom_roi:
         zy, zx = (int(v) for v in opt.zoom_roi.split(",")[:2])
     else:
-        picks = rm.select_rois(ref_panel, step, size, 1, 0.0, 0.0, (field_px, field_px))
-        dy, dx = picks[0] if picks else ((field_px - size) // 2,) * 2
+        picks = rm.select_rois(
+            ref_panel,
+            step,
+            size,
+            rank,
+            0.0 if rank == 1 else 0.15,
+            0.0,
+            (field_px, field_px),
+        )
+        dy, dx = picks[-1] if picks else ((field_px - size) // 2,) * 2
         zy, zx = y + dy, x + dx
     zy = min(max(zy, y), y + field_px - size)
     zx = min(max(zx, x), x + field_px - size)
@@ -228,6 +242,29 @@ def zoom_region(arm: rm.Arm, key: str, opt, crop, ref_panel, step: int, px):
         "scalebar": bar,
         "panel": {},
     }
+
+
+def fit_to_tissue(low, factor, field_px: int, full_shape, margin: float = 0.08):
+    """(y, x, field_px) of a field FITTED to the tissue, or None when the field is not
+    larger than the tissue.
+
+    A field wider than the tissue (10 mm on a 3 mm biopsy) has no window to choose: it was
+    centred on the SLIDE, which put the tissue in a corner of a black panel. Such a field
+    is shrunk to the tissue's box plus ``margin`` on each side and centred on it. A field
+    the tissue is larger than is left to select_rois, which picks the best window.
+    """
+    box = rm.tissue_box(low, factor, full_shape)
+    if box is None:
+        return None
+    H, W = full_shape
+    y0, x0, y1, x1 = box
+    side = int(round(max(y1 - y0, x1 - x0) * (1.0 + 2.0 * margin)))
+    if side >= field_px:
+        return None
+    side = max(side, 1)
+    y = (y0 + y1) // 2 - side // 2
+    x = (x0 + x1) // 2 - side // 2
+    return min(max(y, 0), max(H - side, 0)), min(max(x, 0), max(W - side, 0)), side
 
 
 def render(
@@ -266,8 +303,13 @@ def render(
         raise SystemExit("pixel size unknown; pass --pixel-size-um or --field-px")
     field_px = min(field_px, H, W)
 
+    fitted = None
+    if not opt.roi and opt.fit_tissue:
+        fitted = fit_to_tissue(*lowres(opt.lowres_um), field_px, (H, W), opt.fit_margin)
     if opt.roi:
         y, x = (int(v) for v in opt.roi.split(",")[:2])
+    elif fitted is not None:
+        y, x, field_px = fitted
     else:
         low, f = lowres(opt.lowres_um)
         picks = rm.select_rois(
@@ -303,7 +345,8 @@ def render(
 
     # --zoom-um: a small inset read at FULL resolution (step 1), so individual nuclei are
     # visible even when the panel itself is strided down from a millimetre-scale field
-    zoom = zoom_region(arm, key, opt, (y, x, field_px), ref_a, step, px)
+    same = sum(1 for e in exclude if tuple(e) == (y, x, field_px))
+    zoom = zoom_region(arm, key, opt, (y, x, field_px), ref_a, step, px, rank=1 + same)
     # one stretch for the reference (it is the same pixels in both panels); the moving
     # channel is stretched per panel, since the two crops cover different tissue
     lim_ref = rm.percentile_limits(ref_a, opt.pmin, opt.pmax)
@@ -416,6 +459,7 @@ def render(
             "x": x,
             "size_px": field_px,
             "size_um": field_px * px if px else None,
+            "fitted_to_tissue": fitted is not None,
         },
         "zoom": None
         if zoom is None
@@ -514,6 +558,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="crop side in px (overrides --field-um)",
+    )
+    ap.add_argument(
+        "--no-fit-tissue",
+        dest="fit_tissue",
+        action="store_false",
+        help="keep a field LARGER than the tissue as asked (centred on the slide). By "
+        "default such a field is shrunk to the tissue plus --fit-margin and centred on "
+        "it; a field smaller than the tissue is never changed",
+    )
+    ap.add_argument(
+        "--fit-margin",
+        type=float,
+        default=0.08,
+        help="empty border around the tissue of a fitted field, as a fraction of its side",
     )
     ap.add_argument(
         "--max-px",
