@@ -565,7 +565,8 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
     out2 = tmp_path / "o2"
     args = ["--results", str(work), "--plan", str(full), "--config", str(conf2)]
     assert sp.main([*args, "-o", str(out2), "--only", "S5"]) == 0
-    assert (out2 / "S5" / "S5_cost_high.png").is_file()
+    for stem in ("S5_cpu_reserved", "S5_cpu_used", "S5_task_time", "S5_peak_memory"):
+        assert (out2 / "S5" / f"{stem}.png").is_file(), stem
     vals = {
         r["arm"]: r for r in csv.DictReader((out2 / "S5" / "S5_values_high.csv").open())
     }
@@ -574,6 +575,14 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
     assert float(v["median_peak_rss_gb"]) == pytest.approx(4.0)  # not the failed 64
     assert v["failed_attempts_not_counted"] == "1"
     assert float(v["used_over_reserved"]) == pytest.approx(0.75)  # 150% of 2 cores
+    # one finished task: 600 s on 2 reserved cores, measured at 150% CPU
+    n = (600 * 2 / 3600) / float(v["median_reserved_core_h_per_slide"])  # its slides
+    assert float(v["median_used_core_h_per_slide"]) * n == pytest.approx(
+        600 * 1.5 / 3600
+    )
+    assert float(v["median_sequential_task_h_per_slide"]) * n == pytest.approx(
+        600 / 3600
+    )
     tier = list(csv.DictReader((out2 / "S5" / "S5_values_median_by_tier.csv").open()))
     assert tier and not any("wall" in k for k in tier[0])
     assert all(float(r["reg_peak_rss_gb"]) == pytest.approx(4.0) for r in tier)

@@ -267,62 +267,81 @@ _PHASE_LABEL = {
 }
 
 
-def cost_two_arms(frame, phase_order, labels=None):
-    """Registration cost of a few arms side by side, one dot per patient.
+_DOTS = dict(ls="", marker="o", ms=4, mfc="white", mec="#222222", mew=0.9, zorder=3)
+
+
+def _arm_axes(arms, labels):
+    fig, ax = plt.subplots(figsize=(1.7 * len(arms) + 2.2, 3.4))
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.set_xticks(range(len(arms)))
+    ax.set_xticklabels([(labels or {}).get(a, a) for a in arms])
+    ax.set_xlim(-0.6, len(arms) - 0.4)
+    return fig, ax
+
+
+def _jitter(patients):
+    rng = np.random.default_rng(0)
+    return {p: float(rng.uniform(-0.12, 0.12)) for p in sorted(set(patients))}
+
+
+def cost_by_phase(frame, phase_order, value, ylabel, labels=None):
+    """One cost of a few arms side by side, split by phase, one dot per patient.
 
     ``frame`` is quality.registration_cost_by_patient's long table restricted to the arms
-    to draw (in the order of first appearance). Left: reserved core-hours per slide --
-    the bar is the median patient's total, split by each phase's share of the arm's
-    core-hours, the dots are the patients. Right: the largest single task's peak memory,
-    bar = median patient.
+    to draw (in the order of first appearance) and ``value`` one of its per-slide columns.
+    The bar is the MEDIAN patient's total; its segments are each phase's share of the
+    arm's total over all patients; the dots are the patients' own totals.
     """
     arms = list(dict.fromkeys(frame["run_id"]))
-    labels = labels or {}
     per = (
-        frame.groupby(["run_id", "patient_id"])
-        .agg(core_h=("cpu_hours_per_slide", "sum"), peak=("peak_rss_gb", "max"))
+        frame.groupby(["run_id", "patient_id"])[value]
+        .sum(min_count=1)
+        .rename("total")
         .reset_index()
     )
     phases = [p for p in phase_order if p in set(frame["phase"])]
     colour = {p: _PHASE_COLOUR.get(p, f"C{i}") for i, p in enumerate(phases)}
-    fig, (ax_c, ax_m) = plt.subplots(1, 2, figsize=(2.2 * len(arms) + 3.6, 3.4))
-    rng = np.random.default_rng(0)
-    jitter = {
-        pid: float(rng.uniform(-0.12, 0.12)) for pid in sorted(set(per["patient_id"]))
-    }
+    fig, ax = _arm_axes(arms, labels)
+    jitter = _jitter(per["patient_id"])
     for i, arm in enumerate(arms):
         sub, tot = frame[frame["run_id"] == arm], per[per["run_id"] == arm]
-        height = float(np.nanmedian(tot["core_h"])) if len(tot) else np.nan
-        share = sub.groupby("phase")["cpu_hours"].sum()
+        height = (
+            float(np.nanmedian(tot["total"])) if tot["total"].notna().any() else np.nan
+        )
+        share = sub.groupby("phase")[value].sum()
         share = share / share.sum() if share.sum() else share
         bottom = 0.0
         for ph in phases:
             if ph not in share.index or not np.isfinite(height):
                 continue
             h = height * float(share[ph])
-            ax_c.bar(i, h, 0.55, bottom=bottom, color=colour[ph], ec="white", lw=0.6)
+            ax.bar(i, h, 0.55, bottom=bottom, color=colour[ph], ec="white", lw=0.6)
             bottom += h
-        peak = float(np.nanmedian(tot["peak"])) if len(tot) else np.nan
-        ax_m.bar(i, peak, 0.55, color="#B8C4CE", ec="white", lw=0.6)
-        x = [i + jitter[p] for p in tot["patient_id"]]
-        dots = dict(
-            ls="", marker="o", ms=4, mfc="white", mec="#222222", mew=0.9, zorder=3
-        )
-        ax_c.plot(x, tot["core_h"], **dots)
-        ax_m.plot(x, tot["peak"], **dots)
-    for ax in (ax_c, ax_m):
-        ax.spines[["top", "right"]].set_visible(False)
-        ax.set_xticks(range(len(arms)))
-        ax.set_xticklabels([labels.get(a, a) for a in arms])
-        ax.set_xlim(-0.6, len(arms) - 0.4)
-        ax.set_ylim(bottom=0)
-    ax_c.set_ylabel("CPU time reserved per slide (core-hours)")
-    ax_m.set_ylabel("Peak memory of the largest task (GB)")
-    ax_c.legend(
+        ax.plot([i + jitter[p] for p in tot["patient_id"]], tot["total"], **_DOTS)
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel(ylabel)
+    ax.legend(
         handles=[plt.Rectangle((0, 0), 1, 1, color=colour[p]) for p in phases],
         labels=[_PHASE_LABEL.get(p, p) for p in phases],
         fontsize=7,
         frameon=False,
     )
+    fig.tight_layout()
+    return fig
+
+
+def cost_peak_memory(frame, ylabel, labels=None):
+    """The largest single task's peak memory per arm: bar = median patient, dots = patients."""
+    arms = list(dict.fromkeys(frame["run_id"]))
+    per = frame.groupby(["run_id", "patient_id"])["peak_rss_gb"].max().reset_index()
+    fig, ax = _arm_axes(arms, labels)
+    jitter = _jitter(per["patient_id"])
+    for i, arm in enumerate(arms):
+        tot = per[per["run_id"] == arm]
+        peak = float(np.nanmedian(tot["peak_rss_gb"])) if len(tot) else np.nan
+        ax.bar(i, peak, 0.55, color="#B8C4CE", ec="white", lw=0.6)
+        ax.plot([i + jitter[p] for p in tot["patient_id"]], tot["peak_rss_gb"], **_DOTS)
+    ax.set_ylim(bottom=0)
+    ax.set_ylabel(ylabel)
     fig.tight_layout()
     return fig

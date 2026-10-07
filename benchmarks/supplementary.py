@@ -30,8 +30,9 @@ Outputs (``-o OUT``):
     OUT/picks.csv                   the arm behind every (method, config), with its numbers
     OUT/mosaic/<set>_<config>/v<k>/ reg_mosaic per patient (overlay + checker), Dice in cells
     OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE (+ASHLAR), matched insets
-    OUT/S5/                         registration cost: S5_cost_high (the two high arms, per
-                                    patient and phase) and S5_cost_by_tier_all (every tier)
+    OUT/S5/                         registration cost of the two high arms, per patient and
+                                    phase: S5_cpu_reserved, S5_cpu_used, S5_task_time,
+                                    S5_peak_memory; S5_cost_by_tier_all keeps every tier
     OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
     OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
     OUT/S8/<set>_<config>/          Dice and displacement by case and by panel pair
@@ -849,10 +850,29 @@ def fig_s5(ctx: Ctx):
 
 
 S5_ARMS = ("valis_high_micro2", "tiled_high_s64")
+# (file stem, column of registration_cost_by_patient, y label): one figure each.
+S5_COSTS = (
+    (
+        "S5_cpu_reserved",
+        "cpu_hours_per_slide",
+        "CPU time reserved per slide (core-hours)",
+    ),
+    (
+        "S5_cpu_used",
+        "cpu_hours_used_per_slide",
+        "CPU time used per slide (core-hours)",
+    ),
+    (
+        "S5_task_time",
+        "task_hours_per_slide",
+        "Summed task run time per slide (hours)",
+    ),
+)
 
 
 def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
-    """The figure: the two high arms side by side, per patient and per phase."""
+    """The figures: the two high arms side by side, per patient and per phase -- one
+    file per measure (S5_COSTS) and one for peak memory."""
     from benchmarks.analysis.lib import plotting, quality
 
     spec = ctx.opt("S5", default={}) or {}
@@ -864,7 +884,7 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
     if missing:
         print(
             f"[supp] S5: no finished registration task in the trace of {missing}; "
-            f"S5_cost_high is drawn from {[a for a in arms if a in have]}",
+            f"the S5 cost figures are drawn from {[a for a in arms if a in have]}",
             file=sys.stderr,
         )
     sub = pd.concat([per[per["run_id"] == a] for a in arms if a in have] or [per[:0]])
@@ -875,12 +895,24 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
         a: f"{TITLE.get(str(m), str(m))}\n({a})"
         for a, m in zip(sub["run_id"], sub["backend"])
     }
-    fig = plotting.cost_two_arms(sub, quality.PHASE_ORDER, labels)
-    plotting.save_fig(fig, out / "S5_cost_high", formats=ctx.formats.split(","))
+    fmts = ctx.formats.split(",")
+    for stem, col, ylabel in S5_COSTS:
+        if not sub[col].notna().any():
+            # e.g. no %cpu field in the traces: nothing measured to draw
+            print(
+                f"[supp] S5: {stem} not drawn, no {col} in the traces", file=sys.stderr
+            )
+            continue
+        fig = plotting.cost_by_phase(sub, quality.PHASE_ORDER, col, ylabel, labels)
+        plotting.save_fig(fig, out / stem, formats=fmts)
+    fig = plotting.cost_peak_memory(sub, "Peak memory of the largest task (GB)", labels)
+    plotting.save_fig(fig, out / "S5_peak_memory", formats=fmts)
     tot = (
         sub.groupby(["run_id", "backend", "patient_id"])
         .agg(
-            core_h_per_slide=("cpu_hours_per_slide", "sum"),
+            reserved=("cpu_hours_per_slide", "sum"),
+            used=("cpu_hours_used_per_slide", lambda s: s.sum(min_count=1)),
+            sequential=("task_hours_per_slide", "sum"),
             core_h=("cpu_hours", "sum"),
             core_h_used=("cpu_hours_used", lambda s: s.sum(min_count=1)),
             peak_rss_gb=("peak_rss_gb", "max"),
@@ -896,7 +928,9 @@ def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
                 "arm": arm,
                 "backend": backend,
                 "n_patients": len(g),
-                "median_reserved_core_h_per_slide": g["core_h_per_slide"].median(),
+                "median_reserved_core_h_per_slide": g["reserved"].median(),
+                "median_used_core_h_per_slide": g["used"].median(),
+                "median_sequential_task_h_per_slide": g["sequential"].median(),
                 "median_peak_rss_gb": g["peak_rss_gb"].median(),
                 # of the cores reserved, the fraction measured busy (NaN: no %cpu field)
                 "used_over_reserved": g["core_h_used"].sum(min_count=1)

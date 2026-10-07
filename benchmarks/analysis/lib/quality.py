@@ -440,15 +440,23 @@ def _pairs(by_method: dict, reader, ident: dict) -> list:
         for k in range(i + 1, len(methods)):
             a, b = methods[i], methods[k]
             try:
-                row = _agreement_row(reader(by_method[a]), reader(by_method[b]))
+                ma, mb = reader(by_method[a]), reader(by_method[b])
+                row = _agreement_row(ma, mb)
             except Exception as exc:
                 print(
                     f"[agreement] {ident} {a} vs {b}: skipped ({type(exc).__name__}: {exc})",
                     file=sys.stderr,
                 )
                 continue
-            if row is not None:
-                rows.append({**ident, "method_a": a, "method_b": b, **row})
+            if row is None:
+                # an empty cell of the matrix must have a stated reason
+                print(
+                    f"[agreement] {ident} {a} vs {b}: skipped, the masks differ in shape "
+                    f"({np.shape(ma)} vs {np.shape(mb)}): {by_method[a]} / {by_method[b]}",
+                    file=sys.stderr,
+                )
+                continue
+            rows.append({**ident, "method_a": a, "method_b": b, **row})
     return rows
 
 
@@ -653,6 +661,9 @@ def registration_cost_by_patient(runs_df: pd.DataFrame, results_root) -> pd.Data
 
       cpu_hours          runtime x cores RESERVED: what the cluster set aside
       cpu_hours_used     runtime x measured CPU use (%cpu); NaN without that trace field
+      task_hours         runtime alone, summed: the time the tasks would take run one
+                         after another, whatever cores each had
+      *_per_slide        each of the three divided by the patient's slides
       peak_rss_gb        the largest single task of the phase
       n_failed_attempts  attempts of the phase that did not finish (out of memory, time
                          limit), NOT in any number above. A lower bound for a resumed
@@ -692,6 +703,8 @@ def registration_cost_by_patient(runs_df: pd.DataFrame, results_root) -> pd.Data
             pcpu = ok["pcpu"] if "pcpu" in ok else pd.Series(np.nan, index=ok.index)
             n = slides.get(str(pid), float("nan"))
             cpu_h = float((rt * cpus).sum() / 3600.0)
+            used_h = float((rt * pcpu / 100.0).sum(min_count=1) / 3600.0)
+            task_h = float(rt.sum() / 3600.0)
             rows.append(
                 {
                     "run_id": run,
@@ -704,10 +717,11 @@ def registration_cost_by_patient(runs_df: pd.DataFrame, results_root) -> pd.Data
                     "phase": phase,
                     "n_slides": n,
                     "cpu_hours": cpu_h,
-                    "cpu_hours_used": float(
-                        (rt * pcpu / 100.0).sum(min_count=1) / 3600.0
-                    ),
+                    "cpu_hours_used": used_h,
+                    "task_hours": task_h,
                     "cpu_hours_per_slide": cpu_h / n,
+                    "cpu_hours_used_per_slide": used_h / n,
+                    "task_hours_per_slide": task_h / n,
                     "peak_rss_gb": float(ok["peak_rss_gb"].max()),
                     "n_tasks": int(len(ok)),
                     "n_failed_attempts": int((~t["_ok"]).sum()),

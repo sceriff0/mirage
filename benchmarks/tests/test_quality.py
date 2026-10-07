@@ -532,6 +532,9 @@ def test_registration_cost_by_patient_splits_phases_and_drops_failed_attempts(tm
     assert v["cpu_hours"] == pytest.approx(8.0)  # the failed 16 core-h are not in it
     assert v["cpu_hours_per_slide"] == pytest.approx(2.0)
     assert v["cpu_hours_used"] == pytest.approx(4.0)  # 400% of one hour
+    assert v["task_hours"] == pytest.approx(1.0)  # the run time alone, cores ignored
+    assert v["cpu_hours_used_per_slide"] == pytest.approx(1.0)
+    assert v["task_hours_per_slide"] == pytest.approx(0.25)
     assert v["peak_rss_gb"] == pytest.approx(40.0)  # not the failed attempt's 90
     assert v["n_failed_attempts"] == 1 and v["n_tasks"] == 1
     assert key.loc[("valis_high_micro2", "P2", "REGISTER")]["n_slides"] == 2
@@ -547,6 +550,8 @@ def test_registration_cost_by_patient_splits_phases_and_drops_failed_attempts(tm
     assert s.loc["TILED_REG_TILE", "peak_rss_gb"] == pytest.approx(6.0)
     assert s["cpu_hours"].sum() == pytest.approx((2400 + 4800 + 300 + 3600) / 3600)
     assert s["n_failed_attempts"].sum() == 0
+    assert s.loc["TILED_REG_TILE", "task_hours"] == pytest.approx(2400 / 3600)
+    assert s.loc["TILED_REG_TILE", "cpu_hours_used"] == pytest.approx(4800 / 3600)
 
 
 def test_mask_agreement_is_banded_and_bounded_by_the_pairs_that_exist():
@@ -592,3 +597,25 @@ def test_mask_agreement_is_banded_and_bounded_by_the_pairs_that_exist():
     big = quality._agreement_row(big_a, big_b)
     assert big["foreground_iou"] == pytest.approx(iou)
     assert big["matched_cells"] == row["matched_cells"]
+
+
+def test_a_backend_pair_that_cannot_be_compared_says_why(capsys):
+    """An empty cell of the agreement matrix (S6, 2026-10-07: every StarDist pair) must
+    come with its reason on stderr: masks of different shape, or a mask that cannot be
+    read. It used to be dropped without a word."""
+    masks = {
+        "a": np.ones((4, 4), np.uint32),
+        "b": np.ones((4, 5), np.uint32),
+        "c": None,
+    }
+
+    def reader(key):
+        if masks[key] is None:
+            raise ValueError("cannot decode")
+        return masks[key]
+
+    rows = quality._pairs({k: k for k in masks}, reader, {"patient_id": "P1"})
+    err = capsys.readouterr().err
+    assert rows == []
+    assert "a vs b: skipped, the masks differ in shape ((4, 4) vs (4, 5))" in err
+    assert "a vs c: skipped (ValueError: cannot decode)" in err
