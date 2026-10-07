@@ -75,6 +75,13 @@ S7:
   numbers: scorer
   labels: editable                # as S4
 
+# ---- S5: registration cost -----------------------------------------------------------
+# S5_cost_high: these arms side by side, one dot per patient, reserved core-hours per slide
+# (stacked by phase) and the largest task's peak memory. Attempts that ran out of memory
+# and were retried are not counted. S5_cost_by_tier_all keeps every tier.
+S5:
+  arms: [valis_high_micro2, tiled_high_s64]
+
 # ---- S6: segmentation backends ------------------------------------------------------
 S6:
   patient: null

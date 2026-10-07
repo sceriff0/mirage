@@ -30,7 +30,8 @@ Outputs (``-o OUT``):
     OUT/picks.csv                   the arm behind every (method, config), with its numbers
     OUT/mosaic/<set>_<config>/v<k>/ reg_mosaic per patient (overlay + checker), Dice in cells
     OUT/S4/<set>_<config>/v<k>/     Before | VALIS | STARE (+ASHLAR), matched insets
-    OUT/S5/                         registration cost by tier, three method subsets
+    OUT/S5/                         registration cost: S5_cost_high (the two high arms, per
+                                    patient and phase) and S5_cost_by_tier_all (every tier)
     OUT/S6/r<k>/                    nuclei | cell masks per backend + the pairwise-Dice matrix
     OUT/S7/<patient>/<set>_<config>/v<k>/   as S4, for every other case
     OUT/S8/<set>_<config>/          Dice and displacement by case and by panel pair
@@ -734,7 +735,10 @@ def fig_s5(ctx: Ctx):
     from benchmarks.analysis.lib import load, plotting, quality
 
     runs = load.load_runs(ctx.root, ctx.plan_csv)
-    cost = quality.registration_cost_by_tier(runs, ctx.root)
+    # An attempt killed for memory and retried is not the method's cost: the numbers are
+    # those of the attempts that finished (the failed ones are counted, not summed, in
+    # S5_cost_by_patient.csv).
+    cost = quality.registration_cost_by_tier(load.only_successful(runs), ctx.root)
     out = ctx.out / "S5"
     out.mkdir(parents=True, exist_ok=True)
     cost.to_csv(out / "registration_cost_by_tier.csv", index=False)
@@ -754,12 +758,13 @@ def fig_s5(ctx: Ctx):
                 file=sys.stderr,
             )
     unit = "per slide" if per_slide else "per run"
+    # No wall-clock: first task start to last task end of a tile-parallel arm measures
+    # how many tiles the scheduler ran at once, not the method. It stays in the raw CSV.
     metrics = [
-        "wall_h_per_slide" if per_slide else "reg_wall_h",
         "reg_peak_rss_gb",
         "cpu_hours_per_slide" if per_slide else "reg_cpu_hours",
     ]
-    labels = [f"wall-clock h\n{unit}", "peak RSS GB\n(largest task)", f"CPU-h\n{unit}"]
+    labels = ["peak RSS GB\n(largest task)", f"reserved core-h\n{unit}"]
     for name, keep in (("all", ("valis", "stare")),):
         sub = cost[cost["backend"].isin(keep)]
         if per_slide:
@@ -775,6 +780,71 @@ def fig_s5(ctx: Ctx):
         .median()
         .to_csv(out / "S5_values_median_by_tier.csv", index=False)
     )
+    _s5_two_arms(ctx, runs, out)
+
+
+S5_ARMS = ("valis_high_micro2", "tiled_high_s64")
+
+
+def _s5_two_arms(ctx: Ctx, runs: pd.DataFrame, out: Path) -> None:
+    """The figure: the two high arms side by side, per patient and per phase."""
+    from benchmarks.analysis.lib import plotting, quality
+
+    spec = ctx.opt("S5", default={}) or {}
+    arms = [str(a) for a in (spec.get("arms") or S5_ARMS)]
+    per = quality.registration_cost_by_patient(runs, ctx.root)
+    per.to_csv(out / "S5_cost_by_patient.csv", index=False)
+    have = set(per["run_id"]) if len(per) else set()
+    missing = [a for a in arms if a not in have]
+    if missing:
+        print(
+            f"[supp] S5: no finished registration task in the trace of {missing}; "
+            f"S5_cost_high is drawn from {[a for a in arms if a in have]}",
+            file=sys.stderr,
+        )
+    sub = pd.concat([per[per["run_id"] == a] for a in arms if a in have] or [per[:0]])
+    sub = sub[sub["n_slides"].notna()]
+    if sub.empty:
+        return
+    labels = {
+        a: f"{TITLE.get(str(m), str(m))}\n({a})"
+        for a, m in zip(sub["run_id"], sub["backend"])
+    }
+    fig = plotting.cost_two_arms(sub, quality.PHASE_ORDER, labels)
+    plotting.save_fig(fig, out / "S5_cost_high", formats=ctx.formats.split(","))
+    tot = (
+        sub.groupby(["run_id", "backend", "patient_id"])
+        .agg(
+            core_h_per_slide=("cpu_hours_per_slide", "sum"),
+            core_h=("cpu_hours", "sum"),
+            core_h_used=("cpu_hours_used", lambda s: s.sum(min_count=1)),
+            peak_rss_gb=("peak_rss_gb", "max"),
+            failed=("n_failed_attempts", "sum"),
+        )
+        .reset_index()
+    )
+    rows = []
+    for (arm, backend), g in tot.groupby(["run_id", "backend"], sort=False):
+        phase = sub[sub["run_id"] == arm].groupby("phase")["cpu_hours"].sum()
+        rows.append(
+            {
+                "arm": arm,
+                "backend": backend,
+                "n_patients": len(g),
+                "median_reserved_core_h_per_slide": g["core_h_per_slide"].median(),
+                "median_peak_rss_gb": g["peak_rss_gb"].median(),
+                # of the cores reserved, the fraction measured busy (NaN: no %cpu field)
+                "used_over_reserved": g["core_h_used"].sum(min_count=1)
+                / g["core_h"].sum(),
+                "failed_attempts_not_counted": int(g["failed"].sum()),
+                **{
+                    f"share_{p}": float(phase[p] / phase.sum())
+                    for p in quality.PHASE_ORDER
+                    if p in phase.index
+                },
+            }
+        )
+    pd.DataFrame(rows).to_csv(out / "S5_values_high.csv", index=False)
 
 
 # ----------------------------------------------------------------------------- S6 --

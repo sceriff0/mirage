@@ -32,6 +32,15 @@ def parse_trace(trace_txt) -> pd.DataFrame:
     # I/O volume: rchar/wchar are the cumulative bytes a process moved through read()/write()
     # syscalls (Nextflow trace fields; nextflow.config enables both). This is transferred VOLUME,
     # not throughput. Present-only, so a trace lacking the fields degrades to NaN, never an error.
+    # %cpu is the task's MEASURED CPU use (100 = one core busy for its whole runtime), as
+    # opposed to `cpus`, the cores it reserved. Present-only, like the I/O fields.
+    out["pcpu"] = (
+        pd.to_numeric(
+            df["%cpu"].astype(str).str.rstrip("%").str.strip(), errors="coerce"
+        )
+        if "%cpu" in df.columns
+        else float("nan")
+    )
     for src, dst in (("rchar", "read_gb"), ("wchar", "write_gb")):
         out[dst] = df[src].map(parse_to_gb) if src in df.columns else float("nan")
     # Timestamps (start/complete) enable an end-to-end wall-clock; present only if the trace config

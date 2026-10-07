@@ -563,6 +563,110 @@ def registration_cost_by_tier(runs_df: pd.DataFrame, results_root) -> pd.DataFra
     return pd.DataFrame(rows)
 
 
+# The order a registration's phases are stacked in: VALIS is one task, STARE is four.
+PHASE_ORDER = (
+    "REGISTER",
+    "TILED_COARSE",
+    "TILED_REG_TILE",
+    "TILED_SOLVE",
+    "TILED_STITCH",
+)
+
+
+def _succeeded(df: pd.DataFrame) -> pd.Series:
+    """True for a task attempt that FINISHED (COMPLETED/CACHED, exit 0). An attempt killed
+    for memory and retried is a row of its own in the trace; a frame with neither column
+    counts every row."""
+    ok = pd.Series(True, index=df.index)
+    if "status" in df.columns and df["status"].notna().any():
+        ok &= df["status"].isna() | df["status"].isin(["COMPLETED", "CACHED"])
+    if "exit" in df.columns and df["exit"].notna().any():
+        ok &= df["exit"].isna() | (df["exit"] == 0)
+    return ok
+
+
+def _slides_by_patient(results_root, run_id) -> dict:
+    """patient -> slides the run registered (rows of csv/registered.csv); {} when absent."""
+    p = Path(results_root) / str(run_id) / "csv" / "registered.csv"
+    try:
+        reg = pd.read_csv(p, dtype=str)
+        return reg.groupby("patient_id").size().astype(float).to_dict()
+    except Exception:
+        return {}
+
+
+def registration_cost_by_patient(runs_df: pd.DataFrame, results_root) -> pd.DataFrame:
+    """Registration cost per arm, PATIENT and PHASE, from the attempts that succeeded.
+
+    One row per (run_id, patient_id, phase), a phase being a registration process
+    (PHASE_ORDER): VALIS has one, STARE four. The patient is the task tag's first field
+    (`P1`, `P1:DAPI_CD3`, `P1:3_4`).
+
+      cpu_hours          runtime x cores RESERVED: what the cluster set aside
+      cpu_hours_used     runtime x measured CPU use (%cpu); NaN without that trace field
+      peak_rss_gb        the largest single task of the phase
+      n_failed_attempts  attempts of the phase that did not finish (out of memory, time
+                         limit), NOT in any number above. A lower bound for a resumed
+                         run, whose trace starts at the resume.
+
+    No wall-clock: first start to last end of a phase with many tasks measures how many
+    of them the scheduler ran at once, which is the cluster's doing, not the method's.
+    """
+    if runs_df.empty or "registration_method" not in runs_df.columns:
+        return pd.DataFrame()
+    df = runs_df
+    if "arm_kind" in df.columns:
+        df = df[df["arm_kind"] == "registration"]
+    rows = []
+    for run, g in df.groupby("run_id"):
+        leaves = REGISTRATION_LEAVES.get(str(g["registration_method"].iloc[0]))
+        if not leaves:
+            continue
+        reg = g[g["process"].map(_leaf).isin(leaves)].copy()
+        if reg.empty:
+            continue
+        backend = _family(g)
+        tier_col, depth_col = _TIER_COLS[backend]
+        reg["_phase"] = reg["process"].map(_leaf)
+        tag = reg["tag"] if "tag" in reg.columns else pd.Series("", index=reg.index)
+        reg["_patient"] = tag.fillna("").astype(str).str.split(":").str[0]
+        reg["_ok"] = _succeeded(reg)
+        slides = _slides_by_patient(results_root, run)
+        for (pid, phase), t in reg.groupby(["_patient", "_phase"]):
+            ok = t[t["_ok"]]
+            if ok.empty:
+                continue
+            rt = ok["realtime_s"].fillna(0)
+            cpus = (
+                ok["cpus"].fillna(1) if "cpus" in ok else pd.Series(1, index=ok.index)
+            )
+            pcpu = ok["pcpu"] if "pcpu" in ok else pd.Series(np.nan, index=ok.index)
+            n = slides.get(str(pid), float("nan"))
+            cpu_h = float((rt * cpus).sum() / 3600.0)
+            rows.append(
+                {
+                    "run_id": run,
+                    "backend": backend,
+                    "tier": str(g[tier_col].iloc[0]) if tier_col in g else "",
+                    "depth": _depth_label(backend, g[depth_col].iloc[0])
+                    if depth_col in g
+                    else "",
+                    "patient_id": str(pid),
+                    "phase": phase,
+                    "n_slides": n,
+                    "cpu_hours": cpu_h,
+                    "cpu_hours_used": float(
+                        (rt * pcpu / 100.0).sum(min_count=1) / 3600.0
+                    ),
+                    "cpu_hours_per_slide": cpu_h / n,
+                    "peak_rss_gb": float(ok["peak_rss_gb"].max()),
+                    "n_tasks": int(len(ok)),
+                    "n_failed_attempts": int((~t["_ok"]).sum()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 # ─────────────────────────────────────────────────────────── per-run cost ──
 def run_cost_summary(runs_df: pd.DataFrame) -> pd.DataFrame:
     """Per-run cost derived from the trace: total compute, CPU-hours, GPU-hours, end-to-end wall-clock

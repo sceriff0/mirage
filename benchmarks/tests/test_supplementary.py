@@ -521,9 +521,12 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
         proc = "REGISTER" if arm.startswith("valis") else "TILED_SOLVE"
         t.write_text(
             "task_id\tprocess\ttag\tstatus\texit\tpeak_rss\tpeak_vmem\trealtime\t"
-            "duration\tcpus\tstart\tcomplete\n"
-            f"1\tMIRAGE:REGISTRATION:{proc}\tP1\tCOMPLETED\t0\t4 GB\t5 GB\t600s\t605s\t2\t"
-            "2026-01-01 00:00:00\t2026-01-01 00:10:00\n"
+            "duration\tcpus\tstart\tcomplete\t%cpu\n"
+            # an out-of-memory attempt, retried: in the trace, in no number
+            f"1\tMIRAGE:REGISTRATION:{proc}\tP1\tFAILED\t137\t64 GB\t70 GB\t6000s\t6005s\t2\t"
+            "2026-01-01 00:00:00\t2026-01-01 01:40:00\t150.0%\n"
+            f"2\tMIRAGE:REGISTRATION:{proc}\tP1\tCOMPLETED\t0\t4 GB\t5 GB\t600s\t605s\t2\t"
+            "2026-01-01 02:00:00\t2026-01-01 02:10:00\t150.0%\n"
         )
     # a real plan carries the backend and tier columns cost-by-tier keys on
     rows = list(csv.DictReader(plan.open()))
@@ -554,6 +557,26 @@ def test_s5_draws_the_cost_figure_when_traces_exist(unified, tmp_path):
     assert list((out / "S5").glob("S5_cost_by_tier_all.png")), sorted(
         p.name for p in (out / "S5").iterdir()
     )
+    # the figure: the two arms the config names, per patient, failed attempts left out
+    conf2 = tmp_path / "s5.yaml"
+    spec = yaml.safe_load(conf.read_text())
+    spec["S5"] = {"arms": ["valis_high_micro2", "tiled_high_s128"]}
+    conf2.write_text(yaml.safe_dump(spec))
+    out2 = tmp_path / "o2"
+    args = ["--results", str(work), "--plan", str(full), "--config", str(conf2)]
+    assert sp.main([*args, "-o", str(out2), "--only", "S5"]) == 0
+    assert (out2 / "S5" / "S5_cost_high.png").is_file()
+    vals = {
+        r["arm"]: r for r in csv.DictReader((out2 / "S5" / "S5_values_high.csv").open())
+    }
+    assert set(vals) == {"valis_high_micro2", "tiled_high_s128"}
+    v = vals["valis_high_micro2"]
+    assert float(v["median_peak_rss_gb"]) == pytest.approx(4.0)  # not the failed 64
+    assert v["failed_attempts_not_counted"] == "1"
+    assert float(v["used_over_reserved"]) == pytest.approx(0.75)  # 150% of 2 cores
+    tier = list(csv.DictReader((out2 / "S5" / "S5_values_median_by_tier.csv").open()))
+    assert tier and not any("wall" in k for k in tier[0])
+    assert all(float(r["reg_peak_rss_gb"]) == pytest.approx(4.0) for r in tier)
 
 
 def test_gallery_draws_every_arm_backend_and_channel_on_shared_tissue(

@@ -477,3 +477,73 @@ def test_full_transform_row_is_the_headline_and_the_deltas_stay_on_the_ladder(tm
     # no record -> the ladder's last stage, as before
     assert per_run.loc["old", "reg_dice_matched"] == 0.80
     assert per_run.loc["old", "reg_pair_fraction"] == 0.70
+
+
+def test_registration_cost_by_patient_splits_phases_and_drops_failed_attempts(tmp_path):
+    """Per patient and phase, from the attempts that FINISHED: an out-of-memory attempt
+    that was retried is counted as a failure, never summed into the cost."""
+
+    def rows(run, backend, depth, procs):
+        out = _trace_rows(run, backend, "high", depth, [p[:5] for p in procs])
+        for r, p in zip(out, procs):
+            r["tag"], r["status"], r["pcpu"] = p[5], p[6], p[7]
+        return out
+
+    runs = pd.DataFrame(
+        rows(
+            "valis_high_micro2",
+            "valis",
+            "2",
+            [
+                ("REGISTER", 7200, 8, 90.0, 0, "P1", "FAILED", 400.0),  # OOM, retried
+                ("REGISTER", 3600, 8, 40.0, 0, "P1", "COMPLETED", 400.0),
+                ("REGISTER", 1800, 8, 30.0, 0, "P2", "COMPLETED", 400.0),
+                ("WARP_SEG_QC", 7200, 16, 99.0, 0, "P1", "COMPLETED", 100.0),  # QC
+            ],
+        )
+        + rows(
+            "tiled_high_s64",
+            "tiled",
+            "64",
+            [
+                ("TILED_COARSE", 600, 4, 10.0, 0, "P1:DAPI_CD3", "COMPLETED", 100.0),
+                ("TILED_REG_TILE", 1200, 2, 5.0, 0, "P1:0_0", "COMPLETED", 200.0),
+                ("TILED_REG_TILE", 1200, 2, 6.0, 0, "P1:0_1", "CACHED", 200.0),
+                ("TILED_SOLVE", 300, 1, 2.0, 0, "P1:DAPI_CD3", "COMPLETED", 100.0),
+                ("TILED_STITCH", 900, 4, 30.0, 0, "P1:DAPI_CD3", "COMPLETED", 100.0),
+            ],
+        )
+    )
+    for arm, n in (
+        ("valis_high_micro2", {"P1": 4, "P2": 2}),
+        ("tiled_high_s64", {"P1": 4}),
+    ):
+        d = tmp_path / arm / "csv"
+        d.mkdir(parents=True)
+        pd.DataFrame(
+            {"patient_id": [p for p, k in n.items() for _ in range(k)]}
+        ).to_csv(d / "registered.csv", index=False)
+
+    out = quality.registration_cost_by_patient(runs, tmp_path)
+    assert "reg_wall_h" not in out.columns and "wall_h_per_slide" not in out.columns
+    key = out.set_index(["run_id", "patient_id", "phase"])
+
+    v = key.loc[("valis_high_micro2", "P1", "REGISTER")]
+    assert v["cpu_hours"] == pytest.approx(8.0)  # the failed 16 core-h are not in it
+    assert v["cpu_hours_per_slide"] == pytest.approx(2.0)
+    assert v["cpu_hours_used"] == pytest.approx(4.0)  # 400% of one hour
+    assert v["peak_rss_gb"] == pytest.approx(40.0)  # not the failed attempt's 90
+    assert v["n_failed_attempts"] == 1 and v["n_tasks"] == 1
+    assert key.loc[("valis_high_micro2", "P2", "REGISTER")]["n_slides"] == 2
+    assert set(out[out["run_id"] == "valis_high_micro2"]["phase"]) == {"REGISTER"}
+
+    s = out[out["run_id"] == "tiled_high_s64"].set_index("phase")
+    assert list(s.index) == sorted(s.index) and set(s.index) == set(
+        quality.PHASE_ORDER[1:]
+    )
+    assert set(s["patient_id"]) == {"P1"}  # every tag's first field
+    assert s.loc["TILED_REG_TILE", "cpu_hours"] == pytest.approx(4800 / 3600)
+    assert s.loc["TILED_REG_TILE", "n_tasks"] == 2
+    assert s.loc["TILED_REG_TILE", "peak_rss_gb"] == pytest.approx(6.0)
+    assert s["cpu_hours"].sum() == pytest.approx((2400 + 4800 + 300 + 3600) / 3600)
+    assert s["n_failed_attempts"].sum() == 0

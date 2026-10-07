@@ -248,3 +248,77 @@ def cost_by_tier(frame, metrics, ylabels):
     for i in range(len(metrics)):
         axes[i, 0].set_ylim(bottom=0)
     return fig
+
+
+_PHASE_LABEL = {
+    "REGISTER": "register (one task)",
+    "TILED_COARSE": "coarse alignment",
+    "TILED_REG_TILE": "tile registration",
+    "TILED_SOLVE": "solve",
+    "TILED_STITCH": "stitch",
+}
+
+
+def cost_two_arms(frame, phase_order, labels=None):
+    """Registration cost of a few arms side by side, one dot per patient.
+
+    ``frame`` is quality.registration_cost_by_patient's long table restricted to the arms
+    to draw (in the order of first appearance). Left: reserved core-hours per slide --
+    the bar is the median patient's total, split by each phase's share of the arm's
+    core-hours, the dots are the patients, a grey line joins one patient across arms.
+    Right: the largest single task's peak memory, bar = median patient.
+    """
+    arms = list(dict.fromkeys(frame["run_id"]))
+    labels = labels or {}
+    per = (
+        frame.groupby(["run_id", "patient_id"])
+        .agg(core_h=("cpu_hours_per_slide", "sum"), peak=("peak_rss_gb", "max"))
+        .reset_index()
+    )
+    phases = [p for p in phase_order if p in set(frame["phase"])]
+    colour = {p: f"C{i}" for i, p in enumerate(phases)}
+    fig, (ax_c, ax_m) = plt.subplots(1, 2, figsize=(2.2 * len(arms) + 3.6, 3.4))
+    rng = np.random.default_rng(0)
+    jitter = {
+        pid: float(rng.uniform(-0.12, 0.12)) for pid in sorted(set(per["patient_id"]))
+    }
+    for i, arm in enumerate(arms):
+        sub, tot = frame[frame["run_id"] == arm], per[per["run_id"] == arm]
+        height = float(np.nanmedian(tot["core_h"])) if len(tot) else np.nan
+        share = sub.groupby("phase")["cpu_hours"].sum()
+        share = share / share.sum() if share.sum() else share
+        bottom = 0.0
+        for ph in phases:
+            if ph not in share.index or not np.isfinite(height):
+                continue
+            h = height * float(share[ph])
+            ax_c.bar(i, h, 0.55, bottom=bottom, color=colour[ph], alpha=0.85)
+            bottom += h
+        peak = float(np.nanmedian(tot["peak"])) if len(tot) else np.nan
+        ax_m.bar(i, peak, 0.55, color="0.75")
+        x = [i + jitter[p] for p in tot["patient_id"]]
+        ax_c.plot(x, tot["core_h"], "o", color="k", ms=3.5, zorder=3)
+        ax_m.plot(x, tot["peak"], "o", color="k", ms=3.5, zorder=3)
+    for ax, col in ((ax_c, "core_h"), (ax_m, "peak")):
+        wide = per.pivot(index="patient_id", columns="run_id", values=col)
+        for pid, r in wide.iterrows():
+            xs = [i + jitter[pid] for i, a in enumerate(arms) if np.isfinite(r.get(a))]
+            ys = [r[a] for a in arms if np.isfinite(r.get(a))]
+            if len(xs) > 1:
+                ax.plot(xs, ys, "-", color="0.5", lw=0.6, zorder=2)
+        ax.set_xticks(range(len(arms)))
+        ax.set_xticklabels([labels.get(a, a) for a in arms])
+        ax.set_xlim(-0.6, len(arms) - 0.4)
+        ax.set_ylim(bottom=0)
+    ax_c.set_ylabel("reserved core-hours per slide")
+    ax_m.set_ylabel("peak memory, largest task (GB)")
+    ax_c.legend(
+        handles=[
+            plt.Rectangle((0, 0), 1, 1, color=colour[p], alpha=0.85) for p in phases
+        ],
+        labels=[_PHASE_LABEL.get(p, p) for p in phases],
+        fontsize=7,
+        frameon=False,
+    )
+    fig.tight_layout()
+    return fig
