@@ -125,9 +125,18 @@ ENABLE_CSE="${ENABLE_CSE:-true}"         # true => score the segmentation arms w
 #   sbatch --export=ALL,ARMS_RESUME=1,REDO_SINCE="2026-09-29 10:00:00" benchmarks/submit_arms.sh
 #   (REDO_UNTIL= closes it; default: open-ended)
 # `+` or space separates job ids: sbatch --export splits on commas.
+# EXACTLY SOME ROWS, with nothing that depends on them and nothing they read:
+#   EXACT='^(valis_high_micro2|tiled_high_s64)$'
+# ONLY names rows AND their dependants (naming the arm every other arm is scored on selects
+# nearly the whole plan); EXACT launches the named rows alone, so what they read must
+# already be under RESULTS. Used by submit_degraded.sh to run two arms in a root of its own.
 CHANGED="${CHANGED:-}"
 ONLY="${ONLY:-}"
 METHODS="${METHODS:-}"
+EXACT="${EXACT:-}"
+if [[ -n "$EXACT" && -n "$CHANGED$ONLY$METHODS" ]]; then
+    echo "ERROR: EXACT and CHANGED/ONLY/METHODS both select rows; set one." >&2; exit 1
+fi
 REDO_LAUNCHED_BY="${REDO_LAUNCHED_BY:-}"
 REDO_SINCE="${REDO_SINCE:-}"
 REDO_UNTIL="${REDO_UNTIL:-}"
@@ -369,6 +378,11 @@ fi
 #    -profile only once. A trailing -c IS fine (Nextflow merges multiple -c).
 #    ARMS_REPLACE (if set in the submitting environment) reaches run_arms.sh through
 #    the environment unchanged: sbatch --export=ALL is the default.
+if [ -n "$EXACT" ]; then
+    "$PYTHON" "$SRC_DIR/benchmarks/plan_exact.py" \
+        "$PLAN_CSV" "$BENCH_DIR/arm_plan.exact.csv" "$EXACT" || exit 1
+    PLAN_CSV="$BENCH_DIR/arm_plan.exact.csv"
+fi
 export ARMS_CONCURRENCY="$CONCURRENCY"
 export ARMS_PROFILE="$PROFILES"
 "$SRC_DIR/benchmarks/run_arms.sh" \

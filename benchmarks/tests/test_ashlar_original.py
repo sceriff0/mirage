@@ -355,3 +355,64 @@ def test_the_original_ashlar_recovers_a_known_shift_and_its_images_are_aligned(
             ref[200:1300, 200:1600], mov[200:1300, 200:1600], upsample_factor=10
         )
         assert np.abs(residual).max() < 0.5, n  # ASHLAR's own image is on the reference
+
+
+# ------------------------------------------------------ the same defect, whole slides --
+def test_whole_slides_get_noise_of_the_strength_the_tiles_get(tmp_path):
+    """VALIS and STARE register whole slides. They get no stage error (a stitched slide
+    has none) but the SAME sensor noise ASHLAR's tiles carry: same fraction, measured the
+    same way on the same clean slide. The copies keep their names, channel names and pixel
+    size, and the checkpoint is rewritten to name them."""
+    from benchmarks.ashlar import degrade
+
+    plane = _texture((500, 640), seed=3)
+    clean = tmp_path / "clean" / "P1" / "preprocessed"
+    clean.mkdir(parents=True)
+    src = clean / "P1_DAPI_CD3.ome.tif"
+    tifffile.imwrite(
+        src,
+        np.stack([plane, plane * 0.5]).astype(np.uint16),
+        tile=(64, 64),
+        photometric="minisblack",
+        metadata={"axes": "CYX", "Channel": {"Name": ["DAPI", "CD3"]}},
+        ome=True,
+    )
+    chk = tmp_path / "clean" / "csv" / "preprocessed.csv"
+    chk.parent.mkdir()
+    chk.write_text(
+        "patient_id,id,preprocessed_image,is_reference,channels,pixel_size\n"
+        f"P1,P1_DAPI_CD3,{src},true,DAPI|CD3,0.325\n"
+    )
+    out = degrade.degrade_checkpoint(chk, tmp_path / "noisy", noise_frac=0.02, seed=5)
+    row = out.read_text().splitlines()[1].split(",")
+    dst = tmp_path / "noisy" / "P1" / "preprocessed" / "P1_DAPI_CD3.ome.tif"
+    assert row[2] == str(dst) and row[3:] == ["true", "DAPI|CD3", "0.325"]
+    noisy = tifffile.imread(dst).astype(float)
+    truth = tifffile.imread(src).astype(float)
+    assert noisy.shape == truth.shape
+    # the strength retile.py gives the tiles of this very slide
+    grid = json.loads(
+        retile.write_tiles(
+            src, tmp_path / "tiles", 128, 0.125, pixel_size_um=0.325, noise_frac=0.02
+        ).read_text()
+    )
+    for c in range(2):
+        assert np.std(noisy[c] - truth[c]) == pytest.approx(
+            grid["noise_sd"][c], rel=0.1
+        )
+    with tifffile.TiffFile(dst) as tf:
+        assert 'Name="DAPI"' in tf.ome_metadata and 'Name="CD3"' in tf.ome_metadata
+        assert 'PhysicalSizeX="0.325"' in tf.ome_metadata
+        assert len(tf.pages) == 2 and tf.pages[0].is_tiled  # one page per channel
+    # seeded, and an existing copy is kept (an interrupted run continues)
+    before = dst.stat().st_mtime_ns
+    degrade.degrade_checkpoint(chk, tmp_path / "noisy", noise_frac=0.02, seed=5)
+    assert dst.stat().st_mtime_ns == before
+    again = degrade.degrade_checkpoint(
+        chk, tmp_path / "noisy2", noise_frac=0.02, seed=5
+    )
+    np.testing.assert_array_equal(
+        tifffile.imread(tmp_path / "noisy2" / "P1" / "preprocessed" / src.name),
+        tifffile.imread(dst),
+    )
+    assert again.is_file()

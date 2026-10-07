@@ -58,7 +58,10 @@ IMAGES="${IMAGES:-${NXF_SINGULARITY_CACHEDIR:-${SINGULARITY_CACHEDIR:-/hpcnfs/sc
 SING_BINDS="${SING_BINDS:---bind /beegfs --bind /hpcnfs}"
 # -------------------------------------------------------------------------------
 
-PREPROC="$RESULTS/$PREPROCESS_ARM/csv/preprocessed.csv"
+# PREPROC_CSV: the slides the tiles are cut from, when they are not this root's own
+# preprocessing (submit_degraded.sh cuts them from the CLEAN slides: the tiles get their
+# noise per tile, and cutting them from the noisy copies would add it twice).
+PREPROC="${PREPROC_CSV:-$RESULTS/$PREPROCESS_ARM/csv/preprocessed.csv}"
 [[ -s "$PREPROC" ]] || { echo "no $PREPROC: $PREPROCESS_ARM has not finished" >&2; exit 1; }
 [[ "$SEG_QC" != "1" || -d "$RESULTS/$FROM_ARM" ]] \
   || { echo "no $RESULTS/$FROM_ARM: its QC nuclei score ASHLAR (SEG_QC=0 skips the Dice)" >&2; exit 1; }
