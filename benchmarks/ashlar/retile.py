@@ -187,21 +187,83 @@ def _pixel_size_um(image_path: Path) -> float:
     return value * factor
 
 
-def _region(arr, n_channels, t, tile_size, dtype):
-    """One zero-padded ``(C, tile_size, tile_size)`` tile read from a lazy (C, H, W) view."""
+def _region(arr, n_channels, t, tile_size, dtype, offset_yx=(0, 0)):
+    """One zero-padded ``(C, tile_size, tile_size)`` tile read from a lazy (C, H, W) view.
+
+    ``offset_yx`` moves the window off the tile's nominal corner: the tile then holds the
+    slide content at ``(t.y + dy, t.x + dx)`` while its file name still says ``(row, col)``,
+    which is what a stage that did not land exactly where it reported looks like.
+    """
     import numpy as np
 
     out = np.zeros((n_channels, tile_size, tile_size), dtype=dtype)
-    if t.w <= 0 or t.h <= 0:
+    height, width = arr.shape[-2:]
+    y0, x0 = t.y + int(offset_yx[0]), t.x + int(offset_yx[1])
+    ys, ye = max(y0, 0), min(y0 + tile_size, height)
+    xs, xe = max(x0, 0), min(x0 + tile_size, width)
+    if ye <= ys or xe <= xs:
         return out
-    win = arr[:, t.y : t.y + t.h, t.x : t.x + t.w]
-    win = np.asarray(win)
+    win = np.asarray(arr[:, ys:ye, xs:xe])
     if (
         win.ndim == 2
     ):  # open_lazy presents a 2-D source as C=1 but returns it un-promoted
         win = win[np.newaxis, ...]
-    out[:, : t.h, : t.w] = win
+    out[:, ys - y0 : ye - y0, xs - x0 : xe - x0] = win
     return out
+
+
+def stage_jitter(n_tiles, jitter_px, seed):
+    """``(n_tiles, 2)`` integer ``(dy, dx)`` stage errors, uniform in ``[-j, j]`` px.
+
+    A real stage does not land where it reports: ASHLAR exists to find those errors from
+    the overlaps (its --maximum-shift is their budget). Whole pixels, so a jittered tile
+    is still the slide's own pixels and nothing is resampled.
+    """
+    import numpy as np
+
+    j = int(round(jitter_px))
+    if j <= 0:
+        return np.zeros((n_tiles, 2), dtype=int)
+    return np.random.default_rng(seed).integers(-j, j + 1, size=(n_tiles, 2))
+
+
+def noise_sd(arr, noise_frac, max_samples=4_000_000):
+    """Per-channel sensor-noise s.d. in grey levels: ``noise_frac`` of the channel's own
+    1st-99th percentile range, measured on a strided sample of the slide."""
+    import numpy as np
+
+    n_channels, height, width = arr.shape
+    if noise_frac <= 0:
+        return [0.0] * n_channels
+    step = max(1, int(math.ceil(math.sqrt(height * width / max_samples))))
+    out = []
+    for c in range(n_channels):
+        sample = np.asarray(arr[c, ::step, ::step], dtype=np.float32)
+        lo, hi = np.percentile(sample, (1.0, 99.0))
+        out.append(float(noise_frac * max(hi - lo, 1.0)))
+    return out
+
+
+def add_noise(tile, sd, rng):
+    """``tile`` (C, H, W) plus independent Gaussian noise of s.d. ``sd[c]``, in its dtype.
+
+    Each tile is a separate exposure, so the noise is drawn per tile: the SAME tissue seen
+    in two neighbouring tiles' overlap is no longer the same pixels. That is also what
+    lets ASHLAR's edge registration run at all on tiles cut from one image -- on identical
+    overlaps its error metric fails on a rounding difference (job 6844139).
+    """
+    import numpy as np
+
+    if not any(v > 0 for v in sd):
+        return tile
+    out = tile.astype(np.float32)
+    for c, v in enumerate(sd):
+        if v > 0:
+            out[c] += rng.normal(0.0, v, out[c].shape).astype(np.float32)
+    if np.issubdtype(tile.dtype, np.integer):
+        info = np.iinfo(tile.dtype)
+        return np.clip(np.rint(out), info.min, info.max).astype(tile.dtype)
+    return out.astype(tile.dtype)
 
 
 def _yx_shape(image_path) -> tuple[int, int]:
@@ -221,8 +283,23 @@ def write_tiles(
     cycle=0,
     canvas_like=(),
     pixel_size_um=None,
+    stage_jitter_um=0.0,
+    noise_frac=0.0,
+    seed=0,
+    exact_overlap=False,
 ):
     """Cut ``image_path`` into a uniform padded tile grid + ``grid.json``. Returns its path.
+
+    SYNTHETIC RAW TILES (``stage_jitter_um`` / ``noise_frac``, both off by default). A
+    stitched slide cut on a perfect grid is not what a microscope hands ASHLAR: real tiles
+    sit a few microns off their reported stage position and each is its own noisy
+    exposure. With these set, every tile is cut ``stage_jitter`` px off its nominal corner
+    (see :func:`stage_jitter`) and gets its own sensor noise (:func:`add_noise`), seeded by
+    (``seed``, ``cycle``, tile), and ``grid.json`` records where each tile REALLY came from
+    (``true_positions_yx``) -- the ground truth ASHLAR is not told. ``exact_overlap``
+    records the overlap as ``1 - stride / tile_size`` (the pitch is a whole pixel, the
+    requested fraction usually is not), so the positions ASHLAR computes from row, col and
+    overlap are exactly the nominal corners.
 
     Streams via ``tiled_io.open_lazy``, whose zarr view fetches only the OME-TIFF tiles a
     region touches, so peak memory is one output tile rather than the whole slide --
@@ -241,6 +318,7 @@ def write_tiles(
     which can carry the scanner's own calibration (0.3453 on a real ND2 run given 0.325);
     it is what ASHLAR converts --maximum-shift by.
     """
+    import numpy as np
     import tifffile
     from tiled_io import open_lazy
 
@@ -261,22 +339,29 @@ def write_tiles(
             )
             for t in tile_grid(canvas_w, canvas_h, tile_size, overlap_fraction)
         ]
-        for t in tiles:
-            tile = _region(arr, n_channels, t, tile_size, dtype)
+        px = float(pixel_size_um)
+        jitter = stage_jitter(len(tiles), stage_jitter_um / px, [seed, cycle, 0])
+        sd = noise_sd(arr, noise_frac)
+        for k, t in enumerate(tiles):
+            tile = _region(arr, n_channels, t, tile_size, dtype, jitter[k])
+            tile = add_noise(
+                tile, sd, np.random.default_rng([seed, cycle, 1, t.row, t.col])
+            )
             name = TILE_PATTERN.format(row=t.row, col=t.col)
             tifffile.imwrite(outdir / name, tile, photometric="minisblack")
     finally:
         close()
 
     n_rows, n_cols = grid_shape(canvas_w, canvas_h, tile_size, overlap_fraction)
+    stride = _stride(tile_size, overlap_fraction)
     grid = {
         "cycle": cycle,
         "pattern": TILE_PATTERN,
         "n_rows": n_rows,
         "n_cols": n_cols,
         "tile_size": tile_size,
-        "overlap": overlap_fraction,
-        "stride": _stride(tile_size, overlap_fraction),
+        "overlap": (1.0 - stride / tile_size) if exact_overlap else overlap_fraction,
+        "stride": stride,
         "pixel_size_um": pixel_size_um,
         "n_channels": int(n_channels),
         "orig_shape": [int(height), int(width)],
@@ -285,6 +370,17 @@ def write_tiles(
         # Valid (unpadded) extent per tile, row-major, so nothing downstream reads padding
         # as signal.
         "valid_extent": [[t.row, t.col, t.w, t.h] for t in tiles],
+        # Where each tile's pixels REALLY came from in the slide, (y, x) px, row-major:
+        # the nominal corner plus the stage jitter. Equal to the nominal corner when no
+        # jitter was asked for. ASHLAR never sees this; the scorer needs it.
+        "true_positions_yx": [
+            [int(t.y + jitter[k][0]), int(t.x + jitter[k][1])]
+            for k, t in enumerate(tiles)
+        ],
+        "stage_jitter_um": float(stage_jitter_um),
+        "noise_frac": float(noise_frac),
+        "noise_sd": sd,
+        "seed": int(seed),
     }
     grid_path = outdir / "grid.json"
     grid_path.write_text(json.dumps(grid, indent=2))
@@ -315,6 +411,27 @@ def main(argv=None):
         default=None,
         help="the run's pixel size; wins over the OME header",
     )
+    ap.add_argument(
+        "--stage-jitter-um",
+        type=float,
+        default=0.0,
+        help="synthetic raw tiles: cut each tile up to this far (um, either way, both "
+        "axes) off its nominal corner, as a real stage's positioning error (default 0)",
+    )
+    ap.add_argument(
+        "--noise-frac",
+        type=float,
+        default=0.0,
+        help="synthetic raw tiles: per-tile sensor noise, s.d. as a fraction of each "
+        "channel's 1st-99th percentile range (default 0)",
+    )
+    ap.add_argument("--seed", type=int, default=0, help="seed of the jitter and noise")
+    ap.add_argument(
+        "--exact-overlap",
+        action="store_true",
+        help="record the overlap as 1 - stride/tile_size, so ASHLAR's computed positions "
+        "are the whole-pixel nominal corners",
+    )
     a = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -326,6 +443,10 @@ def main(argv=None):
         cycle=a.cycle,
         canvas_like=a.canvas_like,
         pixel_size_um=a.pixel_size_um,
+        stage_jitter_um=a.stage_jitter_um,
+        noise_frac=a.noise_frac,
+        seed=a.seed,
+        exact_overlap=a.exact_overlap,
     )
     grid = json.loads(Path(grid_path).read_text())
     logger.info(
