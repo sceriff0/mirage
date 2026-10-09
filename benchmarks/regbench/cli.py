@@ -43,7 +43,10 @@ def build_parser():
     s = prep.add_parser("synthetic")
     common(s)
     s.add_argument(
-        "--suite", default="full", choices=("test", "ci", "full", "scale", "dev")
+        "--suite",
+        default="full",
+        choices=("test", "ci", "full", "scale", "dev", "truth"),
+        help="`truth` is the frozen known-truth suite of truth_spec.json",
     )
 
     m = prep.add_parser("multiplex")
@@ -98,6 +101,12 @@ def build_parser():
         help="added noise, in units of the image's background noise (same-image variant)",
     )
     ss.add_argument("--pixel-size-um", type=float, default=None)
+    ss.add_argument(
+        "--truth",
+        action="store_true",
+        help="the frozen known-truth cases of truth_spec.json for the patient --name: "
+        "window side, windows, noise and amplitudes come from the spec",
+    )
 
     lst = sub.add_parser("list")
     lst.add_argument("--cases", required=True)

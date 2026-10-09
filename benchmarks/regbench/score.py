@@ -19,6 +19,12 @@ readable:
                 nuclei onto their nearest neighbour is rewarded by the paired numbers; this
                 and the two-sided curve are what object.
 
+**Known-truth error** (``regbench.truth``). On cases made by a known map, ``truth.csv`` has
+the distance between where a method puts each probe and where it truly belongs, in the
+method's own direction, and ``truth_by_family.csv`` summarises it per (dataset, family,
+pose, variant). Families are never pooled. Cases of the frozen spec are left out of the
+cost tables, and cases of two spec hashes are refused.
+
 **A failed run is a row, never a gap.** A variant that failed, was killed, or never ran is
 scored at the unregistered pose (``imputed_initial``), with ``problem`` and ``cause``
 filled. ``expected`` names variants that must appear even with no directory.
@@ -51,7 +57,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, pairs
+from . import DATASETS, pairs, truth
 from .cases import list_cases, load_points, polys, result_dir
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -85,50 +91,7 @@ def tier_of(case):
     return "secondary"
 
 
-def jacobian_stats(warped):
-    """``fold_pct`` and ``sd_log_jac`` of a method's map from its warped lattice."""
-    out = {"fold_pct": math.nan, "sd_log_jac": math.nan}
-    if warped is None or "grid" not in warped or min(warped["grid_shape"]) < 3:
-        return out
-    rows, cols = (int(v) for v in warped["grid_shape"])
-    step = float(warped["grid_step"])
-    g = warped["grid"].astype(float).reshape(rows, cols, 2)
-    jac = np.gradient(g[..., 0], step, axis=1) * np.gradient(
-        g[..., 1], step, axis=0
-    ) - np.gradient(g[..., 0], step, axis=0) * np.gradient(g[..., 1], step, axis=1)
-    jac = jac[np.isfinite(jac)]
-    if len(jac):
-        out["fold_pct"] = float(100.0 * np.mean(jac <= 0))
-        if np.any(jac > 0):
-            out["sd_log_jac"] = float(np.std(np.log(jac[jac > 0])))
-    return out
-
-
-def landmark_stats(warped, target, source, diagonal):
-    """Per-case error against paired truth points. A non-finite warped point counts at its
-    initial position. Not written to any table yet: kept for the known-truth scores."""
-    warped = np.array(warped, dtype=float)
-    bad = ~np.isfinite(warped).all(axis=1)
-    warped[bad] = source[bad]
-    tre = np.hypot(*(warped - target).T)
-    init = np.hypot(*(source - target).T)
-    r = tre / diagonal
-    return {
-        "n_landmarks": len(tre),
-        "n_nonfinite": int(bad.sum()),
-        "rtre_median": float(np.median(r)),
-        "rtre_mean": float(np.mean(r)),
-        "rtre_max": float(np.max(r)),
-        "tre_px_median": float(np.median(tre)),
-        "tre_px_mean": float(np.mean(tre)),
-        "tre_px_p90": float(np.percentile(tre, 90)),
-        "tre_px_max": float(np.max(tre)),
-        "tre_um_median": math.nan,
-        "tre_um_p90": math.nan,
-        "initial_tre_px_median": float(np.median(init)),
-        "robustness": float(np.mean(tre < init)),
-        "not_improved": bool(np.median(tre) >= np.median(init)),
-    }
+jacobian_stats = truth.jacobian_stats
 
 
 def density(ps, pixel_size_um):
@@ -274,6 +237,44 @@ def _load_run(out, variant, case):
     return run, warped, str(run.get("problem") or ""), ""
 
 
+def _truth_rows(case, points, base):
+    """A function ``add(method, frame, direction, mapped, ...)`` and the rows it fills, for
+    a case with paired truth probes; ``(None, [])`` for a case without."""
+    if "truth_mov" not in points or not len(points["truth_mov"]):
+        return None, []
+    t_mov = np.asarray(points["truth_mov"], dtype=float)
+    t_ref = np.asarray(points["truth_ref"], dtype=float)
+    head = {
+        **base,
+        "in_stare_model": case.extra.get("in_stare_model", ""),
+        "truth_spec": case.extra.get("truth_spec_sha256", ""),
+    }
+    rows = []
+
+    def add(method, frame, direction, mapped, jac, imputed, problem, cause, keep=None):
+        # the method's own direction: its map of the side it starts from, against the
+        # partner on the other side
+        source, target = (t_mov, t_ref) if direction == MOV_TO_REF else (t_ref, t_mov)
+        if mapped is None:  # the unregistered pose
+            mapped = source
+        if keep is not None:
+            mapped, source, target = mapped[keep], source[keep], target[keep]
+        rows.append(
+            {
+                **head,
+                "method": method,
+                "frame": frame,
+                **truth.error_stats(mapped, target, source, case.pixel_size_um),
+                **jac,
+                "imputed_initial": imputed,
+                "problem": problem[:200],
+                "cause": cause,
+            }
+        )
+
+    return add, rows
+
+
 def _score_case(job):
     out, case, variants = job
     points = load_points(case)
@@ -291,7 +292,10 @@ def _score_case(job):
     }
     dens = density(ref, px) if scorable else {}
     cell_rows, res_rows = [], []
+    add_truth, truth_rows = _truth_rows(case, points, base)
     unregistered = {}
+    flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
+    nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
 
     def at_initial():
         if not unregistered:
@@ -320,6 +324,26 @@ def _score_case(job):
             res_rows.append(
                 {**base, "method": v, **resource_row(run or {"cause": "not_run"})}
             )
+        failed = v != "initial" and warped is None
+        if add_truth is not None:
+            direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
+            mapped = warped.get("truth_xy") if warped is not None else None
+            t_problem, t_cause, t_failed = problem, cause, failed
+            if warped is not None and (
+                direction not in FRAME
+                or mapped is None
+                or len(mapped) != len(points["truth_mov"])
+            ):
+                mapped, direction, t_failed = None, MOV_TO_REF, True
+                t_problem = "warped.npz does not fit the case's truth probes"
+                t_cause = "exception"
+            jac = flat if mapped is None else jacobian_stats(warped)
+            args = (jac, t_failed, t_problem, t_cause)
+            add_truth(v, FRAME[direction], direction, mapped, *args)
+            band = warped.get("band") if mapped is not None else None
+            if band is not None and "truth_cell" in points:
+                keep = ~np.asarray(band, dtype=bool)[points["truth_cell"]]
+                add_truth(v + NONBAND, FRAME[direction], direction, mapped, *args, keep)
         if not scorable:
             continue
         direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
@@ -331,9 +355,8 @@ def _score_case(job):
         imputed = v != "initial" and warped is None
         status = run.get("selfcheck_status", "") if run else ""
         if warped is None:
-            jac = {"fold_pct": 0.0, "sd_log_jac": 0.0}
             cell_rows.append(
-                row(v, "reference", status, at_initial(), jac, imputed, problem, cause)
+                row(v, "reference", status, at_initial(), flat, imputed, problem, cause)
             )
             continue
         xy = warped["cells_xy"].astype(float)
@@ -353,12 +376,16 @@ def _score_case(job):
             cell_rows.append(
                 row(v + NONBAND, FRAME[direction], status, rec, jac, False, problem, "")
             )
+    if add_truth is not None:
+        # the true map itself: zero by construction, shown so the table has its floor
+        add_truth(
+            "truth", "reference", MOV_TO_REF, points["truth_ref"], nan, False, "", ""
+        )
     if scorable and "cells_mov_xy_truth" in points:
         moved = pairs.with_xy(mov, points["cells_mov_xy_truth"].astype(float))
-        nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
         rec = pairs.record(ref, mov, ref, moved, px)
         cell_rows.append(row("truth", "reference", "", rec, nan, False, "", ""))
-    return cell_rows, res_rows
+    return cell_rows, res_rows, truth_rows
 
 
 # ── summaries ─────────────────────────────────────────────────────────────────
@@ -609,7 +636,26 @@ def _summary_table(rows, primary):
     return markdown(table, list(table[0])) if table else ""
 
 
-def summary_markdown(summary, fails, res_summary, primary=None):
+TRUTH_COLUMNS = (
+    "dataset",
+    "family",
+    "pose",
+    "in_stare_model",
+    "method",
+    "n_ok",
+    "n_cases",
+    "initial_tre_um_p50_med",
+    "tre_um_p50_med",
+    "tre_um_p50_max",
+    "tre_um_p90_med",
+    "tre_um_max_max",
+    "frac_under_1um_med",
+    "frac_under_2um_med",
+    "fold_pct_med",
+)
+
+
+def summary_markdown(summary, fails, res_summary, primary=None, by_family=None):
     parts = ["# Registration benchmark\n"]
     parts.append(
         "Nuclear overlap after registration, on nuclei segmented on the native slides. "
@@ -630,6 +676,21 @@ def summary_markdown(summary, fails, res_summary, primary=None):
             block = [r for r in of_ds if r["subset"] == subset]
             if block:
                 parts += [f"### {title}\n", _summary_table(block, primary), ""]
+    if by_family:
+        parts += [
+            "## Known-truth error, per deformation family\n",
+            "Distance between where a method puts a probe and where the generating map "
+            "says it belongs, in the method's own direction (micrometres). One row per "
+            "family, pose and variant; families are never pooled. `in_stare_model` is "
+            "False for the families a B-spline mesh on STARE's lattice cannot "
+            "represent. A run that did not register is scored at the unregistered "
+            "pose; a point a method could not map counts as an infinite error. The "
+            "amplitudes are literature values as recorded in STARE's README; the "
+            "families, their smoothness and the multiscale spectrum were chosen by "
+            "STARE's authors.\n",
+            markdown(by_family, list(TRUTH_COLUMNS)),
+            "",
+        ]
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
         parts += [markdown(fails, list(fails[0])), ""]
@@ -677,7 +738,7 @@ def score(
     ``expected`` lists variants that must appear even with no directory. ``primary`` lists
     the primary variants: they come first in the summary and define the ``common`` block.
     """
-    jobs = []
+    jobs, hashes = [], {}
     for ds in datasets or DATASETS:
         cs = [
             c for c in list_cases(cases_root, ds) if c.case_id.startswith("dev_") == dev
@@ -685,8 +746,17 @@ def score(
         if cs:
             variants = find_variants(out, ds, expected)
             jobs += [(str(out), c, variants) for c in cs]
+            for c in cs:
+                if c.extra.get("truth_spec_sha256"):
+                    hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
     if not jobs:
         raise SystemExit(f"no prepared cases under {cases_root}")
+    if len(hashes) > 1:
+        raise SystemExit(
+            "the known-truth cases were made from more than one truth_spec.json: "
+            + "; ".join(f"{h[:12]} (e.g. {c})" for h, c in hashes.items())
+            + ". Score them separately; a changed spec is a post hoc change."
+        )
     if workers > 1 and len(jobs) > 1:
         import multiprocessing
 
@@ -696,9 +766,14 @@ def score(
         done = [_score_case(j) for j in jobs]
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
+    truth_rows = [r for rows in done for r in rows[2]]
+    by_family = truth.by_family(truth_rows)
     summary = summarise_cells(cells, primary)
     paired = paired_vs_primary(cells)
-    fails = failures(res)
+    fails = failures(res)  # every run, the frozen known-truth cases included
+    # cost is read on the cohort: the frozen known-truth cases are left out of it
+    frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
+    res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
     res_summary = summarise_resources(res)
 
     tables = Path(out) / ("tables_dev" if dev else "tables")
@@ -710,6 +785,8 @@ def score(
         "failures",
         "resources",
         "summary_resources",
+        "truth",
+        "truth_by_family",
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
     write_csv(tables / "cells.csv", cells)
@@ -718,7 +795,9 @@ def score(
     write_csv(tables / "failures.csv", fails)
     write_csv(tables / "resources.csv", res)
     write_csv(tables / "summary_resources.csv", res_summary)
-    text = summary_markdown(summary, fails, res_summary, primary)
+    write_csv(tables / "truth.csv", truth_rows)
+    write_csv(tables / "truth_by_family.csv", by_family)
+    text = summary_markdown(summary, fails, res_summary, primary, by_family)
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -729,4 +808,6 @@ def score(
         "failures": fails,
         "resources": res,
         "summary_resources": res_summary,
+        "truth": truth_rows,
+        "truth_by_family": by_family,
     }

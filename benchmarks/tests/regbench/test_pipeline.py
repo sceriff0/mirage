@@ -131,7 +131,7 @@ def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):
         assert after["displacement_px_p50"] < 0.5, name
         assert after["dice_matched"] > 0.9, name
         assert after["displacement_px_p50"] < before["displacement_px_p50"], name
-        assert np.allclose(g(pts["landmarks_mov"]), pts["landmarks_ref"])
+        assert np.allclose(g(pts["truth_mov"]), pts["truth_ref"])
         assert case.pixel_size_um == synthetic.PIXEL_SIZE_UM
         assert case.group == name and case.family  # the patient is not the family
 
@@ -150,12 +150,12 @@ def _tre(out, variant, case):
     pts = load_points(case)
     with np.load(result_dir(out, variant, case) / "warped.npz") as z:
         assert str(z["direction"]) == MOV_TO_REF
-        return float(np.median(np.hypot(*(z["landmarks"] - pts["landmarks_ref"]).T)))
+        return float(np.median(np.hypot(*(z["truth_xy"] - pts["truth_ref"]).T)))
 
 
 def _initial_tre(case):
     pts = load_points(case)
-    d = pts["landmarks_mov"] - pts["landmarks_ref"]
+    d = pts["truth_mov"] - pts["truth_ref"]
     return float(np.median(np.hypot(*d.T)))
 
 
@@ -479,12 +479,8 @@ def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_
     write_npz(dst / "points.npz", **pts)
     case = load_case(dst)
 
-    known_ref = np.concatenate([pts["cells_ref_xy"], pts["landmarks_ref"]]).astype(
-        float
-    )
-    known_mov = np.concatenate([pts["cells_mov_xy"], pts["landmarks_mov"]]).astype(
-        float
-    )
+    known_ref = np.concatenate([pts["cells_ref_xy"], pts["truth_ref"]]).astype(float)
+    known_mov = np.concatenate([pts["cells_mov_xy"], pts["truth_mov"]]).astype(float)
     tree = cKDTree(known_ref)
 
     def lookup(xy):

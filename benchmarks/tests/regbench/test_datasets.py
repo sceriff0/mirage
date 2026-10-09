@@ -67,7 +67,7 @@ def test_multiplex_manifest_to_dice_and_displacement(tmp_path):
         768,
     )  # the nuclear channel alone
     pts = load_points(case)
-    assert "landmarks_ref" not in pts
+    assert "truth_ref" not in pts
     ref, mov = polys(pts, "ref"), polys(pts, "mov")
     assert ref.n_features > 100 and mov.n_features > 100
 

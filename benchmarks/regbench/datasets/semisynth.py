@@ -38,6 +38,13 @@ secondary tier, never pooled with the two above.
 ``--windows K`` test windows are taken where there is most tissue, each paired with every
 deformation family; one more window makes the ``dev_*`` cases, the only ones method options
 may be chosen on. Test and development windows never overlap.
+
+**The frozen known-truth cases** (``--truth``, ``regbench.truth``). ``truth_spec.json``
+names the cohort patients, the windows per patient, the seven families with their
+amplitudes, and the two poses. ``--image`` is that patient's reference round and ``--name``
+its id, which must be one the spec names. A patient here is (window, family): the untouched
+window is its reference, kept once, and each pose is one round. Variant ``same`` only. The
+window side, the noise and every amplitude come from the spec, not from the command line.
 """
 
 from __future__ import annotations
@@ -48,7 +55,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import cells
+from .. import cells, truth
 from ..cases import Case, case_dir, write_case
 from ..imageio import pixel_size_um, write_nuclear_tiles
 from . import synthetic
@@ -166,21 +173,16 @@ class RealScene:
         return img.astype(self.ref.dtype)
 
 
-def landmarks(spec, ref_cells, diameter, count=2000, margin=32):
-    """Moving-frame probes whose true reference position is within 3 nuclear diameters of a
-    reference nucleus (so they sit on tissue), and that position."""
-    from scipy.spatial import cKDTree
-
-    n = spec["n"]
-    g = synthetic.forward_map(spec)
-    rng = np.random.default_rng(spec["seed"] + 104729)
-    p = rng.uniform(margin, n - 1 - margin, size=(count * 8, 2))
-    x = g(p)
-    ok = ((x >= margin) & (x <= n - 1 - margin)).all(axis=1)
-    p, x = p[ok], x[ok]
-    _, centroids = cells.area_centroid(ref_cells)
-    near = cKDTree(centroids).query(x, distance_upper_bound=3.0 * diameter)[0] < np.inf
-    return p[near][:count], x[near][:count]
+def _write_slide(scene, which, path, dtype, px):
+    n = scene.n
+    write_nuclear_tiles(
+        path,
+        (n, n),
+        dtype,
+        (scene.tile(which, *b) for b in synthetic.tile_boxes((n, n))),
+        synthetic.TILE,
+        px,
+    )
 
 
 def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
@@ -189,21 +191,21 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
         return d
     d.mkdir(parents=True, exist_ok=True)
     n = spec["n"]
+    patient = spec.get("patient")
     ref_src = Source(a.image, a.channel)
     mov_src = Source(a.mov_image, a.mov_channel) if a.mov_image else ref_src
     try:
         scene = RealScene(spec, ref_src, mov_src, origin, noise_sd)
         ref_p, mov_p = d / "ref.ome.tif", d / "mov.ome.tif"
-        boxes = synthetic.tile_boxes((n, n))
-        for which, path in (("ref", ref_p), ("mov", mov_p)):
-            write_nuclear_tiles(
-                path,
-                (n, n),
-                ref_src.dtype,
-                (scene.tile(which, *b) for b in boxes),
-                synthetic.TILE,
-                px,
+        dtype = ref_src.dtype
+        if patient:  # one reference file for every round of the patient
+            ref_p = synthetic.write_once(
+                synthetic.shared_reference(cases_root, "semisynth", patient),
+                lambda tmp: _write_slide(scene, "ref", tmp, dtype, px),
             )
+        else:
+            _write_slide(scene, "ref", ref_p, dtype, px)
+        _write_slide(scene, "mov", mov_p, dtype, px)
     finally:
         ref_src.close()
         if mov_src is not ref_src:
@@ -217,13 +219,15 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
         raise RuntimeError(
             f"{name}: no nuclei segmented; check --channel and --diameter"
         )
-    lm_mov, lm_ref = landmarks(spec, ref_cells, a.diameter)
-    truth = synthetic.forward_map(spec)(mov_cells.xy)
+    g = synthetic.forward_map(spec)
+    _, centroids = cells.area_centroid(mov_cells)
+    probes = truth.probe_arrays(centroids, g, (n, n), spec["seed"])
     case = Case(
         dataset="semisynth",
         case_id=name,
-        group=name,
+        group=patient or name,
         family=spec["family"],
+        pose=spec.get("pose", ""),
         ref_nuclear=str(ref_p),
         mov_nuclear=str(mov_p),
         ref_image=str(ref_p),
@@ -240,17 +244,81 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
             "variant": "cross" if a.mov_image else "same",
             "origin_xy": list(origin),
             "noise_sd": noise_sd,
+            "in_stare_model": spec.get("in_stare_model", ""),
+            "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
         },
     )
     return write_case(
         cases_root,
         case,
-        lm_mov,
-        lm_ref,
+        probes["truth_mov"],
+        probes["truth_ref"],
         mov_cells,
         ref_cells,
-        cells_mov_xy_truth=truth.astype(np.float32),
+        truth_cell=probes["truth_cell"],
+        cells_mov_xy_truth=g(mov_cells.xy).astype(np.float32),
     )
+
+
+def _pixel_size(a):
+    px = a.pixel_size_um or pixel_size_um(a.image)
+    if not px:
+        raise SystemExit(
+            f"{a.image}: no pixel size in the header; give --pixel-size-um "
+            "(the multiscale deformation is defined in micrometres)"
+        )
+    return px
+
+
+def plan_truth(a, spec=None, n=None):
+    """``[(name, spec, origin)]`` and the noise SD of the frozen known-truth cases of ONE
+    named patient: its windows with most tissue, each with every family and both poses.
+
+    ``n`` makes a reduced copy for a test; its cases carry no spec hash.
+    """
+    spec = spec or truth.load_spec()
+    conf = spec["semisynth"]
+    patient = str(a.name or "")
+    if patient not in conf["patients"]:
+        raise SystemExit(
+            f"--truth: --name must be one of the patients the frozen spec names "
+            f"({', '.join(conf['patients'])}), got {patient!r}"
+        )
+    if a.mov_image:
+        raise SystemExit("--truth: the frozen cases are the `same` variant only")
+    frozen = n is None
+    n = int(n or spec["n_px"])
+    px = _pixel_size(a)
+    src = Source(a.image, a.channel)
+    try:
+        threshold = cells.slide_threshold(a.image, a.channel)
+        windows, bg_sd = pick_windows(src, n, conf["windows_per_patient"], threshold)
+    finally:
+        src.close()
+    if len(windows) < conf["windows_per_patient"]:
+        raise SystemExit(
+            f"{a.image}: {len(windows)} window(s) of {n} px; the frozen spec asks for "
+            f"{conf['windows_per_patient']} per patient"
+        )
+    key = zlib.crc32(patient.encode()) % 100_000
+    jobs = []
+    for i, (x, y, _) in enumerate(windows):
+        for j, family in enumerate(truth.family_names(spec)):
+            group = f"{patient}_w{i}_{family}"
+            for k, pose in enumerate(truth.pose_names(spec)):
+                job = {
+                    **synthetic._BASE,
+                    "n": n,
+                    "family": family,
+                    "pose": pose,
+                    "patient": group,
+                    "seed": conf["seed"] + 1000 * key + 100 * i + 10 * j + k,
+                    **truth.pose_kwargs(spec, pose),
+                    **truth.family_kwargs(spec, family, px),
+                    **truth.case_extra(spec, family, frozen),
+                }
+                jobs.append((f"{group}_{pose}", job, (x, y)))
+    return jobs, conf["noise_background_sd"] * bg_sd
 
 
 def plan(a):
@@ -261,12 +329,7 @@ def plan(a):
         windows, bg_sd = pick_windows(src, a.n, a.windows + 1, threshold)
     finally:
         src.close()
-    px = a.pixel_size_um or pixel_size_um(a.image)
-    if not px:
-        raise SystemExit(
-            f"{a.image}: no pixel size in the header; give --pixel-size-um "
-            "(the multiscale deformation is defined in micrometres)"
-        )
+    px = _pixel_size(a)
     stem = a.name or Path(a.image).name.split(".")[0]
     key = zlib.crc32(stem.encode()) % 100_000
     # the window with the least tissue of those picked is the development one
@@ -293,8 +356,8 @@ def plan(a):
 
 
 def prepare(a):
-    jobs, noise = plan(a)
-    px = a.pixel_size_um or pixel_size_um(a.image)
+    jobs, noise = plan_truth(a) if getattr(a, "truth", False) else plan(a)
+    px = _pixel_size(a)
     if a.index is not None:
         jobs = jobs[a.index : a.index + 1]
     for name, spec, origin in jobs:

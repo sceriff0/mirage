@@ -23,9 +23,10 @@ This package is being ported in steps. What exists now:
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
-| datasets `synthetic`, `semisynth`, `multiplex` | here, as copied; each case is its own patient until the known-truth and cohort cases are built |
+| datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient, and the cohort's cases are not built yet |
+| known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapters `initial`, `stare`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them |
-| known-truth error per deformation family, selfcheck and realcheck, ASHLAR, the cohort's cases, the run list and the cohort launcher | not here yet |
+| selfcheck and realcheck, ASHLAR, the cohort's cases, the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
 
@@ -70,7 +71,8 @@ runs per patient). `--label NAME` renames a method's variants
 two slides, the pixel size, `group` (the PATIENT, in every dataset) and, on known-truth
 cases, `family` and `pose`. `points.npz` holds the nuclei segmented on each NATIVE slide as
 full polygon sets (`cells_<side>_xy`, `_ring_off`, `_ring_feat`, `_ring_hole`, `_n`; `side`
-is `ref` or `mov`), read back with `cases.polys(points, side)`.
+is `ref` or `mov`), read back with `cases.polys(points, side)`. A known-truth case also
+holds paired probes: `truth_mov`, `truth_ref` and `truth_cell` (see "Known-truth error").
 
 **A method** is a module with `SCOPE` (`"pair"` or `"group"`), `VARIANTS`, and one generator:
 
@@ -90,8 +92,10 @@ the generator ends with the clock paused; `state` is what the method put in
 **The driver** (`methods.run_case`, `methods.run_group`), at each yield, before it resumes
 the generator and with the clock paused: moves the nuclei through the map (the moving
 nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.npz`
-(`cells_xy`, `direction`, `band` when `info["band_mov"]` is given, and the map on a lattice
-for the Jacobian statistics), writes `run.json`, and calls `on_variant`.
+(`cells_xy`, `direction`, `band` when `info["band_mov"]` is given, `truth_xy` = the map
+applied to the truth probes of the side it starts from, and `grid`, `grid_shape`,
+`grid_step` = the map on a lattice for the Jacobian statistics), writes `run.json`, and
+calls `on_variant`.
 
 **`run.json`**: `ok`, `error`, `cause`, `problem`, `direction`, `launch_id`, `unit`
 (`pair` | `patient`), `group_cases`, `register_s`, `write_s`, `resources`, `native`,
@@ -175,6 +179,77 @@ A failed, killed or never-started run is a row scored at the unregistered pose
 It is self-consistency on the registration channel: there is no held-out structure and no
 landmarks on real slides.
 
+## Known-truth error
+
+The one independent check: on synthetic and semi-synthetic cases the map that made the
+moving slide is known, so a method's error can be measured against it. Everything here is
+fixed by `truth_spec.json`, which carries the SHA-256 of its own content.
+
+**Probes.** `truth_mov` are centroids of nuclei segmented on the native MOVING slide, and
+`truth_ref = g(truth_mov)` with `g` the generating map (moving -> reference, exact). A
+probe is kept when its true position lies at least 32 px inside the reference; at most
+20000 per case, by a seeded draw. `truth_cell` says which moving nucleus each probe is.
+
+**Direction, with no inverse of anything.** For a `mov_to_ref` method the error is
+`fn(truth_mov) - truth_ref`; for a `ref_to_mov` method it is `fn(truth_ref) - truth_mov`.
+The same pairs serve both. Neither the method's map nor `g` is inverted, which also keeps
+the discontinuous `seams` family well defined.
+
+**Families** (frozen; each is reported on its own, never pooled):
+
+| family | amplitude | scale | note |
+|---|---|---|---|
+| `rigid` | none | | control: the pose alone |
+| `wave` | 10 px peak | 1500 px | the benchmark's choice |
+| `grid` | s.d. 5 px | 9 x 9 nodes | literature value as recorded in STARE's README, not re-read |
+| `multiscale` | RMS 2.0 µm | 333, 166, 83 µm, fixed in µm | amplitude as above; the spectrum is the benchmark's choice |
+| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 20 bumps | the benchmark's choice; inside STARE's model |
+| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 60 bumps | **outside STARE's model** (finer than its 64 px lattice) |
+| `seams` | s.d. 3 px | 1536 px blocks | **outside STARE's model** (discontinuous) |
+
+The 1536 px block is neither STARE's 2048 px tile nor ASHLAR's 922 px tile pitch. It is a
+multiple of STARE's 64 px lattice, and in an 8192 px window one seam (6144 px) falls on a
+STARE tile edge. Bumps cover a small part of an 8192 px window, so their effect shows in
+`tre_um_max` and the shares under a threshold, hardly in the median.
+
+**Poses**, one per round: `shift` is (30, -20) px with no rotation; `rot` is 2 degrees plus
+that shift. ASHLAR has no rotation, so its `rot` rows measure that limit and are read
+beside its `shift` rows.
+
+**Cases.** Windows of 8192 px for every method (4 x 4 STARE tiles). A patient is
+(window, family): one reference, kept as one file, and two rounds. `synthetic`: one
+Gaussian-blob scene per family (7 patients, 14 cases). `semisynth`: 2 windows from each of
+the 2 cohort patients the spec names, variant `same`, noise 1.0 x the background s.d.
+(28 patients, 56 cases). A per-pair method runs each round; a per-patient method gets the
+patient and so never sees two families at once.
+
+```bash
+python -m benchmarks.regbench prepare synthetic --suite truth --cases CASES
+python -m benchmarks.regbench prepare semisynth --truth --cases CASES \
+    --name <a patient the spec names> --image <its reference round> --channel <nuclear>
+```
+
+**The freeze.** `prepare` refuses a `truth_spec.json` whose content does not match its
+hash and writes the hash into every `case.json` it makes from it
+(`extra.truth_spec_sha256`); `score` refuses cases of two hashes. The hash covers the
+parameters, not the generator's code: the commit is what fixes that, and it is to be tagged
+`regbench-truth-frozen-<date>` before any method runs.
+
+**Numbers** (`truth.error_stats`), per case and variant, in micrometres: `tre_um_p50`,
+`tre_um_p90`, `tre_um_max`, `frac_under_1um`, `frac_under_2um`, `initial_tre_um_p50` (the
+unregistered pose) and `frac_improved`, with `n_probes` and `n_nonfinite`. A point a method
+returns as NaN counts against it: its error is infinite. A failed run is scored at the
+unregistered pose. Without a pixel size the micrometre numbers are NaN. A variant with
+`band` gets a second row `<variant>:nonband` on the probes outside bands.
+
+**What these numbers are not.** The amplitudes are literature values as recorded in
+STARE's README (the papers were not re-read for this port), not STARE's output on the
+cohort. The bias is elsewhere: the families, their smoothness and the multiscale spectrum
+were chosen by STARE's authors after its design was fixed; `grid`, `multiscale` and `wave`
+are fields a B-spline mesh on a 64 px lattice can represent; the `same` variant reuses the
+reference's pixels, so every error is a lower bound. Any amplitude later estimated from a
+method's fields is post hoc and names that method.
+
 ### Tables (`<out>/tables/`)
 
 | file | one row per | what |
@@ -185,7 +260,13 @@ landmarks on real slides.
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
 | `resources.csv` | case x variant | the cost recorded at that variant's yield |
 | `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; peaks are maxima, never divided by rounds |
-| `summary.md` | | the summary, with the line "descriptive; no ranking is claimed" under six patients |
+| `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
+| `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
+| `summary.md` | | the summary, with the line "descriptive; no ranking is claimed" under six patients, and the known-truth table |
+
+The cases of the frozen known-truth spec are left out of `resources.csv` and
+`summary_resources.csv` (cost is read on the cohort); their failures are still counted in
+`failures.csv`.
 
 ## Cost
 
@@ -225,7 +306,9 @@ peak memory, GPU-hours with the device named, and total time to the registered i
 4. **Self-consistency, not accuracy** on real slides.
 5. **The ladder:** methods need not finish at the same rung, so they need not have had the
    same memory request; the tables show each run's rung.
-6. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
+6. **Known-truth cases** are a check chosen by STARE's authors; see "What these numbers
+   are not" under "Known-truth error".
+7. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
    confines cores are unverified.
 
 ## Tests

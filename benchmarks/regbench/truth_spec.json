@@ -1,0 +1,118 @@
+{
+ "version": 1,
+ "frozen_on": "2026-10-09",
+ "what": "The known-truth cases of regbench: deformation families, amplitudes, scales, poses, window, probes and thresholds. Frozen before any method is scored; see truth.py.",
+ "n_px": 8192,
+ "pixel_size_um": 0.325,
+ "poses": [
+  {
+   "name": "shift",
+   "theta_deg": 0.0,
+   "shift_px": [
+    30.0,
+    -20.0
+   ]
+  },
+  {
+   "name": "rot",
+   "theta_deg": 2.0,
+   "shift_px": [
+    30.0,
+    -20.0
+   ]
+  }
+ ],
+ "families": [
+  {
+   "name": "rigid",
+   "field": "none",
+   "in_stare_model": true,
+   "note": "control: the pose alone"
+  },
+  {
+   "name": "wave",
+   "field": "wave",
+   "amp_px": 10.0,
+   "wavelength_px": 1500.0,
+   "in_stare_model": true,
+   "note": "amplitude and wavelength are the benchmark's choice"
+  },
+  {
+   "name": "grid",
+   "field": "grid",
+   "sd_px": 5.0,
+   "nodes": 9,
+   "in_stare_model": true,
+   "note": "literature value as recorded in STARE's README, not re-read"
+  },
+  {
+   "name": "multiscale",
+   "field": "multiscale",
+   "rms_um": 2.0,
+   "scales_um": [
+    333.0,
+    166.0,
+    83.0
+   ],
+   "in_stare_model": true,
+   "note": "amplitude: literature value as recorded in STARE's README, not re-read; the three scales and their equal energy are the benchmark's choice; fixed in micrometres"
+  },
+  {
+   "name": "bumps100",
+   "field": "bumps",
+   "sigma_px": 100.0,
+   "count": 20,
+   "in_stare_model": true,
+   "note": "the benchmark's choice; each bump peaks at 0.2 to 0.6 sigma"
+  },
+  {
+   "name": "bumps25",
+   "field": "bumps",
+   "sigma_px": 25.0,
+   "count": 60,
+   "in_stare_model": false,
+   "note": "outside STARE's model: finer than its vector lattice; each bump peaks at 0.2 to 0.6 sigma"
+  },
+  {
+   "name": "seams",
+   "field": "seams",
+   "sd_px": 3.0,
+   "block_px": 1536,
+   "in_stare_model": false,
+   "note": "outside STARE's model: discontinuous; the block is no method's grid"
+  }
+ ],
+ "method_grids_px": {
+  "stare_tile": 2048,
+  "stare_lattice": 64,
+  "ashlar_pitch": 922
+ },
+ "probes": {
+  "max": 20000,
+  "margin_px": 32,
+  "seed_offset": 104729
+ },
+ "thresholds_um": [
+  1.0,
+  2.0
+ ],
+ "synthetic": {
+  "scene_seed": 7000,
+  "noise": 0.02,
+  "seed_rule": "scene = scene_seed + 100 * family index; round = scene + 1 + pose index"
+ },
+ "semisynth": {
+  "patients": [
+   "046",
+   "052"
+  ],
+  "windows_per_patient": 2,
+  "variant": "same",
+  "noise_background_sd": 1.0,
+  "seed": 2000000,
+  "image": "the patient's reference round, nuclear channel, before registration",
+  "windows": "the windows_per_patient non-overlapping n_px windows with most tissue (semisynth.pick_windows)",
+  "seed_rule": "seed + 1000 * (crc32(patient) % 100000) + 100 * window + 10 * family index + pose index"
+ },
+ "sha256": "54f7883a1da305bf29c8ffbd30c2410ccdd07f336ce7102106b54f8561d5bed0"
+}

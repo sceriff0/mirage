@@ -13,7 +13,7 @@ One row is one (reference round, moving round) pair::
                              ships (e.g. mirage's SEG_QC output) to score its cells; leave
                              empty to use the built-in threshold + watershed segmenter.
 
-There is no ground truth here, so there are no landmarks: these cases are scored by matched
+There is no ground truth here, so there are no truth probes: these cases are scored by matched
 Dice and centroid displacement of the nuclei only.
 
 The nuclear channel of each slide is extracted once and its segmentation cached under

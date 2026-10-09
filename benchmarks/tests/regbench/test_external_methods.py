@@ -17,12 +17,12 @@ from benchmarks.regbench.methods import deeperhistreg as dhr
 def _median_tre(out, variant, case):
     pts = load_points(case)
     with np.load(result_dir(out, variant, case) / "warped.npz") as z:
-        return float(np.median(np.hypot(*(z["landmarks"] - pts["landmarks_ref"]).T)))
+        return float(np.median(np.hypot(*(z["truth_xy"] - pts["truth_ref"]).T)))
 
 
 def _initial(case):
     pts = load_points(case)
-    return float(np.median(np.hypot(*(pts["landmarks_mov"] - pts["landmarks_ref"]).T)))
+    return float(np.median(np.hypot(*(pts["truth_mov"] - pts["truth_ref"]).T)))
 
 
 # ── DeeperHistReg's field bookkeeping, without the package ───────────────────
@@ -85,7 +85,7 @@ def test_valis_micro_variant_is_produced(synthetic_cases, tmp_path):
     done = methods.run_case("valis", case, tmp_path, opts={"workers": 2})
     assert done == ["valis_rigid", "valis", "valis_micro"]
     with np.load(result_dir(tmp_path, "valis_micro", case) / "warped.npz") as z:
-        assert np.isfinite(z["landmarks"]).all()
+        assert np.isfinite(z["truth_xy"]).all()
 
 
 def test_deeperhistreg_field_is_read_as_moving_to_reference(synthetic_cases, tmp_path):

@@ -10,8 +10,9 @@ peak amplitude ``amp`` px and wavelength ``wavelength`` px, plus, by ``field``:
 
 ``multiscale``  three random fields of correlation length ``scales`` px and RMS ``rms`` px
                 each, summed (energy at several scales at once)
-``grid``        a 9 x 9 grid of i.i.d. Gaussian control-point moves of SD ``grid_sd`` px,
-                cubic-spline interpolated (Casamitjana et al., arXiv:2104.14873)
+``grid``        a ``grid_nodes`` x ``grid_nodes`` (9 x 9) grid of i.i.d. Gaussian
+                control-point moves of SD ``grid_sd`` px, cubic-spline interpolated
+                (Casamitjana et al., arXiv:2104.14873)
 ``bumps``       ``bump_count`` local Gaussian bumps of width ``bump_sigma`` px, each peaking at
                 0.2-0.6 sigma (at most 50 px), so no single bump folds the map
 ``seams``       an independent shift of SD ``seam_sd`` px per ``seam_tile`` px tile: the jump a
@@ -25,15 +26,23 @@ independent noise, and (``dropout``) a fraction of nuclei missing from the movin
 ``mov_hw`` gives the moving slide a smaller canvas than the reference (its top-left
 ``(H, W)`` pixels), because real pairs rarely share a shape and methods that pad or rescale
 must get the bookkeeping right.
+
+**Patients.** A spec with ``patient`` is one ROUND of that patient: ``scene_seed`` fixes the
+tissue and the reference slide, which every round of the patient shares (one file), and
+``seed`` fixes that round's deformation and noise. ``truth_suite`` builds the frozen
+known-truth cases of ``truth_spec.json`` this way: one patient per deformation family, two
+rounds each (``regbench.truth``).
 """
 
 from __future__ import annotations
 
 import math
+import os
+from pathlib import Path
 
 import numpy as np
 
-from .. import cells
+from .. import cells, truth
 from ..cases import Case, case_dir, write_case
 from ..imageio import write_nuclear_tiles
 
@@ -67,6 +76,7 @@ _BASE = dict(
     scales=(2000.0, 500.0, 125.0),
     rms=(8.0, 3.0, 1.0),
     grid_sd=5.0,
+    grid_nodes=9,
     bump_sigma=100.0,
     bump_count=20,
     seam_tile=1024,
@@ -257,6 +267,46 @@ SUITES = {
     ),
 }
 FIELDS = ("wave", "multiscale", "grid", "bumps", "seams")
+TRUTH_SUITE = "truth"
+TRUTH_WINDOW = "blob"  # the synthetic scene's name in a patient id
+
+
+def truth_suite(spec=None, n=None, families=None):
+    """``{case_id: generator spec}`` of the frozen known-truth cases: one patient per
+    family (its own blob scene), one round per pose.
+
+    ``n`` and ``families`` make a reduced copy for a test; a reduced copy is not the frozen
+    suite and its cases carry no spec hash.
+    """
+    spec = spec or truth.load_spec()
+    names = truth.family_names(spec)
+    frozen = n is None and families is None
+    out = {}
+    for j, family in enumerate(names):
+        if families is not None and family not in families:
+            continue
+        scene_seed = spec["synthetic"]["scene_seed"] + 100 * j
+        patient = f"{TRUTH_WINDOW}_{family}"
+        for k, pose in enumerate(truth.pose_names(spec)):
+            out[f"{patient}_{pose}"] = {
+                **_BASE,
+                "n": int(n or spec["n_px"]),
+                "noise": spec["synthetic"]["noise"],
+                "family": family,
+                "pose": pose,
+                "patient": patient,
+                "scene_seed": scene_seed,
+                "seed": scene_seed + 1 + k,
+                **truth.pose_kwargs(spec, pose),
+                **truth.family_kwargs(spec, family, spec["pixel_size_um"]),
+                **truth.case_extra(spec, family, frozen),
+            }
+    return out
+
+
+def suite_specs(name):
+    """The cases of a suite by name; ``truth`` is read from the frozen spec."""
+    return truth_suite() if name == TRUTH_SUITE else SUITES[name]
 
 
 def _spline_field(rng, n, spacing, sd):
@@ -308,7 +358,8 @@ def extra_field(spec):
 
         return w
     if kind == "grid":
-        return _spline_field(rng, n, n / 8.0, float(spec["grid_sd"]))
+        nodes = int(spec.get("grid_nodes", 9))
+        return _spline_field(rng, n, n / (nodes - 1.0), float(spec["grid_sd"]))
     if kind == "bumps":
         sg, k = float(spec["bump_sigma"]), int(spec["bump_count"])
         cen = rng.uniform(0, n, (k, 2))
@@ -371,7 +422,9 @@ class Scene:
 
         self.spec = spec
         n = self.n = spec["n"]
-        rng = np.random.default_rng(spec["seed"])
+        # the tissue and the reference belong to the patient, the map to the round
+        self.scene_seed = spec.get("scene_seed", spec["seed"])
+        rng = np.random.default_rng(self.scene_seed)
         # The silhouette is kept at <= 2048 px a side and looked up by index, so a 65536 px
         # slide does not need a 4 GB mask.
         m = self.m = min(n, 2048)
@@ -431,7 +484,8 @@ class Scene:
                 base, [q[..., 1] - by0, q[..., 0] - bx0], order=3, mode="constant"
             )
         sig = spec["noise"] * PEAK
-        rng = np.random.default_rng([spec["seed"], which == "mov", y0, x0])
+        seed = spec["seed"] if which == "mov" else self.scene_seed
+        rng = np.random.default_rng([seed, which == "mov", y0, x0])
         # a pedestal, so the noise is not clipped to half-normal at zero
         img = img + 4.0 * sig + rng.normal(0, sig, img.shape).astype(np.float32)
         return img.clip(0, 65535).astype(np.uint16)
@@ -492,28 +546,39 @@ def make_pair(spec, tile=TILE):
     return out[0], out[1], scene
 
 
-def write_pair(spec, ref_path, mov_path, workers=1):
-    """Write both slides tile by tile: memory is one row of tiles, whatever the slide size."""
+def _write_slide(spec, which, path, workers):
     scene = Scene(spec)
-    for which, path in (("ref", ref_path), ("mov", mov_path)):
-        write_nuclear_tiles(
-            path, scene.shape(which), np.uint16, _tiles(spec, which, workers), TILE
-        )
+    write_nuclear_tiles(
+        path, scene.shape(which), np.uint16, _tiles(spec, which, workers), TILE
+    )
     return scene
 
 
-def landmarks(spec, scene, count=2000, margin=32):
-    """Moving-frame probes whose true reference position is on tissue, and that position."""
-    n = spec["n"]
-    g = forward_map(spec)
-    rng = np.random.default_rng(spec["seed"] + 104729)
-    mh, mw = scene.mov_hw
-    p = rng.uniform(margin, [mw - 1 - margin, mh - 1 - margin], size=(count * 8, 2))
-    x = g(p)
-    ok = ((x >= margin) & (x <= n - 1 - margin)).all(axis=1)
-    p, x = p[ok], x[ok]
-    on = scene.on_tissue(np.round(x[:, 0]), np.round(x[:, 1]))
-    return p[on][:count], x[on][:count]
+def write_pair(spec, ref_path, mov_path, workers=1):
+    """Write both slides tile by tile: memory is one row of tiles, whatever the slide size."""
+    _write_slide(spec, "ref", ref_path, workers)
+    return _write_slide(spec, "mov", mov_path, workers)
+
+
+def shared_reference(cases_root, dataset, patient):
+    """Where the one reference slide of a patient with several rounds is kept."""
+    return Path(cases_root) / "_cache" / dataset / str(patient) / "ref.ome.tif"
+
+
+def write_once(path, write):
+    """``write(tmp_path)`` then rename, unless ``path`` exists: two array tasks preparing
+    two rounds of one patient both find a complete file."""
+    path = Path(path)
+    if path.exists():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"tmp{os.getpid()}_{path.name}")
+    try:
+        write(tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return path
 
 
 def prepare_one(cases_root, name, spec, workers=1, force=False):
@@ -521,9 +586,16 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     if (d / "case.json").exists() and not force:
         return d
     d.mkdir(parents=True, exist_ok=True)
+    patient = spec.get("patient")
     ref_p, mov_p = d / "ref.ome.tif", d / "mov.ome.tif"
-    scene = write_pair(spec, ref_p, mov_p, workers)
-    lm_mov, lm_ref = landmarks(spec, scene)
+    if patient:
+        ref_p = write_once(
+            shared_reference(cases_root, "synthetic", patient),
+            lambda tmp: _write_slide(spec, "ref", tmp, workers),
+        )
+    else:
+        _write_slide(spec, "ref", ref_p, workers)
+    scene = _write_slide(spec, "mov", mov_p, workers)
     seg = dict(diameter=NUCLEUS_DIAMETER, workers=workers)
     mov_cells, ref_cells = (
         cells.segment_slide(mov_p, **seg),
@@ -536,11 +608,13 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
             np.random.default_rng(0).choice(len(mov_cells), cap, replace=False)
         )
         mov_cells = mov_cells.take(keep)
+    hw = [spec["n"], spec["n"]]
     case = Case(
         dataset="synthetic",
         case_id=name,
-        group=name,
+        group=patient or name,
         family=spec["family"],
+        pose=spec.get("pose", ""),
         ref_nuclear=str(ref_p),
         mov_nuclear=str(mov_p),
         ref_image=str(ref_p),
@@ -548,26 +622,34 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
         modality="fluorescence",
         diagonal=math.hypot(spec["n"], spec["n"]),
         pixel_size_um=PIXEL_SIZE_UM,
-        ref_hw=[spec["n"], spec["n"]],
+        ref_hw=hw,
         mov_hw=list(scene.mov_hw),
-        extra={"spec": {k: v for k, v in spec.items()}},
+        extra={
+            "spec": {k: v for k, v in spec.items()},
+            "in_stare_model": spec.get("in_stare_model", ""),
+            "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
+        },
     )
+    g = forward_map(spec)
+    # Paired probes for the known-truth error: moving nuclei and where the map puts them.
+    _, centroids = cells.area_centroid(mov_cells)
+    probes = truth.probe_arrays(centroids, g, hw, spec["seed"])
     # Where a perfect registration puts the moving outlines: scoring them gives the cell
     # metric's ceiling for this pair (noise, resampling and dropout, no registration error).
-    truth = forward_map(spec)(mov_cells.xy)
     return write_case(
         cases_root,
         case,
-        lm_mov,
-        lm_ref,
+        probes["truth_mov"],
+        probes["truth_ref"],
         mov_cells,
         ref_cells,
-        cells_mov_xy_truth=truth.astype(np.float32),
+        truth_cell=probes["truth_cell"],
+        cells_mov_xy_truth=g(mov_cells.xy).astype(np.float32),
     )
 
 
 def prepare(a):
-    suite = SUITES[a.suite]
+    suite = suite_specs(a.suite)
     names = sorted(suite)
     if a.index is not None:
         names = names[a.index : a.index + 1]

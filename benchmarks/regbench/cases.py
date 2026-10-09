@@ -12,14 +12,16 @@ A dataset's ``prepare`` writes one folder per case::
 ``cells_<side>_ring_feat``   ``cell_pairs.PolySet``, holes and multi-part cells included
 ``cells_<side>_ring_hole``
 ``cells_<side>_n``
-``landmarks_mov`` / ``landmarks_ref``   (known-truth cases) paired points: moving-frame
-                                         positions and where the true map puts them
+``truth_mov`` / ``truth_ref``           (known-truth cases) paired probes: centroids of
+                                        moving nuclei and where the true map puts them;
+                                        ``truth_cell`` is each probe's moving nucleus
 ``cells_mov_xy_truth``                  (known-truth cases) the moving outlines under the true map
 
 A method reads the two images and returns a point mapping in its own direction
 (``mapping.PointMap``). The driver moves the nuclei that direction and writes::
 
-    <out>/<variant>/<dataset>/<case_id>/warped.npz   ``cells_xy``, ``direction`` (+ ``band``)
+    <out>/<variant>/<dataset>/<case_id>/warped.npz   ``cells_xy``, ``direction``, ``truth_xy``,
+                                                     ``grid`` (+ ``band``)
     <out>/<variant>/<dataset>/<case_id>/run.json     ok, cause, seconds, resources, info
 
 so the scorer needs neither the method's software nor its transform format.
@@ -111,8 +113,8 @@ def polyset_arrays(ps, side):
 def write_case(
     cases_root,
     case,
-    landmarks_mov=None,
-    landmarks_ref=None,
+    truth_mov=None,
+    truth_ref=None,
     cells_mov=None,
     cells_ref=None,
     **extra_arrays,
@@ -121,10 +123,10 @@ def write_case(
     d = case_dir(cases_root, case.dataset, case.case_id)
     case.dir = str(d)
     arrays = {}
-    if landmarks_mov is not None:
-        arrays["landmarks_mov"] = np.asarray(landmarks_mov, dtype=float).reshape(-1, 2)
-    if landmarks_ref is not None:
-        arrays["landmarks_ref"] = np.asarray(landmarks_ref, dtype=float).reshape(-1, 2)
+    if truth_mov is not None:
+        arrays["truth_mov"] = np.asarray(truth_mov, dtype=float).reshape(-1, 2)
+    if truth_ref is not None:
+        arrays["truth_ref"] = np.asarray(truth_ref, dtype=float).reshape(-1, 2)
     for side, ps in (("mov", cells_mov), ("ref", cells_ref)):
         if ps is not None:
             arrays.update(polyset_arrays(ps, side))

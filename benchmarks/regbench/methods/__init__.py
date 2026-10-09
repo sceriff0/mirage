@@ -366,9 +366,10 @@ def _run(method, cases, out, opts, label, work, keep_work, on_variant, launch_id
                     "cells_xy": _warp_chunked(
                         pmap.fn, pts.get(f"cells_{side}_xy", np.empty((0, 2)))
                     ).astype(np.float32),
-                    # the paired truth points of the side the map starts from
-                    "landmarks": _warp_chunked(
-                        pmap.fn, pts.get(f"landmarks_{side}", np.empty((0, 2)))
+                    # the known-truth probes of the side the map starts from, at full
+                    # precision: fn(truth_mov) or fn(truth_ref), never the other way
+                    "truth_xy": _warp_chunked(
+                        pmap.fn, pts.get(f"truth_{side}", np.empty((0, 2)))
                     ),
                     "grid": _warp_chunked(pmap.fn, grid).astype(np.float32),
                     "grid_shape": np.array(grid_shape),
