@@ -5,7 +5,8 @@ import sys
 import time
 
 import pytest
-from regbench.resources import Monitor, set_thread_env
+
+from benchmarks.regbench.resources import Monitor, set_thread_env
 
 CHILD = """
 import time

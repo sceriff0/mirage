@@ -2,22 +2,16 @@
 
 Preparing cases needs STARE's dependencies (it writes and segments OME-TIFFs). A method's own
 environment need not have them: set ``REGBENCH_TEST_CASES`` to a folder prepared elsewhere
-(``python -m regbench prepare synthetic --suite test --cases DIR``) and the fixtures use it.
+(``python -m benchmarks.regbench prepare synthetic --suite test --cases DIR``) and the fixtures use it.
 """
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[3]
-for p in (ROOT / "src", ROOT / "benchmarks"):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
-
-from regbench.cases import load_case
-from regbench.datasets import synthetic
+from benchmarks.regbench.cases import load_case
+from benchmarks.regbench.datasets import synthetic
 
 SPECS = synthetic.SUITES["test"]
 

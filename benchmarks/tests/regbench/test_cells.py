@@ -4,8 +4,9 @@ import json
 
 import numpy as np
 import pytest
-from regbench import cells
-from regbench.imageio import write_nuclear
+
+from benchmarks.regbench import cells
+from benchmarks.regbench.imageio import write_nuclear
 
 
 def square(cx, cy, half):

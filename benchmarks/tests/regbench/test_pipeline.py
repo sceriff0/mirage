@@ -6,10 +6,11 @@ import json
 
 import numpy as np
 import pytest
-from regbench import cells, methods
-from regbench.cases import load_points, polys, result_dir
-from regbench.datasets import synthetic
-from regbench.score import score
+
+from benchmarks.regbench import cells, methods
+from benchmarks.regbench.cases import load_points, polys, result_dir
+from benchmarks.regbench.datasets import synthetic
+from benchmarks.regbench.score import score
 
 
 def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):

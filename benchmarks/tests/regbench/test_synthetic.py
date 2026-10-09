@@ -2,7 +2,8 @@
 
 import numpy as np
 import tifffile
-from regbench.datasets import synthetic
+
+from benchmarks.regbench.datasets import synthetic
 
 SPEC = {**synthetic._BASE, "family": "t", "n": 1536, "theta": 20.0, "shift": (25.0, -40.0),
         "amp": 12.0, "wavelength": 500.0, "dropout": 0.2, "noise": 0.0, "seed": 9,

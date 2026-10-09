@@ -8,9 +8,10 @@ direction, in full-resolution reference pixels, for slides of equal and of diffe
 
 import numpy as np
 import pytest
-from regbench import methods
-from regbench.cases import load_points, result_dir
-from regbench.methods import deeperhistreg as dhr
+
+from benchmarks.regbench import methods
+from benchmarks.regbench.cases import load_points, result_dir
+from benchmarks.regbench.methods import deeperhistreg as dhr
 
 
 def _median_tre(out, variant, case):
