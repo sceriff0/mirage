@@ -23,11 +23,12 @@ This package is being ported in steps. What exists now:
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
-| datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient, and the cohort's cases are not built yet |
+| datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient |
+| the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC nuclei of one arm. Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapters `initial`, `stare`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them. `stare` already writes its native image: its own STITCH, deferred until the clock has stopped |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
-| ASHLAR, the cohort's cases, the run list and the cohort launcher | not here yet |
+| ASHLAR, the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
 
@@ -36,7 +37,8 @@ Nothing here has run on the cluster.
 ```
 mapping.py     PointMap: a point mapping and the direction it was estimated in
 cases.py       the on-disk contract: case.json + points.npz in, warped.npz + run.json out
-cells.py       segment nuclei on a native slide (the built-in segmenter, label images)
+cells.py       nuclei of a native slide: the built-in segmenter, label images, cell GeoJSON
+arms_manifest.py  the arms cohort as a `prepare multiplex` manifest, one row per moving round
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
@@ -62,6 +64,31 @@ python -m benchmarks.regbench run --cases CASES --out OUT --dataset synthetic \
 python -m benchmarks.regbench score --cases CASES --out OUT
 python -m benchmarks.regbench selfcheck --method stare --work WORK
 ```
+
+The cohort (the arms' results folder, `ROOT`):
+
+```bash
+python -m benchmarks.regbench.arms_manifest --root ROOT --out rounds.csv
+python -m benchmarks.regbench prepare multiplex --manifest rounds.csv --cases CASES
+```
+
+The first command reads `ROOT/preprocess_shared/csv/preprocessed.csv` and the QC nuclei
+`ROOT/valis_high_micro2/<patient>/qc/registration/geojson/<slide>.geojson` (`--from-arm`
+names another arm), and writes one row per moving round: `case_id` = `<patient>_<slide>`,
+`group` = the patient. A patient without exactly one reference, a slide that is not on
+disk, a slide whose channel list does not name exactly one nuclear channel (a
+case-insensitive substring match of `DAPI` or `CELLTOX`; `--nuclear` narrows it) and a
+round whose nuclei are missing are dropped, each printed with its reason and path; the exit
+code is non-zero only when no row is left. The pixel size is the checkpoint's `pixel_size`
+column, 0.325 µm where a row has none (`pixel_size_source` says which).
+
+The second writes the cases. Each one names the original multichannel slides
+(`ref_image`, `mov_image`; `extra["ref_channel"]`, `["mov_channel"]`, `["channels_ref"]`,
+`["channels_mov"]`, and `["channel_names"]` = the moving slide's) and the nuclear channel
+alone (`ref_nuclear`, `mov_nuclear`). The nuclei are read with the pipeline's
+`cell_pairs.from_feature_collection`, holes and multi-part cells included. A nuclei file
+that is unreadable, empty, or has a vertex outside `[-1, W] x [-1, H]` of its slide refuses
+that case with the file's path, and the rest are still prepared.
 
 `run` takes one of `--case-id` (one pair), `--group` (every round of one patient) or
 `--index` (the n-th case for a method that runs per pair, the n-th patient for one that

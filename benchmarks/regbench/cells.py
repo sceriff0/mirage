@@ -6,8 +6,9 @@ This module makes the cells; it does not score them. Pairing, IoU and every scor
 * each slide's nuclei are segmented on its NATIVE image, never on a warped one, so no method
   is scored on pixels it interpolated itself;
 * :class:`Polys` is one outer ring per cell, which is what the built-in segmenter and a
-  label image give. Cells read from a GeoJSON through ``cell_pairs.from_feature_collection``
-  keep their holes and parts; ``cases.write_case`` stores either kind.
+  label image give. Cells read from a GeoJSON (:func:`cells_from_geojson`) are a
+  ``cell_pairs.PolySet`` from the pipeline's own ``from_feature_collection``: they keep
+  their holes and parts. ``cases.write_case`` stores either kind.
 
 Coordinates are X, Y with pixel CENTRES on the integers, the convention of
 ``skimage.measure.find_contours``.
@@ -258,31 +259,49 @@ def polys_from_label_image(path, diameter=20.0, tile=2048, workers=1):
     return _over_tiles(path, 0, "labels", None, float(diameter), tile, workers)
 
 
-def polys_from_geojson(path):
-    """A cell GeoJSON (FeatureCollection of Polygon / MultiPolygon), outer rings only."""
-    with open(path) as fh:
-        fc = json.load(fh)
-    feats = fc["features"] if isinstance(fc, dict) else fc
-    rings = []
-    for f in feats:
-        g = f.get("geometry") or {}
-        if g.get("type") == "Polygon":
-            outers = [g["coordinates"][0]] if g.get("coordinates") else []
-        elif g.get("type") == "MultiPolygon":
-            outers = [p[0] for p in g.get("coordinates", []) if p]
-        else:
-            continue
-        if not outers:
-            continue
-        ring = np.asarray(max(outers, key=len), dtype=float)[:, :2]
-        if len(ring) > 1 and np.allclose(ring[0], ring[-1]):
-            ring = ring[:-1]  # GeoJSON closes its rings
-        rings.append(ring)
-    return from_rings(rings)
+def is_geojson(path):
+    return str(path).lower().endswith((".geojson", ".json"))
 
 
-def load_cells(path, diameter=20.0, tile=2048, workers=1):
-    """Cells from a GeoJSON or a label TIFF, by extension."""
-    if str(path).lower().endswith((".geojson", ".json")):
-        return polys_from_geojson(path)
+def cells_from_geojson(path, hw=None):
+    """A cell GeoJSON as a ``cell_pairs.PolySet``: every ring of every feature, holes and
+    multi-part cells included, read by the pipeline's own ``from_feature_collection``.
+
+    With ``hw``, the ``(H, W)`` of the slide the cells were segmented on, the file must fit
+    that slide: every vertex within ``[-1, W] x [-1, H]`` (the pipeline's writer traces a
+    border nucleus half a pixel outside the raster, ``bin/mask_to_geojson.py``). A file
+    that is unreadable, holds no cell, or does not fit raises ``ValueError`` naming it.
+    """
+    from . import pairs
+
+    try:
+        with open(path) as fh:
+            fc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{path}: cannot be read as GeoJSON ({exc})") from exc
+    if isinstance(fc, list):
+        fc = {"features": fc}
+    if not isinstance(fc, dict):
+        raise ValueError(f"{path}: not a GeoJSON FeatureCollection")
+    ps = pairs.cp.from_feature_collection(fc)
+    if not ps.n_rings:
+        raise ValueError(f"{path}: no cell ({ps.n_features} features, no polygon)")
+    if not np.isfinite(ps.xy).all():
+        raise ValueError(f"{path}: a vertex is not finite")
+    if hw is not None:
+        h, w = (int(v) for v in hw)
+        (x0, y0), (x1, y1) = ps.xy.min(axis=0), ps.xy.max(axis=0)
+        if x0 < -1 or y0 < -1 or x1 > w or y1 > h:
+            raise ValueError(
+                f"{path}: cells lie outside their slide: x {x0:g}..{x1:g}, "
+                f"y {y0:g}..{y1:g} on a slide {w} px wide and {h} px high"
+            )
+    return ps
+
+
+def load_cells(path, diameter=20.0, tile=2048, workers=1, hw=None):
+    """Cells from a GeoJSON (a ``PolySet``, checked against ``hw``) or a label TIFF (a
+    :class:`Polys`), by extension."""
+    if is_geojson(path):
+        return cells_from_geojson(path, hw)
     return polys_from_label_image(path, diameter, tile, workers)

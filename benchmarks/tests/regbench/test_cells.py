@@ -92,4 +92,40 @@ def test_label_image_and_geojson_give_the_same_cells(tmp_path):
     gj = tmp_path / "cells.geojson"
     gj.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
     from_json = cells.load_cells(gj)
-    assert cells.area_centroid(from_json)[0] == pytest.approx(area)
+    assert isinstance(from_json, pairs.cp.PolySet)  # the pipeline's reader
+    assert pairs.cp.feature_area_centroid(from_json)[0] == pytest.approx(area)
+
+
+def test_geojson_cells_are_checked_against_their_slide(tmp_path):
+    def write(name, features):
+        path = tmp_path / name
+        path.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+        return path
+
+    def cell(ring):
+        geometry = {"type": "Polygon", "coordinates": [ring]}
+        return {"type": "Feature", "properties": {}, "geometry": geometry}
+
+    inside = write("in.geojson", [cell([[-0.5, -0.5], [9, 0], [9.5, 19.5], [0, 9]])])
+    assert cells.cells_from_geojson(inside, hw=(20, 10)).n_features == 1
+    assert cells.cells_from_geojson(inside).n_features == 1  # no slide: no check
+    # [-1, W] x [-1, H]: one pixel of slack on every side, no more
+    for hw in ((20, 9), (19, 10)):
+        with pytest.raises(ValueError, match="in.geojson.*outside"):
+            cells.cells_from_geojson(inside, hw=hw)
+    low = write("low.geojson", [cell([[-1.5, 0], [5, 0], [5, 5]])])
+    with pytest.raises(ValueError, match="low.geojson.*outside"):
+        cells.cells_from_geojson(low, hw=(20, 10))
+
+    with pytest.raises(ValueError, match="none.geojson.*no cell"):
+        cells.cells_from_geojson(write("none.geojson", []))
+    # features without a usable polygon are no cells either
+    degenerate = write("thin.geojson", [cell([[0, 0], [1, 1]])])
+    with pytest.raises(ValueError, match="thin.geojson.*no cell"):
+        cells.cells_from_geojson(degenerate)
+    broken = tmp_path / "broken.geojson"
+    broken.write_text("{")
+    with pytest.raises(ValueError, match="broken.geojson"):
+        cells.cells_from_geojson(broken)
+    with pytest.raises(ValueError, match="absent.geojson"):
+        cells.cells_from_geojson(tmp_path / "absent.geojson")

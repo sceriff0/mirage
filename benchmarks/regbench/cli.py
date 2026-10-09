@@ -58,7 +58,10 @@ def build_parser():
     m = prep.add_parser("multiplex")
     common(m)
     m.add_argument(
-        "--manifest", required=True, help="CSV: case_id,reference,moving,..."
+        "--manifest",
+        required=True,
+        help="CSV: case_id,reference,moving,... (for the arms cohort: the output of "
+        "`python -m benchmarks.regbench.arms_manifest`)",
     )
     m.add_argument(
         "--diameter",
@@ -71,7 +74,8 @@ def build_parser():
         "--max-cells",
         type=int,
         default=0,
-        help="score a random sample of this many moving cells (0 = all)",
+        help="score a random sample of this many moving cells (0 = all); not for "
+        "nuclei given as GeoJSON",
     )
 
     ss = prep.add_parser("semisynth")
