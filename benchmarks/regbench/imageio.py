@@ -1,4 +1,5 @@
-"""Writing and extracting the one-channel nuclear OME-TIFF every method is given."""
+"""Writing and extracting the OME-TIFFs the methods are given: the one-channel nuclear slide,
+and slides with several named channels (the selfcheck's pair)."""
 
 from __future__ import annotations
 
@@ -9,15 +10,11 @@ from pathlib import Path
 import numpy as np
 
 BAND_ROWS = 2048
+NUCLEAR_NAME = ("NUCLEAR",)
 
 
-def write_nuclear(path, plane, pixel_size_um=None):
-    """One ``(H, W)`` plane as a tiled, compressed, one-channel OME-TIFF (atomic)."""
-    import tifffile
-
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    meta = {"axes": "CYX", "Channel": {"Name": ["NUCLEAR"]}}
+def _ome_meta(names, pixel_size_um):
+    meta = {"axes": "CYX", "Channel": {"Name": [str(n) for n in names]}}
     if pixel_size_um:
         meta.update(
             {
@@ -27,18 +24,16 @@ def write_nuclear(path, plane, pixel_size_um=None):
                 "PhysicalSizeYUnit": "µm",
             }
         )
+    return meta
+
+
+def _atomic_tiff(path, write):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(suffix=".ome.tif", dir=path.parent)
     os.close(fd)
     try:
-        tifffile.imwrite(
-            tmp,
-            np.asarray(plane)[None],
-            ome=True,
-            bigtiff=True,
-            tile=(512, 512),
-            compression="zlib",
-            metadata=meta,
-        )
+        write(tmp)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -46,26 +41,38 @@ def write_nuclear(path, plane, pixel_size_um=None):
     return path
 
 
-def write_nuclear_tiles(path, hw, dtype, tiles, tile, pixel_size_um=None):
-    """As :func:`write_nuclear`, from an iterator of tiles in row-major order.
+def write_channels(path, planes, names, pixel_size_um=None):
+    """``(C, H, W)`` planes as a tiled, compressed OME-TIFF with NAMED channels (atomic)."""
+    import tifffile
+
+    planes = np.asarray(planes)
+    if planes.ndim != 3 or len(names) != planes.shape[0]:
+        raise ValueError(
+            f"{len(names)} channel names for planes of shape {planes.shape}"
+        )
+    return _atomic_tiff(
+        path,
+        lambda tmp: tifffile.imwrite(
+            tmp,
+            planes,
+            ome=True,
+            bigtiff=True,
+            tile=(512, 512),
+            compression="zlib",
+            photometric="minisblack",
+            metadata=_ome_meta(names, pixel_size_um),
+        ),
+    )
+
+
+def write_channel_tiles(path, hw, dtype, tiles, tile, names, pixel_size_um=None):
+    """As :func:`write_channels`, from an iterator of tiles: every tile of channel 0 in
+    row-major order, then every tile of channel 1, and so on.
 
     The slide is never held in memory, which is what lets a 65536 px slide be written from a
     generator. Edge tiles are padded to the full tile, as TIFF stores them.
     """
     import tifffile
-
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    meta = {"axes": "CYX", "Channel": {"Name": ["NUCLEAR"]}}
-    if pixel_size_um:
-        meta.update(
-            {
-                "PhysicalSizeX": float(pixel_size_um),
-                "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": float(pixel_size_um),
-                "PhysicalSizeYUnit": "µm",
-            }
-        )
 
     def padded():
         for t in tiles:
@@ -75,25 +82,44 @@ def write_nuclear_tiles(path, hw, dtype, tiles, tile, pixel_size_um=None):
                 t = full
             yield t
 
-    fd, tmp = tempfile.mkstemp(suffix=".ome.tif", dir=path.parent)
-    os.close(fd)
-    try:
-        tifffile.imwrite(
+    return _atomic_tiff(
+        path,
+        lambda tmp: tifffile.imwrite(
             tmp,
             padded(),
-            shape=(1, *hw),
+            shape=(len(names), *hw),
             dtype=dtype,
             ome=True,
             bigtiff=True,
             tile=(tile, tile),
             compression="zlib",
-            metadata=meta,
-        )
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-    return path
+            photometric="minisblack",
+            metadata=_ome_meta(names, pixel_size_um),
+        ),
+    )
+
+
+def write_nuclear(path, plane, pixel_size_um=None):
+    """One ``(H, W)`` plane as a tiled, compressed, one-channel OME-TIFF (atomic)."""
+    return write_channels(path, np.asarray(plane)[None], NUCLEAR_NAME, pixel_size_um)
+
+
+def write_nuclear_tiles(path, hw, dtype, tiles, tile, pixel_size_um=None):
+    """As :func:`write_nuclear`, from an iterator of tiles in row-major order."""
+    return write_channel_tiles(
+        path, hw, dtype, tiles, tile, NUCLEAR_NAME, pixel_size_um
+    )
+
+
+def channel_names(path):
+    """The channel names in an OME-TIFF's header ([] when it names none)."""
+    import re
+
+    import tifffile
+
+    with tifffile.TiffFile(path) as tif:
+        xml = tif.ome_metadata or ""
+    return re.findall(r'<Channel\b[^>]*?\bName="([^"]*)"', xml)
 
 
 def shape_of(path):

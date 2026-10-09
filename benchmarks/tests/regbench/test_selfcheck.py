@@ -1,0 +1,869 @@
+"""selfcheck and realcheck: the checks must be able to FAIL.
+
+A "render" here is the moving slide's dots channel resampled through an image transform A
+(moving -> reference) with ``scipy.ndimage.map_coordinates``: it stands in for a method's
+own writer. P is the point mapping that is checked against it. P consistent with A must be
+``ok`` whatever A is; a P with the wrong direction, an offset, a scale error, a wrong strip
+or a wrong block must be ``inconsistent``; an output the dots cannot be seen in must be
+``not_checked``, never ``inconsistent``.
+"""
+
+import json
+import types
+
+import numpy as np
+import pytest
+import tifffile
+from scipy.ndimage import map_coordinates
+
+from benchmarks.regbench import cells, cli, imageio, methods
+from benchmarks.regbench import selfcheck as sc
+from benchmarks.regbench.cases import load_points, result_dir, write_case, write_json
+from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
+
+HW = (1024, 1280)
+SMALL = (512, 640)
+DIRECTIONS = (MOV_TO_REF, REF_TO_MOV)
+
+
+class Pair:
+    """The pair, its planes in memory, and renders of it."""
+
+    def __init__(self, work, hw=HW, mov_hw=None):
+        self.d = sc.make_pair(work, hw, mov_hw)
+        self.mov = tifffile.imread(self.d["moving"])
+        self.ref = tifffile.imread(self.d["reference"])
+        self.dots = self.d["dots_mov_xy"]
+        self.truth, self.inverse = self.d["truth"], self.d["truth_inverse"]
+        h, w = self.d["ref_hw"]
+        yy, xx = np.mgrid[0:h, 0:w].astype(float)
+        self.grid = np.stack([xx.ravel(), yy.ravel()], axis=1)
+        self._renders = {}
+
+    def a_inv(self, shift=(0.0, 0.0)):
+        """reference -> moving of the image transform A = truth + shift."""
+        shift = np.asarray(shift, dtype=float)
+        return lambda q: self.inverse(np.asarray(q, dtype=float) - shift)
+
+    def a(self, shift=(0.0, 0.0)):
+        shift = np.asarray(shift, dtype=float)
+        return lambda p: self.truth(p) + shift
+
+    def render(self, channel=1, shift=(0.0, 0.0), order=1):
+        key = (channel, tuple(shift), order)
+        if key not in self._renders:
+            h, w = self.d["ref_hw"]
+            p = self.a_inv(shift)(self.grid)
+            self._renders[key] = map_coordinates(
+                self.mov[channel].astype(float),
+                [p[:, 1].reshape(h, w), p[:, 0].reshape(h, w)],
+                order=order,
+            )
+        return self._renders[key]
+
+    def maps(self, shift=(0.0, 0.0)):
+        """P consistent with A = truth + shift, in each direction."""
+        return {
+            MOV_TO_REF: PointMap(self.a(shift), MOV_TO_REF),
+            REF_TO_MOV: PointMap(self.a_inv(shift), REF_TO_MOV),
+        }
+
+
+@pytest.fixture(scope="module")
+def pair(tmp_path_factory):
+    return Pair(tmp_path_factory.mktemp("selfcheck_pair"))
+
+
+def plus(pmap, offset):
+    """The mapping, moved by ``offset`` (a constant or a function of the input points)."""
+    off = offset if callable(offset) else (lambda xy: np.asarray(offset, dtype=float))
+    return PointMap(lambda xy: pmap.fn(xy) + off(np.asarray(xy)), pmap.direction)
+
+
+# ── the pair ──────────────────────────────────────────────────────────────────
+def test_the_pair_is_two_named_channels_on_a_canvas_that_is_not_square(pair):
+    d = pair.d
+    assert pair.mov.shape == (2, *HW) and pair.ref.shape == (2, *HW)
+    assert pair.mov.dtype == np.uint16 and HW[0] != HW[1]
+    for path in (d["reference"], d["moving"]):
+        assert imageio.channel_names(path) == ["DAPI", "dots"]
+        assert imageio.pixel_size_um(path) == pytest.approx(0.325)
+    assert pair.ref[1].max() == 0  # the reference's second channel is empty
+    assert 0.9 * sc.DOT_PEAK < pair.mov[1].max() <= sc.DOT_PEAK
+    # the tissue does not start at the origin
+    ys, xs = np.nonzero(pair.ref[0] > 0.3 * pair.ref[0].max())
+    assert xs.min() > 0.05 * HW[1] and ys.min() > 0.03 * HW[0]
+
+
+def test_dots_are_a_jittered_lattice_inside_the_moving_frame(pair):
+    xy = pair.dots
+    assert len(xy) > 100
+    assert xy.min() >= sc.DOT_MARGIN
+    assert (xy[:, 0] <= HW[1] - 1 - sc.DOT_MARGIN).all()
+    assert (xy[:, 1] <= HW[0] - 1 - sc.DOT_MARGIN).all()
+    off = (xy - sc.LATTICE / 2.0) % sc.LATTICE
+    off = np.minimum(off, sc.LATTICE - off)
+    assert off.max() <= sc.JITTER and off.std() > 4.0  # jittered, not a plain lattice
+
+
+def test_the_inverse_of_the_generators_map_is_good_to_a_ten_thousandth_of_a_pixel(pair):
+    q = pair.grid[::997]
+    assert np.abs(pair.truth(pair.inverse(q)) - q).max() < 1e-4
+
+
+def test_the_generator_is_unchanged_for_square_specs():
+    from benchmarks.regbench.datasets import synthetic
+
+    scene = synthetic.Scene({**synthetic._BASE, "family": "t", "n": 256, "seed": 3})
+    assert scene.shape("ref") == (256, 256) and scene.shape("mov") == (256, 256)
+    assert len(scene.ref[0]) == 55  # the same nuclei as before `ref_hw` existed
+
+
+def test_sizes_are_the_ones_each_method_needs():
+    assert sc.sizes_for("initial") == [(sc.DEFAULT_HW, None)]
+    assert sc.sizes_for("stare")[0] == (sc.DEFAULT_HW, None)
+    assert sc.sizes_for("stare")[1][0] == (4096, 5120)  # a four-tile junction
+    for name in ("valis", "valis_mirage", "valis120", "valis120_hires"):
+        assert max(sc.sizes_for(name)[-1][0]) >= 30000, name
+    assert sc.sizes_for("deeperhistreg_gpu") == sc.SIZES["deeperhistreg"]
+    assert sc.sizes_for("deeperhistreg_hr_fluo_cpu") == sc.SIZES["deeperhistreg_hr"]
+    (default,) = sc.SIZES["deeperhistreg"]
+    assert min(default[0]) > 20480 and min(default[1]) > 20480
+    for key in ("deeperhistreg", "deeperhistreg_hr"):
+        for ref_hw, mov_hw in sc.SIZES[key]:
+            assert all(v % 20 == 0 for v in (*ref_hw, *mov_hw)), key
+
+
+# ── blind detection ───────────────────────────────────────────────────────────
+def test_find_dots_locates_clean_dots_to_a_tenth_of_a_pixel(pair):
+    found = sc.find_dots(pair.mov[1])
+    assert len(found) == len(pair.dots)
+    d = np.linalg.norm(found[:, None] - pair.dots[None], axis=2).min(axis=1)
+    assert d.max() < 0.1
+
+
+def test_nuclei_are_not_mistaken_for_dots(pair):
+    assert pair.mov[0].max() > 10000  # sigma 5 px blobs, as bright as the dots
+    assert len(sc.find_dots(pair.mov[0])) == 0
+    assert len(sc.find_dots(pair.ref[0])) == 0
+
+
+def test_a_lazy_channel_is_read_by_region(pair):
+    from stare.slide_io import open_lazy
+
+    arr, _, close = open_lazy(pair.d["moving"])
+    try:
+        found = sc.find_dots(sc._Plane(arr, 1))
+    finally:
+        close()
+    assert len(found) == len(pair.dots)
+
+
+# ── a consistent mapping is ok, whatever the writer does to the pixels ────────
+def _pedestal(img):
+    rng = np.random.default_rng(5)
+    return rng.poisson(np.clip(img, 0, None) + 1600.0).astype(float)
+
+
+def _eight_bit(img):
+    return np.rint(255.0 * np.clip(img, 0, None) / img.max()).astype(np.uint8)
+
+
+WRITERS = {
+    "bilinear": (1, lambda img: img),
+    "bicubic": (3, lambda img: img),
+    "pedestal_poisson": (1, _pedestal),
+    "eight_bit": (1, _eight_bit),
+}
+
+
+@pytest.mark.parametrize("writer", sorted(WRITERS))
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_consistent_map_is_ok(pair, direction, writer):
+    order, post = WRITERS[writer]
+    res = sc.compare(pair.maps()[direction], pair.dots, post(pair.render(order=order)))
+    assert res["status"] == sc.OK, res["failed"]
+    assert res["err_px_p95"] < 0.25
+    assert res["n_found"] == res["n_dots"] > 100
+    assert res["n_blocks_judged"] >= 4
+    assert max(abs(res["offset_px_mean_x"]), abs(res["offset_px_mean_y"])) < 0.03
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_registration_error_does_not_matter(pair, direction):
+    """A is 20 px away from the truth; P follows A: the check is about P and A only."""
+    shift = (20.0, 0.0)
+    res = sc.compare(pair.maps(shift)[direction], pair.dots, pair.render(shift=shift))
+    assert res["status"] == sc.OK, res["failed"]
+    assert res["err_px_p95"] < 0.25
+
+
+def test_an_output_with_an_origin_is_compared_in_the_reference_frame(pair):
+    out = pair.render()[100:, 60:]
+    res = sc.compare(pair.maps()[MOV_TO_REF], pair.dots, out, origin_xy=(60, 100))
+    assert res["status"] == sc.OK
+    assert sc.compare(pair.maps()[MOV_TO_REF], pair.dots, out)["status"] != sc.OK
+
+
+# ── a wrong mapping is inconsistent ───────────────────────────────────────────
+def test_a_flipped_direction_is_inconsistent(pair):
+    out = pair.render()
+    flipped = {
+        MOV_TO_REF: PointMap(pair.inverse, MOV_TO_REF),
+        REF_TO_MOV: PointMap(pair.truth, REF_TO_MOV),
+    }
+    for direction in DIRECTIONS:
+        res = sc.compare(flipped[direction], pair.dots, out)
+        assert res["status"] == sc.INCONSISTENT, direction
+        assert res["n_found"] < 0.5 * res["n_dots"]
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize(
+    "offset", [(0.30, 0.0), (0.0, -0.30), (0.5, 0.5)], ids=["x.30", "y-.30", "half"]
+)
+def test_a_fraction_of_a_pixel_offset_is_inconsistent(pair, direction, offset):
+    res = sc.compare(plus(pair.maps()[direction], offset), pair.dots, pair.render())
+    assert res["status"] == sc.INCONSISTENT
+    assert "whole image" in res["failed"]
+    assert res["n_found"] == res["n_dots"]  # found, and measured as offset
+    assert res["offset_px_mean_x"] == pytest.approx(offset[0], abs=0.03)
+    assert res["offset_px_mean_y"] == pytest.approx(offset[1], abs=0.03)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_tenth_of_a_percent_scale_error_is_inconsistent(pair, direction):
+    centre = np.array([HW[1] - 1, HW[0] - 1]) / 2.0
+    good = pair.maps()[direction]
+    scaled = PointMap(
+        lambda xy: centre + 1.001 * (good.fn(xy) - centre), good.direction
+    )
+    res = sc.compare(scaled, pair.dots, pair.render())
+    assert res["status"] == sc.INCONSISTENT
+    # about the centre the mean offset cancels: the percentile and the blocks object
+    assert abs(res["offset_px_mean_x"]) < sc.GATE_MEAN
+    assert res["err_px_p95"] > sc.GATE_P95
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_an_offset_of_one_lattice_period_is_inconsistent(pair, direction):
+    res = sc.compare(
+        plus(pair.maps()[direction], (float(sc.LATTICE), 0.0)), pair.dots, pair.render()
+    )
+    assert res["status"] == sc.INCONSISTENT
+    assert res["n_found"] < 0.1 * res["n_dots"]  # the jitter: neighbours do not line up
+
+
+def _strip(pair, direction, share):
+    """True for the given share of the dots, along the left edge of the output."""
+    where = pair.truth(pair.dots)[:, 0]
+    cut = np.sort(where)[int(round(share * len(where)))]
+    if direction == MOV_TO_REF:
+        return lambda xy: (pair.truth(xy)[:, 0] < cut)[:, None]
+    return lambda xy: (np.asarray(xy)[:, 0] < cut)[:, None]
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_strip_that_is_five_pixels_wrong_is_inconsistent(pair, direction):
+    """8 % of the dots, along one edge: the whole-image gate at 90 % found passed this."""
+    strip = _strip(pair, direction, 0.08)
+    wrong = plus(pair.maps()[direction], lambda xy: strip(xy) * np.array([5.0, 0.0]))
+    res = sc.compare(wrong, pair.dots, pair.render())
+    assert res["status"] == sc.INCONSISTENT
+    assert 0.90 * res["n_dots"] <= res["n_found"] < sc.GATE_FOUND * res["n_dots"]
+    assert any(f.startswith("block") for f in res["failed"])
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_one_pixel_wrong_on_four_percent_of_dots_is_inconsistent(pair, direction):
+    """Five neighbouring dots, 1 px off: every whole-image number passes; a block does not."""
+    out_xy = pair.truth(pair.dots)
+    block_centre = np.array([768.0, 256.0])
+    near = np.argsort(np.linalg.norm(out_xy - block_centre, axis=1))[:5]
+    assert len(near) / len(pair.dots) < 0.045
+
+    def off(xy):
+        at = pair.truth(xy) if direction == MOV_TO_REF else np.asarray(xy)
+        d = np.linalg.norm(at[:, None] - out_xy[near][None], axis=2).min(axis=1)
+        return (d < 2.0)[:, None] * np.array([1.0, 0.0])
+
+    res = sc.compare(plus(pair.maps()[direction], off), pair.dots, pair.render())
+    assert res["status"] == sc.INCONSISTENT
+    assert res["failed"] == ["block (1, 0)"]
+    assert res["n_found"] == res["n_dots"]
+    assert res["err_px_p95"] < sc.GATE_P95 and abs(res["offset_px_mean_x"]) < 0.15
+
+
+def test_a_map_that_covers_half_of_the_image_is_inconsistent(pair):
+    """Half the dots are sent off the canvas: what is left matches, the image disagrees."""
+    good = pair.maps()[MOV_TO_REF]
+    half = PointMap(
+        lambda xy: good.fn(xy) + (np.asarray(xy)[:, :1] > 640) * 1e6, MOV_TO_REF
+    )
+    res = sc.compare(half, pair.dots, pair.render())
+    assert res["n_found"] == res["n_dots"] < 0.6 * res["n_drawn"]
+    assert res["n_unexplained"] > 40
+    assert res["status"] == sc.INCONSISTENT
+
+
+def test_a_map_that_returns_nan_is_inconsistent(pair):
+    nan = PointMap(lambda xy: np.full((len(xy), 2), np.nan), MOV_TO_REF)
+    assert sc.compare(nan, pair.dots, pair.render())["status"] == sc.INCONSISTENT
+    nan = PointMap(lambda xy: np.full((len(xy), 2), np.nan), REF_TO_MOV)
+    assert sc.compare(nan, pair.dots, pair.render())["status"] == sc.INCONSISTENT
+
+
+# ── an output the dots cannot be seen in is not checked ───────────────────────
+def test_blank_constant_and_noise_only_outputs_are_not_checked(pair):
+    rng = np.random.default_rng(0)
+    outputs = {
+        "zeros": np.zeros(HW, np.uint16),
+        "constant": np.full(HW, 255, np.uint8),
+        "noise": rng.normal(1600.0, 40.0, HW),
+    }
+    for name, out in outputs.items():
+        for direction in DIRECTIONS:
+            res = sc.compare(pair.maps()[direction], pair.dots, out)
+            assert res["status"] == sc.NOT_CHECKED, name
+            assert res["n_detected"] < 0.5 * res["n_drawn"]
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_weak_dots_are_not_checked_rather_than_inconsistent(pair, direction):
+    """Dots at 5 x the noise s.d.: too weak to place, so nothing is claimed."""
+    rng = np.random.default_rng(1)
+    sd = 40.0
+    out = pair.render() * (5.0 * sd / sc.DOT_PEAK) + rng.normal(1600.0, sd, HW)
+    res = sc.compare(pair.maps()[direction], pair.dots, out)
+    assert res["status"] == sc.NOT_CHECKED
+    assert "detected" in res["cause"]
+
+
+# ── a declared offset ─────────────────────────────────────────────────────────
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_declared_offset_is_required_to_match(pair, direction):
+    moved = plus(pair.maps()[direction], (2.5, 2.5))
+    out = pair.render()
+
+    def status(offset):
+        return sc.compare(moved, pair.dots, out, expected_offset=offset)["status"]
+
+    assert status((2.5, 2.5)) == sc.OK
+    assert status((0.0, 0.0)) == sc.INCONSISTENT
+    assert status(None) == sc.INCONSISTENT
+    assert status((2.0, 2.5)) == sc.INCONSISTENT
+    assert status((-2.5, -2.5)) == sc.INCONSISTENT  # the sign is part of the claim
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_declared_offset_is_a_function_of_position(pair, direction):
+    """An offset that grows across the slide: its mean, declared as a constant, fails."""
+
+    def declared(xy):
+        x = np.asarray(xy, dtype=float)[:, 0]
+        return np.stack([3.0 + 2.0 * x / HW[1], 4.0 - 2.0 * x / HW[1]], axis=1)
+
+    moved = plus(pair.maps()[direction], declared)
+    out = pair.render()
+    res = sc.compare(moved, pair.dots, out, expected_offset=declared)
+    assert res["status"] == sc.OK and res["err_px_p95"] < 0.25
+    assert res["declared_px_mean_x"] == pytest.approx(4.0, abs=0.2)
+    constant = (res["declared_px_mean_x"], res["declared_px_mean_y"])
+    assert sc.compare(moved, pair.dots, out, constant)["status"] == sc.INCONSISTENT
+
+
+def test_masked_dots_are_left_out_and_counted(pair):
+    """A mapping wrong only where the method says not to look (ASHLAR's overlap bands)."""
+    for direction in DIRECTIONS:
+        strip = _strip(pair, direction, 0.08)
+        wrong = plus(pair.maps()[direction], lambda xy, s=strip: s(xy) * [5.0, 0.0])
+        res = sc.compare(
+            wrong, pair.dots, pair.render(), drop=lambda xy, s=strip: s(xy)[:, 0]
+        )
+        assert res["status"] == sc.OK, res["failed"]
+        assert 8 <= res["n_masked"] <= 12
+        assert sc.compare(wrong, pair.dots, pair.render())["status"] == sc.INCONSISTENT
+
+
+def test_the_overall_status_is_the_worst_checked_one():
+    assert sc.worst([sc.OK, sc.NO_STAGE_IMAGE]) == sc.OK
+    assert sc.worst([sc.OK, sc.NOT_CHECKED]) == sc.NOT_CHECKED
+    assert sc.worst([sc.CRASHED, sc.NOT_CHECKED, sc.OK]) == sc.CRASHED
+    assert sc.worst([sc.CRASHED, sc.INCONSISTENT]) == sc.INCONSISTENT
+    assert sc.worst([sc.NO_STAGE_IMAGE]) == sc.NOT_CHECKED  # nothing was checked
+    assert set(sc.BLOCKING) == {sc.INCONSISTENT, sc.CRASHED, sc.NOT_CHECKED}
+    assert sc.EXIT_CODE[sc.OK] == 0 and all(sc.EXIT_CODE[s] for s in sc.BLOCKING)
+
+
+# ── run(): fake methods through the real driver ───────────────────────────────
+def _truths(case):
+    spec = sc.pair_spec(case.ref_hw, case.mov_hw, 0)
+    from benchmarks.regbench.datasets import synthetic
+
+    return synthetic.forward_map(spec), sc.inverse_of(spec)
+
+
+def _draw(case, src_path, dest, inverse, shift=(0.0, 0.0), channels=None, stem="out"):
+    """A writer: every channel of ``src_path`` resampled into the reference frame."""
+    src = tifffile.imread(src_path)
+    src = src[None] if src.ndim == 2 else src
+    h, w = case.ref_hw
+    yy, xx = np.mgrid[0:h, 0:w].astype(float)
+    p = inverse(np.stack([xx.ravel(), yy.ravel()], axis=1) - np.asarray(shift))
+    at = [p[:, 1].reshape(h, w), p[:, 0].reshape(h, w)]
+    planes = [
+        np.rint(np.clip(map_coordinates(c.astype(float), at, order=1), 0, 65535))
+        for c in (src if channels is None else src[list(channels)])
+    ]
+    path = dest / f"{stem}.ome.tif"
+    imageio.write_channels(
+        path, np.asarray(planes, np.uint16), [f"c{i}" for i in range(len(planes))]
+    )
+    return {"files": [str(path)], "format": "ome-tiff", "channels": len(planes)}
+
+
+def fake_method(
+    name="fake",
+    direction=MOV_TO_REF,
+    wrong=(0.0, 0.0),
+    stage=None,
+    raises=None,
+    writer=True,
+    one_channel=False,
+    declare=None,
+    group=False,
+):
+    """A method whose writer draws through the truth and whose points are the truth plus
+    ``wrong``. ``stage``: ``"yield"`` (a first variant with its image handed over at the
+    yield), ``"hook"`` (the same through ``write_stage``) or ``"none"`` (no stage image)."""
+    variants = (f"{name}_rigid", name) if stage else (name,)
+    seen = {}
+
+    def register(case, work, opts):
+        seen.update(opts=dict(opts))
+        truth, inverse = _truths(case)
+        if raises is not None:
+            raise raises
+        fn = truth if direction == MOV_TO_REF else inverse
+        pmap = PointMap(lambda xy: fn(xy) + np.asarray(wrong), direction)
+        if stage:
+            info = {}
+            if stage == "yield" and opts.get("stage_images"):
+                opts["monitor"].pause()
+                d = work / "rigid"
+                d.mkdir(parents=True, exist_ok=True)
+                info["native"] = _draw(case, case.mov_image, d, inverse)
+                opts["monitor"].resume()
+            yield variants[0], pmap, info
+        yield name, pmap, {"_state": {"case": case, "inverse": inverse}, "k": 1.0}
+
+    def register_group(cases, work, opts):
+        for case in cases:
+            for variant, pmap, info in register(case, work, opts):
+                yield case.case_id, variant, pmap, info
+
+    def write_native(state, case_id, dest_dir):
+        channels = [0] if one_channel else None
+        case = state["case"]
+        return _draw(
+            case, case.mov_image, dest_dir, state["inverse"], channels=channels
+        )
+
+    extra = {}
+    if writer:
+        extra["write_native"] = write_native
+    if stage == "hook":
+        extra["write_stage"] = lambda state, case_id, variant, dest: _draw(
+            state["case"], state["case"].mov_image, dest, state["inverse"]
+        )
+    if one_channel:
+        extra["warp_extra"] = lambda state, case_id, variant, image, dest: (
+            _draw(state["case"], image, dest, state["inverse"], stem="dots")
+            if variant == name
+            else None
+        )
+    if declare is not None:
+        extra["SELFCHECK_OFFSET"] = lambda info: {name: declare}
+    if group:
+        extra["register_group"] = register_group
+    else:
+        extra["register"] = register
+    return types.SimpleNamespace(
+        NAME=name,
+        SCOPE="group" if group else "pair",
+        VARIANTS=variants,
+        seen=seen,
+        **extra,
+    )
+
+
+def run_small(method, tmp_path, **kw):
+    return sc.run(method, tmp_path / "w", {"workers": 1}, sizes=[(SMALL, None)], **kw)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_run_reports_a_consistent_method_as_ok(tmp_path, direction):
+    rec = run_small(fake_method(direction=direction), tmp_path)
+    assert rec["status"] == sc.OK and rec["variants"] == {"fake": sc.OK}
+    assert rec["blocks_the_method"] is False
+    (p,) = rec["pairs"]
+    assert (
+        p["ref_hw"] == list(SMALL) and p["variants"]["fake"]["direction"] == direction
+    )
+    assert p["variants"]["fake"]["err_px_p95"] < 0.25
+    saved = json.loads((tmp_path / "w" / "selfcheck.json").read_text())
+    assert saved["status"] == sc.OK and saved["gate"]["found_min"] == 0.99
+    assert not (tmp_path / "w" / "work").exists()  # the method's scratch is removed
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("wrong", [(0.3, 0.0), (40.0, 0.0)], ids=["third", "forty"])
+def test_run_reports_a_method_whose_points_leave_its_image_as_inconsistent(
+    tmp_path, direction, wrong
+):
+    rec = run_small(fake_method(direction=direction, wrong=wrong), tmp_path)
+    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"] is True
+
+
+def test_run_reports_a_method_declared_in_the_wrong_direction_as_inconsistent(tmp_path):
+    """The method's writer and its points agree, but it says the points go the other way."""
+    good = fake_method(direction=REF_TO_MOV)
+
+    def register(case, work, opts):
+        for variant, pmap, info in good.register(case, work, opts):
+            yield variant, PointMap(pmap.fn, MOV_TO_REF), info
+
+    liar = types.SimpleNamespace(**{**vars(good), "register": register})
+    assert run_small(liar, tmp_path)["status"] == sc.INCONSISTENT
+
+
+def test_run_reports_a_method_that_raises_as_crashed(tmp_path):
+    rec = run_small(fake_method(raises=RuntimeError("no keypoints")), tmp_path)
+    assert rec["status"] == sc.CRASHED
+    assert "no keypoints" in rec["pairs"][0]["variants"]["fake"]["error"]
+
+
+def test_out_of_memory_is_not_checked_never_inconsistent(tmp_path):
+    rec = run_small(fake_method(raises=MemoryError("Java heap space")), tmp_path)
+    assert rec["status"] == sc.NOT_CHECKED
+    assert rec["pairs"][0]["variants"]["fake"]["cause"] == "oom"
+    assert rec["blocks_the_method"] is True
+
+
+def test_a_final_variant_without_an_image_is_not_checked(tmp_path):
+    rec = run_small(fake_method(writer=False), tmp_path)
+    assert rec["status"] == sc.NOT_CHECKED
+    assert "no native image" in rec["pairs"][0]["variants"]["fake"]["cause"]
+
+
+def test_a_stage_without_an_image_is_reported_and_does_not_block(tmp_path):
+    rec = run_small(fake_method(stage="none"), tmp_path)
+    assert rec["variants"] == {"fake_rigid": sc.NO_STAGE_IMAGE, "fake": sc.OK}
+    assert rec["status"] == sc.OK and rec["blocks_the_method"] is False
+
+
+@pytest.mark.parametrize("stage", ["yield", "hook"])
+def test_a_stage_image_is_checked_when_the_method_can_draw_it(tmp_path, stage):
+    method = fake_method(stage=stage)
+    rec = run_small(method, tmp_path)
+    assert rec["variants"] == {"fake_rigid": sc.OK, "fake": sc.OK}
+    assert method.seen["opts"]["stage_images"] == "1"
+    rec = run_small(fake_method(stage=stage, wrong=(0.5, 0.5)), tmp_path / "b")
+    assert rec["variants"] == {"fake_rigid": sc.INCONSISTENT, "fake": sc.INCONSISTENT}
+
+
+def test_dots_come_through_warp_extra_when_the_output_has_one_channel(tmp_path):
+    rec = run_small(fake_method(one_channel=True), tmp_path)
+    assert rec["status"] == sc.OK
+    native = rec["pairs"][0]["variants"]["fake"]["native"]
+    assert native["files"][0].endswith("dots.ome.tif")
+    assert (tmp_path / "w" / "pair" / "dots.ome.tif").exists()
+    # without the hook nothing can be checked, and it says so
+    method = fake_method(one_channel=True)
+    del method.warp_extra
+    rec = run_small(method, tmp_path / "b")
+    assert rec["status"] == sc.NOT_CHECKED
+    assert "no dots channel" in rec["pairs"][0]["variants"]["fake"]["cause"]
+
+
+def test_the_methods_declared_offset_is_subtracted(tmp_path):
+    def declared(xy):
+        return np.broadcast_to([2.5, 2.5], (len(xy), 2))
+
+    rec = run_small(fake_method(wrong=(2.5, 2.5), declare=declared), tmp_path)
+    assert rec["status"] == sc.OK
+    assert rec["pairs"][0]["variants"]["fake"]["declared_offset"] is True
+    rec = run_small(fake_method(wrong=(2.5, 2.5)), tmp_path / "b")
+    assert rec["status"] == sc.INCONSISTENT
+
+
+def test_a_per_patient_method_and_a_label(tmp_path):
+    rec = run_small(fake_method(group=True, stage="none"), tmp_path, label="other")
+    assert rec["variants"] == {"other_rigid": sc.NO_STAGE_IMAGE, "other": sc.OK}
+    assert rec["label"] == "other"
+
+
+def test_every_size_is_run_and_the_worst_counts(tmp_path):
+    rec = sc.run(
+        fake_method(),
+        tmp_path / "w",
+        {"workers": 1},
+        sizes=[((512, 640), None), ((640, 768), (600, 700))],
+    )
+    assert [p["ref_hw"] for p in rec["pairs"]] == [[512, 640], [640, 768]]
+    assert rec["pairs"][1]["mov_hw"] == [600, 700]
+    assert rec["status"] == sc.OK
+    assert (tmp_path / "w" / "640x768" / "pair" / "moving.ome.tif").exists()
+
+
+def test_m0_from_and_mask_reach_the_method(tmp_path):
+    method = fake_method()
+    with pytest.raises(SystemExit, match="SELFCHECK_MASK"):
+        run_small(method, tmp_path, mask="overlap")
+    calls = []
+
+    def mask(info, name):
+        calls.append((name, info.get("k")))
+        return lambda xy: np.asarray(xy)[:, 0] < 300
+
+    method.SELFCHECK_MASK = mask
+    rec = run_small(method, tmp_path, mask="overlap", m0_from=tmp_path / "stare")
+    assert calls == [("overlap", 1.0)] and rec["mask"] == "overlap"
+    assert rec["pairs"][0]["variants"]["fake"]["n_masked"] > 10
+    assert method.seen["opts"]["m0_from"] == str(tmp_path / "stare")
+
+
+def test_a_killed_selfcheck_process_is_not_checked_and_a_broken_one_crashed(
+    tmp_path, monkeypatch
+):
+    size = ((512, 640), None)
+
+    def with_exit(code):
+        done = types.SimpleNamespace(returncode=code)
+        monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: done)
+        return sc._in_subprocess("stare", tmp_path, size, {}, None, None, None, 0)
+
+    assert with_exit(-9)["status"] == sc.NOT_CHECKED
+    assert with_exit(137)["status"] == sc.NOT_CHECKED
+    assert "out of memory" in with_exit(137)["cause"]
+    assert with_exit(1)["status"] == sc.CRASHED  # exit 1 and no selfcheck.json
+    write_json(tmp_path / "selfcheck.json", {"pairs": [{"status": sc.INCONSISTENT}]})
+    assert with_exit(1) == {"status": sc.INCONSISTENT}
+
+
+def test_a_method_that_asks_for_it_gets_one_process_per_pair(tmp_path, monkeypatch):
+    from benchmarks.regbench.methods import stare
+
+    calls = []
+
+    def run(argv, cwd, check):
+        calls.append(argv)
+        work = argv[argv.index("--work") + 1]
+        write_json(
+            f"{work}/selfcheck.json",
+            {"pairs": [{"status": sc.OK, "variants": {"stare": {"status": sc.OK}}}]},
+        )
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(stare, "SELFCHECK_SUBPROCESS", True, raising=False)
+    monkeypatch.setattr(sc.subprocess, "run", run)
+    rec = sc.run("stare", tmp_path, {"tile": 1024}, sizes=sc.sizes_for("stare"))
+    assert rec["status"] == sc.OK and len(calls) == 2
+    assert calls[1][calls[1].index("--size") + 1] == "4096x5120"
+    assert "--in-process" in calls[0] and "tile=1024" in calls[0]
+    assert cli.build_parser().parse_args(calls[0][3:]).in_process is True
+
+
+def test_the_cli_runs_stare_for_real_and_exits_by_status(tmp_path, capsys):
+    """`stare register` 1.2.1, its own STITCH, and the gate, on a small pair."""
+    argv = ["selfcheck", "--method", "stare", "--work", str(tmp_path / "w")]
+    assert cli.main([*argv, "--size", "1024x1280", "--opt", "workers=2"]) == 0
+    rec = json.loads((tmp_path / "w" / "selfcheck.json").read_text())
+    assert rec["variants"] == {"stare_rigid": sc.NO_STAGE_IMAGE, "stare": sc.OK}
+    stare = rec["pairs"][0]["variants"]["stare"]
+    assert stare["err_px_p95"] < 0.25 and stare["n_found"] == stare["n_dots"] > 100
+    assert stare["native"]["writer"] == "stare.stages.stitch.main"
+    assert "selfcheck [stare]: ok" in capsys.readouterr().out
+
+
+def test_parse_size():
+    assert sc.parse_size("1024x1280") == ((1024, 1280), None)
+    assert sc.parse_size("40x60:30X50") == ((40, 60), (30, 50))
+    for bad in ("1024", "1x2x3", "axb", "1x2:3x4:5x6"):
+        with pytest.raises(SystemExit):
+            sc.parse_size(bad)
+
+
+# ── realcheck ─────────────────────────────────────────────────────────────────
+CROP = 768
+
+
+class Real:
+    """A real-like case: nuclei segmented on each native slide, with 10 % of them missed
+    and about 1 px of centroid jitter, and the image a writer draws through the truth."""
+
+    def __init__(self, pair, root):
+        from benchmarks.regbench.datasets import synthetic
+
+        self.pair = pair
+        rng = np.random.default_rng(11)
+        sets = {}
+        for side, path in (("ref", pair.d["reference"]), ("mov", pair.d["moving"])):
+            ps = cells.segment_slide(path, 0, synthetic.NUCLEUS_DIAMETER)
+            ps = ps.take(np.flatnonzero(rng.random(len(ps)) >= 0.10))
+            jitter = rng.normal(0.0, 0.7, (len(ps), 2))
+            sets[side] = ps.with_xy(ps.xy + np.repeat(jitter, np.diff(ps.off), axis=0))
+        case = sc.pair_case(pair.d, root / "cases")
+        write_case(root / "cases", case, cells_mov=sets["mov"], cells_ref=sets["ref"])
+        self.case = case
+        self.points = load_points(case)
+        out = np.rint(np.clip(pair.render(channel=0), 0, 65535)).astype(np.uint16)
+        self.native = {
+            "files": [
+                str(
+                    imageio.write_channels(
+                        root / "registered.ome.tif", out[None], ["DAPI"]
+                    )
+                )
+            ]
+        }
+        self.root = root
+
+    def check(self, pmap, name, **kw):
+        d = self.root / name
+        d.mkdir(exist_ok=True)
+        return sc.realcheck(self.case, d, pmap, self.native, crop=CROP, **kw)
+
+
+@pytest.fixture(scope="module")
+def real(pair, tmp_path_factory):
+    return Real(pair, tmp_path_factory.mktemp("realcheck"))
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_realcheck_does_not_flag_a_correct_mapping(real, direction):
+    res = real.check(real.pair.maps()[direction], f"ok_{direction}")
+    assert res["status"] == "ok" and res["flag"] is False
+    assert len(res["crops"]) == 5 and all(c["judged"] for c in res["crops"])
+    for c in res["crops"]:
+        assert c["n"] >= 50
+        assert max(abs(c["offset_px_mean_x"]), abs(c["offset_px_mean_y"])) < 0.2
+        assert c["matched_fraction"] > 0.9 * c["baseline_fraction"] > 0.6
+    saved = json.loads((real.root / f"ok_{direction}" / "realcheck.json").read_text())
+    assert saved["flag"] is False and saved["direction"] == direction
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_realcheck_flags_half_a_pixel_by_the_signed_mean(real, direction):
+    res = real.check(plus(real.pair.maps()[direction], (0.5, 0.5)), f"half_{direction}")
+    assert res["status"] == "flagged" and res["flag"] is True
+    assert all(c["why"] == ["offset"] for c in res["crops"])
+    for c in res["crops"]:
+        assert c["offset_px_mean_x"] == pytest.approx(0.5, abs=0.2)
+        assert c["offset_px_mean_y"] == pytest.approx(0.5, abs=0.2)
+
+
+def test_realcheck_flags_a_flipped_direction_by_the_matched_fraction(real):
+    flipped = {
+        MOV_TO_REF: PointMap(real.pair.inverse, MOV_TO_REF),
+        REF_TO_MOV: PointMap(real.pair.truth, REF_TO_MOV),
+    }
+    for direction in DIRECTIONS:
+        res = real.check(flipped[direction], f"flip_{direction}")
+        assert res["flag"] is True
+        assert all("matched_fraction" in c["why"] for c in res["crops"])
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_realcheck_subtracts_the_declared_offset(real, direction):
+    moved = plus(real.pair.maps()[direction], (2.5, 2.5))
+
+    def declared(xy):
+        return np.broadcast_to([2.5, 2.5], (len(xy), 2))
+
+    assert real.check(moved, "declared", offset=declared)["flag"] is False
+    assert real.check(moved, "undeclared")["flag"] is True
+    assert real.check(moved, "wrong", offset=(2.0, 2.5))["flag"] is True
+
+
+def test_realcheck_of_an_empty_output_is_not_checked(real):
+    blank = imageio.write_channels(
+        real.root / "blank.ome.tif", np.zeros((1, *HW), np.uint16), ["DAPI"]
+    )
+    d = real.root / "blank"
+    d.mkdir()
+    res = sc.realcheck(
+        real.case, d, real.pair.maps()[MOV_TO_REF], {"files": [str(blank)]}, crop=CROP
+    )
+    assert res["status"] == sc.NOT_CHECKED and res["flag"] is False
+
+
+def _real_method(real, wrong=(0.0, 0.0), declare=None):
+    def register(case, work, opts):
+        pmap = plus(real.pair.maps()[MOV_TO_REF], wrong)
+        yield "rm", pmap, {"_state": {}, "k": 2}
+
+    def write_native(state, case_id, dest_dir):
+        return real.native
+
+    extra = {"SELFCHECK_OFFSET": (lambda info: {"rm": declare})} if declare else {}
+    return types.SimpleNamespace(
+        NAME="rm",
+        SCOPE="pair",
+        VARIANTS=("rm",),
+        register=register,
+        write_native=write_native,
+        **extra,
+    )
+
+
+def test_the_driver_runs_the_realcheck_after_the_writer(real, tmp_path, monkeypatch):
+    monkeypatch.setattr(sc, "REAL_CROP", CROP)
+    out = tmp_path / "out"
+    methods.run_case(_real_method(real), real.case, out, realcheck=True)
+    d = result_dir(out, "rm", real.case)
+    run = json.loads((d / "run.json").read_text())
+    assert run["realcheck"] == {"status": "ok", "flag": False}
+    assert json.loads((d / "realcheck.json").read_text())["crop_px"] == CROP
+
+    methods.run_case(_real_method(real, (0.5, 0.5)), real.case, out, realcheck=True)
+    run = json.loads((d / "run.json").read_text())
+    assert run["ok"] is True and run["realcheck"] == {"status": "flagged", "flag": True}
+    args = types.SimpleNamespace(out=out, dataset=real.case.dataset)
+    assert cli._realcheck_flagged(args, [real.case], {real.case.case_id: ["rm"]})
+
+    def declared(xy):
+        return np.broadcast_to([0.5, 0.5], (len(xy), 2))
+
+    method = _real_method(real, (0.5, 0.5), declared)
+    methods.run_case(method, real.case, out, realcheck=True)
+    assert json.loads((d / "run.json").read_text())["realcheck"]["flag"] is False
+    assert not cli._realcheck_flagged(args, [real.case], {real.case.case_id: ["rm"]})
+
+    methods.run_case(_real_method(real), real.case, tmp_path / "plain")
+    plain = result_dir(tmp_path / "plain", "rm", real.case)
+    assert "realcheck" not in json.loads((plain / "run.json").read_text())
+    assert not (plain / "realcheck.json").exists()
+
+
+def test_a_realcheck_that_raises_is_recorded_and_the_row_stays(real, tmp_path):
+    method = _real_method(real)
+    method.write_native = lambda state, case_id, dest: {"files": ["/nowhere.tif"]}
+    methods.run_case(method, real.case, tmp_path, realcheck=True)
+    run = json.loads((result_dir(tmp_path, "rm", real.case) / "run.json").read_text())
+    assert run["ok"] is True and run["realcheck"]["status"] == "crashed"
+    assert run["realcheck"]["flag"] is None
+
+
+def test_run_takes_the_realcheck_flag():
+    argv = ["run", "--cases", "c", "--out", "o", "--dataset", "multiplex"]
+    argv += ["--method", "stare", "--index", "0"]
+    assert cli.build_parser().parse_args(argv).realcheck is False
+    assert cli.build_parser().parse_args([*argv, "--realcheck"]).realcheck is True
+
+
+def test_realcheck_of_a_case_without_nuclei_is_not_checked(pair, tmp_path):
+    case = sc.pair_case(pair.d, tmp_path / "cases")
+    res = sc.realcheck(case, tmp_path, pair.maps()[MOV_TO_REF], {"files": ["x"]})
+    assert res["status"] == sc.NOT_CHECKED and "no nuclei" in res["cause"]
+    assert json.loads((tmp_path / "realcheck.json").read_text())["flag"] is False

@@ -25,7 +25,9 @@ Two things besides geometry differ between the slides, as between two staining r
 independent noise, and (``dropout``) a fraction of nuclei missing from the moving slide.
 ``mov_hw`` gives the moving slide a smaller canvas than the reference (its top-left
 ``(H, W)`` pixels), because real pairs rarely share a shape and methods that pad or rescale
-must get the bookkeeping right.
+must get the bookkeeping right. ``ref_hw`` gives the reference a canvas that is not square
+(the top-left ``(H, W)`` of the ``n`` x ``n`` scene) and ``tissue_box`` keeps the nuclei
+inside a box, so the tissue need not start at the origin; the selfcheck's pair uses both.
 
 **Patients.** A spec with ``patient`` is one ROUND of that patient: ``scene_seed`` fixes the
 tissue and the reference slide, which every round of the patient shares (one file), and
@@ -433,6 +435,9 @@ class Scene:
         k = n * n // 900
         ys, xs = rng.integers(0, n, k), rng.integers(0, n, k)
         inside = self.on_tissue(xs, ys)
+        box = spec.get("tissue_box")
+        if box:  # tissue that does not fill the canvas: (x0, y0, x1, y1), reference px
+            inside &= (xs >= box[0]) & (xs < box[2]) & (ys >= box[1]) & (ys < box[3])
         ys, xs = ys[inside], xs[inside]
         amp = rng.uniform(0.5, 1.5, len(ys)).astype(np.float32)
         kept = rng.random(len(ys)) >= spec["dropout"]
@@ -441,7 +446,11 @@ class Scene:
         )  # sorted by row: a patch is one searchsorted
         self.ref = (ys[order], xs[order], amp[order])
         self.mov = tuple(v[order][kept[order]] for v in (ys, xs, amp))
-        self.mov_hw = tuple(spec.get("mov_hw") or (n, n))
+        # a reference that is not square: its top-left (H, W) of the n x n scene
+        self.ref_hw = tuple(spec.get("ref_hw") or (n, n))
+        if max(self.ref_hw) > n:
+            raise ValueError(f"ref_hw {self.ref_hw} does not fit the scene (n = {n})")
+        self.mov_hw = tuple(spec.get("mov_hw") or self.ref_hw)
         self.g = forward_map(spec)
 
     def on_tissue(self, x, y):
@@ -491,7 +500,7 @@ class Scene:
         return img.clip(0, 65535).astype(np.uint16)
 
     def shape(self, which):
-        return (self.n, self.n) if which == "ref" else self.mov_hw
+        return self.ref_hw if which == "ref" else self.mov_hw
 
 
 def tile_boxes(hw, tile=TILE):

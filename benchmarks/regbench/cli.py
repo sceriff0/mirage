@@ -7,6 +7,12 @@
                        ``--index``-th of them: the index counts cases for a method that runs
                        per pair and patients for one that runs per patient
 ``score``              score every variant under ``--out``; writes ``<out>/tables``
+``selfcheck``          check that a method's points follow the image its own writer produced,
+                       on a synthetic pair; exit 0 ``ok``, 1 ``inconsistent``, 2
+                       ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
+
+``run --realcheck`` does the same kind of check on the real case it has just registered
+and exits 3 when it is flagged.
 
 Run from the repository root.
 """
@@ -148,6 +154,44 @@ def build_parser():
         "--work", default=None, help="scratch for the method's intermediates"
     )
     r.add_argument("--keep-work", action="store_true")
+    r.add_argument(
+        "--realcheck",
+        action="store_true",
+        help="after the method's writer, check that each mapping follows the image "
+        "written for it (realcheck.json); exit 3 when one is flagged",
+    )
+
+    chk = sub.add_parser("selfcheck")
+    chk.add_argument("--method", required=True, choices=METHODS)
+    chk.add_argument("--label", default=None)
+    chk.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
+    chk.add_argument("--work", required=True, help="where the pair and results go")
+    chk.add_argument(
+        "--mask",
+        default=None,
+        choices=("overlap",),
+        help="leave out the dots the method says to (ASHLAR: tile overlap bands)",
+    )
+    chk.add_argument(
+        "--m0-from",
+        default=None,
+        help="the --work of a `stare` selfcheck on the same pair (anchored methods)",
+    )
+    chk.add_argument(
+        "--size",
+        action="append",
+        default=None,
+        metavar="HxW[:HxW]",
+        help="check on this pair (reference[:moving]) instead of the method's own "
+        "sizes; repeatable",
+    )
+    chk.add_argument("--seed", type=int, default=0)
+    chk.add_argument("--keep-work", action="store_true")
+    chk.add_argument(
+        "--in-process",
+        action="store_true",
+        help="do not start a process per pair (what that process itself is given)",
+    )
 
     sc = sub.add_parser("score")
     sc.add_argument("--cases", required=True)
@@ -199,11 +243,12 @@ def _run(a):
             return 0
         picked = units[a.index]
     opts = parse_opts(a.opt)
+    rest = (opts, a.label, a.work, a.keep_work)
     if per_patient or a.group is not None:
-        done = run_group(a.method, picked, a.out, opts, a.label, a.work, a.keep_work)
+        done = run_group(a.method, picked, a.out, *rest, realcheck=a.realcheck)
     else:
         case = picked[0]
-        got = run_case(a.method, case, a.out, opts, a.label, a.work, a.keep_work)
+        got = run_case(a.method, case, a.out, *rest, realcheck=a.realcheck)
         done = {case.case_id: got}
     for case_id, variants in done.items():
         print(
@@ -212,7 +257,54 @@ def _run(a):
         )
     # A failure is recorded in run.json and scored at the unregistered pose; the exit code
     # says whether the method produced anything at all.
-    return 0 if any(done.values()) else 1
+    if not any(done.values()):
+        return 1
+    if a.realcheck and _realcheck_flagged(a, picked, done):
+        return 3
+    return 0
+
+
+def _realcheck_flagged(a, picked, done):
+    """Print each realcheck; True when one is flagged."""
+    import json
+
+    from .cases import result_dir
+
+    flagged = False
+    by_id = {c.case_id: c for c in picked}
+    for case_id, variants in done.items():
+        for variant in variants:
+            d = result_dir(a.out, variant, by_id[case_id])
+            try:
+                check = json.loads((d / "run.json").read_text()).get("realcheck")
+            except (OSError, ValueError):
+                check = None
+            if check:
+                print(f"{a.dataset}/{case_id} [{variant}] realcheck: {check['status']}")
+                flagged = flagged or bool(check.get("flag"))
+    return flagged
+
+
+def _selfcheck(a):
+    from . import selfcheck
+    from .methods import parse_opts
+
+    record = selfcheck.run(
+        a.method,
+        a.work,
+        parse_opts(a.opt),
+        a.label,
+        a.mask,
+        a.m0_from,
+        [selfcheck.parse_size(s) for s in a.size] if a.size else None,
+        a.seed,
+        a.in_process,
+        a.keep_work,
+    )
+    for variant, status in record["variants"].items():
+        print(f"selfcheck [{variant}]: {status}")
+    print(f"selfcheck [{a.label or a.method}]: {record['status']}")
+    return selfcheck.EXIT_CODE[record["status"]]
 
 
 def _list(a):
@@ -236,6 +328,8 @@ def main(argv=None):
         return _list(a)
     if a.cmd == "run":
         return _run(a)
+    if a.cmd == "selfcheck":
+        return _selfcheck(a)
     from .score import score
 
     score(a.cases, a.out, a.dataset, a.workers, dev=a.dev)

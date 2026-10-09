@@ -23,7 +23,10 @@ full-resolution pixels of the native slides. Optional hooks:
         "dtype"}``. ``state`` is whatever the method put in ``info["_state"]`` of its last
         yield. A method may instead write an image at a yield (inside ``opts["monitor"]``
         ``.pause()`` / ``.resume()``) and hand the same dict over as ``info["native"]``.
-``write_stage`` / ``warp_extra`` / ``SELFCHECK_OFFSET``  used by the selfcheck only.
+``write_stage`` / ``warp_extra`` / ``SELFCHECK_OFFSET`` / ``SELFCHECK_MASK`` /
+``SELFCHECK_SUBPROCESS``  used by the selfcheck and the realcheck only; their signatures are
+        in ``regbench.selfcheck``. A point mapping must stay valid until the run ends: the
+        realcheck calls it after the writer.
 
 **At each yield, before the generator is resumed and with the clock paused,** the driver
 moves the nuclei through the map (the moving nuclei for ``mov_to_ref``, the reference
@@ -213,7 +216,18 @@ def _launch_id():
     return f"{launch}.{next(_LAUNCHES)}" if launch.startswith("pid") else launch
 
 
-def _run(method, cases, out, opts, label, work, keep_work, on_variant, launch_id):
+def _run(
+    method,
+    cases,
+    out,
+    opts,
+    label,
+    work,
+    keep_work,
+    on_variant,
+    launch_id,
+    realcheck=False,
+):
     mod, name = load(method), method_name(method)
     scope = scope_of(method)
     opts = dict(opts or {})
@@ -242,6 +256,7 @@ def _run(method, cases, out, opts, label, work, keep_work, on_variant, launch_id
     }
     lock = threading.Lock()
     done, failed, final_maps = {}, {}, {}  # keyed by (case_id, variant)
+    infos = {}  # the live info of each yield, for a declared offset (realcheck)
     earlier = {}
 
     def head(case, variant):
@@ -397,6 +412,7 @@ def _run(method, cases, out, opts, label, work, keep_work, on_variant, launch_id
                 write_json(d / "run.json", rec)
                 done[key] = rec
                 final_maps[key] = pmap
+                infos[key] = info
             except (MemoryError, KeyboardInterrupt):
                 raise
             except Exception as exc:  # the benchmark's own step failed for this variant
@@ -485,7 +501,36 @@ def _run(method, cases, out, opts, label, work, keep_work, on_variant, launch_id
                     {**cost, **end},
                     tb,
                 )
+    if realcheck:
+        # Clock stopped, writers done: does each mapping follow the image written for it?
+        from .. import selfcheck
+
+        declare = getattr(mod, "SELFCHECK_OFFSET", None)
+        for (case_id, variant), rec in done.items():
+            native = rec.get("native")
+            if not (isinstance(native, dict) and native.get("files")):
+                continue
+            d = result_dir(out, names[variant], by_id[case_id])
+            try:
+                offsets = declare(infos[(case_id, variant)]) if declare else None
+                res = selfcheck.realcheck(
+                    by_id[case_id],
+                    d,
+                    final_maps[(case_id, variant)],
+                    native,
+                    offset=(offsets or {}).get(variant),
+                    points=points[case_id],
+                )
+                rec["realcheck"] = {"status": res["status"], "flag": res["flag"]}
+            except (Exception, SystemExit) as exc:
+                rec["realcheck"] = {
+                    "status": "crashed",
+                    "flag": None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            write_json(d / "run.json", rec)
     final_maps.clear()  # kept until the writer has run (the realcheck reads them)
+    infos.clear()
     return {
         c.case_id: [names[v] for v in mod.VARIANTS if (c.case_id, v) in done]
         for c in cases
@@ -501,13 +546,17 @@ def run_case(
     work=None,
     keep_work=False,
     on_variant=None,
+    realcheck=False,
 ):
-    """Register one case with a pair method; returns the variants that succeeded."""
+    """Register one case with a pair method; returns the variants that succeeded.
+
+    ``realcheck`` also checks, after the method's writer, that each mapping follows the
+    image written for it (``regbench.selfcheck.realcheck``; ``run.json: realcheck``)."""
     if scope_of(method) != "pair":
         raise SystemExit(
             f"{method_name(method)} runs per patient: use run_group (`run --group`)"
         )
-    args = (opts, label, work, keep_work, on_variant, _launch_id())
+    args = (opts, label, work, keep_work, on_variant, _launch_id(), realcheck)
     done = _run(method, [case], out, *args)
     return done[case.case_id]
 
@@ -521,6 +570,7 @@ def run_group(
     work=None,
     keep_work=False,
     on_variant=None,
+    realcheck=False,
 ):
     """Register one patient: ``{case_id: [variants that succeeded]}``.
 
@@ -534,11 +584,11 @@ def run_group(
         raise SystemExit("run_group takes the cases of ONE patient")
     launch = _launch_id()  # one launch, however many rounds it holds
     if scope_of(method) == "group":
-        args = (opts, label, work, keep_work, on_variant, launch)
+        args = (opts, label, work, keep_work, on_variant, launch, realcheck)
         return _run(method, cases, out, *args)
     done = {}
     for case in cases:
         sub = Path(work) / str(case.case_id) if work else None
-        args = (opts, label, sub, keep_work, on_variant, launch)
+        args = (opts, label, sub, keep_work, on_variant, launch, realcheck)
         done.update(_run(method, [case], out, *args))
     return done

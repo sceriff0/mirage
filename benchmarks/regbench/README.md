@@ -25,8 +25,9 @@ This package is being ported in steps. What exists now:
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
 | datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient, and the cohort's cases are not built yet |
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
-| adapters `initial`, `stare`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them |
-| selfcheck and realcheck, ASHLAR, the cohort's cases, the run list and the cohort launcher | not here yet |
+| adapters `initial`, `stare`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them. `stare` already writes its native image: its own STITCH, deferred until the clock has stopped |
+| selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
+| ASHLAR, the cohort's cases, the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
 
@@ -41,6 +42,7 @@ resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
 datasets/      synthetic, semisynth, multiplex: each writes cases
 score.py       reads files only; writes <out>/tables
+selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
 slurm/         sbatch wrappers (first rung of the ladder; no escalation yet)
 ```
 
@@ -58,6 +60,7 @@ python -m benchmarks.regbench list --cases CASES --dataset synthetic --groups  #
 python -m benchmarks.regbench run --cases CASES --out OUT --dataset synthetic \
     --method stare --index 0
 python -m benchmarks.regbench score --cases CASES --out OUT
+python -m benchmarks.regbench selfcheck --method stare --work WORK
 ```
 
 `run` takes one of `--case-id` (one pair), `--group` (every round of one patient) or
@@ -100,7 +103,8 @@ calls `on_variant`.
 **`run.json`**: `ok`, `error`, `cause`, `problem`, `direction`, `launch_id`, `unit`
 (`pair` | `patient`), `group_cases`, `register_s`, `write_s`, `resources`, `native`,
 `selfcheck_status`, `attempt`, `mem_requested_gb`, `cpus_requested`, `cpus_affinity`,
-`blas`, `cpu_model`, `previous_attempts`, `info`. It is written as
+`blas`, `cpu_model`, `previous_attempts`, `info`, and `realcheck` (`status`, `flag`) when
+`run --realcheck` was given. It is written as
 `ok: false, cause: killed` before the method starts, so a task the scheduler kills leaves a
 failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`,
 `gpu_oom`.
@@ -140,6 +144,129 @@ frames; matched Dice differs by up to 1e-3; displacement p50 by 0.5 % from a 0.5
 alone; displacement p90 by 0.14 µm (11 %) at 25 % local stretch; `within_1um` by 0.022 when
 the residual sits at the threshold (simulations recorded in the port's plan, not re-run
 here).
+
+## selfcheck and realcheck
+
+A method is scored through its point mapping. That is only fair if the mapping IS the
+transform of the image the method wrote to disk. Two checks measure exactly that;
+registration accuracy enters neither.
+
+### selfcheck (a gate)
+
+```bash
+python -m benchmarks.regbench selfcheck --method M [--label L] [--opt k=v ...] --work W \
+    [--mask overlap] [--m0-from DIR] [--size HxW[:HxW] ...]
+```
+
+Exit 0 `ok`, 1 `inconsistent`, 2 `not_checked`, 3 `crashed`. **Anything but 0 blocks the
+method** on the cohort. It writes `W/selfcheck.json` (every variant's numbers, per pair and
+per 512 px block).
+
+**The pair** (`selfcheck.make_pair`): two-channel 16-bit OME-TIFFs at 0.325 µm per pixel,
+channel 0 nuclei (`DAPI`), channel 1 `dots`, on a canvas that is not square (2048 x 2560 by
+default) with tissue that does not start at the origin. The moving slide is the reference
+seen through a known map (1.5 degrees, a shift, a smooth 10 px field). Its dots channel
+holds Gaussian dots (sigma 1.5 px, 20000 counts, zero background) on a 96 px lattice, each
+jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass. The
+reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
+Methods with a size-dependent code path are checked on more than one pair
+(`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction), both VALIS
+adapters also on a pair with a 30000 px side, DeeperHistReg on pairs whose sides are
+multiples of 20.
+
+**The check.** The method runs natively through the normal driver, writer included. The
+dots are found blind in the method's own output (`find_dots`: a 15 px median background,
+peaks above 8 robust s.d. and a quarter of the brightest, a second-moment width of 1.2 to
+1.8 px in a 7 px window, an intensity-weighted centroid) and compared with the mapping:
+
+- `mov_to_ref`: `fn(dot)` against the nearest detection within 3 px;
+- `ref_to_mov`: `fn(detection)` against the nearest original dot within 3 px.
+
+The residual is **the point mapping minus the image**, in the frame the mapping leads to.
+A method whose writer is known to depart from its mapping declares that departure as a
+function of position (`SELFCHECK_OFFSET`); it is subtracted point by point, and its sign
+is part of the claim.
+
+**The gate (frozen).** 95th percentile of the residual at most 0.40 px, mean signed
+residual at most 0.15 px per axis, at least 99 % of the dots found: on the whole image AND
+in every 512 px block holding at least 8 dots. For `mov_to_ref`, at most 1 % of the
+detections may be dots the mapping puts nothing on.
+
+| status | meaning | blocks the method |
+|---|---|---|
+| `ok` | the gate holds | no |
+| `inconsistent` | the points do not follow the image | yes |
+| `crashed` | the method raised | yes |
+| `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` | yes |
+| `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: `stare register` writes one image). Reported, never counted as checked | no |
+
+The overall status is the worst over the checked variants.
+
+**Measured on `stare` 1.2.1** (2026-10-09, macOS arm64, `--opt workers=4`; the only method
+whose selfcheck has really run):
+
+| pair | dots found | residual p50 / p95 px | mean x / y px | worst block p95 | worst block mean |
+|---|---|---|---|---|---|
+| 2048 x 2560 | 537 / 537 | 0.055 / 0.090 | +0.003 / +0.002 | 0.104 (20 blocks) | 0.020 |
+| 4096 x 5120 | 2202 / 2202 | 0.057 / 0.091 | 0.000 / 0.000 | 0.108 (80 blocks) | 0.025 |
+
+`stare_rigid` is `no_stage_image`. The same image, with STARE's own mapping deliberately
+changed, on the 2048 x 2560 pair:
+
+| mapping checked against STARE's image | status | found | p95 px | mean x px | blocks failed |
+|---|---|---|---|---|---|
+| STARE's own | `ok` | 537 / 537 | 0.090 | +0.003 | 0 / 20 |
+| + 0.10 px on x | `ok` (inside the gate) | 537 / 537 | 0.175 | +0.103 | 0 / 20 |
+| + 0.15 px on x | `inconsistent` | 537 / 537 | 0.224 | +0.153 | 12 / 20 |
+| + 0.30 px on x | `inconsistent` | 537 / 537 | 0.373 | +0.303 | 20 / 20 |
+| + 0.5 px on both axes | `inconsistent` | 538 / 538 | 0.781 | +0.503 | 20 / 20 |
+| scale error of 0.05 % about the centre | `inconsistent` | 537 / 537 | 0.685 | +0.005 | 18 / 20 |
+| scale error of 0.1 % about the centre | `inconsistent` | 537 / 537 | 1.354 | +0.008 | 20 / 20 |
+| + 96 px (one lattice period) | `inconsistent` | 7 / 519 | | | 20 / 20 |
+| 5 px wrong on the 8 % of dots along one edge | `inconsistent` | 496 / 537 | 0.090 | +0.004 | 4 / 20 |
+| 1 px wrong on 4 % of dots, one neighbourhood | `inconsistent` | 537 / 537 | 0.101 | +0.042 | 1 / 20 |
+| the rigid stage's mapping (`M0` only) | `inconsistent` | 74 / 539 | | | 20 / 20 |
+| the identity | `inconsistent` | 0 / 543 | | | 20 / 20 |
+| the same function declared `ref_to_mov` | `inconsistent` | 2 / 537 | | | 20 / 20 |
+
+So the smallest constant offset the gate objects to is 0.15 px per axis, the detector's
+own floor being 0.09 px at the 95th percentile. The row "1 px wrong on 4 % of dots" is
+caught by one block alone, with every whole-image number inside the gate.
+
+**What it cannot see.** A defect the writer and the point path SHARE passes (both read
+the same wrong field); a stage with no image of its own is not checked; the default pair
+does not exercise whole-slide code paths, which is what the larger pairs and the
+realcheck are for.
+
+**What a method provides** for it (all optional; signatures in `selfcheck.py`):
+`write_native`, or an image handed over at a yield as `info["native"]` (with
+`opts["stage_images"]` set, also for its earlier stages); `write_stage`; `warp_extra` (its
+own writer applied to the one-channel dots image, when its output has one channel);
+`SELFCHECK_OFFSET(info)`; `SELFCHECK_MASK(info, mask)` (`--mask overlap`);
+`SELFCHECK_SUBPROCESS = True` (one process per pair). A native dict may carry
+`dots_file`, `dots_channel` and `origin_xy`.
+
+### realcheck (one real case per method)
+
+```bash
+python -m benchmarks.regbench run ... --realcheck      # exit 3 when a realcheck is flagged
+```
+
+After the method's writer, with the clock stopped, for every variant that has a native
+image: nuclei are detected with the built-in segmenter in five 2048 px crops of the native
+nuclear output (the four corners of the tissue's bounding box and its centre) and matched,
+within one nuclear radius, to the point-mapped native nuclei (`mov_to_ref`: detections
+against the mapped moving nuclei; `ref_to_mov`: detections mapped back, against the moving
+nuclei). The baseline is the same detector on the unwarped slide of the frame the mapping
+leads to (for `ref_to_mov` the crop is carried there by the mapping itself; nothing is
+inverted). `realcheck.json` holds, per crop, `n`, `matched_fraction`, `baseline_fraction`,
+`offset_px_mean_x/y` (after the variant's declared offset) and `err_px_p50`. **`flag`** is
+true when a crop's mean offset exceeds 0.3 px on an axis or its matched fraction is under
+0.7 of the baseline's; `status` is `ok`, `flagged` or `not_checked` (no crop held 20
+nuclei). The median distance is shown and not used: it measures segmentation noise.
+`run.json: realcheck` repeats `status` and `flag`. For the VALIS primary rows the flag is
+a gate (it is the only check at cohort field scales); the launcher that applies it is not
+here yet. It has only run on synthetic slides.
 
 ## Scoring
 
@@ -318,3 +445,4 @@ python -m pytest benchmarks/tests/regbench -q --basetemp=/tmp/rb_<unique>
 ```
 
 `test_external_methods.py` skips where VALIS or DeeperHistReg is not importable.
+`test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair.
