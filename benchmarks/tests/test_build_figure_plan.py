@@ -470,7 +470,10 @@ def test_the_summary_counts_reused_segmentations_apart_from_runs():
 
 
 # --- the shipped configs draw from the arms benchmark, they do not recompute it ------
-ARM_FIGURE_CONFIGS = [SHIPPED, REPO / "benchmarks" / "configs" / "figures_arm_crosses.yaml"]
+ARM_FIGURE_CONFIGS = [
+    SHIPPED,
+    REPO / "benchmarks" / "configs" / "figures_arm_crosses.yaml",
+]
 
 
 @pytest.mark.parametrize("path", ARM_FIGURE_CONFIGS, ids=lambda p: p.name)

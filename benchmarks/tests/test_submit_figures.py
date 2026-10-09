@@ -530,7 +530,9 @@ def test_an_existing_segmentation_is_read_where_it_lives_and_never_rerun(tmp_pat
     assert not (root / ".launch" / "seg_stardist").exists()  # never launched
 
 
-def test_a_reused_segmentation_without_its_checkpoint_costs_only_its_own_figures(tmp_path):
+def test_a_reused_segmentation_without_its_checkpoint_costs_only_its_own_figures(
+    tmp_path,
+):
     """A dir that has not finished (no csv/segmented.csv) is named and its figures skipped --
     never silently re-segmented, and never drawn from a half-written run."""
     external = tmp_path / "arm_results" / "seg_cellsam"
