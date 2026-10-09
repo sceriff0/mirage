@@ -1,0 +1,29 @@
+# DeeperHistReg's PyPI package declares none of its runtime dependencies, so they are listed
+# here: its own requirements.txt (github.com/MWod/DeeperHistReg), plus the two binary wheels
+# that stand in for system libvips / OpenSlide. Install torch and torchvision first, from the
+# index that matches your hardware (CPU, or your CUDA version).
+#   Verified importable and run on 2026-10-07 with: deeperhistreg 1.0.1, Python 3.10,
+#   numpy 1.26.4, SimpleITK 2.5.6, pyvips 3.2.0.
+deeperhistreg==1.0.1
+numpy<2
+requests
+requests-toolbelt
+cachecontrol
+six
+future
+matplotlib>=3.6.2
+scikit-learn
+scikit-image
+pandas
+opencv-contrib-python-headless>=4.7.0.68
+openslide-python>=1.2.0
+openslide-bin
+Pillow>=9.5.0
+pyvips[binary]>=2.2.1
+scipy>=1.10.1
+SimpleITK>=2.2.1
+torchsummary
+torchio
+tifffile
+psutil
+zarr
