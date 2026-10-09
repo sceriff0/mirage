@@ -183,15 +183,30 @@ def test_holes_are_kept_when_cells_come_from_geojson():
 
 
 def test_cell_pairs_is_the_pipelines_file_and_nothing_else_is_put_on_the_path():
+    """In a fresh interpreter: other benchmark modules put ``bin/utils`` on ``sys.path``
+    themselves, so this process cannot say what ``pairs`` did."""
+    import subprocess
     import sys
     from pathlib import Path
 
-    import cell_pairs as cp
-
-    utils = Path(pairs.__file__).resolve().parents[2] / "bin" / "utils"
-    assert Path(cp.__file__).resolve() == utils / "cell_pairs.py"
-    assert pairs.cp is cp
-    assert str(utils) not in sys.path
+    repo = Path(pairs.__file__).resolve().parents[2]
+    probe = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "before = list(sys.path)\n"
+        "from benchmarks.regbench import pairs\n"
+        "import cell_pairs\n"
+        "utils = Path(pairs.__file__).resolve().parents[2] / 'bin' / 'utils'\n"
+        "assert Path(cell_pairs.__file__).resolve() == utils / 'cell_pairs.py'\n"
+        "assert pairs.cp is cell_pairs\n"
+        "assert sys.path == before, 'pairs changed sys.path'\n"
+        "assert not any(Path(p).resolve() == utils for p in sys.path if p)\n"
+        "assert 'logger' not in sys.modules and 'retry' not in sys.modules\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe], cwd=repo, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_no_pixel_size_gives_nan_not_zero():

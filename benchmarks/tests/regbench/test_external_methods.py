@@ -26,12 +26,21 @@ def _initial(case):
 
 
 # ── DeeperHistReg's field bookkeeping, without the package ───────────────────
-@pytest.mark.parametrize("ref_hw,mov_hw,f", [((400, 600), (400, 600), 1), ((400, 600), (360, 520), 1),
-                                             ((300, 500), (420, 640), 1), ((400, 600), (360, 520), 4)])
+@pytest.mark.parametrize(
+    "ref_hw,mov_hw,f",
+    [
+        ((400, 600), (400, 600), 1),
+        ((400, 600), (360, 520), 1),
+        ((300, 500), (420, 640), 1),
+        ((400, 600), (360, 520), 4),
+    ],
+)
 def test_field_warper_undoes_padding_stretch_and_reduction(ref_hw, mov_hw, f):
     """A known translation, written the way DeeperHistReg stores it: a backward field on the
     padded moving grid, at a coarser resolution than the images it was computed from."""
-    t = np.array([7.0, -4.0])  # reference = moving + t, in the pixels of the registered images
+    t = np.array(
+        [7.0, -4.0]
+    )  # reference = moving + t, in the pixels of the registered images
     hp, wp = max(ref_hw[0], mov_hw[0]), max(ref_hw[1], mov_hw[1])
     (pr_y, pr_x), (pm_y, pm_x) = dhr.centre_pads(ref_hw, mov_hw)
     fh, fw = hp // 2, wp // 2
@@ -58,10 +67,14 @@ def test_valis_rigid_and_nonrigid_land_in_reference_pixels(synthetic_cases, tmp_
     pytest.importorskip("valis")
     for name in ("smooth", "crop"):
         case = synthetic_cases[name]
-        done = methods.run_case("valis", case, tmp_path, opts={"micro": "0"}, workers=2)
+        done = methods.run_case(
+            "valis", case, tmp_path, opts={"micro": "0", "workers": 2}
+        )
         assert done == ["valis_rigid", "valis"], name
         assert _median_tre(tmp_path, "valis", case) < 1.0 < _initial(case), name
-        assert _median_tre(tmp_path, "valis", case) < _median_tre(tmp_path, "valis_rigid", case)
+        assert _median_tre(tmp_path, "valis", case) < _median_tre(
+            tmp_path, "valis_rigid", case
+        )
 
 
 def test_valis_micro_variant_is_produced(synthetic_cases, tmp_path):
@@ -69,7 +82,8 @@ def test_valis_micro_variant_is_produced(synthetic_cases, tmp_path):
     a result the benchmark reports, not something this test asserts."""
     pytest.importorskip("valis")
     case = synthetic_cases["smooth"]
-    assert methods.run_case("valis", case, tmp_path, workers=2) == ["valis_rigid", "valis", "valis_micro"]
+    done = methods.run_case("valis", case, tmp_path, opts={"workers": 2})
+    assert done == ["valis_rigid", "valis", "valis_micro"]
     with np.load(result_dir(tmp_path, "valis_micro", case) / "warped.npz") as z:
         assert np.isfinite(z["landmarks"]).all()
 
@@ -79,5 +93,8 @@ def test_deeperhistreg_field_is_read_as_moving_to_reference(synthetic_cases, tmp
     # equal shapes at full size, then different shapes reduced 2x: padding and scaling both live
     for name, opts in (("smooth", {}), ("crop", {"max_dim": "512"})):
         case = synthetic_cases[name]
-        assert methods.run_case("deeperhistreg", case, tmp_path, opts=opts, workers=2) == ["deeperhistreg"]
+        done = methods.run_case(
+            "deeperhistreg", case, tmp_path, opts={**opts, "workers": 2}
+        )
+        assert done == ["deeperhistreg"]
         assert _median_tre(tmp_path, "deeperhistreg", case) < 1.5 < _initial(case), name

@@ -39,7 +39,10 @@ REQUIRED = ("case_id", "reference", "moving")
 
 def read_manifest(path):
     with open(path, newline="") as fh:
-        rows = [{k.strip(): (v or "").strip() for k, v in r.items() if k} for r in csv.DictReader(fh)]
+        rows = [
+            {k.strip(): (v or "").strip() for k, v in r.items() if k}
+            for r in csv.DictReader(fh)
+        ]
     if not rows:
         raise SystemExit(f"{path}: no rows")
     missing = [c for c in REQUIRED if c not in rows[0]]
@@ -87,24 +90,45 @@ def prepare_one(cases_root, row, a):
         return d
     cache = Path(cases_root) / "_cache" / "multiplex"
     cache.mkdir(parents=True, exist_ok=True)
-    px = float(row["pixel_size_um"]) if row.get("pixel_size_um") else pixel_size_um(row["reference"])
+    px = (
+        float(row["pixel_size_um"])
+        if row.get("pixel_size_um")
+        else pixel_size_um(row["reference"])
+    )
     ref_c, mov_c = int(row.get("ref_channel") or 0), int(row.get("mov_channel") or 0)
-    ref_n, ref_cells = _slide(cache, row["reference"], ref_c, row.get("ref_cells"), px, a)
+    ref_n, ref_cells = _slide(
+        cache, row["reference"], ref_c, row.get("ref_cells"), px, a
+    )
     mov_n, mov_cells = _slide(cache, row["moving"], mov_c, row.get("mov_cells"), px, a)
     if a.max_cells and len(mov_cells) > a.max_cells:
         # Only the moving side is thinned: each sampled cell still finds its partner among
         # ALL reference cells, so the pairs are a sample of the full pairing.
-        keep = np.sort(np.random.default_rng(0).choice(len(mov_cells), a.max_cells, replace=False))
+        keep = np.sort(
+            np.random.default_rng(0).choice(len(mov_cells), a.max_cells, replace=False)
+        )
         mov_cells = mov_cells.take(keep)
     _, h, w = shape_of(ref_n)
     case = Case(
-        dataset="multiplex", case_id=row["case_id"], group=row.get("group") or row["case_id"],
-        ref_nuclear=str(ref_n), mov_nuclear=str(mov_n), ref_image=str(ref_n), mov_image=str(mov_n),
-        modality="fluorescence", diagonal=math.hypot(h, w), pixel_size_um=px,
-        ref_hw=[h, w], mov_hw=list(shape_of(mov_n)[1:]),
-        extra={"reference": row["reference"], "moving": row["moving"], "ref_channel": ref_c,
-               "mov_channel": mov_c, "cells": "provided" if row.get("ref_cells") else "builtin",
-               "diameter": a.diameter},
+        dataset="multiplex",
+        case_id=row["case_id"],
+        group=row.get("group") or row["case_id"],
+        ref_nuclear=str(ref_n),
+        mov_nuclear=str(mov_n),
+        ref_image=str(ref_n),
+        mov_image=str(mov_n),
+        modality="fluorescence",
+        diagonal=math.hypot(h, w),
+        pixel_size_um=px,
+        ref_hw=[h, w],
+        mov_hw=list(shape_of(mov_n)[1:]),
+        extra={
+            "reference": row["reference"],
+            "moving": row["moving"],
+            "ref_channel": ref_c,
+            "mov_channel": mov_c,
+            "cells": "provided" if row.get("ref_cells") else "builtin",
+            "diameter": a.diameter,
+        },
     )
     return write_case(cases_root, case, cells_mov=mov_cells, cells_ref=ref_cells)
 

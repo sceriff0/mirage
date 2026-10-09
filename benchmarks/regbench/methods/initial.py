@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..mapping import MOV_TO_REF, PointMap
+
+SCOPE = "pair"
 VARIANTS = ("initial",)
 
 
 def register(case, work, opts):
-    yield "initial", lambda xy: np.array(xy, dtype=float), {}
+    yield "initial", PointMap(lambda xy: np.array(xy, dtype=float), MOV_TO_REF), {}

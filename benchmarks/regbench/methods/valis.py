@@ -35,10 +35,16 @@ import os
 import sys
 from pathlib import Path
 
+from ..mapping import MOV_TO_REF, PointMap
+
+SCOPE = "pair"
 VARIANTS = ("valis_rigid", "valis", "valis_micro")
 REF_NAME, MOV_NAME = "reference", "moving"
-_INT_KWARGS = ("max_image_dim_px", "max_processed_image_dim_px",
-               "max_non_rigid_registration_dim_px")
+_INT_KWARGS = (
+    "max_image_dim_px",
+    "max_processed_image_dim_px",
+    "max_non_rigid_registration_dim_px",
+)
 
 
 def _truthy(v):
@@ -48,8 +54,14 @@ def _truthy(v):
 def _link(src, dst_dir, name):
     """``dst_dir/<name><all suffixes of src>`` -> ``src``, so the two slides have known names."""
     src = Path(src).resolve()
-    dst = Path(dst_dir) / (name + "".join(src.suffixes[-2:] if src.name.lower().endswith(
-        (".ome.tif", ".ome.tiff")) else src.suffixes[-1:]))
+    dst = Path(dst_dir) / (
+        name
+        + "".join(
+            src.suffixes[-2:]
+            if src.name.lower().endswith((".ome.tif", ".ome.tiff"))
+            else src.suffixes[-1:]
+        )
+    )
     if dst.exists() or dst.is_symlink():
         dst.unlink()
     os.symlink(src, dst)
@@ -76,44 +88,69 @@ def register(case, work, opts):
         from valis.micro_rigid_registrar import MicroRigidRegistrar
 
         kwargs["micro_rigid_registrar_cls"] = MicroRigidRegistrar
-    info = {"version": getattr(valis, "__version__", "?"),
-            "source": str(Path(valis.__file__).parent), "kwargs": {k: str(v) for k, v in kwargs.items()},
-            "implementation": {
-                "package": "valis-wsi", "source": str(Path(valis.__file__).parent),
-                "registration": "valis.registration.Valis(...).register(), then .register_micro()",
-                "parameters": "upstream defaults",
-                "changed_from_defaults": {"reference_img_f": "the benchmark's reference",
-                                          "align_to_reference": True,
-                                          **{k: str(v) for k, v in kwargs.items()}},
-                "point_warp": "valis.registration.Slide.warp_xy_from_to",
-                "benchmark_side": ["images passed as files, read by VALIS's own readers"]}}
+    info = {
+        "version": getattr(valis, "__version__", "?"),
+        "source": str(Path(valis.__file__).parent),
+        "kwargs": {k: str(v) for k, v in kwargs.items()},
+        "implementation": {
+            "package": "valis-wsi",
+            "source": str(Path(valis.__file__).parent),
+            "registration": "valis.registration.Valis(...).register(), then .register_micro()",
+            "parameters": "upstream defaults",
+            "changed_from_defaults": {
+                "reference_img_f": "the benchmark's reference",
+                "align_to_reference": True,
+                **{k: str(v) for k, v in kwargs.items()},
+            },
+            "point_warp": "valis.registration.Slide.warp_xy_from_to",
+            "benchmark_side": ["images passed as files, read by VALIS's own readers"],
+        },
+    }
     try:
-        reg = registration.Valis(str(src_dir), str(dst_dir), img_list=[str(ref_f), str(mov_f)],
-                                 reference_img_f=str(ref_f), align_to_reference=True, **kwargs)
+        reg = registration.Valis(
+            str(src_dir),
+            str(dst_dir),
+            img_list=[str(ref_f), str(mov_f)],
+            reference_img_f=str(ref_f),
+            align_to_reference=True,
+            **kwargs,
+        )
         reg.register()
         ref, mov = reg.get_slide(str(ref_f)), reg.get_slide(str(mov_f))
 
         def warper(non_rigid):
-            return lambda xy: mov.warp_xy_from_to(xy, ref, non_rigid=non_rigid)
+            return PointMap(
+                lambda xy: mov.warp_xy_from_to(xy, ref, non_rigid=non_rigid), MOV_TO_REF
+            )
 
         yield "valis_rigid", warper(False), info
         yield "valis", warper(True), info
         if _truthy(opts.get("micro", 1)):
             micro = {"reference_img_f": str(ref_f), "align_to_reference": True}
             long_side = max(max(case.ref_hw or [0]), max(case.mov_hw or [0]))
-            first = kwargs.get("max_non_rigid_registration_dim_px",
-                               registration.DEFAULT_MAX_NON_RIGID_REG_SIZE)
+            first = kwargs.get(
+                "max_non_rigid_registration_dim_px",
+                registration.DEFAULT_MAX_NON_RIGID_REG_SIZE,
+            )
             skipped = "micro_fraction" in opts and 0 < long_side <= first
             if "micro_fraction" in opts:
                 micro["max_non_rigid_registration_dim_px"] = max(
                     registration.DEFAULT_MAX_MICRO_REG_SIZE,
-                    int(round(float(opts["micro_fraction"]) * long_side)))
+                    int(round(float(opts["micro_fraction"]) * long_side)),
+                )
             if "micro_dim" in opts:
                 micro["max_non_rigid_registration_dim_px"] = int(opts["micro_dim"])
             if not skipped:
                 reg.register_micro(**micro)
-            yield "valis_micro", warper(True), {**info, "micro_skipped": skipped,
-                                                "micro": {k: str(v) for k, v in micro.items()}}
+            yield (
+                "valis_micro",
+                warper(True),
+                {
+                    **info,
+                    "micro_skipped": skipped,
+                    "micro": {k: str(v) for k, v in micro.items()},
+                },
+            )
     finally:
         try:  # a live BioFormats JVM keeps the interpreter from exiting
             registration.kill_jvm()

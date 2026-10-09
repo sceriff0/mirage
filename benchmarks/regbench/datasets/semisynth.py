@@ -36,8 +36,8 @@ headline tier:
 secondary tier, never pooled with the two above.
 
 ``--windows K`` test windows are taken where there is most tissue, each paired with every
-deformation family; one more window makes the ``dev_*`` cases that ``regbench calibrate``
-chooses options on. Test and development windows never overlap.
+deformation family; one more window makes the ``dev_*`` cases, the only ones method options
+may be chosen on. Test and development windows never overlap.
 """
 
 from __future__ import annotations
@@ -61,13 +61,22 @@ FAMILIES = ("grid", "multiscale", "wave", "bumps", "seams")
 def family_spec(family, n, px_um, residual_um, seed):
     """The deformation parameters of one case; ``px_um`` turns micrometres into pixels."""
     if family == "grid":
-        return dict(field="grid", grid_sd=float(np.random.default_rng(seed).uniform(3.0, 7.0)))
+        return dict(
+            field="grid", grid_sd=float(np.random.default_rng(seed).uniform(3.0, 7.0))
+        )
     if family == "multiscale":
         # three scales, two components each, equal energy: RMS of |w| is residual_um
         rms = residual_um / px_um / math.sqrt(6.0)
-        return dict(field="multiscale", scales=(n / 8.0, n / 16.0, n / 32.0), rms=(rms,) * 3)
-    return {"wave": dict(amp=10.0, wavelength=1500.0), "bumps": dict(field="bumps"),
-            "seams": dict(field="seams")}[family]
+        return dict(
+            field="multiscale", scales=(n / 8.0, n / 16.0, n / 32.0), rms=(rms,) * 3
+        )
+    return {
+        "wave": dict(amp=10.0, wavelength=1500.0),
+        "bumps": dict(field="bumps"),
+        "seams": dict(field="seams"),
+    }[family]
+
+
 PROBE = 256  # side of the patches a candidate window is sampled with
 _MARGIN = 16
 
@@ -89,7 +98,8 @@ class Source:
         cx0, cy0, cx1, cy1 = max(x0, 0), max(y0, 0), min(x1, self.w), min(y1, self.h)
         if cx1 > cx0 and cy1 > cy0:
             out[cy0 - y0 : cy1 - y0, cx0 - x0 : cx1 - x0] = np.asarray(
-                self.arr[self.channel, slice(cy0, cy1), slice(cx0, cx1)])
+                self.arr[self.channel, slice(cy0, cy1), slice(cx0, cx1)]
+            )
         return out
 
 
@@ -100,8 +110,11 @@ def pick_windows(src, n, count, threshold):
     for y0 in range(0, max(src.h - n, 0) + 1, n):
         for x0 in range(0, max(src.w - n, 0) + 1, n):
             at = np.linspace(0, n - PROBE, 4).astype(int)
-            patches = [src.read(x0 + dx, y0 + dy, x0 + dx + PROBE, y0 + dy + PROBE)
-                       for dy in at for dx in at]
+            patches = [
+                src.read(x0 + dx, y0 + dy, x0 + dx + PROBE, y0 + dy + PROBE)
+                for dy in at
+                for dx in at
+            ]
             v = np.concatenate([p.ravel() for p in patches]).astype(np.float32)
             scored.append((float((v > threshold).mean()), x0, y0))
             background.append(v[v <= threshold][::16])
@@ -134,12 +147,20 @@ class RealScene:
         bx0, by0 = (int(math.floor(q[..., i].min())) - _MARGIN for i in (0, 1))
         bx1, by1 = (int(math.ceil(q[..., i].max())) + _MARGIN + 1 for i in (0, 1))
         base = self.mov.read(self.ox + bx0, self.oy + by0, self.ox + bx1, self.oy + by1)
-        img = map_coordinates(base.astype(np.float32), [q[..., 1] - by0, q[..., 0] - bx0],
-                              order=3, mode="nearest")
+        img = map_coordinates(
+            base.astype(np.float32),
+            [q[..., 1] - by0, q[..., 0] - bx0],
+            order=3,
+            mode="nearest",
+        )
         if self.noise_sd:
             rng = np.random.default_rng([self.spec["seed"], y0, x0])
             img = img + rng.normal(0, self.noise_sd, img.shape).astype(np.float32)
-        info = np.iinfo(self.ref.dtype) if np.issubdtype(self.ref.dtype, np.integer) else None
+        info = (
+            np.iinfo(self.ref.dtype)
+            if np.issubdtype(self.ref.dtype, np.integer)
+            else None
+        )
         if info is not None:
             img = np.rint(img).clip(info.min, info.max)
         return img.astype(self.ref.dtype)
@@ -175,29 +196,61 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
         ref_p, mov_p = d / "ref.ome.tif", d / "mov.ome.tif"
         boxes = synthetic.tile_boxes((n, n))
         for which, path in (("ref", ref_p), ("mov", mov_p)):
-            write_nuclear_tiles(path, (n, n), ref_src.dtype,
-                                (scene.tile(which, *b) for b in boxes), synthetic.TILE, px)
+            write_nuclear_tiles(
+                path,
+                (n, n),
+                ref_src.dtype,
+                (scene.tile(which, *b) for b in boxes),
+                synthetic.TILE,
+                px,
+            )
     finally:
         ref_src.close()
         if mov_src is not ref_src:
             mov_src.close()
     seg = dict(diameter=a.diameter, workers=a.workers)
-    mov_cells, ref_cells = cells.segment_slide(mov_p, **seg), cells.segment_slide(ref_p, **seg)
+    mov_cells, ref_cells = (
+        cells.segment_slide(mov_p, **seg),
+        cells.segment_slide(ref_p, **seg),
+    )
     if not len(ref_cells) or not len(mov_cells):
-        raise RuntimeError(f"{name}: no nuclei segmented; check --channel and --diameter")
+        raise RuntimeError(
+            f"{name}: no nuclei segmented; check --channel and --diameter"
+        )
     lm_mov, lm_ref = landmarks(spec, ref_cells, a.diameter)
     truth = synthetic.forward_map(spec)(mov_cells.xy)
     case = Case(
-        dataset="semisynth", case_id=name, group=spec["family"], ref_nuclear=str(ref_p),
-        mov_nuclear=str(mov_p), ref_image=str(ref_p), mov_image=str(mov_p),
-        modality="fluorescence", diagonal=math.hypot(n, n), pixel_size_um=px,
-        ref_hw=[n, n], mov_hw=[n, n],
-        extra={"spec": dict(spec), "image": str(a.image), "mov_image": str(a.mov_image or a.image),
-               "variant": "cross" if a.mov_image else "same", "origin_xy": list(origin),
-               "noise_sd": noise_sd},
+        dataset="semisynth",
+        case_id=name,
+        group=name,
+        family=spec["family"],
+        ref_nuclear=str(ref_p),
+        mov_nuclear=str(mov_p),
+        ref_image=str(ref_p),
+        mov_image=str(mov_p),
+        modality="fluorescence",
+        diagonal=math.hypot(n, n),
+        pixel_size_um=px,
+        ref_hw=[n, n],
+        mov_hw=[n, n],
+        extra={
+            "spec": dict(spec),
+            "image": str(a.image),
+            "mov_image": str(a.mov_image or a.image),
+            "variant": "cross" if a.mov_image else "same",
+            "origin_xy": list(origin),
+            "noise_sd": noise_sd,
+        },
     )
-    return write_case(cases_root, case, lm_mov, lm_ref, mov_cells, ref_cells,
-                      cells_mov_xy_truth=truth.astype(np.float32))
+    return write_case(
+        cases_root,
+        case,
+        lm_mov,
+        lm_ref,
+        mov_cells,
+        ref_cells,
+        cells_mov_xy_truth=truth.astype(np.float32),
+    )
 
 
 def plan(a):
@@ -210,8 +263,10 @@ def plan(a):
         src.close()
     px = a.pixel_size_um or pixel_size_um(a.image)
     if not px:
-        raise SystemExit(f"{a.image}: no pixel size in the header; give --pixel-size-um "
-                         "(the multiscale deformation is defined in micrometres)")
+        raise SystemExit(
+            f"{a.image}: no pixel size in the header; give --pixel-size-um "
+            "(the multiscale deformation is defined in micrometres)"
+        )
     stem = a.name or Path(a.image).name.split(".")[0]
     key = zlib.crc32(stem.encode()) % 100_000
     # the window with the least tissue of those picked is the development one
@@ -223,8 +278,14 @@ def plan(a):
         x, y, _ = windows[i]
         for j, family in enumerate(FAMILIES):
             seed = 1_000_000 + key * 100 + i * 10 + j
-            spec = {**synthetic._BASE, **_POSE, "n": a.n, "family": family, "seed": seed,
-                    **family_spec(family, a.n, px, a.residual_um, seed)}
+            spec = {
+                **synthetic._BASE,
+                **_POSE,
+                "n": a.n,
+                "family": family,
+                "seed": seed,
+                **family_spec(family, a.n, px, a.residual_um, seed),
+            }
             name = f"{stem}_w{i}_{family}"
             jobs.append((f"dev_{name}" if role == "dev" else name, spec, (x, y)))
     noise = 0.0 if a.mov_image else a.noise * bg_sd

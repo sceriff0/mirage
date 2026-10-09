@@ -16,14 +16,29 @@ several times a second and keeps:
 and, read once at the end, the scheduler's own number where there is one:
 
 ``cgroup_peak_mb`` the job cgroup's peak memory (what SLURM enforces ``--mem`` against). It
-                   covers the whole task, interpreter start-up and point warping included,
-                   and counts shared pages once, so it is the figure to size a job by.
+                   is the WHOLE job's high-water mark, writers included, for every method:
+                   it cannot be paused.
+
+**Pausing.** Between :meth:`Monitor.pause` and :meth:`Monitor.resume` nothing is billed: the
+wall and CPU time of that stretch are taken out and the memory peak is not updated. The
+driver pauses while it warps the benchmark's points and while a method's own writer runs,
+so ``peak_rss_mb`` is the registration's peak. Memory that a paused stretch still holds
+after ``resume`` is seen again from then on.
 
 RSS summed over processes counts pages shared between them once per process, so
 ``peak_rss_mb`` is an upper bound for a forked pool; STARE's pool is spawned, which shares
 little. ``rss_method`` records how the tree was read: ``psutil``, ``proc`` (Linux
 ``/proc``, no dependency), or ``rusage`` (neither available: the parent's own high-water
-mark plus the largest single child -- a LOWER bound, flagged so it is not compared).
+mark plus the largest single child -- a LOWER bound that cannot be paused, flagged so it is
+not compared).
+
+**Out of memory.** The kernel may kill one worker of a job and leave its parent waiting
+until the time limit, so the driver polls the task's own cgroup counter
+(:func:`oom_events_path`, :func:`read_oom_kills`) and ends the run when it rises.
+:data:`MEMORY_ERRORS` is the fixed list of memory errors a method reports itself.
+
+**Threads.** No thread variable is exported. :func:`n_cpus` is the allocation, and it is
+what a method's own core-count option is set to.
 """
 
 from __future__ import annotations
@@ -95,7 +110,11 @@ def _cgroup_peak_mb():
             if controllers == "":  # cgroup v2
                 f = Path("/sys/fs/cgroup") / path.lstrip("/") / "memory.peak"
             elif "memory" in controllers.split(","):
-                f = Path("/sys/fs/cgroup/memory") / path.lstrip("/") / "memory.max_usage_in_bytes"
+                f = (
+                    Path("/sys/fs/cgroup/memory")
+                    / path.lstrip("/")
+                    / "memory.max_usage_in_bytes"
+                )
             else:
                 continue
             if f.exists():
@@ -115,15 +134,84 @@ def _gpu_peak_mb():
     return None
 
 
-def n_cpus():
-    """CPUs this process may run on (the SLURM allocation), not the node's core count."""
+def _affinity():
+    """``(count, how)``: the cores this process may run on, and how that was read."""
     try:
-        return len(os.sched_getaffinity(0))
-    except AttributeError:
-        return os.cpu_count() or 1
+        return len(os.sched_getaffinity(0)), "sched_getaffinity"
+    except AttributeError:  # macOS: no affinity mask
+        return os.cpu_count() or 1, "cpu_count"
+
+
+def cpu_counts():
+    """Both numbers behind :func:`n_cpus`, as recorded in ``run.json``.
+
+    ``cpus_requested`` is ``SLURM_CPUS_PER_TASK`` (None outside SLURM); ``cpus_affinity`` is
+    the affinity mask. Whether a site confines a job to its cores is the site's setting, so
+    the two can differ.
+    """
+    raw = os.environ.get("SLURM_CPUS_PER_TASK")
+    try:
+        requested = int(raw) if raw else None
+    except ValueError:
+        requested = None
+    affinity, how = _affinity()
+    return {
+        "cpus_requested": requested,
+        "cpus_affinity": affinity,
+        "cpus_affinity_from": how,
+        "cpus_node": os.cpu_count(),
+    }
+
+
+def n_cpus():
+    """The allocation: ``min(SLURM_CPUS_PER_TASK, affinity)``, or the affinity outside SLURM."""
+    c = cpu_counts()
+    if c["cpus_requested"]:
+        return max(1, min(c["cpus_requested"], c["cpus_affinity"]))
+    return max(1, c["cpus_affinity"])
+
+
+def _blas():
+    """The BLAS NumPy was built against (ASHLAR's clean rows depend on its rounding)."""
+    try:
+        import numpy as np
+
+        dep = np.show_config(mode="dicts")["Build Dependencies"]["blas"]
+        return f"{dep.get('name', '?')} {dep.get('version', '?')}"
+    except Exception:
+        return ""
+
+
+def _mem_requested_gb():
+    """The memory request of this attempt: the launcher's rung, else SLURM's own figure."""
+    raw = os.environ.get("REGBENCH_MEM_GB")
+    try:
+        if raw:
+            return float(raw)
+        per_node = os.environ.get("SLURM_MEM_PER_NODE")  # megabytes
+        return float(per_node) / 1024.0 if per_node else None
+    except ValueError:
+        return None
+
+
+def _gpu():
+    torch = sys.modules.get("torch")
+    try:
+        if torch is not None and torch.cuda.is_available():
+            return torch.cuda.get_device_name(0), int(torch.cuda.device_count())
+    except Exception:
+        pass
+    return "", 0
+
+
+def gpu_info():
+    """``{"gpu_model", "gpus"}`` once torch is loaded; empty and 0 otherwise."""
+    model, count = _gpu()
+    return {"gpu_model": model, "gpus": count}
 
 
 def host_info():
+    """What the run had: host, CPU, BLAS, the allocation and the ladder's rung."""
     cpu = platform.processor() or platform.machine()
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
@@ -132,24 +220,109 @@ def host_info():
                 break
     except OSError:
         pass
-    return {"host": platform.node(), "cpu_model": cpu, "n_cpus": n_cpus(),
-            "slurm_job_id": os.environ.get("SLURM_ARRAY_JOB_ID") or os.environ.get("SLURM_JOB_ID"),
-            "slurm_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
-            "threads": {k: os.environ.get(k) for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-                                                       "MKL_NUM_THREADS")}}
+    try:
+        attempt = int(os.environ.get("REGBENCH_ATTEMPT") or 1)
+    except ValueError:
+        attempt = 1
+    array_job, task = (
+        os.environ.get("SLURM_ARRAY_JOB_ID"),
+        os.environ.get("SLURM_ARRAY_TASK_ID"),
+    )
+    job = (
+        f"{array_job}_{task}" if array_job and task else os.environ.get("SLURM_JOB_ID")
+    )
+    counts = cpu_counts()
+    return {
+        "host": platform.node(),
+        "cpu_model": cpu,
+        "blas": _blas(),
+        "n_cpus": n_cpus(),
+        "cpus_requested": counts["cpus_requested"],
+        "cpus_affinity": counts["cpus_affinity"],
+        "cpus_node": counts["cpus_node"],
+        "attempt": attempt,
+        "mem_requested_gb": _mem_requested_gb(),
+        # the scheduler's job id, or this process when there is no scheduler
+        "launch_id": job or f"pid{os.getpid()}",
+        # recorded, never set: the benchmark exports no thread variable
+        "threads_env": {
+            k: os.environ.get(k)
+            for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+        },
+    }
 
 
-def set_thread_env(method, workers):
-    """One CPU budget for every method, spent the way each method parallelises.
+# ── out of memory ─────────────────────────────────────────────────────────────
+# Substrings of the memory errors a method reports itself; any of them makes the run's cause
+# ``oom``. Frozen: changing the list after a cohort run is a post hoc change.
+#   "Java heap space"       java.lang.OutOfMemoryError from the JVM VALIS starts; it comes
+#                           back as a plain exit 1 (conf/modules.config:460-464, plan A8)
+#   "MemoryError"           Python's and NumPy's (numpy.core._exceptions._ArrayMemoryError)
+#   "DefaultCPUAllocator"   PyTorch's CPU allocation failure (c10 alloc_cpu.cpp `[MEMORY]`:
+#                           the wording was not re-read from the torch source this session)
+MEMORY_ERRORS = ("Java heap space", "MemoryError", "DefaultCPUAllocator")
+GPU_MEMORY_ERRORS = ("CUDA out of memory",)
+CAUSES = ("exception", "killed", "not_run", "oom", "timeout", "gpu_oom")
 
-    STARE's parallelism is its tile pool, so its BLAS threads are pinned to 1 (``workers``
-    processes x 1 thread). The others parallelise through native thread pools, which get
-    ``workers`` threads. Must run before NumPy / torch are imported; a value already in the
-    environment wins.
+
+def classify_error(exc):
+    """The ``cause`` of a method's own failure: ``gpu_oom``, ``oom``, ``timeout`` or ``exception``.
+
+    A GPU out-of-memory is looked for first: ``torch.cuda.OutOfMemoryError`` contains the
+    text ``MemoryError`` and must not be read as a host out-of-memory, which would move the
+    run up the ladder. Only ``oom`` escalates.
     """
-    n = "1" if method in ("stare", "initial") else str(max(1, int(workers)))
-    for k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
-        os.environ.setdefault(k, n)
+    import subprocess
+
+    text = f"{type(exc).__name__}: {exc}"
+    if any(s in text for s in GPU_MEMORY_ERRORS):
+        return "gpu_oom"
+    if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+        return "timeout"
+    if isinstance(exc, MemoryError) or any(s in text for s in MEMORY_ERRORS):
+        return "oom"
+    return "exception"
+
+
+def oom_events_path():
+    """The file holding this task's cgroup ``oom_kill`` counter, or None.
+
+    Read from the path in ``/proc/self/cgroup``: ``memory.events`` on cgroup v2,
+    ``memory.oom_control`` on v1 (Linux kernel cgroup documentation `[MEMORY]`: file names
+    and the ``oom_kill`` key as remembered, not re-read this session; untested on a cluster).
+    """
+    try:
+        lines = Path("/proc/self/cgroup").read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            _, controllers, path = line.split(":", 2)
+        except ValueError:
+            continue
+        if controllers == "":  # cgroup v2
+            f = Path("/sys/fs/cgroup") / path.lstrip("/") / "memory.events"
+        elif "memory" in controllers.split(","):
+            f = Path("/sys/fs/cgroup/memory") / path.lstrip("/") / "memory.oom_control"
+        else:
+            continue
+        if f.exists():
+            return f
+    return None
+
+
+def read_oom_kills(path):
+    """The ``oom_kill`` count in a cgroup events file; None when it cannot be read."""
+    if path is None:
+        return None
+    try:
+        for line in Path(path).read_text().splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == "oom_kill":
+                return int(parts[1])
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 class Monitor:
@@ -165,6 +338,7 @@ class Monitor:
         self._cpu0 = 0.0
         self._peak = 0.0
         self._paused_wall = self._paused_cpu = 0.0
+        self._pause_at = None  # (wall, cpu) clocks when the current pause began
 
     def _sample(self):
         if self._read is None:
@@ -174,7 +348,8 @@ class Monitor:
         except Exception:
             return
         with self._lock:
-            self._peak = max(self._peak, sum(r for r, _ in tree.values()))
+            if self._pause_at is None:
+                self._peak = max(self._peak, sum(r for r, _ in tree.values()))
             for pid, (_, cpu) in tree.items():
                 self._cpu[pid] = max(self._cpu.get(pid, 0.0), cpu)
 
@@ -200,31 +375,59 @@ class Monitor:
         self._thread.start()
         return self
 
-    def exclude(self, wall_s, cpu_s):
-        """Take a stretch (the benchmark's own point warping) out of the method's bill."""
-        self._paused_wall += wall_s
-        self._paused_cpu += cpu_s
+    @property
+    def paused(self):
+        return self._pause_at is not None
+
+    def pause(self):
+        """Stop billing: the peak so far is kept, and nothing after it counts until ``resume``."""
+        if self._pause_at is not None:
+            return self
+        self._sample()  # the peak and the CPU up to this instant belong to the method
+        clocks = (time.perf_counter(), self._cpu_now())
+        with self._lock:
+            self._pause_at = clocks
+        return self
+
+    def resume(self):
+        if self._pause_at is None:
+            return self
+        self._sample()  # CPU spent while paused is observed, then taken out below
+        wall0, cpu0 = self._pause_at
+        self._paused_wall += time.perf_counter() - wall0
+        self._paused_cpu += self._cpu_now() - cpu0
+        with self._lock:
+            self._pause_at = None
+        return self
 
     def snapshot(self):
+        """The bill so far. Taken during a pause, it is the bill at the moment of the pause."""
         self._sample()
-        wall = time.perf_counter() - self._t0 - self._paused_wall
-        cpu = self._cpu_now() - self._cpu0 - self._paused_cpu
+        if self._pause_at is not None:
+            wall_now, cpu_now = self._pause_at
+        else:
+            wall_now, cpu_now = time.perf_counter(), self._cpu_now()
+        wall = wall_now - self._t0 - self._paused_wall
+        cpu = cpu_now - self._cpu0 - self._paused_cpu
         if self._read is None:
             import resource
 
-            scale = 1.0 if sys.platform == "darwin" else 1024.0  # bytes on macOS, KiB on Linux
-            peak = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-                    + resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss) * scale
+            # bytes on macOS, KiB on Linux
+            scale = 1.0 if sys.platform == "darwin" else 1024.0
+            peak = (
+                resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                + resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+            ) * scale
         else:
             with self._lock:
                 peak = self._peak
-        return {"wall_s": wall, "cpu_s": cpu, "peak_rss_mb": peak / MB,
-                "gpu_peak_mb": _gpu_peak_mb(), "rss_method": self.method}
-
-    def raw(self):
-        """``(wall, cpu)`` clocks without exclusions, for timing a stretch to exclude."""
-        self._sample()
-        return time.perf_counter(), self._cpu_now()
+        return {
+            "wall_s": wall,
+            "cpu_s": cpu,
+            "peak_rss_mb": peak / MB,
+            "gpu_peak_mb": _gpu_peak_mb(),
+            "rss_method": self.method,
+        }
 
     def stop(self):
         self._stop.set()

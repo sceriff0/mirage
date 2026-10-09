@@ -1,7 +1,7 @@
 #!/bin/bash
 # The scaling test in one command, from a fresh clone:
 #
-#   git clone -b benchmarking https://github.com/sceriff0/stare && cd stare
+#   (from a checkout of mirage's `benchmarking` branch)
 #   export REGBENCH_CONDA_STARE=... REGBENCH_SIF_VALIS=... REGBENCH_VENV_DEEPERHISTREG=...
 #   benchmarks/regbench/slurm/submit_scale.sh [-- --partition=cpu --constraint=<node-type>]
 #
@@ -16,7 +16,7 @@
 #
 # A method that runs out of memory or time at some size is a result, not an error: its
 # run.json says so, slurm_accounting.psv has the scheduler's verdict, and the scorer counts
-# it under n_failed.
+# it in failures.csv. This script sizes memory by slide, so it is OFF the ladder.
 #
 # Options:
 #   --sizes "1024 2048 4096"   a subset (default: all seven)
@@ -24,7 +24,7 @@
 #   --mem-scale 2              multiply every memory request (e.g. if a method needs more)
 #   --time-scale 2             multiply every time limit
 # Paths default to $SCRATCH (or $HOME): REGBENCH_CASES=.../regbench_scale/cases,
-# REGBENCH_OUT=.../regbench_scale/results-<commit>. REGBENCH_CPUS (default 8) is per job.
+# REGBENCH_OUT=.../regbench_scale/results-<commit>. REGBENCH_CPUS (default 4) is per job.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 base="${SCRATCH:-$HOME}/regbench_scale"
@@ -81,5 +81,5 @@ js=$(sbatch --parsable --export=ALL --dependency=afterany:"$dep" --cpus-per-task
     --mem=32G --time=06:00:00 "${extra[@]}" "$HERE/score.sbatch")
 echo "score: job $js"
 echo "cases   -> $REGBENCH_CASES"
-echo "results -> $REGBENCH_OUT/tables/summary.md  (scaling table: tables/scaling.csv)"
-echo "preview at any time:  PYTHONPATH=\$REGBENCH_REPO/src:\$REGBENCH_REPO/benchmarks python -m regbench score --cases $REGBENCH_CASES --out $REGBENCH_OUT"
+echo "results -> $REGBENCH_OUT/tables/summary.md  (cost per case: tables/resources.csv)"
+echo "preview at any time (from $REGBENCH_REPO):  python -m benchmarks.regbench score --cases $REGBENCH_CASES --out $REGBENCH_OUT"

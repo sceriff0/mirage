@@ -1,13 +1,16 @@
 # shellcheck shell=bash
 # Sourced by every regbench sbatch script. Export what you need before `submit.sh`.
 #
-#   REGBENCH_REPO    this repository, on the `benchmarking` branch (default: where this file is)
-#   REGBENCH_CASES   the prepared cases (`python -m regbench prepare ...`)
+#   REGBENCH_REPO    the mirage repository (default: where this file is)
+#   REGBENCH_CASES   the prepared cases (`python -m benchmarks.regbench prepare ...`)
 #   REGBENCH_OUT     results: one folder per method variant, plus tables/ and logs/
 #   REGBENCH_WORK    scratch for a method's intermediates (default: $TMPDIR, node-local)
 #
-# Every method gets the SAME allocation, so their costs are comparable:
-#   REGBENCH_CPUS (8)   REGBENCH_MEM (64G)   REGBENCH_TIME (04:00:00)
+# Every method runs at 4 CPUs on a memory ladder that starts low (16 -> 64 -> 256 -> 512 GB;
+# a run moves up one rung only when it ran out of memory). These three are the first rung:
+#   REGBENCH_CPUS (4)   REGBENCH_MEM (16G)   REGBENCH_TIME (04:00:00)
+# No thread variable is exported: a method's own core-count option is set to the
+# allocation by the driver, and what its pools saw is recorded.
 #
 # Each method runs in its own software environment. For a method M in
 # {STARE, VALIS, DEEPERHISTREG}, set ONE of
@@ -22,45 +25,50 @@
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
-: "${REGBENCH_OUT:=$HOME/regbench_results/stare-$(git -C "$REGBENCH_REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-: "${REGBENCH_CPUS:=8}"
-: "${REGBENCH_MEM:=64G}"
+: "${REGBENCH_OUT:=$HOME/regbench_results/mirage-$(git -C "$REGBENCH_REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+: "${REGBENCH_CPUS:=4}"
+: "${REGBENCH_MEM:=16G}"
 : "${REGBENCH_TIME:=04:00:00}"
 export REGBENCH_REPO REGBENCH_CASES REGBENCH_OUT REGBENCH_CPUS REGBENCH_MEM REGBENCH_TIME
 
-# The checked-out source wins over any STARE installed in an image or environment, so the
-# benchmark always measures this commit.
-export PYTHONPATH="$REGBENCH_REPO/src:$REGBENCH_REPO/benchmarks${PYTHONPATH:+:$PYTHONPATH}"
+# The harness is imported from the checkout as `benchmarks.regbench`. STARE itself is the
+# pinned release installed in the method's environment (requirements/stare.txt).
+export PYTHONPATH="$REGBENCH_REPO${PYTHONPATH:+:$PYTHONPATH}"
+REGBENCH_MODULE=benchmarks.regbench
 
 _regbench_var() {  # _regbench_var SIF stare -> value of REGBENCH_SIF_STARE
     local name="REGBENCH_$1_$(echo "$2" | tr '[:lower:]' '[:upper:]')"
     echo "${!name:-}"
 }
 
-# regbench_py <method> <regbench args...>: run `python -m regbench` in that method's environment.
-regbench_py() {
+# regbench_py <method> <regbench args...>: run `python -m benchmarks.regbench` in that
+# method's environment, from the repository root (in a subshell: the caller's directory
+# and environment are left alone).
+regbench_py() (
     local method="$1"; shift
     local sif conda venv
     sif="$(_regbench_var SIF "$method")"
     conda="$(_regbench_var CONDA "$method")"
     venv="$(_regbench_var VENV "$method")"
+    cd "$REGBENCH_REPO" || return 1
     if [ -n "$sif" ]; then
         local runtime bind v nv=()
         runtime="$(command -v apptainer || command -v singularity)"
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
-        for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_JOB_ID SLURM_ARRAY_JOB_ID SLURM_ARRAY_TASK_ID; do
+        for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
+                 SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS; do
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done
         [ -n "${CUDA_VISIBLE_DEVICES:-}" ] && nv=(--nv)
-        "$runtime" exec --cleanenv "${nv[@]}" --bind "$bind" "$sif" python -m regbench "$@"
+        "$runtime" exec --cleanenv "${nv[@]}" --bind "$bind" "$sif" python -m "$REGBENCH_MODULE" "$@"
     elif [ -n "$conda" ]; then
         # shellcheck disable=SC1091
         source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$conda"
-        python -m regbench "$@"
+        python -m "$REGBENCH_MODULE" "$@"
     elif [ -n "$venv" ]; then
-        "$venv/bin/python" -m regbench "$@"
+        "$venv/bin/python" -m "$REGBENCH_MODULE" "$@"
     else
-        python -m regbench "$@"
+        python -m "$REGBENCH_MODULE" "$@"
     fi
-}
+)

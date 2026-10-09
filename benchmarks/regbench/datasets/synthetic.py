@@ -37,90 +37,224 @@ from .. import cells
 from ..cases import Case, case_dir, write_case
 from ..imageio import write_nuclear_tiles
 
+# The cohort's pixel size (benchmarks/configs/benchmark.config). The generator works in
+# pixels; this is what turns its scores into micrometres.
+PIXEL_SIZE_UM = 0.325
 NUCLEUS_SIGMA = 5.0
 NUCLEUS_DIAMETER = 12.0  # what the segmenter is told; ~FWHM of a sigma-5 blob
 PEAK = 20000.0
 TILE = 1024  # generation and TIFF tile; also the unit the noise is seeded by
 _PAD = int(4.0 * NUCLEUS_SIGMA + 0.5) + 1  # scipy truncates the Gaussian at 4 sigma
-_MARGIN = 16  # around a resampled patch, so the cubic prefilter's edge transient has died out
+_MARGIN = (
+    16  # around a resampled patch, so the cubic prefilter's edge transient has died out
+)
 SCALE_SIZES = (1024, 2048, 4096, 8192, 16384, 32768, 65536)
 
-_BASE = dict(n=4096, theta=0.0, shift=(0.0, 0.0), amp=0.0, wavelength=1500.0, noise=0.02,
-             dropout=0.0, gain=1.0, keep=0.7, seed=0, mov_hw=None, max_cells=None,
-             field="wave", scales=(2000.0, 500.0, 125.0), rms=(8.0, 3.0, 1.0), grid_sd=5.0,
-             bump_sigma=100.0, bump_count=20, seam_tile=1024, seam_sd=3.0)
-_POSE = dict(theta=2.0, shift=(30.0, -20.0))  # the rigid part every non-rigid family shares
+_BASE = dict(
+    n=4096,
+    theta=0.0,
+    shift=(0.0, 0.0),
+    amp=0.0,
+    wavelength=1500.0,
+    noise=0.02,
+    dropout=0.0,
+    gain=1.0,
+    keep=0.7,
+    seed=0,
+    mov_hw=None,
+    max_cells=None,
+    field="wave",
+    scales=(2000.0, 500.0, 125.0),
+    rms=(8.0, 3.0, 1.0),
+    grid_sd=5.0,
+    bump_sigma=100.0,
+    bump_count=20,
+    seam_tile=1024,
+    seam_sd=3.0,
+)
+_POSE = dict(
+    theta=2.0, shift=(30.0, -20.0)
+)  # the rigid part every non-rigid family shares
 
 
 def _suite(rows):
-    return {name: {**_BASE, "family": name.rsplit("_", 1)[0].rstrip("0123456789_"), **kw}
-            for name, kw in rows}
+    return {
+        name: {**_BASE, "family": name.rsplit("_", 1)[0].rstrip("0123456789_"), **kw}
+        for name, kw in rows
+    }
 
 
 SUITES = {
     # One deformation at every size from 1024 to 65536 px a side (1 Mpx to 4.3 Gpx per
     # slide): the same rotation, shift and smooth warp, so what changes down the suite is
     # the slide, and accuracy and cost can be read against size. Names sort by size.
-    "scale": _suite([
-        (f"scale_{n:05d}", dict(n=n, theta=1.0, shift=(30.0, -20.0), amp=10.0, wavelength=1500.0,
-                                seed=100, max_cells=200_000)) for n in SCALE_SIZES]),
+    "scale": _suite(
+        [
+            (
+                f"scale_{n:05d}",
+                dict(
+                    n=n,
+                    theta=1.0,
+                    shift=(30.0, -20.0),
+                    amp=10.0,
+                    wavelength=1500.0,
+                    seed=100,
+                    max_cells=200_000,
+                ),
+            )
+            for n in SCALE_SIZES
+        ]
+    ),
     # What the test-suite registers: seconds per case, one with a smaller moving slide, and
     # two that pin the conditions under which STARE 1.2.1's SOLVE picks a flat field.
-    "test": _suite([
-        ("rigid", dict(n=1024, theta=2.0, shift=(14.0, -9.0), seed=1)),
-        ("smooth", dict(n=1024, amp=5.0, wavelength=600.0, seed=4)),
-        ("crop", dict(n=1024, theta=1.0, shift=(10.0, 6.0), amp=4.0, wavelength=600.0,
-                      mov_hw=(832, 928), seed=4)),
-        ("smooth_border", dict(n=1024, amp=5.0, wavelength=600.0, seed=2)),
-    ]),
-    # Small enough for a CI runner: one rigid, one smooth, one both.
-    "ci": _suite([
-        ("rigid_0", dict(n=1536, theta=2.0, shift=(18.0, -11.0), seed=1)),
-        ("smooth_0", dict(n=1536, amp=6.0, wavelength=700.0, seed=2)),
-        ("mixed_0", dict(n=1536, theta=-1.5, shift=(-9.0, 14.0), amp=5.0, wavelength=700.0,
-                         dropout=0.1, seed=3)),
-        ("crop_0", dict(n=1536, theta=1.0, shift=(12.0, 8.0), amp=4.0, wavelength=700.0,
-                        mov_hw=(1280, 1408), seed=4)),
-    ]),
-    "full": _suite(
-        [(f"rigid_{i}", dict(theta=th, shift=sh, seed=10 + i)) for i, (th, sh) in enumerate(
-            [(0.0, (40.0, -25.0)), (3.0, (60.0, 30.0)), (15.0, (-80.0, 50.0)),
-             (90.0, (20.0, 20.0)), (180.0, (-30.0, 10.0))])]
-        + [(f"smooth_{i}", dict(amp=a, wavelength=wl, seed=20 + i)) for i, (a, wl) in enumerate(
-            [(3.0, 2000.0), (8.0, 1500.0), (15.0, 1500.0), (15.0, 600.0), (30.0, 1500.0),
-             (60.0, 2500.0)])]
-        + [(f"mixed_{i}", dict(theta=th, shift=sh, amp=a, wavelength=wl, seed=30 + i))
-           for i, (th, sh, a, wl) in enumerate(
-               [(2.0, (30.0, -20.0), 8.0, 1500.0), (5.0, (-50.0, 40.0), 15.0, 1000.0),
-                (30.0, (60.0, 60.0), 15.0, 1500.0), (180.0, (10.0, -10.0), 30.0, 2000.0)])]
-        + [(f"noisy_{i}", dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, noise=nz, seed=40 + i))
-           for i, nz in enumerate([0.05, 0.15, 0.4])]
-        + [(f"dropout_{i}", dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, dropout=d,
-                                 seed=50 + i)) for i, d in enumerate([0.1, 0.3, 0.6])]
-        + [(f"sparse_{i}", dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, keep=k, seed=60 + i))
-           for i, k in enumerate([0.4, 0.15])]
-        + [(f"dim_{i}", dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, gain=g, seed=70 + i))
-           for i, g in enumerate([0.4, 0.1])]
-        + [(f"multiscale_{i}", dict(**_POSE, field="multiscale", rms=r, seed=80 + i))
-           for i, r in enumerate([(4.0, 1.5, 0.5), (8.0, 3.0, 1.0), (16.0, 6.0, 2.0)])]
-        + [(f"grid_{i}", dict(**_POSE, field="grid", grid_sd=sd, seed=90 + i))
-           for i, sd in enumerate([3.0, 5.0, 7.0])]
-        # sigma 25 px is finer than STARE's 64 px vector lattice: a case it cannot represent
-        + [(f"bumps_{i}", dict(**_POSE, field="bumps", bump_sigma=sg, bump_count=k, seed=110 + i))
-           for i, (sg, k) in enumerate([(25.0, 60), (100.0, 20), (400.0, 4)])]
-        + [(f"seams_{i}", dict(**_POSE, field="seams", seam_sd=sd, seed=120 + i))
-           for i, sd in enumerate([1.5, 3.0, 6.0])]
+    "test": _suite(
+        [
+            ("rigid", dict(n=1024, theta=2.0, shift=(14.0, -9.0), seed=1)),
+            ("smooth", dict(n=1024, amp=5.0, wavelength=600.0, seed=4)),
+            (
+                "crop",
+                dict(
+                    n=1024,
+                    theta=1.0,
+                    shift=(10.0, 6.0),
+                    amp=4.0,
+                    wavelength=600.0,
+                    mov_hw=(832, 928),
+                    seed=4,
+                ),
+            ),
+            ("smooth_border", dict(n=1024, amp=5.0, wavelength=600.0, seed=2)),
+        ]
     ),
-    # Development cases: what `regbench calibrate` chooses each method's options on. Their
+    # Small enough for a CI runner: one rigid, one smooth, one both.
+    "ci": _suite(
+        [
+            ("rigid_0", dict(n=1536, theta=2.0, shift=(18.0, -11.0), seed=1)),
+            ("smooth_0", dict(n=1536, amp=6.0, wavelength=700.0, seed=2)),
+            (
+                "mixed_0",
+                dict(
+                    n=1536,
+                    theta=-1.5,
+                    shift=(-9.0, 14.0),
+                    amp=5.0,
+                    wavelength=700.0,
+                    dropout=0.1,
+                    seed=3,
+                ),
+            ),
+            (
+                "crop_0",
+                dict(
+                    n=1536,
+                    theta=1.0,
+                    shift=(12.0, 8.0),
+                    amp=4.0,
+                    wavelength=700.0,
+                    mov_hw=(1280, 1408),
+                    seed=4,
+                ),
+            ),
+        ]
+    ),
+    "full": _suite(
+        [
+            (f"rigid_{i}", dict(theta=th, shift=sh, seed=10 + i))
+            for i, (th, sh) in enumerate(
+                [
+                    (0.0, (40.0, -25.0)),
+                    (3.0, (60.0, 30.0)),
+                    (15.0, (-80.0, 50.0)),
+                    (90.0, (20.0, 20.0)),
+                    (180.0, (-30.0, 10.0)),
+                ]
+            )
+        ]
+        + [
+            (f"smooth_{i}", dict(amp=a, wavelength=wl, seed=20 + i))
+            for i, (a, wl) in enumerate(
+                [
+                    (3.0, 2000.0),
+                    (8.0, 1500.0),
+                    (15.0, 1500.0),
+                    (15.0, 600.0),
+                    (30.0, 1500.0),
+                    (60.0, 2500.0),
+                ]
+            )
+        ]
+        + [
+            (f"mixed_{i}", dict(theta=th, shift=sh, amp=a, wavelength=wl, seed=30 + i))
+            for i, (th, sh, a, wl) in enumerate(
+                [
+                    (2.0, (30.0, -20.0), 8.0, 1500.0),
+                    (5.0, (-50.0, 40.0), 15.0, 1000.0),
+                    (30.0, (60.0, 60.0), 15.0, 1500.0),
+                    (180.0, (10.0, -10.0), 30.0, 2000.0),
+                ]
+            )
+        ]
+        + [
+            (
+                f"noisy_{i}",
+                dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, noise=nz, seed=40 + i),
+            )
+            for i, nz in enumerate([0.05, 0.15, 0.4])
+        ]
+        + [
+            (
+                f"dropout_{i}",
+                dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, dropout=d, seed=50 + i),
+            )
+            for i, d in enumerate([0.1, 0.3, 0.6])
+        ]
+        + [
+            (
+                f"sparse_{i}",
+                dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, keep=k, seed=60 + i),
+            )
+            for i, k in enumerate([0.4, 0.15])
+        ]
+        + [
+            (
+                f"dim_{i}",
+                dict(theta=2.0, shift=(30.0, -20.0), amp=10.0, gain=g, seed=70 + i),
+            )
+            for i, g in enumerate([0.4, 0.1])
+        ]
+        + [
+            (f"multiscale_{i}", dict(**_POSE, field="multiscale", rms=r, seed=80 + i))
+            for i, r in enumerate([(4.0, 1.5, 0.5), (8.0, 3.0, 1.0), (16.0, 6.0, 2.0)])
+        ]
+        + [
+            (f"grid_{i}", dict(**_POSE, field="grid", grid_sd=sd, seed=90 + i))
+            for i, sd in enumerate([3.0, 5.0, 7.0])
+        ]
+        # sigma 25 px is finer than STARE's 64 px vector lattice: a case it cannot represent
+        + [
+            (
+                f"bumps_{i}",
+                dict(**_POSE, field="bumps", bump_sigma=sg, bump_count=k, seed=110 + i),
+            )
+            for i, (sg, k) in enumerate([(25.0, 60), (100.0, 20), (400.0, 4)])
+        ]
+        + [
+            (f"seams_{i}", dict(**_POSE, field="seams", seam_sd=sd, seed=120 + i))
+            for i, sd in enumerate([1.5, 3.0, 6.0])
+        ]
+    ),
+    # Development cases: what method options may be chosen on. Their
     # seeds are used nowhere else and the scorer leaves `dev_*` cases out of every table.
-    "dev": _suite([
-        ("dev_wave", dict(**_POSE, amp=10.0, seed=900)),
-        ("dev_multiscale", dict(**_POSE, field="multiscale", seed=901)),
-        ("dev_grid", dict(**_POSE, field="grid", seed=902)),
-        ("dev_bumps", dict(**_POSE, field="bumps", seed=903)),
-        ("dev_seams", dict(**_POSE, field="seams", seed=904)),
-        ("dev_dropout", dict(**_POSE, amp=10.0, dropout=0.3, seed=905)),
-    ]),
+    "dev": _suite(
+        [
+            ("dev_wave", dict(**_POSE, amp=10.0, seed=900)),
+            ("dev_multiscale", dict(**_POSE, field="multiscale", seed=901)),
+            ("dev_grid", dict(**_POSE, field="grid", seed=902)),
+            ("dev_bumps", dict(**_POSE, field="bumps", seed=903)),
+            ("dev_seams", dict(**_POSE, field="seams", seed=904)),
+            ("dev_dropout", dict(**_POSE, amp=10.0, dropout=0.3, seed=905)),
+        ]
+    ),
 }
 FIELDS = ("wave", "multiscale", "grid", "bumps", "seams")
 
@@ -130,13 +264,19 @@ def _spline_field(rng, n, spacing, sd):
     from scipy.ndimage import spline_filter
 
     m = int(math.ceil(n / spacing)) + 3
-    coef = [spline_filter(rng.normal(0.0, sd, (m, m)), order=3, mode="nearest") for _ in (0, 1)]
+    coef = [
+        spline_filter(rng.normal(0.0, sd, (m, m)), order=3, mode="nearest")
+        for _ in (0, 1)
+    ]
 
     def f(x, y):
         from scipy.ndimage import map_coordinates
 
         at = [y / spacing + 1.0, x / spacing + 1.0]
-        return [map_coordinates(c, at, order=3, mode="nearest", prefilter=False) for c in coef]
+        return [
+            map_coordinates(c, at, order=3, mode="nearest", prefilter=False)
+            for c in coef
+        ]
 
     return f
 
@@ -243,7 +383,9 @@ class Scene:
         ys, xs = ys[inside], xs[inside]
         amp = rng.uniform(0.5, 1.5, len(ys)).astype(np.float32)
         kept = rng.random(len(ys)) >= spec["dropout"]
-        order = np.argsort(ys, kind="stable")  # sorted by row: a patch is one searchsorted
+        order = np.argsort(
+            ys, kind="stable"
+        )  # sorted by row: a patch is one searchsorted
         self.ref = (ys[order], xs[order], amp[order])
         self.mov = tuple(v[order][kept[order]] for v in (ys, xs, amp))
         self.mov_hw = tuple(spec.get("mov_hw") or (n, n))
@@ -285,8 +427,9 @@ class Scene:
             bx0, by0 = (int(math.floor(q[..., i].min())) - _MARGIN for i in (0, 1))
             bx1, by1 = (int(math.ceil(q[..., i].max())) + _MARGIN + 1 for i in (0, 1))
             base = self.patch("mov", bx0, by0, bx1, by1)
-            img = spec["gain"] * map_coordinates(base, [q[..., 1] - by0, q[..., 0] - bx0],
-                                                 order=3, mode="constant")
+            img = spec["gain"] * map_coordinates(
+                base, [q[..., 1] - by0, q[..., 0] - bx0], order=3, mode="constant"
+            )
         sig = spec["noise"] * PEAK
         rng = np.random.default_rng([spec["seed"], which == "mov", y0, x0])
         # a pedestal, so the noise is not clipped to half-normal at zero
@@ -299,8 +442,11 @@ class Scene:
 
 def tile_boxes(hw, tile=TILE):
     h, w = hw
-    return [(x0, y0, min(x0 + tile, w), min(y0 + tile, h))
-            for y0 in range(0, h, tile) for x0 in range(0, w, tile)]
+    return [
+        (x0, y0, min(x0 + tile, w), min(y0 + tile, h))
+        for y0 in range(0, h, tile)
+        for x0 in range(0, w, tile)
+    ]
 
 
 _SCENE = None
@@ -308,7 +454,9 @@ _SCENE = None
 
 def _init(spec):
     global _SCENE
-    _SCENE = Scene(spec)  # rebuilt from the seed in each worker: nothing large is pickled
+    _SCENE = Scene(
+        spec
+    )  # rebuilt from the seed in each worker: nothing large is pickled
 
 
 def _job(job):
@@ -348,7 +496,9 @@ def write_pair(spec, ref_path, mov_path, workers=1):
     """Write both slides tile by tile: memory is one row of tiles, whatever the slide size."""
     scene = Scene(spec)
     for which, path in (("ref", ref_path), ("mov", mov_path)):
-        write_nuclear_tiles(path, scene.shape(which), np.uint16, _tiles(spec, which, workers), TILE)
+        write_nuclear_tiles(
+            path, scene.shape(which), np.uint16, _tiles(spec, which, workers), TILE
+        )
     return scene
 
 
@@ -375,24 +525,45 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     scene = write_pair(spec, ref_p, mov_p, workers)
     lm_mov, lm_ref = landmarks(spec, scene)
     seg = dict(diameter=NUCLEUS_DIAMETER, workers=workers)
-    mov_cells, ref_cells = cells.segment_slide(mov_p, **seg), cells.segment_slide(ref_p, **seg)
+    mov_cells, ref_cells = (
+        cells.segment_slide(mov_p, **seg),
+        cells.segment_slide(ref_p, **seg),
+    )
     cap = spec.get("max_cells")
     if cap and len(mov_cells) > cap:
         # only the moving side is thinned: each sampled cell still meets ALL reference cells
-        keep = np.sort(np.random.default_rng(0).choice(len(mov_cells), cap, replace=False))
+        keep = np.sort(
+            np.random.default_rng(0).choice(len(mov_cells), cap, replace=False)
+        )
         mov_cells = mov_cells.take(keep)
     case = Case(
-        dataset="synthetic", case_id=name, group=spec["family"], ref_nuclear=str(ref_p),
-        mov_nuclear=str(mov_p), ref_image=str(ref_p), mov_image=str(mov_p),
-        modality="fluorescence", diagonal=math.hypot(spec["n"], spec["n"]),
-        ref_hw=[spec["n"], spec["n"]], mov_hw=list(scene.mov_hw),
+        dataset="synthetic",
+        case_id=name,
+        group=name,
+        family=spec["family"],
+        ref_nuclear=str(ref_p),
+        mov_nuclear=str(mov_p),
+        ref_image=str(ref_p),
+        mov_image=str(mov_p),
+        modality="fluorescence",
+        diagonal=math.hypot(spec["n"], spec["n"]),
+        pixel_size_um=PIXEL_SIZE_UM,
+        ref_hw=[spec["n"], spec["n"]],
+        mov_hw=list(scene.mov_hw),
         extra={"spec": {k: v for k, v in spec.items()}},
     )
     # Where a perfect registration puts the moving outlines: scoring them gives the cell
     # metric's ceiling for this pair (noise, resampling and dropout, no registration error).
     truth = forward_map(spec)(mov_cells.xy)
-    return write_case(cases_root, case, lm_mov, lm_ref, mov_cells, ref_cells,
-                      cells_mov_xy_truth=truth.astype(np.float32))
+    return write_case(
+        cases_root,
+        case,
+        lm_mov,
+        lm_ref,
+        mov_cells,
+        ref_cells,
+        cells_mov_xy_truth=truth.astype(np.float32),
+    )
 
 
 def prepare(a):

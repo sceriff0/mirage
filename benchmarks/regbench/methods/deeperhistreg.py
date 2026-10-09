@@ -41,6 +41,9 @@ from pathlib import Path
 
 import numpy as np
 
+from ..mapping import MOV_TO_REF, PointMap
+
+SCOPE = "pair"
 VARIANTS = ("deeperhistreg",)
 DEFAULT_MAX_DIM = 8192
 BAND = 1024
@@ -59,7 +62,7 @@ def to_rgb8(case, which, out, max_dim):
     """Write the 8-bit RGB image DeeperHistReg reads; returns ``(path, factor, (h, w))``."""
     from PIL import Image
 
-    Image.MAX_IMAGE_PIXELS = None  # ANHIR's medium images exceed PIL's bomb guard
+    Image.MAX_IMAGE_PIXELS = None  # a whole slide exceeds PIL's bomb guard
     path = str(getattr(case, f"{which}_image"))
     if case.modality == "brightfield" and path.lower().endswith((".tif", ".tiff")):
         from ..imageio import (
@@ -82,8 +85,12 @@ def to_rgb8(case, which, out, max_dim):
         h, w = plane.shape
         f = max(1, math.ceil(max(h, w) / max_dim))
         rows = BAND * f  # reduce in bands: the float copy is one band, not the slide
-        g = np.concatenate([block_mean(plane[y0 : y0 + rows], f)
-                            for y0 in range(0, (h // f) * f, rows)])
+        g = np.concatenate(
+            [
+                block_mean(plane[y0 : y0 + rows], f)
+                for y0 in range(0, (h // f) * f, rows)
+            ]
+        )
         del plane
         lo, hi = np.percentile(g[::4, ::4], (1.0, 99.9))
         g = 255.0 - ((g - lo) / max(hi - lo, 1e-6) * 255.0).clip(0, 255)
@@ -112,7 +119,9 @@ def _linear_field_warp(landmarks, field):
     return np.stack([x + ux, y + uy], axis=1)
 
 
-def field_warper(field, ref_hw, mov_hw, f_ref, f_mov, warp_landmarks=_linear_field_warp):
+def field_warper(
+    field, ref_hw, mov_hw, f_ref, f_mov, warp_landmarks=_linear_field_warp
+):
     """``warp(xy moving px) -> xy reference px`` from a backward field on the padded moving grid.
 
     ``field`` is ``(2, h, w)``: X then Y displacement, in field pixels. ``ref_hw`` / ``mov_hw``
@@ -131,7 +140,9 @@ def field_warper(field, ref_hw, mov_hw, f_ref, f_mov, warp_landmarks=_linear_fie
         # block averaging by f puts full-resolution pixel p at (p + 0.5) / f - 0.5
         px = (xy[:, 0] + 0.5) / f_mov - 0.5 + pm_x
         py = (xy[:, 1] + 0.5) / f_mov - 0.5 + pm_y
-        moved = warp_landmarks(np.stack([(px + 0.5) / sx - 0.5, (py + 0.5) / sy - 0.5], axis=1), field)
+        moved = warp_landmarks(
+            np.stack([(px + 0.5) / sx - 0.5, (py + 0.5) / sy - 0.5], axis=1), field
+        )
         rx = (moved[:, 0] + 0.5) * sx - 0.5 - pr_x
         ry = (moved[:, 1] + 0.5) * sy - 0.5 - pr_y
         return np.stack([(rx + 0.5) * f_ref - 0.5, (ry + 0.5) * f_ref - 0.5], axis=1)
@@ -200,11 +211,16 @@ def register(case, work, opts):
     _set_device(params, device)
     # Everything that differs from the package's `config` defaults is in `changed`, and is
     # recorded with the run. Nothing in the registration blocks themselves is touched.
-    changed = {"loading_params.loader": "pil", "loading_params.source_resample_ratio": 1.0,
-               "loading_params.target_resample_ratio": 1.0, "save_final_images": False,
-               "device": device}
-    params["loading_params"].update(loader="pil", source_resample_ratio=1.0,
-                                    target_resample_ratio=1.0)
+    changed = {
+        "loading_params.loader": "pil",
+        "loading_params.source_resample_ratio": 1.0,
+        "loading_params.target_resample_ratio": 1.0,
+        "save_final_images": False,
+        "device": device,
+    }
+    params["loading_params"].update(
+        loader="pil", source_resample_ratio=1.0, target_resample_ratio=1.0
+    )
     params["save_final_images"] = False  # only the field is needed
     out = work / "out"
     direction = opts.get("direction", "swapped")
@@ -212,9 +228,16 @@ def register(case, work, opts):
         raise ValueError(f"direction must be swapped or native, got {direction!r}")
     src_p, tgt_p = (ref_p, mov_p) if direction == "swapped" else (mov_p, ref_p)
     deeperhistreg.run_registration(
-        source_path=str(src_p), target_path=str(tgt_p), output_path=str(out),
-        registration_parameters=params, case_name="case", save_displacement_field=True,
-        copy_target=False, delete_temporary_results=False, temporary_path=str(work / "tmp"))
+        source_path=str(src_p),
+        target_path=str(tgt_p),
+        output_path=str(out),
+        registration_parameters=params,
+        case_name="case",
+        save_displacement_field=True,
+        copy_target=False,
+        delete_temporary_results=False,
+        temporary_path=str(work / "tmp"),
+    )
     field_p = out / "displacement_field.mha"
     if not field_p.exists():
         # run_registration prints and swallows the pipeline's exception; surface it here
@@ -228,31 +251,44 @@ def register(case, work, opts):
         warping,  # the package's own module (it extends sys.path on import)
     )
 
-    info = {"version": _dist_version("deeperhistreg"), "torch": torch.__version__,
-            "device": device, "config": config, "direction": direction, "factor_ref": f_ref, "factor_mov": f_mov,
-            "field_shape": list(field.shape),
-            "implementation": {
-                "package": "deeperhistreg", "source": str(Path(deeperhistreg.__file__).parent),
-                "registration": "deeperhistreg.run_registration",
-                "parameters": f"deeperhistreg.configs.{config}()",
-                "changed_from_defaults": changed,
-                "point_warp": "dhr_utils.warping.warp_landmarks",
-                "benchmark_side": [
-                    "roles swapped: reference given as source, moving as target, so the "
-                    "backward field is the moving -> reference point map (maintainer's recipe, issue #12)"
-                    if direction == "swapped" else
-                    "native roles (moving as source); the reference -> moving field is inverted "
-                    "numerically for the point map",
-                    f"inputs converted to 8-bit RGB, block-averaged x{f_ref} / x{f_mov} to <= {max_dim} px",
-                    "fluorescence inverted to dark-on-white" if case.modality != "brightfield" else "brightfield passed as is",
-                    "field -> full-resolution coordinates as apply_deformation_pyvips does (centre pad, stretch)",
-                ]}}
+    info = {
+        "version": _dist_version("deeperhistreg"),
+        "torch": torch.__version__,
+        "device": device,
+        "config": config,
+        "direction": direction,
+        "factor_ref": f_ref,
+        "factor_mov": f_mov,
+        "field_shape": list(field.shape),
+        "implementation": {
+            "package": "deeperhistreg",
+            "source": str(Path(deeperhistreg.__file__).parent),
+            "registration": "deeperhistreg.run_registration",
+            "parameters": f"deeperhistreg.configs.{config}()",
+            "changed_from_defaults": changed,
+            "point_warp": "dhr_utils.warping.warp_landmarks",
+            "benchmark_side": [
+                "roles swapped: reference given as source, moving as target, so the "
+                "backward field is the moving -> reference point map (maintainer's recipe, issue #12)"
+                if direction == "swapped"
+                else "native roles (moving as source); the reference -> moving field is inverted "
+                "numerically for the point map",
+                f"inputs converted to 8-bit RGB, block-averaged x{f_ref} / x{f_mov} to <= {max_dim} px",
+                "fluorescence inverted to dark-on-white"
+                if case.modality != "brightfield"
+                else "brightfield passed as is",
+                "field -> full-resolution coordinates as apply_deformation_pyvips does (centre pad, stretch)",
+            ],
+        },
+    }
     pp = out / "postprocessing_params.json"
     if pp.exists():
         info["postprocessing_params"] = json.loads(pp.read_text())
     if direction == "swapped":
         warp = field_warper(field, ref_hw, mov_hw, f_ref, f_mov, warping.warp_landmarks)
     else:
-        to_moving = field_warper(field, mov_hw, ref_hw, f_mov, f_ref, warping.warp_landmarks)
+        to_moving = field_warper(
+            field, mov_hw, ref_hw, f_mov, f_ref, warping.warp_landmarks
+        )
         warp = inverse_warper(to_moving, case.ref_hw or [v * f_ref for v in ref_hw])
-    yield "deeperhistreg", warp, info
+    yield "deeperhistreg", PointMap(warp, MOV_TO_REF), info

@@ -5,9 +5,19 @@ import tifffile
 
 from benchmarks.regbench.datasets import synthetic
 
-SPEC = {**synthetic._BASE, "family": "t", "n": 1536, "theta": 20.0, "shift": (25.0, -40.0),
-        "amp": 12.0, "wavelength": 500.0, "dropout": 0.2, "noise": 0.0, "seed": 9,
-        "mov_hw": (1300, 1400)}
+SPEC = {
+    **synthetic._BASE,
+    "family": "t",
+    "n": 1536,
+    "theta": 20.0,
+    "shift": (25.0, -40.0),
+    "amp": 12.0,
+    "wavelength": 500.0,
+    "dropout": 0.2,
+    "noise": 0.0,
+    "seed": 9,
+    "mov_hw": (1300, 1400),
+}
 
 
 def test_tiles_join_into_the_slide_a_single_tile_would_render():
@@ -29,14 +39,27 @@ def test_streamed_files_equal_the_in_memory_pair_and_do_not_depend_on_workers(tm
         r, m = tmp_path / f"r{workers}.ome.tif", tmp_path / f"m{workers}.ome.tif"
         synthetic.write_pair(spec, r, m, workers=workers)
         assert np.array_equal(tifffile.imread(r).squeeze(), ref)
-        assert np.array_equal(tifffile.imread(m).squeeze(), mov)  # incl. the padded edge tiles
+        assert np.array_equal(
+            tifffile.imread(m).squeeze(), mov
+        )  # incl. the padded edge tiles
 
 
 def test_scale_suite_runs_one_deformation_from_1024_to_65536():
     suite = synthetic.SUITES["scale"]
     names = sorted(suite)
-    assert [suite[k]["n"] for k in names] == [1024, 2048, 4096, 8192, 16384, 32768, 65536]
-    deform = {tuple((k, str(v)) for k, v in s.items() if k not in ("n",)) for s in suite.values()}
+    assert [suite[k]["n"] for k in names] == [
+        1024,
+        2048,
+        4096,
+        8192,
+        16384,
+        32768,
+        65536,
+    ]
+    deform = {
+        tuple((k, str(v)) for k, v in s.items() if k not in ("n",))
+        for s in suite.values()
+    }
     assert len(deform) == 1  # only the size differs
     # a huge slide is described without allocating it
     scene = synthetic.Scene({**suite["scale_65536"], "n": 65536})

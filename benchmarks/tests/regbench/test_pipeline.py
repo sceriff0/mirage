@@ -1,39 +1,109 @@
-"""End to end on synthetic slides with a known map: the truth is self-consistent, STARE is
-really run and scored, a failed method is imputed, and resources are measured."""
+"""The driver and the scorer, end to end.
+
+On synthetic slides with a known map: the truth is self-consistent and STARE is really run
+and scored. On hand-made cases and fake methods: a failed, killed or missing run is a row,
+a map is scored in its own direction, each variant has its own cost, and an out-of-memory
+ends the run as ``oom``.
+"""
 
 import csv
 import json
+import shutil
+import time
+import types
 
 import numpy as np
 import pytest
 
-from benchmarks.regbench import cells, methods
-from benchmarks.regbench.cases import load_points, polys, result_dir
+from benchmarks.regbench import cells, methods, pairs, resources
+from benchmarks.regbench.cases import (
+    Case,
+    load_case,
+    load_points,
+    polys,
+    result_dir,
+    write_case,
+    write_json,
+    write_npz,
+)
 from benchmarks.regbench.datasets import synthetic
-from benchmarks.regbench.score import score
+from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
+from benchmarks.regbench.score import DESCRIPTIVE, score
+
+WORKERS = {"workers": 2}
+GRID = np.array(
+    [(x, y) for x in range(40, 400, 40) for y in range(40, 400, 40)], dtype=float
+)
+# larger than the gate (8.5 px): unregistered, nothing pairs on the 40 px grid
+SHIFT = np.array([12.0, -9.0])
 
 
-def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):
-    """Guards the truth's DIRECTION: nuclei segmented on the moving slide, pushed through the
-    generator's forward map, land on the nuclei segmented on the reference."""
-    for name, case in synthetic_cases.items():
-        pts = load_points(case)
-        g = synthetic.forward_map(case.extra["spec"])
-        ref, mov = polys(pts, "cells_ref"), polys(pts, "cells_mov")
-        before = cells.score_cells(ref, mov)
-        after = cells.score_cells(ref, mov.with_xy(g(mov.xy)))
-        assert after["displacement_px_p50"] < 0.5, name
-        assert after["dice_matched"] > 0.9, name
-        assert after["displacement_px_p50"] < before["displacement_px_p50"], name
-        assert np.allclose(g(pts["landmarks_mov"]), pts["landmarks_ref"])
+def squares(centres, half=5.0):
+    return cells.from_rings(
+        [
+            np.array(
+                [
+                    [x - half, y - half],
+                    [x + half, y - half],
+                    [x + half, y + half],
+                    [x - half, y + half],
+                ]
+            )
+            for x, y in centres
+        ]
+    )
 
 
-@pytest.fixture(scope="module")
-def scored(cases_root, synthetic_cases, tmp_path_factory):
-    out = tmp_path_factory.mktemp("out")
-    for case in synthetic_cases.values():
-        assert methods.run_case("stare", case, out, workers=2) == ["stare_rigid", "stare"]
-    return out, score(cases_root, out, ["synthetic"])
+def toy_case(root, case_id, group):
+    """A case with nuclei and no images: the moving nuclei are the reference's minus SHIFT."""
+    case = Case(
+        dataset="multiplex",
+        case_id=case_id,
+        group=group,
+        ref_nuclear="",
+        mov_nuclear="",
+        ref_image="",
+        mov_image="",
+        modality="fluorescence",
+        diagonal=622.0,
+        pixel_size_um=0.5,
+        ref_hw=[440, 440],
+        mov_hw=[440, 440],
+    )
+    write_case(root, case, cells_mov=squares(GRID - SHIFT), cells_ref=squares(GRID))
+    return load_case(root / "multiplex" / case_id)
+
+
+def true_map():
+    return PointMap(lambda xy: np.asarray(xy, dtype=float) + SHIFT, MOV_TO_REF)
+
+
+def fake(name, variants, register=None, register_group=None, **extra):
+    """A method module, without a module."""
+    return types.SimpleNamespace(
+        NAME=name,
+        SCOPE="group" if register_group else "pair",
+        VARIANTS=tuple(variants),
+        register=register,
+        register_group=register_group,
+        **extra,
+    )
+
+
+def good(name="good"):
+    def register(case, work, opts):
+        yield name, true_map(), {}
+
+    return fake(name, [name], register)
+
+
+def run_json(out, variant, case):
+    return json.loads((result_dir(out, variant, case) / "run.json").read_text())
+
+
+def rows_of(out, table):
+    with open(out / "tables" / f"{table}.csv", newline="") as fh:
+        return list(csv.DictReader(fh))
 
 
 def _row(rows, case_id, method):
@@ -41,83 +111,183 @@ def _row(rows, case_id, method):
     return r
 
 
-def test_stare_registers_rigid_and_smooth_cases_to_subpixel_landmark_error(scored):
+@pytest.fixture
+def toy(tmp_path):
+    root = tmp_path / "cases"
+    return root, toy_case(root, "P1_r1", "P1"), tmp_path / "out"
+
+
+# ── the synthetic suite, with STARE really run ───────────────────────────────
+def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):
+    """Guards the truth's DIRECTION: nuclei segmented on the moving slide, pushed through the
+    generator's forward map, land on the nuclei segmented on the reference."""
+    for name, case in synthetic_cases.items():
+        pts = load_points(case)
+        g = synthetic.forward_map(case.extra["spec"])
+        ref, mov = polys(pts, "ref"), polys(pts, "mov")
+        radius, _ = pairs.gate_px(ref, mov)
+        before = pairs.score(ref, mov, radius, None)
+        after = pairs.score(ref, pairs.with_xy(mov, g(mov.xy)), radius, None)
+        assert after["displacement_px_p50"] < 0.5, name
+        assert after["dice_matched"] > 0.9, name
+        assert after["displacement_px_p50"] < before["displacement_px_p50"], name
+        assert np.allclose(g(pts["landmarks_mov"]), pts["landmarks_ref"])
+        assert case.pixel_size_um == synthetic.PIXEL_SIZE_UM
+        assert case.group == name and case.family  # the patient is not the family
+
+
+@pytest.fixture(scope="module")
+def scored(cases_root, synthetic_cases, tmp_path_factory):
+    out = tmp_path_factory.mktemp("out")
+    for case in synthetic_cases.values():
+        done = methods.run_case("stare", case, out, opts=WORKERS)
+        assert done == ["stare_rigid", "stare"]
+    return out, score(cases_root, out, ["synthetic"])
+
+
+def _tre(out, variant, case):
+    """Median distance of the warped truth points to their partners, px."""
+    pts = load_points(case)
+    with np.load(result_dir(out, variant, case) / "warped.npz") as z:
+        assert str(z["direction"]) == MOV_TO_REF
+        return float(np.median(np.hypot(*(z["landmarks"] - pts["landmarks_ref"]).T)))
+
+
+def _initial_tre(case):
+    pts = load_points(case)
+    d = pts["landmarks_mov"] - pts["landmarks_ref"]
+    return float(np.median(np.hypot(*d.T)))
+
+
+def test_stare_registers_rigid_and_smooth_cases_to_subpixel_error(
+    scored, synthetic_cases
+):
+    out, res = scored
+    for name in ("rigid", "smooth"):
+        case = synthetic_cases[name]
+        assert _initial_tre(case) > 3.0
+        assert _tre(out, "stare", case) < 1.0, name
+        assert not _row(res["cells"], name, "stare")["imputed_initial"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "STARE 1.2.1: REG-TILE emits full-weight vectors for lattice windows the moving "
+        "slide does not cover (here the bottom three rows: residuals 7-35 px against ~3 px "
+        "elsewhere). SOLVE selects s by block CV before any outlier rejection; no s "
+        "predicts those vectors, a flat field predicts them least badly, so s = 1e6 is "
+        "chosen for the whole slide and the mesh adds nothing (~2.5 px, the rigid anchor). "
+        "4 of 6 seeds at 1024 px, 2 of 6 at 2048 px. Remove the xfail when uncovered "
+        "windows are rejected."
+    ),
+)
+def test_stare_refines_a_moving_slide_that_does_not_cover_the_reference(
+    scored, synthetic_cases
+):
+    out, _ = scored
+    assert _tre(out, "stare", synthetic_cases["crop"]) < 1.0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "STARE 1.2.1, the same selection on a full-size 1024 px pair: held-out 3x3 patches "
+        "on the lattice border must be extrapolated, a flexible fit extrapolates worse "
+        "than a flat one, and on a 15 x 15 lattice 44 % of the nodes are border, so block "
+        "CV can prefer s = 1e6 although the interior is predicted twice as well by a small "
+        "s. 2 of 6 seeds at 1024 px, 0 of 14 at 2048 px and above. Remove the xfail when "
+        "the selection is fixed."
+    ),
+)
+def test_stare_refines_a_small_slide_whatever_the_seed(scored, synthetic_cases):
+    out, _ = scored
+    assert _tre(out, "stare", synthetic_cases["smooth_border"]) < 1.0
+
+
+def test_stare_still_anchors_a_moving_slide_of_another_shape(scored, synthetic_cases):
+    out, _ = scored
+    case = synthetic_cases["crop"]
+    assert _tre(out, "stare_rigid", case) < 3.0 < _initial_tre(case)
+
+
+def test_the_mesh_is_what_fixes_a_smooth_deformation(scored, synthetic_cases):
+    out, _ = scored
+    case = synthetic_cases["smooth"]
+    assert _tre(out, "stare_rigid", case) > 2.0
+    assert _tre(out, "stare", case) < 1.0
+
+
+def test_cell_scores_agree_with_the_known_map(scored):
     _, res = scored
     for name in ("rigid", "smooth"):
-        init, full = _row(res["landmarks"], name, "initial"), _row(res["landmarks"], name, "stare")
-        assert init["tre_px_median"] > 3.0
-        assert full["tre_px_median"] < 1.0, name
-        assert full["robustness"] > 0.95
-        assert full["rank"] == 1.0
-        assert not full["imputed_initial"]
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "STARE 1.2.1: REG-TILE emits full-weight vectors for lattice windows the moving slide "
-    "does not cover (here the bottom three rows: residuals 7-35 px against ~3 px elsewhere). "
-    "SOLVE selects s by block CV before any outlier rejection; no s predicts those vectors, "
-    "a flat field predicts them least badly, so s = 1e6 is chosen for the whole slide and "
-    "the mesh adds nothing (~2.5 px, the rigid anchor). 4 of 6 seeds at 1024 px, 2 of 6 at "
-    "2048 px. Remove the xfail when uncovered windows are rejected."))
-def test_stare_refines_a_moving_slide_that_does_not_cover_the_reference(scored):
-    _, res = scored
-    assert _row(res["landmarks"], "crop", "stare")["tre_px_median"] < 1.0
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "STARE 1.2.1, the same selection on a full-size 1024 px pair: held-out 3x3 patches on "
-    "the lattice border must be extrapolated, a flexible fit extrapolates worse than a flat "
-    "one, and on a 15 x 15 lattice 44 % of the nodes are border, so block CV can prefer "
-    "s = 1e6 although the interior is predicted twice as well by a small s. 2 of 6 seeds at "
-    "1024 px, 0 of 14 at 2048 px and above. Remove the xfail when the selection is fixed."))
-def test_stare_refines_a_small_slide_whatever_the_seed(scored):
-    _, res = scored
-    assert _row(res["landmarks"], "smooth_border", "stare")["tre_px_median"] < 1.0
-
-
-def test_stare_still_anchors_a_moving_slide_of_another_shape(scored):
-    _, res = scored
-    init, rigid = _row(res["landmarks"], "crop", "initial"), _row(res["landmarks"], "crop", "stare_rigid")
-    assert rigid["tre_px_median"] < 3.0 < init["tre_px_median"]
-    assert rigid["robustness"] > 0.95
-
-
-def test_the_mesh_is_what_fixes_a_smooth_deformation(scored):
-    _, res = scored
-    rigid, full = _row(res["landmarks"], "smooth", "stare_rigid"), _row(res["landmarks"], "smooth", "stare")
-    assert rigid["tre_px_median"] > 2.0
-    assert full["tre_px_median"] < 1.0
-
-
-def test_cell_metrics_agree_with_the_landmarks(scored):
-    _, res = scored
-    for name in ("rigid", "smooth"):
-        init, full = _row(res["cells"], name, "initial"), _row(res["cells"], name, "stare")
+        init = _row(res["cells"], name, "initial")
+        full = _row(res["cells"], name, "stare")
+        truth = _row(res["cells"], name, "truth")
+        assert full["frame"] == "reference"
         assert full["dice_matched"] > 0.85 > init["dice_matched"]
         assert full["displacement_px_p50"] < 1.0
         assert full["pair_fraction"] > 0.9
+        assert full["within_1um"] > init["within_1um"]
+        assert abs(full["within_2um"] - truth["within_2um"]) < 0.05
+        assert full["fold_pct"] == 0.0 and full["sd_log_jac"] < 0.1
+        assert 0.0 < full["coverage"] < 1.0 and full["nn_distance_um_p50"] > 0
 
 
-def test_resources_are_measured_for_the_whole_run(scored):
+def test_resources_are_measured_for_the_whole_run(scored, synthetic_cases):
     out, res = scored
     r = _row(res["resources"], "smooth", "stare")
-    assert r["ok"] and r["wall_min"] > 0 and r["cpu_min"] > 0
-    assert r["megapixels"] == pytest.approx(2 * 1024 * 1024 / 1e6)
-    assert r["wall_s_per_mpx"] == pytest.approx(r["wall_min"] * 60 / r["megapixels"])
+    assert r["ok"] and r["register_s"] > 0 and r["cpu_h"] > 0
+    assert r["unit"] == "pair" and r["attempt"] == 1 and r["wasted_attempts"] == 0
+    assert r["total_to_image_s"] == pytest.approx(r["register_s"] + r["write_s"])
+    assert r["cpu_efficiency"] > 0
     if r["rss_method"] != "rusage":
         assert r["peak_rss_gb"] > 0.05  # at least the interpreter and one slide
-    (agg,) = [a for a in res["resources_agg"] if a["method"] == "stare"]
-    assert agg["n_runs"] == 4 and agg["n_failed"] == 0
-    tables = out / "tables"
-    for name in ("landmarks_cases", "landmarks_aggregates", "cells_cases", "cells_aggregates",
-                 "resources_cases", "resources_aggregates"):
-        with open(tables / f"{name}.csv", newline="") as fh:
-            assert list(csv.DictReader(fh))
-    assert "## Resources" in (tables / "summary.md").read_text()
+    # the anchor is yielded first: its own, smaller bill
+    rigid = _row(res["resources"], "smooth", "stare_rigid")
+    assert rigid["register_s"] <= r["register_s"]
+    run = run_json(out, "stare", synthetic_cases["smooth"])
+    for key in (
+        "attempt",
+        "mem_requested_gb",
+        "cpus_requested",
+        "cpus_affinity",
+        "blas",
+        "cpu_model",
+        "launch_id",
+        "unit",
+        "group_cases",
+        "native",
+        "selfcheck_status",
+        "register_s",
+        "write_s",
+        "cause",
+    ):
+        assert key in run, key
+    for name in (
+        "cells",
+        "summary_cells",
+        "paired_vs_primary",
+        "failures",
+        "resources",
+        "summary_resources",
+    ):
+        assert rows_of(out, name), name
+    text = (out / "tables" / "summary.md").read_text()
+    assert "## Resources" in text and "whole job, writers included" in text
 
 
-def test_a_failed_method_is_scored_at_the_initial_pose(cases_root, synthetic_cases, tmp_path,
-                                                       monkeypatch):
+def test_paired_differences_are_against_stare(scored):
+    _, res = scored
+    paired = res["paired_vs_primary"]
+    assert {r["against"] for r in paired} == {"stare"}
+    (d,) = [r for r in paired if r["group"] == "rigid" and r["method"] == "initial"]
+    assert d["d_pair_fraction_excess"] < 0  # unregistered is below STARE
+
+
+def test_a_failed_method_is_scored_at_the_initial_pose(
+    cases_root, synthetic_cases, tmp_path, monkeypatch
+):
     def boom(case, work, opts):
         raise RuntimeError("no transform")
         yield  # pragma: no cover
@@ -125,22 +295,497 @@ def test_a_failed_method_is_scored_at_the_initial_pose(cases_root, synthetic_cas
     monkeypatch.setattr(methods.load("stare"), "register", boom)
     case = synthetic_cases["rigid"]
     assert methods.run_case("stare", case, tmp_path) == []
-    run = json.loads((result_dir(tmp_path, "stare", case) / "run.json").read_text())
+    run = run_json(tmp_path, "stare", case)
     assert run["ok"] is False and "no transform" in run["error"]
+    assert run["cause"] == "exception"
 
     res = score(cases_root, tmp_path, ["synthetic"])
-    init, failed = _row(res["landmarks"], "rigid", "initial"), _row(res["landmarks"], "rigid", "stare")
-    assert failed["imputed_initial"] and failed["tre_px_median"] == init["tre_px_median"]
-    assert failed["robustness"] == 0.0
-    (agg,) = [a for a in res["landmarks_agg"] if a["method"] == "stare" and a["subset"] == "all"]
-    # the three cases it was never run on count at the initial pose too, as a missing
-    # submission does in the challenge; with nothing registered there is no common subset
-    assert agg["n_imputed"] == 4
-    assert not [a for a in res["landmarks_agg"] if a["subset"] == "common"]
+    init = _row(res["cells"], "rigid", "initial")
+    failed = _row(res["cells"], "rigid", "stare")
+    assert failed["imputed_initial"] and failed["cause"] == "exception"
+    assert failed["pair_fraction"] == init["pair_fraction"]
+    # the three cases it was never run on are rows too
+    never = _row(res["cells"], "smooth", "stare")
+    assert never["problem"] == "not run" and never["cause"] == "not_run"
+    (agg,) = [
+        a
+        for a in res["summary_cells"]
+        if a["method"] == "stare" and a["subset"] == "all"
+    ]
+    assert agg["n_cases"] == 4 and agg["n_ok"] == 0
+    assert not [a for a in res["summary_cells"] if a["subset"] == "common"]
+    (f,) = [f for f in res["failures"] if f["method"] == "stare"]
+    assert f["launches"] == 1 and f["launches_failed_exception"] == 1
+    assert f["rounds_lost"] == 4 and f["rounds_not_run"] == 3
 
 
-def test_label_renames_a_configuration(synthetic_cases, tmp_path):
-    case = synthetic_cases["rigid"]
-    assert methods.variant_names("valis", "valis_mr") == ["valis_mr_rigid", "valis_mr", "valis_mr_micro"]
-    done = methods.run_case("initial", case, tmp_path, label="baseline")
-    assert done == ["baseline"] and (result_dir(tmp_path, "baseline", case) / "warped.npz").exists()
+# ── a failed, killed or missing run is a row ─────────────────────────────────
+def test_failed_method_is_a_row_not_a_gap(toy):
+    root, case, out = toy
+    write_json(
+        result_dir(out, "ghost", case) / "run.json",
+        {"ok": False, "error": "node failure", "cause": "killed", "launch_id": "77"},
+    )
+    score(root, out, ["multiplex"])
+    rows = rows_of(out, "cells")
+    init, failed = _row(rows, "P1_r1", "initial"), _row(rows, "P1_r1", "ghost")
+    assert failed["imputed_initial"] == "True"
+    assert failed["problem"] == "node failure" and failed["cause"] == "killed"
+    assert failed["pair_fraction"] == init["pair_fraction"]
+    (f,) = rows_of(out, "failures")
+    assert f["launches_failed_killed"] == "1" and f["rounds_lost"] == "1"
+
+
+def test_a_variant_that_never_ran_is_a_row(toy):
+    root, case, out = toy
+    toy_case(root, "P1_r2", "P1")
+    res = score(root, out, ["multiplex"], expected=["ghost"])
+    ghosts = [r for r in res["cells"] if r["method"] == "ghost"]
+    assert [r["case_id"] for r in ghosts] == ["P1_r1", "P1_r2"]
+    assert all(r["problem"] == "not run" for r in ghosts)
+    assert all(r["cause"] == "not_run" and r["imputed_initial"] for r in ghosts)
+
+
+def test_the_run_is_recorded_as_killed_before_the_method_starts(toy):
+    _, case, out = toy
+    seen = {}
+
+    def register(case, work, opts):
+        seen.update(run_json(out, "fake", case))
+        yield "fake", true_map(), {}
+
+    assert methods.run_case(fake("fake", ["fake"], register), case, out) == ["fake"]
+    assert seen["ok"] is False and seen["cause"] == "killed"
+    assert run_json(out, "fake", case)["ok"] is True
+
+
+def test_a_system_exit_is_an_exception_row_not_killed(toy):
+    _, case, out = toy
+
+    def register(case, work, opts):
+        raise SystemExit("stare register: error: argument --stride: invalid int")
+        yield  # pragma: no cover
+
+    assert methods.run_case(fake("fake", ["fake"], register), case, out) == []
+    run = run_json(out, "fake", case)
+    assert run["ok"] is False and run["cause"] == "exception"
+    assert "SystemExit" in run["error"] and "--stride" in run["error"]
+
+
+def test_a_reported_memory_error_is_oom(toy):
+    _, case, out = toy
+    for k, exc in enumerate(
+        [
+            MemoryError("Unable to allocate 512. GiB for an array"),
+            RuntimeError("java.lang.OutOfMemoryError: Java heap space"),
+            RuntimeError("DefaultCPUAllocator: not enough memory"),
+        ]
+    ):
+
+        def register(case, work, opts, exc=exc):
+            raise exc
+            yield  # pragma: no cover
+
+        name = f"fake{k}"
+        assert methods.run_case(fake(name, [name], register), case, out) == []
+        assert run_json(out, name, case)["cause"] == "oom", exc
+
+    def gpu(case, work, opts):
+        raise RuntimeError("CUDA out of memory. Tried to allocate 20.00 MiB")
+        yield  # pragma: no cover
+
+    methods.run_case(fake("gpu", ["gpu"], gpu), case, out)
+    assert run_json(out, "gpu", case)["cause"] == "gpu_oom"  # reported, never escalated
+
+
+def test_a_timeout_is_not_oom(toy):
+    _, case, out = toy
+
+    def register(case, work, opts):
+        raise TimeoutError("the registration did not finish in 14400 s")
+        yield  # pragma: no cover
+
+    assert methods.run_case(fake("slow", ["slow"], register), case, out) == []
+    assert run_json(out, "slow", case)["cause"] == "timeout"
+    assert "timeout" in resources.CAUSES and "oom" in resources.CAUSES
+
+
+def test_an_oom_counter_rise_ends_the_run_as_oom(toy, tmp_path, monkeypatch):
+    """The kernel kills one worker and the parent waits for it: the counter is what ends it."""
+    _, case, out = toy
+    counter = tmp_path / "memory.events"
+    counter.write_text("low 0\nhigh 0\nmax 3\noom 0\noom_kill 0\n")
+    monkeypatch.setattr(resources, "oom_events_path", lambda: counter)
+    monkeypatch.setattr(methods, "OOM_POLL_S", 0.05)
+
+    def register(case, work, opts):
+        yield "fake_a", true_map(), {}
+        counter.write_text("low 0\nhigh 0\nmax 9\noom 1\noom_kill 1\n")
+        time.sleep(60)  # a parent waiting for a worker that is gone
+        yield "fake_b", true_map(), {}
+
+    t0 = time.perf_counter()
+    done = methods.run_case(fake("fake", ["fake_a", "fake_b"], register), case, out)
+    assert time.perf_counter() - t0 < 20
+    assert done == ["fake_a"]  # what existed before the kill is kept
+    run = run_json(out, "fake_b", case)
+    assert run["ok"] is False and run["cause"] == "oom"
+    assert resources.read_oom_kills(counter) == 1
+
+
+def test_an_earlier_attempt_of_the_ladder_is_kept_as_wasted(toy, monkeypatch):
+    root, case, out = toy
+
+    def register(case, work, opts):
+        if resources.host_info()["attempt"] == 1:
+            raise MemoryError("first rung")
+        yield "fake", true_map(), {}
+
+    method = fake("fake", ["fake"], register)
+    monkeypatch.setenv("REGBENCH_ATTEMPT", "1")
+    monkeypatch.setenv("REGBENCH_MEM_GB", "16")
+    assert methods.run_case(method, case, out) == []
+    monkeypatch.setenv("REGBENCH_ATTEMPT", "2")
+    monkeypatch.setenv("REGBENCH_MEM_GB", "64")
+    assert methods.run_case(method, case, out) == ["fake"]
+    run = run_json(out, "fake", case)
+    assert run["attempt"] == 2 and run["mem_requested_gb"] == 64.0
+    (prev,) = run["previous_attempts"]
+    assert prev["attempt"] == 1 and prev["cause"] == "oom"
+    assert prev["mem_requested_gb"] == 16.0
+    res = score(root, out, ["multiplex"])
+    r = _row(res["resources"], "P1_r1", "fake")
+    assert r["ok"] and r["wasted_attempts"] == 1 and r["mem_requested_gb"] == 64.0
+
+
+# ── direction, and what is warped when ───────────────────────────────────────
+def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_path):
+    """A backward method with the TRUE map, by exact lookup: no inverse is approximated.
+
+    The reference nuclei of this case are the moving nuclei under the generator's map, so
+    the moving partner of every reference vertex is known exactly. Anywhere else the map is
+    undefined and says so (NaN)."""
+    from scipy.spatial import cKDTree
+
+    src = synthetic_cases["rigid"]
+    root = tmp_path / "cases"
+    dst = root / "synthetic" / "rigid"
+    dst.mkdir(parents=True)
+    shutil.copy(src.points_path.parent / "case.json", dst / "case.json")
+    pts = load_points(src)
+    for key in ("ring_off", "ring_feat", "ring_hole", "n"):
+        pts[f"cells_ref_{key}"] = pts[f"cells_mov_{key}"]
+    pts["cells_ref_xy"] = pts["cells_mov_xy_truth"]
+    write_npz(dst / "points.npz", **pts)
+    case = load_case(dst)
+
+    known_ref = np.concatenate([pts["cells_ref_xy"], pts["landmarks_ref"]]).astype(
+        float
+    )
+    known_mov = np.concatenate([pts["cells_mov_xy"], pts["landmarks_mov"]]).astype(
+        float
+    )
+    tree = cKDTree(known_ref)
+
+    def lookup(xy):
+        dist, idx = tree.query(np.asarray(xy, dtype=float))
+        back = known_mov[idx].copy()
+        back[dist > 0] = np.nan  # not a probe: the truth is not known here
+        return back
+
+    def register(case, work, opts):
+        yield "backward", PointMap(lookup, REF_TO_MOV), {}
+
+    out = tmp_path / "out"
+    done = methods.run_case(fake("backward", ["backward"], register), case, out)
+    assert done == ["backward"]
+    with np.load(result_dir(out, "backward", case) / "warped.npz") as z:
+        assert str(z["direction"]) == REF_TO_MOV
+        assert len(z["cells_xy"]) == len(
+            pts["cells_ref_xy"]
+        )  # the REFERENCE nuclei moved
+    res = score(root, out, ["synthetic"])
+    row, init = (
+        _row(res["cells"], "rigid", "backward"),
+        _row(res["cells"], "rigid", "initial"),
+    )
+    truth = _row(res["cells"], "rigid", "truth")
+    assert row["frame"] == "moving" and init["frame"] == "reference"
+    assert row["pair_fraction"] > init["pair_fraction"]
+    assert abs(row["within_2um"] - truth["within_2um"]) < 0.05
+    assert not row["imputed_initial"]
+
+
+def test_points_are_warped_at_the_yield(toy):
+    _, case, out = toy
+    live = {"shift": np.array([1.0, 0.0])}
+
+    def register(case, work, opts):
+        fn = PointMap(
+            lambda xy: np.asarray(xy, dtype=float) + live["shift"], MOV_TO_REF
+        )
+        yield "fake_a", fn, {}
+        live["shift"] = np.array([0.0, 50.0])  # a later stage overwrites the object
+        yield "fake_b", fn, {}
+
+    methods.run_case(fake("fake", ["fake_a", "fake_b"], register), case, out)
+    mov = load_points(case)["cells_mov_xy"]
+    with np.load(result_dir(out, "fake_a", case) / "warped.npz") as z:
+        assert np.allclose(z["cells_xy"], mov + [1.0, 0.0])
+    with np.load(result_dir(out, "fake_b", case) / "warped.npz") as z:
+        assert np.allclose(z["cells_xy"], mov + [0.0, 50.0])
+
+
+def test_on_variant_is_called_at_each_yield_with_the_map(toy):
+    _, case, out = toy
+    seen = []
+
+    def register(case, work, opts):
+        yield "fake", true_map(), {"m0": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+
+    methods.run_case(
+        fake("fake", ["fake"], register),
+        case,
+        out,
+        label="relabelled",
+        on_variant=lambda c, v, pm, info: seen.append((c.case_id, v, pm.direction)),
+    )
+    assert seen == [("P1_r1", "relabelled", MOV_TO_REF)]
+
+
+def test_a_method_must_return_a_point_map(toy):
+    _, case, out = toy
+
+    def register(case, work, opts):
+        yield "fake", lambda xy: xy, {}
+
+    assert methods.run_case(fake("fake", ["fake"], register), case, out) == []
+    assert "PointMap" in run_json(out, "fake", case)["error"]
+    with pytest.raises(ValueError):
+        PointMap(lambda xy: xy, "sideways")
+
+
+def test_nuclei_in_bands_get_a_second_row_without_them(toy):
+    root, case, out = toy
+    band = np.zeros(len(GRID), dtype=bool)
+    band[:20] = True
+
+    def register(case, work, opts):
+        def fn(xy):  # right outside the bands, 30 px off inside them
+            xy = np.asarray(xy, dtype=float) + SHIFT
+            if len(xy) == 4 * len(GRID):
+                xy[: 4 * 20] += [30.0, 0.0]
+            return xy
+
+        yield "tiles", PointMap(fn, MOV_TO_REF), {"band_mov": band}
+
+    methods.run_case(fake("tiles", ["tiles"], register), case, out)
+    res = score(root, out, ["multiplex"])
+    full = _row(res["cells"], "P1_r1", "tiles")
+    outside = _row(res["cells"], "P1_r1", "tiles:nonband")
+    assert outside["n_moving"] == len(GRID) - 20 and full["n_moving"] == len(GRID)
+    assert outside["pair_fraction"] == 1.0 > full["pair_fraction"]
+    assert outside["match_radius_px"] == full["match_radius_px"]  # one gate per case
+
+
+# ── per-patient methods ──────────────────────────────────────────────────────
+def test_a_failed_round_of_a_group_method_fails_only_that_round(tmp_path):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    c1, c2 = toy_case(root, "P1_r1", "P1"), toy_case(root, "P1_r2", "P1")
+
+    def register_group(cases, work, opts):
+        assert [c.case_id for c in cases] == ["P1_r1", "P1_r2"]
+        yield "P1_r1", "flaky", None, {"error": "x"}
+        yield "P1_r2", "flaky", true_map(), {}
+
+    method = fake("flaky", ["flaky"], register_group=register_group)
+    done = methods.run_group(method, [c1, c2], out)
+    assert done == {"P1_r1": [], "P1_r2": ["flaky"]}
+    bad, ok = run_json(out, "flaky", c1), run_json(out, "flaky", c2)
+    assert bad["ok"] is False and bad["error"] == "x"
+    assert ok["ok"] is True
+    assert ok["unit"] == "patient" and ok["group_cases"] == ["P1_r1", "P1_r2"]
+    assert ok["launch_id"] == bad["launch_id"]
+    with pytest.raises(SystemExit):
+        methods.run_case(method, c1, out)
+
+
+def test_the_methods_own_writer_runs_after_the_clock_stops(tmp_path):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    c1, c2 = toy_case(root, "P1_r1", "P1"), toy_case(root, "P1_r2", "P1")
+    calls = []
+
+    def register_group(cases, work, opts):
+        for c in cases:
+            yield c.case_id, "pp", true_map(), {"_state": {"registrar": object()}}
+
+    def write_native(state, case_id, dest_dir):
+        calls.append((sorted(state), case_id, dest_dir.name))
+        time.sleep(0.4)
+        (dest_dir / "registered.ome.tif").write_bytes(b"")
+        return {
+            "files": [str(dest_dir / "registered.ome.tif")],
+            "format": "ome-tiff",
+            "channels": 1,
+            "dtype": "uint16",
+        }
+
+    method = fake(
+        "pp", ["pp"], register_group=register_group, write_native=write_native
+    )
+    methods.run_group(method, [c1, c2], out)
+    assert calls == [
+        (["registrar"], "P1_r1", "native"),
+        (["registrar"], "P1_r2", "native"),
+    ]
+    run = run_json(out, "pp", c2)
+    assert run["native"]["format"] == "ome-tiff" and run["write_s"] >= 0.4
+    assert run["register_s"] < 0.3  # the writer is not billed
+    assert "_state" not in json.dumps(run)
+    assert (result_dir(out, "pp", c2) / "native" / "registered.ome.tif").exists()
+
+
+def test_summary_counts_failures_and_has_a_common_block(tmp_path):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    by_patient = {
+        p: [toy_case(root, f"{p}_r{k}", p) for k in (1, 2)] for p in ("P1", "P2")
+    }
+
+    def register_group(cases, work, opts):
+        for c in cases:
+            if c.case_id == "P2_r2":
+                yield c.case_id, "flaky", None, {"error": "anchor unavailable"}
+            else:
+                yield c.case_id, "flaky", true_map(), {}
+
+    flaky = fake("flaky", ["flaky"], register_group=register_group)
+    for cases in by_patient.values():
+        methods.run_group(flaky, cases, out)
+        methods.run_group(good(), cases, out)  # a pair method, addressed by patient
+    res = score(root, out, ["multiplex"])
+    summary = {(r["method"], r["subset"]): r for r in res["summary_cells"]}
+    assert summary[("flaky", "all")]["n_ok"] == 3
+    assert summary[("flaky", "all")]["n_cases"] == 4
+    assert summary[("flaky", "all")]["n_patients"] == 2
+    assert summary[("good", "all")]["n_ok"] == 4
+    for method in ("initial", "good", "flaky"):
+        assert summary[(method, "common")]["n_cases"] == 3, method
+    # the median hides the failed round; the minimum over cases and n_ok do not
+    assert summary[("flaky", "all")]["pair_fraction_min_case"] == 0.0
+    assert summary[("good", "all")]["pair_fraction_min_case"] == 1.0
+    assert summary[("flaky", "common")]["pair_fraction_min_case"] == 1.0
+    (f,) = [f for f in res["failures"] if f["method"] == "flaky"]
+    assert f["launches"] == 2 and f["launches_failed"] == 1 and f["rounds_lost"] == 1
+    (g,) = [f for f in res["failures"] if f["method"] == "good"]
+    assert g["launches_failed"] == 0 and g["rounds_lost"] == 0
+    per_patient = [r for r in res["summary_resources"] if r["method"] == "flaky"]
+    assert sorted((r["group"], r["n_rounds"], r["n_ok"]) for r in per_patient) == [
+        ("P1", 2, 2),
+        ("P2", 2, 1),
+    ]
+    # a primary list defines the common block: `good` registered everything
+    res = score(root, out, ["multiplex"], primary=["good"])
+    summary = {(r["method"], r["subset"]): r for r in res["summary_cells"]}
+    assert summary[("flaky", "common")]["n_cases"] == 4
+
+
+def test_summary_says_descriptive_under_six_patients(tmp_path):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    for k in range(6):
+        methods.run_case(good(), toy_case(root, f"P{k}_r1", f"P{k}"), out)
+    score(root, out, ["multiplex"])
+    assert DESCRIPTIVE not in (out / "tables" / "summary.md").read_text()
+    shutil.rmtree(root / "multiplex" / "P5_r1")
+    score(root, out, ["multiplex"])
+    text = (out / "tables" / "summary.md").read_text()
+    assert f"5 patient(s): {DESCRIPTIVE}" in text
+
+
+# ── cost, per variant ────────────────────────────────────────────────────────
+HOLD = """
+import sys, time
+block = bytearray(600 * 1024 * 1024)
+for i in range(0, len(block), 4096):
+    block[i] = 1                      # touch every page so it is resident
+print("ready", flush=True)
+time.sleep(60)
+"""
+
+
+def test_each_variant_has_its_own_clock_and_peak(toy):
+    """A variant yielded before a later stage is not billed for that stage."""
+    import subprocess
+    import sys
+
+    _, case, out = toy
+
+    def register(case, work, opts):
+        yield "fake_a", true_map(), {}
+        # the later stage: 600 MB in a worker, and some time. (Large on purpose: the
+        # parent's own resident size drifts by tens of MB between the two yields.)
+        worker = subprocess.Popen([sys.executable, "-c", HOLD], stdout=subprocess.PIPE)
+        try:
+            assert worker.stdout.readline().strip() == b"ready"
+            time.sleep(0.4)
+            yield "fake_b", true_map(), {}
+        finally:
+            worker.kill()
+            worker.wait()
+
+    methods.run_case(fake("fake", ["fake_a", "fake_b"], register), case, out)
+    a, b = run_json(out, "fake_a", case), run_json(out, "fake_b", case)
+    assert b["register_s"] - a["register_s"] >= 0.4
+    if a["resources"]["rss_method"] != "rusage":
+        assert b["resources"]["peak_rss_mb"] - a["resources"]["peak_rss_mb"] > 300
+
+
+def test_pause_freezes_the_memory_peak():
+    import subprocess
+    import sys
+
+    child = (
+        "b = bytearray(200 * 1024 * 1024)\n"
+        "for i in range(0, len(b), 4096):\n"
+        "    b[i] = 1\n"
+        "import time; time.sleep(0.5)\n"
+    )
+    mon = resources.Monitor(interval=0.05)
+    if mon.method == "rusage":
+        pytest.skip("no psutil and no /proc: a high-water mark cannot be paused")
+    mon.start()
+    before = mon.snapshot()
+    mon.pause()
+    subprocess.run([sys.executable, "-c", child], check=True)  # 200 MB, while paused
+    mon.resume()
+    after = mon.snapshot()
+    mon.stop()
+    assert after["peak_rss_mb"] - before["peak_rss_mb"] < 50
+    assert after["wall_s"] - before["wall_s"] < 0.3  # nor is its time billed
+
+
+# ── run.json ─────────────────────────────────────────────────────────────────
+def test_info_arrays_round_trip(toy):
+    _, case, out = toy
+    m0 = [[1.0, 0.0, 12.0], [0.0, 1.0, -9.0], [0.0, 0.0, 1.0]]
+
+    def register(case, work, opts):
+        yield "fake_a", true_map(), {"m0": m0}
+        yield "fake_b", true_map(), {"m0": np.array(m0), "n": np.int64(3)}
+
+    methods.run_case(fake("fake", ["fake_a", "fake_b"], register), case, out)
+    for variant in ("fake_a", "fake_b"):
+        got = run_json(out, variant, case)["info"]["m0"]
+        assert got == m0 and np.array(got).shape == (3, 3)
+    assert run_json(out, "fake_b", case)["info"]["n"] == 3
+
+
+def test_label_renames_every_variant(toy):
+    _, case, out = toy
+    assert methods.variant_names("valis", "valis120") == [
+        "valis120_rigid",
+        "valis120",
+        "valis120_micro",
+    ]
+    done = methods.run_case("initial", case, out, label="baseline")
+    assert done == ["baseline"]
+    assert (result_dir(out, "baseline", case) / "warped.npz").exists()
