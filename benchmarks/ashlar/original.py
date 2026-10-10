@@ -169,9 +169,22 @@ def _note(aligner) -> dict:
     return out
 
 
-def run_ashlar(argv) -> tuple[int, list[dict], list[str]]:
+def run_ashlar(
+    argv, notes_path=None, on_aligner=None
+) -> tuple[int, list[dict], list[str]]:
     """Run the original command; returns (its exit code, one note per cycle, its data
-    warnings). The aligners' ``run`` methods are wrapped only to be observed."""
+    warnings). The aligners' ``run`` methods are wrapped only to be observed.
+
+    Each note carries ``seconds``, the wall time of that aligner's own ``run()`` (the
+    reference stitch for the first, one cycle's alignment for each later one). With
+    ``notes_path`` the notes so far are written there as each aligner finishes, so a
+    process killed while the mosaic is being written -- or a command that raises in a later
+    cycle -- does not lose the alignments already made. ``on_aligner(index, note)`` is
+    called after each aligner, before the command goes on: every aligner has finished
+    before the writer starts (``ashlar/scripts/ashlar.py:262-296`` at v1.20.0 ``[FULL]``),
+    so the call for the last cycle marks the end of registration.
+    """
+    import time
     import warnings
 
     from ashlar import reg
@@ -184,8 +197,17 @@ def run_ashlar(argv) -> tuple[int, list[dict], list[str]]:
         original = originals[cls]
 
         def run(self):
+            t0 = time.perf_counter()
             result = original(self)
-            notes.append(_note(self))
+            note = _note(self)
+            note["seconds"] = time.perf_counter() - t0
+            notes.append(note)
+            if notes_path is not None:
+                tmp = Path(f"{notes_path}.tmp")
+                tmp.write_text(json.dumps(notes))
+                tmp.replace(notes_path)
+            if on_aligner is not None:
+                on_aligner(len(notes) - 1, note)
             return result
 
         return run

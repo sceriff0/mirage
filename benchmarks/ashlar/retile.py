@@ -227,20 +227,21 @@ def stage_jitter(n_tiles, jitter_px, seed):
     return np.random.default_rng(seed).integers(-j, j + 1, size=(n_tiles, 2))
 
 
-def noise_sd(arr, noise_frac, max_samples=4_000_000):
+def noise_sd(arr, noise_frac, max_samples=4_000_000, min_counts=0.0):
     """Per-channel sensor-noise s.d. in grey levels: ``noise_frac`` of the channel's own
-    1st-99th percentile range, measured on a strided sample of the slide."""
+    1st-99th percentile range, measured on a strided sample of the slide, and never less
+    than ``min_counts`` (a floor for a channel whose range is narrow; 0 = no floor)."""
     import numpy as np
 
     n_channels, height, width = arr.shape
     if noise_frac <= 0:
-        return [0.0] * n_channels
+        return [float(max(min_counts, 0.0))] * n_channels
     step = max(1, int(math.ceil(math.sqrt(height * width / max_samples))))
     out = []
     for c in range(n_channels):
         sample = np.asarray(arr[c, ::step, ::step], dtype=np.float32)
         lo, hi = np.percentile(sample, (1.0, 99.0))
-        out.append(float(noise_frac * max(hi - lo, 1.0)))
+        out.append(float(max(noise_frac * max(hi - lo, 1.0), min_counts)))
     return out
 
 
@@ -287,6 +288,8 @@ def write_tiles(
     noise_frac=0.0,
     seed=0,
     exact_overlap=False,
+    tile_origins_yx=None,
+    noise_min_counts=0.0,
 ):
     """Cut ``image_path`` into a uniform padded tile grid + ``grid.json``. Returns its path.
 
@@ -317,6 +320,15 @@ def write_tiles(
     ``pixel_size_um``: the run's pixel size. When given it wins over the file's OME header,
     which can carry the scanner's own calibration (0.3453 on a real ND2 run given 0.325);
     it is what ASHLAR converts --maximum-shift by.
+
+    ``tile_origins_yx`` (``(n_tiles, 2)``, whole pixels, row-major): tile ``k`` is cut with
+    its top-left corner THERE instead of at its nominal corner, zero-padded wherever it
+    leaves the slide, on any side. The file names, and so the positions ASHLAR computes,
+    stay the regular grid's; ``true_positions_yx`` records the origins and
+    ``valid_extent`` the part of each tile that is slide. Refused together with
+    ``stage_jitter_um``: both say where a tile's pixels come from.
+
+    ``noise_min_counts``: a floor on the noise s.d., in grey levels (:func:`noise_sd`).
     """
     import numpy as np
     import tifffile
@@ -340,8 +352,36 @@ def write_tiles(
             for t in tile_grid(canvas_w, canvas_h, tile_size, overlap_fraction)
         ]
         px = float(pixel_size_um)
-        jitter = stage_jitter(len(tiles), stage_jitter_um / px, [seed, cycle, 0])
-        sd = noise_sd(arr, noise_frac)
+        if tile_origins_yx is None:
+            jitter = stage_jitter(len(tiles), stage_jitter_um / px, [seed, cycle, 0])
+        else:
+            if stage_jitter_um:
+                raise ValueError(
+                    "tile_origins_yx and stage jitter both say where a tile's pixels "
+                    "come from; give one of them"
+                )
+            origins = np.asarray(tile_origins_yx)
+            if origins.shape != (len(tiles), 2):
+                raise ValueError(
+                    f"tile_origins_yx needs one origin per tile: {len(tiles)} x 2 for "
+                    f"this grid, got {origins.shape}"
+                )
+            if not np.array_equal(origins, np.round(origins)):
+                raise ValueError(
+                    "tile_origins_yx must be whole pixels: a tile is the slide's own "
+                    "pixels, never resampled"
+                )
+            origins = np.round(origins).astype(np.int64)
+            # the same mechanism as the jitter: an offset from the nominal corner
+            jitter = origins - np.array([[t.y, t.x] for t in tiles], dtype=np.int64)
+            tiles = [
+                t._replace(
+                    w=max(0, min(int(ox) + tile_size, width) - max(int(ox), 0)),
+                    h=max(0, min(int(oy) + tile_size, height) - max(int(oy), 0)),
+                )
+                for t, (oy, ox) in zip(tiles, origins)
+            ]
+        sd = noise_sd(arr, noise_frac, min_counts=noise_min_counts)
         for k, t in enumerate(tiles):
             tile = _region(arr, n_channels, t, tile_size, dtype, jitter[k])
             tile = add_noise(
@@ -377,8 +417,10 @@ def write_tiles(
             [int(t.y + jitter[k][0]), int(t.x + jitter[k][1])]
             for k, t in enumerate(tiles)
         ],
+        "tile_origins": "grid" if tile_origins_yx is None else "given",
         "stage_jitter_um": float(stage_jitter_um),
         "noise_frac": float(noise_frac),
+        "noise_min_counts": float(noise_min_counts),
         "noise_sd": sd,
         "seed": int(seed),
     }
