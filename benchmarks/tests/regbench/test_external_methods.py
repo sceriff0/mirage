@@ -1,10 +1,11 @@
-"""VALIS and DeeperHistReg, really run -- in the environments that have them.
+"""VALIS, ASHLAR and DeeperHistReg, really run -- in the environments that have them.
 
-Each test is skipped where its package is not importable (for VALIS: not at the pinned
-version of that row), so the default suite needs only STARE's dependencies; run this file
-inside each method's own image. For VALIS the test IS the selfcheck: the points must follow
-the image VALIS's own writer produced, at every stage. ``test_valis_adapters.py`` holds
-everything that can be checked without the package.
+Each test is skipped where its package is not importable (or not at the pinned version of
+that row), so the default suite needs only STARE's dependencies; run this file inside each
+method's own image. For each method the test IS the selfcheck: the points must follow the
+image the method's own writer produced. ``test_valis_adapters.py``,
+``test_ashlar_adapter.py`` and ``test_dhr_adapter.py`` hold everything that can be checked
+without the package.
 """
 
 import json
@@ -15,57 +16,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import methods, selfcheck
-from benchmarks.regbench.cases import load_points, result_dir
+from benchmarks.regbench import selfcheck
 from benchmarks.regbench.methods import deeperhistreg as dhr
-
-
-def _median_tre(out, variant, case):
-    pts = load_points(case)
-    with np.load(result_dir(out, variant, case) / "warped.npz") as z:
-        return float(np.median(np.hypot(*(z["truth_xy"] - pts["truth_ref"]).T)))
-
-
-def _initial(case):
-    pts = load_points(case)
-    return float(np.median(np.hypot(*(pts["truth_mov"] - pts["truth_ref"]).T)))
-
-
-# ── DeeperHistReg's field bookkeeping, without the package ───────────────────
-@pytest.mark.parametrize(
-    "ref_hw,mov_hw,f",
-    [
-        ((400, 600), (400, 600), 1),
-        ((400, 600), (360, 520), 1),
-        ((300, 500), (420, 640), 1),
-        ((400, 600), (360, 520), 4),
-    ],
-)
-def test_field_warper_undoes_padding_stretch_and_reduction(ref_hw, mov_hw, f):
-    """A known translation, written the way DeeperHistReg stores it: a backward field on the
-    padded moving grid, at a coarser resolution than the images it was computed from."""
-    t = np.array(
-        [7.0, -4.0]
-    )  # reference = moving + t, in the pixels of the registered images
-    hp, wp = max(ref_hw[0], mov_hw[0]), max(ref_hw[1], mov_hw[1])
-    (pr_y, pr_x), (pm_y, pm_x) = dhr.centre_pads(ref_hw, mov_hw)
-    fh, fw = hp // 2, wp // 2
-    # padded-reference = padded-moving + u  =>  u = t + pad_ref - pad_mov; stored in field px
-    u = t + [pr_x - pm_x, pr_y - pm_y]
-    field = np.empty((2, fh, fw), np.float32)
-    field[0], field[1] = u[0] * fw / wp, u[1] * fh / hp
-    warp = dhr.field_warper(field, ref_hw, mov_hw, f, f)
-    xy = np.array([[10.0, 20.0], [300.0, 150.0], [511.0, 333.0]]) * f
-    assert warp(xy) == pytest.approx(xy + t * f, abs=1e-3)
-
-
-def test_block_mean_and_centre_pads_follow_the_package_rules():
-    img = np.arange(6 * 8, dtype=float).reshape(6, 8)
-    assert dhr.block_mean(img, 2).shape == (3, 4)
-    assert dhr.block_mean(img, 2)[0, 0] == pytest.approx(img[:2, :2].mean())
-    assert dhr.block_mean(img[:5, :7], 2).shape == (2, 3)  # the ragged edge is dropped
-    # leading pad is floor(diff / 2), on the smaller image only
-    assert dhr.centre_pads((10, 20), (15, 14)) == [(2, 0), (0, 3)]
 
 
 # ── the real packages ────────────────────────────────────────────────────────
@@ -178,13 +130,106 @@ def test_ashlar_points_follow_its_mosaic(tmp_path):
     assert info["discard_rebuild_matches"] is True
 
 
-def test_deeperhistreg_field_is_read_as_moving_to_reference(synthetic_cases, tmp_path):
-    pytest.importorskip("deeperhistreg")
-    # equal shapes at full size, then different shapes reduced 2x: padding and scaling both live
-    for name, opts in (("smooth", {}), ("crop", {"max_dim": "512"})):
-        case = synthetic_cases[name]
-        done = methods.run_case(
-            "deeperhistreg", case, tmp_path, opts={**opts, "workers": 2}
-        )
-        assert done == ["deeperhistreg"]
-        assert _median_tre(tmp_path, "deeperhistreg", case) < 1.5 < _initial(case), name
+# ── DeeperHistReg 1.0.1 ───────────────────────────────────────────────────────
+DHR_PIN = (
+    "needs deeperhistreg==1.0.1 with torch >= 2.3, SimpleITK and pyvips: run inside "
+    "the DeeperHistReg image"
+)
+# Small enough for a test on the CPU: loaded 1640 x 2048, below both working sizes, so
+# S = 5.0 at either parameter set. The cohort-class pair of ``selfcheck.SIZES`` (S = 9.77
+# at the 4096 px set) is the launcher's selfcheck job.
+DHR_SMALL = [((8200, 10240), (7780, 9720))]
+
+
+def need_dhr():
+    """Skip unless the real DeeperHistReg, at the pinned release, is importable."""
+    package = pytest.importorskip("deeperhistreg", reason=DHR_PIN)
+    found = dhr.installed_version(package)
+    if found != dhr.VERSION:
+        pytest.skip(f"{DHR_PIN}; found {found}")
+    return package
+
+
+def test_hr_factory_is_the_8192_configuration():
+    """What the row labels claim about the two shipped parameter sets, on the real
+    package: a later release that changes a factory fails here."""
+    from .test_dhr_adapter import check_factories
+
+    check_factories(need_dhr().configs)
+
+
+def test_params_equal_the_factory_except_changed_keys():
+    from .test_dhr_adapter import check_params_equal_the_factory
+
+    check_params_equal_the_factory(need_dhr().configs)
+
+
+def test_centre_pads_equal_the_packages_own():
+    package = need_dhr()
+    from dhr_utils import utils  # the package puts its own folder on sys.path
+
+    assert package.direct_registration.w.warp_landmarks is not None
+    for a, b in (((10, 20), (15, 14)), ((7, 9), (7, 9)), ((301, 40), (300, 47))):
+        pad_a, pad_b = utils.calculate_pad_value(a, b)
+        assert dhr.centre_pads(a, b) == [
+            (pad_a[0][0], pad_a[1][0]),
+            (pad_b[0][0], pad_b[1][0]),
+        ]
+
+
+def test_a_zero_field_is_written_half_a_field_pixel_right_and_down(tmp_path):
+    """The settling measurement. A zero displacement field of 200 x 240 on a 1000 x 1200
+    dot image (S = 5): the package's own writer must draw every dot 2.5 px right and down
+    of where it is, which is what the as-drawn row is built on. If this fails, the number
+    in the message is the measurement: report it, do not adjust anything to fit."""
+    package = need_dhr()
+    import SimpleITK as sitk
+    import tifffile
+
+    pipeline = package.direct_registration
+    hw, s = (1000, 1200), 5
+    dots = selfcheck.lattice_dots(hw, seed=4)
+    plane = np.rint(selfcheck.render_dots(dots, 0, 0, hw[1], hw[0])).astype(np.uint16)
+    src, field = tmp_path / "dots.tif", tmp_path / "displacement_field.mha"
+    tifffile.imwrite(src, plane, tile=(512, 512), photometric="minisblack")
+    zero = np.zeros((2, hw[0] // s, hw[1] // s), np.float32)
+    sitk.WriteImage(sitk.GetImageFromArray(zero), str(field))
+    out = tmp_path / "warped.tiff"
+    pipeline.adf.apply_deformation_pyvips(
+        str(src),
+        str(src),
+        str(out),
+        str(field),
+        loader=pipeline.loader_mapper["tiff"],
+        saver=pipeline.saver_mapper["tiff"],
+        level=0,
+        pad_value=255.0,
+        save_source_only=True,
+        to_template_shape=True,
+    )
+    with tifffile.TiffFile(out) as tif:
+        written = tif.pages[0].asarray()
+    assert written.shape == hw and written.dtype == np.uint16
+    found = selfcheck.find_dots(written)
+    hit, j = selfcheck._nearest(found, dots, 6.0)
+    assert hit.mean() > 0.9, f"{hit.sum()} of {len(found)} detections near a dot"
+    shift = (found[hit] - dots[j[hit]]).mean(axis=0)
+    assert shift == pytest.approx([s / 2, s / 2], abs=0.1), f"measured shift {shift}"
+
+
+@pytest.mark.parametrize("fluo", [False, True], ids=["shipped", "fluo"])
+def test_deeperhistreg_points_follow_its_written_image(tmp_path, fluo):
+    """The selfcheck IS the test, on the CPU: the as-drawn row must follow the image the
+    package's own writer produced, and the estimated-field row must be exactly its
+    declared half field pixel away from it."""
+    need_dhr()
+    opts = {"device": "cpu", **({"fluo": "1"} if fluo else {})}
+    label = "deeperhistreg_fluo_cpu" if fluo else "deeperhistreg_cpu"
+    rec = selfcheck.run("deeperhistreg", tmp_path, opts, label=label, sizes=DHR_SMALL)
+    assert rec["variants"] == {label: selfcheck.OK, f"{label}_asdrawn": selfcheck.OK}, (
+        rec
+    )
+    check = rec["pairs"][0]["variants"][label]
+    # the measured offset between the two maps: S / 2 = 2.5 px on each axis
+    assert check["declared_px_mean_x"] == pytest.approx(2.5, abs=0.3), check
+    assert check["declared_px_mean_y"] == pytest.approx(2.5, abs=0.3), check

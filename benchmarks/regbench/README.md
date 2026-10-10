@@ -28,7 +28,8 @@ This package is being ported in steps. What exists now:
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
 | adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
-| adapters `initial`, `deeperhistreg` | converted to the contract only. `deeperhistreg` still computes what the copied harness computed (it is still asked for a moving -> reference map). The native adapter of "Methods" below replaces it |
+| adapter `initial` | here (the identity) |
+| adapter `deeperhistreg` (DeeperHistReg 1.0.1, the software that ships RegWSI: eight labels, each with an estimated-field row and an `_asdrawn` row) | here, as in "DeeperHistReg" below. **Written against DeeperHistReg's and libvips' source and never run with either** (DeeperHistReg, SimpleITK and pyvips are not installed where this was written): tested with a recording stand-in that draws the warped image the way the package's writer is written to. Its first real runs are the settling measurement and the selfcheck inside the DeeperHistReg image |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask; the driver stores a reference-side mask (`band_ref`) and the scorer applies it to the nuclei, for PALOM's task |
@@ -157,7 +158,8 @@ failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0 from PyPI, upstream defaults | patient | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`) | patient | same | same |
-| `deeperhistreg_*` | DeeperHistReg 1.0.1 | pair | backward field on the reference grid | reference nuclei through its `warp_landmarks`; moving frame. Each also has an `_asdrawn` row, the image as written |
+| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary |
+| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
 | `initial` | none | | identity | |
 
@@ -211,8 +213,9 @@ jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass
 reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
 Methods with a size-dependent code path are checked on more than one pair
 (`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction), both VALIS
-adapters also on a pair with a 30000 px side, DeeperHistReg on pairs whose sides are
-multiples of 20.
+adapters also on a pair with a 30000 px side, every DeeperHistReg label on one pair of
+40000 x 50000 against 40000 x 48000 (the cohort's size class, with sizes that divide
+exactly; see "DeeperHistReg").
 
 **The check.** The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (`find_dots`: a 15 px median background,
@@ -879,14 +882,201 @@ ASHLAR's `correlation > total_amplitude`: that is the known numerical failure, i
 published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
 `affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).
 
+### DeeperHistReg (`methods/deeperhistreg.py`)
+
+**The software is DeeperHistReg 1.0.1; the method is RegWSI** (Wodzinski et al. 2024,
+doi:10.1016/j.cmpb.2024.108187). There is no separate RegWSI code: the paper says the
+method "is incorporated into the DeeperHistReg framework", and the package is where it
+ships. What follows about the paper is taken from this port's RegWSI report, which read
+arXiv:2404.13108v2 `[FULL]` (TeX, the three table files, all captions) and the journal
+version `[ABSTRACT]`; the paper was not re-read for the adapter. The code was read at
+MWod/DeeperHistReg main @ `42e7c9d` `[PARTIAL: the files listed in the adapter's
+docstring]`, which the report found identical to the PyPI 1.0.1 wheel but for two data
+paths.
+
+**What runs.** `deeperhistreg.run_registration` in its native roles (source = the moving
+slide, target = the reference) with one of two shipped parameter factories, deep-copied,
+in which only these keys are changed (`changed_keys`, recorded per run with the whole
+parameter set): every `device` and `cuda` key, and `save_final_images = False` (the
+writer is run afterwards, outside the clock, as the package's own example does).
+
+| rows | factory | working size (short side) | in the paper |
+|---|---|---|---|
+| `deeperhistreg_gpu`, `_cpu` | `default_initial_nonrigid` | 4096 px, 8 levels, 900 iterations | the 4096 px point of its resolution ablation: 1.01 µm median error on re-stained HyReCo |
+| `deeperhistreg_hr_gpu`, `_cpu` | `default_initial_nonrigid_high_resolution` | 8192 px, 9 levels, 1100 iterations | the resolution of its 0.59 µm result on re-stained HyReCo |
+| the same four with `_fluo` | the same, plus `pad_value = 0` and `flip_intensity = False` | | not in the paper: configured by the benchmark |
+
+- **These are the shipped sets, not the paper's.** The paper's exact parameters are not
+  published. The maintainer says "the configs used to produce the results reported in
+  RegWSI paper were slightly different than the default ones" (issue #15 `[FULL]`). Where
+  the shipped sets visibly depart from the paper's text is recorded with every run
+  (`info.implementation.departures_from_paper_text`): SIFT+RANSAC also runs as an
+  initial-alignment candidate; the transform is a four-parameter similarity where the
+  paper says affine; the 8192 px set has nine initial-alignment sizes where the paper's
+  tables stop at eight; the writer enlarges the field linearly where the paper says
+  B-splines; the intensity flip is not in the paper's text.
+- **"8192" is the short side**, and the package never enlarges
+  (`dhr_utils/utils.py:530-540`). It loads at 0.2 and then resamples the short side down
+  to the working size. On this cohort (0.325 µm per pixel):
+
+  | slide short side | 4096 px set | 8192 px set |
+  |---|---|---|
+  | 40000 px | S = 9.77, 3.17 µm per working pixel | S = 5.0, 1.63 µm (loaded 8000 px is already below 8192) |
+  | 50000 px | S = 12.21, 3.97 µm | S = 6.10, 1.98 µm |
+
+  `S` is full-resolution pixels per working pixel; each run records its own (`info.S_x`,
+  `info.S_y`, `info.implementation.working_um_per_px`, `initial_resample_ratio`).
+- **Fluorescence.** The authors state that DAPI needs no parameter change (the paper, per
+  the report; the package README lists fluorescence microscopy and DAPI as tested,
+  `README.md:16-30` `[PARTIAL: lines 10-32]`; issue #8 `[FULL]`: "it should be possible to
+  register any H&E and IHC stains (and in fact also others, e.g. ExM or DAPI)"), so the
+  unmodified rows are
+  the authors' stated use and **the `_fluo` rows are the benchmark's**: brightfield after
+  the flip is bright tissue on black, which is unflipped DAPI, so `flip_intensity = False`
+  restores the polarity the method was built for. They are never primary.
+- **Which DeeperHistReg row is primary** (the 4096 px `deeperhistreg_gpu_asdrawn` or the
+  8192 px `deeperhistreg_hr_gpu_asdrawn`) is set in the run list, not here. Both are
+  complete rows with their own selfcheck.
+
+**Inputs.** The package does not read OME-TIFF (issue #4 `[FULL]`) and its TIFF loader
+counts top-level pages as pyramid levels (`tiff_loader.py:34-38`). Each slide's nuclear
+channel is written as a tiled TIFF with ONE top-level page, same dtype and values,
+uncompressed (`single_page_tiff`); the clock is paused meanwhile and `convert_s` recorded.
+`info.grey_levels` is the number of 8-bit levels each channel keeps under the package's
+min-max rule (counted on every fourth row and column): a few bright pixels can leave
+16-bit DAPI in a handful of levels.
+
+**Two rows per run, both reference -> moving, neither inverted.**
+
+- `<label>` scores the field the method **estimated**: reference pixel -> moving pixel
+  through the package's own `warp_landmarks` and the coordinate chain of issue #12 (a
+  user's function the maintainer endorsed; the package itself never calls
+  `warp_landmarks`). The chain leaves out the half-pixel terms of the two resamplings
+  (`info.gap.chain_halfpixel_px_p95`).
+- `<label>_asdrawn` scores the image **as written**: for every pixel of the file on disk,
+  the moving-slide position the package's writer sampled. Its points are the transform of
+  the image, and its selfcheck declares no offset.
+
+They differ because the writer is not the registration. The field lives on the padded,
+resampled grid, `warped(x) = source(x + u(x))`. The writer (`apply_deformation_pyvips`,
+`dhr_utils/warping.py:224-239`) turns `grid + u` into an index image, enlarges it to the
+full-resolution canvas with libvips' linear kernel, multiplies by the enlargement and
+calls `mapim`. libvips enlarges with an input displacement of half a pixel, so output
+pixel `X` reads the field at `X / S - 0.5` (libvips v8.15.2 `resize.c:233-277`,
+`affine.c:445-480`, `:320-349` `[PARTIAL: those ranges, transform.c:158-252 and
+mapim.c:225-300, 455-480, 589-594; not executed]`). Three consequences:
+
+1. **Half a field pixel.** The written image samples `X - S/2 + S u(X/S - 0.5)`: its
+   content sits about S/2 px right and down of the registration, 4.9 px at S = 9.77 and
+   2.5 px at S = 5. The gap between the two maps is `(S/2) x Jacobian x (1, 1)`, a
+   function of position.
+2. **The stretch.** The writer enlarges by `canvas / field size`. The field's size is a
+   floor (torch's `interpolate` with a scale factor), so on a slide whose loaded size
+   does not divide by the resample ratio the written image is stretched relative to the
+   registration: with torch 2.3.1, a loaded 7974 x 11975 slide gives a field of 4095 x
+   6151, not 4096 rows, and the written image is 2.6e-4 too tall, about 10 px at the
+   bottom edge of a 39871 px slide.
+3. **The pads.** The writer pads at full resolution, the registration padded the loaded
+   images; the two agree only where the slides' sizes divide evenly.
+
+The as-drawn map uses the writer's own numbers for all three (`asdrawn_map`: full-
+resolution centre pads, `S = canvas / field size`, the index image read at `X / S - 0.5`
+linearly with the edge copied). The estimated-field row declares only the first
+(`declared_offset`: the registration differenced over half a field pixel), and each run
+records how far the two maps are apart and how much of that the declaration does not
+explain (`info.gap.mean_px`, `beyond_declared_px_p95`). On real slides the second and
+third terms are expected to be several pixels, which is why the as-drawn rows are the
+ones that describe the image on disk.
+
+**The written image** (`write_native`): the package's writer with the arguments its own
+`save_final` passes, once per channel of the moving slide (the maintainer's route for
+multichannel images, issue #6 `[FULL]`), the first page of each of its files stacked into
+`native/registered.ome.tif`, values unchanged. It has the reference slide's size and is
+on its grid, because the writer crops the padded canvas back by the reference's own pads
+(`pair_full_saver.py:76-80`, `dhr_utils/utils.py:299-311`): `origin_xy` is `(0, 0)` and
+the pads enter the map, not the origin. Pixels from outside the moving slide are the pad
+value (255 counts, or 0 for `_fluo`) inside the padded canvas and 0 beyond it;
+`valid_box` bounds the pixels that come from the moving slide. A failed writer leaves
+both rows `ok` with `native.error`.
+
+**Cost.** The clock runs over `run_registration` only, including the package's own
+loading, its diagnostic JPEGs and intermediate fields; its own per-stage seconds are in
+`info.stage_s`. The package has no core-count option; `info.torch_num_threads` and
+`info.vips_concurrency` are what it saw. A `_gpu` row without CUDA is refused before the
+package is called, because the package would fall back silently
+(`full_resolution.py:58`).
+
+**Failures.** `run_registration` prints the pipeline's exception and carries on
+(`run.py:40-46`); the caller sees a missing `displacement_field.mha` (`:59-60`). stdout is
+captured and the error raised with that text, so a CUDA out-of-memory is `gpu_oom`
+(reported, never escalated), a host allocation failure is `oom` (the ladder), anything
+else `exception`.
+
+**The checks.** The selfcheck compares both rows with the one image the writer produced:
+`_asdrawn` as it is, the estimated-field row minus its declared offset. With a stand-in
+for the package whose writer is drawn from the source, a wrong direction, dropped or
+exchanged pads, a 1 % scale error, a missing half pixel and a field of the wrong sign
+are each reported `inconsistent` on the `_asdrawn` row; an undeclared offset and a wrong
+chain are each reported `inconsistent` on the estimated-field row alone
+(`test_dhr_adapter.py`). The realcheck runs on the `_asdrawn` row (the one with the
+image).
+
+**What the selfcheck reaches.** One pair for all eight labels, 40000 x 50000 against
+40000 x 48000: S = 9.77 at the 4096 px set (the cohort's class) and S = 5.0 at the
+8192 px set, with every division exact, which the estimated-field row's declaration
+needs. A coarsest pyramid level of 31 to 32 px. Not reached: the 8192 px set's second
+resampling (a slide whose short side exceeds 40960 px: S between 5 and about 6.1), and
+sizes that leave remainders, where the estimated-field row is expected to fail its
+declaration and the `_asdrawn` row to hold (emulated in `test_dhr_adapter.py`); on the
+cohort that is the realcheck's ground. The 8192 px set on the CPU is 1100 full-field
+iterations at 80 megapixels: hours, and tens of GB.
+
+**Not checked by reading alone:** nothing here has run DeeperHistReg or libvips.
+Unverified until the checks run in the image: the half-pixel offset itself (the settling
+measurement below); that the package's loader and writer accept a one-channel 16-bit
+TIFF (its pad colour is a three-element vector, `dhr_utils/utils.py:220-221`); that
+`tifffile` reads the writer's LZW pyramid; run time and memory at any size.
+
+**First commands in the image** (from the repository root; DeeperHistReg 1.0.1 with
+`torch >= 2.3`, SimpleITK and pyvips, plus the pinned STARE release, `tifffile`, `zarr`
+and `imagecodecs`):
+
+```bash
+# 1. the settling measurement, seconds: a zero field must be written 2.5 px right and down
+python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
+    -k "zero_field or factory or centre_pads" --basetemp=/tmp/rb_dhr
+# 2. the small pair on the CPU, both rows, shipped and fluo (S = 5)
+python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
+    -k deeperhistreg_points --basetemp=/tmp/rb_dhr2
+# 3. the selfcheck of each label (the cohort-class pair)
+python -m benchmarks.regbench selfcheck --method deeperhistreg --label deeperhistreg_cpu \
+    --opt device=cpu --work W/deeperhistreg_cpu
+python -m benchmarks.regbench selfcheck --method deeperhistreg --label deeperhistreg_gpu \
+    --opt device=cuda:0 --work W/deeperhistreg_gpu
+python -m benchmarks.regbench selfcheck --method deeperhistreg --label deeperhistreg_hr_gpu \
+    --opt device=cuda:0 --opt config=default_initial_nonrigid_high_resolution \
+    --work W/deeperhistreg_hr_gpu
+# ... and _hr_cpu, _fluo_gpu, _fluo_cpu, _hr_fluo_gpu, _hr_fluo_cpu (add --opt fluo=1)
+```
+
+`ok` is exit 0 and, in `W/<label>/selfcheck.json`, `"status": "ok"` with
+`variants.<label>` and `variants.<label>_asdrawn` both `ok`; in the pair's record,
+`variants.<label>.declared_px_mean_x/y` is the measured offset between the two maps
+(4.9 px at the 4096 px set, 2.5 px at the 8192 px set). Add `--size 8200x10240:7780x9720`
+for a quick S = 5 run of any label. If step 1 fails, the offset is not what the source
+reading predicts: report the measured shift and stop.
+
 ## Tests
 
 ```bash
 python -m pytest benchmarks/tests/regbench -q --basetemp=/tmp/rb_<unique>
 ```
 
-`test_external_methods.py` skips where VALIS (at the pinned version of the row) or
-DeeperHistReg is not importable. `test_valis_adapters.py` runs both VALIS adapters against
+`test_external_methods.py` skips where VALIS, ASHLAR or DeeperHistReg (each at the pinned
+version of the row) is not importable. `test_dhr_adapter.py` runs the DeeperHistReg adapter
+against `fake_dhr.py`, a stand-in that records every call, keeps the package's bookkeeping
+(pads, resample ratio, field size, its swallowed exception) and draws the warped image the
+way the package's writer and libvips are written to. `test_valis_adapters.py` runs both VALIS adapters against
 `fake_valis.py`, a stand-in that records every call and draws images the way VALIS's
 writer is written to; for `valis_mirage` it executes the real `bin/register.py` on that
 stand-in, in a fresh process.

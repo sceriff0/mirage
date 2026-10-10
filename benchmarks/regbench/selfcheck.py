@@ -136,14 +136,22 @@ SIZES = {
     "valis": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
     "valis_mirage": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
     "valis120": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
-    # DeeperHistReg loads at 0.2 and resamples to `initial_resolution` (4096 at
-    # `default_initial_nonrigid`, 8192 at `..._high_resolution`; MWod/DeeperHistReg
-    # `dhr_pipeline/registration_params.py:484-515, 652-683` [PARTIAL: the loading and
-    # preprocessing parameters of those two factories]). Sides are multiples of 20. The
-    # default config needs a short side above 20480 px for the second resampling; 40000 px
-    # gives the cohort's S = 9.77. The high-resolution pair stays at S = 5.0.
+    # DeeperHistReg, one pair for all eight labels (confirmed by Task 9 from the source:
+    # MWod/DeeperHistReg main @ 42e7c9d `registration_params.py:484-565, 652-733`,
+    # `dhr_utils/utils.py:530-540`, `60-64`, `435-464` [PARTIAL: see
+    # methods/deeperhistreg.py]). It loads at 0.2 and resamples the SHORT side down to
+    # `initial_resolution`, never up. With 40000 px on the short side the 4096 px set
+    # works at k = 1.953125, S = 9.765625 (the cohort's class), and the 8192 px set at
+    # k = 1, S = 5.0 (loaded 8000 px is below 8192). Every division is exact here (loaded
+    # 8000 x 10000, a field of 4096 x 5120 or 8000 x 10000, pads 200 and 1000), which
+    # the declared offset of the estimated-field row needs. The coarsest pyramid level
+    # is 32 px (eight levels) and 31 px (nine). A smaller pair for the 8192 px set was
+    # dropped: (8200, 10240) also gives S = 5.0 and adds only a 6 px coarsest level,
+    # nothing the cohort has (the package fails outright once a level reaches 1 px,
+    # its issue #22). NOT reached by this pair: a non-integer second resampling at the
+    # 8192 px set (short side above 40960 px: S between 5 and about 6.1), and sizes that
+    # leave remainders; the realcheck is the check there.
     "deeperhistreg": [((40000, 50000), (40000, 48000))],
-    "deeperhistreg_hr": [((8200, 10240), (7780, 9720))],
     # ASHLAR at 1024 px tiles and a 922 px pitch: 3 x 3 tiles, then 5 x 6 with interior
     # tiles and four-tile corners. The same two pairs as `stare`, whose rigid matrix the
     # anchored rows read (`--m0-from`).

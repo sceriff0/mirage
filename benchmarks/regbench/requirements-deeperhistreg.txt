@@ -2,6 +2,13 @@
 # here: its own requirements.txt (github.com/MWod/DeeperHistReg), plus the two binary wheels
 # that stand in for system libvips / OpenSlide. Install torch and torchvision first, from the
 # index that matches your hardware (CPU, or your CUDA version).
+#   torch >= 2.3 is THIS BENCHMARK's floor, not upstream's (its requirements.txt asks for
+#   torch>=1.13.1 and the wheel declares nothing): the adapter hands the package one-channel
+#   16-bit TIFFs, and uint16 arrays load into torch only from 2.3 on (the port's plan;
+#   seen to load on torch 2.3.1, older releases not tried).
+#   The adapter (methods/deeperhistreg.py) also needs what every method image carries: the
+#   pinned stare-registration (its lazy reader), tifffile, zarr < 3 and imagecodecs (the
+#   package's writer saves LZW, which tifffile decodes through imagecodecs).
 #   Verified importable and run on 2026-10-07 with: deeperhistreg 1.0.1, Python 3.10,
 #   numpy 1.26.4, SimpleITK 2.5.6, pyvips 3.2.0.
 deeperhistreg==1.0.1

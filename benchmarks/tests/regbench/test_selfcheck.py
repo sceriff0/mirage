@@ -125,13 +125,13 @@ def test_sizes_are_the_ones_each_method_needs():
     assert sc.sizes_for("stare")[1][0] == (4096, 5120)  # a four-tile junction
     for name in ("valis", "valis_mirage", "valis120", "valis120_hires"):
         assert max(sc.sizes_for(name)[-1][0]) >= 30000, name
+    # one pair for every DeeperHistReg label, the high-resolution ones included
     assert sc.sizes_for("deeperhistreg_gpu") == sc.SIZES["deeperhistreg"]
-    assert sc.sizes_for("deeperhistreg_hr_fluo_cpu") == sc.SIZES["deeperhistreg_hr"]
-    (default,) = sc.SIZES["deeperhistreg"]
-    assert min(default[0]) > 20480 and min(default[1]) > 20480
-    for key in ("deeperhistreg", "deeperhistreg_hr"):
-        for ref_hw, mov_hw in sc.SIZES[key]:
-            assert all(v % 20 == 0 for v in (*ref_hw, *mov_hw)), key
+    assert sc.sizes_for("deeperhistreg_hr_fluo_cpu") == sc.SIZES["deeperhistreg"]
+    assert "deeperhistreg_hr" not in sc.SIZES
+    ((ref_hw, mov_hw),) = sc.SIZES["deeperhistreg"]
+    assert min(ref_hw) > 20480 and min(mov_hw) > 20480
+    assert all(v % 20 == 0 for v in (*ref_hw, *mov_hw))
 
 
 # ── blind detection ───────────────────────────────────────────────────────────
