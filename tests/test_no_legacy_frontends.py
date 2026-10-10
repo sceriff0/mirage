@@ -66,6 +66,10 @@ ALLOW_FILES = {
     # design doc and the reg_benchmark ORB-oracle files left this list on 2026-09-27: with ORB
     # dropped from PATTERN they matched nothing.)
     "docs/parallel_registration_research.md",
+    # DeeperHistReg's OWN configuration key (`run_sift_ransac`), a third-party method the
+    # regbench stand-in emulates and its test asserts verbatim: not STARE's deleted front-end.
+    "benchmarks/tests/regbench/fake_dhr.py",
+    "benchmarks/tests/regbench/test_dhr_adapter.py",
 }
 
 

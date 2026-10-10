@@ -277,6 +277,26 @@ def test_resources_are_measured_for_the_whole_run(scored, synthetic_cases):
     assert "## Resources" in text and "whole job, writers included" in text
 
 
+def test_the_image_stare_wrote_has_a_tissue_row_beside_initial_and_truth(scored):
+    """The tissue-level block on a REAL method's written image (STARE's own STITCH)."""
+    pytest.importorskip("cv2")
+    _, tables = scored
+    rows = {(r["case_id"], r["variant"]): r for r in tables["tissue"]}
+    assert {v for _, v in rows} == {"initial", "truth", "stare"}
+    assert {(m["variant"], m["reason"]) for m in tables["tissue_missing"]} == {
+        ("stare_rigid", "the method writes no image for this variant")
+    }
+    stare, truth, initial = (rows[("rigid", v)] for v in ("stare", "truth", "initial"))
+    assert stare["source"] == "method" and truth["source"] == "benchmark"
+    for key in ("tissue_dice", "boundary_dice"):
+        assert stare[key] > initial[key], key
+        assert stare[key] == pytest.approx(truth[key], abs=0.05), key
+    assert stare["qcs"] >= initial["qcs"]
+    assert {r["shift_um"] for r in tables["tissue_dose"]} == {0, 1, 3, 10, 30, 100}
+    for name in ("cells", "summary_cells", "paired_vs_primary", "truth"):
+        assert not any("qcs" in k or "tissue" in k for k in tables[name][0]), name
+
+
 def test_paired_differences_are_against_stare(scored):
     _, res = scored
     paired = res["paired_vs_primary"]

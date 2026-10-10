@@ -34,6 +34,7 @@ This package is being ported in steps. What exists now:
 | adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
 | adapter `palom` (PALOM 2026.4.1 by its README recipe: `palom`, and `palom_b1024` with the reference rechunked to 1024 px blocks) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
+| tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
 | the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
@@ -51,6 +52,7 @@ methods/       one module per method, and the driver that runs any of them
 datasets/      synthetic, semisynth, multiplex: each writes cases
 score.py       reads files only; writes <out>/tables
 selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
+tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 slurm/         sbatch wrappers (first rung of the ladder; no escalation yet)
 ```
 
@@ -67,6 +69,7 @@ python -m benchmarks.regbench list --cases CASES --dataset synthetic          # 
 python -m benchmarks.regbench list --cases CASES --dataset synthetic --groups  # patients
 python -m benchmarks.regbench run --cases CASES --out OUT --dataset synthetic \
     --method stare --index 0
+python -m benchmarks.regbench tissue --cases CASES --out OUT   # needs OpenCV; see below
 python -m benchmarks.regbench score --cases CASES --out OUT
 python -m benchmarks.regbench selfcheck --method stare --work WORK
 ```
@@ -508,6 +511,7 @@ method's fields is post hoc and names that method.
 | `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; peaks are maxima, never divided by rounds |
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
+| `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv`, `tissue_dose.csv`, `tissue_dose_summary.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
 | `summary.md` | | the summary, with the line "descriptive; no ranking is claimed" under six patients, and the known-truth table |
 
 ### Off the seams
@@ -556,6 +560,141 @@ The cases of the frozen known-truth spec are left out of `resources.csv` and
 `summary_resources.csv` (cost is read on the cohort); their failures are still counted in
 `failures.csv`.
 
+## Tissue-level agreement of the written images (secondary)
+
+**ACCREDIT's composite (Zhou et al. 2026, bioRxiv, released code), designed for H&E
+references; weights, ranges and thresholds not calibrated on this data; secondary, not
+part of any ranking.** That sentence is printed with every table of this block.
+
+For each variant that has an image on disk, the nuclear channel of that image is compared
+with the nuclear channel of the reference slide at 4000 px (`tissue.py`). It is the only
+part of the benchmark that looks at the written image as a whole: a point map can be
+right where the image is blank, cropped or filled. It is computed here between two
+fluorescence images of the same channel, which is **outside what the score was designed
+and reported for** (every use in its source has an H&E reference). Not claimed: accuracy
+at nuclear scale (one evaluation pixel is about 4 µm on a 50000 px slide), or that the
+composite tracks registration error (the QCS report of this port, whose author read the
+whole preprint, found no check of it against landmarks; the preprint itself calls it "a
+proxy metric").
+
+### The definition: the released code, and where the preprint's text differs
+
+Implemented from github.com/LeeZhou-bearway/ACCREDIT at commit `9293473` (MIT licence;
+re-implemented, nothing vendored): `benchmark/evaluation/compute_qcs_4methods.py`
+`[FULL]` (the script that scored the other methods' images), `quality/quality_metrics.py`
+`[FULL]`, `benchmark/evaluation/qcs_formula_v2.py` `[FULL]`,
+`benchmark/evaluation/recompute_qcs_v2_from_existing.py` `[FULL]`; the header and all 96
+rows of `benchmark/evaluation/metrics_flat_all_4000px.csv` `[FULL]` were parsed and the
+composite recomputed from its pieces (91 numeric rows, largest difference 0.00015, the
+table's rounding). The preprint (doi 10.64898/2026.08.08.743602, v1) was read for its
+"Composite Quality Score (QCS)" section and its limitations paragraph only `[PARTIAL: read
+those two passages from the PDF's extracted text, equations partly garbled; missing every
+other section and the supplement]`. Term by term, with the file and lines, in
+`tissue.py`'s docstring. Where the two disagree the code is implemented (ruling R3.3):
+
+| term | preprint, Methods text | released code (implemented) |
+|---|---|---|
+| boundary Dice | Dice of two bands, `B_r(M) = dilate(dM, r)`, r = 8 | band = dilate minus erode (17 px ellipse); Dice of the two MASKS restricted to the union of the two bands (`quality_metrics.py:34-54`) |
+| Hausdorff | the symmetric maximum: "the worst boundary mismatch, not the average mismatch" | the MEAN of the pooled nearest-neighbour distances between the single longest external contour of each mask, each cut to 2000 evenly taken points (`:86-119`, `:260`). A detached piece of tissue is not seen at all |
+| coverage | `c_ref = \|M & M_r\| / \|M_r\|`, penalised under 20 % of the reference tissue | written-image mask / ALL pixels of the frame (`compute_qcs_4methods.py:99`). A tissue that fills 5 % of the frame is scaled by 0.25 even when it matches exactly |
+| background | `\|M & not M_r\| / \|M\|` | `\|M & not M_r\| / \|not M_r\|`, the reference's background (`:100`) |
+| where the pieces are computed | not stated | inside the bounding box of the written image's mask (`:87-92`); only the two penalties use the frame. Reference tissue outside that box is not seen: an image holding one of two identical pieces of tissue has a tissue Dice of 1 |
+| NMI | 64-bin joint histogram | the same, on the pixels above 0 in BOTH 8-bit images only (`quality_metrics.py:238`) |
+
+The released code also disagrees with itself: ACCREDIT's own pipelines score their output
+through `compute_quality_metrics_v2` (`quality_metrics.py:288-296`: no bounding-box crop)
+with a mask that has one more dilation and no component filter
+(`pipelines/dapi/run_dapi_ROI_flip_pipeline.py:74-79` `[PARTIAL: read lines 70-82]`). The
+script implemented here is the one the repository ships for other methods' images. The
+script that scored the VALIS and ACCREDIT rows of the published table is not in the
+repository (`compute_qcs_4methods.py:2`).
+
+### What the benchmark does around it
+
+- **Reference:** the nuclear channel of the reference slide, not an inverted H&E.
+- **Evaluation size:** the longest edge of the REFERENCE reduced to 4000 px (never
+  enlarged), by an exact area mean in row bands; only this size (ruling R3.3).
+- **8-bit:** both planes go through the released `norm8` (1st to 99th percentile of the
+  positive pixels). In the released script that function is defined and never called,
+  because its inputs were 8-bit already.
+- **The written image as it is:** read from the method's own file at full resolution
+  (`native.files[0]`, or `nuclear_file`), channel `nuclear_channel` (else the moving
+  slide's nuclear index). The released script enlarged 2000 px PNGs, and for one method
+  applied an affine itself.
+- **Fill:** pixels outside the writer's declared `valid_box` are set to 0 before the
+  reduction. The released `== 255 -> 0` rule for one method is not copied.
+- **Off the reference grid:** an image with `origin_xy` (ASHLAR's mosaic only) is placed
+  on the reference canvas first; what the image does not cover is 0. ASHLAR is therefore
+  scored against the benchmark's reference slide, like every other method.
+- **A blank image** (under 100 mask pixels) is a row with `status: no_tissue` and a
+  composite of 0; the released script stores no score there.
+- **Frozen before any cohort run** (`tissue.FROZEN`): 4000 px, r = 8, 64 bins, ORB 5000
+  features, RANSAC 5.0 px, the mask recipe (Otsu, 15 px closing twice, components under
+  1e-4 of the frame dropped), 2000 contour points, the weights and ranges.
+
+### Rows and tables
+
+| row | image |
+|---|---|
+| every variant with a written image | the method's own file |
+| `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |
+| `truth` (known-truth cases) | the moving slide resampled by the generating map, drawn by the benchmark (bilinear, at the evaluation size; the inverse of the generator's map is taken on every 4th evaluation pixel) |
+
+A variant with no image has NO row and one line in `tissue_missing.csv` with the reason:
+`not run`, `the run failed (<cause>): no image`, `the method writes no image for this
+variant` (`stare_rigid`, `palom_affine`, the VALIS rigid and non-rigid stages, DeeperHistReg's
+estimated-field rows), `the method's writer failed: ...`. A failed run is NOT scored at
+the unregistered pose here, so `n_scored` of `n_cases` is printed beside every median.
+
+| file | one row per | columns |
+|---|---|---|
+| `tissue.csv` | case x variant | `dataset, case_id, group, family, pose, variant, source` (`method` or `benchmark`), `status` (`ok` or `no_tissue`), `qcs`, `tissue_dice, boundary_dice, hausdorff_mean, hausdorff_p95` (evaluation px), `hausdorff_mean_um, hausdorff_p95_um`, `inlier_ratio, n_inliers, n_matches, nmi, ncc` (stored by the source, not in the composite), `coverage, bg_coverage`, the bounded terms `s_td, s_bd, s_hd, s_ir, s_nmi, cov_factor, bg_penalty`, `eval_h, eval_w, eval_um_per_px, ref_tissue_frac, mov_tissue_frac, ref_otsu, mov_otsu, crop_box, opencv, definition` |
+| `tissue_summary.csv` | dataset x variant | `source, n_scored, n_cases, n_no_tissue, n_below_025`, and for each piece `<piece>_median` and `<piece>_worst` over the scored CASES (minimum; maximum for the two distances) |
+| `tissue_missing.csv` | case x variant without a row | `dataset, case_id, group, variant, reason` |
+| `tissue_dose.csv` | known-truth case x shift | the columns of `tissue.csv` plus `shift_um`: the `truth` plane moved by 0, 1, 3, 10, 30 and 100 µm along x |
+| `tissue_dose_summary.csv` | dataset x shift | the summary of those rows: what the block can resolve |
+
+The numeric composite and the count under 0.25 are printed; the source's good /
+acceptable / poor classes are not. The known-truth datasets are separate rows (`dataset`),
+and their evaluation pixel is not the cohort's: an 8192 px window at 4000 px is 0.67 µm per
+evaluation pixel, a 50000 px slide 4.06 µm.
+
+### Where it runs, and what it needs
+
+1. **The reduction** runs in the driver, right after a method's writer, clock stopped
+   (`run.json: tissue`; `<variant dir>/tissue/moving_eval.tif`, 16-bit). NumPy and
+   tifffile through `stare.slide_io.open_lazy` only, which every method image already
+   needs. One channel is read `tissue.BAND_ROWS` rows at a time; the image is never
+   loaded whole. A selfcheck run is not reduced. A plane that is missing is made by the
+   scorer from the written image when that still exists. Measured once, on a laptop
+   (macOS, tifffile 2023.4.12, zarr 2.18.3), never on the cluster: one channel of a
+   three-channel 40000 x 50000 16-bit tiled OME-TIFF reduced in 16 s at a peak of 1.5 GB,
+   most of it the reader's (a bare loop of band reads of that file reaches 0.9 to
+   1.2 GB; one channel whole would be 3.7 GB); the pieces on the two 3200 x 4000 planes
+   took 2 s at a peak of 0.9 GB.
+2. **The pieces** need OpenCV (`cv2`). The STARE image, where `score` runs, does not have
+   it (`requirements/stare.txt`), and no pin was added for this block.
+   `python -m benchmarks.regbench tissue --cases C --out O` computes them in any
+   environment that has `cv2`, NumPy, tifffile, zarr and `stare.slide_io`, and leaves
+   `tissue.json` beside each reduced plane (`<out>/cache/tissue/...` for the reference,
+   `initial` and `truth`). `score` reads those; what it finds neither on disk nor
+   computable is listed in `tissue_missing.csv` with the reason, never left out silently.
+   Use ONE OpenCV version for a whole result: the version is recorded in each row
+   (`opencv`), and ORB and RANSAC are OpenCV's. The pinned `opencv-python-headless
+   4.10.0.82` of `requirements/constraints.txt` is in the PALOM image and in CI.
+3. Delete `<out>/cache/tissue` after re-preparing cases: the reference's plane is made
+   once per case and kept.
+
+### What to expect of the pieces (not measured on real slides)
+
+- The **inlier ratio** fits its own similarity, so it is blind to any shift, rotation or
+  scale left in the image: the unregistered `initial` row saturates the term (tested).
+- **Tissue Dice, coverage and background** see gross failure and missing or misplaced
+  tissue, not micrometres. **Boundary Dice** sees only the outline of the tissue.
+- **NMI** is self-consistency on the registration channel, like the nuclear scores.
+- The composite is `1.0` for a perfect match only when the tissue fills at least 20 % of
+  the frame.
+
 ## Cost
 
 Per round and per patient: registration wall time, CPU-hours of the whole process tree,
@@ -596,7 +735,10 @@ peak memory, GPU-hours with the device named, and total time to the registered i
    same memory request; the tables show each run's rung.
 6. **Known-truth cases** are a check chosen by STARE's authors; see "What these numbers
    are not" under "Known-truth error".
-7. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
+7. **The tissue-level block is secondary**: ACCREDIT's score on same-modality
+   fluorescence, outside what it was validated for, by its released code where that
+   differs from the preprint's text. It ranks nothing.
+8. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
    confines cores are unverified.
 
 ### STARE (`methods/stare.py`)
@@ -930,8 +1072,8 @@ writer is run afterwards, outside the clock, as the package's own example does).
   published. The maintainer says "the configs used to produce the results reported in
   RegWSI paper were slightly different than the default ones" (issue #15 `[FULL]`). Where
   the shipped sets visibly depart from the paper's text is recorded with every run
-  (`info.implementation.departures_from_paper_text`): SIFT+RANSAC also runs as an
-  initial-alignment candidate; the transform is a four-parameter similarity where the
+  (`info.implementation.departures_from_paper_text`): a scale-invariant feature
+  transform + RANSAC candidate also runs in the initial alignment; the transform is a four-parameter similarity where the
   paper says affine; the 8192 px set has nine initial-alignment sizes where the paper's
   tables stop at eight; the writer enlarges the field linearly where the paper says
   B-splines; the intensity flip is not in the paper's text.
@@ -1250,5 +1392,10 @@ stand-in, in a fresh process.
 `test_ashlar_adapter.py` runs the ASHLAR adapter against `fake_ashlar.py`, the same kind of
 stand-in (ASHLAR's reader, positions and paste rule transcribed from its source at
 v1.20.0); the one test that needs ASHLAR itself is in `test_external_methods.py`.
+`test_tissue.py` checks the tissue-level block on drawn masks and images with known
+answers (identical, a known shift, a known rotation, concentric discs, a blank image, an
+image off the reference grid, a bright fill outside the valid box), the reduction against
+`cv2.INTER_AREA` and a brute-force integral, and the block's place in the scorer with fake
+methods that write images; it needs OpenCV and skips without it.
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.

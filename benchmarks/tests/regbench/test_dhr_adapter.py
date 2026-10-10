@@ -645,7 +645,9 @@ def test_info_names_regwsi_and_the_departures(tmp_path, case):
         assert impl["paper_resolution_px"] == 4096
         departures = impl["departures_from_paper_text"]
         assert len(departures) == 5
-        for i, word in enumerate(("SIFT", "rigid", "nine", "linear", "flip_intensity")):
+        for i, word in enumerate(
+            ("scale-invariant", "rigid", "nine", "linear", "flip_intensity")
+        ):
             assert word in departures[i], (i, departures[i])
         side = " ".join(impl["benchmark_side"])
         for word in (

@@ -242,6 +242,24 @@ def build_parser():
         "rest of the run list and no primary rows (a laptop run of one method)",
     )
 
+    sc.add_argument(
+        "--no-tissue",
+        action="store_true",
+        help="leave out the tissue-level block of the written images (tissue*.csv)",
+    )
+
+    ts = sub.add_parser(
+        "tissue",
+        help="compute the tissue-level pieces of every written image (needs OpenCV); "
+        "`score` then reads them",
+    )
+    ts.add_argument("--cases", required=True)
+    ts.add_argument("--out", required=True)
+    ts.add_argument("--dataset", nargs="*", default=None, choices=DATASETS)
+    ts.add_argument("--workers", type=int, default=n_cpus())
+    ts.add_argument("--dev", action="store_true")
+    ts.add_argument("--only-run", action="store_true")
+
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
@@ -373,6 +391,34 @@ def _runs(a):
     return 0
 
 
+def _tissue(a):
+    """The pieces of every written image, left beside each reduced plane (tissue.json)."""
+    from . import score, tissue, variants
+    from .cases import list_cases
+
+    if not tissue.have_cv2():
+        raise SystemExit(
+            "tissue: OpenCV (cv2) is not importable in this environment; the pieces "
+            "are the released ACCREDIT code's and need it"
+        )
+    expected = None if a.only_run else variants.expected_variants()
+    jobs = []
+    for ds in a.dataset or DATASETS:
+        cases = [
+            c for c in list_cases(a.cases, ds) if c.case_id.startswith("dev_") == a.dev
+        ]
+        found = score.find_variants(a.out, ds, expected) if cases else []
+        jobs += [(a.out, c, found) for c in cases]
+    if not jobs:
+        raise SystemExit(f"no prepared cases under {a.cases}")
+    got = tissue.score_all(jobs, a.workers)
+    print(
+        f"tissue: {len(got['tissue'])} row(s), {len(got['tissue_missing'])} without "
+        f"one, {len(got['tissue_dose'])} dose row(s); `score` writes the tables"
+    )
+    return 0
+
+
 def main(argv=None):
     a = build_parser().parse_args(argv)
     if a.cmd == "prepare":
@@ -385,6 +431,8 @@ def main(argv=None):
         return _selfcheck(a)
     if a.cmd == "runs":
         return _runs(a)
+    if a.cmd == "tissue":
+        return _tissue(a)
     from . import score, variants
 
     expected = None if a.only_run else variants.expected_variants()
@@ -397,5 +445,6 @@ def main(argv=None):
         dev=a.dev,
         expected=expected,
         primary=primary,
+        with_tissue=not a.no_tissue,
     )
     return 0

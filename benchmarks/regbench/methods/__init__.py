@@ -542,6 +542,22 @@ def _run(
                     {**cost, **end},
                     tb,
                 )
+    if not opts.get("stage_images"):  # a selfcheck's pair carries dots, not tissue
+        # Clock stopped, writers done: the nuclear channel of each written image, reduced
+        # to the evaluation size of the tissue-level block (regbench.tissue). One channel
+        # in row bands; a failure here is recorded and changes nothing else.
+        from .. import tissue
+
+        for (case_id, variant), rec in done.items():
+            native = rec.get("native")
+            if not (isinstance(native, dict) and native.get("files")):
+                continue
+            d = result_dir(out, names[variant], by_id[case_id])
+            try:
+                rec["tissue"] = tissue.reduce_native(by_id[case_id], native, d)
+            except (Exception, SystemExit) as exc:
+                rec["tissue"] = {"error": f"{type(exc).__name__}: {exc}"}
+            write_json(d / "run.json", rec)
     if realcheck:
         # Clock stopped, writers done: does each mapping follow the image written for it?
         from .. import selfcheck

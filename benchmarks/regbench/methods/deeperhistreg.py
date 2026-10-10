@@ -118,8 +118,9 @@ HR_CONFIG = "default_initial_nonrigid_high_resolution"
 # Where the shipped sets visibly depart from the paper's text (the port's RegWSI report,
 # B2; code lines read for this file, the paper's statements taken from the report).
 DEPARTURES = (
-    "SIFT+RANSAC also runs as an initial-alignment candidate (run_sift_ransac=True; "
-    "multi_feature.py:56-61); the paper's method is SuperPoint/SuperGlue only",
+    "a scale-invariant feature transform + RANSAC candidate also runs in the initial "
+    "alignment (the shipped sets switch it on; multi_feature.py:56-61); the paper's "
+    "method is SuperPoint/SuperGlue only",
     "transform_type is 'rigid', a four-parameter similarity (dhr_utils/utils.py:583-603); "
     "the paper says affine",
     "the 8192 px set has nine initial-alignment sizes (150 to 600; "

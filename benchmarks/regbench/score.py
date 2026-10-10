@@ -57,6 +57,13 @@ own: they enter no summary of the primary rows, no paired difference and no rank
 a number from them is never set beside a full-slide number. A case the owner's primary run
 did not register has no such row for any method, and the count of those cases is printed.
 
+**Tissue-level agreement of the written images** (``tissue*.csv``, ``regbench.tissue``;
+never in the tables above). ACCREDIT's score and its pieces between the nuclear channel of
+each image a method wrote and the reference's, at 4000 px, with an ``initial`` row for
+scale. Secondary: a block of its own, in no summary of the primary rows, no paired
+difference and no ranking. A variant without a written image has no row there and a line
+in ``tissue_missing.csv``.
+
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
 """
 
@@ -69,7 +76,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, pairs, truth
+from . import DATASETS, pairs, tissue, truth
 from .cases import list_cases, load_points, polys, result_dir
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -899,6 +906,7 @@ def summary_markdown(
     known_truth=None,
     nonband=None,
     nonband_lost=None,
+    tissue_tables=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
@@ -937,6 +945,8 @@ def summary_markdown(
             "",
         ]
     parts += _nonband_markdown(nonband or [], nonband_lost or [])
+    if tissue_tables:
+        parts += tissue.markdown(tissue_tables, markdown)
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
         parts += [markdown(fails, list(fails[0])), ""]
@@ -979,8 +989,12 @@ def score(
     expected=None,
     primary=None,
     seam_owners=None,
+    with_tissue=True,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``with_tissue`` adds the tissue-level block of the written images (``tissue*.csv``,
+    ``regbench.tissue``): secondary, its own tables, never part of the ones above.
 
     ``expected`` lists variants that must appear even with no directory. ``primary`` lists
     the primary variants: they come first in the summary and define the ``common`` block.
@@ -1076,6 +1090,7 @@ def score(
         "nonband_truth",
         "nonband_truth_by_family",
         "nonband_missing",
+        *tissue.TABLES,
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
     write_csv(tables / "cells.csv", cells)
@@ -1091,9 +1106,25 @@ def score(
     write_csv(tables / "nonband_truth.csv", non_truth)
     write_csv(tables / "nonband_truth_by_family.csv", truth.by_family(non_truth))
     write_csv(tables / "nonband_missing.csv", non_lost)
+    # the written images against the reference: tables of their own, never ranked
+    tis = (
+        tissue.score_all([(j[0], j[1], j[2]) for j in jobs], workers)
+        if with_tissue
+        else {}
+    )
+    for name, rows in tis.items():
+        write_csv(tables / f"{name}.csv", rows)
     known = truth_header(list(hashes), patients, prepared, folded)
     text = summary_markdown(
-        summary, fails, res_summary, primary, by_family, known, non_summary, non_lost
+        summary,
+        fails,
+        res_summary,
+        primary,
+        by_family,
+        known,
+        non_summary,
+        non_lost,
+        tis,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -1112,4 +1143,5 @@ def score(
         "nonband_summary": non_summary,
         "nonband_truth": non_truth,
         "nonband_missing": non_lost,
+        **tis,
     }
