@@ -339,7 +339,9 @@ landmarks on real slides.
 
 The one independent check: on synthetic and semi-synthetic cases the map that made the
 moving slide is known, so a method's error can be measured against it. Everything here is
-fixed by `truth_spec.json`, which carries the SHA-256 of its own content.
+fixed by `truth_spec.json`, which carries the SHA-256 of its own content, except which
+cohort patients the semi-synthetic cases are cut from: that is the cohort's own list, or
+a subset declared before any run ("Cases" below).
 
 **Probes.** `truth_mov` are centroids of nuclei segmented on the native MOVING slide, and
 `truth_ref = g(truth_mov)` with `g` the generating map (moving -> reference, exact). A
@@ -359,37 +361,102 @@ the discontinuous `seams` family well defined.
 | `wave` | 10 px peak | 1500 px | the benchmark's choice |
 | `grid` | s.d. 5 px | 9 x 9 nodes | literature value as recorded in STARE's README, not re-read |
 | `multiscale` | RMS 2.0 µm | 333, 166, 83 µm, fixed in µm | amplitude as above; the spectrum is the benchmark's choice |
-| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 20 bumps | the benchmark's choice; inside STARE's model |
-| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 60 bumps | **outside STARE's model** (finer than its 64 px lattice) |
-| `seams` | s.d. 3 px | 1536 px blocks | **outside STARE's model** (discontinuous) |
+| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 120 bumps per 8192 px window | the benchmark's choice; inside STARE's model; 24 % of the window moves by more than 1 µm |
+| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 4000 bumps per 8192 px window | **outside STARE's model** (finer than its 64 px lattice); 23 % of the window moves by more than 1 µm |
+| `seams` | s.d. 3 px | 1950 px blocks | **outside STARE's model** (discontinuous); no seam on any method's grid |
 
-The 1536 px block is neither STARE's 2048 px tile nor ASHLAR's 922 px tile pitch. It is a
-multiple of STARE's 64 px lattice, and in an 8192 px window one seam (6144 px) falls on a
-STARE tile edge. Bumps cover a small part of an 8192 px window, so their effect shows in
-`tre_um_max` and the shares under a threshold, hardly in the median.
+**Seams.** With 1950 px blocks the seams of an 8192 px window fall at 1950, 3900, 5850 and
+7800 px. None of these positions is a multiple of any grid a method works on
+(`method_grids_px` in the spec): STARE's 64 px vector lattice and 2048 px tile, ASHLAR's
+922 px tile pitch, PALOM's 1024 and 2048 px blocks. The test
+`test_no_seam_falls_on_a_method_grid` checks every seam position against every listed
+grid (`truth.seams_on_a_grid`), not the block size alone. "Grid" here means multiples of
+the listed size from the window's origin; ASHLAR's tile ENDS (922 k + 1024) are not in the
+list. A window smaller than 1950 px has no seam at all: a reduced copy of this family is
+a constant shift.
+
+**Bumps.** The counts are for the 8192 px window and were set so that about a quarter of
+it moves by more than 1 µm, measured on the generated field (the pose not counted;
+`synthetic.field_stats`, a lattice every 4 px):
+
+| family | bumps | moved by > 1 µm, the two synthetic cases | over other seeds | smallest Jacobian determinant |
+|---|---|---|---|---|
+| `bumps100` | 120 | 23.7 %, 24.6 % | 21.8 to 25.0 % (82 seeds) | 0.48, 0.46 in the synthetic cases; 0.37 over the 82 seeds |
+| `bumps25` | 4000 | 23.2 %, 22.9 % | 22.9 to 23.7 % (182 seeds) | 0.25, 0.32 in the synthetic cases; see below |
+
+Neither synthetic case folds, and the scorer's own `fold_pct` of the true map is 0 for
+both families. For `bumps25` a fold is a rare coincidence of bumps, not a matter of the
+count: 1 seed of 182 at 4000 bumps had a negative determinant at one point of a 4.2
+million point lattice, and so had 1 seed of 100 at 3400 bumps (0 of 100 at 3600 and
+3800), so a lower count inside the 20 to 30 % range does not remove it. The seeds of the
+semi-synthetic cases depend on the patients' ids, so each known-truth case records what
+its own map does (`case.json`: `extra.field` = `moved_frac_over_1um`, `min_jacobian`,
+`fold_pct` on a lattice every 8 px), and the summary's known-truth header lists any case
+whose true map folds. The test
+`test_bumps_move_about_a_quarter_of_the_window_without_folding` measures both families at
+the frozen size and holds them to the fraction the spec records, within 0.02.
+
+A reduced copy (a test, a smoke run at 1024 px) keeps the bumps' density, not their
+number: 4000 x (n / 8192)^2. A bump is summed out to 8 sigma and is exactly zero beyond
+(under 1.3e-14 of its peak there), so an 8192 px slide with 4000 bumps costs what the few
+bumps near each block cost; the rule is per point, and a point has the same value in any
+batch. Preparing one 8192 px `bumps25` case (both slides, segmentation, probes) took 49 s
+with 4 workers on the development laptop, and twice in fresh folders gave the same pixels,
+nuclei, probes and `case.json` (the files differ only in the OME header's UUID).
 
 **Poses**, one per round: `shift` is (30, -20) px with no rotation; `rot` is 2 degrees plus
 that shift. ASHLAR has no rotation, so its `rot` rows measure that limit and are read
 beside its `shift` rows.
 
 **Cases.** Windows of 8192 px for every method (4 x 4 STARE tiles). A patient is
-(window, family): one reference, kept as one file, and two rounds. `synthetic`: one
-Gaussian-blob scene per family (7 patients, 14 cases). `semisynth`: 2 windows from each of
-the 2 cohort patients the spec names, variant `same`, noise 1.0 x the background s.d.
-(28 patients, 56 cases). A per-pair method runs each round; a per-patient method gets the
-patient and so never sees two families at once.
+(window, family): one reference, kept as one file, and two rounds. A per-pair method runs
+each round; a per-patient method gets the patient and so never sees two families at once.
+
+- `synthetic`: one Gaussian-blob scene per family (7 patients, 14 cases).
+- `semisynth`: variant `same`, noise 1.0 x the background s.d., on the 2 windows with most
+  tissue of each cohort patient's reference round. **The spec names no patient.** The
+  patients are every patient of the manifest given to `prepare`, or a subset declared with
+  `--patients` / `--patients-file`; an id that is not in the manifest is an error that
+  names it. Cost, stated up front: each patient gives 2 windows x 7 families x 2 poses =
+  28 cases of 8192 px (14 patients in the sense above), and every method runs each of them.
 
 ```bash
 python -m benchmarks.regbench prepare synthetic --suite truth --cases CASES
+# every patient of the cohort (rounds.csv from `python -m benchmarks.regbench.arms_manifest`)
+python -m benchmarks.regbench prepare semisynth --truth --cases CASES --manifest rounds.csv
+# a declared subset
+python -m benchmarks.regbench prepare semisynth --truth --cases CASES --manifest rounds.csv \
+    --patients 046,052            # or --patients-file ids.txt (one id per line, # comments)
+# one patient by hand (tests)
 python -m benchmarks.regbench prepare semisynth --truth --cases CASES \
-    --name <a patient the spec names> --image <its reference round> --channel <nuclear>
+    --name <patient id> --image <its reference round> --channel <nuclear index>
 ```
+
+`--manifest` reads two layouts. The `rounds.csv` of `arms_manifest`: each patient's
+`reference` and `ref_channel`, one entry per `group`, pixel size from `pixel_size_um`. The
+arms' raw `input.csv` (`patient_id, path_to_file, is_reference, channels`): the row marked
+as the reference and the one channel whose name holds `DAPI` or `CELLTOX`; it has no pixel
+size, so the file's own header or `--pixel-size-um` gives it, and the raw files must be
+TIFFs this reader opens (the pipeline's preprocessed slides of `rounds.csv` always are).
+With `--index` (a SLURM array) only the patient that case belongs to is opened; the index
+runs over 28 x the number of patients, in the manifest's order.
+
+**Which patients a result rests on.** `prepare` writes `CASES/semisynth/truth_patients.json`
+(the ids, the manifest's path and SHA-256, the spec's hash, each patient's image and
+channel, and the SHA-256 of ids + manifest content + spec hash) and that list's hash into
+every case (`extra.truth_patients_sha256`, with `extra.truth_patient`). A folder that holds
+one list refuses cases of another; `score` refuses cases of two lists, or a list file that
+does not match its cases, and prints the list in the header of the known-truth table of
+`summary.md`, with how many of the listed patients have cases so far. The one-patient form
+declares a list of that one patient.
 
 **The freeze.** `prepare` refuses a `truth_spec.json` whose content does not match its
 hash and writes the hash into every `case.json` it makes from it
 (`extra.truth_spec_sha256`); `score` refuses cases of two hashes. The hash covers the
 parameters, not the generator's code: the commit is what fixes that, and it is to be tagged
-`regbench-truth-frozen-<date>` before any method runs.
+`regbench-truth-frozen-<date>` before any method runs. The spec was re-hashed once on
+2026-10-10 (version 2: seam block, bump counts, no patient named), before any method was
+scored on it.
 
 **Numbers** (`truth.error_stats`), per case and variant, in micrometres: `tre_um_p50`,
 `tre_um_p90`, `tre_um_max`, `frac_under_1um`, `frac_under_2um`, `initial_tre_um_p50` (the

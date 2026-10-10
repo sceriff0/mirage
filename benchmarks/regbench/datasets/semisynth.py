@@ -40,22 +40,38 @@ deformation family; one more window makes the ``dev_*`` cases, the only ones met
 may be chosen on. Test and development windows never overlap.
 
 **The frozen known-truth cases** (``--truth``, ``regbench.truth``). ``truth_spec.json``
-names the cohort patients, the windows per patient, the seven families with their
-amplitudes, and the two poses. ``--image`` is that patient's reference round and ``--name``
-its id, which must be one the spec names. A patient here is (window, family): the untouched
-window is its reference, kept once, and each pose is one round. Variant ``same`` only. The
-window side, the noise and every amplitude come from the spec, not from the command line.
+fixes the windows per patient, the seven families with their amplitudes, and the two poses;
+it names no patient. The patients are the cohort's own::
+
+    prepare semisynth --truth --manifest rounds.csv [--patients 046,052 | --patients-file F]
+
+``--manifest`` is the ``rounds.csv`` that ``regbench.arms_manifest`` writes (each patient's
+``reference`` and ``ref_channel``, one entry per ``group``) or the arms' raw samplesheet
+(``patient_id, path_to_file, is_reference, channels``: the reference row, and the channel
+whose name holds a nuclear marker; the files must be TIFFs this reader opens). Every
+patient of the manifest is used unless a subset is declared; an id that is not in the
+manifest is an error. The list used is written beside the cases
+(``truth_patients.json``) and its hash into every case. ``--name --image --channel`` is the
+same for ONE patient given by hand (tests); it declares a list of that one patient.
+
+A patient here is (window, family): the untouched window is its reference, kept once, and
+each pose is one round. Variant ``same`` only. The window side, the noise and every
+amplitude come from the spec, not from the command line. Each cohort patient gives
+``windows_per_patient`` x families x poses cases (2 x 7 x 2 = 28) of ``n_px`` (8192) px.
 """
 
 from __future__ import annotations
 
+import argparse
+import csv
 import math
+import re
 import zlib
 from pathlib import Path
 
 import numpy as np
 
-from .. import cells, truth
+from .. import arms_manifest, cells, truth
 from ..cases import Case, case_dir, write_case
 from ..imageio import pixel_size_um, write_nuclear_tiles
 from . import synthetic
@@ -246,6 +262,9 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
             "noise_sd": noise_sd,
             "in_stare_model": spec.get("in_stare_model", ""),
             "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
+            "truth_patient": spec.get("truth_patient", ""),
+            "truth_patients_sha256": spec.get("truth_patients_sha256", ""),
+            **synthetic.known_truth_field(spec, px),
         },
     )
     return write_case(
@@ -270,19 +289,29 @@ def _pixel_size(a):
     return px
 
 
+def cases_per_patient(spec):
+    """Known-truth cases one cohort patient gives: windows x families x poses."""
+    return (
+        int(spec["semisynth"]["windows_per_patient"])
+        * len(truth.family_names(spec))
+        * len(truth.pose_names(spec))
+    )
+
+
 def plan_truth(a, spec=None, n=None):
     """``[(name, spec, origin)]`` and the noise SD of the frozen known-truth cases of ONE
-    named patient: its windows with most tissue, each with every family and both poses.
+    patient (``a.name``, ``a.image``, ``a.channel``): its windows with most tissue, each
+    with every family and both poses.
 
     ``n`` makes a reduced copy for a test; its cases carry no spec hash.
     """
     spec = spec or truth.load_spec()
     conf = spec["semisynth"]
     patient = str(a.name or "")
-    if patient not in conf["patients"]:
+    if not patient or not a.image:
         raise SystemExit(
-            f"--truth: --name must be one of the patients the frozen spec names "
-            f"({', '.join(conf['patients'])}), got {patient!r}"
+            "--truth: give --manifest (the cohort's list), or --name and --image for "
+            "one patient"
         )
     if a.mov_image:
         raise SystemExit("--truth: the frozen cases are the `same` variant only")
@@ -314,11 +343,193 @@ def plan_truth(a, spec=None, n=None):
                     "patient": group,
                     "seed": conf["seed"] + 1000 * key + 100 * i + 10 * j + k,
                     **truth.pose_kwargs(spec, pose),
-                    **truth.family_kwargs(spec, family, px),
+                    **truth.family_kwargs(spec, family, px, None if frozen else n),
                     **truth.case_extra(spec, family, frozen),
                 }
                 jobs.append((f"{group}_{pose}", job, (x, y)))
     return jobs, conf["noise_background_sd"] * bg_sd
+
+
+# ── the cohort's own list ─────────────────────────────────────────────────────
+def _rows(path):
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(f"--manifest {path}: not found")
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        reader = csv.DictReader(fh)
+        return [c.strip() for c in reader.fieldnames or []], [
+            {k.strip(): (v or "").strip() for k, v in row.items() if k is not None}
+            for row in reader
+        ]
+
+
+def read_manifest(path):
+    """``{patient: {"image", "channel", "pixel_size_um"}}`` in file order: each patient's
+    reference round and the index of its nuclear channel.
+
+    Two layouts are read. ``rounds.csv`` of ``regbench.arms_manifest`` (``group``,
+    ``reference``, ``ref_channel``, ``pixel_size_um``): one row per moving round, so a
+    patient appears several times with the same reference. The arms' raw samplesheet
+    (``patient_id``, ``path_to_file``, ``is_reference``, ``channels``): the row marked as
+    the reference, and the one channel whose name holds a nuclear marker
+    (``arms_manifest.nuclear_index``); it has no pixel size.
+    """
+    columns, rows = _rows(path)
+    out = {}
+    if {"group", "reference", "ref_channel"} <= set(columns):
+        for row in rows:
+            patient = row["group"]
+            if not patient:
+                continue
+            px = arms_manifest._pixel_size(row.get("pixel_size_um"))
+            entry = {
+                "image": row["reference"],
+                "channel": int(row["ref_channel"] or 0),
+                "pixel_size_um": px,
+            }
+            have = out.setdefault(patient, entry)
+            if (have["image"], have["channel"]) != (entry["image"], entry["channel"]):
+                raise SystemExit(
+                    f"{path}: patient {patient} has more than one reference "
+                    f"({have['image']} channel {have['channel']}, {entry['image']} "
+                    f"channel {entry['channel']})"
+                )
+        return out
+    if {"patient_id", "path_to_file", "is_reference", "channels"} <= set(columns):
+        per = {}
+        for row in rows:
+            if row["patient_id"]:
+                per.setdefault(row["patient_id"], []).append(row)
+        for patient, slides in per.items():
+            refs = [r for r in slides if arms_manifest._truthy(r["is_reference"])]
+            if len(refs) != 1:
+                n = "no" if not refs else str(len(refs))
+                raise SystemExit(
+                    f"{path}: patient {patient} has {n} reference row"
+                    f"{'s' * (len(refs) != 1)}"
+                )
+            names = [c.strip() for c in refs[0]["channels"].split("|") if c.strip()]
+            try:
+                channel = arms_manifest.nuclear_index(names)
+            except ValueError as exc:
+                raise SystemExit(f"{path}: patient {patient}: {exc}") from None
+            out[patient] = {
+                "image": refs[0]["path_to_file"],
+                "channel": channel,
+                "pixel_size_um": None,
+            }
+        return out
+    raise SystemExit(
+        f"{path}: neither a rounds.csv of regbench.arms_manifest (group, reference, "
+        "ref_channel) nor the arms' samplesheet (patient_id, path_to_file, "
+        f"is_reference, channels); its columns are {columns}"
+    )
+
+
+def declared_patients(a):
+    """The subset given by ``--patients`` or ``--patients-file``; None for every patient."""
+    listed, from_file = getattr(a, "patients", None), getattr(a, "patients_file", None)
+    if listed and from_file:
+        raise SystemExit("give one of --patients and --patients-file, not both")
+    if from_file:
+        path = Path(from_file)
+        if not path.is_file():
+            raise SystemExit(f"--patients-file {path}: not found")
+        listed = ",".join(
+            line.split("#", 1)[0] for line in path.read_text().splitlines()
+        )
+    if listed is None:
+        return None
+    ids = [i for i in re.split(r"[,\s]+", listed) if i]
+    if not ids:
+        raise SystemExit("the declared subset of patients is empty")
+    return ids
+
+
+def select_patients(manifest, wanted, path=""):
+    """The patients to build, in the manifest's order; an unknown id is an error."""
+    if wanted is None:
+        return list(manifest)
+    unknown = list(dict.fromkeys(i for i in wanted if i not in manifest))
+    if unknown:
+        raise SystemExit(
+            f"patient(s) {', '.join(unknown)} not in the manifest {path} "
+            f"(it has: {', '.join(manifest)})"
+        )
+    return [p for p in manifest if p in set(wanted)]
+
+
+def _patient_args(a, patient, entry):
+    """``a`` as the one-patient form would have it for a patient of the manifest."""
+    return argparse.Namespace(
+        **{
+            **vars(a),
+            "name": patient,
+            "image": entry["image"],
+            "channel": entry["channel"],
+            "mov_image": None,
+            # the command line wins, then the manifest, then the file's own header
+            "pixel_size_um": getattr(a, "pixel_size_um", None)
+            or entry["pixel_size_um"],
+        }
+    )
+
+
+def _tag(jobs, record, patient):
+    for _, job, _ in jobs:
+        if job.get("truth_spec_sha256"):
+            job["truth_patient"] = patient
+            job["truth_patients_sha256"] = record[truth.HASH_KEY]
+
+
+def plan_truth_manifest(a, spec=None, n=None):
+    """``([(name, spec, origin, args, noise SD, pixel size)], patient list)`` of the frozen
+    known-truth cases of every patient of ``a.manifest``, or of the declared subset.
+
+    With ``a.index`` only the patient that case belongs to is opened: an array task does
+    not read every slide of the cohort to make one case.
+    """
+    spec = spec or truth.load_spec()
+    manifest = read_manifest(a.manifest)
+    if not manifest:
+        raise SystemExit(f"--manifest {a.manifest}: no patient in it")
+    ids = select_patients(manifest, declared_patients(a), a.manifest)
+    sources = {
+        p: {"image": manifest[p]["image"], "channel": manifest[p]["channel"]}
+        for p in ids
+    }
+    record = truth.patient_list(ids, spec, a.manifest, sources)
+    per = cases_per_patient(spec)
+    todo, pick = ids, None
+    if a.index is not None:
+        if not 0 <= a.index < per * len(ids):
+            return [], record
+        todo, pick = [ids[a.index // per]], a.index % per
+    out = []
+    for patient in todo:
+        pa = _patient_args(a, patient, manifest[patient])
+        jobs, noise = plan_truth(pa, spec, n)
+        _tag(jobs, record, patient)
+        px = _pixel_size(pa)
+        if pick is not None:
+            jobs = jobs[pick : pick + 1]
+        out += [(*job, pa, noise, px) for job in jobs]
+    return out, record
+
+
+def _plan_truth_one(a, spec=None):
+    """The one-patient form as the manifest form returns it: a list of that patient."""
+    spec = spec or truth.load_spec()
+    jobs, noise = plan_truth(a, spec)
+    patient = str(a.name)
+    record = truth.patient_list(
+        [patient], spec, None, {patient: {"image": str(a.image), "channel": a.channel}}
+    )
+    _tag(jobs, record, patient)
+    px = _pixel_size(a)
+    if a.index is not None:
+        jobs = jobs[a.index : a.index + 1]
+    return [(*job, a, noise, px) for job in jobs], record
 
 
 def plan(a):
@@ -355,8 +566,38 @@ def plan(a):
     return jobs, noise
 
 
-def prepare(a):
-    jobs, noise = plan_truth(a) if getattr(a, "truth", False) else plan(a)
+def prepare(a, spec=None):
+    """``spec`` stands in for ``truth_spec.json`` (a test's smaller window)."""
+    manifest = getattr(a, "manifest", None)
+    if getattr(a, "truth", False):
+        if manifest and (a.image or a.name):
+            raise SystemExit(
+                "--manifest names the patients: leave out --name / --image"
+            )
+        if not manifest and (
+            getattr(a, "patients", None) or getattr(a, "patients_file", None)
+        ):
+            raise SystemExit("--patients / --patients-file choose among a --manifest's")
+        jobs, record = (
+            plan_truth_manifest(a, spec) if manifest else _plan_truth_one(a, spec)
+        )
+        # before any case: a folder holding another list's cases is refused untouched
+        where = truth.write_patients(a.cases, record)
+        print(
+            f"known-truth patients ({len(record['patients'])}): "
+            f"{', '.join(record['patients'])} -> {where}"
+        )
+        for name, job, origin, pa, noise, px in jobs:
+            d = prepare_one(a.cases, name, job, pa, origin, noise, px, force=a.force)
+            print(f"semisynth/{name} -> {d}")
+        return 0
+    if manifest or getattr(a, "patients", None) or getattr(a, "patients_file", None):
+        raise SystemExit("--manifest / --patients belong to --truth")
+    if not a.image:
+        raise SystemExit(
+            "prepare semisynth: --image is required (or --truth --manifest)"
+        )
+    jobs, noise = plan(a)
     px = _pixel_size(a)
     if a.index is not None:
         jobs = jobs[a.index : a.index + 1]

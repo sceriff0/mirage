@@ -110,6 +110,13 @@ def test_probes_are_exact_pairs(reduced):
         mov = polys(pts, "mov")
         _, cent = cells.area_centroid(cells.Polys(mov.xy, mov.ring_off))
         np.testing.assert_allclose(cent[pts["truth_cell"]], pts["truth_mov"], atol=1e-3)
+        # the case says what its own true map does: how much moves, and no fold
+        field = case.extra["field"]
+        assert field["fold_pct"] == 0.0 and field["min_jacobian"] > 0.05
+        if case.family == "rigid":
+            assert field["moved_frac_over_1um"] == 0.0
+        if case.family == "bumps25":  # the reduced copy keeps the frozen density
+            assert 0.15 < field["moved_frac_over_1um"] < 0.35
         # and its true position lies well inside the reference
         margin = SPEC["probes"]["margin_px"]
         assert pts["truth_ref"].min() >= margin
@@ -316,9 +323,9 @@ def test_out_of_model_families_are_present_and_marked(scored):
     assert (fam["grid"]["sd_px"], fam["grid"]["nodes"]) == (5.0, 9)
     assert fam["multiscale"]["rms_um"] == 2.0
     assert fam["multiscale"]["scales_um"] == [333.0, 166.0, 83.0]
-    assert (fam["bumps100"]["sigma_px"], fam["bumps100"]["count"]) == (100.0, 20)
-    assert (fam["bumps25"]["sigma_px"], fam["bumps25"]["count"]) == (25.0, 60)
-    assert (fam["seams"]["sd_px"], fam["seams"]["block_px"]) == (3.0, 1536)
+    assert (fam["bumps100"]["sigma_px"], fam["bumps100"]["count"]) == (100.0, 120)
+    assert (fam["bumps25"]["sigma_px"], fam["bumps25"]["count"]) == (25.0, 4000)
+    assert (fam["seams"]["sd_px"], fam["seams"]["block_px"]) == (3.0, 1950)
     poses = {p["name"]: (p["theta_deg"], p["shift_px"]) for p in SPEC["poses"]}
     assert poses == {"shift": (0.0, [30.0, -20.0]), "rot": (2.0, [30.0, -20.0])}
     assert SPEC["n_px"] == 8192 and SPEC["probes"] == {
@@ -338,7 +345,74 @@ def test_bumps25_is_finer_than_stares_lattice():
     assert register.get_default("tile") == SPEC["method_grids_px"]["stare_tile"]
     # and the generator really makes bumps of that width
     spec = synthetic.truth_suite()["blob_bumps25_shift"]
-    assert spec["bump_sigma"] == 25.0 and spec["bump_count"] == 60
+    assert spec["bump_sigma"] == 25.0 and spec["bump_count"] == 4000
+    # a reduced copy keeps the bumps' DENSITY, not their number
+    small = synthetic.truth_suite(n=1024)
+    assert small["blob_bumps25_shift"]["bump_count"] == round(4000 / 64)
+    assert small["blob_bumps100_shift"]["bump_count"] == round(120 / 64)
+
+
+def test_a_bump_is_the_same_in_any_batch():
+    """The image is made a tile at a time and a probe is asked for alone: both must see
+    the same field, to the last bit, and it must be the plain sum of the Gaussians."""
+    spec = synthetic.truth_suite()["blob_bumps25_rot"]
+    w = synthetic.extra_field(spec)
+    rng = np.random.default_rng(3)
+    x, y = rng.uniform(0, spec["n"], (2, 400))
+    whole = w(x, y)
+    for i in (0, 17, 399):
+        one = w(x[i : i + 1], y[i : i + 1])
+        assert one[0][0] == whole[0][i] and one[1][0] == whole[1][i]
+    tile = w(*np.meshgrid(np.arange(3000.0, 3040), np.arange(5000.0, 5030)))
+    assert tile[0].shape == (30, 40)
+    np.testing.assert_array_equal(
+        tile[0][7, 9], w(np.array(3009.0), np.array(5007.0))[0]
+    )
+    # against the sum over every bump, written out
+    seed = np.random.default_rng(spec["seed"] + 15485863)
+    k, sg = spec["bump_count"], spec["bump_sigma"]
+    cen = seed.uniform(0, spec["n"], (k, 2))
+    peak = np.minimum(seed.uniform(0.2, 0.6, k) * sg, 50.0)
+    ang = seed.uniform(0, 2 * math.pi, k)
+    e = np.exp(
+        -((x[:, None] - cen[:, 0]) ** 2 + (y[:, None] - cen[:, 1]) ** 2) / (2 * sg * sg)
+    )
+    np.testing.assert_allclose(whole[0], e @ (peak * np.cos(ang)), atol=1e-11)
+    np.testing.assert_allclose(whole[1], e @ (peak * np.sin(ang)), atol=1e-11)
+    assert np.isnan(w(np.array([np.nan, 5.0]), np.array([1.0, 5.0]))[0]).tolist() == [
+        True,
+        False,
+    ]
+
+
+def test_bumps_move_about_a_quarter_of_the_window_without_folding():
+    """At the FROZEN size (8192 px, a lattice every 8 px): the share of the window a bump
+    family moves by more than 1 um is the one the spec records, 20 to 30 %, and the map
+    does not fold."""
+    suite = synthetic.truth_suite()
+    for name in ("bumps25", "bumps100"):
+        fam = truth.family(SPEC, name)
+        recorded = fam["measured_moved_frac_over_1um"]
+        assert 0.20 <= recorded <= 0.30
+        assert f"{100 * recorded:.0f} %" in fam["note"]
+        for pose in truth.pose_names(SPEC):
+            spec = suite[f"blob_{name}_{pose}"]
+            got = synthetic.field_stats(spec, PX, step=8)
+            assert abs(got["moved_frac_over_1um"] - recorded) < 0.02, (name, pose, got)
+            assert got["min_jacobian"] > 0.05, (name, pose, got)
+            # and the number the scorer itself would report for the true map
+            xy, shape, step = methods.jacobian_grid((spec["n"], spec["n"]))
+            jac = truth.jacobian_stats(
+                {
+                    "grid": synthetic.forward_map(spec)(xy),
+                    "grid_shape": np.array(shape),
+                    "grid_step": np.array(step),
+                }
+            )
+            assert jac["fold_pct"] == 0.0
+    # the old counts moved almost nothing: the test can tell
+    sparse = {**suite["blob_bumps25_shift"], "bump_count": 60}
+    assert synthetic.field_stats(sparse, PX, step=8)["moved_frac_over_1um"] < 0.01
 
 
 def _jump_at(spec, x):
@@ -357,18 +431,34 @@ def test_seams_are_discontinuous():
     assert _jump_at(suite["blob_grid_rot"], block) < 1e-4  # none in a smooth family
 
 
-def test_seam_block_matches_no_method_grid():
-    """The block is neither STARE's tile nor ASHLAR's tile pitch, nor a multiple or a
-    divisor of either. It IS a multiple of STARE's 64 px vector lattice (24 x 64), and
-    every fourth seam (6144 px) falls on a STARE tile edge: both are stated, not hidden."""
+def test_no_seam_falls_on_a_method_grid():
+    """Every seam POSITION inside the frozen window is checked against every grid a method
+    works on: STARE's vector lattice and tile, ASHLAR's tile pitch, PALOM's blocks. A seam
+    on a method's own grid line would be a jump that method can absorb for free."""
     block = truth.family(SPEC, "seams")["block_px"]
-    grids = SPEC["method_grids_px"]
-    for name in ("stare_tile", "ashlar_pitch"):
-        size = grids[name]
-        assert block != size, name
-        assert block % size and size % block, name
-    assert block % grids["stare_lattice"] == 0
-    assert math.lcm(block, grids["stare_tile"]) == 6144
+    grids = truth.method_grids(SPEC)
+    assert grids == [
+        ("stare_tile", 2048),
+        ("stare_lattice", 64),
+        ("ashlar_pitch", 922),
+        ("palom_block", 1024),
+        ("palom_block", 2048),
+    ]
+    seams = truth.seam_positions(SPEC)
+    assert seams == [1950, 3900, 5850, 7800]
+    assert truth.seams_on_a_grid(SPEC) == []
+    for at in seams:
+        for name, size in grids:
+            assert at % size, (at, name, size)
+    # the generator really jumps there
+    spec = synthetic.truth_suite()["blob_seams_shift"]
+    assert spec["seam_tile"] == block and all(_jump_at(spec, at) > 0 for at in seams)
+    # the block this replaced was a multiple of STARE's lattice: the check can tell
+    old = {**SPEC, "families": [dict(f) for f in SPEC["families"]]}
+    truth.family(old, "seams")["block_px"] = 1536
+    hits = truth.seams_on_a_grid(old)
+    assert (1536, "stare_lattice", 64) in hits and (6144, "stare_tile", 2048) in hits
+    assert (6144, "palom_block", 1024) in hits
 
 
 def test_multiscale_scales_do_not_depend_on_window_size():
@@ -413,7 +503,9 @@ def test_a_synthetic_patient_is_one_family(reduced, real_like, tmp_path):
         assert len({c.ref_nuclear for c in rounds}) == 1
         assert len({c.mov_nuclear for c in rounds}) == 2
 
-    # semisynth: (window, family) is the patient; 2 windows x 7 families x 2 poses
+    # semisynth: (window, family) is the patient; 2 windows x 7 families x 2 poses for
+    # each cohort patient, whose id the spec no longer names
+    assert "patients" not in SPEC["semisynth"]
     a = semisynth_args(real_like, tmp_path, name="046", truth=True)
     jobs, noise = semisynth.plan_truth(a, n=512)
     assert noise > 0 and len(jobs) == 28
@@ -424,13 +516,14 @@ def test_a_synthetic_patient_is_one_family(reduced, real_like, tmp_path):
         assert name == f"{spec['patient']}_{spec['pose']}"
         assert spec["patient"].endswith(spec["family"])
         assert spec["truth_spec_sha256"] == ""  # a reduced copy is not the frozen suite
-    # 2 named patients: 28 + 7 patients and 70 cases in all
-    named = SPEC["semisynth"]["patients"]
-    assert len(named) == 2 and SPEC["semisynth"]["windows_per_patient"] == 2
-    assert len(named) * 14 + len(patients) == 35
-    assert len(named) * len(jobs) + len(suite) == 70
-    with pytest.raises(SystemExit, match="must be one of the patients"):
-        semisynth.plan_truth(semisynth_args(real_like, tmp_path, truth=True), n=512)
+    assert SPEC["semisynth"]["windows_per_patient"] == 2
+    assert semisynth.cases_per_patient(SPEC) == 28
+    # another patient: other seeds, the same windows of the same image
+    b = semisynth_args(real_like, tmp_path, name="052", truth=True)
+    other, _ = semisynth.plan_truth(b, n=512)
+    assert not {s["seed"] for _, s, _ in jobs} & {s["seed"] for _, s, _ in other}
+    with pytest.raises(SystemExit, match="--name"):
+        semisynth.plan_truth(semisynth_args(real_like, tmp_path, name=None), n=512)
 
 
 def test_semisynth_rounds_share_the_untouched_window(real_like, tmp_path):
@@ -511,6 +604,26 @@ def test_spec_hash_is_enforced(reduced, tmp_path):
     _hashed_copy(src, root, "c", "b" * 64)
     with pytest.raises(SystemExit, match="more than one truth_spec.json"):
         score(root, out, ["synthetic"])
+
+
+def test_a_case_whose_true_map_folds_is_named_in_the_summary(reduced, tmp_path):
+    src = reduced[1][0]
+    root, out = tmp_path / "cases", tmp_path / "out"
+    _hashed_copy(src, root, "fine", "a" * 64)
+    score(root, out, ["synthetic"])
+    text = (out / "tables" / "summary.md").read_text()
+    assert "sha256 `" + "a" * 64 in text and "folds somewhere" not in text
+    dst = root / "synthetic" / "bent"
+    shutil.copytree(src.dir, dst)
+    rec = json.loads((dst / "case.json").read_text())
+    rec["case_id"] = "bent"
+    rec["extra"]["truth_spec_sha256"] = "a" * 64
+    rec["extra"]["field"]["fold_pct"] = 0.001
+    (dst / "case.json").write_text(json.dumps(rec))
+    score(root, out, ["synthetic"])
+    text = (out / "tables" / "summary.md").read_text()
+    assert "1 case(s) were made by a true map that folds somewhere" in text
+    assert "synthetic/bent." in text
 
 
 def test_folding_is_reported():

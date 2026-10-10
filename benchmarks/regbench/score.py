@@ -22,7 +22,10 @@ readable:
 **Known-truth error** (``regbench.truth``). On cases made by a known map, ``truth.csv`` has
 the distance between where a method puts each probe and where it truly belongs, in the
 method's own direction, and ``truth_by_family.csv`` summarises it per (dataset, family,
-pose, variant). Families are never pooled. Cases of the frozen spec are left out of the
+pose, variant). Families are never pooled. The summary's known-truth header names the
+spec's hash and the cohort patients the semi-synthetic cases were built from
+(``truth_patients.json``); cases of two patient lists are refused, like cases of two
+specs. Cases of the frozen spec are left out of the
 cost tables, and cases of two spec hashes are refused.
 
 **A failed run is a row, never a gap.** A variant that failed, was killed, or never ran is
@@ -655,7 +658,41 @@ TRUTH_COLUMNS = (
 )
 
 
-def summary_markdown(summary, fails, res_summary, primary=None, by_family=None):
+def truth_header(spec_hashes, record, prepared, folded=()):
+    """The lines that say what the known-truth numbers rest on: the frozen spec, and the
+    cohort patients the semi-synthetic cases were built from."""
+    lines = []
+    for h in spec_hashes:
+        lines.append(f"Frozen spec `truth_spec.json`, sha256 `{h}`.")
+    if not spec_hashes:
+        lines.append("These cases are not the frozen ones (no spec hash).")
+    if record:
+        ids = record["patients"]
+        have = [p for p in ids if p in prepared]
+        source = (
+            f"manifest `{record['manifest']}` (sha256 "
+            f"`{record['manifest_sha256'][:12]}`)"
+            if record["manifest"]
+            else "given on the command line, no manifest"
+        )
+        lines.append(
+            f"Semi-synthetic cases: {len(ids)} cohort patient(s): {', '.join(ids)}; "
+            f"cases are prepared for {len(have)} of them ({', '.join(have) or 'none'}). "
+            f"List `{record['sha256'][:12]}` ({truth.PATIENTS_FILE}), {source}."
+        )
+    if folded:
+        lines.append(
+            f"{len(folded)} case(s) were made by a true map that folds somewhere "
+            "(`extra.field.fold_pct` > 0 in their case.json): "
+            + ", ".join(folded)
+            + "."
+        )
+    return lines
+
+
+def summary_markdown(
+    summary, fails, res_summary, primary=None, by_family=None, known_truth=None
+):
     parts = ["# Registration benchmark\n"]
     parts.append(
         "Nuclear overlap after registration, on nuclei segmented on the native slides. "
@@ -688,6 +725,7 @@ def summary_markdown(summary, fails, res_summary, primary=None, by_family=None):
             "amplitudes are literature values as recorded in STARE's README; the "
             "families, their smoothness and the multiscale spectrum were chosen by "
             "STARE's authors.\n",
+            *[line + "\n" for line in known_truth or []],
             markdown(by_family, list(TRUTH_COLUMNS)),
             "",
         ]
@@ -738,7 +776,7 @@ def score(
     ``expected`` lists variants that must appear even with no directory. ``primary`` lists
     the primary variants: they come first in the summary and define the ``common`` block.
     """
-    jobs, hashes = [], {}
+    jobs, hashes, lists, prepared, folded = [], {}, {}, set(), []
     for ds in datasets or DATASETS:
         cs = [
             c for c in list_cases(cases_root, ds) if c.case_id.startswith("dev_") == dev
@@ -749,6 +787,13 @@ def score(
             for c in cs:
                 if c.extra.get("truth_spec_sha256"):
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
+                if (c.extra.get("field") or {}).get("fold_pct", 0) > 0:
+                    folded.append(f"{ds}/{c.case_id}")
+                if c.extra.get("truth_patients_sha256"):
+                    lists.setdefault(
+                        (ds, c.extra["truth_patients_sha256"]), f"{ds}/{c.case_id}"
+                    )
+                    prepared.add(str(c.extra.get("truth_patient", "")))
     if not jobs:
         raise SystemExit(f"no prepared cases under {cases_root}")
     if len(hashes) > 1:
@@ -757,6 +802,24 @@ def score(
             + "; ".join(f"{h[:12]} (e.g. {c})" for h, c in hashes.items())
             + ". Score them separately; a changed spec is a post hoc change."
         )
+    if len(lists) > 1:
+        raise SystemExit(
+            "the semi-synthetic known-truth cases were built from more than one "
+            "patient list: "
+            + "; ".join(f"{h[:12]} (e.g. {c})" for (_, h), c in lists.items())
+            + ". A result rests on one declared list of patients; score them "
+            "separately."
+        )
+    patients = None
+    for ds, sha in lists:
+        patients = truth.load_patients(truth.patients_path(cases_root, ds))
+        if patients[truth.HASH_KEY] != sha:
+            raise SystemExit(
+                f"{truth.patients_path(cases_root, ds)} (list "
+                f"{patients[truth.HASH_KEY][:12]}: {', '.join(patients['patients'])}) "
+                f"does not match the list the cases were built from ({sha[:12]}, "
+                f"e.g. {lists[(ds, sha)]})."
+            )
     if workers > 1 and len(jobs) > 1:
         import multiprocessing
 
@@ -797,7 +860,8 @@ def score(
     write_csv(tables / "summary_resources.csv", res_summary)
     write_csv(tables / "truth.csv", truth_rows)
     write_csv(tables / "truth_by_family.csv", by_family)
-    text = summary_markdown(summary, fails, res_summary, primary, by_family)
+    known = truth_header(list(hashes), patients, prepared, folded)
+    text = summary_markdown(summary, fails, res_summary, primary, by_family, known)
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -810,4 +874,5 @@ def score(
         "summary_resources": res_summary,
         "truth": truth_rows,
         "truth_by_family": by_family,
+        "truth_patients": patients,
     }

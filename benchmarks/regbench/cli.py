@@ -81,7 +81,9 @@ def build_parser():
     ss = prep.add_parser("semisynth")
     common(ss)
     ss.add_argument(
-        "--image", required=True, help="OME-TIFF with a real nuclear channel"
+        "--image",
+        default=None,
+        help="OME-TIFF with a real nuclear channel (required without --manifest)",
     )
     ss.add_argument("--channel", type=int, default=0)
     ss.add_argument(
@@ -114,8 +116,28 @@ def build_parser():
     ss.add_argument(
         "--truth",
         action="store_true",
-        help="the frozen known-truth cases of truth_spec.json for the patient --name: "
-        "window side, windows, noise and amplitudes come from the spec",
+        help="the frozen known-truth cases of truth_spec.json: window side, windows, "
+        "noise and amplitudes come from the spec. With --manifest for every patient "
+        "of the cohort; with --name --image --channel for one patient",
+    )
+    ss.add_argument(
+        "--manifest",
+        default=None,
+        help="with --truth: the cohort's list, either the rounds.csv of "
+        "`python -m benchmarks.regbench.arms_manifest` or the arms' input.csv; each "
+        "patient's reference round and nuclear channel are read from it",
+    )
+    ss.add_argument(
+        "--patients",
+        default=None,
+        metavar="ID,ID,...",
+        help="with --manifest: only these patients (an id not in the manifest is an "
+        "error)",
+    )
+    ss.add_argument(
+        "--patients-file",
+        default=None,
+        help="with --manifest: the same subset, one id per line (# starts a comment)",
     )
 
     lst = sub.add_parser("list")

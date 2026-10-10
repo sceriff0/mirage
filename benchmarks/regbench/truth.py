@@ -18,6 +18,13 @@ and scales, the two poses, the window size, the probes and the thresholds. It ca
 SHA-256 of its own content; ``prepare`` refuses a file whose hash does not match and writes
 the hash into every ``case.json`` it makes from it, and ``score`` refuses to mix cases of
 two hashes. Families are reported one by one and never pooled.
+
+**The patients.** The spec names no patient. The semi-synthetic cases are built from the
+cohort's own list (``prepare semisynth --truth --manifest``), or a declared subset of it,
+and the list used is written beside the cases as ``truth_patients.json``: the ids, the
+manifest's path and SHA-256, the spec's hash. Every case records that list's hash;
+``prepare`` refuses to add cases of another list to a folder and ``score`` refuses to
+score cases of two.
 """
 
 from __future__ import annotations
@@ -25,12 +32,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 
 import numpy as np
 
 SPEC_PATH = Path(__file__).with_name("truth_spec.json")
 HASH_KEY = "sha256"
+PATIENTS_FILE = "truth_patients.json"
+PATIENTS_HASHED = ("patients", "manifest_sha256", "truth_spec_sha256")
 ERROR_KEYS = (
     "n_probes",
     "n_nonfinite",
@@ -87,9 +97,14 @@ def in_stare_model(spec, name):
     return bool(family(spec, name)["in_stare_model"])
 
 
-def family_kwargs(spec, name, pixel_size_um):
+def family_kwargs(spec, name, pixel_size_um, n=None):
     """The generator's keywords for one family. Lengths given in micrometres are turned
-    into pixels by the case's pixel size, never by the window's side."""
+    into pixels by the case's pixel size, never by the window's side.
+
+    ``n`` is the side of a reduced copy (a test): the number of bumps is the spec's count
+    for its ``n_px`` window, so a smaller window gets the same bumps per area, not the
+    same number. Nothing else depends on ``n``.
+    """
     f = family(spec, name)
     kind = f["field"]
     if kind == "none":
@@ -107,9 +122,10 @@ def family_kwargs(spec, name, pixel_size_um):
             field="multiscale", amp=0.0, scales=scales, rms=(rms,) * len(scales)
         )
     if kind == "bumps":
-        return dict(
-            field="bumps", amp=0.0, bump_sigma=f["sigma_px"], bump_count=f["count"]
-        )
+        count = int(f["count"])
+        if n is not None and int(n) != int(spec["n_px"]):
+            count = max(1, round(count * (int(n) / spec["n_px"]) ** 2))
+        return dict(field="bumps", amp=0.0, bump_sigma=f["sigma_px"], bump_count=count)
     if kind == "seams":
         return dict(field="seams", amp=0.0, seam_tile=f["block_px"], seam_sd=f["sd_px"])
     raise ValueError(f"family {name!r}: unknown field {kind!r}")
@@ -129,6 +145,104 @@ def case_extra(spec, family_name, frozen):
         "in_stare_model": in_stare_model(spec, family_name),
         "truth_spec_sha256": spec[HASH_KEY] if frozen else "",
     }
+
+
+# ── seams against the methods' own grids ──────────────────────────────────────
+def method_grids(spec):
+    """``[(name, size px)]`` of every grid a method works on, as the spec lists them."""
+    out = []
+    for name, sizes in spec["method_grids_px"].items():
+        for size in sizes if isinstance(sizes, list) else [sizes]:
+            out.append((name, int(size)))
+    return out
+
+
+def seam_positions(spec):
+    """Where the ``seams`` family jumps inside the frozen window, px from its origin."""
+    block = int(family(spec, "seams")["block_px"])
+    return list(range(block, int(spec["n_px"]), block))
+
+
+def seams_on_a_grid(spec):
+    """``[(seam px, grid name, grid size)]`` for every seam that falls on a grid line of
+    a method (a multiple of its size). Empty for a spec that favours no method."""
+    return [
+        (at, name, size)
+        for at in seam_positions(spec)
+        for name, size in method_grids(spec)
+        if at % size == 0
+    ]
+
+
+# ── the patients the semi-synthetic cases come from ───────────────────────────
+def patients_hash(record):
+    """SHA-256 of a patient list: the ids, the manifest's content and the spec."""
+    body = {k: record[k] for k in PATIENTS_HASHED}
+    text = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def patient_list(ids, spec, manifest=None, sources=None):
+    """The record of which cohort patients the semi-synthetic cases are built from.
+
+    ``manifest`` is the CSV the list was read from, or None for one patient given on the
+    command line. ``sources`` (patient -> image and channel) is kept for the reader and
+    is not part of the hash.
+    """
+    record = {
+        "patients": [str(i) for i in ids],
+        "manifest": str(Path(manifest).resolve()) if manifest else "",
+        "manifest_sha256": (
+            hashlib.sha256(Path(manifest).read_bytes()).hexdigest() if manifest else ""
+        ),
+        "truth_spec_sha256": spec[HASH_KEY],
+        "sources": sources or {},
+    }
+    record[HASH_KEY] = patients_hash(record)
+    return record
+
+
+def patients_path(cases_root, dataset="semisynth"):
+    return Path(cases_root) / dataset / PATIENTS_FILE
+
+
+def load_patients(path):
+    """The list in ``truth_patients.json``; refused when it was edited by hand."""
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(
+            f"{path}: not found. The semi-synthetic known-truth cases say which patient "
+            f"list they were built from, and {PATIENTS_FILE} is where that list is "
+            "written; it must stay beside the cases."
+        )
+    record = json.loads(path.read_text())
+    if record.get(HASH_KEY) != patients_hash(record):
+        raise SystemExit(f"{path}: its content does not match the hash it carries")
+    return record
+
+
+def write_patients(cases_root, record, dataset="semisynth"):
+    """Write the list beside the cases, once. A folder that already holds another list
+    is refused: its cases would rest on two sets of patients."""
+    path = patients_path(cases_root, dataset)
+    if path.exists():
+        have = load_patients(path)
+        if have[HASH_KEY] != record[HASH_KEY]:
+            raise SystemExit(
+                f"{path} holds another patient list ({', '.join(have['patients'])}; "
+                f"manifest {have['manifest'] or 'none'}, spec "
+                f"{have['truth_spec_sha256'][:12]}) than the one asked for now "
+                f"({', '.join(record['patients'])}; manifest "
+                f"{record['manifest'] or 'none'}, spec "
+                f"{record['truth_spec_sha256'][:12]}). Cases of two lists are never "
+                "scored together: prepare into another --cases folder."
+            )
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"tmp{os.getpid()}_{path.name}")
+    tmp.write_text(json.dumps(record, indent=1) + "\n")
+    os.replace(tmp, path)
+    return path
 
 
 # ── probes ────────────────────────────────────────────────────────────────────

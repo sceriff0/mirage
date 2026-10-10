@@ -1,7 +1,7 @@
 {
- "version": 1,
- "frozen_on": "2026-10-09",
- "what": "The known-truth cases of regbench: deformation families, amplitudes, scales, poses, window, probes and thresholds. Frozen before any method is scored; see truth.py.",
+ "version": 2,
+ "frozen_on": "2026-10-10",
+ "what": "The known-truth cases of regbench: deformation families, amplitudes, scales, poses, window, probes and thresholds. Frozen before any method is scored; see truth.py. Version 2 (rulings of 2026-10-09, R3.6): seam block 1950 px, denser bumps, no patient named.",
  "n_px": 8192,
  "pixel_size_um": 0.325,
  "poses": [
@@ -61,31 +61,37 @@
    "name": "bumps100",
    "field": "bumps",
    "sigma_px": 100.0,
-   "count": 20,
+   "count": 120,
    "in_stare_model": true,
-   "note": "the benchmark's choice; each bump peaks at 0.2 to 0.6 sigma"
+   "note": "the benchmark's choice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 24 % of the window moves by more than 1 um (0.218 to 0.250 over 82 seeds); no fold in any of them (smallest Jacobian determinant 0.37)",
+   "measured_moved_frac_over_1um": 0.24
   },
   {
    "name": "bumps25",
    "field": "bumps",
    "sigma_px": 25.0,
-   "count": 60,
+   "count": 4000,
    "in_stare_model": false,
-   "note": "outside STARE's model: finer than its vector lattice; each bump peaks at 0.2 to 0.6 sigma"
+   "note": "outside STARE's model: finer than its vector lattice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 23 % of the window moves by more than 1 um (0.229 to 0.237 over 182 seeds); the two synthetic cases do not fold (smallest Jacobian determinant 0.25 and 0.32); about 1 seed in 180 has a fold at one point, so every case records its own (case.json: extra.field)",
+   "measured_moved_frac_over_1um": 0.23
   },
   {
    "name": "seams",
    "field": "seams",
    "sd_px": 3.0,
-   "block_px": 1536,
+   "block_px": 1950,
    "in_stare_model": false,
-   "note": "outside STARE's model: discontinuous; the block is no method's grid"
+   "note": "outside STARE's model: discontinuous. Seams in the n_px window at 1950, 3900, 5850 and 7800 px: none is a multiple of any size in method_grids_px"
   }
  ],
  "method_grids_px": {
   "stare_tile": 2048,
   "stare_lattice": 64,
-  "ashlar_pitch": 922
+  "ashlar_pitch": 922,
+  "palom_block": [
+   1024,
+   2048
+  ]
  },
  "probes": {
   "max": 20000,
@@ -102,10 +108,7 @@
   "seed_rule": "scene = scene_seed + 100 * family index; round = scene + 1 + pose index"
  },
  "semisynth": {
-  "patients": [
-   "046",
-   "052"
-  ],
+  "patients_from": "the cohort's own list: every patient of the manifest given to `prepare semisynth --truth --manifest`, or a declared subset of it; the list used is written beside the cases as truth_patients.json and is not part of this spec",
   "windows_per_patient": 2,
   "variant": "same",
   "noise_background_sd": 1.0,
@@ -114,5 +117,5 @@
   "windows": "the windows_per_patient non-overlapping n_px windows with most tissue (semisynth.pick_windows)",
   "seed_rule": "seed + 1000 * (crc32(patient) % 100000) + 100 * window + 10 * family index + pose index"
  },
- "sha256": "54f7883a1da305bf29c8ffbd30c2410ccdd07f336ce7102106b54f8561d5bed0"
+ "sha256": "719eca876107a49b9a70a6db357ee287e69ed7e04838d474c2c3358b5c814539"
 }

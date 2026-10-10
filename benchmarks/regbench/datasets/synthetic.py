@@ -14,7 +14,8 @@ peak amplitude ``amp`` px and wavelength ``wavelength`` px, plus, by ``field``:
                 control-point moves of SD ``grid_sd`` px, cubic-spline interpolated
                 (Casamitjana et al., arXiv:2104.14873)
 ``bumps``       ``bump_count`` local Gaussian bumps of width ``bump_sigma`` px, each peaking at
-                0.2-0.6 sigma (at most 50 px), so no single bump folds the map
+                0.2-0.6 sigma (at most 50 px), so no single bump folds the map. A bump is
+                summed out to ``BUMP_REACH`` (8) sigma and is zero beyond, point by point
 ``seams``       an independent shift of SD ``seam_sd`` px per ``seam_tile`` px tile: the jump a
                 stitching error leaves at a tile boundary. Not continuous, on purpose.
  Because ``g`` is written in the direction a
@@ -269,6 +270,8 @@ SUITES = {
     ),
 }
 FIELDS = ("wave", "multiscale", "grid", "bumps", "seams")
+# A bump is summed out to this many sigma: beyond, it is under 1.3e-14 of its peak.
+BUMP_REACH = 8.0
 TRUTH_SUITE = "truth"
 TRUTH_WINDOW = "blob"  # the synthetic scene's name in a patient id
 
@@ -300,7 +303,7 @@ def truth_suite(spec=None, n=None, families=None):
                 "scene_seed": scene_seed,
                 "seed": scene_seed + 1 + k,
                 **truth.pose_kwargs(spec, pose),
-                **truth.family_kwargs(spec, family, spec["pixel_size_um"]),
+                **truth.family_kwargs(spec, family, spec["pixel_size_um"], n),
                 **truth.case_extra(spec, family, frozen),
             }
     return out
@@ -331,6 +334,47 @@ def _spline_field(rng, n, spacing, sd):
         ]
 
     return f
+
+
+def _bump_sum(x, y, cen, ax, ay, sg):
+    """Sum of Gaussian bumps at the points ``(x, y)``: each bump counts out to
+    ``BUMP_REACH`` sigma and is exactly zero beyond.
+
+    The rule is per point, so a point gets the same value in whatever batch it is asked
+    for (a tile of the image, or one probe). The points are taken a block at a time and
+    each block meets only the bumps that can reach it: thousands of bumps on a 8192 px
+    slide cost what the few near each block cost.
+    """
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    shape = np.broadcast(x, y).shape
+    xf, yf = (np.broadcast_to(v, shape).ravel() for v in (x, y))
+    dx, dy = np.full(xf.shape, np.nan), np.full(xf.shape, np.nan)
+    ok = np.flatnonzero(np.isfinite(xf) & np.isfinite(yf))
+    if ok.size:
+        reach = BUMP_REACH * sg
+        block = max(512.0, 4.0 * reach)
+        kx = np.floor(xf[ok] / block).astype(np.int64)
+        ky = np.floor(yf[ok] / block).astype(np.int64)
+        _, group = np.unique(np.stack([ky, kx], axis=1), axis=0, return_inverse=True)
+        group = group.ravel()
+        order = np.argsort(group, kind="stable")
+        cuts = np.flatnonzero(np.diff(group[order])) + 1
+        for part in np.split(order, cuts):
+            idx = ok[part]
+            px, py = xf[idx], yf[idx]
+            near = (
+                (cen[:, 0] >= px.min() - reach)
+                & (cen[:, 0] <= px.max() + reach)
+                & (cen[:, 1] >= py.min() - reach)
+                & (cen[:, 1] <= py.max() + reach)
+            )
+            sx, sy = np.zeros(len(idx)), np.zeros(len(idx))
+            for i in np.flatnonzero(near):  # ascending: one order of summation
+                d2 = (px - cen[i, 0]) ** 2 + (py - cen[i, 1]) ** 2
+                e = np.where(d2 <= reach * reach, np.exp(-d2 / (2.0 * sg * sg)), 0.0)
+                sx, sy = sx + ax[i] * e, sy + ay[i] * e
+            dx[idx], dy[idx] = sx, sy
+    return dx.reshape(shape), dy.reshape(shape)
 
 
 def extra_field(spec):
@@ -370,11 +414,7 @@ def extra_field(spec):
         ax, ay = peak * np.cos(ang), peak * np.sin(ang)
 
         def w(x, y):
-            dx, dy = np.zeros(np.shape(x)), np.zeros(np.shape(x))
-            for (cx, cy), bx, by in zip(cen, ax, ay):
-                e = np.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2.0 * sg * sg))
-                dx, dy = dx + bx * e, dy + by * e
-            return dx, dy
+            return _bump_sum(x, y, cen, ax, ay, sg)
 
         return w
     t = int(spec["seam_tile"])
@@ -387,6 +427,42 @@ def extra_field(spec):
         return shifts[iy, ix, 0], shifts[iy, ix, 1]
 
     return w
+
+
+def field_stats(spec, pixel_size_um, step=8, threshold_um=1.0):
+    """What a case's non-rigid field does to its window, on a lattice every ``step`` px:
+
+    ``moved_frac_over_1um``  share of the window the field ``w`` moves by more than
+                             ``threshold_um`` (the pose is not counted)
+    ``min_jacobian``         smallest determinant of the Jacobian of the whole map ``g``,
+                             by central differences; a value <= 0 is a fold
+    ``fold_pct``             share of the lattice where it is <= 0
+    """
+    n = spec["n"]
+    at = np.arange(step / 2.0, n, step)
+    xx, yy = np.meshgrid(at, at)
+    q = forward_map(spec)(np.stack([xx, yy], axis=-1))
+    rigid = forward_map({**spec, "amp": 0.0, "field": "wave"})(
+        np.stack([xx, yy], axis=-1)
+    )
+    moved = np.hypot(*np.moveaxis(q - rigid, -1, 0)) * float(pixel_size_um)
+    det = np.gradient(q[..., 0], step, axis=1) * np.gradient(
+        q[..., 1], step, axis=0
+    ) - np.gradient(q[..., 0], step, axis=0) * np.gradient(q[..., 1], step, axis=1)
+    return {
+        "moved_frac_over_1um": float(np.mean(moved > threshold_um)),
+        "min_jacobian": float(det.min()),
+        "fold_pct": float(100.0 * np.mean(det <= 0)),
+    }
+
+
+def known_truth_field(spec, pixel_size_um):
+    """``{"field": field_stats}`` for a known-truth case (one with a pose), else nothing:
+    each such case says in its own ``case.json`` how much of it moves and that its true
+    map does not fold, measured on the map it was really made with."""
+    if not spec.get("pose"):
+        return {}
+    return {"field": {"lattice_px": 8, **field_stats(spec, pixel_size_um, step=8)}}
 
 
 def forward_map(spec):
@@ -637,6 +713,7 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
             "spec": {k: v for k, v in spec.items()},
             "in_stare_model": spec.get("in_stare_model", ""),
             "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
+            **known_truth_field(spec, PIXEL_SIZE_UM),
         },
     )
     g = forward_map(spec)
