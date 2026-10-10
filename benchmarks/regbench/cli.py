@@ -195,8 +195,9 @@ def build_parser():
     chk.add_argument(
         "--mask",
         default=None,
-        choices=("overlap",),
-        help="leave out the dots the method says to (ASHLAR: tile overlap bands)",
+        choices=("overlap", "seams"),
+        help="leave out the dots the method says to (ASHLAR `overlap`: tile overlap "
+        "bands; PALOM `seams`: edges between blocks with different shifts)",
     )
     chk.add_argument(
         "--m0-from",

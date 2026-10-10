@@ -287,6 +287,70 @@ def test_nuclei_in_bands_get_a_second_truth_row(reduced, tmp_path):
     assert not [r for r in res["truth_by_family"] if NON in r["method"]]
 
 
+def test_a_reference_side_owner_drops_the_probes_its_own_run_marked(reduced, tmp_path):
+    """A mask on reference nuclei has no probe index (a probe is a MOVING nucleus's
+    centroid and its true reference position), so the owner says which probes are on its
+    seams (``band_truth``); the scorer takes that and nothing else."""
+    root, cases = reduced
+    case = cases[0]
+    pts = load_points(case)
+    n_ref, n_probes = polys(pts, "ref").n_features, len(pts["truth_mov"])
+    on_seam = np.zeros(n_probes, dtype=bool)
+    on_seam[: n_probes // 3] = True
+    band_ref = np.zeros(n_ref, dtype=bool)
+    band_ref[::7] = True
+
+    def blocks(marks):
+        def register(case, work, opts):
+            fn = synthetic.forward_map(case.extra["spec"])
+
+            def off_on_seams(xy):  # 10 px wrong on the marked probes only
+                out = fn(xy)
+                if len(out) == n_probes:
+                    out[on_seam] += 10.0
+                return out
+
+            yield "blocks", PointMap(off_on_seams, MOV_TO_REF), marks
+
+        return fake("blocks", register)
+
+    one = tmp_path / "cases"
+    shutil.copytree(case.dir, one / "synthetic" / case.case_id)
+    copy = load_case(one / "synthetic" / case.case_id)
+    out = tmp_path / "out"
+    methods.run_case(blocks({"band_ref": band_ref, "band_truth": on_seam}), copy, out)
+    res = score(one, out, ["synthetic"], seam_owners=("blocks",))
+    whole = _row(res["truth"], case.case_id, "blocks")
+    rest = _row(res["nonband_truth"], case.case_id, "blocks" + NON + "blocks")
+    assert whole["tre_um_max"] > 4.0 and rest["tre_um_max"] < 1e-6
+    assert rest["n_probes"] == n_probes - n_probes // 3
+    assert rest["n_probes_all"] == whole["n_probes"] == n_probes
+    start = _row(res["nonband_truth"], case.case_id, "initial" + NON + "blocks")
+    assert start["n_probes"] == rest["n_probes"] and start["owner"] == "blocks"
+    cells_row = _row(res["nonband_cells"], case.case_id, "blocks" + NON + "blocks")
+    assert cells_row["n_ref_kept"] == n_ref - int(band_ref.sum())
+    assert not [r for r in res["truth"] if NON in r["method"]]
+
+    # a reference-side owner that marks no probes gets cell rows and NO truth rows: the
+    # scorer does not guess which probes a reference nucleus stands for
+    out2 = tmp_path / "out2"
+    methods.run_case(blocks({"band_ref": band_ref}), copy, out2)
+    res2 = score(one, out2, ["synthetic"], seam_owners=("blocks",))
+    assert res2["nonband_truth"] == []
+    assert _row(res2["nonband_cells"], case.case_id, "blocks" + NON + "blocks")
+    # a probe mask of the wrong length is not applied; with a moving-side mask too, a
+    # probe must survive both
+    from benchmarks.regbench.score import _truth_keep
+
+    assert _truth_keep(pts, None, on_seam[:-1]) is None
+    assert _truth_keep({}, None, on_seam) is None
+    assert np.array_equal(_truth_keep(pts, None, on_seam), ~on_seam)
+    keep_mov = np.ones(polys(pts, "mov").n_features, dtype=bool)
+    keep_mov[pts["truth_cell"][-1]] = False
+    both = _truth_keep(pts, keep_mov, on_seam)
+    assert not both[-1] and not both[0] and both.sum() == (~on_seam).sum() - 1
+
+
 # ── per family ────────────────────────────────────────────────────────────────
 def test_families_are_never_pooled(scored):
     out, res = scored

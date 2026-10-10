@@ -66,6 +66,13 @@ this check, and a stage with no image of its own is not checked.
         image (the median of matched dot minus the pixel it was found at).
         Its result is stored under ``reference`` and the variant's status is the worse of
         the two.
+``SELFCHECK_NOT_CHECKED(info, variant)``  a reason (text) why an ``ok`` comparison of this
+        variant proves too little on this run, or None. With a reason the variant is
+        ``not_checked`` and the numbers are kept (PALOM: every block shift is zero, so a
+        wrong sign or block order could not have shown). It never softens a failure.
+``SELFCHECK_PAIR_TILE(opts)``  the TIFF tile of the pair's files, for a method whose
+        behaviour depends on it (PALOM's blocks are the reference file's tiles); None
+        or absent: the generator's own.
 
 A native dict may say where its dots are: ``dots_file``, ``dots_channel`` (default: the
 first of ``files``, at the moving slide's dots channel INDEX; names are not used, because
@@ -157,6 +164,18 @@ SIZES = {
     # anchored rows read (`--m0-from`).
     "ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
     "affine_ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
+    # PALOM (both labels): 8 x 10 blocks of 1024 px. Its filter thresholds the
+    # distribution of the block shifts and fits a regression on them
+    # (labsyspharm/palom v2026.4.1 `align.py:54-80` [FULL]), which the default pair's
+    # 2 x 3 blocks cannot feed; the maintainer says small tiles break it too (issue #12
+    # [PARTIAL: the maintainer's comments]). The second pair gives the two slides
+    # different sizes, hence different thumbnail down-factors (`reader.py:70-79`): on
+    # the one-level files written here PALOM builds its own levels by 2 x 2 means with
+    # the excess trimmed, so 7782 rows give 1945 at level 2 and a factor of 4.0005.
+    # `palom` reads files with 1024 px tiles; `palom_b1024` files with 2048 px tiles
+    # (the cohort's layout) rechunked to 1024 (`methods/palom.py::SELFCHECK_PAIR_TILE`).
+    # NOT reached: the cohort's 2048 px blocks for `palom` (the realcheck is the check).
+    "palom": [((8192, 10240), None), ((8192, 10240), (7782, 9728))],
 }
 
 # ── the detector ──────────────────────────────────────────────────────────────
@@ -286,6 +305,7 @@ def make_pair(
     workers=1,
     dots_image=False,
     ref_dots=False,
+    tile=None,
 ):
     """Write the selfcheck pair under ``work`` and describe it.
 
@@ -297,6 +317,7 @@ def make_pair(
     method whose writer is applied to it (``warp_extra``). ``ref_dots`` draws another
     lattice of dots in the reference's second channel (``dots_ref_xy``, reference frame),
     for a method that redraws the reference; no method registers on that channel.
+    ``tile`` is the TIFF tile of every file written (default: the generator's).
     """
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
@@ -304,7 +325,7 @@ def make_pair(
     ref_hw, mov_hw = spec["ref_hw"], spec["mov_hw"]
     dots = lattice_dots(mov_hw, seed)
     dots_ref = lattice_dots(ref_hw, seed + 1) if ref_dots else np.empty((0, 2))
-    tile = synthetic.TILE
+    tile = int(tile or synthetic.TILE)
 
     def dot_tiles(hw, xy):
         for x0, y0, x1, y1 in synthetic.tile_boxes(hw, tile):
@@ -356,6 +377,7 @@ def make_pair(
         "pixel_size_um": PIXEL_SIZE_UM,
         "nuclear_channel": NUCLEAR_CHANNEL,
         "dots_channel": DOTS_CHANNEL,
+        "tile": tile,
     }
 
 
@@ -817,6 +839,11 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
         close()
     out["native"] = {k: v for k, v in native.items() if k != "error"}
     out["declared_offset"] = offset is not None
+    too_little = getattr(mod, "SELFCHECK_NOT_CHECKED", None)
+    if too_little is not None and out["status"] == OK:
+        why = too_little(info, variant)
+        if why:
+            out["status"], out["cause"] = NOT_CHECKED, str(why)
     reference = getattr(mod, "SELFCHECK_REFERENCE", None)
     if reference is not None:
         out["reference"] = _check_reference(reference, info, native, pair)
@@ -901,7 +928,11 @@ def run_pair(
     workers = int(opts.get("workers") or resources.n_cpus())
     wants_dots = hasattr(mod, "warp_extra")
     ref_dots = bool(getattr(mod, "SELFCHECK_REF_DOTS", False))
-    pair = make_pair(work / "pair", ref_hw, mov_hw, seed, workers, wants_dots, ref_dots)
+    pair_tile = getattr(mod, "SELFCHECK_PAIR_TILE", None)
+    tile = pair_tile({**opts, "label": label or ""}) if pair_tile else None
+    pair = make_pair(
+        work / "pair", ref_hw, mov_hw, seed, workers, wants_dots, ref_dots, tile
+    )
     case = pair_case(pair, work / "cases")
     out = work / "out"
     opts["stage_images"] = "1"
@@ -955,6 +986,7 @@ def run_pair(
         "mov_hw": list(pair["mov_hw"]),
         "seed": int(seed),
         "n_drawn": int(len(pair["dots_mov_xy"])),
+        "tile": int(pair["tile"]),
         "status": worst(v["status"] for v in variants.values()),
         "variants": variants,
     }

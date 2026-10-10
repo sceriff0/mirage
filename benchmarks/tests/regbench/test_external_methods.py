@@ -1,11 +1,11 @@
-"""VALIS, ASHLAR and DeeperHistReg, really run -- in the environments that have them.
+"""VALIS, ASHLAR, DeeperHistReg and PALOM, really run -- in the environments that have them.
 
 Each test is skipped where its package is not importable (or not at the pinned version of
 that row), so the default suite needs only STARE's dependencies; run this file inside each
 method's own image. For each method the test IS the selfcheck: the points must follow the
 image the method's own writer produced. ``test_valis_adapters.py``,
-``test_ashlar_adapter.py`` and ``test_dhr_adapter.py`` hold everything that can be checked
-without the package.
+``test_ashlar_adapter.py``, ``test_dhr_adapter.py`` and ``test_palom_adapter.py`` hold
+everything that can be checked without the package.
 """
 
 import json
@@ -233,3 +233,110 @@ def test_deeperhistreg_points_follow_its_written_image(tmp_path, fluo):
     # the measured offset between the two maps: S / 2 = 2.5 px on each axis
     assert check["declared_px_mean_x"] == pytest.approx(2.5, abs=0.3), check
     assert check["declared_px_mean_y"] == pytest.approx(2.5, abs=0.3), check
+
+
+# ── PALOM ────────────────────────────────────────────────────────────────────
+PALOM_PIN = "needs palom==2026.4.1: run inside the PALOM image"
+
+
+def need_palom():
+    """Skip where PALOM is not importable; FAIL where it is another release (an image
+    with the wrong PALOM must not look like a machine without it)."""
+    from benchmarks.regbench.methods import palom as adapter
+
+    package = pytest.importorskip("palom", reason=PALOM_PIN)
+    found = adapter.installed_version(package)
+    assert found == adapter.VERSION, f"{PALOM_PIN}; found {found}"
+    return package, adapter
+
+
+def test_installed_palom_is_the_pinned_one():
+    package, adapter = need_palom()
+    assert adapter.installed_version(package) == "2026.4.1"
+    import psutil  # noqa: F401  (dask reads the affinity mask only through it)
+
+
+@pytest.mark.parametrize("tile", [1024, 2048])
+def test_palom_reads_a_single_level_file(tmp_path, tile):
+    """The FIRST thing to run in the image: PALOM's issue #12 reports ``ValueError: seek
+    of closed file`` on an OME-TIFF without pyramid levels, which is what the cohort's
+    slides (2048 px tiles) and every generated case (1024 px) are. A failure here with
+    that message means the row needs the maintainer's workaround
+    (``methods/palom.py::first_block_persist``), which the adapter applies by itself and
+    records; this test then says so by failing, with the message."""
+    package, adapter = need_palom()
+    pair = selfcheck.make_pair(tmp_path, tile=tile)
+    reader = package.reader.OmePyramidReader(pair["reference"])
+    assert adapter._file_levels(pair["reference"]) == 1
+    assert len(reader.pyramid) > 1  # PALOM built its own levels
+    level = int(reader.get_thumbnail_level_of_size(adapter.THUMBNAIL_SIZE))
+    thumbnail = reader.read_level_channels(level, 0).compute()
+    assert thumbnail.shape == tuple(int(v) for v in reader.pyramid[level].shape[1:])
+    full = reader.read_level_channels(0, 0)
+    last = full.blocks[full.numblocks[0] - 1, full.numblocks[1] - 1].compute()
+    assert last.size and int(np.asarray(full.blocks[0, 0].compute()).max()) > 0
+
+
+@pytest.mark.parametrize("tile, grid", [(1024, (2, 3)), (2048, (1, 2))])
+def test_palom_block_grid_is_the_reference_tile_grid(tmp_path, tile, grid):
+    package, adapter = need_palom()
+    pair = selfcheck.make_pair(tmp_path, tile=tile)
+    reader = package.reader.OmePyramidReader(pair["reference"])
+    ref = reader.read_level_channels(0, 0)
+    assert ref.numblocks == grid
+    assert ref.chunks[0][0] == min(tile, 2048) and ref.chunks[1][0] == tile
+    # the benchmark's rechunk (palom_b1024) on the array the reader returned
+    assert ref.rechunk((1024, 1024)).numblocks == (2, 3)
+
+
+def test_palom_writer_follows_the_point_map_pixel_for_pixel():
+    """PALOM's own ``block_affine_transformed_moving_img`` (and the OpenCV in its image)
+    on a ramp: every output pixel says where it was read from, and that must be the
+    adapter's map there -- direction, ``(dy, dx)``, block order and block edges, on the
+    pixels next to the edges too, which the dots of the selfcheck cannot see."""
+    package, adapter = need_palom()
+    from .test_palom_adapter import (
+        EDGE_MAPS,
+        RAMP_TOL,
+        WRONG_MAPS,
+        _geometry,
+        ramp_errors,
+    )
+
+    geo = _geometry()
+    worst, n = ramp_errors(package.align, geo)
+    assert n > 0.8 * 300 * 420 and worst < RAMP_TOL, (worst, n)
+    for name, make in {**WRONG_MAPS, **EDGE_MAPS}.items():  # and it would have shown
+        assert ramp_errors(package.align, geo, make(geo))[0] >= 0.5 - RAMP_TOL, name
+
+
+@pytest.mark.parametrize(
+    "label, opts", [(None, None), ("palom_b1024", {"block": "1024"})]
+)
+def test_palom_points_follow_its_written_image(tmp_path, label, opts):
+    """The selfcheck on both of its pairs (8 x 10 blocks of 1024 px), seams left out."""
+    need_palom()
+    rec = selfcheck.run("palom", tmp_path, opts, label=label, mask="seams")
+    name = label or "palom"
+    assert rec["variants"] == {f"{name}_affine": selfcheck.OK, name: selfcheck.OK}, rec
+    for pair in rec["pairs"]:
+        assert pair["tile"] == (2048 if label else 1024)
+
+
+def test_palom_on_equal_shifts_everywhere():
+    """What PALOM's filter does when every block has the same shift (the ``rigid``
+    known-truth family; expected to raise from the reading, never run). Reported, not
+    judged: the row is published as it comes out either way."""
+    package, _ = need_palom()
+    import warnings
+
+    shifts = np.full((80, 2), 3.0, dtype=np.float32)
+    constrain = package.align.constrain_block_shifts
+    try:
+        kept = constrain(shifts, (8, 10))
+        outcome = f"returned; all shifts still equal: {bool((kept == 3.0).all())}"
+    except Exception as exc:
+        outcome = f"raised {type(exc).__name__}: {exc}"
+    warnings.warn(
+        f"PALOM constrain_block_shifts on equal shifts {outcome}", stacklevel=1
+    )

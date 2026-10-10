@@ -32,7 +32,8 @@ This package is being ported in steps. What exists now:
 | adapter `deeperhistreg` (DeeperHistReg 1.0.1, the software that ships RegWSI: eight labels, each with an estimated-field row and an `_asdrawn` row) | here, as in "DeeperHistReg" below. **Written against DeeperHistReg's and libvips' source and never run with either** (DeeperHistReg, SimpleITK and pyvips are not installed where this was written): tested with a recording stand-in that draws the warped image the way the package's writer is written to. Its first real runs are the settling measurement and the selfcheck inside the DeeperHistReg image |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
-| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask; the driver stores a reference-side mask (`band_ref`) and the scorer applies it to the nuclei, for PALOM's task |
+| adapter `palom` (PALOM 2026.4.1 by its README recipe: `palom`, and `palom_b1024` with the reference rechunked to 1024 px blocks) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
+| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
@@ -135,7 +136,8 @@ the generator and with the clock paused: moves the nuclei through the map (the m
 nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.npz`
 (`cells_xy`, `direction`, `band` when `info["band_mov"]` is given and `band_ref` when
 `info["band_ref"]` is: a method's own seam mask, one bool per moving or per reference
-nucleus; `truth_xy` = the map
+nucleus; `band_truth` when `info["band_truth"]` is: the same seams by known-truth probe,
+for a reference-side mask; `truth_xy` = the map
 applied to the truth probes of the side it starts from, and `grid`, `grid_shape`,
 `grid_step` = the map on a lattice for the Jacobian statistics), writes `run.json`, and
 calls `on_variant`.
@@ -478,8 +480,9 @@ unregistered pose) and `frac_improved`, with `n_probes` and `n_nonfinite`. A poi
 returns as NaN counts against it: its error is infinite. A failed run is scored at the
 unregistered pose. Without a pixel size the micrometre numbers are NaN. A variant with
 seam mask's owner on that case gets a second row `<variant>:non_<owner>` in
-`nonband_truth.csv`, on the probes of the moving nuclei the mask leaves (see "Off the
-seams").
+`nonband_truth.csv`, on the probes the mask leaves (see "Off the seams": the probes of
+the moving nuclei a moving-side mask leaves; for a reference-side mask, the probes the
+owner's run did not mark).
 
 **What these numbers are not.** The amplitudes are literature values as recorded in
 STARE's README (the papers were not re-read for this port), not STARE's output on the
@@ -510,11 +513,28 @@ method's fields is post hoc and names that method.
 ### Off the seams
 
 A method that builds its image from tiles or blocks draws some nuclei across a join, and
-its point map is not exactly its image there. Such a method (`score.SEAM_OWNERS`: `ashlar`
-now, PALOM's two rows when its adapter lands) writes a **seam mask** with its primary row:
+its point map is not exactly its image there. Such a method (`score.SEAM_OWNERS`: `ashlar`,
+`palom`, `palom_b1024`) writes a **seam mask** with its primary row:
 one bool per nucleus, from its own geometry alone (ASHLAR: the tile grid and the positions
-it accepted; never any method's scores). ASHLAR's is on the moving nuclei
-(`info["band_mov"]`, `band` in `warped.npz`); a reference-side mask is `band_ref`.
+it accepted; PALOM: its block grid and the shifts it accepted; never any method's scores).
+ASHLAR's is on the moving nuclei (`info["band_mov"]`, `band` in `warped.npz`); PALOM's is
+on the reference nuclei (`info["band_ref"]`, `band_ref`).
+
+**Which rows a reference-side mask removes.**
+
+- `nonband_cells.csv`: the marked reference nuclei are taken out of the reference set
+  before pairing (`n_ref_kept` of `n_ref_all`); every moving nucleus stays
+  (`n_mov_kept == n_mov_all`). A moving nucleus whose partner was removed is then
+  unpaired, for every method alike.
+- `nonband_truth.csv`: a probe is a pair, the centroid of a moving nucleus (`truth_mov`,
+  nucleus `truth_cell`) and where the truth puts it on the reference (`truth_ref`).
+  Reference nuclei carry no probe index, so the owner's run marks the probes itself
+  (`info["band_truth"]`, one bool per probe, `band_truth` in its `warped.npz`) and the
+  scorer drops exactly those (`score._truth_keep`). PALOM's rule
+  (`methods/palom.py::probe_band`) is its nucleus rule applied to the probe's own
+  nucleus: the bounding box of moving nucleus `truth_cell`, moved so that its centroid
+  sits at `truth_ref`, grown by 1 px, touches blocks that do not all carry the same
+  shift. An owner with `band_ref` and no `band_truth` gets cell rows and no truth rows.
 
 The scorer then scores **every** variant of that case a second time on the nuclei the
 mask leaves: `stare:non_ashlar`, `valis120:non_ashlar`, `ashlar:non_ashlar`, `initial:
@@ -1066,14 +1086,161 @@ python -m benchmarks.regbench selfcheck --method deeperhistreg --label deeperhis
 for a quick S = 5 run of any label. If step 1 fails, the offset is not what the source
 reading predicts: report the measured shift and stop.
 
+### PALOM (`methods/palom.py`)
+
+Sources: labsyspharm/palom at tag `v2026.4.1` (= PyPI `palom==2026.4.1`) `[PARTIAL: read in
+full align.py, block_affine.py, pyramid.py, __init__.py; register.py:1-316;
+reader.py:1-175; img_util.py:1-47; README.md:214-284; cli/align_he.py:150-180; missing:
+the multi-resolution and multi-object aligners, register_dev.py, register_util.py, the
+stores and the other command-line tools]`; PALOM issues #12 and #13 `[PARTIAL: the
+maintainer's comments]`; the maintainer's example script for multi-cycle IF,
+`Yu-AnChen/dump` `2023-09/palom-example-script.py` at `61c8e1a2` and `333ebbb5` `[FULL]`
+(**the maintainer's personal script, not an official PALOM source**). There is no
+publication; the README is the method's description. Nothing here was run with PALOM.
+
+| run | what it is | set by the benchmark |
+|---|---|---|
+| `--method palom` | the README's scripting recipe (`README.md:220-284`): `OmePyramidReader(path)`, `Aligner` with its six keywords, `coarse_register_affine(n_keypoints=4000)`, `compute_shifts()`, `constrain_shifts()`. PALOM's primary row | the nuclear channel by index; `LEVEL = 0`; the thumbnail level from `get_thumbnail_level_of_size(2000)` (the README's suggestion) |
+| `--method palom --label palom_b1024 --opt block=1024` | the same recipe with the reference array PALOM's reader returned rechunked to 1024 px blocks (`ref_img.rechunk((1024, 1024))`) before `Aligner`. **Configured by the benchmark**, never primary | the above and the block size. The label and the option must come together or the run is refused |
+
+Each run yields `palom_affine` (the coarse affine alone) and `palom` (the affine and one
+shift per block), both `ref_to_mov`. Pair scope, no GPU, no JVM.
+
+**What PALOM does.** A full six-parameter affine from ORB keypoints on thumbnails, then
+one whole-pixel shift per block by cross-correlation of Laplacian-filtered blocks, then a
+filter that replaces the shifts that disagree with a linear trend over the block grid
+(and those of blank blocks) by the trend's value. **A block is one dask chunk of the
+reference array, which is the reference file's TIFF tile**: 2048 px (666 µm) on the
+cohort's preprocessed slides, 1024 px on the generated cases. PALOM has no block-size
+parameter; the block of the `palom` row is therefore an accident of each file's layout,
+and `palom_b1024` is the row with a stated block. Inside a block everything moves
+together; neighbouring blocks may jump.
+
+**The point map** is exact and closed-form, reference -> moving:
+`written(P) = bilinear(moving, A^-1 (P - s_b(P)))`, with `A` = `aligner.affine_matrix`
+(moving -> reference, homogeneous x, y), `s_b` = `aligner.shifts[b]` given as `(dy, dx)`
+and row-major over `aligner.grid_shape`, and `b(P)` the block of `aligner.ref_img.chunks`
+that holds pixel `P` (line references in the module's docstring). The only inverse is
+the 3 x 3 affine's, which PALOM's writer takes itself. The other direction is not a
+function: where two neighbouring shifts differ, some moving points are drawn twice and
+some never. For a point between pixel centres a block edge sits half a pixel before the
+edge pixel. Before writing, the adapter checks that the aligner's affine, shifts and
+chunks are still the ones the map was made from, and hands the writer `aligner.ref_img`
+(the rechunked array for `palom_b1024`), so the image is drawn on the blocks of the map.
+
+**Seams.** The map jumps at an edge between two blocks whose shifts differ, and the image
+is torn there. `band_ref` marks the reference nuclei whose outline's bounding box, grown
+by 1 px, touches blocks that do not all carry the same shift; `band_truth` the known-truth
+probes by the same rule on their own nucleus ("Off the seams"). An edge between two
+blocks with the same shift is not a seam. Every method gets `<variant>:non_palom` and
+`<variant>:non_palom_b1024` rows on identical nuclei.
+
+**The written image** is PALOM's: `block_affine_transformed_moving_img` then
+`write_pyramid(mosaics=[it], output_path, pixel_size)` with the writer's defaults
+(pyramidal BigTIFF, zlib, 1024 px tiles, channels anonymous): every channel of the moving
+slide on the reference grid, 0 where nothing lands. `native` has `valid_box` and no
+`origin_xy`. The affine stage is drawn by the same calls with `mxs=aligner.affine_matrix`
+(the package's coarse-only path), for the selfcheck only.
+
+**What a run records** (`run.json: info`): `version`, `RECIPE`, `affine`,
+`coarse_identity_placeholder`, `thumbnail_level`, `thumb_um_per_px`, `ref_down_factor`,
+`mov_down_factor`, `n_levels`, `file_levels`, `auto_pyramid`, `block_px`, `file_block_px`,
+`block_option`, `grid_shape`, `n_blocks`, `n_blocks_blank`, `n_blocks_replaced`,
+`integer_shifts`, `shift_nonzero_fraction`, `shift_px_p50/p95/max`, `n_block_edges`,
+`n_seams`, `seam_jump_px_p50/p95`, `band_fraction`, `pixel_size_detected`, `workers_seen`
+and `concurrency` (what dask, OpenCV and `os.cpu_count()` saw; `psutil` is required and
+nothing is set), `figures`, `closed_file`, `blocks` (the affine, block edges and shifts
+the map is made of) and `implementation.benchmark_side`.
+
+**Cost.** The clock stops after `constrain_shifts()`; `palom_affine`'s clock stops after
+the coarse call. The writer runs with the clock paused. PALOM has no worker option: dask's
+thread pool takes every core it can see, and it sees the job's affinity mask only when
+`psutil` is importable, which is why the adapter refuses to run without it. The matplotlib
+figure the documented coarse call opens is saved to the work folder and closed with the
+clock paused.
+
+**Known risks, reported as they are.**
+
+- *Silent identity.* Failed feature matching logs a warning and continues with the
+  identity (`register.py:152-154`). The rows are kept and carry `problem: coarse matching
+  failed; PALOM continued with the identity`.
+- *Equal shifts crash the filter.* A transcription of `align.py:54-80` run here with
+  scikit-image 0.24.0 and scikit-learn 1.7.2 (not PALOM, not its pinned scikit-image
+  0.19.3) raises `ValueError: Found array with 0 sample(s)` when every finite block shift
+  is the same, all-zero included: no block is under the threshold, so the regression has
+  nothing to fit. That is what the `rigid` known-truth family, or a pair the affine
+  already aligns to the pixel, may give. The `palom` row then fails with PALOM's own
+  message and `palom_affine` is kept; nothing is excluded.
+- *`seek of closed file` on a file without pyramid levels* (issue #12, 2023), which is
+  the cohort's file type. Whether 2026.4.1 still does it is unknown. The adapter runs
+  the recipe as it is; only if a call raises that error does it apply the maintainer's
+  workaround (read the first block of level 0 of each slide once and drop it, from their
+  personal script), repeat the failed call, record it (`closed_file`) and list it under
+  `benchmark_side`. `--opt preread=1` applies it up front, `--opt preread=0` never.
+- *The maintainer's script is for an older PALOM.* It uses `get_aligner`, 5000 keypoints,
+  a thumbnail of 2000 px (500 in the version written for the issue's files), channel 0
+  (2 there) and `detect_flip_rotate=True`, an argument `coarse_register_affine` no longer
+  takes at 2026.4.1; no mask and no other channel handling. The primary row stays the
+  README's recipe.
+- *Memory.* A whole full-resolution moving channel is passed to each block as a keyword
+  and is held in memory; the writer does that per channel. Unmeasured.
+
+**Selfcheck.** Always with `--mask seams`: a dot drawn across two blocks with different
+shifts is torn in the image, and its centroid follows neither half (without the mask the
+stand-in's `palom` row is `inconsistent` for that reason alone). The mask leaves out
+detections within 8 px of such an edge; the affine stage has none. Pairs: 8192 x 10240
+twice (8 x 10 blocks of 1024 px; the second with a smaller moving slide, so the two
+thumbnail down-factors differ). `palom` reads files with 1024 px tiles; `palom_b1024`
+reads files with 2048 px tiles, the cohort's layout, and cuts them to 1024. If under 10 %
+of the blocks have a non-zero shift the `palom` variant is `not_checked`: the block map
+then equals the affine map and a wrong sign or block order could not show.
+
+What the dots cannot see, and what covers it:
+
+- a block edge one pixel off: those pixels are on the seams the mask leaves out. The
+  pixel-for-pixel test draws a ramp through PALOM's own
+  `block_affine_transformed_moving_img` and compares every output pixel with the map;
+- content PALOM draws twice or never at a seam (a backward check counts neither);
+  `seam_jump_px_*` and `band_fraction` say how much is at stake;
+- the cohort's 2048 px blocks for the `palom` row: the realcheck is the only check there.
+
+**First commands in a PALOM image** (from the repository root; Python 3.10,
+`palom==2026.4.1` with its own pins, `psutil`, plus the pinned STARE release installed
+without its dependencies, since it asks for a newer scikit-image than PALOM allows):
+
+```bash
+# 1. the pin, and the cohort's file type: a one-level OME-TIFF must be readable
+python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
+    -k "pinned_one or single_level or tile_grid" --basetemp=/tmp/rb_palom1
+# 2. PALOM's own writer against the point map, pixel for pixel (seconds)
+python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs -W always \
+    -k "pixel_for_pixel or equal_shifts" --basetemp=/tmp/rb_palom2
+# 3. the selfcheck of each row
+python -m benchmarks.regbench selfcheck --method palom --mask seams --work W/palom
+python -m benchmarks.regbench selfcheck --method palom --label palom_b1024 \
+    --opt block=1024 --mask seams --work W/palom_b1024
+```
+
+`ok` for 1 and 2 is every test passed and none skipped; step 2 prints, as a warning, what
+PALOM's filter does on equal shifts. If step 1 fails with `seek of closed file`, the
+workaround is needed: step 3 still runs (the adapter applies it) and `closed_file.applied`
+is true in each `run.json`. `ok` for 3 is exit 0 and, in `W/<row>/selfcheck.json`,
+`"status": "ok"` with `variants.<row>_affine` and `variants.<row>` both `ok` on both
+pairs, `n_masked` a few percent of `n_detected` for `<row>` and 0 for `<row>_affine`.
+`inconsistent` on `<row>` with step 2 green means torn dots outside the mask or a shift
+the image does not show: report the numbers and stop.
+
 ## Tests
 
 ```bash
 python -m pytest benchmarks/tests/regbench -q --basetemp=/tmp/rb_<unique>
 ```
 
-`test_external_methods.py` skips where VALIS, ASHLAR or DeeperHistReg (each at the pinned
-version of the row) is not importable. `test_dhr_adapter.py` runs the DeeperHistReg adapter
+`test_external_methods.py` skips where VALIS, ASHLAR, DeeperHistReg or PALOM (each at the
+pinned version of the row) is not importable. `test_palom_adapter.py` runs the PALOM
+adapter against `fake_palom.py`, a stand-in that records every call, keeps the package's
+bookkeeping (its reader's levels and chunks, the affine's rescaling, the block matrices)
+and draws the image block by block the way `block_affine.py` is written to. `test_dhr_adapter.py` runs the DeeperHistReg adapter
 against `fake_dhr.py`, a stand-in that records every call, keeps the package's bookkeeping
 (pads, resample ratio, field size, its swallowed exception) and draws the warped image the
 way the package's writer and libvips are written to. `test_valis_adapters.py` runs both VALIS adapters against

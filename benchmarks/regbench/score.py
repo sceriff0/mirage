@@ -82,8 +82,9 @@ PSEUDO = ("initial", "truth")  # not registrations run by the driver
 # <variant>:non_<owner>: the variant scored without the nuclei on <owner>'s seams
 NON = ":non_"
 # Methods whose primary row carries a seam mask (``warped.npz``: ``band`` on the moving
-# nuclei, ``band_ref`` on the reference nuclei). The owner's name is its primary variant.
-SEAM_OWNERS = ("ashlar",)
+# nuclei, ``band_ref`` on the reference nuclei, ``band_truth`` on the known-truth probes
+# of a reference-side owner). The owner's name is its primary variant.
+SEAM_OWNERS = ("ashlar", "palom", "palom_b1024")
 # pair_fraction_excess is already "above the null", so it has no null column of its own
 HEADLINES = (
     "pair_fraction",
@@ -307,10 +308,12 @@ def _truth_rows(case, points, base):
     return add, rows
 
 
-def _seam_masks(out, case, variants, owners, ref, mov):
-    """``({owner: (keep_ref | None, keep_mov | None)}, [owners without a mask])`` for the
-    owners that have a row on this dataset. The mask is read from the owner's own primary
-    run and from nothing else: no other method's result can change it."""
+def _seam_masks(out, case, variants, owners, ref, mov, points):
+    """``({owner: (keep_ref | None, keep_mov | None, keep_truth | None)}, [owners without
+    a mask])`` for the owners that have a row on this dataset. The mask is read from the
+    owner's own primary run and from nothing else: no other method's result can change it.
+
+    ``keep_truth`` is one bool per known-truth probe (``_truth_keep``)."""
     masks, missing = {}, []
     for owner in owners:
         if owner not in variants:
@@ -324,11 +327,40 @@ def _seam_masks(out, case, variants, owners, ref, mov):
         if (band is None and band_ref is None) or not fits:
             missing.append(owner)
             continue
+        keep_mov = None if band is None else ~np.asarray(band, dtype=bool)
         masks[owner] = (
             None if band_ref is None else ~np.asarray(band_ref, dtype=bool),
-            None if band is None else ~np.asarray(band, dtype=bool),
+            keep_mov,
+            _truth_keep(points, keep_mov, warped.get("band_truth")),
         )
     return masks, missing
+
+
+def _truth_keep(points, keep_mov, band_truth):
+    """Which known-truth probes an owner's seam mask leaves: one bool per probe, or None
+    when the mask says nothing about probes (no off-seam truth row is then made).
+
+    A probe is a pair: the centroid of moving nucleus ``truth_cell`` (``truth_mov``) and
+    where the truth puts it on the reference (``truth_ref``). It is dropped when
+
+    * the owner's mask is on MOVING nuclei and marks the probe's own nucleus, or
+    * the owner's mask is on REFERENCE nuclei and its run marked the probe itself
+      (``band_truth`` in its ``warped.npz``, one bool per probe: the owner applies its
+      seam rule to the probe's nucleus at ``truth_ref``; PALOM's is in
+      ``methods/palom.py::probe_band``). Reference nuclei carry no probe index, so the
+      scorer cannot derive this from ``band_ref``.
+
+    Either way only the owner's geometry enters, never a score."""
+    if "truth_mov" not in points:
+        return None
+    n = len(points["truth_mov"])
+    keep = None
+    if keep_mov is not None and "truth_cell" in points:
+        keep = keep_mov[np.asarray(points["truth_cell"], dtype=np.int64)]
+    if band_truth is not None and len(band_truth) == n:
+        off = ~np.asarray(band_truth, dtype=bool)
+        keep = off if keep is None else keep & off
+    return keep
 
 
 def _score_case(job):
@@ -350,7 +382,9 @@ def _score_case(job):
     cell_rows, res_rows, non_cells, non_truth = [], [], [], []
     add_truth, truth_rows = _truth_rows(case, points, base)
     masks, missing = (
-        _seam_masks(out, case, variants, owners, ref, mov) if scorable else ({}, [])
+        _seam_masks(out, case, variants, owners, ref, mov, points)
+        if scorable
+        else ({}, [])
     )
     unregistered = {}
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
@@ -377,7 +411,7 @@ def _score_case(job):
 
     def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
         """The same variant on the nuclei each owner's mask leaves, one row per owner."""
-        for owner, (keep_ref, keep_mov) in masks.items():
+        for owner, (keep_ref, keep_mov, _) in masks.items():
             r_in = ref_in if keep_ref is None else _keep_features(ref_in, keep_ref)
             m_in = mov_in if keep_mov is None else _keep_features(mov_in, keep_mov)
             # the gate still comes from ALL native nuclei: one gate per case
@@ -427,22 +461,21 @@ def _score_case(job):
             jac = flat if mapped is None else jacobian_stats(warped)
             args = (jac, t_failed, t_problem, t_cause)
             add_truth(v, FRAME[direction], direction, mapped, *args)
-            if "truth_cell" in points:
-                # each probe is a moving nucleus: a moving-side mask leaves its probes
-                # out. A reference-side mask has no probe index yet (PALOM's task).
-                for owner, (_, keep_mov) in masks.items():
-                    if keep_mov is None:
-                        continue
-                    add_truth(
-                        f"{v}{NON}{owner}",
-                        FRAME[direction],
-                        direction,
-                        mapped,
-                        *args,
-                        keep_mov[points["truth_cell"]],
-                        into=non_truth,
-                        owner=owner,
-                    )
+            # the same probes for every variant of the case: those the owner's seam
+            # mask leaves (``_truth_keep``)
+            for owner, (_, _, keep_truth) in masks.items():
+                if keep_truth is None:
+                    continue
+                add_truth(
+                    f"{v}{NON}{owner}",
+                    FRAME[direction],
+                    direction,
+                    mapped,
+                    *args,
+                    keep_truth,
+                    into=non_truth,
+                    owner=owner,
+                )
         if not scorable:
             continue
         direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
