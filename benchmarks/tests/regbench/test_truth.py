@@ -22,7 +22,7 @@ from benchmarks.regbench.cases import (
 )
 from benchmarks.regbench.datasets import semisynth, synthetic
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
-from benchmarks.regbench.score import NONBAND, score
+from benchmarks.regbench.score import NON, score
 
 from .conftest import semisynth_args
 
@@ -275,11 +275,16 @@ def test_nuclei_in_bands_get_a_second_truth_row(reduced, tmp_path):
     methods.run_case(
         fake("banded", register), load_case(one / "synthetic" / case.case_id), out
     )
-    res = score(one, out, ["synthetic"])
+    res = score(one, out, ["synthetic"], seam_owners=("banded",))
     whole = _row(res["truth"], case.case_id, "banded")
-    rest = _row(res["truth"], case.case_id, "banded" + NONBAND)
+    rest = _row(res["nonband_truth"], case.case_id, "banded" + NON + "banded")
     assert whole["tre_um_max"] > 4.0 and rest["tre_um_max"] < 1e-6
-    assert rest["n_probes"] < whole["n_probes"]
+    assert rest["n_probes"] < whole["n_probes"] == rest["n_probes_all"]
+    # every variant gets the row, on the same probes; none of them is in truth.csv
+    start = _row(res["nonband_truth"], case.case_id, "initial" + NON + "banded")
+    assert start["n_probes"] == rest["n_probes"] and start["owner"] == "banded"
+    assert not [r for r in res["truth"] if NON in r["method"]]
+    assert not [r for r in res["truth_by_family"] if NON in r["method"]]
 
 
 # ── per family ────────────────────────────────────────────────────────────────

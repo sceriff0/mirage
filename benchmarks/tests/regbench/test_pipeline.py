@@ -561,27 +561,152 @@ def test_a_method_must_return_a_point_map(toy):
         PointMap(lambda xy: xy, "sideways")
 
 
-def test_nuclei_in_bands_get_a_second_row_without_them(toy):
-    root, case, out = toy
-    band = np.zeros(len(GRID), dtype=bool)
-    band[:20] = True
+# ── off the seams: one method's mask, every method scored on what it leaves ──
+def _tiles(band, name="tiles", key="band_mov"):
+    """A method with a seam mask: right off the seams, 30 px off on them."""
 
     def register(case, work, opts):
-        def fn(xy):  # right outside the bands, 30 px off inside them
+        def fn(xy):
             xy = np.asarray(xy, dtype=float) + SHIFT
-            if len(xy) == 4 * len(GRID):
-                xy[: 4 * 20] += [30.0, 0.0]
+            if key == "band_mov" and len(xy) == 4 * len(GRID):
+                xy[np.repeat(band, 4)] += [30.0, 0.0]
             return xy
 
-        yield "tiles", PointMap(fn, MOV_TO_REF), {"band_mov": band}
+        yield name, PointMap(fn, MOV_TO_REF), {key: band}
 
-    methods.run_case(fake("tiles", ["tiles"], register), case, out)
-    res = score(root, out, ["multiplex"])
+    return fake(name, [name], register)
+
+
+def _shifted(name, by):
+    def register(case, work, opts):
+        yield (
+            name,
+            PointMap(lambda xy: np.asarray(xy, dtype=float) + SHIFT + by, MOV_TO_REF),
+            {},
+        )
+
+    return fake(name, [name], register)
+
+
+def _band(n=20):
+    band = np.zeros(len(GRID), dtype=bool)
+    band[:n] = True
+    return band
+
+
+def test_every_variant_is_scored_again_on_the_nuclei_off_the_owners_seams(toy):
+    root, case, out = toy
+    methods.run_case(_tiles(_band()), case, out)
+    methods.run_case(good("plain"), case, out)  # a method with no seams of its own
+    res = score(root, out, ["multiplex"], seam_owners=("tiles",))
+    non = res["nonband_cells"]
+    names = {r["method"] for r in non}
+    assert names == {"initial:non_tiles", "tiles:non_tiles", "plain:non_tiles"}
+    # identical nuclei for every row, and their number is in the row
+    assert {(r["n_mov_kept"], r["n_mov_all"]) for r in non} == {
+        (len(GRID) - 20, len(GRID))
+    }
+    assert {r["n_moving"] for r in non} == {len(GRID) - 20}
+    assert {r["owner"] for r in non} == {"tiles"}
     full = _row(res["cells"], "P1_r1", "tiles")
-    outside = _row(res["cells"], "P1_r1", "tiles:nonband")
-    assert outside["n_moving"] == len(GRID) - 20 and full["n_moving"] == len(GRID)
-    assert outside["pair_fraction"] == 1.0 > full["pair_fraction"]
-    assert outside["match_radius_px"] == full["match_radius_px"]  # one gate per case
+    off = _row(non, "P1_r1", "tiles:non_tiles")
+    assert off["pair_fraction"] == 1.0 > full["pair_fraction"]
+    assert off["match_radius_px"] == full["match_radius_px"]  # one gate per case
+    assert _row(non, "P1_r1", "plain:non_tiles")["pair_fraction"] == 1.0
+    assert _row(non, "P1_r1", "initial:non_tiles")["pair_fraction"] < 0.5
+    assert res["nonband_missing"] == [
+        {
+            "dataset": "multiplex",
+            "owner": "tiles",
+            "n_cases": 1,
+            "n_cases_without_mask": 0,
+        }
+    ]
+    assert rows_of(out, "nonband_cells") and rows_of(out, "nonband_summary")
+
+
+def test_the_off_seam_block_never_enters_the_primary_tables(toy):
+    root, case, out = toy
+    methods.run_case(_tiles(_band()), case, out)
+    methods.run_case(good("stare"), case, out)
+    res = score(root, out, ["multiplex"], seam_owners=("tiles",), primary=["stare"])
+    for table in ("cells", "summary_cells", "paired_vs_primary", "resources"):
+        assert not [r for r in res[table] if ":non_" in r["method"]], table
+        assert ":non_" not in (out / "tables" / f"{table}.csv").read_text()
+    text = (out / "tables" / "summary.md").read_text()
+    head, block = text.split("## Off the seams")
+    assert ":non_" not in head
+    assert "tiles:non_tiles" in block and "stare:non_tiles" in block
+    assert "not ranked" in text and "61 of 81 moving" in block
+    assert "0 of 1 case(s) have no mask" in block
+
+
+def test_a_failed_owner_gives_no_off_seam_row_to_anyone(tmp_path):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    c1, c2 = toy_case(root, "P1_r1", "P1"), toy_case(root, "P2_r1", "P2")
+    methods.run_case(_tiles(_band()), c1, out)
+
+    def broken(case, work, opts):
+        raise RuntimeError("the owner failed here")
+        yield
+
+    methods.run_case(fake("tiles", ["tiles"], broken), c2, out)
+    for case in (c1, c2):
+        methods.run_case(good("plain"), case, out)
+    res = score(root, out, ["multiplex"], seam_owners=("tiles",))
+    assert {r["case_id"] for r in res["nonband_cells"]} == {"P1_r1"}
+    assert res["nonband_missing"][0]["n_cases_without_mask"] == 1
+    assert res["nonband_missing"][0]["n_cases"] == 2
+    text = (out / "tables" / "summary.md").read_text()
+    assert "1 of 2 case(s) have no mask" in text
+    # the primary table still has both cases, the failed one at the unregistered pose
+    assert _row(res["cells"], "P2_r1", "tiles")["imputed_initial"]
+
+
+def test_the_mask_does_not_move_when_another_methods_scores_change(toy):
+    root, case, out = toy
+    methods.run_case(_tiles(_band()), case, out)
+    kept = []
+    for by in ([0.0, 0.0], [3.0, 0.0], [19.0, 0.0]):
+        methods.run_case(_shifted("other", np.array(by)), case, out)
+        res = score(root, out, ["multiplex"], seam_owners=("tiles",))
+        own = _row(res["nonband_cells"], "P1_r1", "tiles:non_tiles")
+        other = _row(res["nonband_cells"], "P1_r1", "other:non_tiles")
+        kept.append((own["n_mov_kept"], own["pair_fraction"], other["n_mov_kept"]))
+    assert len(set(kept)) == 1 and kept[0][0] == len(GRID) - 20
+    assert other["pair_fraction"] < 0.5  # the last map is 19 px off: its score moved
+
+
+def test_a_failed_variant_keeps_its_off_seam_row_at_the_unregistered_pose(toy):
+    root, case, out = toy
+    methods.run_case(_tiles(_band()), case, out)
+    res = score(root, out, ["multiplex"], expected=["ghost"], seam_owners=("tiles",))
+    ghost = _row(res["nonband_cells"], "P1_r1", "ghost:non_tiles")
+    initial = _row(res["nonband_cells"], "P1_r1", "initial:non_tiles")
+    assert ghost["imputed_initial"] and ghost["cause"] == "not_run"
+    assert ghost["pair_fraction"] == initial["pair_fraction"]
+
+
+def test_a_reference_side_mask_is_stored_and_drops_reference_nuclei(toy):
+    root, case, out = toy
+    band = _band(30)
+    methods.run_case(_tiles(band, name="blocks", key="band_ref"), case, out)
+    methods.run_case(good("plain"), case, out)
+    with np.load(result_dir(out, "blocks", case) / "warped.npz") as z:
+        assert z["band_ref"].sum() == 30 and "band" not in z.files
+    res = score(root, out, ["multiplex"], seam_owners=("blocks",))
+    for name in ("blocks:non_blocks", "plain:non_blocks"):
+        r = _row(res["nonband_cells"], "P1_r1", name)
+        assert (r["n_ref_kept"], r["n_mov_kept"]) == (len(GRID) - 30, len(GRID))
+
+
+def test_an_owner_that_was_not_run_makes_no_block(toy):
+    root, case, out = toy
+    methods.run_case(good("plain"), case, out)
+    res = score(root, out, ["multiplex"])  # the default owners, none of them here
+    assert res["nonband_cells"] == [] and res["nonband_missing"] == []
+    assert "Off the seams" not in (out / "tables" / "summary.md").read_text()
+    assert not (out / "tables" / "nonband_cells.csv").exists()
 
 
 # ── per-patient methods ──────────────────────────────────────────────────────

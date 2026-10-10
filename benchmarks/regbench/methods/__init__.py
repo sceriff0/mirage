@@ -27,6 +27,11 @@ full-resolution pixels of the native slides. Optional hooks:
 ``SELFCHECK_SUBPROCESS``  used by the selfcheck and the realcheck only; their signatures are
         in ``regbench.selfcheck``. A point mapping must stay valid until the run ends: the
         realcheck calls it after the writer.
+``info["band_mov"]`` / ``info["band_ref"]``  a seam mask: one bool per moving (reference)
+        nucleus, True where the nucleus straddles one of the method's own joins (ASHLAR's
+        tile overlaps, PALOM's block edges). Stored in ``warped.npz`` as ``band`` /
+        ``band_ref``; the scorer scores EVERY variant of the case a second time without
+        those nuclei (``<variant>:non_<owner>``).
 ``VARIANT_LABELS``  ``{label: variant names}`` for a label whose names do not follow the
         replace rule of ``variant_names`` (``valis120_hires``).
 
@@ -372,6 +377,7 @@ def _run(
             if "_state" in info:
                 state = info.pop("_state")
             band = info.pop("band_mov", None)
+            band_ref = info.pop("band_ref", None)
             native = info.pop("native", None)
             try:
                 if watch.rose():
@@ -414,8 +420,13 @@ def _run(
                     "grid_shape": np.array(grid_shape),
                     "grid_step": np.array(grid_step),
                 }
+                # a method's own seam mask, by nucleus: on the moving side ("band", from
+                # info["band_mov"]) or on the reference side ("band_ref"). The scorer
+                # applies an owner's mask to every variant of the case (score.SEAM_OWNERS)
                 if band is not None:
                     arrays["band"] = np.asarray(band, dtype=bool).ravel()
+                if band_ref is not None:
+                    arrays["band_ref"] = np.asarray(band_ref, dtype=bool).ravel()
                 warp_s = time.perf_counter() - t0
                 d = result_dir(out, names[variant], case)
                 write_npz(d / "warped.npz", **arrays)

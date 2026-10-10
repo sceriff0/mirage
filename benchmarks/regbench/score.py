@@ -48,6 +48,15 @@ every primary variant registered.
 patient. Peak memory is never divided by rounds. ``cgroup_peak_gb`` is the whole job,
 writers included, for every method; ``peak_rss_gb`` is the registration's own peak.
 
+**Off the seams** (``nonband_*.csv``, never in the tables above). A method that draws its
+image from tiles or blocks (``SEAM_OWNERS``) writes a seam mask with its primary row: the
+nuclei that straddle its joins, from its geometry alone. EVERY variant of the case is then
+scored a second time on the nuclei that survive that mask, as ``<variant>:non_<owner>``:
+all methods on identical nuclei, with the number kept. These rows are a block of their
+own: they enter no summary of the primary rows, no paired difference and no ranking, and
+a number from them is never set beside a full-slide number. A case the owner's primary run
+did not register has no such row for any method, and the count of those cases is printed.
+
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
 """
 
@@ -64,12 +73,17 @@ from . import DATASETS, pairs, truth
 from .cases import list_cases, load_points, polys, result_dir
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
-RESERVED = ("tables", "tables_dev", "logs")
+# "cache": what methods share between runs (ASHLAR's reference tiles), never a variant
+RESERVED = ("tables", "tables_dev", "logs", "cache")
 TIERS = ("headline", "secondary")
 # semisynth families with parameters from papers
 HEADLINE_FAMILIES = ("grid", "multiscale")
 PSEUDO = ("initial", "truth")  # not registrations run by the driver
-NONBAND = ":nonband"
+# <variant>:non_<owner>: the variant scored without the nuclei on <owner>'s seams
+NON = ":non_"
+# Methods whose primary row carries a seam mask (``warped.npz``: ``band`` on the moving
+# nuclei, ``band_ref`` on the reference nuclei). The owner's name is its primary variant.
+SEAM_OWNERS = ("ashlar",)
 # pair_fraction_excess is already "above the null", so it has no null column of its own
 HEADLINES = (
     "pair_fraction",
@@ -254,17 +268,32 @@ def _truth_rows(case, points, base):
     }
     rows = []
 
-    def add(method, frame, direction, mapped, jac, imputed, problem, cause, keep=None):
+    def add(
+        method,
+        frame,
+        direction,
+        mapped,
+        jac,
+        imputed,
+        problem,
+        cause,
+        keep=None,
+        into=None,
+        owner=None,
+    ):
         # the method's own direction: its map of the side it starts from, against the
         # partner on the other side
         source, target = (t_mov, t_ref) if direction == MOV_TO_REF else (t_ref, t_mov)
         if mapped is None:  # the unregistered pose
             mapped = source
+        n_all = len(source)
         if keep is not None:
             mapped, source, target = mapped[keep], source[keep], target[keep]
-        rows.append(
+        seam = {} if owner is None else {"owner": owner, "n_probes_all": n_all}
+        (rows if into is None else into).append(
             {
                 **head,
+                **seam,
                 "method": method,
                 "frame": frame,
                 **truth.error_stats(mapped, target, source, case.pixel_size_um),
@@ -278,8 +307,32 @@ def _truth_rows(case, points, base):
     return add, rows
 
 
+def _seam_masks(out, case, variants, owners, ref, mov):
+    """``({owner: (keep_ref | None, keep_mov | None)}, [owners without a mask])`` for the
+    owners that have a row on this dataset. The mask is read from the owner's own primary
+    run and from nothing else: no other method's result can change it."""
+    masks, missing = {}, []
+    for owner in owners:
+        if owner not in variants:
+            continue
+        _, warped, _, _ = _load_run(out, owner, case)
+        band = warped.get("band") if warped is not None else None
+        band_ref = warped.get("band_ref") if warped is not None else None
+        fits = (band is None or len(band) == mov.n_features) and (
+            band_ref is None or len(band_ref) == ref.n_features
+        )
+        if (band is None and band_ref is None) or not fits:
+            missing.append(owner)
+            continue
+        masks[owner] = (
+            None if band_ref is None else ~np.asarray(band_ref, dtype=bool),
+            None if band is None else ~np.asarray(band, dtype=bool),
+        )
+    return masks, missing
+
+
 def _score_case(job):
-    out, case, variants = job
+    out, case, variants, owners = job
     points = load_points(case)
     ref, mov = polys(points, "ref"), polys(points, "mov")
     px = case.pixel_size_um
@@ -294,8 +347,11 @@ def _score_case(job):
         "pose": case.pose,
     }
     dens = density(ref, px) if scorable else {}
-    cell_rows, res_rows = [], []
+    cell_rows, res_rows, non_cells, non_truth = [], [], [], []
     add_truth, truth_rows = _truth_rows(case, points, base)
+    masks, missing = (
+        _seam_masks(out, case, variants, owners, ref, mov) if scorable else ({}, [])
+    )
     unregistered = {}
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
     nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
@@ -318,6 +374,34 @@ def _score_case(job):
             "problem": problem[:200],
             "cause": cause,
         }
+
+    def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
+        """The same variant on the nuclei each owner's mask leaves, one row per owner."""
+        for owner, (keep_ref, keep_mov) in masks.items():
+            r_in = ref_in if keep_ref is None else _keep_features(ref_in, keep_ref)
+            m_in = mov_in if keep_mov is None else _keep_features(mov_in, keep_mov)
+            # the gate still comes from ALL native nuclei: one gate per case
+            rec = pairs.record(ref, mov, r_in, m_in, px)
+            non_cells.append(
+                {
+                    **row(
+                        f"{v}{NON}{owner}",
+                        frame,
+                        status,
+                        rec,
+                        jac,
+                        imputed,
+                        problem,
+                        cause,
+                    ),
+                    "variant": v,
+                    "owner": owner,
+                    "n_mov_all": int(mov.n_features),
+                    "n_mov_kept": int(m_in.n_features),
+                    "n_ref_all": int(ref.n_features),
+                    "n_ref_kept": int(r_in.n_features),
+                }
+            )
 
     for v in variants:
         if v == "initial":
@@ -343,10 +427,22 @@ def _score_case(job):
             jac = flat if mapped is None else jacobian_stats(warped)
             args = (jac, t_failed, t_problem, t_cause)
             add_truth(v, FRAME[direction], direction, mapped, *args)
-            band = warped.get("band") if mapped is not None else None
-            if band is not None and "truth_cell" in points:
-                keep = ~np.asarray(band, dtype=bool)[points["truth_cell"]]
-                add_truth(v + NONBAND, FRAME[direction], direction, mapped, *args, keep)
+            if "truth_cell" in points:
+                # each probe is a moving nucleus: a moving-side mask leaves its probes
+                # out. A reference-side mask has no probe index yet (PALOM's task).
+                for owner, (_, keep_mov) in masks.items():
+                    if keep_mov is None:
+                        continue
+                    add_truth(
+                        f"{v}{NON}{owner}",
+                        FRAME[direction],
+                        direction,
+                        mapped,
+                        *args,
+                        keep_mov[points["truth_cell"]],
+                        into=non_truth,
+                        owner=owner,
+                    )
         if not scorable:
             continue
         direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
@@ -361,6 +457,7 @@ def _score_case(job):
             cell_rows.append(
                 row(v, "reference", status, at_initial(), flat, imputed, problem, cause)
             )
+            off_seams(v, "reference", status, ref, mov, flat, imputed, problem, cause)
             continue
         xy = warped["cells_xy"].astype(float)
         if direction == REF_TO_MOV:
@@ -369,16 +466,9 @@ def _score_case(job):
             ref_in, mov_in = ref, pairs.with_xy(mov, xy)
         jac = jacobian_stats(warped)
         rec = pairs.record(ref, mov, ref_in, mov_in, px)
-        cell_rows.append(
-            row(v, FRAME[direction], status, rec, jac, False, problem, cause)
-        )
-        band = warped.get("band")
-        if band is not None and len(band) == mov.n_features:
-            # the gate still comes from ALL native nuclei: one gate per case
-            rec = pairs.record(ref, mov, ref_in, _keep_features(mov_in, ~band), px)
-            cell_rows.append(
-                row(v + NONBAND, FRAME[direction], status, rec, jac, False, problem, "")
-            )
+        frame = FRAME[direction]
+        cell_rows.append(row(v, frame, status, rec, jac, False, problem, cause))
+        off_seams(v, frame, status, ref_in, mov_in, jac, False, problem, cause)
     if add_truth is not None:
         # the true map itself: zero by construction, shown so the table has its floor
         add_truth(
@@ -388,7 +478,9 @@ def _score_case(job):
         moved = pairs.with_xy(mov, points["cells_mov_xy_truth"].astype(float))
         rec = pairs.record(ref, mov, ref, moved, px)
         cell_rows.append(row("truth", "reference", "", rec, nan, False, "", ""))
-    return cell_rows, res_rows, truth_rows
+        off_seams("truth", "reference", "", ref, moved, nan, False, "", "")
+    lost = [{**base, "owner": owner} for owner in missing]
+    return cell_rows, res_rows, truth_rows, non_cells, non_truth, lost
 
 
 # ── summaries ─────────────────────────────────────────────────────────────────
@@ -416,7 +508,7 @@ def _methods(rows):
 
 def common_cases(rows, primary=None):
     """Case ids every primary variant registered (every run variant when none is named)."""
-    judged = [r for r in rows if NONBAND not in r["method"]]
+    judged = [r for r in rows if NON not in r["method"]]
     if primary:
         judged = [r for r in judged if r["method"] in primary]
     else:
@@ -690,8 +782,90 @@ def truth_header(spec_hashes, record, prepared, folded=()):
     return lines
 
 
+def summarise_nonband(rows):
+    """One row per (dataset, owner, variant): the summary of ``summarise_cells`` on the
+    off-seam rows, with the nuclei kept. Never merged with the primary summary."""
+    out = []
+    for owner in dict.fromkeys(r["owner"] for r in rows):
+        mine = [r for r in rows if r["owner"] == owner]
+        for rec in summarise_cells(mine):
+            if rec["subset"] != "all":
+                continue
+            of = [
+                r
+                for r in mine
+                if r["method"] == rec["method"] and r["dataset"] == rec["dataset"]
+            ]
+            rec = {"owner": owner, **rec}
+            del rec["subset"]
+            for key in ("n_mov_kept", "n_mov_all", "n_ref_kept", "n_ref_all"):
+                rec[key] = int(sum(r[key] for r in of))
+            out.append(rec)
+    return out
+
+
+def nonband_missing(lost, jobs, owners, variants_of):
+    """Per (dataset, owner) with a row on that dataset: the cases, and how many of them
+    have no off-seam rows because the owner's primary run left no mask there."""
+    out = []
+    for ds in dict.fromkeys(job[1].dataset for job in jobs):
+        n_cases = sum(job[1].dataset == ds for job in jobs)
+        for owner in owners:
+            if owner not in variants_of.get(ds, ()):
+                continue
+            n = sum(r["dataset"] == ds and r["owner"] == owner for r in lost)
+            out.append(
+                {
+                    "dataset": ds,
+                    "owner": owner,
+                    "n_cases": n_cases,
+                    "n_cases_without_mask": n,
+                }
+            )
+    return out
+
+
+def _nonband_markdown(summary, missing):
+    """The off-seam block: apart from every other table, and saying so."""
+    if not missing:
+        return []
+    parts = [
+        "## Off the seams (a block of its own; not ranked)\n",
+        "Every variant scored a second time WITHOUT the nuclei that straddle one "
+        "method's joins (`<variant>:non_<owner>`): all rows of a block use the same "
+        "nuclei, chosen from the owner's geometry alone. These numbers are not "
+        "comparable with the full-slide tables above and enter no ranking. A case the "
+        "owner did not register has no row here for any method.\n",
+    ]
+    for m in missing:
+        ds, owner = m["dataset"], m["owner"]
+        block = [r for r in summary if r["dataset"] == ds and r["owner"] == owner]
+        parts.append(f"### {ds}: off `{owner}`'s seams\n")
+        kept = (
+            f"{block[0]['n_mov_kept']} of {block[0]['n_mov_all']} moving and "
+            f"{block[0]['n_ref_kept']} of {block[0]['n_ref_all']} reference nuclei "
+            "kept, the same for every row. "
+            if block
+            else ""
+        )
+        parts.append(
+            f"{kept}{m['n_cases_without_mask']} of {m['n_cases']} case(s) have no "
+            f"mask (`{owner}` did not register them) and no row.\n"
+        )
+        if block:
+            parts += [_summary_table(block, None), ""]
+    return parts
+
+
 def summary_markdown(
-    summary, fails, res_summary, primary=None, by_family=None, known_truth=None
+    summary,
+    fails,
+    res_summary,
+    primary=None,
+    by_family=None,
+    known_truth=None,
+    nonband=None,
+    nonband_lost=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
@@ -729,6 +903,7 @@ def summary_markdown(
             markdown(by_family, list(TRUTH_COLUMNS)),
             "",
         ]
+    parts += _nonband_markdown(nonband or [], nonband_lost or [])
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
         parts += [markdown(fails, list(fails[0])), ""]
@@ -770,12 +945,17 @@ def score(
     dev=False,
     expected=None,
     primary=None,
+    seam_owners=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
 
     ``expected`` lists variants that must appear even with no directory. ``primary`` lists
     the primary variants: they come first in the summary and define the ``common`` block.
+    ``seam_owners`` (default ``SEAM_OWNERS``) names the variants whose seam mask gives
+    every variant a second, off-seam row (``nonband_*``).
     """
+    owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
+    variants_of = {}
     jobs, hashes, lists, prepared, folded = [], {}, {}, set(), []
     for ds in datasets or DATASETS:
         cs = [
@@ -783,7 +963,8 @@ def score(
         ]
         if cs:
             variants = find_variants(out, ds, expected)
-            jobs += [(str(out), c, variants) for c in cs]
+            variants_of[ds] = variants
+            jobs += [(str(out), c, variants, owners) for c in cs]
             for c in cs:
                 if c.extra.get("truth_spec_sha256"):
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
@@ -830,6 +1011,13 @@ def score(
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
     truth_rows = [r for rows in done for r in rows[2]]
+    # off the seams: tables of their own, never merged into the ones above
+    non_cells = [r for rows in done for r in rows[3]]
+    non_truth = [r for rows in done for r in rows[4]]
+    non_summary = summarise_nonband(non_cells)
+    non_lost = nonband_missing(
+        [r for rows in done for r in rows[5]], jobs, owners, variants_of
+    )
     by_family = truth.by_family(truth_rows)
     summary = summarise_cells(cells, primary)
     paired = paired_vs_primary(cells)
@@ -850,6 +1038,11 @@ def score(
         "summary_resources",
         "truth",
         "truth_by_family",
+        "nonband_cells",
+        "nonband_summary",
+        "nonband_truth",
+        "nonband_truth_by_family",
+        "nonband_missing",
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
     write_csv(tables / "cells.csv", cells)
@@ -860,8 +1053,15 @@ def score(
     write_csv(tables / "summary_resources.csv", res_summary)
     write_csv(tables / "truth.csv", truth_rows)
     write_csv(tables / "truth_by_family.csv", by_family)
+    write_csv(tables / "nonband_cells.csv", non_cells)
+    write_csv(tables / "nonband_summary.csv", non_summary)
+    write_csv(tables / "nonband_truth.csv", non_truth)
+    write_csv(tables / "nonband_truth_by_family.csv", truth.by_family(non_truth))
+    write_csv(tables / "nonband_missing.csv", non_lost)
     known = truth_header(list(hashes), patients, prepared, folded)
-    text = summary_markdown(summary, fails, res_summary, primary, by_family, known)
+    text = summary_markdown(
+        summary, fails, res_summary, primary, by_family, known, non_summary, non_lost
+    )
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -875,4 +1075,8 @@ def score(
         "truth": truth_rows,
         "truth_by_family": by_family,
         "truth_patients": patients,
+        "nonband_cells": non_cells,
+        "nonband_summary": non_summary,
+        "nonband_truth": non_truth,
+        "nonband_missing": non_lost,
     }
