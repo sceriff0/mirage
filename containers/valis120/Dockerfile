@@ -33,7 +33,7 @@
 #   [layer 22, dist-info names]  91 distributions in /root/.local/lib/python3.12/
 #       site-packages, among them: valis-wsi 1.2.0 (installed from /usr/local/src by uv),
 #       torch 2.7.1 with the nvidia-*-cu12 12.6 wheels (the CUDA build), torchvision
-#       0.22.1, kornia 0.8.1, pyvips 3.0.0, numpy 1.26.4, scipy 1.16.0, scikit-image
+#       0.22.1, Kornia 0.8.1, pyvips 3.0.0, numpy 1.26.4, scipy 1.16.0, scikit-image
 #       0.25.2, pandas 2.3.0, tifffile 2025.6.11, opencv-contrib-python-headless
 #       4.9.0.80, jpype1 1.5.2, scyjava 1.12.1, simpleitk 2.5.2, psutil 7.0.0.
 #       NOT there: zarr, numcodecs, imagecodecs, pytest, stare-registration.
