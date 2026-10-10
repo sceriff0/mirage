@@ -1,0 +1,42 @@
+# The registration benchmark's own STARE image (benchmarks/regbench: the `stare` run, and
+# the `tissue` and `score` steps). COPY'd into containers/stare-regbench/Dockerfile ->
+# bolt3x/mirage-stare-regbench. No pipeline process runs in that image: the pipeline's
+# STARE image is containers/stare, which this file does not touch.
+#
+# THE SAME STARE, THE SAME STACK. `-r stare.txt` brings the pipeline image's lines as they
+# are: the harmonised numpy / scipy / scikit-image / tifffile / zarr / numcodecs /
+# imagecodecs and STARE's one pin, which therefore stays written exactly once in this
+# repository. What this file adds is what the benchmark needs around the method and the
+# pipeline does not (ruling R3.9a, 2026-10-10):
+#   psutil   the benchmark reads a run's memory through psutil in every other method's
+#            image; without it resources.Monitor falls back to /proc and STARE alone would
+#            be measured by another instrument
+#   pytest   the first command on the cluster runs test_external_methods.py inside the image
+#   OpenCV   the tissue-level block (benchmarks/regbench/tissue.py: ORB, RANSAC, contours)
+#            is the released ACCREDIT code and needs cv2. `tissue` and `score` run in THIS
+#            image, so one OpenCV version stands behind a whole result
+-c constraints.txt
+-r stare.txt
+
+psutil==7.2.2                       # resources.Monitor
+pytest==9.1.1                       # test_external_methods.py is run INSIDE the image first
+opencv-python-headless==4.10.0.82   # = constraints.txt; headless: no display libraries
+
+# EVERY other name the resolver installs is pinned too, so a rebuild cannot move a version
+# under the benchmark (requirements/stare.txt leaves these to the resolver for the
+# pipeline's image). The versions are the ones resolved for CPython 3.11 on linux x86_64
+# on 2026-10-10 for the benchmark's other python:3.11 stack (uv 0.12.13 and pip 26.2.1,
+# from PyPI metadata), re-read from PyPI's JSON API on 2026-10-11: each exists and
+# publishes a wheel CPython 3.11 can install, except asciitree, which is a source-only
+# pure-Python release. NOTHING HERE WAS INSTALLED OR IMPORTED on the machine that wrote
+# this file; containers/stare-regbench/smoke.sh is where the stack first runs.
+asciitree==0.3.3      # zarr
+fasteners==0.20       # zarr
+imageio==2.38.1       # scikit-image
+lazy-loader==0.6      # scikit-image
+networkx==3.6.1       # scikit-image
+packaging==26.3       # scikit-image, pytest
+pillow==12.3.0        # scikit-image, imageio
+iniconfig==2.3.1      # pytest
+pluggy==1.6.0         # pytest
+pygments==2.21.0      # pytest

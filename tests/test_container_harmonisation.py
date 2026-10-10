@@ -172,6 +172,9 @@ PINNED_EXCEPTIONS = {
 BENCHMARK_IMAGES = {
     "deeperhistreg": "benchmarks/regbench/methods/deeperhistreg.py",
     "palom": "benchmarks/regbench/methods/palom.py",
+    # the benchmark's OWN STARE image (psutil, pytest, OpenCV beside the same pinned STARE):
+    # the `stare` run, `tissue` and `score`. The pipeline's TILED_* run in containers/stare.
+    "stare-regbench": "benchmarks/regbench/methods/stare.py",
     "valis120": "benchmarks/regbench/methods/valis.py",
 }
 

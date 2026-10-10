@@ -114,6 +114,35 @@ LOCALLY_INSTALLED_PACKAGES: dict[str, dict[str, str]] = {
 }
 
 
+# {container: (the FROM image, {import names})} for modules a smoke script imports that
+# the BASE IMAGE already holds and the Dockerfile must NOT install. containers/valis120
+# is the case: it is built FROM upstream's published VALIS 1.2.0 image so that VALIS runs
+# on the stack its authors built (benchmark ruling R3.9b), and its smoke.sh asserts that
+# stack's versions; requirements/valis120.txt holds only what the benchmark adds.
+# `test_base_image_modules_come_from_the_base_and_are_not_reinstalled` keeps an entry
+# honest in both directions: the FROM line must name that image, smoke.sh must really
+# import the module, and no requirement of the image may name its distribution (a pip
+# line for one would REPLACE upstream's build, which is what the entry says is not done).
+BASE_IMAGE_MODULES: dict[str, tuple[str, set[str]]] = {
+    "valis120": (
+        "cdgatenbee/valis-wsi:1.2.0",
+        {
+            "valis",
+            "torch",
+            "torchvision",
+            "kornia",
+            "pyvips",
+            "numpy",
+            "scipy",
+            "skimage",
+            "pandas",
+            "psutil",
+            "packaging",
+        },
+    ),
+}
+
+
 def _entries() -> list[dict]:
     return json.loads(IMAGES_JSON.read_text())
 
@@ -169,7 +198,18 @@ _FROM_RE = re.compile(r"^\s*from\s+([A-Za-z_][\w.]*)\s+import\b")
 _IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)")
 
 # Python's own modules, which no image installs.
-_STDLIB = {"os", "sys", "json", "pathlib", "argparse", "logging", "time", "csv", "glob"}
+_STDLIB = {
+    "os",
+    "sys",
+    "json",
+    "pathlib",
+    "argparse",
+    "logging",
+    "time",
+    "csv",
+    "glob",
+    "importlib",
+}
 
 
 def imported_modules(script: str) -> set[str]:
@@ -372,9 +412,12 @@ def test_every_module_the_smoke_script_imports_is_installed_by_the_image(name):
     )
     locally_copied = LOCALLY_COPIED_MODULES.get(name, set())
     locally_installed = LOCALLY_INSTALLED_PACKAGES.get(name, {})
+    from_base = BASE_IMAGE_MODULES.get(name, ("", set()))[1]
     missing = []
     for module in sorted(imported_modules(smoke_path(name).read_text())):
         if module in locally_copied or module in locally_installed:
+            continue
+        if module in from_base:
             continue
         distribution = IMPORT_TO_DISTRIBUTION.get(module, module)
         if distribution.lower() not in declared:
@@ -450,6 +493,49 @@ def test_locally_installed_packages_are_actually_installed_by_name(
         f"LOCALLY_INSTALLED_PACKAGES[{name!r}] names {module!r}, but "
         f"containers/{name}/smoke.sh does not actually import it -- the entry has "
         "outlived its reason and should be removed."
+    )
+
+
+@pytest.mark.parametrize(
+    "name,module",
+    sorted(
+        (name, module)
+        for name, (_, modules) in BASE_IMAGE_MODULES.items()
+        for module in modules
+    ),
+)
+def test_base_image_modules_come_from_the_base_and_are_not_reinstalled(name, module):
+    """A BASE_IMAGE_MODULES entry exempts a smoke import from "the Dockerfile installs
+    it". It is true only while the image is built FROM that base, the smoke script
+    imports the module, and nothing the Dockerfile installs names its distribution."""
+    base = BASE_IMAGE_MODULES[name][0]
+    text = _strip_hash_comments(dockerfile(name).read_text())
+    assert re.search(
+        rf"(?m)^FROM\s+{re.escape(base)}@sha256:[0-9a-f]{{64}}\s*$", text
+    ), (
+        f"BASE_IMAGE_MODULES[{name!r}] says its modules come from {base}, but "
+        f"containers/{name}/Dockerfile is not built FROM that image by digest."
+    )
+    assert module in imported_modules(smoke_path(name).read_text()), (
+        f"BASE_IMAGE_MODULES[{name!r}] names {module!r}, but containers/{name}/smoke.sh "
+        "does not import it -- the entry has outlived its reason and should be removed."
+    )
+    # What the image's OWN pin file names, not `declared_distributions`: that scan counts
+    # every requirements file the Dockerfile mentions, and this one mentions stare.txt
+    # only to cut STARE's single line out of it.
+    own = set()
+    for line in _strip_hash_comments(
+        (REPO / "requirements" / f"{name}.txt").read_text()
+    ).splitlines():
+        token = line.split("#")[0].strip()
+        if token and not token.startswith("-"):
+            own |= {t.lower() for t in _tokens_from_pip_line(token)}
+    assert len(own) >= 5, f"requirements/{name}.txt parsed to {sorted(own)}"
+    distribution = IMPORT_TO_DISTRIBUTION.get(module, module).lower()
+    assert distribution not in own, (
+        f"requirements/{name}.txt installs {distribution!r}, which "
+        f"BASE_IMAGE_MODULES says is {base}'s own build: a pip line for it replaces "
+        "upstream's. Remove the requirement, or the entry if the replacement is meant."
     )
 
 

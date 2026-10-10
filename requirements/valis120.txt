@@ -1,117 +1,60 @@
-# VALIS 1.2.0, for the registration benchmark (benchmarks/regbench, method `valis`, labels
-# `valis120` and `valis120_hires`). COPY'd into containers/valis120/Dockerfile ->
-# bolt3x/mirage-valis120. No pipeline process runs in that image: the pipeline's own VALIS
-# is upstream's 1.0.0 image (modules/local/register.nf), which the `valis_mirage` row uses.
+# What the registration benchmark ADDS to upstream's VALIS 1.2.0 image
+# (cdgatenbee/valis-wsi:1.2.0, the base of containers/valis120/Dockerfile ->
+# bolt3x/mirage-valis120; benchmarks/regbench, method `valis`, labels `valis120` and
+# `valis120_hires`). No pipeline process runs in that image.
 #
-# The harmonised versions hold here: VALIS 1.2.0's metadata (PyPI valis-wsi==1.2.0,
-# requires_dist [FULL]) accepts numpy 1.26.4, scipy 1.15.3, scikit-image 0.25.2 and pandas
-# 2.3.3, and STARE's requirements are the same lines, so `-r stare.txt` brings both the
-# imaging stack and STARE's one pin (the benchmark reads images through stare.slide_io).
+# VALIS ITSELF IS NOT IN THIS FILE. VALIS 1.2.0, torch, Kornia, pyvips, libvips, the JVM
+# and Bio-Formats are the ones upstream built into its image (ruling R3.9b, 2026-10-10);
+# containers/valis120/Dockerfile's header lists them and says how they were read. This
+# file holds only what the benchmark's own code needs beside them:
+#   - What STARE's reader needs. Every method's images are read through stare.slide_io
+#     (tifffile's zarr view), so the pinned stare-registration is installed in every
+#     method image; it needs zarr 2, numcodecs and imagecodecs, which upstream's image
+#     lacks.
+#   - pytest: the first command on the cluster runs the benchmark's tests in the image.
+#   - psutil is NOT here: upstream's image already has it (7.0.0).
+#
+# WHAT THE BENCHMARK ADDS IS HARMONISED; WHAT UPSTREAM BUILT IS LEFT ALONE. The lines
+# below are the versions of requirements/constraints.txt, which this file reads like the
+# other images' files. Nothing below depends on scipy, scikit-image or pandas, so the
+# harmonised pins of those (scipy 1.15.3 against upstream's 1.16.0, pandas 2.3.3 against
+# 2.3.0) never enter the resolve. The Dockerfile adds a second constraint, the freeze of
+# the base image, so pip can add these lines and cannot move anything else.
+#
+# NOT `-r stare.txt`, AND STARE ITSELF IS NOT IN THIS FILE. stare.txt names numpy, scipy
+# and scikit-image at the harmonised versions and would replace upstream's scipy. STARE's
+# own requirements (stare-registration 1.2.1, pyproject.toml [FULL]: numpy>=1.26,
+# scipy>=1.13, scikit-image>=0.24, tifffile<=2025.5.10, zarr>=2.18,<3, numcodecs<0.14,
+# imagecodecs>=2023) are all met by upstream's stack plus the lines below, but resolving
+# them would bring scipy and scikit-image under the harmonised constraint. The Dockerfile
+# therefore installs STARE's one pinned line (cut out of requirements/stare.txt, so the
+# version is still written once) with --no-deps, as containers/palom does, and smoke.sh
+# checks every one of STARE's requirements against what is installed.
+#
+# THE ONE VERSION OF UPSTREAM'S STACK THAT IS CHANGED: tifffile. Upstream's image has
+# tifffile 2025.6.11, and STARE requires tifffile<=2025.5.10: releases after that refuse
+# zarr 2 in `aszarr` ("zarr 2.18.7 < 3 is not supported"; stare-registration 1.2.1,
+# pyproject.toml [FULL], measured by STARE's authors on Python 3.12, which is this image's
+# Python). Without the downgrade the benchmark could not read a single image here. VALIS
+# 1.2.0 imports tifffile nowhere (its PyPI sdist [PARTIAL: every valis/*.py searched for
+# the name]) and does not list it as a requirement (its pyproject.toml, read from the
+# image's own layer [FULL]); it is in the image as a dependency of scikit-image, which
+# accepts any tifffile>=2022.8.12. smoke.sh proves that this is the only line of
+# upstream's freeze that differs.
 -c constraints.txt
--r stare.txt
 
-# torch and torchvision come from PyTorch's own CPU index: the two VALIS rows run without a
-# GPU, and the default PyPI wheel carries about 2 GB of CUDA libraries nothing here would
-# load. This line reaches the whole resolve, so this file must never be `-r`-included from
-# another one (requirements/torch-cpu.txt says the same of itself).
---extra-index-url https://download.pytorch.org/whl/cpu
+tifffile==2025.5.10     # replaces upstream's 2025.6.11, for stare.slide_io (above)
+zarr==2.18.3            # stare.slide_io's lazy region reads
+numcodecs==0.13.1       # zarr 2.18 imports blosc.cbuffer_sizes, gone from newer releases
+imagecodecs==2025.3.30  # the codecs tifffile decodes the cohort's tiles with
+pytest==9.1.1           # test_external_methods.py is run INSIDE the image first
 
-# EVERY name the resolver installs is pinned below, so a rebuild cannot move a version
-# under the benchmark. Resolved on 2026-10-10 for CPython 3.11 on linux x86_64 with
-# `uv pip compile --python-version 3.11 --python-platform x86_64-manylinux_2_28
-# --index-strategy unsafe-best-match` (uv 0.12.13); `pip install --dry-run --report`
-# (pip 26.2.1) gives the same versions. NOTHING HERE WAS INSTALLED OR IMPORTED on the
-# machine that wrote this file; containers/valis120/smoke.sh is where the stack first runs.
-
-# ---- VALIS and what it is told to use ---------------------------------------------------
-valis-wsi==1.2.0
-torch==2.7.1+cpu             # valis-wsi 1.2.0: torch>=2.7.1 -- the oldest it accepts
-torchvision==0.22.1+cpu      # the torchvision built against torch 2.7.1
-kornia==0.8.3                # valis-wsi: kornia>=0.7.3,<1.0.0. DISK and LightGlue live
-                             # here; containers/valis120/fetch_assets.py names the two
-                             # weight files this release looks for
-pyvips==3.2.0                # valis-wsi: pyvips>2.2.1
-pyvips-binary==8.18.7        # libvips itself, as a wheel (pyvips' own `binary` extra)
-
-# ---- VALIS's other direct requirements --------------------------------------------------
-beautifulsoup4==4.15.0
-scyjava==1.12.5
-colorama==0.4.6
-colour-science==0.4.6
-fastcluster==1.2.6
-jpype1==1.7.1
-matplotlib==3.11.2
-ome-types==0.6.3
-opencv-contrib-python-headless==4.9.0.80
-pandas==2.3.3
-pillow==12.3.0
-scikit-learn==1.9.1
-shapely==2.2.0
-tqdm==4.70.1
-weightedstats==0.4.1
-pqdm==0.2.0
-markupsafe==2.1.5
-aicspylibczi==3.3.1
-setuptools==84.0.0
-einops==0.8.2
-openpyxl==3.1.5
-simpleitk==2.5.6
-lxml==6.1.3
-
-# ---- what the benchmark's driver and checks import --------------------------------------
-psutil==7.2.2                # resources.Monitor
-pytest==9.1.1                # test_external_methods.py is run INSIDE the image first
-
-# ---- everything else the resolver installs ----------------------------------------------
-annotated-types==0.8.0
-asciitree==0.3.3
-bounded-pool-executor==0.0.3
-certifi==2026.7.22
-cffi==2.1.1
-charset-normalizer==3.5.2
-cjdk==0.5.0
-click==8.5.0
-cloudpickle==3.1.2
-contourpy==1.3.3
-cycler==0.12.1
-et-xmlfile==2.0.0
-fasteners==0.20
-filelock==4.1.0
-fonttools==4.66.1
-fsspec==2026.9.0
-idna==3.20
-imageio==2.38.1
-iniconfig==2.3.1
-jgo==3.1.0
-jinja2==3.1.6
-joblib==1.6.0
-kiwisolver==1.5.1
-kornia-rs==0.2.0
-lazy-loader==0.6
-mpmath==1.3.0
-narwhals==2.27.1
-networkx==3.6.1
-packaging==26.3
-pluggy==1.6.0
-progressbar2==4.6.0
-pycparser==3.11
-pydantic==2.14.0
-pydantic-core==2.50.0
-pydantic-extra-types==2.11.1
-pygments==2.21.0
-pyparsing==3.3.3
-python-dateutil==2.9.0.post0
-python-utils==4.1.0
-pytz==2026.5
-requests==2.34.2
-semver==3.1.0
-six==1.17.0
-soupsieve==3.0.1
-sympy==1.14.0
-threadpoolctl==3.7.0
-tomli-w==1.2.0
-typing-extensions==4.16.0
-typing-inspection==0.4.4
-tzdata==2026.5
-urllib3==2.8.0
-xsdata==26.2
+# Everything else the resolver adds for the five lines above, pinned so a rebuild cannot
+# move it. Checked on PyPI's JSON API on 2026-10-11: each release exists and has a wheel
+# CPython 3.12 installs (asciitree is a source-only pure-Python release; pip builds it).
+# packaging, which pytest also needs, is upstream's own (25.0) and stays.
+asciitree==0.3.3        # zarr
+fasteners==0.20         # zarr
+iniconfig==2.3.1        # pytest
+pluggy==1.6.0           # pytest
+pygments==2.21.0        # pytest
