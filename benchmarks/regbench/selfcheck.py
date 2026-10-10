@@ -112,8 +112,17 @@ DATASET = "selfcheck"
 SIZES = {
     # two REG_TILE tiles and one seam, then a pair with a four-tile junction
     "stare": [(DEFAULT_HW, None), ((4096, 5120), None)],
-    # On the default pair VALIS applies its field at scale 1 to 1.25; on the cohort at 8x to
-    # 29x. The large pair (long side >= 30000 px) is the only selfcheck at that scale.
+    # Confirmed from VALIS's source by Task 7 (sdists 1.0.0 and 1.2.0 [PARTIAL: see
+    # methods/_valis_points.py]). On the default pair the stages run at or near full
+    # resolution (rigid 512 or 2048 px, first field 2048 px on a 2560 px slide), and two
+    # micro passes do not run as on the cohort: 1.2.0's `register_micro` returns early
+    # unless its size exceeds the first pass's 2048 px (`registration.py:4862-4871`), and
+    # the hires size is 0.25 x the smallest slide's long side (640 px here); the
+    # pipeline's is 0.125 x (320 px), which 1.0.0 runs at a COARSER grid than the first
+    # pass. With the smaller slide at 29000 px the three micro sizes are 4096, 7250 and
+    # 3625 px, all above 2048, and the first field is applied at 14x (29x on a 60000 px
+    # cohort slide). Not reached by either pair: the tiler (stored fields), which needs
+    # more than 10 GB of images at registration size (`TILER_THRESH_GB`).
     "valis": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
     "valis_mirage": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
     "valis120": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
@@ -703,7 +712,7 @@ def _proxy(mod, name, pair, extras):
     ns = types.SimpleNamespace(
         NAME=name, SCOPE=getattr(mod, "SCOPE", "pair"), VARIANTS=mod.VARIANTS
     )
-    for attr in ("register", "register_group"):
+    for attr in ("register", "register_group", "VARIANT_LABELS"):
         if hasattr(mod, attr):
             setattr(ns, attr, getattr(mod, attr))
     if real or write_stage or warp_extra:

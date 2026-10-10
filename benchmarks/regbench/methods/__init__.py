@@ -27,6 +27,14 @@ full-resolution pixels of the native slides. Optional hooks:
 ``SELFCHECK_SUBPROCESS``  used by the selfcheck and the realcheck only; their signatures are
         in ``regbench.selfcheck``. A point mapping must stay valid until the run ends: the
         realcheck calls it after the writer.
+``VARIANT_LABELS``  ``{label: variant names}`` for a label whose names do not follow the
+        replace rule of ``variant_names`` (``valis120_hires``).
+
+The driver hands a method three things through ``opts``, none of them recorded as an
+option: ``monitor`` (the live ``resources.Monitor``), ``native_dir`` (``f(case_id,
+variant) -> Path``, where an image written at a yield belongs:
+``<out>/<variant>/<dataset>/<case>/native/``; the work directory is deleted after the run)
+and ``label`` (the run's label, ``""`` without one).
 
 **At each yield, before the generator is resumed and with the clock paused,** the driver
 moves the nuclei through the map (the moving nuclei for ``mov_to_ref``, the reference
@@ -104,7 +112,16 @@ def scope_of(method):
 
 def variant_names(method, label=None):
     """``--label`` renames a method's variants, so two configurations of it can sit side by side."""
-    names, name = load(method).VARIANTS, method_name(method)
+    mod, name = load(method), method_name(method)
+    names = mod.VARIANTS
+    declared = (getattr(mod, "VARIANT_LABELS", None) or {}).get(label)
+    if declared is not None:
+        if len(declared) != len(names):
+            raise SystemExit(
+                f"{name}: VARIANT_LABELS[{label!r}] names {len(declared)} variants, "
+                f"the method produces {len(names)}"
+            )
+        return list(declared)
     return [v.replace(name, label, 1) for v in names] if label else list(names)
 
 
@@ -307,8 +324,15 @@ def _run(
             fail(case, variant, KILLED, "killed")
 
     mon = resources.Monitor()
-    opts["monitor"] = mon  # for a method whose own writer runs at a yield
-    base["opts"].pop("monitor", None)
+    # for a method whose own writer runs at a yield: the clock to pause, and where the
+    # image belongs (the work directory does not outlive the run)
+    opts["monitor"] = mon
+    opts["native_dir"] = lambda case_id, variant: (
+        result_dir(out, names[variant], by_id[case_id]) / "native"
+    )
+    opts["label"] = label or ""
+    for key in ("monitor", "native_dir", "label"):
+        base["opts"].pop(key, None)
 
     def not_done(error, cause, cost, tb=""):
         with lock:

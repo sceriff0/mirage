@@ -1,15 +1,21 @@
 """VALIS and DeeperHistReg, really run -- in the environments that have them.
 
-Each test is skipped where its package is not importable, so the default suite needs only
-STARE's dependencies; the benchmark workflow runs this file once inside each method's own
-environment. What is pinned is the adapter: that the method's transform is read in the right
-direction, in full-resolution reference pixels, for slides of equal and of different shape.
+Each test is skipped where its package is not importable (for VALIS: not at the pinned
+version of that row), so the default suite needs only STARE's dependencies; run this file
+inside each method's own image. For VALIS the test IS the selfcheck: the points must follow
+the image VALIS's own writer produced, at every stage. ``test_valis_adapters.py`` holds
+everything that can be checked without the package.
 """
+
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from benchmarks.regbench import methods
+from benchmarks.regbench import methods, selfcheck
 from benchmarks.regbench.cases import load_points, result_dir
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
@@ -63,29 +69,80 @@ def test_block_mean_and_centre_pads_follow_the_package_rules():
 
 
 # ── the real packages ────────────────────────────────────────────────────────
-def test_valis_rigid_and_nonrigid_land_in_reference_pixels(synthetic_cases, tmp_path):
-    pytest.importorskip("valis")
-    for name in ("smooth", "crop"):
-        case = synthetic_cases[name]
-        done = methods.run_case(
-            "valis", case, tmp_path, opts={"micro": "0", "workers": 2}
-        )
-        assert done == ["valis_rigid", "valis"], name
-        assert _median_tre(tmp_path, "valis", case) < 1.0 < _initial(case), name
-        assert _median_tre(tmp_path, "valis", case) < _median_tre(
-            tmp_path, "valis_rigid", case
-        )
+def need_valis(version):
+    """Skip unless the installed VALIS is exactly the pinned one of that row."""
+    valis = pytest.importorskip(
+        "valis", reason=f"needs valis-wsi=={version}: run inside that row's image"
+    )
+    found = getattr(valis, "__version__", "?")
+    if found != version:
+        pytest.skip(f"needs valis-wsi=={version}, found {found}")
 
 
-def test_valis_micro_variant_is_produced(synthetic_cases, tmp_path):
-    """Only that the stage runs and yields finite points: whether it IMPROVES on ``valis`` is
-    a result the benchmark reports, not something this test asserts."""
-    pytest.importorskip("valis")
-    case = synthetic_cases["smooth"]
-    done = methods.run_case("valis", case, tmp_path, opts={"workers": 2})
-    assert done == ["valis_rigid", "valis", "valis_micro"]
-    with np.load(result_dir(tmp_path, "valis_micro", case) / "warped.npz") as z:
-        assert np.isfinite(z["truth_xy"]).all()
+def _valis_selfcheck(method, work, label=None, opts=None):
+    """The default pair, in its own process (the JVM cannot restart). The large pair
+    of ``selfcheck.SIZES`` is the launcher's job: it needs tens of GB."""
+    rec = selfcheck.run(
+        method, work, opts, label=label, sizes=[(selfcheck.DEFAULT_HW, None)]
+    )
+    return rec["variants"], rec
+
+
+def test_valis120_points_follow_its_images(tmp_path):
+    need_valis("1.2.0")
+    variants, rec = _valis_selfcheck("valis", tmp_path, "valis120")
+    assert variants == dict.fromkeys(
+        ("valis120_rigid", "valis120", "valis120_micro"), selfcheck.OK
+    ), rec
+
+
+def test_valis120_hires_points_follow_its_images(tmp_path):
+    need_valis("1.2.0")
+    variants, rec = _valis_selfcheck(
+        "valis", tmp_path, "valis120_hires", {"hires": "1"}
+    )
+    names = ("valis120_hires_rigid", "valis120_hires_nonrigid", "valis120_hires")
+    assert variants == dict.fromkeys(names, selfcheck.OK), rec
+
+
+def test_valis_mirage_points_follow_the_pipelines_images(tmp_path):
+    need_valis("1.0.0")
+    variants, rec = _valis_selfcheck("valis_mirage", tmp_path)
+    names = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
+    assert variants == dict.fromkeys(names, selfcheck.OK), rec
+
+
+_PATIENT = """
+import json, sys
+from pathlib import Path
+from benchmarks.regbench import methods, selfcheck
+from benchmarks.tests.regbench.test_valis_adapters import patient
+from valis import registration
+
+built = []
+init = registration.Valis.__init__
+def counting(self, *args, **kwargs):
+    built.append(1)
+    return init(self, *args, **kwargs)
+registration.Valis.__init__ = counting
+work = Path(sys.argv[1])
+pair = selfcheck.make_pair(work / "pair", selfcheck.DEFAULT_HW)
+done = methods.run_group(
+    "valis", patient(work, pair), work / "out", {}, label="valis120"
+)
+(work / "answer.json").write_text(json.dumps({"done": done, "built": len(built)}))
+"""
+
+
+def test_valis120_registers_a_three_slide_patient_with_one_registrar(tmp_path):
+    need_valis("1.2.0")
+    root = Path(__file__).resolve().parents[3]
+    subprocess.run(
+        [sys.executable, "-c", _PATIENT, str(tmp_path)], cwd=root, check=False
+    )
+    answer = json.loads((tmp_path / "answer.json").read_text())
+    names = ["valis120_rigid", "valis120", "valis120_micro"]
+    assert answer == {"done": {"P1_r1": names, "P1_r2": names}, "built": 1}
 
 
 def test_deeperhistreg_field_is_read_as_moving_to_reference(synthetic_cases, tmp_path):

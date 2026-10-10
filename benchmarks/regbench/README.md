@@ -27,7 +27,8 @@ This package is being ported in steps. What exists now:
 | the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC nuclei of one arm. Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
-| adapters `initial`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them |
+| adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
+| adapters `initial`, `deeperhistreg` | converted to the contract only. `deeperhistreg` still computes what the copied harness computed (it is still asked for a moving -> reference map). The native adapter of "Methods" below replaces it |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | ASHLAR, the run list and the cohort launcher | not here yet |
 
@@ -120,6 +121,12 @@ the generator ends with the clock paused; `state` is what the method put in
 `info["_state"]`), or an image written at a yield inside `opts["monitor"].pause()` /
 `.resume()` and handed over as `info["native"]`.
 
+The driver hands a method three things through `opts` that are not options of the run and
+are not recorded as such: `monitor` (the clock), `native_dir` (`f(case_id, variant)`: where
+an image written at a yield belongs, `<out>/<variant>/<dataset>/<case>/native/`; the work
+directory is deleted after the run) and `label`. A method whose label does not rename its
+variants by the replace rule declares the names in `VARIANT_LABELS` (`valis120_hires`).
+
 **The driver** (`methods.run_case`, `methods.run_group`), at each yield, before it resumes
 the generator and with the clock paused: moves the nuclei through the map (the moving
 nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.npz`
@@ -143,9 +150,9 @@ failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`
 |---|---|---|---|---|
 | `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame |
 | `stare_s128`, `stare_s256` | the same, `--opt stride=128` / `256` and nothing else (a sensitivity analysis, never primary) | pair | same | same |
-| `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei through VALIS's own point warp; moving frame |
+| `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0 from PyPI, upstream defaults | patient | same | same |
-| `valis120_hires_*` | VALIS 1.2.0, upstream's high-resolution example | patient | same | same |
+| `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`) | patient | same | same |
 | `deeperhistreg_*` | DeeperHistReg 1.0.1 | pair | backward field on the reference grid | reference nuclei through its `warp_landmarks`; moving frame. Each also has an `_asdrawn` row, the image as written |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
 | `initial` | none | | identity | |
@@ -572,12 +579,132 @@ Selfcheck per stride (2026-10-09, macOS arm64, `--opt workers=4`, `stare` 1.2.1)
 | 256 | 2048 x 2560 | 539 / 539 | 0.058 / 0.089 | -0.001 / +0.001 | 0.098 (20 blocks) | 0.021 |
 | 256 | 4096 x 5120 | 2200 / 2200 | 0.056 / 0.089 | -0.001 / 0.000 | 0.103 (80 blocks) | 0.022 |
 
+### VALIS (`methods/valis_mirage.py`, `methods/valis.py`, `methods/_valis_points.py`)
+
+**Never run with VALIS.** Both adapters were written from the PyPI sdists
+`valis-wsi==1.0.0` and `==1.2.0` `[PARTIAL: registration.py (Slide's crop, field getters
+and warp functions, Valis.__init__, non_rigid_register, register, register_micro,
+warp_and_save_slides), warp_tools.py (warp_img, the point functions), slide_tools.warp_slide;
+the registrars, slide_io and libvips were not read]` and tested against a recording
+stand-in (`tests/regbench/fake_valis.py`). Everything in this section about VALIS's
+behaviour is a reading of that source; the selfcheck inside each VALIS image is what
+tests it.
+
+**Three rows, one patient per run** (`run --group`, `selfcheck`):
+
+| run | call | what the benchmark sets |
+|---|---|---|
+| `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x rung, GiB - 4)` (the module's formula: 12, 60, 80, 96 GiB on the four rungs), `stage_checkpoint_dir=None` (files only) |
+| `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()`, `.register_micro()` with no argument | the reference slide. `align_to_reference` stays `False` |
+| `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
+
+**Which file each row reads.** The patient's ORIGINAL multichannel slides
+(`case.ref_image`, every round's `case.mov_image`), hard-linked under their own names
+into one folder (a copy where a link is impossible, never a symlink), and read by VALIS's
+own readers. That is what the pipeline's REGISTER is given. VALIS picks its registration
+channel by name (`dapi`): 1.0.0 by a regular expression, channel 0 on no match or on
+several (`slide_io.py:723-747`); 1.2.0 by a fuzzy match (`slide_io.py:1074-1099`). The
+index it picked is in `run.json: info.nuclear_channel`.
+
+**The point map is the map of the written image.** For output pixel `P` of a slide
+written with `crop="reference"`, VALIS's writer (`warp_tools.warp_img`) samples the moving
+slide at `warp_xy_inv(P + c)`: `c` is the crop box's origin as the writer used it, and
+`warp_tools.warp_xy_inv` reads the backward field `bk_dxdy` in its own grid and applies
+the slide's matrix. So every VALIS row is `REF_TO_MOV`, nothing is inverted, and the
+function that moves a point is VALIS's own.
+
+- **It is not `Slide.warp_xy_from_to(reference -> moving)`**, which the plan named. That
+  function places a reference pixel on the registered canvas through the reference
+  slide's own matrix, `(P / s - t) x canvas / reg`; the writer places it at `P + c`. The
+  two differ by the rounding of the crop origin (up to 1 px) and by the ceiling in the
+  canvas size (up to 1 px at the far edge). On the stand-in's geometry that is 0.46 px,
+  which the selfcheck reports as `inconsistent`. Each run records the gap on its own
+  geometry (`info.stage.valis_from_to_minus_writer_px`), and `--opt points=from_to`
+  scores VALIS's own function instead, so the claim can be measured in the image.
+- **The rounding of the crop origin is measured, not assumed.** 1.2.0 takes `np.ceil` of
+  the box (`warp_tools.py:1118`); 1.0.0 hands the real number to pyvips (`:1097`). The
+  adapter passes an 8 px probe through the installed `warp_tools.warp_img` and reads
+  where the crop began. `--opt crop_round=<ceil|trunc|round>` states the rule instead.
+- **In 1.0.0 the reference slide is itself resampled** by the writer (through its matrix
+  and the same crop), so the pipeline's two registered files agree with each other
+  through `warp_xy_from_to`, while the benchmark's reference nuclei are on the NATIVE
+  reference grid. This map relates the written moving image to that native grid. In 1.2.0
+  the reference is written unwarped (`registration.py:955-974`).
+- **Two differences the selfcheck measures** and nothing corrects: points read the field
+  through VALIS's cubic spline, the image through libvips' bicubic; the writer's rigid
+  step goes through a four-corner projective fit of the same chain.
+- **Fields are copied at the yield**, through `Slide.bk_dxdy` as the writer reads it; a
+  stored (tiled) field is loaded whole as an array, so points take VALIS's vectorised
+  branch instead of its per-point loop.
+
+**Stages, images, cost.**
+
+| variant | what it is | image |
+|---|---|---|
+| `valis_mirage_rigid` | the matrix after the pipeline's micro-rigid refinement, no field | selfcheck only |
+| `valis_mirage_nonrigid` | the field as it stood when the pipeline called `register_micro` | selfcheck only |
+| `valis_mirage` | the final transform | always: the file the pipeline's function wrote |
+| `valis120_rigid` / `valis120_hires_rigid` | the matrix (after micro-rigid for hires) | selfcheck only |
+| `valis120` / `valis120_hires_nonrigid` | after `register()` | always, written BEFORE `register_micro` rewrites the fields |
+| `valis120_micro` / `valis120_hires` | after `register_micro()` | always |
+
+- `valis_mirage` captures its stages inside the one call through three wrappers
+  (`Valis.register`, `Valis.register_micro`, `Slide.warp_and_save_slide`) that copy
+  matrices and fields out, pause the clock around the writer, and change no argument and
+  no result. `register_micro`'s wrapper always calls the original.
+- A written image has the reference slide's size and is on its grid: **no `origin_xy`**.
+  Pixels the moving slide does not cover are **filled** with the slide's background colour
+  (the value of its darkest pixel; zero when the writer is given another path), so the
+  native record carries **`valid_box`**: the bounding box of the lattice points the map
+  sends inside the moving slide, grown by one step.
+- Cost: `valis120`'s three results are billed at their own yields. All three
+  `valis_mirage` results carry the cost of the whole call; `info.cost_after_register` is
+  the bill when `Valis.register()` returned. The writer is never billed.
+- CPUs: nothing is exported. `valis_mirage` passes the allocation as `n_cpus`, which the
+  pipeline's `bound_cpu_count` turns into `multiprocessing.cpu_count()` (VALIS 1.0.0's
+  pools use that minus one). VALIS 1.2.0 has no option and takes the affinity mask minus
+  one. `info.workers_seen` is what VALIS saw.
+- `info` also records: `micro_ran` (and `problem` when the micro pass did not run),
+  `repair_fired`, the µm per pixel of the rigid image and of the field
+  (`info.stage.um_per_px`), whether the field was stored (the tiler), the non-rigid
+  bounding box, and for 1.2.0 the last slide of `slide_dict` (its micro pass prepares
+  every slide's image with the last slide's field, `registration.py:3944-3968, 4045-4062`).
+
+**What the selfcheck reaches.** `SIZES` checks every VALIS row on 2048 x 2560 and on
+24000 x 30000 against 23000 x 29000. On the small pair `valis120_hires`'s micro pass
+cannot run (its size, 640 px, is under the first pass's 2048 px, and 1.2.0 returns
+early: `registration.py:4862-4871`), and the pipeline's runs on a coarser grid than the
+first pass; on the large pair all three micro passes run and the first field is applied
+at 14x. Not reached by any pair: stored (tiled) fields, which need more than 10 GB of
+images at registration size. That path, and field scales of 29x, are first exercised by
+the realcheck on a cohort patient.
+
+**First commands in each image** (from the repository root; `ok` is exit 0, and
+`selfcheck [<variant>]: ok` for all three variants of the row):
+
+```bash
+# the pipeline's VALIS image (valis-wsi 1.0.0)
+python -m benchmarks.regbench selfcheck --method valis_mirage --work W/valis_mirage
+# the VALIS 1.2.0 image
+python -m benchmarks.regbench selfcheck --method valis --label valis120 --work W/valis120
+python -m benchmarks.regbench selfcheck --method valis --label valis120_hires --opt hires=1 \
+    --work W/valis120_hires
+```
+
+Add `--size 2048x2560` for the small pair alone (minutes, a few GB); without it the
+large pair runs too. `python -m pytest benchmarks/tests/regbench/test_external_methods.py`
+runs the small pair of each row whose VALIS version is installed.
+
 ## Tests
 
 ```bash
 python -m pytest benchmarks/tests/regbench -q --basetemp=/tmp/rb_<unique>
 ```
 
-`test_external_methods.py` skips where VALIS or DeeperHistReg is not importable.
+`test_external_methods.py` skips where VALIS (at the pinned version of the row) or
+DeeperHistReg is not importable. `test_valis_adapters.py` runs both VALIS adapters against
+`fake_valis.py`, a stand-in that records every call and draws images the way VALIS's
+writer is written to; for `valis_mirage` it executes the real `bin/register.py` on that
+stand-in, in a fresh process.
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.
