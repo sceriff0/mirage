@@ -56,6 +56,16 @@ this check, and a stage with no image of its own is not checked.
         out (``--mask overlap``: ASHLAR's tile overlap bands), at the same points.
 ``SELFCHECK_SUBPROCESS = True``  each pair is run in its own Python process (a method that
         ends its process state on return, such as a JVM that cannot restart).
+``SELFCHECK_REF_DOTS = True``  the REFERENCE slide of the pair carries its own dots too
+        (another lattice), for a method that redraws the reference (ASHLAR re-stitches it).
+``SELFCHECK_REFERENCE(info, native, pair)``  for such a method: ``{"point_map", "file",
+        "channel", "drop", "expect_origin_xy"}``, a second comparison of the same kind on
+        the reference's dots (``pair["dots_ref_xy"]``) in the image the method wrote of
+        the reference. ``expect_origin_xy`` is the ``origin_xy`` the method reports for
+        its image; it must agree, within the gate's mean, with the origin read off the
+        image (the median of matched dot minus the pixel it was found at).
+        Its result is stored under ``reference`` and the variant's status is the worse of
+        the two.
 
 A native dict may say where its dots are: ``dots_file``, ``dots_channel`` (default: the
 first of ``files``, at the moving slide's dots channel INDEX; names are not used, because
@@ -134,6 +144,11 @@ SIZES = {
     # gives the cohort's S = 9.77. The high-resolution pair stays at S = 5.0.
     "deeperhistreg": [((40000, 50000), (40000, 48000))],
     "deeperhistreg_hr": [((8200, 10240), (7780, 9720))],
+    # ASHLAR at 1024 px tiles and a 922 px pitch: 3 x 3 tiles, then 5 x 6 with interior
+    # tiles and four-tile corners. The same two pairs as `stare`, whose rigid matrix the
+    # anchored rows read (`--m0-from`).
+    "ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
+    "affine_ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
 }
 
 # ── the detector ──────────────────────────────────────────────────────────────
@@ -256,7 +271,13 @@ def inverse_of(spec, tol=1e-4, max_iter=60):
 
 
 def make_pair(
-    work, ref_hw=DEFAULT_HW, mov_hw=None, seed=0, workers=1, dots_image=False
+    work,
+    ref_hw=DEFAULT_HW,
+    mov_hw=None,
+    seed=0,
+    workers=1,
+    dots_image=False,
+    ref_dots=False,
 ):
     """Write the selfcheck pair under ``work`` and describe it.
 
@@ -265,13 +286,16 @@ def make_pair(
     them with ``dots_mov_xy (K, 2)``, ``truth`` (moving -> reference, exact) and
     ``truth_inverse`` (reference -> moving, the generator's map inverted to 1e-4 px).
     ``dots_image`` also writes the dots as a one-channel image on the moving grid, for a
-    method whose writer is applied to it (``warp_extra``).
+    method whose writer is applied to it (``warp_extra``). ``ref_dots`` draws another
+    lattice of dots in the reference's second channel (``dots_ref_xy``, reference frame),
+    for a method that redraws the reference; no method registers on that channel.
     """
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
     spec = pair_spec(ref_hw, mov_hw, seed)
     ref_hw, mov_hw = spec["ref_hw"], spec["mov_hw"]
     dots = lattice_dots(mov_hw, seed)
+    dots_ref = lattice_dots(ref_hw, seed + 1) if ref_dots else np.empty((0, 2))
     tile = synthetic.TILE
 
     def dot_tiles(hw, xy):
@@ -284,7 +308,7 @@ def make_pair(
 
     paths = {}
     for which, name, hw, xy in (
-        ("ref", "reference", ref_hw, np.empty((0, 2))),
+        ("ref", "reference", ref_hw, dots_ref),
         ("mov", "moving", mov_hw, dots),
     ):
         paths[name] = work / f"{name}.ome.tif"
@@ -314,6 +338,7 @@ def make_pair(
         "moving": str(paths["moving"]),
         "dots_image": str(dots_path) if dots_path else None,
         "dots_mov_xy": dots,
+        "dots_ref_xy": dots_ref,
         "truth": synthetic.forward_map(spec),
         "truth_inverse": inverse_of(spec),
         "spec": spec,
@@ -613,6 +638,13 @@ def compare(
         resid = back[found] - dots[j[found]]
         where = src - origin
         n_deep = 0
+        if found.any():
+            # where the image's first pixel sits in the frame the mapping leads to, read
+            # off the image: matched dot minus the pixel it was found at. A constant only
+            # for a mapping that is a translation there (a mosaic, not a warp).
+            at = np.median(dots[j[found]] - (src[found] - origin), axis=0)
+            out["image_origin_px_median_x"] = float(at[0])
+            out["image_origin_px_median_y"] = float(at[1])
     out.update(_stats(resid, len(where)))
     whole_passes = out.pop("passes")
     out["declared_px_mean_x"] = float(off[:, 0].mean()) if len(off) else 0.0
@@ -777,7 +809,66 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
         close()
     out["native"] = {k: v for k, v in native.items() if k != "error"}
     out["declared_offset"] = offset is not None
+    reference = getattr(mod, "SELFCHECK_REFERENCE", None)
+    if reference is not None:
+        out["reference"] = _check_reference(reference, info, native, pair)
+        if out["reference"]["status"] != OK:
+            out["failed"] = [*out.get("failed", []), "the reference as redrawn"]
+            out["status"] = worst([out["status"], out["reference"]["status"]])
     return out
+
+
+def _check_reference(hook, info, native, pair):
+    """The second comparison of a method that redraws the reference: its own dots."""
+    from stare.slide_io import open_lazy
+
+    try:
+        spec = hook(info, native, pair)
+        if not spec:
+            return {"status": NOT_CHECKED, "cause": "the method named no image"}
+        arr, _, close = open_lazy(spec["file"])
+    except Exception as exc:
+        return {
+            "status": CRASHED,
+            "cause": "the reference comparison could not start",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    try:
+        plane = _Plane(arr, int(spec["channel"]))
+        res = compare(
+            spec["point_map"],
+            pair["dots_ref_xy"],
+            plane,
+            None,
+            spec.get("origin_xy") or (0.0, 0.0),
+            spec.get("drop"),
+        )
+        res.pop("blocks", None)
+        res["file"], res["channel"] = str(spec["file"]), int(spec["channel"])
+        want = spec.get("expect_origin_xy")
+        if want is not None and res["status"] == OK:
+            # the origin the method reports for its image, against the image itself
+            got = [
+                res.get("image_origin_px_median_x", math.nan),
+                res.get("image_origin_px_median_y", math.nan),
+            ]
+            res["origin_xy_reported"] = [float(v) for v in want]
+            off = np.abs(np.asarray(got) - np.asarray(want, dtype=float))
+            if not (off <= GATE_MEAN).all():
+                res["failed"] = [*res["failed"], "origin_xy"]
+                res["status"] = INCONSISTENT
+        return res
+    except MemoryError as exc:
+        return {"status": NOT_CHECKED, "cause": "oom", "error": str(exc)}
+    except Exception as exc:
+        return {
+            "status": CRASHED,
+            "cause": "the reference comparison raised",
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+        }
+    finally:
+        close()
 
 
 def run_pair(
@@ -801,7 +892,8 @@ def run_pair(
     opts = dict(opts or {})
     workers = int(opts.get("workers") or resources.n_cpus())
     wants_dots = hasattr(mod, "warp_extra")
-    pair = make_pair(work / "pair", ref_hw, mov_hw, seed, workers, wants_dots)
+    ref_dots = bool(getattr(mod, "SELFCHECK_REF_DOTS", False))
+    pair = make_pair(work / "pair", ref_hw, mov_hw, seed, workers, wants_dots, ref_dots)
     case = pair_case(pair, work / "cases")
     out = work / "out"
     opts["stage_images"] = "1"

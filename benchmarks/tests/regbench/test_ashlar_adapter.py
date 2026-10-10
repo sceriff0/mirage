@@ -1,0 +1,922 @@
+"""The ASHLAR adapter, without ASHLAR.
+
+ASHLAR (pinned at 1.20.0) is not installed where this suite runs, so everything here runs
+against ``fake_ashlar``: a recording stand-in that keeps ASHLAR's geometry conventions and
+draws the mosaic the way its writer is written to (see that module). What these tests pin:
+
+* the command is ASHLAR's own, with nothing but the documented flags;
+* the point map against the emulated writer, in the selfcheck's own comparisons, with a
+  reference that is NOT stitched onto its slide's grid; and that a wrong origin, a wrong
+  direction, a swapped tile index and a one-tile offset are each reported
+  ``inconsistent``;
+* the four rows: noise on the reference tiles or none, moving tiles on the grid or placed
+  by STARE's anchor; a missing anchor fails its round alone; reference tiles cut once;
+* an exception out of ASHLAR fails the patient with its message; the clock is paused
+  while tiles are cut and while ASHLAR's writer runs.
+
+What they cannot pin is ASHLAR itself: ``test_external_methods.py`` holds the test that
+needs the real package, skipped here.
+"""
+
+import json
+import math
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pytest
+import tifffile
+
+from benchmarks.ashlar import original, retile
+from benchmarks.regbench import METHODS, methods, tilemap
+from benchmarks.regbench import selfcheck as sc
+from benchmarks.regbench.cases import (
+    Case,
+    load_case,
+    load_points,
+    result_dir,
+    write_case,
+)
+from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
+from benchmarks.regbench.methods import ashlar as am
+from benchmarks.regbench.score import score
+
+from . import fake_ashlar as fa
+from .test_pipeline import squares
+
+SMALL = (768, 1024)  # with 256 px tiles: a 4 x 5 grid
+SMALL_TILE = 256
+
+
+def off_grid(n_rows, n_cols):
+    """A reference stitch that is NOT on the slide's grid: every tile 4 px down and 7 px
+    right of where it was cut, except the first (so the origin is not zero) and one tile
+    another 0.3 px off (so the tiles do not share one offset either)."""
+    shifts = np.zeros((n_rows * n_cols, 2))
+    shifts[0] = [-4.0, -7.0]
+    shifts[n_cols + 1] = [0.3, -0.2]
+    return shifts
+
+
+@pytest.fixture(autouse=True)
+def fake(monkeypatch):
+    """The fake ``ashlar`` for one test, gone afterwards."""
+    fa.install(monkeypatch.setitem, edge_shifts=off_grid)
+    yield fa
+    fa.configure()
+
+
+@pytest.fixture
+def small(monkeypatch):
+    """256 px tiles, so a 768 x 1024 pair is a 4 x 5 grid and a run takes a second."""
+    monkeypatch.setattr(am, "TILE", SMALL_TILE)
+    return [(SMALL, None)]
+
+
+@pytest.fixture(scope="module")
+def pair(tmp_path_factory):
+    return sc.make_pair(tmp_path_factory.mktemp("ashlar_pair"), SMALL, ref_dots=True)
+
+
+def case_of(root, pair, case_id, mov, dataset="selfcheck", cells=None, **extra):
+    h, w = pair["ref_hw"]
+    case = Case(
+        dataset=dataset,
+        case_id=case_id,
+        group="P1",
+        ref_nuclear=pair["reference"],
+        mov_nuclear=str(mov),
+        ref_image=pair["reference"],
+        mov_image=str(mov),
+        modality="fluorescence",
+        diagonal=math.hypot(h, w),
+        pixel_size_um=pair["pixel_size_um"],
+        ref_hw=list(pair["ref_hw"]),
+        mov_hw=list(pair["mov_hw"]),
+        extra={"ref_channel": 0, "mov_channel": 0, **extra},
+    )
+    kw = {} if cells is None else {"cells_mov": cells[0], "cells_ref": cells[1]}
+    return load_case(write_case(root, case, **kw))
+
+
+def patient(tmp_path, pair, rounds=2, **kw):
+    cases = []
+    for i in range(rounds):
+        mov = tmp_path / f"round{i + 1}.ome.tif"
+        shutil.copyfile(pair["moving"], mov)
+        cases.append(case_of(tmp_path / "cases", pair, f"P1_r{i + 1}", mov, **kw))
+    return cases
+
+
+def run_json(out, variant, case):
+    return json.loads((result_dir(out, variant, case) / "run.json").read_text())
+
+
+def stare_run(out, case, m0=None, ok=True):
+    """What a ``stare`` run of this round leaves for the anchored rows."""
+    d = result_dir(out, "stare", case)
+    d.mkdir(parents=True, exist_ok=True)
+    info = {} if m0 is None else {"m0": np.asarray(m0).tolist()}
+    (d / "run.json").write_text(json.dumps({"ok": ok, "info": info}))
+    return d / "run.json"
+
+
+M0 = np.array([[1.0, 0.0, 18.0], [0.0, 1.0, -12.0], [0.0, 0.0, 1.0]])
+
+
+# ── names and settings ────────────────────────────────────────────────────────
+def test_registered_and_named():
+    assert "ashlar" in METHODS and am.SCOPE == "group" and am.VARIANTS == ("ashlar",)
+    assert methods.scope_of("ashlar") == "group"
+    for label in ("ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
+        assert methods.variant_names("ashlar", label) == [label]
+    assert methods.variant_names("ashlar") == ["ashlar"]
+    assert not hasattr(am, "register")
+    # frozen values of the plan
+    assert (am.TILE, am.OVERLAP, am.MAX_SHIFT_UM) == (1024, 0.1, 15.0)
+    assert (am.NOISE_FRAC, am.NOISE_MIN_COUNTS) == (0.002, 3.0)
+    assert sc.sizes_for("ashlar_clean") == sc.sizes_for("affine_ashlar_clean")
+    assert sc.sizes_for("ashlar")[-1] == ((4096, 5120), None)
+
+
+def test_the_primary_row_is_slight_noise_and_no_anchor():
+    assert am.settings({}) == ("ref", "none")
+    assert am.settings({"label": ""}) == ("ref", "none")
+    assert am.LABELS == {
+        "ashlar": ("ref", "none"),
+        "ashlar_clean": ("none", "none"),
+        "affine_ashlar": ("ref", "stare"),
+        "affine_ashlar_clean": ("none", "stare"),
+    }
+
+
+@pytest.mark.parametrize(
+    "opts",
+    [
+        {"label": "ashlar", "noise": "none"},
+        {"label": "ashlar_clean"},
+        {"label": "affine_ashlar", "noise": "ref"},
+        {"label": "affine_ashlar_clean", "affine": "stare"},
+        {"label": "", "affine": "stare"},
+    ],
+)
+def test_a_label_and_its_options_come_together(opts):
+    with pytest.raises(ValueError, match="come together"):
+        am.settings(opts)
+
+
+def test_an_unknown_setting_is_refused():
+    with pytest.raises(ValueError, match="noise="):
+        am.settings({"noise": "lots", "label": "mine"})
+    assert am.settings({"noise": "none", "affine": "stare", "label": "mine"}) == (
+        "none",
+        "stare",
+    )
+
+
+def test_the_module_imports_without_ashlar():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from benchmarks.regbench.methods import ashlar\n"
+        "raise SystemExit(int('ashlar' in sys.modules))\n"
+    )
+    root = Path(__file__).resolve().parents[3]
+    assert subprocess.run([sys.executable, "-c", code], cwd=root).returncode == 0
+
+
+# ── geometry read back from ASHLAR's notes ────────────────────────────────────
+def _grid(n_rows=2, n_cols=3, stride=230, tile=256):
+    true = [[r * stride, c * stride] for r in range(n_rows) for c in range(n_cols)]
+    return {
+        "n_rows": n_rows,
+        "n_cols": n_cols,
+        "stride": stride,
+        "tile_size": tile,
+        "true_positions_yx": true,
+    }
+
+
+def test_the_tile_order_is_read_from_ashlars_positions_not_assumed():
+    grid = _grid()
+    meta = np.array(grid["true_positions_yx"], dtype=float)
+    np.testing.assert_array_equal(am.tile_order(meta, grid), np.arange(6))
+    # the same tiles handed over column by column are found where they belong
+    by_column = meta.reshape(2, 3, 2).transpose(1, 0, 2).reshape(-1, 2)
+    np.testing.assert_array_equal(am.tile_order(by_column, grid), [0, 3, 1, 4, 2, 5])
+    with pytest.raises(RuntimeError, match="are not the 2 x 3 grid"):
+        am.tile_order(meta[:5], grid)
+    with pytest.raises(RuntimeError, match="are not the 2 x 3 grid"):
+        am.tile_order(meta + 40.0, grid)
+    with pytest.raises(RuntimeError, match="are not the 2 x 3 grid"):
+        am.tile_order(np.repeat(meta[:1], 6, axis=0), grid)
+
+
+def _placement():
+    c = np.array([[0.0, 0.0], [0.0, 230.0]])
+    return {
+        "tile": 256,
+        "ref_true_yx": c.tolist(),
+        "ref_pos_yx": (c + [[4.0, 7.0], [4.0, 7.0]]).tolist(),
+        "mov_true_yx": c.tolist(),
+        "mov_pos_yx": (c + [[10.0, 30.0], [12.0, 18.0]]).tolist(),
+        "mosaic_shape": [260, 493],
+    }
+
+
+def test_the_origin_is_where_the_mosaics_first_pixel_sits_on_the_reference_slide():
+    p = _placement()
+    assert am.mosaic_origin_xy(p) == [-7.0, -4.0]
+    # the reference slide (200 x 480) inside the mosaic, in the mosaic's own pixels
+    assert am._valid_box(p, (200, 480)) == [7, 4, 487, 204]
+    fn = am.point_map(p)
+    assert fn.direction == MOV_TO_REF
+    # +30 right and +10 down into the mosaic, then -7 and -4 back to the reference slide
+    np.testing.assert_allclose(fn(np.array([[100.0, 100.0]])), [[123.0, 106.0]])
+
+
+def _notes(shifts, errors, max_shift_px=46.0):
+    """An edge note on the grid and a layer note with the given shifts and errors, the
+    way ASHLAR would have left them (the discard flag from its own rule)."""
+    shifts = np.asarray(shifts, dtype=float)
+    errors = np.asarray(errors, dtype=float)
+    n = len(shifts)
+    meta = np.array([[230.0 * (i // 2), 230.0 * (i % 2)] for i in range(n)])
+    edge = {
+        "metadata_positions_yx": meta.tolist(),
+        "positions_yx": meta.tolist(),
+        "model_coef": np.eye(2).tolist(),
+        "model_intercept": [0.0, 0.0],
+    }
+    zero = (np.rint(np.abs(shifts) * 10) / 10 == 0).all(axis=1)
+    first = zero | np.isinf(errors)
+    offset = np.median(shifts[~first], axis=0) if (~first).any() else 0.0
+    over = np.linalg.norm(shifts - offset, axis=1) > max_shift_px
+    layer = {
+        "metadata_positions_yx": meta.tolist(),
+        "shifts_yx": shifts.tolist(),
+        "cycle_offset_yx": [0.0, 0.0],
+        "reference_idx": list(range(n)),
+        "errors": [None if np.isinf(e) else float(e) for e in errors],
+        "discard": (first | over).tolist(),
+    }
+    return layer, edge
+
+
+def test_discards_are_counted_once_each_by_a_fixed_precedence():
+    # tile 0: no registration AND zero shift -> infinite error wins
+    # tile 1: zero to 0.1 px -> zero offset; tile 2: 300 px off -> over budget
+    # tiles 3 to 5: normal tiles
+    shifts = [[0.0, 0.0], [0.04, -0.03], [300.0, 5.0], [5.0, 5.0], [5.0, 5.0], [5, 5]]
+    layer, edge = _notes(shifts, [np.inf, 0.2, 0.2, 0.2, 0.2, 0.2])
+    assert layer["discard"] == [True, True, True, False, False, False]
+    got = am.discards(layer, edge, 46.0)
+    assert got == {
+        "discard_infinite_error": 1,
+        "discard_zero_offset": 1,
+        "discard_over_budget": 1,
+        "n_tiles": 6,
+        "n_discarded": 3,
+        "discard_rebuild_matches": True,
+    }
+    # an infinite error far over the budget is still counted once, as infinite
+    layer, edge = _notes(
+        [[300.0, 5.0], [5, 5], [5, 5], [5, 5]], [np.inf, 0.2, 0.2, 0.2]
+    )
+    got = am.discards(layer, edge, 46.0)
+    assert (got["discard_infinite_error"], got["discard_over_budget"]) == (1, 0)
+
+
+def test_a_rebuild_that_disagrees_with_ashlars_flag_says_so():
+    layer, edge = _notes([[5.0, 5.0]] * 4, [0.2] * 4)
+    layer["discard"][2] = True  # ASHLAR discarded a tile this reading cannot explain
+    assert not am.discards(layer, edge, 46.0)["discard_rebuild_matches"]
+
+
+# ── the selfcheck against the emulated writer ────────────────────────────────
+def _selfcheck(tmp_path, sizes, **kw):
+    rec = sc.run("ashlar", tmp_path, mask="overlap", sizes=sizes, **kw)
+    (pair_rec,) = rec["pairs"]
+    (name,) = pair_rec["variants"]
+    return rec, pair_rec["variants"][name]
+
+
+def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
+    """The frozen geometry (1024 px tiles), a reference stitched off its slide's grid."""
+    rec, v = _selfcheck(tmp_path, [(sc.DEFAULT_HW, None)])
+    assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
+    assert v["direction"] == MOV_TO_REF and v["n_masked"] > 0
+    assert v["n_found"] == v["n_dots"] > 300 and v["err_px_p95"] < 0.2
+    # both comparisons read ASHLAR's own file, not the per-cycle copy
+    native, ref = v["native"], v["reference"]
+    assert Path(native["dots_file"]).name == original.OUTPUT_NAME
+    assert ref["file"] == native["dots_file"] and ref["channel"] == 1
+    assert native["dots_channel"] == 3 and native["mosaic_planes"] == [2, 4]
+    # the mosaic is not on the reference slide's grid, and says where it is
+    assert native["origin_xy"] == [-7.0, -4.0] == ref["origin_xy_reported"]
+    assert ref["image_origin_px_median_x"] == pytest.approx(-7.0, abs=0.1)
+    assert ref["image_origin_px_median_y"] == pytest.approx(-4.0, abs=0.1)
+    assert native["valid_box"] == [7, 4, 2567, 2052]
+    assert ref["status"] == sc.OK and ref["n_found"] == ref["n_dots"] > 300
+    assert v["declared_offset"] and abs(v["declared_px_mean_x"]) > 0.5
+    # the copy holds the mosaic's planes, pixel for pixel
+    with tifffile.TiffFile(native["mosaic"]) as tf:
+        planes = tf.series[0].asarray()
+    np.testing.assert_array_equal(tifffile.imread(native["files"][0]), planes[2:4])
+    np.testing.assert_array_equal(tifffile.imread(native["reference_file"]), planes[:2])
+
+
+def test_the_command_is_ashlars_own_and_nothing_else(tmp_path, small):
+    _selfcheck(tmp_path, small)
+    (call,) = fa.calls("main")
+    argv = call["argv"]
+    assert argv[0] == "ashlar" and argv[3:] == [
+        "-o",
+        argv[4],
+        "-c",
+        "0",
+        "-m",
+        "15.0",
+    ]
+    assert Path(argv[4]).name == "ashlar_output.ome.tif"
+    for spec in argv[1:3]:
+        reader, _, pattern, overlap, px = spec.split("|")
+        assert reader == "filepattern" and pattern == "pattern=r{row:03}_c{col:03}.tif"
+        assert float(overlap.split("=")[1]) == pytest.approx(1 - 230 / 256)
+        assert px == "pixel_size=0.325"
+    assert len(fa.calls("EdgeAligner")) == 1 and len(fa.calls("LayerAligner")) == 1
+
+
+def test_the_run_record_holds_the_transform_and_the_diagnostics(tmp_path, small):
+    _selfcheck(tmp_path, small, keep_work=True)
+    (path,) = (tmp_path / "out").rglob("run.json")
+    run = json.loads(path.read_text())
+    info = run["info"]
+    assert run["ok"] and run["direction"] == MOV_TO_REF and run["unit"] == "patient"
+    assert info["version"] == "1.20.0" and info["noise"] == "ref"
+    assert info["affine"] == "none" and info["align_channel"] == 0
+    for key in (
+        "discard_over_budget",
+        "discard_zero_offset",
+        "discard_infinite_error",
+        "jump_px_p50",
+        "jump_px_p95",
+        "reference_stitch_error",
+        "retile_s",
+        "edge_s",
+        "layer_s",
+        "register_s_round",
+        "peak_rss_after_register_mb",
+        "edge_positions_identical",
+        "command",
+    ):
+        assert key in info, key
+    assert info["discard_rebuild_matches"] is True
+    assert info["register_s_round"] == pytest.approx(
+        info["layer_s"][0] + info["edge_s"]
+    )
+    # the placement IS the transform: one row per tile, both cycles
+    p = info["placement"]
+    assert len(p["mov_pos_yx"]) == len(p["ref_pos_yx"]) == 20 and p["tile"] == 256
+    assert info["reference_stitch_error"]["max"] > 5  # the tile stitched 8 px away
+    # 0.2 % of the nuclear channel's range; the floor of 3 counts on the empty one
+    assert info["reference_noise_sd"][0] > 3.0 == info["reference_noise_sd"][1]
+    assert any(
+        "noise on the reference" in s for s in info["implementation"]["benchmark_side"]
+    )
+    assert run["write_s"] > 0 and run["native"]["origin_xy"] == [-7.0, -4.0]
+    assert "band" not in np.load(path.parent / "warped.npz").files  # no nuclei here
+
+
+def _mutate_origin(monkeypatch):
+    real = am.mosaic_origin_xy
+    monkeypatch.setattr(am, "mosaic_origin_xy", lambda p: [-v for v in real(p)])
+
+
+def _mutate_direction(monkeypatch):
+    def backwards(placement):
+        swapped = {
+            **placement,
+            "mov_pos_yx": placement["mov_true_yx"],
+            "mov_true_yx": placement["mov_pos_yx"],
+        }
+        return PointMap(tilemap.placement_maps(swapped)[0], MOV_TO_REF)
+
+    monkeypatch.setattr(am, "point_map", backwards)
+
+
+def _mutate_label(monkeypatch):
+    real = am.point_map
+    monkeypatch.setattr(am, "point_map", lambda p: PointMap(real(p).fn, REF_TO_MOV))
+
+
+def _mutate_tile_index(monkeypatch):
+    real = am.placement_of
+
+    def swapped(edge, layer, ref_grid, mov_grid):
+        p = real(edge, layer, ref_grid, mov_grid)
+        pos = np.array(p["mov_pos_yx"])
+        pos[[6, 7]] = pos[[7, 6]]  # two interior neighbours take each other's place
+        return {**p, "mov_pos_yx": pos.tolist()}
+
+    monkeypatch.setattr(am, "placement_of", swapped)
+
+
+def _mutate_one_tile_off(monkeypatch):
+    real = am.placement_of
+
+    def rolled(edge, layer, ref_grid, mov_grid):
+        p = real(edge, layer, ref_grid, mov_grid)
+        return {**p, "mov_true_yx": np.roll(p["mov_true_yx"], 1, axis=0).tolist()}
+
+    monkeypatch.setattr(am, "placement_of", rolled)
+
+
+def _mutate_reference_index(monkeypatch):
+    real = am.placement_of
+
+    def rolled(edge, layer, ref_grid, mov_grid):
+        p = real(edge, layer, ref_grid, mov_grid)
+        return {**p, "ref_true_yx": np.roll(p["ref_true_yx"], 1, axis=0).tolist()}
+
+    monkeypatch.setattr(am, "placement_of", rolled)
+
+
+def _mutate_reference_sign(monkeypatch):
+    def wrong(placement):
+        flipped = {
+            **placement,
+            "ref_pos_yx": placement["ref_true_yx"],
+            "ref_true_yx": placement["ref_pos_yx"],
+        }
+        return PointMap(tilemap.placement_maps(flipped)[0], MOV_TO_REF)
+
+    monkeypatch.setattr(am, "point_map", wrong)
+
+
+def test_the_unmutated_adapter_passes_on_the_small_grid(tmp_path, small):
+    rec, v = _selfcheck(tmp_path, small)
+    assert rec["status"] == sc.OK, v
+    assert v["reference"]["status"] == sc.OK and v["n_blocks_judged"] >= 2
+
+
+@pytest.mark.parametrize(
+    "mutate,where",
+    [
+        (_mutate_origin, "reference"),
+        (_mutate_direction, "moving"),
+        (_mutate_label, "moving"),
+        (_mutate_tile_index, "moving"),
+        (_mutate_one_tile_off, "moving"),
+        (_mutate_reference_index, "reference"),
+        (_mutate_reference_sign, "moving"),
+    ],
+    ids=lambda v: getattr(v, "__name__", v),
+)
+def test_a_wrong_map_is_inconsistent(tmp_path, small, monkeypatch, mutate, where):
+    """Each of these is a mistake the adapter could contain; the selfcheck must object."""
+    mutate(monkeypatch)
+    rec, v = _selfcheck(tmp_path, small)
+    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"], v
+    if where == "reference":
+        assert v["reference"]["status"] == sc.INCONSISTENT
+        assert "the reference as redrawn" in v["failed"]
+    else:
+        assert "whole image" in v["failed"]
+
+
+def test_without_the_mask_the_seams_fail_the_check(tmp_path, small):
+    """Dots in the overlap bands are drawn twice: unmasked, the check must object, which
+    is why the launcher passes ``--mask overlap`` and the masked count is reported."""
+    rec = sc.run("ashlar", tmp_path, sizes=small)
+    assert rec["status"] == sc.INCONSISTENT
+
+
+def test_an_unknown_mask_is_refused():
+    with pytest.raises(SystemExit, match="knows the masks"):
+        am.SELFCHECK_MASK({"placement": _placement()}, "everything")
+
+
+# ── the four rows ─────────────────────────────────────────────────────────────
+def _grid_of(run):
+    return json.loads((Path(run["info"]["reference_tiles"]) / "grid.json").read_text())
+
+
+def test_one_command_registers_every_round_of_the_patient(tmp_path, pair, small):
+    cases = patient(tmp_path, pair)
+    done = methods.run_group("ashlar", cases, tmp_path / "out")
+    assert done == {"P1_r1": ["ashlar"], "P1_r2": ["ashlar"]}
+    assert len(fa.calls("main")) == 1 and len(fa.calls("LayerAligner")) == 2
+    runs = [run_json(tmp_path / "out", "ashlar", c) for c in cases]
+    assert [r["info"]["cycle"] for r in runs] == [1, 2]
+    # each round's own placement (the fake shifts every cycle differently)
+    assert (
+        runs[0]["info"]["placement"]["mov_pos_yx"]
+        != (runs[1]["info"]["placement"]["mov_pos_yx"])
+    )
+    assert (
+        runs[0]["info"]["placement"]["ref_pos_yx"]
+        == (runs[1]["info"]["placement"]["ref_pos_yx"])
+    )
+    # per round: its own alignment plus its share of the reference stitch
+    for k, r in enumerate(runs):
+        info = r["info"]
+        assert info["register_s_round"] == pytest.approx(
+            info["layer_s"][k] + info["edge_s"] / 2
+        )
+        native = r["native"]
+        assert Path(native["files"][0]).parent == (
+            result_dir(tmp_path / "out", "ashlar", cases[k]) / "native"
+        )
+        assert native["channels"] == ["channel_0", "channel_1"]
+        assert "dots_file" not in native and "mosaic" not in native  # a cohort run
+    assert runs[0]["native"]["reference_file"] == runs[1]["native"]["reference_file"]
+    assert runs[0]["launch_id"] == runs[1]["launch_id"]
+
+
+def test_noise_goes_on_the_reference_tiles_only(tmp_path, pair, small):
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out", keep_work=True)
+    run = run_json(tmp_path / "out", "ashlar", cases[0])
+    grid = _grid_of(run)
+    assert grid["noise_frac"] == 0.002 and grid["noise_min_counts"] == 3.0
+    assert all(sd >= 3.0 for sd in grid["noise_sd"])
+    ref = tifffile.imread(pair["reference"])
+    mov = tifffile.imread(pair["moving"])
+    ref_tile = tifffile.imread(Path(run["info"]["reference_tiles"]) / "r001_c001.tif")
+    assert not np.array_equal(ref_tile, ref[:, 230:486, 230:486])
+    (mov_dir,) = (tmp_path / "out").rglob("cycle_1")
+    mov_grid = json.loads((mov_dir / "grid.json").read_text())
+    assert mov_grid["noise_sd"] == [0.0, 0.0] and mov_grid["tile_origins"] == "grid"
+    np.testing.assert_array_equal(
+        tifffile.imread(mov_dir / "r001_c001.tif"), mov[:, 230:486, 230:486]
+    )
+
+
+def test_the_clean_row_cuts_noise_free_tiles(tmp_path, pair, small):
+    cases = patient(tmp_path, pair, rounds=1)
+    done = methods.run_group(
+        "ashlar", cases, tmp_path / "out", {"noise": "none"}, label="ashlar_clean"
+    )
+    assert done == {"P1_r1": ["ashlar_clean"]}
+    run = run_json(tmp_path / "out", "ashlar_clean", cases[0])
+    assert _grid_of(run)["noise_sd"] == [0.0, 0.0]
+    ref = tifffile.imread(pair["reference"])
+    ref_tile = tifffile.imread(Path(run["info"]["reference_tiles"]) / "r001_c001.tif")
+    np.testing.assert_array_equal(ref_tile, ref[:, 230:486, 230:486])
+    side = run["info"]["implementation"]["benchmark_side"]
+    assert "no noise on any tile" in side
+
+
+def test_a_missing_anchor_fails_its_round_and_the_others_proceed(tmp_path, pair, small):
+    cases = patient(tmp_path, pair)
+    out = tmp_path / "out"
+    stare_run(out, cases[0], M0)
+    opts = {"affine": "stare"}
+    done = methods.run_group("ashlar", cases, out, opts, label="affine_ashlar")
+    assert done == {"P1_r1": ["affine_ashlar"], "P1_r2": []}
+    bad = run_json(out, "affine_ashlar", cases[1])
+    missing = result_dir(out, "stare", cases[1]) / "run.json"
+    assert not bad["ok"] and bad["cause"] == "exception"
+    assert bad["error"] == f"anchor unavailable: {missing}"
+    good = run_json(out, "affine_ashlar", cases[0])
+    assert good["ok"] and good["info"]["rounds_in_command"] == ["P1_r1"]
+    assert good["info"]["m0"] == M0.tolist()
+    assert good["info"]["anchor_from"].endswith("stare/selfcheck/P1_r1/run.json")
+    # ONE command, the dropped round is not in it
+    (call,) = fa.calls("main")
+    assert len(call["argv"]) == 1 + 2 + 6 and len(fa.calls("LayerAligner")) == 1
+    # with one round the reference stitch is not divided
+    info = good["info"]
+    assert info["register_s_round"] == pytest.approx(
+        info["layer_s"][0] + info["edge_s"]
+    )
+
+
+@pytest.mark.parametrize(
+    "ok,m0,text",
+    [
+        (False, M0, "holds no info.m0 of a run that ok"),
+        (True, None, "holds no info.m0 of a run that ok"),
+        (True, np.eye(2), "has no 3 x 3 finite info.m0"),
+    ],
+)
+def test_a_stare_run_without_a_usable_matrix_is_no_anchor(tmp_path, pair, ok, m0, text):
+    (case,) = patient(tmp_path, pair, rounds=1)
+    path = stare_run(tmp_path / "out", case, m0, ok)
+    got, why = am.read_anchor({}, case, tmp_path / "out")
+    assert got is None and why == f"anchor unavailable: {path} {text}"
+
+
+def test_the_anchor_is_found_in_a_stare_selfchecks_work_folder(tmp_path, pair):
+    (case,) = patient(tmp_path, pair, rounds=1)
+    h, w = case.ref_hw
+    for sub in (f"{h}x{w}/out", "out"):
+        work = tmp_path / sub.replace("/", "_")
+        path = stare_run(work / sub, case, M0)
+        got, where = am.read_anchor({"m0_from": str(work)}, case, None)
+        np.testing.assert_array_equal(got, M0)
+        assert where == str(path)
+
+
+def test_anchored_moving_tiles_are_cut_where_the_anchor_puts_them(
+    tmp_path, pair, small
+):
+    """The fourth combination: STARE's anchor, no noise anywhere."""
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    stare_run(out, cases[0], M0)
+    opts = {"affine": "stare", "noise": "none"}
+    done = methods.run_group(
+        "ashlar", cases, out, opts, label="affine_ashlar_clean", keep_work=True
+    )
+    assert done == {"P1_r1": ["affine_ashlar_clean"]}
+    run = run_json(out, "affine_ashlar_clean", cases[0])
+    assert _grid_of(run)["noise_sd"] == [0.0, 0.0]  # reference tiles, noise-free
+    (mov_dir,) = out.rglob("cycle_1")
+    grid = json.loads((mov_dir / "grid.json").read_text())
+    assert grid["tile_origins"] == "given" and grid["noise_sd"] == [0.0, 0.0]
+    nominal = am.nominal_origins([pair["reference"], pair["moving"]])
+    # M0 is a shift of (+18, -12): the moving tile is cut 18 px left and 12 px below
+    np.testing.assert_array_equal(
+        np.array(grid["true_positions_yx"]), nominal + [12, -18]
+    )
+    mov = tifffile.imread(pair["moving"])
+    np.testing.assert_array_equal(
+        tifffile.imread(mov_dir / "r001_c001.tif"),
+        mov[:, 242:498, 212:468],
+    )
+    # ASHLAR was told the regular grid all the same
+    spec = fa.calls("main")[0]["argv"][2]
+    assert "pattern=r{row:03}_c{col:03}.tif" in spec
+    assert run["info"]["placement"]["mov_true_yx"] == grid["true_positions_yx"]
+    assert any(
+        "STARE's rigid matrix" in s
+        for s in run["info"]["implementation"]["benchmark_side"]
+    )
+
+
+def test_the_anchored_row_passes_its_selfcheck(tmp_path, small):
+    """The same two comparisons with moving tiles cut off the grid."""
+    h, w = SMALL
+    case_dir = Path("stare") / "selfcheck" / f"pair_{h}x{w}"
+    d = tmp_path / "stare_work" / "out" / case_dir
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps({"ok": True, "info": {"m0": M0.tolist()}}))
+    rec = sc.run(
+        "ashlar",
+        tmp_path / "check",
+        {"affine": "stare"},
+        label="affine_ashlar",
+        mask="overlap",
+        m0_from=tmp_path / "stare_work",
+        sizes=small,
+    )
+    v = rec["pairs"][0]["variants"]["affine_ashlar"]
+    assert rec["status"] == sc.OK, v
+    assert v["reference"]["status"] == sc.OK
+
+
+def test_reference_tiles_are_cut_once_per_noise_level(
+    tmp_path, pair, small, monkeypatch
+):
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    stare_run(out, cases[0], M0)
+    cut = []
+    real = retile.write_tiles
+
+    def counting(image, outdir, *a, **kw):
+        if kw.get("cycle") == 0:
+            cut.append(kw.get("noise_frac"))
+        return real(image, outdir, *a, **kw)
+
+    monkeypatch.setattr(retile, "write_tiles", counting)
+    methods.run_group("ashlar", cases, out)
+    methods.run_group("ashlar", cases, out, {"affine": "stare"}, label="affine_ashlar")
+    assert cut == [0.002]  # the anchored row found the plain row's reference tiles
+    plain = run_json(out, "ashlar", cases[0])["info"]
+    anchored = run_json(out, "affine_ashlar", cases[0])["info"]
+    assert plain["reference_tiles"] == anchored["reference_tiles"]
+    assert (plain["reference_tiles_reused"], anchored["reference_tiles_reused"]) == (
+        False,
+        True,
+    )
+    assert Path(plain["reference_tiles"]).parent == (
+        out / "cache" / "ashlar_tiles" / "selfcheck__P1"
+    )
+    # the stitch is NOT shared: each command made its own, and they are compared
+    assert plain["edge_positions_identical"] is None
+    assert anchored["edge_positions_identical"] is True
+    # another noise level is another set of tiles
+    methods.run_group("ashlar", cases, out, {"noise": "none"}, label="ashlar_clean")
+    assert cut == [0.002, 0.0]
+    clean = run_json(out, "ashlar_clean", cases[0])["info"]
+    assert clean["reference_tiles"] != plain["reference_tiles"]
+
+
+# ── failures ──────────────────────────────────────────────────────────────────
+def test_an_ashlar_exception_fails_the_patient_with_its_message(tmp_path, pair, small):
+    """Pixel-identical overlaps make ASHLAR's error metric raise (utils.py:84-86); its
+    command does not catch that (scripts/ashlar.py:231), so the adapter must."""
+    fa.configure(raise_in="edge")
+    cases = patient(tmp_path, pair)
+    out = tmp_path / "out"
+    done = methods.run_group(
+        "ashlar", cases, out, {"noise": "none"}, label="ashlar_clean"
+    )
+    assert done == {"P1_r1": [], "P1_r2": []}
+    for case in cases:
+        run = run_json(out, "ashlar_clean", case)
+        assert not run["ok"] and run["cause"] == "exception"
+        assert run["error"] == f"RuntimeError: {fa.RAISE_TEXT}"
+        assert run["info"]["ashlar_raise"] == run["error"]
+        assert run["info"]["noise"] == "none" and "retile_s" in run["info"]
+
+
+def test_a_raise_in_a_later_cycle_keeps_the_alignments_already_made(
+    tmp_path, pair, small
+):
+    fa.configure(raise_in=2, edge_shifts=off_grid)
+    cases = patient(tmp_path, pair)
+    done = methods.run_group("ashlar", cases, tmp_path / "out", keep_work=True)
+    assert done == {"P1_r1": [], "P1_r2": []}  # one mosaic: the rounds fail together
+    (notes,) = (tmp_path / "out").rglob("aligner_notes.json")
+    kinds = [n["kind"] for n in json.loads(notes.read_text())]
+    assert kinds == ["EdgeAligner", "LayerAligner"]
+
+
+def test_the_wrapper_writes_each_aligners_note_as_it_finishes(tmp_path, pair, small):
+    """``original.run_ashlar`` alone: the notes file exists after the first aligner when
+    the second raises, and every note carries its own seconds."""
+    cases = patient(tmp_path, pair, rounds=1)
+    slides = [pair["reference"], cases[0].mov_image]
+    dirs = []
+    for k, slide in enumerate(slides):
+        d = tmp_path / f"tiles{k}"
+        retile.write_tiles(
+            slide, d, 256, 0.1, cycle=k, canvas_like=slides, exact_overlap=True
+        )
+        dirs.append(d)
+    grids = [json.loads((d / "grid.json").read_text()) for d in dirs]
+    argv = original.ashlar_argv(dirs, grids, tmp_path / "m.ome.tif", 0, 15.0)
+    seen = []
+    code, notes, _ = original.run_ashlar(
+        argv,
+        notes_path=tmp_path / "notes.json",
+        on_aligner=lambda i, note: seen.append((i, note["kind"])),
+    )
+    assert code == 0 and seen == [(0, "EdgeAligner"), (1, "LayerAligner")]
+    assert all(n["seconds"] >= 0 for n in notes)
+    assert json.loads((tmp_path / "notes.json").read_text()) == notes
+    (tmp_path / "notes.json").unlink()
+    fa.configure(raise_in=1)
+    with pytest.raises(RuntimeError, match="correlation > total_amplitude"):
+        original.run_ashlar(argv, notes_path=tmp_path / "notes.json")
+    (first,) = json.loads((tmp_path / "notes.json").read_text())
+    assert first["kind"] == "EdgeAligner" and "seconds" in first
+    # the wrapper leaves the classes as it found them, even after a raise
+    reg = __import__("sys").modules["ashlar.reg"]
+    assert reg.EdgeAligner.run is fa.EdgeAligner.run
+
+
+def test_a_memory_error_is_not_swallowed_as_an_ashlar_failure(
+    tmp_path, pair, small, monkeypatch
+):
+    """Only ``oom`` moves a run up the ladder: it must keep its cause."""
+
+    def out_of_memory(*a, **kw):
+        raise MemoryError("Unable to allocate 91.2 GiB")
+
+    monkeypatch.setattr(original, "run_ashlar", out_of_memory)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    assert run_json(tmp_path / "out", "ashlar", cases[0])["cause"] == "oom"
+
+
+def test_a_non_zero_exit_fails_the_patient(tmp_path, pair, small):
+    fa.configure(exit_code=1)
+    cases = patient(tmp_path, pair)
+    done = methods.run_group("ashlar", cases, tmp_path / "out")
+    assert done == {"P1_r1": [], "P1_r2": []}
+    run = run_json(tmp_path / "out", "ashlar", cases[0])
+    assert run["error"].startswith("ashlar exited 1")
+
+
+def test_cycles_with_the_nucleus_at_different_indices_fail_the_patient(
+    tmp_path, pair, small
+):
+    mov = tmp_path / "round1.ome.tif"
+    shutil.copyfile(pair["moving"], mov)
+    case = case_of(tmp_path / "cases", pair, "P1_r1", mov, mov_channel=1)
+    methods.run_group("ashlar", [case], tmp_path / "out")
+    run = run_json(tmp_path / "out", "ashlar", case)
+    assert not run["ok"] and "ONE channel index across cycles" in run["error"]
+    assert not fa.calls("main")
+
+
+def test_another_ashlar_version_is_refused(tmp_path, pair, small, monkeypatch):
+    fa.install(monkeypatch.setitem, version="1.19.0")
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    run = run_json(tmp_path / "out", "ashlar", cases[0])
+    assert "ASHLAR 1.20.0 as shipped; the installed ashlar is 1.19.0" in run["error"]
+
+
+# ── the clock ─────────────────────────────────────────────────────────────────
+class _Clock:
+    def __init__(self):
+        self.paused = False
+
+    def pause(self):
+        self.paused = True
+
+    def resume(self):
+        self.paused = False
+
+    def snapshot(self):
+        return {"peak_rss_mb": 123.0}
+
+
+def test_tile_cutting_and_ashlars_writer_run_with_the_clock_paused(
+    tmp_path, pair, small, monkeypatch
+):
+    clock, seen = _Clock(), {}
+    for cls, name in (
+        (fa.EdgeAligner, "run"),
+        (fa.LayerAligner, "run"),
+        (fa.PyramidWriter, "run"),
+    ):
+        real = getattr(cls, name)
+
+        def watched(self, real=real, key=cls.__name__):
+            seen[key] = clock.paused
+            return real(self)
+
+        monkeypatch.setattr(cls, name, watched)
+    real_tiles = retile.write_tiles
+
+    def cutting(*a, **kw):
+        seen.setdefault("tiles", []).append(clock.paused)
+        return real_tiles(*a, **kw)
+
+    monkeypatch.setattr(retile, "write_tiles", cutting)
+    real_split = original.split_mosaic
+
+    def splitting(*a, **kw):
+        seen["split"] = clock.paused
+        return real_split(*a, **kw)
+
+    monkeypatch.setattr(original, "split_mosaic", splitting)
+    cases = patient(tmp_path, pair, rounds=1)
+    opts = {"monitor": clock, "tiles_cache": tmp_path / "cache"}
+    items = list(am.register_group(cases, tmp_path / "work", opts))
+    assert seen == {
+        "tiles": [True, True],
+        "EdgeAligner": False,
+        "LayerAligner": False,
+        "PyramidWriter": True,
+        "split": True,
+    }
+    assert not clock.paused  # handed back running
+    (item,) = items
+    assert item[3]["peak_rss_after_register_mb"] == 123.0
+
+
+# ── the seam mask on nuclei, and its rows ────────────────────────────────────
+def test_nuclei_on_ashlars_seams_are_marked_and_every_method_is_scored_off_them(
+    tmp_path, pair, small, monkeypatch
+):
+    # the fake places every tile exactly on the grid here, so the seams are the cut bands
+    fa.configure(edge_shifts=None, layer_shifts=lambda c, r, k: np.zeros((r * k, 2)))
+    # tile pitch 230, tiles 256 px: x in 230..256 is held by two tiles
+    centres = np.array([[100.0, 100.0], [243.0, 100.0], [222.0, 100.0], [400.0, 300.0]])
+    mov = tmp_path / "round1.ome.tif"
+    shutil.copyfile(pair["moving"], mov)
+    case = case_of(
+        tmp_path / "cases",
+        pair,
+        "P1_r1",
+        mov,
+        dataset="multiplex",
+        cells=(squares(centres), squares(centres)),
+    )
+    out = tmp_path / "out"
+    methods.run_group("ashlar", [case], out)
+    with np.load(result_dir(out, "ashlar", case) / "warped.npz") as z:
+        # the square around x = 222 reaches 227..: its right edge (227) is 3 px short of
+        # the band and stays; the one at 243 is inside it
+        np.testing.assert_array_equal(z["band"], [False, True, False, False])
+        # every tile sits where it was cut: the map is the identity
+        np.testing.assert_allclose(z["cells_xy"], load_points(case)["cells_mov_xy"])
+    run = run_json(out, "ashlar", case)
+    assert run["info"]["band_fraction"] == 0.25 and "band_mov" not in run["info"]
+    res = score(tmp_path / "cases", out, ["multiplex"])  # the default owners
+    names = {r["method"] for r in res["nonband_cells"]}
+    assert names == {"initial:non_ashlar", "ashlar:non_ashlar"}
+    assert {r["n_mov_kept"] for r in res["nonband_cells"]} == {3}
+    assert not [r for r in res["cells"] if ":non_" in r["method"]]
+    # the shared tiles under <out>/cache are not taken for a method
+    assert {r["method"] for r in res["cells"]} == {"initial", "ashlar"}

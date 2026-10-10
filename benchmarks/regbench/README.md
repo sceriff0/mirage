@@ -30,7 +30,9 @@ This package is being ported in steps. What exists now:
 | adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
 | adapters `initial`, `deeperhistreg` | converted to the contract only. `deeperhistreg` still computes what the copied harness computed (it is still asked for a moving -> reference map). The native adapter of "Methods" below replaces it |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
-| ASHLAR, the run list and the cohort launcher | not here yet |
+| adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
+| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask; the driver stores a reference-side mask (`band_ref`) and the scorer applies it to the nuclei, for PALOM's task |
+| the run list and the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
 
@@ -130,7 +132,9 @@ variants by the replace rule declares the names in `VARIANT_LABELS` (`valis120_h
 **The driver** (`methods.run_case`, `methods.run_group`), at each yield, before it resumes
 the generator and with the clock paused: moves the nuclei through the map (the moving
 nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.npz`
-(`cells_xy`, `direction`, `band` when `info["band_mov"]` is given, `truth_xy` = the map
+(`cells_xy`, `direction`, `band` when `info["band_mov"]` is given and `band_ref` when
+`info["band_ref"]` is: a method's own seam mask, one bool per moving or per reference
+nucleus; `truth_xy` = the map
 applied to the truth probes of the side it starts from, and `grid`, `grid_shape`,
 `grid_step` = the map on a lattice for the Jacobian statistics), writes `run.json`, and
 calls `on_variant`.
@@ -470,7 +474,9 @@ scored on it.
 unregistered pose) and `frac_improved`, with `n_probes` and `n_nonfinite`. A point a method
 returns as NaN counts against it: its error is infinite. A failed run is scored at the
 unregistered pose. Without a pixel size the micrometre numbers are NaN. A variant with
-`band` gets a second row `<variant>:nonband` on the probes outside bands.
+seam mask's owner on that case gets a second row `<variant>:non_<owner>` in
+`nonband_truth.csv`, on the probes of the moving nuclei the mask leaves (see "Off the
+seams").
 
 **What these numbers are not.** The amplitudes are literature values as recorded in
 STARE's README (the papers were not re-read for this port), not STARE's output on the
@@ -484,7 +490,11 @@ method's fields is post hoc and names that method.
 
 | file | one row per | what |
 |---|---|---|
-| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`. A variant whose `warped.npz` has `band` also gets a row `<variant>:nonband`, scored without the moving nuclei in bands |
+| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`. Every row scores ALL nuclei |
+| `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
+| `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept |
+| `nonband_truth.csv`, `nonband_truth_by_family.csv` | as `truth.csv`, `truth_by_family.csv` | the known-truth error on the probes a moving-side mask leaves, with `owner, n_probes_all` |
+| `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
 | `summary_cells.csv` | dataset x variant x subset | per patient the median over rounds, then median, min, max over patients; `n_patients, n_cases, n_ok`; the minimum over cases; each headline beside its null; Dice over the cases that clear the null; displacement over the readable cases with `n_readable`. `subset=common` repeats it on the cases every primary variant registered |
 | `paired_vs_primary.csv` | patient x variant | the difference of each headline against the `stare` row |
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
@@ -493,6 +503,31 @@ method's fields is post hoc and names that method.
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
 | `summary.md` | | the summary, with the line "descriptive; no ranking is claimed" under six patients, and the known-truth table |
+
+### Off the seams
+
+A method that builds its image from tiles or blocks draws some nuclei across a join, and
+its point map is not exactly its image there. Such a method (`score.SEAM_OWNERS`: `ashlar`
+now, PALOM's two rows when its adapter lands) writes a **seam mask** with its primary row:
+one bool per nucleus, from its own geometry alone (ASHLAR: the tile grid and the positions
+it accepted; never any method's scores). ASHLAR's is on the moving nuclei
+(`info["band_mov"]`, `band` in `warped.npz`); a reference-side mask is `band_ref`.
+
+The scorer then scores **every** variant of that case a second time on the nuclei the
+mask leaves: `stare:non_ashlar`, `valis120:non_ashlar`, `ashlar:non_ashlar`, `initial:
+non_ashlar`, ... All rows of one owner use identical nuclei, and each row says how many
+(`n_mov_kept` of `n_mov_all`). The gate still comes from all native nuclei. A variant that
+failed keeps its row, at the unregistered pose.
+
+- Primary rows always score all nuclei. The off-seam rows live in `nonband_*.csv` and in
+  their own block of `summary.md` ("Off the seams"): they are in no primary table, no
+  paired difference and no ranking, and an off-seam number is never set beside a
+  full-slide number.
+- The mask comes from the owner's primary row (`<out>/<owner>/...`) on that case. Where
+  that run failed there is no off-seam row for ANY method on the case, and the summary
+  prints how many such cases there are (`nonband_missing.csv`).
+- The old name `:nonband`, and a second row only for the method that has the band, are
+  gone.
 
 The cases of the frozen known-truth spec are left out of `resources.csv` and
 `summary_resources.csv` (cost is read on the cohort); their failures are still counted in
@@ -695,6 +730,155 @@ Add `--size 2048x2560` for the small pair alone (minutes, a few GB); without it 
 large pair runs too. `python -m pytest benchmarks/tests/regbench/test_external_methods.py`
 runs the small pair of each row whose VALIS version is installed.
 
+### ASHLAR (`methods/ashlar.py`, `tilemap.py`, `benchmarks/ashlar/`)
+
+**What runs.** ASHLAR's own command, once per patient, through
+`benchmarks.ashlar.original.run_ashlar` (`ashlar.scripts.ashlar.main`, unmodified):
+
+```
+ashlar 'filepattern|<reference tiles>|...' 'filepattern|<round 1 tiles>|...' ... \
+    -o ashlar_output.ome.tif -c <nuclear channel index> -m 15.0
+```
+
+The reference cycle is stitched by `EdgeAligner`, each later cycle aligned to it by
+`LayerAligner`, and ONE mosaic is written by `PyramidWriter`. `-m 15` is ASHLAR's default.
+Because it is one process writing one file, a patient's rounds fail together.
+
+| run it as | options | what it is |
+|---|---|---|
+| `--method ashlar` | (none) | slight noise on the reference tiles. **ASHLAR's primary row** |
+| `--method ashlar --label ashlar_clean` | `--opt noise=none` | no noise |
+| `--method ashlar --label affine_ashlar` | `--opt affine=stare` | moving tiles placed by STARE's anchor, slight noise. A hybrid, never ranked as ASHLAR |
+| `--method ashlar --label affine_ashlar_clean` | `--opt affine=stare --opt noise=none` | the same hybrid, no noise |
+
+A label and its options come together; a mismatch is refused.
+
+**The tiles are the benchmark's** (ASHLAR "requires unstitched individual tile images as
+input", README at v1.20.0 `[PARTIAL: lines 1-60]`; the slides exist only stitched).
+`benchmarks.ashlar.retile.write_tiles` cuts every slide of the patient on one regular
+grid: 1024 px tiles at a 922 px pitch, all channels, whole pixels, no stage error.
+
+- *Slight noise* is per-tile Gaussian noise on the REFERENCE cycle's tiles only, s.d. =
+  max(0.2 % of the channel's 1st to 99th percentile range, 3 counts; the floor assumes
+  16-bit data). On pixel-identical overlaps ASHLAR's error metric can raise
+  `RuntimeError("correlation > total_amplitude ...")` (`utils.py:74-86`); its command
+  catches `ProcessingError` only (`scripts/ashlar.py:231`), and only the reference cycle's
+  edge alignment can raise (`:261-262`). So the two clean rows fail together, per patient,
+  where they fail; the adapter catches the exception and the patient's rows carry its
+  message (`info["ashlar_raise"]`). A memory error is not caught: it stays `oom`.
+- *The anchor* (`affine=stare`): each moving tile is cut, unrotated and uninterpolated,
+  where STARE's rigid matrix (`info["m0"]` in `<out>/stare/<dataset>/<case>/run.json`) puts
+  the matching reference tile's centre; ASHLAR is told the regular grid. A round whose
+  `stare` result is missing, failed or has no matrix fails alone as `anchor unavailable:
+  <path>`, and the patient's other rounds proceed.
+- Reference tiles are cut once per noise level and shared by the plain and the anchored
+  row, under `<out>/cache/ashlar_tiles/<dataset>__<patient>/` (delete it when both rows
+  have run; it is large). ASHLAR's reference STITCH is not shared: each command does its
+  own, and `info["edge_positions_identical"]` says whether the two came out equal.
+
+**The point map is where ASHLAR drew each tile, exactly.** `Mosaic.assemble_channel`
+pastes tile `i` at `aligner.positions[i]` (`reg.py:1147-1153`) and `utils.paste` puts tile
+pixel `l` on mosaic pixel `position + l`, the whole part by slicing and the fractional
+part by `scipy.ndimage.shift` (`utils.py:149-194`). The wrapper notes both cycles'
+`positions` once each aligner has returned, and `grid.json` records where each tile's
+pixels came from. A moving point goes, in ASHLAR's own direction (`mov_to_ref`):
+
+```
+moving slide --(+ L[t] - c_mov[t])--> mosaic --(- (E[s] - c_ref[s]))--> reference slide
+```
+
+`t` is the moving tile that holds the point, `s` the reference tile drawn where the point
+lands in the mosaic. Both steps are one translation per tile; nothing is inverted
+numerically, fitted or resampled. The tile order is read back from ASHLAR's own positions
+(`filepattern.py:90-100`: row-major), not assumed. `run.json: info.placement` holds the
+four arrays: it is the whole transform.
+
+**The mosaic is not on the reference slide's grid.** ASHLAR re-stitches the reference and
+moves its origin to zero (`reg.py:713-716`). The native record says where the image is:
+`origin_xy` = where the mosaic's first pixel sits in the reference slide's frame (minus
+the median over tiles of `E - c_ref`), `valid_box` = the reference slide's extent inside
+the mosaic (outside it the image is the tiles' zero padding), `reference_file` = the
+reference cycle as ASHLAR redrew it. How far single tiles depart from that one origin is
+`info["reference_stitch_error"]`; the scored map uses each tile's own placement, not the
+median.
+
+**Where the map is not exact: seams.** Where two tiles of a cycle cover one mosaic pixel
+ASHLAR cross-fades them (`pastefunc_blend`, `utils.py:197-216`), and where two tiles hold
+one point it may be drawn twice. The map there is the mean of the covering tiles' shifts
+weighted by depth: an approximation, which matches ASHLAR's blend only in two-tile bands
+on a non-zero background. A moving point is ON a seam unless one moving tile holds it in
+the slide, it lands under that one moving tile's footprint and no other's in the mosaic,
+and one reference tile is drawn where it lands (`tilemap.on_seam`, with 1 px to spare).
+`info["band_mov"]` marks the moving nuclei with any vertex on a seam, and the rows
+`<variant>:non_ashlar` are every method scored without them ("Off the seams"). They are
+the rows to lean on for ASHLAR; `info["band_fraction"]` says how many nuclei that is.
+
+**Also reported per round:** `discard_infinite_error`, `discard_zero_offset`,
+`discard_over_budget` (why ASHLAR replaced a tile's position by its linear model, one
+cause per tile in that order of precedence, rebuilt from `reg.py:910-946`;
+`discard_rebuild_matches` is false if the three do not add up to the flag ASHLAR kept),
+`jump_px_p50`, `jump_px_p95` (difference of `D(t)` between neighbouring tiles), ASHLAR's
+data warnings, the exact command.
+
+**Cost.** Every aligner finishes before the writer starts (`scripts/ashlar.py:262-296`),
+so the clock and the memory peak stop after the last aligner. `register_s` is the whole
+command up to there; `info["register_s_round"]` = that round's `layer_s` + `edge_s` /
+rounds (an anchored row that dropped a round divides by fewer); `info
+["peak_rss_after_register_mb"]` is the peak read at that moment. Tile cutting is not
+billed (`retile_s`). `write_s` is ASHLAR's writer plus the copy, divided by the rounds.
+ASHLAR has no core-count option and none is set. It starts a JVM on import with
+`-Xms10m -XX:+UseSerialGC` and no heap limit (`reg.py:29-38`); the reader used here does
+not call it.
+
+**Selfcheck: two comparisons against the file ASHLAR wrote, both from the image.**
+
+1. The moving dots through the scored map, against the moving cycle's planes of the
+   mosaic located by `origin_xy`. This proves the first step (`L`, `c_mov`, the tile
+   index). The per-tile departure of the reference from the median placement is declared
+   (`declared_offset: true`), so `origin_xy` cancels out of this comparison.
+2. The REFERENCE slide of ASHLAR's selfcheck pair carries its own dots
+   (`SELFCHECK_REF_DOTS`). Every dot found in the reference cycle's planes is sent back by
+   the second step of the map and must land on a dot of the reference slide; and the
+   reported `origin_xy` must equal the origin read off those matched dots
+   (`reference.image_origin_px_median_x/y`), within 0.15 px. This proves `E`, `c_ref`, the
+   lookup and the origin.
+
+The variant's status is the worse of the two. Dots within 8 px of a seam are left out
+(`--mask overlap`, `n_masked`); without the mask the check fails, as it should, because
+band dots are drawn twice. With a stand-in for ASHLAR whose reference is stitched 7 px
+off its slide's grid, a negated origin, a reversed map, a map labelled the other
+direction, two tiles swapped, a one-tile offset, a shifted reference index and a reference
+term of the wrong sign are each reported `inconsistent` (`test_ashlar_adapter.py`).
+
+**Not checked by reading alone:** nothing here has run ASHLAR. Unverified until the
+selfcheck runs in the image: that ASHLAR 1.20.0 stitches the noisy tiles of the selfcheck
+pair at all; how often the clean rows raise on the cluster's BLAS; the rounding of
+`scipy.ndimage.shift` at the pinned SciPy against the 0.15 px gate; run time and memory.
+
+**First commands in the image** (`labsyspharm/ashlar:1.20.0`, from the repository root,
+with the pinned STARE release, `tifffile` and `zarr` importable: `benchmarks/ashlar`
+imports `stare.manifest`, as `run_ashlar_original_arm.sh:63-80` arranges):
+
+```bash
+python -m benchmarks.regbench selfcheck --method ashlar --mask overlap --work W/ashlar
+python -m benchmarks.regbench selfcheck --method ashlar --label ashlar_clean \
+    --opt noise=none --mask overlap --work W/ashlar_clean
+# the anchored rows read STARE's matrix from a STARE selfcheck on the same pairs
+python -m benchmarks.regbench selfcheck --method stare --work W/stare          # STARE's image
+python -m benchmarks.regbench selfcheck --method ashlar --label affine_ashlar \
+    --opt affine=stare --mask overlap --m0-from W/stare --work W/affine_ashlar
+python -m benchmarks.regbench selfcheck --method ashlar --label affine_ashlar_clean \
+    --opt affine=stare --opt noise=none --mask overlap --m0-from W/stare \
+    --work W/affine_ashlar_clean
+```
+
+`ok` is exit 0 and `"status": "ok"` in `W/<row>/selfcheck.json`, for both pairs (2048 x
+2560: 3 x 3 tiles; 4096 x 5120: 5 x 6 tiles with four-tile corners); in each pair's
+record, `variants.<row>.reference.status` is `ok` too. A clean row may end `crashed` with
+ASHLAR's `correlation > total_amplitude`: that is the known numerical failure, it is
+published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
+`affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).
+
 ## Tests
 
 ```bash
@@ -706,5 +890,8 @@ DeeperHistReg is not importable. `test_valis_adapters.py` runs both VALIS adapte
 `fake_valis.py`, a stand-in that records every call and draws images the way VALIS's
 writer is written to; for `valis_mirage` it executes the real `bin/register.py` on that
 stand-in, in a fresh process.
+`test_ashlar_adapter.py` runs the ASHLAR adapter against `fake_ashlar.py`, the same kind of
+stand-in (ASHLAR's reader, positions and paste rule transcribed from its source at
+v1.20.0); the one test that needs ASHLAR itself is in `test_external_methods.py`.
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.

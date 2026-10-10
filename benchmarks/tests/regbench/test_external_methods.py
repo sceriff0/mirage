@@ -145,6 +145,39 @@ def test_valis120_registers_a_three_slide_patient_with_one_registrar(tmp_path):
     assert answer == {"done": {"P1_r1": names, "P1_r2": names}, "built": 1}
 
 
+def need_ashlar():
+    """Skip unless the installed ASHLAR is the pinned one (``labsyspharm/ashlar:1.20.0``)."""
+    ashlar = pytest.importorskip(
+        "ashlar", reason="needs ashlar==1.20.0: run inside labsyspharm/ashlar:1.20.0"
+    )
+    found = getattr(ashlar, "__version__", "?")
+    if found != "1.20.0":
+        pytest.skip(f"needs ashlar==1.20.0, found {found}")
+
+
+def test_ashlar_points_follow_its_mosaic(tmp_path):
+    """The selfcheck IS the test: the moving dots through the scored map against the
+    mosaic ASHLAR wrote, and the reference dots against its re-stitched reference."""
+    need_ashlar()
+    rec = selfcheck.run(
+        "ashlar", tmp_path, mask="overlap", sizes=[(selfcheck.DEFAULT_HW, None)]
+    )
+    assert rec["variants"] == {"ashlar": selfcheck.OK}, rec
+    check = rec["pairs"][0]["variants"]["ashlar"]
+    assert check["reference"]["status"] == selfcheck.OK, check
+    (path,) = (tmp_path / "out").rglob("run.json")
+    info = json.loads(path.read_text())["info"]
+    for key in (
+        "discard_over_budget",
+        "discard_zero_offset",
+        "discard_infinite_error",
+        "jump_px_p95",
+    ):
+        assert key in info, key
+    # the three causes, rebuilt from the notes, add up to the flag ASHLAR kept
+    assert info["discard_rebuild_matches"] is True
+
+
 def test_deeperhistreg_field_is_read_as_moving_to_reference(synthetic_cases, tmp_path):
     pytest.importorskip("deeperhistreg")
     # equal shapes at full size, then different shapes reduced 2x: padding and scaling both live
