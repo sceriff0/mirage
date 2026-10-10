@@ -11,7 +11,11 @@
                        run" row) and the primary rows lead; ``--only-run`` scores just
                        what is there
 ``runs``               the run list, one tab-separated line per run, for the launcher
-                       (columns: ``benchmarks/regbench/variants.py``)
+                       (columns: ``benchmarks/regbench/variants.py``); ``--all`` adds the
+                       paused runs
+``gate``               from one run's ``selfcheck.json``: the status that decides whether
+                       the run may start, and the rows to leave out of the results
+                       (``score --drop``). Exit code as ``selfcheck``
 ``selfcheck``          check that a method's points follow the image its own writer produced,
                        on a synthetic pair; exit 0 ``ok``, 1 ``inconsistent``, 2
                        ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
@@ -243,6 +247,15 @@ def build_parser():
     )
 
     sc.add_argument(
+        "--drop",
+        action="append",
+        default=[],
+        metavar="VARIANT",
+        help="leave this result row out of every table and name it in dropped.csv: a "
+        "row whose own selfcheck failed without blocking its method (`gate` prints "
+        "them). Repeatable",
+    )
+    sc.add_argument(
         "--no-tissue",
         action="store_true",
         help="leave out the tissue-level block of the written images (tissue*.csv)",
@@ -260,9 +273,22 @@ def build_parser():
     ts.add_argument("--dev", action="store_true")
     ts.add_argument("--only-run", action="store_true")
 
+    gt = sub.add_parser(
+        "gate",
+        help="from a run's selfcheck.json: may the run start, and which of its rows "
+        "are left out of the results",
+    )
+    gt.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
+    gt.add_argument("--selfcheck", required=True, help="the run's selfcheck.json")
+
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
+    )
+    rn.add_argument(
+        "--all",
+        action="store_true",
+        help="also print the paused runs (0 in the `active` column)",
     )
     return ap
 
@@ -386,9 +412,46 @@ def _runs(a):
 
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))
-    for row in variants.runs_table():
+    for row in variants.runs_table(paused=a.all):
         print("\t".join(row))
     return 0
+
+
+def _gate(a):
+    """One line, tab-separated: the status that decides whether the run may start (the
+    worst over its gating rows), and the rows to leave out of the results (``-`` for
+    none). The exit code is that status's, as ``selfcheck`` returns it: 0 only for ok."""
+    import json
+    from pathlib import Path
+
+    from . import selfcheck, variants
+
+    try:
+        variants.run_of(a.name)
+    except KeyError as exc:
+        raise SystemExit(f"gate: {exc.args[0]}; see `runs --all`") from None
+    record = json.loads(Path(a.selfcheck).read_text())
+    status = variants.gate_status(a.name, record)
+    dropped = variants.dropped_variants(a.name, record)
+    print(f"{status}\t{','.join(dropped) or variants.NONE}")
+    return selfcheck.EXIT_CODE[status]
+
+
+def _dropped(names):
+    """The ``--drop`` names, refused when one is a typo or a row that gates a run."""
+    from . import variants
+
+    for name in names:
+        try:
+            ok = variants.droppable(name)
+        except KeyError as exc:
+            raise SystemExit(f"--drop: {exc.args[0]}") from None
+        if not ok:
+            raise SystemExit(
+                f"--drop {name}: that row gates its run (`runs`, last column); when "
+                "its selfcheck fails the method is blocked, the row is not dropped"
+            )
+    return list(names)
 
 
 def _tissue(a):
@@ -431,6 +494,8 @@ def main(argv=None):
         return _selfcheck(a)
     if a.cmd == "runs":
         return _runs(a)
+    if a.cmd == "gate":
+        return _gate(a)
     if a.cmd == "tissue":
         return _tissue(a)
     from . import score, variants
@@ -446,5 +511,6 @@ def main(argv=None):
         expected=expected,
         primary=primary,
         with_tissue=not a.no_tissue,
+        dropped=_dropped(a.drop),
     )
     return 0

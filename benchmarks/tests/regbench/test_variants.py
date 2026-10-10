@@ -79,10 +79,14 @@ def test_runs_produce_exactly_the_designs_variants():
 def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
     """A renamed variant in an adapter must reach the expected list (and so fail the
     literal list above), not be papered over by names restated in variants.py."""
-    monkeypatch.setattr(palom, "VARIANTS", ("palom_affine", "palom_renamed"))
+    monkeypatch.setattr(palom, "VARIANTS", ("palom_renamed", "palom"))
     got = variants.expected_variants()
     assert "palom_renamed" in got and "palom_b1024_renamed" in got
-    assert "palom_b1024" not in got
+    assert "palom_affine" not in got and "palom_b1024_affine" not in got
+    # and a renamed PRIMARY row is refused outright: no run writes it any more
+    monkeypatch.setattr(palom, "VARIANTS", ("palom_affine", "palom_renamed"))
+    with pytest.raises(ValueError, match="written by no run"):
+        variants.expected_variants()
 
 
 def test_counts():
@@ -178,19 +182,40 @@ def test_primary_rows_are_expected_variants():
 
 
 def test_the_primary_list_is_the_plans():
-    """THE one place the DeeperHistReg primary is written out in the tests. It is an
-    open decision (4096 px `deeperhistreg_gpu_asdrawn` or 8192 px
-    `deeperhistreg_hr_gpu_asdrawn`): switching is `variants.PRIMARY_DEEPERHISTREG` and
-    this line."""
-    assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_gpu_asdrawn"
+    """THE one place the two switchable primaries are written out in the tests (ruling
+    R3.12: the high-resolution row is primary for VALIS 1.2.0 and for DeeperHistReg).
+    Switching one is its `variants.PRIMARY_...` line and the matching line here."""
+    assert variants.PRIMARY_VALIS120 == "valis120_hires"
+    assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_hr_gpu_asdrawn"
     assert variants.PRIMARY == (
         "stare",
         "valis_mirage",
-        "valis120",
-        variants.PRIMARY_DEEPERHISTREG,
+        "valis120_hires",
+        "deeperhistreg_hr_gpu_asdrawn",
         "ashlar",
         "palom",
     )
+    assert variants.PRIMARY[2] is variants.PRIMARY_VALIS120
+    assert variants.PRIMARY[3] is variants.PRIMARY_DEEPERHISTREG
+
+
+def test_the_high_resolution_rows_are_primary_and_the_defaults_stay_in_their_family():
+    """A family's name need not be its primary's: `valis120` and `valis120_hires` share
+    the family `valis120`, whose primary is now `valis120_hires`."""
+    assert variants.family("valis120") == "valis120"
+    assert variants.family("valis120_hires") == "valis120"
+    assert variants.primary_of("valis120") == "valis120_hires"
+    assert variants.members("valis120") == ["valis120", "valis120_hires"]
+    assert variants.primary_of("deeperhistreg") == "deeperhistreg_hr_gpu_asdrawn"
+    assert len(variants.members("deeperhistreg")) == 8
+    # the upstream-default rows are still run and expected, just not primary
+    expected = variants.expected_variants()
+    for name in ("valis120", "valis120_micro", "deeperhistreg_gpu_asdrawn"):
+        assert name in expected and name not in variants.PRIMARY
+    # the run that writes each primary row is the high-resolution one
+    runs = by_name()
+    assert runs["valis120_hires"].opts == {"hires": "1"}
+    assert runs["deeperhistreg_hr_gpu"].opts["config"] == variants.HR_CONFIG
 
 
 def test_the_deeperhistreg_primary_scores_the_written_image_on_the_gpu():
@@ -256,7 +281,7 @@ def test_selfcheck_masks_come_from_the_adapters():
 def test_images_are_the_six_the_launcher_knows():
     images = {r.image for r in variants.RUNS}
     assert images == {
-        "STARE",
+        "STARE_REGBENCH",
         "VALIS_MIRAGE",
         "VALIS120",
         "DEEPERHISTREG",
@@ -268,8 +293,45 @@ def test_images_are_the_six_the_launcher_knows():
     for run in variants.RUNS:
         per_method.setdefault(run.method, set()).add(run.image)
     assert all(len(v) == 1 for v in per_method.values())
-    assert set(variants.BUILT_HERE) == {"STARE", "VALIS120", "DEEPERHISTREG", "PALOM"}
+    assert variants.BUILT_HERE == {
+        "STARE_REGBENCH": "stare-regbench",
+        "VALIS120": "valis120",
+        "DEEPERHISTREG": "deeperhistreg",
+        "PALOM": "palom",
+    }
     assert set(variants.BUILT_HERE) | set(variants.PULLED) == images
+    # the suffix of REGBENCH_SIF_<image> is the build context's name, in capitals with
+    # `-` written `_`: the launcher needs no table to go from one to the other
+    for image, directory in variants.BUILT_HERE.items():
+        assert image == directory.upper().replace("-", "_")
+        assert f"REGBENCH_SIF_{image}" in variants.__doc__
+    for image in variants.PULLED:
+        assert f"REGBENCH_SIF_{image}" in variants.__doc__
+
+
+def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
+    """R3.9a: the pipeline's STARE image has no psutil, so STARE's memory would be read
+    by another instrument than every other method's; and the tissue-level block needs the
+    pinned OpenCV, in ONE image for a whole result."""
+    from pathlib import Path
+
+    (stare,) = [r for r in variants.RUNS if r.method == "stare"]
+    assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
+    assert "STARE" not in variants.BUILT_HERE  # the pipeline's image runs no row here
+    assert variants.SCORER_IMAGE in variants.BUILT_HERE
+    root = Path(__file__).resolve().parents[3]
+    pins = (root / "requirements" / "stare-regbench.txt").read_text()
+    lines = [ln.split("#")[0].strip() for ln in pins.splitlines()]
+    assert "-r stare.txt" in lines and "-c constraints.txt" in lines
+    # STARE's own pin is NOT restated: it comes through `-r stare.txt` alone
+    assert not [ln for ln in lines if ln.startswith("stare-registration")]
+    constraints = (root / "requirements" / "constraints.txt").read_text()
+    (opencv,) = [ln for ln in lines if ln.startswith("opencv-python-headless==")]
+    assert opencv in [ln.split("#")[0].strip() for ln in constraints.splitlines()]
+    assert [ln for ln in lines if ln.startswith("psutil==")]
+    assert [ln for ln in lines if ln.startswith("pytest==")]
+    smoke = (root / "containers" / "stare-regbench" / "smoke.sh").read_text()
+    assert "psutil" in smoke and "__import__('cv2')" in smoke
 
 
 def test_images_built_here_have_a_build_context():
@@ -300,7 +362,12 @@ COLUMNS = (
     "selfcheck_mask",
     "primary",
     "variants",
+    "active",
+    "gate_variants",
 )
+# The twelve columns of the first version: a launcher written against them reads the
+# same positions for ever; new columns only go on the end.
+FIRST_TWELVE = COLUMNS[:12]
 
 
 def rows(capsys, *args):
@@ -316,9 +383,11 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert [doc.index(f"``{c}``") for c in COLUMNS] == sorted(
         doc.index(f"``{c}``") for c in COLUMNS
     )
+    assert COLUMNS[:12] == FIRST_TWELVE == variants.RUNS_COLUMNS[:12]
+    assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
     assert len(got) == 18
-    assert all(len(r) == len(COLUMNS) for r in got)
+    assert all(len(r) == len(COLUMNS) == 14 for r in got)
     assert [r[0] for r in got] == [variants.run_name(r) for r in variants.RUNS]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
     assert all(field for r in got for field in r)
@@ -331,7 +400,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "method": "stare",
         "label": "-",
         "opts": "-",
-        "image": "STARE",
+        "image": "STARE_REGBENCH",
         "gpu": "0",
         "scope": "pair",
         "after": "-",
@@ -339,6 +408,8 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "selfcheck_mask": "-",
         "primary": "stare",
         "variants": "stare_rigid,stare",
+        "active": "1",
+        "gate_variants": "stare_rigid,stare",
     }
     assert got["affine_ashlar_clean"] == {
         "name": "affine_ashlar_clean",
@@ -353,6 +424,8 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "selfcheck_mask": "overlap",
         "primary": "-",
         "variants": "affine_ashlar_clean",
+        "active": "1",
+        "gate_variants": "affine_ashlar_clean",
     }
     hr = got["deeperhistreg_hr_fluo_gpu"]
     assert hr["opts"] == f"device=cuda:0,config={variants.HR_CONFIG},fluo=1"
@@ -360,7 +433,11 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
     assert got["palom_b1024"]["opts"] == "block=1024"
     assert got["palom_b1024"]["selfcheck_mask"] == "seams"
     assert got["palom_b1024"]["gated_by"] == "palom_b1024"
-    assert got["valis120"]["primary"] == "valis120"
+    assert got["valis120"]["primary"] == "-"
+    assert got["valis120_hires"]["primary"] == "valis120_hires"
+    assert got["valis120_hires"]["opts"] == "hires=1"
+    assert got["deeperhistreg_hr_gpu"]["primary"] == "deeperhistreg_hr_gpu_asdrawn"
+    assert got["deeperhistreg_gpu"]["primary"] == "-"
     assert (
         got["valis120"]["method"] == "valis" and got["valis120"]["image"] == "VALIS120"
     )
@@ -410,3 +487,263 @@ def test_score_passes_the_expected_variants_and_the_primary_rows(monkeypatch):
     seen.clear()
     assert cli.main(["score", "--cases", "c", "--out", "o", "--only-run"]) == 0
     assert seen["expected"] is None and seen["primary"] is None
+
+
+# ── paused runs (R3.11 a, R3.12: the flag is built, nothing is paused today) ──
+def pause(monkeypatch, *names):
+    """The run list with some runs paused: what `active=False` on their lines gives."""
+    assert set(names) <= set(by_name())
+    paused = tuple(
+        r._replace(active=False) if variants.run_name(r) in names else r
+        for r in variants.RUNS
+    )
+    monkeypatch.setattr(variants, "RUNS", paused)
+
+
+def test_every_run_is_active_today_and_the_flag_is_the_last_field():
+    assert variants.Run._fields[-1] == "active"
+    assert variants.Run._field_defaults == {"active": True}
+    assert all(r.active is True for r in variants.RUNS)
+    assert variants.active_runs() == variants.RUNS
+    assert variants.paused_names() == []
+    variants.check()
+
+
+def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, capsys):
+    pause(monkeypatch, "valis120", "deeperhistreg_fluo_gpu")
+    variants.check()
+    assert variants.paused_names() == ["valis120", "deeperhistreg_fluo_gpu"]
+    gone = {
+        "valis120_rigid",
+        "valis120",
+        "valis120_micro",
+        "deeperhistreg_fluo_gpu",
+        "deeperhistreg_fluo_gpu_asdrawn",
+    }
+    assert variants.expected_variants() == [v for v in EXPECTED if v not in gone]
+    assert variants.counts() == (16, 3, 6)
+    # the family keeps its primary, and its members are the runs that run
+    assert variants.members("valis120") == ["valis120_hires"]
+    assert variants.members("valis120", paused=True) == ["valis120", "valis120_hires"]
+    assert variants.primary_of("valis120") == "valis120_hires"
+    # still implemented: its names resolve, and its family too
+    run = by_name()["valis120"]
+    assert variants.variants_of(run) == ["valis120_rigid", "valis120", "valis120_micro"]
+    assert variants.family("valis120_micro") == "valis120"
+
+    got = rows(capsys)
+    assert len(got) == 16
+    assert "valis120" not in [r[0] for r in got]
+    assert {r[12] for r in got} == {"1"}
+    everything = rows(capsys, "--all")
+    assert [r[0] for r in everything] == [variants.run_name(r) for r in variants.RUNS]
+    flags = {r[0]: r[12] for r in everything}
+    assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
+    assert sum(v == "1" for v in flags.values()) == 16
+    # the same line, flag apart, as when it ran
+    (line,) = [r for r in everything if r[0] == "valis120"]
+    assert line[:12] == [
+        "valis120",
+        "valis",
+        "valis120",
+        "-",
+        "VALIS120",
+        "0",
+        "group",
+        "-",
+        "valis120",
+        "-",
+        "-",
+        "valis120_rigid,valis120,valis120_micro",
+    ]
+    assert rows(capsys, "--all", "--header")[0] == list(COLUMNS)
+
+
+def test_score_does_not_expect_a_paused_run(monkeypatch):
+    from benchmarks.regbench import score as score_module
+
+    pause(monkeypatch, "palom_b1024")
+    seen = {}
+    monkeypatch.setattr(
+        score_module, "score", lambda cases, out, *a, **kw: seen.update(kw) or {}
+    )
+    assert cli.main(["score", "--cases", "c", "--out", "o"]) == 0
+    assert "palom_b1024" not in seen["expected"] and "palom" in seen["expected"]
+    assert len(seen["expected"]) == 33
+
+
+def test_reactivating_is_one_field(monkeypatch):
+    pause(monkeypatch, "valis120")
+    assert len(variants.expected_variants()) == 32
+    monkeypatch.setattr(
+        variants, "RUNS", tuple(r._replace(active=True) for r in variants.RUNS)
+    )
+    assert variants.expected_variants() == EXPECTED
+    assert variants.counts() == (18, 4, 7)
+
+
+@pytest.mark.parametrize(
+    "name, why",
+    [
+        ("valis120_hires", "primary"),  # writes the primary row valis120_hires
+        ("deeperhistreg_hr_gpu", "primary"),  # writes deeperhistreg_hr_gpu_asdrawn
+        ("ashlar", "primary"),  # (and gates ashlar_clean)
+        ("affine_ashlar", "selfcheck gates"),  # gates the active affine_ashlar_clean
+        ("stare", "primary"),  # (and the anchored ASHLAR rows wait for it)
+    ],
+)
+def test_a_paused_run_cannot_write_a_primary_row_or_gate_an_active_run(
+    monkeypatch, name, why
+):
+    pause(monkeypatch, name)
+    with pytest.raises(ValueError, match=why):
+        variants.check()
+    # and nothing downstream hands out a list built on the broken state
+    with pytest.raises(ValueError):
+        variants.expected_variants()
+    with pytest.raises(ValueError):
+        variants.runs_table()
+
+
+def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
+    """`stare` is primary, so the `after` rule is shown on a list where it is not."""
+    pause(monkeypatch, "stare")
+    monkeypatch.setattr(
+        variants, "PRIMARY", tuple(v for v in variants.PRIMARY if v != "stare")
+    )
+    with pytest.raises(ValueError, match="waits for"):
+        variants.check()
+    # pausing the runs that wait as well is a consistent list
+    pause(monkeypatch, "affine_ashlar", "affine_ashlar_clean")
+    variants.check()
+    assert variants.counts() == (15, 4, 5)
+
+
+def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):
+    pause(monkeypatch, "ashlar_clean", "affine_ashlar_clean")
+    variants.check()
+    assert variants.members("ashlar") == ["ashlar"]
+
+
+# ── which rows a run's selfcheck gate reads (R3.12 b) ─────────────────────────
+def test_gate_variants_are_all_of_a_runs_rows_except_for_deeperhistreg():
+    for name, run in by_name().items():
+        names = tuple(variants.variants_of(run))
+        if run.method == "deeperhistreg":
+            assert variants.gate_variants(name) == (f"{name}_asdrawn",)
+            assert name not in variants.gate_variants(name)  # the estimated field
+        else:
+            assert variants.gate_variants(name) == names
+        assert set(variants.gate_variants(name)) <= set(names)
+    assert variants.gate_variants("valis120") == (
+        "valis120_rigid",
+        "valis120",
+        "valis120_micro",
+    )
+    with pytest.raises(KeyError):
+        variants.gate_variants("no_such_run")
+
+
+def test_the_gate_column_is_what_gate_variants_says(capsys):
+    got = {r[0]: dict(zip(COLUMNS, r)) for r in rows(capsys)}
+    for name, row in got.items():
+        assert row["gate_variants"] == ",".join(variants.gate_variants(name))
+    assert (
+        got["deeperhistreg_hr_gpu"]["gate_variants"] == "deeperhistreg_hr_gpu_asdrawn"
+    )
+    assert got["deeperhistreg_hr_gpu"]["variants"] == (
+        "deeperhistreg_hr_gpu,deeperhistreg_hr_gpu_asdrawn"
+    )
+    assert got["palom"]["gate_variants"] == "palom_affine,palom"
+
+
+def record(**statuses):
+    """The part of `selfcheck.json` the gate reads: `variants` = name -> status."""
+    return {"variants": dict(statuses)}
+
+
+def test_the_gate_reads_the_record_selfcheck_really_writes(tmp_path):
+    """`selfcheck.run` writes `variants: {name: status}` at the top of selfcheck.json
+    (and a dict per variant inside each pair): the gate must read the top one."""
+    from benchmarks.regbench import selfcheck
+
+    src = selfcheck.__file__
+    text = open(src).read()
+    assert '"variants": {' in text and "k: (NO_STAGE_IMAGE if" in text
+    name = "deeperhistreg_hr_gpu"
+    top = {"variants": {name: "inconsistent", f"{name}_asdrawn": "ok"}}
+    assert variants.gate_status(name, top) == "ok"
+    # a per-variant dict (the shape inside `pairs`) is read the same way
+    nested = {"variants": {k: {"status": v} for k, v in top["variants"].items()}}
+    assert variants.gate_status(name, nested) == "ok"
+    assert variants.dropped_variants(name, nested) == [name]
+    # a stage with no image of its own is reported, never counted, never dropped
+    rec = record(stare_rigid="no_stage_image", stare="ok")
+    assert variants.gate_status("stare", rec) == "ok"
+    assert variants.dropped_variants("stare", rec) == []
+
+
+def test_gate_status_reads_the_gating_rows_only_and_names_the_rows_to_drop():
+    name = "deeperhistreg_hr_gpu"
+    field, drawn = name, f"{name}_asdrawn"
+    # the estimated-field row fails: the method is NOT blocked, that row is dropped
+    rec = record(**{field: "inconsistent", drawn: "ok"})
+    assert variants.gate_status(name, rec) == "ok"
+    assert variants.dropped_variants(name, rec) == [field]
+    # the written image's row fails: the method is blocked, nothing is "dropped"
+    rec = record(**{field: "ok", drawn: "inconsistent"})
+    assert variants.gate_status(name, rec) == "inconsistent"
+    assert variants.dropped_variants(name, rec) == []
+    # a gating row the record does not have was not checked
+    assert variants.gate_status(name, record(**{field: "ok"})) == "not_checked"
+    # a non-gating row that could not be compared at all is dropped too, never passed
+    rec = record(**{field: "crashed", drawn: "ok"})
+    assert variants.dropped_variants(name, rec) == [field]
+    rec = record(**{field: "ok", drawn: "ok"})
+    assert variants.gate_status(name, rec) == "ok"
+    assert variants.dropped_variants(name, rec) == []
+
+
+def test_for_every_other_method_one_failed_row_blocks_the_run():
+    rec = record(palom_affine="inconsistent", palom="ok")
+    assert variants.gate_status("palom", rec) == "inconsistent"
+    assert variants.dropped_variants("palom", rec) == []
+    rec = record(stare_rigid="ok", stare="ok")
+    assert variants.gate_status("stare", rec) == "ok"
+
+
+# ── `gate`: what the launcher asks before it submits a run ────────────────────
+def gate(capsys, tmp_path, name, rec):
+    import json
+
+    path = tmp_path / f"{name}.json"
+    path.write_text(json.dumps(rec))
+    code = cli.main(["gate", "--name", name, "--selfcheck", str(path)])
+    return code, capsys.readouterr().out.rstrip("\n").split("\t")
+
+
+def test_gate_prints_the_status_and_the_rows_to_drop(capsys, tmp_path):
+    name = "deeperhistreg_hr_gpu"
+    code, out = gate(
+        capsys, tmp_path, name, record(**{name: "ok", f"{name}_asdrawn": "ok"})
+    )
+    assert (code, out) == (0, ["ok", "-"])
+    rec = record(**{name: "inconsistent", f"{name}_asdrawn": "ok"})
+    code, out = gate(capsys, tmp_path, name, rec)
+    assert (code, out) == (0, ["ok", name])  # the method runs; that row is dropped
+    rec = record(**{name: "ok", f"{name}_asdrawn": "inconsistent"})
+    code, out = gate(capsys, tmp_path, name, rec)
+    assert (code, out) == (
+        1,
+        ["inconsistent", "-"],
+    )  # blocked: selfcheck's own exit code
+    code, out = gate(
+        capsys, tmp_path, "palom", record(palom_affine="crashed", palom="ok")
+    )
+    assert (code, out) == (3, ["crashed", "-"])
+    code, out = gate(capsys, tmp_path, "palom", {"variants": {}})
+    assert (code, out) == (2, ["not_checked", "-"])
+    with pytest.raises(SystemExit):
+        cli.main(
+            ["gate", "--name", "nope", "--selfcheck", str(tmp_path / "palom.json")]
+        )

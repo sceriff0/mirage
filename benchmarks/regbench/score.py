@@ -221,7 +221,12 @@ def resource_row(run):
     }
 
 
-def find_variants(out, dataset, expected=None):
+DROPPED_REASON = "its selfcheck failed and it does not gate its method"
+
+
+def find_variants(out, dataset, expected=None, dropped=()):
+    """The variants to score: ``initial``, every result folder of the dataset, and the
+    ``expected`` names that have none. A name in ``dropped`` is in neither part."""
     out = Path(out)
     found = (
         [
@@ -236,7 +241,7 @@ def find_variants(out, dataset, expected=None):
         else []
     )
     extra = [v for v in expected or [] if v not in found and v != "initial"]
-    return ["initial", *found, *extra]
+    return ["initial", *(v for v in [*found, *extra] if v not in set(dropped))]
 
 
 def _load_run(out, variant, case):
@@ -915,6 +920,7 @@ def summary_markdown(
     nonband=None,
     nonband_lost=None,
     tissue_tables=None,
+    dropped=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
@@ -955,6 +961,19 @@ def summary_markdown(
     parts += _nonband_markdown(nonband or [], nonband_lost or [])
     if tissue_tables:
         parts += tissue.markdown(tissue_tables, markdown)
+    if dropped:
+        parts += [
+            "## Rows left out\n",
+            "These result rows are in no table above. Each is a row whose own selfcheck "
+            "failed (its points do not follow an image the method wrote) while the row "
+            "that gates the method passed, so the method ran and this row alone is not "
+            "reported: "
+            + ", ".join(
+                f"`{r['variant']}`" + ("" if r["had_results"] else " (no results)")
+                for r in dropped
+            )
+            + ".\n",
+        ]
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
         parts += [markdown(fails, list(fails[0])), ""]
@@ -998,8 +1017,14 @@ def score(
     primary=None,
     seam_owners=None,
     with_tissue=True,
+    dropped=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``dropped`` names variants that are left out of every table although they may have
+    results: rows whose own selfcheck failed without blocking their method
+    (``variants.dropped_variants``). They are listed in ``dropped.csv`` and in the
+    summary, so a row is never missing without a reason.
 
     ``with_tissue`` adds the tissue-level block of the written images (``tissue*.csv``,
     ``regbench.tissue``): secondary, its own tables, never part of the ones above.
@@ -1010,6 +1035,15 @@ def score(
     every variant a second, off-seam row (``nonband_*``).
     """
     owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
+    dropped = list(dict.fromkeys(dropped or []))
+    dropped_rows = [
+        {
+            "variant": v,
+            "reason": DROPPED_REASON,
+            "had_results": (Path(out) / v).is_dir(),
+        }
+        for v in dropped
+    ]
     variants_of = {}
     jobs, hashes, lists, prepared, folded, reseeded = [], {}, {}, set(), [], []
     for ds in datasets or DATASETS:
@@ -1017,7 +1051,7 @@ def score(
             c for c in list_cases(cases_root, ds) if c.case_id.startswith("dev_") == dev
         ]
         if cs:
-            variants = find_variants(out, ds, expected)
+            variants = find_variants(out, ds, expected, dropped)
             variants_of[ds] = variants
             jobs += [(str(out), c, variants, owners) for c in cs]
             for c in cs:
@@ -1117,6 +1151,8 @@ def score(
     write_csv(tables / "nonband_truth.csv", non_truth)
     write_csv(tables / "nonband_truth_by_family.csv", truth.by_family(non_truth))
     write_csv(tables / "nonband_missing.csv", non_lost)
+    (tables / "dropped.csv").unlink(missing_ok=True)  # never a stale list
+    write_csv(tables / "dropped.csv", dropped_rows)
     # the written images against the reference: tables of their own, never ranked
     tis = (
         tissue.score_all([(j[0], j[1], j[2]) for j in jobs], workers)
@@ -1136,6 +1172,7 @@ def score(
         non_summary,
         non_lost,
         tis,
+        dropped_rows,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -1154,5 +1191,6 @@ def score(
         "nonband_summary": non_summary,
         "nonband_truth": non_truth,
         "nonband_missing": non_lost,
+        "dropped": dropped_rows,
         **tis,
     }

@@ -35,7 +35,8 @@ This package is being ported in steps. What exists now:
 | adapter `palom` (PALOM 2026.4.1 by its README recipe: `palom`, and `palom_b1024` with the reference rechunked to 1024 px blocks) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
-| the run list and the cohort launcher | not here yet |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
+| the cohort launcher | not here yet |
 
 Nothing here has run on the cluster.
 
@@ -104,6 +105,56 @@ that case with the file's path, and the rest are still prepared.
 runs per patient). `--label NAME` renames a method's variants
 (`variant.replace(method, label, 1)`), so two configurations sit side by side.
 
+### The run list (`variants.py`)
+
+`python -m benchmarks.regbench runs [--header] [--all]` prints what the cohort is
+registered with: one tab-separated line per run, in a documented column order that only
+ever grows at the end (the module's docstring; `-` for "none", never an empty field).
+18 runs, 35 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
+names and opens its summary on the six primary rows:
+
+`stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
+
+- **Two methods run at two settings, and the high-resolution one is primary** (the
+  user's ruling of 2026-10-11, fixed before any cohort run). VALIS 1.2.0: `valis120` is
+  upstream's default pipeline, `valis120_hires` upstream's own high-resolution example.
+  DeeperHistReg: the `deeperhistreg_{gpu,cpu}` rows are the package's default parameter
+  set (4096 px), the `_hr` rows its shipped 8192 px set. Both settings of both methods
+  are run, scored and shown; the default-setting rows are in the same family and are
+  never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
+  one line that names each.
+- **A run can be paused** (`active=False` on its entry). A paused run stays implemented
+  and tested and its names still resolve, but it is not launched, not expected by
+  `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the
+  `active` column. Nothing is paused. A list in which a paused run writes a primary row,
+  gates an active run's selfcheck or is what an active run waits for is refused
+  (`variants.check`, at import).
+- **Images** (the `image` column is the suffix of `REGBENCH_SIF_<image>`, the variable
+  that holds an image's path on the cluster). Built here, the suffix being the directory
+  under `containers/` in capitals with `-` written `_`: `STARE_REGBENCH` (the `stare`
+  run, and `tissue` and `score`: `variants.SCORER_IMAGE`), `VALIS120` (built FROM
+  upstream's `cdgatenbee/valis-wsi:1.2.0`; needs `--writable-tmpfs`), `DEEPERHISTREG`,
+  `PALOM`. Pulled from upstream: `VALIS_MIRAGE` (`cdgatenbee/valis-wsi` 1.0.0, the
+  pipeline's digest) and `ASHLAR` (`labsyspharm/ashlar:1.20.0`). `containers/README.md`
+  has what each holds.
+- **Which rows gate a run** (`gate_variants`, the last column). A failed selfcheck blocks
+  the method. For every method but one that means any of the run's rows. DeeperHistReg's
+  gate reads its `_asdrawn` row alone, the row of the image its writer puts on disk: when
+  only the estimated-field row fails, that row is reported, left out of the results
+  (`variants.dropped_variants`) and the method still runs. `variants.gate_status(name,
+  selfcheck_record)` is the status that decides. From a shell:
+
+  ```bash
+  python -m benchmarks.regbench gate --name deeperhistreg_hr_cpu --selfcheck W/deeperhistreg_hr_cpu/selfcheck.json
+  # prints "<status>\t<rows to drop, comma-joined, or ->"; exit 0 ok, 1 inconsistent,
+  # 2 not_checked, 3 crashed (the status of the gating rows, not of the whole record)
+  python -m benchmarks.regbench score --cases CASES --out OUT --drop deeperhistreg_hr_cpu
+  ```
+
+  A dropped row is in no table; `dropped.csv` and the summary's "Rows left out" name it,
+  so a row is never missing without a reason. `--drop` refuses a name that is no result
+  name of the run list, and a row that gates its run.
+
 ## The contract
 
 **A case** is `<cases>/<dataset>/<case_id>/case.json` plus `points.npz`. `case.json` names the
@@ -159,19 +210,18 @@ failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`
 | variant(s) | software | run unit | native transform | how nuclei are moved |
 |---|---|---|---|---|
 | `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame |
-| `stare_s128`, `stare_s256` | the same, `--opt stride=128` / `256` and nothing else (a sensitivity analysis, never primary) | pair | same | same |
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame |
-| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0 from PyPI, upstream defaults | patient | same | same |
-| `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`) | patient | same | same |
+| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same |
+| `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same |
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary |
-| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary |
+| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default) |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
 | `initial` | none | | identity | |
 
 Honest limits of "natively": ASHLAR is run on tiles cut from stitched slides, not raw tiles;
 DeeperHistReg is run on fluorescence with brightfield defaults; STARE is run as one process,
 not as the pipeline's cluster jobs; `valis120` at upstream defaults is upstream's
-low-resolution pipeline.
+low-resolution pipeline (which is why its high-resolution example is the primary row).
 
 VALIS registers a patient's rounds together: its rigid step chains through
 similarity-sorted neighbours (`serial_rigid.py`, `serial_non_rigid.py` in valis-wsi 1.0.0
@@ -541,6 +591,7 @@ method's fields is post hoc and names that method.
 | `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
 | `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept |
 | `nonband_truth.csv`, `nonband_truth_by_family.csv` | as `truth.csv`, `truth_by_family.csv` | the known-truth error on the probes a moving-side mask leaves, with `owner, n_probes_all` |
+| `dropped.csv` | variant | written only when `score --drop` names rows: `variant, reason, had_results`. Rows whose own selfcheck failed without blocking their method; they are in no other table |
 | `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
 | `summary_cells.csv` | dataset x variant x subset | per patient the median over rounds, then median, min, max over patients; `n_patients, n_cases, n_ok`; the minimum over cases; each headline beside its null; Dice over the cases that clear the null; displacement over the readable cases with `n_readable`. `subset=common` repeats it on the cases every primary variant registered |
 | `paired_vs_primary.csv` | patient x variant | the difference of each headline against the `stare` row |
@@ -710,16 +761,20 @@ evaluation pixel, a 50000 px slide 4.06 µm.
    most of it the reader's (a bare loop of band reads of that file reaches 0.9 to
    1.2 GB; one channel whole would be 3.7 GB); the pieces on the two 3200 x 4000 planes
    took 2 s at a peak of 0.9 GB.
-2. **The pieces** need OpenCV (`cv2`). The STARE image, where `score` runs, does not have
-   it (`requirements/stare.txt`), and no pin was added for this block.
+2. **The pieces** need OpenCV (`cv2`). `tissue` and `score` run in the benchmark's own
+   STARE image (`containers/stare-regbench`, `variants.SCORER_IMAGE`), which has the
+   pinned `opencv-python-headless 4.10.0.82` of `requirements/constraints.txt` beside the
+   same pinned STARE; the pipeline's STARE image (`containers/stare`) has no OpenCV and is
+   not used by the benchmark.
    `python -m benchmarks.regbench tissue --cases C --out O` computes them in any
    environment that has `cv2`, NumPy, tifffile, zarr and `stare.slide_io`, and leaves
    `tissue.json` beside each reduced plane (`<out>/cache/tissue/...` for the reference,
    `initial` and `truth`). `score` reads those; what it finds neither on disk nor
    computable is listed in `tissue_missing.csv` with the reason, never left out silently.
    Use ONE OpenCV version for a whole result: the version is recorded in each row
-   (`opencv`), and ORB and RANSAC are OpenCV's. The pinned `opencv-python-headless
-   4.10.0.82` of `requirements/constraints.txt` is in the PALOM image and in CI.
+   (`opencv`), and ORB and RANSAC are OpenCV's. That is why the pieces are computed in
+   one image, whatever OpenCV a method's own image carries (upstream's VALIS 1.2.0 image
+   has 4.9.0.80; the PALOM image and CI have the pinned 4.10.0.82).
 3. Delete `<out>/cache/tissue` after re-preparing cases: the reference's plane is made
    once per case and kept.
 
@@ -828,7 +883,10 @@ stand-in (`tests/regbench/fake_valis.py`). Everything in this section about VALI
 behaviour is a reading of that source; the selfcheck inside each VALIS image is what
 tests it.
 
-**Three rows, one patient per run** (`run --group`, `selfcheck`):
+**Three rows, one patient per run** (`run --group`, `selfcheck`). For VALIS 1.2.0,
+`valis120` is upstream's default setting and `valis120_hires` upstream's high-resolution
+example; both run, and `valis120_hires` is the primary row by the user's ruling of
+2026-10-11 (`variants.PRIMARY_VALIS120`):
 
 | run | call | what the benchmark sets |
 |---|---|---|
@@ -1134,9 +1192,18 @@ writer is run afterwards, outside the clock, as the package's own example does).
   the authors' stated use and **the `_fluo` rows are the benchmark's**: brightfield after
   the flip is bright tissue on black, which is unflipped DAPI, so `flip_intensity = False`
   restores the polarity the method was built for. They are never primary.
-- **Which DeeperHistReg row is primary** (the 4096 px `deeperhistreg_gpu_asdrawn` or the
-  8192 px `deeperhistreg_hr_gpu_asdrawn`) is set in the run list, not here. Both are
-  complete rows with their own selfcheck.
+- **Which setting is upstream's default, and which row is primary.** The package's
+  default is the 4096 px set: `default_initial_nonrigid` is the factory its README's usage
+  example calls (the repository's `README.md:103` `[PARTIAL: lines 88-112 and 222-236]`), and the
+  8192 px `default_initial_nonrigid_high_resolution` is another shipped factory, listed
+  there as "High Resolution". Both are run,
+  on the GPU and on the CPU, each with its own selfcheck. The primary row is the 8192 px
+  one, `deeperhistreg_hr_gpu_asdrawn`, by the user's ruling of 2026-10-11 (it is the
+  resolution of the paper's headline result); the 4096 px rows stand beside it in every
+  table. `variants.PRIMARY_DEEPERHISTREG` is the one line that names it.
+- **The selfcheck gate reads the `_asdrawn` row only** (`variants.gate_variants`). The
+  estimated-field row is still checked and reported; when it alone fails it is left out
+  of the results and the method runs.
 
 **Inputs.** The package does not read OME-TIFF (issue #4 `[FULL]`) and its TIFF loader
 counts top-level pages as pyramid levels (`tiff_loader.py:34-38`). Each slide's nuclear

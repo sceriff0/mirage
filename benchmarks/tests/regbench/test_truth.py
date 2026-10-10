@@ -952,3 +952,61 @@ def test_folding_is_reported():
     folded[left, 0] = 200 - xy[left, 0]  # the left half is mirrored: it folds
     assert 40 < truth.jacobian_stats(pack(folded))["fold_pct"] < 60
     assert math.isnan(truth.jacobian_stats(None)["fold_pct"])
+
+
+# ── a row dropped by its own failed selfcheck (R3.12 b) ────────────────────────
+def test_a_dropped_variant_is_in_no_table_and_is_named(scored, reduced, tmp_path):
+    out, _ = scored
+    root, _cases = reduced
+    kept = score(root, out, ["synthetic"], expected=["ghost", "backward"])
+    assert {"exact", "backward", "ghost"} <= {r["method"] for r in kept["cells"]}
+    assert kept["dropped"] == []
+    res = score(
+        root, out, ["synthetic"], expected=["ghost", "backward"], dropped=["backward"]
+    )
+    for table in ("cells", "truth", "summary_cells", "failures", "truth_by_family"):
+        methods_in = {r["method"].split(":")[0] for r in res[table]}
+        assert "backward" not in methods_in, table
+        assert "exact" in methods_in or table == "failures", table
+    # not resurrected as a "not run" row by the expected list, and reported by name
+    assert res["dropped"] == [
+        {
+            "variant": "backward",
+            "reason": "its selfcheck failed and it does not gate its method",
+            "had_results": True,
+        }
+    ]
+    tables = out / "tables"
+    assert "backward" in (tables / "dropped.csv").read_text()
+    text = (tables / "summary.md").read_text()
+    assert "## Rows left out" in text and "`backward`" in text
+    # a dropped name that never ran is still reported, as having no results
+    res = score(root, out, ["synthetic"], dropped=["never_ran"])
+    assert res["dropped"][0]["had_results"] is False
+    # without the option there is no such list (and the fixture's tables are restored)
+    score(root, out, ["synthetic"], expected=["ghost"])
+    assert not (tables / "dropped.csv").exists()
+    assert "## Rows left out" not in (tables / "summary.md").read_text()
+
+
+def test_score_drop_on_the_command_line(monkeypatch):
+    from benchmarks.regbench import cli
+    from benchmarks.regbench import score as score_module
+
+    seen = {}
+    monkeypatch.setattr(
+        score_module, "score", lambda cases, out, *a, **kw: seen.update(kw) or {}
+    )
+    argv = ["score", "--cases", "c", "--out", "o", "--drop", "deeperhistreg_hr_cpu"]
+    assert cli.main([*argv, "--drop", "deeperhistreg_cpu"]) == 0
+    assert seen["dropped"] == ["deeperhistreg_hr_cpu", "deeperhistreg_cpu"]
+    assert "deeperhistreg_hr_cpu" in seen["expected"]  # the scorer filters, not the CLI
+    # a name that is no result name of the run list is a typo: refused
+    with pytest.raises(SystemExit, match="no_such_row"):
+        cli.main([*argv, "--drop", "no_such_row"])
+    # and a gating row cannot be dropped: its failure blocks the method instead
+    with pytest.raises(SystemExit, match="gates"):
+        cli.main(["score", "--cases", "c", "--out", "o", "--drop", "palom"])
+    seen.clear()
+    assert cli.main(["score", "--cases", "c", "--out", "o"]) == 0
+    assert seen["dropped"] == []
