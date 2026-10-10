@@ -9,5 +9,8 @@
   { "dir": "regqc",       "tag": "regqc" },
   { "dir": "segeval",     "tag": "segeval" },
   { "dir": "spatialdata", "tag": "spatialdata" },
-  { "dir": "stardist",    "tag": "stardist" }
+  { "dir": "stardist",    "tag": "stardist" },
+  { "dir": "valis120",      "tag": "valis120" },
+  { "dir": "deeperhistreg", "tag": "deeperhistreg" },
+  { "dir": "palom",         "tag": "palom" }
 ]

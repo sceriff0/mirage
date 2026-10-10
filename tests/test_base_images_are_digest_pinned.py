@@ -61,8 +61,10 @@ EXTERNAL_SITES = {
 
 def _dockerfiles():
     found = sorted(CONTAINERS.glob("*/Dockerfile"))
-    assert len(found) == 11, (
-        f"expected eleven build contexts, found {len(found)}: {[p.parent.name for p in found]}. "
+    # Fourteen since 2026-10-10: the eleven pipeline images plus the registration
+    # benchmark's three (valis120, deeperhistreg, palom).
+    assert len(found) == 14, (
+        f"expected fourteen build contexts, found {len(found)}: {[p.parent.name for p in found]}. "
         "The glob, not the repository, is what changed -- and a glob that misses the "
         "interesting files passes vacuously."
     )

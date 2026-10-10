@@ -6,7 +6,12 @@
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
                        ``--index``-th of them: the index counts cases for a method that runs
                        per pair and patients for one that runs per patient
-``score``              score every variant under ``--out``; writes ``<out>/tables``
+``score``              score every variant under ``--out``; writes ``<out>/tables``. Every
+                       result name of the run list is expected (a missing one is a "not
+                       run" row) and the primary rows lead; ``--only-run`` scores just
+                       what is there
+``runs``               the run list, one tab-separated line per run, for the launcher
+                       (columns: ``benchmarks/regbench/variants.py``)
 ``selfcheck``          check that a method's points follow the image its own writer produced,
                        on a synthetic pair; exit 0 ``ok``, 1 ``inconsistent``, 2
                        ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
@@ -230,6 +235,17 @@ def build_parser():
         action="store_true",
         help="score the dev_* cases instead of leaving them out",
     )
+    sc.add_argument(
+        "--only-run",
+        action="store_true",
+        help='score only the variants that have results: no "not run" rows for the '
+        "rest of the run list and no primary rows (a laptop run of one method)",
+    )
+
+    rn = sub.add_parser("runs")
+    rn.add_argument(
+        "--header", action="store_true", help="print the column names first"
+    )
     return ap
 
 
@@ -347,6 +363,16 @@ def _list(a):
     return 0
 
 
+def _runs(a):
+    from . import variants
+
+    if a.header:
+        print("\t".join(variants.RUNS_COLUMNS))
+    for row in variants.runs_table():
+        print("\t".join(row))
+    return 0
+
+
 def main(argv=None):
     a = build_parser().parse_args(argv)
     if a.cmd == "prepare":
@@ -357,7 +383,19 @@ def main(argv=None):
         return _run(a)
     if a.cmd == "selfcheck":
         return _selfcheck(a)
-    from .score import score
+    if a.cmd == "runs":
+        return _runs(a)
+    from . import score, variants
 
-    score(a.cases, a.out, a.dataset, a.workers, dev=a.dev)
+    expected = None if a.only_run else variants.expected_variants()
+    primary = None if a.only_run else list(variants.PRIMARY)
+    score.score(
+        a.cases,
+        a.out,
+        a.dataset,
+        a.workers,
+        dev=a.dev,
+        expected=expected,
+        primary=primary,
+    )
     return 0

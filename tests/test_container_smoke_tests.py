@@ -79,6 +79,9 @@ IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow",
     "bioio_bioformats": "bioio-bioformats",
     "scyjava": "scyjava",
+    # containers/valis120 (the registration benchmark's VALIS 1.2.0 image): the package
+    # imports as `valis` and is published as `valis-wsi`.
+    "valis": "valis-wsi",
 }
 
 # {container: {import name}} for a module a smoke script imports that is NOT a pip

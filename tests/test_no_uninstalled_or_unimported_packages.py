@@ -249,6 +249,13 @@ def test_no_image_installs_a_package_nothing_reaches(container):
     It is also a false claim: the Dockerfile says this image depends on the package, and
     the next person reading it to find out what the scripts need is misled.
     """
+    if container in harmonisation.BENCHMARK_IMAGES:
+        pytest.skip(
+            f"containers/{container} runs no pipeline script: it is a registration-benchmark "
+            f"image holding one competitor's own published stack "
+            f"(test_container_harmonisation.BENCHMARK_IMAGES, where the reason is and where "
+            f"test_benchmark_images_run_no_pipeline_process keeps it true)"
+        )
     offenders = sorted(
         p for p in _unimported(container) if (container, p) not in ALLOWED_UNIMPORTED
     )

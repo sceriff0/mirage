@@ -1,0 +1,103 @@
+# PALOM 2026.4.1, for the registration benchmark (benchmarks/regbench, method `palom`).
+# COPY'd into containers/palom/Dockerfile -> bolt3x/mirage-palom. No pipeline process runs
+# in that image.
+#
+# A COMPLETE PIN FILE THAT TAKES NO constraints.txt, and why. PALOM's own package metadata
+# (PyPI palom==2026.4.1, requires_dist [FULL]) asks for `scikit-image>=0.18,<0.20` and
+# `tifffile<=2024.7.2`; requirements/constraints.txt pins scikit-image 0.25.2 and tifffile
+# 2025.5.10, so the two cannot be installed together. scipy and dask follow PALOM's side
+# for one reason each, given beside them. The divergences are recorded in
+# tests/test_container_harmonisation.py's PINNED_EXCEPTIONS. Python is 3.10: PALOM
+# requires >=3.10, and scikit-image 0.19.3 publishes no wheel for 3.11 or later.
+#
+# EVERY name the resolver installs is pinned below (62 of them), not only the ones
+# PALOM names, so a rebuild cannot move a version under the benchmark. The set was resolved
+# on 2026-10-10 from PyPI metadata for CPython 3.10 on linux x86_64, twice, and the two
+# agree name for name: `uv pip compile --python-version 3.10 --python-platform
+# x86_64-manylinux_2_28` (uv 0.12.13) and `pip install --dry-run --report` (pip 26.2.1,
+# --platform manylinux*, --only-binary=:all:). NOTHING HERE WAS INSTALLED OR IMPORTED on
+# the machine that wrote this file; containers/palom/smoke.sh is where the stack first runs.
+#
+# stare-registration is NOT in this file. The benchmark reads images through
+# stare.slide_io and stare.ome, and STARE's metadata requires scikit-image>=0.24, which
+# PALOM forbids. The Dockerfile therefore installs STARE's one pinned line (taken out of
+# requirements/stare.txt, so the version is still written once) with --no-deps. At v1.2.1
+# stare/__init__.py imports nothing, stare/slide_io.py imports numpy (and tifffile, zarr
+# inside its functions) and stare/ome.py imports tifffile: all three are pinned below.
+
+# ---- PALOM and the pins that differ from constraints.txt --------------------------------
+palom==2026.4.1
+scikit-image==0.19.3        # palom: scikit-image>=0.18,<0.20
+tifffile==2024.7.2           # palom: tifffile<=2024.7.2
+scipy==1.14.1                # PALOM's own lock (conda-env/env-win-64.lock at v2026.4.1)
+                             # runs scikit-image 0.19.3 on scipy 1.14.1; 0.19.3 with a
+                             # newer scipy is a pairing nobody upstream has run
+dask[array]==2024.12.1       # NOT forced by PALOM (it asks dask>=2021.10.0; its lock has
+                             # 2024.9.1): this is the release whose scheduler and blockwise
+                             # code the adapter's block grid and worker count were read from
+
+# ---- the same versions as constraints.txt -----------------------------------------------
+numpy==1.26.4
+zarr==2.18.3
+numcodecs==0.13.1            # zarr 2.18 imports blosc.cbuffer_sizes, gone from newer ones
+imagecodecs==2025.3.30
+opencv-python-headless==4.10.0.82
+
+# ---- PALOM's other direct requirements --------------------------------------------------
+scikit-learn==1.7.2
+matplotlib==3.10.9
+tqdm==4.70.1
+openslide-python==1.4.6
+yamale==4.0.4
+loguru==0.7.3
+ome-types==0.6.3
+pint==0.24.4
+fire==0.7.1
+
+# ---- what the benchmark's driver and checks import --------------------------------------
+psutil==7.2.2                # resources.Monitor; and dask reads the CPU affinity
+                             # mask only through psutil (methods/palom.py)
+pytest==9.1.1                # test_external_methods.py is run INSIDE the image first
+
+# ---- everything else the resolver installs ----------------------------------------------
+annotated-types==0.8.0
+asciitree==0.3.3
+click==8.5.0
+cloudpickle==3.1.2
+contourpy==1.3.2
+cycler==0.12.1
+exceptiongroup==1.3.1
+fasteners==0.20
+flexcache==0.3
+flexparser==0.4
+fonttools==4.65.0
+fsspec==2026.9.0
+imageio==2.38.0
+importlib-metadata==9.0.1
+iniconfig==2.3.1
+joblib==1.6.0
+kiwisolver==1.5.1
+locket==1.0.0
+networkx==3.4.2
+packaging==26.3
+partd==1.4.2
+pillow==12.3.0
+platformdirs==4.12.4
+pluggy==1.6.0
+pydantic==2.14.0
+pydantic-core==2.50.0
+pydantic-extra-types==2.11.1
+pygments==2.21.0
+pyparsing==3.3.3
+python-dateutil==2.9.0.post0
+pywavelets==1.8.0
+pyyaml==6.0.3
+six==1.17.0
+termcolor==3.3.0
+threadpoolctl==3.7.0
+tomli==2.5.0
+toolz==1.2.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+xsdata==26.2
+zipp==4.1.1

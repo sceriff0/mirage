@@ -137,6 +137,42 @@ PINNED_EXCEPTIONS = {
         "2.2.6",
         "bioio 3.5.0 plugin set cannot resolve with numpy 1.26.4",
     ),
+    # containers/palom, the registration benchmark's PALOM image (Python 3.10, a complete
+    # pin file, no constraints.txt). The first two are PALOM's own caps (PyPI
+    # palom==2026.4.1, requires_dist); the last two follow from them and say how.
+    ("palom", "scikit-image"): (
+        "0.19.3",
+        "palom 2026.4.1 requires scikit-image>=0.18,<0.20",
+    ),
+    ("palom", "tifffile"): (
+        "2024.7.2",
+        "palom 2026.4.1 requires tifffile<=2024.7.2",
+    ),
+    ("palom", "scipy"): (
+        "1.14.1",
+        "palom's own lock (conda-env/env-win-64.lock) runs scikit-image 0.19.3 on scipy "
+        "1.14.1; no one upstream has run 0.19.3 on the harmonised 1.15.3",
+    ),
+    ("palom", "dask"): (
+        "2024.12.1",
+        "not capped by palom: the release whose scheduler the benchmark's PALOM adapter "
+        "was read against (benchmarks/regbench/methods/palom.py); the image runs nothing else",
+    ),
+}
+
+# Images that run NO modules/local process. Each runs one competitor of the registration
+# benchmark (`python -m benchmarks.regbench`, with the repository bind-mounted), so the rules
+# below that derive what an image needs FROM ITS PIPELINE SCRIPTS have nothing to read for
+# them: their contents are the competitor's own published stack, pinned in
+# requirements/<dir>.txt and proven at build time by containers/<dir>/smoke.sh. Every OTHER
+# rule in this file and its neighbours still applies to them (exact pins, the harmonised
+# versions or a named exception, a digest-pinned base, a smoke script whose imports are
+# declared). {build context: the benchmark module that runs in it}
+# test_benchmark_images_run_no_pipeline_process keeps an entry from outliving its reason.
+BENCHMARK_IMAGES = {
+    "deeperhistreg": "benchmarks/regbench/methods/deeperhistreg.py",
+    "palom": "benchmarks/regbench/methods/palom.py",
+    "valis120": "benchmarks/regbench/methods/valis.py",
 }
 
 # Packages a container's FROM base image bakes in, so no `pip install` line for them ever
@@ -681,6 +717,10 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     reached = set()
     for script in _module_container_and_scripts().get(container, set()):
         reached |= _first_party_packages_reached(script)
+    if container in BENCHMARK_IMAGES:
+        # No pipeline script runs here; what runs is benchmarks/regbench, which reads every
+        # image through stare.slide_io. Same rule, read off the code that actually runs.
+        reached = _first_party_packages_the_benchmark_imports()
     installed = _first_party_packages_installed(container)
     assert reached <= installed, (
         f"containers/{container} runs scripts that import "
@@ -691,6 +731,45 @@ def test_image_whose_scripts_reach_a_first_party_package_installs_it(container):
     assert installed <= reached, (
         f"containers/{container} installs first-party package(s) "
         f"{sorted(installed - reached)} that none of its scripts import."
+    )
+
+
+def _first_party_packages_the_benchmark_imports():
+    """FIRST_PARTY_PACKAGES names imported anywhere under benchmarks/regbench, at any depth
+    (its adapters import inside functions). Empty on a branch without the benchmark."""
+    found = set()
+    for path in sorted((REPO / "benchmarks" / "regbench").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                heads = {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                heads = {node.module.split(".")[0]}
+            else:
+                continue
+            found |= heads & set(FIRST_PARTY_PACKAGES)
+    return found
+
+
+@pytest.mark.parametrize("container", sorted(BENCHMARK_IMAGES))
+def test_benchmark_images_run_no_pipeline_process(container):
+    """BENCHMARK_IMAGES takes an image out of the script-derived rules; this is what stops
+    an entry from doing that for an image a pipeline process has started to use, or for one
+    whose benchmark module is gone."""
+    assert (CONTAINERS / container / "Dockerfile").is_file(), (
+        f"BENCHMARK_IMAGES names containers/{container}, which has no Dockerfile."
+    )
+    assert container not in _module_container_and_scripts(), (
+        f"a modules/local process now runs in containers/{container}, so it is a pipeline "
+        "image: remove it from BENCHMARK_IMAGES and let the script-derived rules read it."
+    )
+    module = REPO / BENCHMARK_IMAGES[container]
+    assert module.is_file(), (
+        f"BENCHMARK_IMAGES says {BENCHMARK_IMAGES[container]} runs in containers/"
+        f"{container}, and that file does not exist: the image has no user left."
+    )
+    assert _first_party_packages_the_benchmark_imports() == {"stare"}, (
+        "benchmarks/regbench no longer imports stare, so the benchmark images' "
+        "stare-registration pin is dead weight (or the scan stopped finding the import)."
     )
 
 
