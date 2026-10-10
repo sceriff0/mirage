@@ -26,7 +26,8 @@ This package is being ported in steps. What exists now:
 | datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient |
 | the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC nuclei of one arm. Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
-| adapters `initial`, `stare`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them. `stare` already writes its native image: its own STITCH, deferred until the clock has stopped |
+| adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
+| adapters `initial`, `valis`, `deeperhistreg` | converted to the contract only. They still compute what the copied harness computed (for example VALIS and DeeperHistReg are still asked for a moving -> reference map). The native adapters of "Methods" below replace them |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | ASHLAR, the run list and the cohort launcher | not here yet |
 
@@ -140,7 +141,8 @@ failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`
 
 | variant(s) | software | run unit | native transform | how nuclei are moved |
 |---|---|---|---|---|
-| `stare_rigid`, `stare` | pinned `stare-registration` | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame |
+| `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame |
+| `stare_s128`, `stare_s256` | the same, `--opt stride=128` / `256` and nothing else (a sensitivity analysis, never primary) | pair | same | same |
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei through VALIS's own point warp; moving frame |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0 from PyPI, upstream defaults | patient | same | same |
 | `valis120_hires_*` | VALIS 1.2.0, upstream's high-resolution example | patient | same | same |
@@ -465,6 +467,44 @@ peak memory, GPU-hours with the device named, and total time to the registered i
 7. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
    confines cores are unverified.
 
+### STARE (`methods/stare.py`)
+
+One `stare register` process per pair, on the slides as the case has them
+(`ref_image`, `mov_image`), with `--nuclear-index` = the case's `mov_channel` (a case whose
+reference has its nuclei at another index is refused: the command takes one index).
+
+- **Parameters.** `TIER_HIGH_STRIDE64` = the `high` row of the STARE table in
+  `lib/RegPresets.groovy` (`tile` 2048, `halo` 256, `out_tile` 1024, `max_dim` 1024) plus
+  `stride` 64, all five passed explicitly; a test reads the row from that file. The two
+  STITCH flags the pipeline always passes are passed too: `--pixel-size` (the case's) and
+  `--channel-names` (the case's, else the names in the moving slide's header). `--workers`
+  is the allocation; `info["cpu_count"]` records what COARSE's FFTs can use regardless.
+- **Stride.** `--opt stride=<64|128|256>`; unset is 64; any other value fails the case.
+  With `--label stare_s128` the results are named `stare_s128_rigid` and `stare_s128`.
+  The rigid stage does not depend on the stride (COARSE is never given it and SOLVE stores
+  the anchor unchanged; `stare/cli.py:79-100`, `stare/stages/solve.py:77-89`,
+  `stare/stage_warp.py:85-87` at 1.2.1 `[PARTIAL: cli.py and stage_warp.py in full, main()
+  of stages/solve.py and stages/stitch.py, manifest.slide_entry; stages/coarse.py and
+  coarse_align.py only searched for "stride" (no match) and for the argument list]`), and a test finds `info["m0"]` and the rigid
+  row's warped nuclei identical to the last bit at stride 64 and 256. So a stride run adds
+  one result, its final variant; its `_rigid` row repeats `stare_rigid` (with another cost,
+  because both variants are yielded after SOLVE).
+- **Output.** STARE's own STITCH on the reference grid: no `origin_xy`, nothing padded
+  (0 where the moving slide has no pixels). `run.json: info.m0` is the anchor, moving px ->
+  reference px.
+
+Selfcheck per stride (2026-10-09, macOS arm64, `--opt workers=4`, `stare` 1.2.1), every one
+`ok` with no failed block, `stare_rigid` `no_stage_image`:
+
+| stride | pair | dots found | residual p50 / p95 px | mean x / y px | worst block p95 | worst block mean |
+|---|---|---|---|---|---|---|
+| 64 | 2048 x 2560 | 537 / 537 | 0.055 / 0.090 | +0.003 / +0.002 | 0.104 (20 blocks) | 0.020 |
+| 64 | 4096 x 5120 | 2202 / 2202 | 0.057 / 0.091 | 0.000 / 0.000 | 0.108 (80 blocks) | 0.025 |
+| 128 | 2048 x 2560 | 537 / 537 | 0.055 / 0.089 | +0.001 / +0.001 | 0.096 (20 blocks) | 0.016 |
+| 128 | 4096 x 5120 | 2200 / 2200 | 0.058 / 0.093 | -0.001 / -0.001 | 0.107 (80 blocks) | 0.022 |
+| 256 | 2048 x 2560 | 539 / 539 | 0.058 / 0.089 | -0.001 / +0.001 | 0.098 (20 blocks) | 0.021 |
+| 256 | 4096 x 5120 | 2200 / 2200 | 0.056 / 0.089 | -0.001 / 0.000 | 0.103 (80 blocks) | 0.022 |
+
 ## Tests
 
 ```bash
@@ -472,4 +512,5 @@ python -m pytest benchmarks/tests/regbench -q --basetemp=/tmp/rb_<unique>
 ```
 
 `test_external_methods.py` skips where VALIS or DeeperHistReg is not importable.
-`test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair.
+`test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
+`test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.
