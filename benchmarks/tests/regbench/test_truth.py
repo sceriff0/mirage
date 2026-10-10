@@ -113,6 +113,17 @@ def test_probes_are_exact_pairs(reduced):
         # the case says what its own true map does: how much moves, and no fold
         field = case.extra["field"]
         assert field["fold_pct"] == 0.0 and field["min_jacobian"] > 0.05
+        # and how its seed was settled: here the seed asked for did not fold
+        if case.family == "seams":  # discontinuous on purpose: the rule does not apply
+            assert "reseed" not in case.extra
+        else:
+            settled = case.extra["reseed"]
+            assert settled["skipped"] == []
+            assert (
+                settled["seed"] == settled["seed_asked"] == case.extra["spec"]["seed"]
+            )
+            assert settled["min_jacobian"] > settled["min_jacobian_required"] == 0.05
+            assert settled["lattice_px"] == 4
         if case.family == "rigid":
             assert field["moved_frac_over_1um"] == 0.0
         if case.family == "bumps25":  # the reduced copy keeps the frozen density
@@ -616,6 +627,235 @@ def test_semisynth_rounds_share_the_untouched_window(real_like, tmp_path):
         g = synthetic.forward_map(case.extra["spec"])
         np.testing.assert_allclose(g(pts["truth_mov"]), pts["truth_ref"], atol=1e-9)
         assert case.extra["variant"] == "same" and case.extra["in_stare_model"] is False
+
+
+# ── a case whose true map folds is re-seeded (R3.11 e) ─────────────────────────
+CONTINUOUS = ("rigid", "wave", "grid", "multiscale", "bumps100", "bumps25")
+# Found by measuring 240 seeds of the frozen bumps25 field (8192 px, 4000 bumps): at this
+# one the Jacobian determinant of the true map is negative at lattice points.
+FOLDING_SEED = 3000044
+
+
+def test_the_spec_says_which_cases_are_reseeded_and_how():
+    rule = SPEC["reseed"]
+    assert SPEC["version"] == 3
+    assert rule["lattice_px"] == 4 and rule["min_jacobian"] == 0.05
+    assert rule["max_tries"] >= 4
+    # every family whose field is continuous; `seams` jumps on purpose and is left alone
+    assert tuple(rule["families"]) == CONTINUOUS
+    assert [f["name"] for f in SPEC["families"] if f["field"] != "seams"] == list(
+        CONTINUOUS
+    )
+    for name in CONTINUOUS:
+        assert truth.reseed_rule(SPEC, name) == {
+            k: rule[k] for k in ("lattice_px", "min_jacobian", "step", "max_tries")
+        }
+        assert truth.case_extra(SPEC, name, True)["reseed"] == truth.reseed_rule(
+            SPEC, name
+        )
+    assert truth.reseed_rule(SPEC, "seams") is None
+    assert truth.case_extra(SPEC, "seams", True)["reseed"] is None
+    # "the next seed" must be no case's asked seed: the step is above every seed a seed
+    # rule can ask for, so seed + t * step lies outside them all, and two re-seeded cases
+    # meet only if they asked for the same seed.
+    semi = SPEC["semisynth"]
+    assert "crc32(patient) % 100000" in semi["seed_rule"]
+    largest = max(
+        semi["seed"] + 1000 * 99_999 + 100 * 9 + 10 * 9 + 9,
+        max(c["seed"] for c in synthetic.truth_suite().values()),
+    )
+    assert largest < 1.1e8 < rule["step"]
+
+
+def test_a_seed_that_folds_is_skipped_for_the_next_that_does_not():
+    """The real thing, at the frozen size: a seed measured to fold is not used."""
+    asked = {**synthetic.truth_suite()["blob_bumps25_shift"], "seed": FOLDING_SEED}
+    assert synthetic.field_stats(asked, PX, step=4)["min_jacobian"] < 0  # it folds
+    used, settled = synthetic.settle(asked, PX)
+    step = SPEC["reseed"]["step"]
+    assert used["seed"] == FOLDING_SEED + step == settled["seed"]
+    assert settled["seed_asked"] == FOLDING_SEED
+    (skipped,) = settled["skipped"]
+    assert skipped["seed"] == FOLDING_SEED and skipped["min_jacobian"] < 0
+    assert settled["min_jacobian"] > 0.05
+    assert synthetic.field_stats(used, PX, step=4)["min_jacobian"] == pytest.approx(
+        settled["min_jacobian"]
+    )
+    # nothing but the seed changed, and the asked spec was not edited in place
+    assert {k for k in used if used[k] != asked[k]} == {"seed"}
+    assert asked["seed"] == FOLDING_SEED
+    # deterministic: the same question has the same answer
+    assert synthetic.settle(asked, PX) == (used, settled)
+
+
+def _fold_for(monkeypatch, bad_seeds):
+    """Make the given seeds measure as folding (and every other one as fine)."""
+    seen = []
+
+    def stats(spec, pixel_size_um, step=8, threshold_um=1.0):
+        seen.append((spec["seed"], step))
+        low = -0.2 if spec["seed"] in bad_seeds else 0.4
+        return {
+            "moved_frac_over_1um": 0.2,
+            "min_jacobian": low,
+            "fold_pct": 1.0 if low <= 0 else 0.0,
+        }
+
+    monkeypatch.setattr(synthetic, "field_stats", stats)
+    return seen
+
+
+def test_the_reseed_rule_step_by_step(monkeypatch):
+    rule = truth.reseed_rule(SPEC, "bumps25")
+    step = rule["step"]
+    job = {**synthetic.truth_suite(n=1024)["blob_bumps25_rot"]}
+    seed = job["seed"]
+    # two folding seeds in a row: both are skipped, in order, and recorded
+    seen = _fold_for(monkeypatch, {seed, seed + step})
+    used, settled = synthetic.settle(job, PX)
+    assert used["seed"] == seed + 2 * step
+    assert [s["seed"] for s in settled["skipped"]] == [seed, seed + step]
+    assert seen == [(seed, 4), (seed + step, 4), (seed + 2 * step, 4)]
+    assert settled == {
+        "seed_asked": seed,
+        "seed": seed + 2 * step,
+        "skipped": [
+            {"seed": seed, "min_jacobian": -0.2},
+            {"seed": seed + step, "min_jacobian": -0.2},
+        ],
+        "step": step,
+        "lattice_px": 4,
+        "min_jacobian": 0.4,
+        "min_jacobian_required": 0.05,
+    }
+    # a seed that does not fold is used as asked, after ONE measurement
+    seen.clear()
+    used, settled = synthetic.settle({**job, "seed": seed + 7}, PX)
+    assert used["seed"] == seed + 7 and settled["skipped"] == [] and len(seen) == 1
+    # a determinant that is positive but under the margin counts as folding too
+    monkeypatch.setattr(
+        synthetic,
+        "field_stats",
+        lambda spec, px, step=8, threshold_um=1.0: {
+            "moved_frac_over_1um": 0.2,
+            "min_jacobian": 0.03 if spec["seed"] == seed else 0.4,
+            "fold_pct": 0.0,
+        },
+    )
+    assert synthetic.settle(job, PX)[0]["seed"] == seed + step
+    # every try folds: refused, never a silently folded case
+    _fold_for(monkeypatch, {seed + t * step for t in range(rule["max_tries"])})
+    with pytest.raises(SystemExit, match="fold"):
+        synthetic.settle(job, PX)
+    # a spec without the rule (the copied suites, `seams`) is not measured or changed
+    seen = _fold_for(monkeypatch, {5})
+    plain = {**synthetic._BASE, "family": "t", "seed": 5}
+    assert synthetic.settle(plain, PX) == (plain, None)
+    seams = synthetic.truth_suite(n=1024)["blob_seams_rot"]
+    assert synthetic.settle(seams, PX) == (seams, None)
+    assert seen == []
+
+
+def test_no_frozen_synthetic_case_folds():
+    """THE guard: every frozen synthetic known-truth case, at the frozen size, is made
+    with a seed whose true map does not fold. `SKIPPED` is written out so that a spec
+    change which starts skipping a seed is seen here."""
+    SKIPPED = {}  # case id -> the seeds skipped; none in the shipped spec
+    suite = synthetic.truth_suite()
+    assert len(suite) == 14
+    got = {}
+    for name, job in suite.items():
+        used, settled = synthetic.settle(job, PX)
+        if job["family"] == "seams":
+            assert settled is None and used == job
+            continue
+        assert settled["min_jacobian"] > SPEC["reseed"]["min_jacobian"], name
+        assert synthetic.field_stats(used, PX, step=8)["fold_pct"] == 0.0, name
+        if settled["skipped"]:
+            got[name] = [s["seed"] for s in settled["skipped"]]
+    assert got == SKIPPED
+
+
+def test_a_prepared_case_is_made_with_the_settled_seed(monkeypatch, tmp_path):
+    """End to end, both datasets: the slide, the probes and case.json all come from the
+    seed that does not fold, and the skipped seed is in the case's metadata."""
+    step = SPEC["reseed"]["step"]
+    name, job = (
+        "blob_bumps25_shift",
+        synthetic.truth_suite(n=1024)["blob_bumps25_shift"],
+    )
+    asked = job["seed"]
+    real = synthetic.field_stats
+
+    def stats(spec, pixel_size_um, step=8, threshold_um=1.0):
+        got = real(spec, pixel_size_um, step=step, threshold_um=threshold_um)
+        if spec["seed"] == asked:
+            got = {**got, "min_jacobian": -0.01, "fold_pct": 0.1}
+        return got
+
+    monkeypatch.setattr(synthetic, "field_stats", stats)
+    case = load_case(synthetic.prepare_one(tmp_path / "cases", name, job))
+    settled = case.extra["reseed"]
+    assert settled["seed_asked"] == asked and settled["seed"] == asked + step
+    assert [s["seed"] for s in settled["skipped"]] == [asked]
+    assert case.extra["spec"]["seed"] == asked + step
+    assert case.extra["field"]["fold_pct"] == 0.0  # measured on the map really used
+    pts = load_points(case)
+    g = synthetic.forward_map(case.extra["spec"])
+    np.testing.assert_allclose(g(pts["truth_mov"]), pts["truth_ref"], atol=1e-9)
+    wrong = synthetic.forward_map(job)(pts["truth_mov"])
+    assert np.abs(wrong - pts["truth_ref"]).max() > 1.0  # not the seed asked for
+    assert job["seed"] == asked  # the plan is not edited
+
+
+def test_a_semisynthetic_case_is_reseeded_too(monkeypatch, real_like, tmp_path):
+    step = SPEC["reseed"]["step"]
+    a = semisynth_args(real_like, tmp_path / "cases", name="052", truth=True)
+    jobs, noise = semisynth.plan_truth(a, n=512)
+    (name, job, origin), (other, job2, origin2) = [
+        j for j in jobs if j[1]["patient"] == "052_w0_bumps25"
+    ]
+    assert job["reseed"] == truth.reseed_rule(SPEC, "bumps25")
+    _fold_for(monkeypatch, {job["seed"]})
+    case = load_case(semisynth.prepare_one(a.cases, name, job, a, origin, noise, 0.5))
+    assert case.extra["reseed"]["seed"] == job["seed"] + step
+    assert [s["seed"] for s in case.extra["reseed"]["skipped"]] == [job["seed"]]
+    assert case.extra["spec"]["seed"] == job["seed"] + step
+    pts = load_points(case)
+    g = synthetic.forward_map(case.extra["spec"])
+    np.testing.assert_allclose(g(pts["truth_mov"]), pts["truth_ref"], atol=1e-9)
+    # the patient's other round keeps the seed it asked for
+    kept = load_case(
+        semisynth.prepare_one(a.cases, other, job2, a, origin2, noise, 0.5)
+    )
+    assert kept.extra["reseed"]["skipped"] == []
+    assert kept.extra["spec"]["seed"] == job2["seed"]
+    assert case.ref_nuclear == kept.ref_nuclear  # still one reference for the patient
+    # `seams` is left alone
+    (sname, sjob, sorigin) = [j for j in jobs if j[1]["patient"] == "052_w0_seams"][0]
+    assert sjob["reseed"] is None
+    seams = load_case(
+        semisynth.prepare_one(a.cases, sname, sjob, a, sorigin, noise, 0.5)
+    )
+    assert "reseed" not in seams.extra
+
+
+def test_reseeded_cases_are_named_in_the_summary(reduced, tmp_path):
+    src = [c for c in reduced[1] if c.family == "bumps25"][0]
+    root, out = tmp_path / "cases", tmp_path / "out"
+    _hashed_copy(src, root, "asked", "a" * 64)
+    score(root, out, ["synthetic"])
+    assert "re-seeded" not in (out / "tables" / "summary.md").read_text()
+    dst = root / "synthetic" / "moved"
+    shutil.copytree(src.dir, dst)
+    rec = json.loads((dst / "case.json").read_text())
+    rec["case_id"] = "moved"
+    rec["extra"]["truth_spec_sha256"] = "a" * 64
+    rec["extra"]["reseed"]["skipped"] = [{"seed": 1, "min_jacobian": -0.1}]
+    (dst / "case.json").write_text(json.dumps(rec))
+    score(root, out, ["synthetic"])
+    text = (out / "tables" / "summary.md").read_text()
+    assert "1 case(s) were re-seeded" in text and "synthetic/moved (1 seed)" in text
 
 
 # ── the freeze ────────────────────────────────────────────────────────────────

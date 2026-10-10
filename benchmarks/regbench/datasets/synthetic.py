@@ -34,7 +34,9 @@ inside a box, so the tissue need not start at the origin; the selfcheck's pair u
 tissue and the reference slide, which every round of the patient shares (one file), and
 ``seed`` fixes that round's deformation and noise. ``truth_suite`` builds the frozen
 known-truth cases of ``truth_spec.json`` this way: one patient per deformation family, two
-rounds each (``regbench.truth``).
+rounds each (``regbench.truth``). The ``seed`` of such a plan is the seed ASKED for:
+``prepare_one`` first settles it (``settle``), skipping a seed whose true map folds, and
+``case.json`` holds the seed used (``extra.spec.seed``) and the record (``extra.reseed``).
 """
 
 from __future__ import annotations
@@ -456,6 +458,51 @@ def field_stats(spec, pixel_size_um, step=8, threshold_um=1.0):
     }
 
 
+def settle(spec, pixel_size_um):
+    """The spec a known-truth case is really made with, and the record of how its seed
+    was settled: ``(spec, record)``.
+
+    A spec carrying a re-seed rule (``spec["reseed"]``, from ``truth_spec.json`` through
+    ``truth.case_extra``) is measured before anything is drawn: the smallest Jacobian
+    determinant of its true map on a lattice every ``lattice_px`` px. Above
+    ``min_jacobian`` the seed is used. Otherwise the map folds, or comes closer to
+    folding than a lattice can tell apart from it, and the seed is skipped for
+    ``seed + step``, up to ``max_tries`` seeds. The answer depends on the spec alone, so
+    every process that prepares the case settles on the same seed.
+
+    The record: ``seed_asked``, ``seed`` (the one used), ``skipped`` (each skipped seed
+    with its determinant, in order), ``step``, ``lattice_px``, ``min_jacobian`` (of the
+    map used) and ``min_jacobian_required``. A spec without the rule comes back as it
+    is, with None.
+    """
+    rule = spec.get("reseed")
+    if not rule:
+        return spec, None
+    asked, skipped = int(spec["seed"]), []
+    for attempt in range(int(rule["max_tries"])):
+        seed = asked + attempt * int(rule["step"])
+        trial = {**spec, "seed": seed}
+        low = field_stats(trial, pixel_size_um, step=rule["lattice_px"])["min_jacobian"]
+        if low > rule["min_jacobian"]:
+            return trial, {
+                "seed_asked": asked,
+                "seed": seed,
+                "skipped": skipped,
+                "step": int(rule["step"]),
+                "lattice_px": rule["lattice_px"],
+                "min_jacobian": low,
+                "min_jacobian_required": rule["min_jacobian"],
+            }
+        skipped.append({"seed": seed, "min_jacobian": low})
+    raise SystemExit(
+        f"{spec.get('family')} case with seed {asked}: the true map folds (smallest "
+        f"Jacobian determinant not above {rule['min_jacobian']} on a "
+        f"{rule['lattice_px']} px lattice) for all {rule['max_tries']} seeds tried: "
+        + ", ".join(f"{s['seed']} ({s['min_jacobian']:.3f})" for s in skipped)
+        + ". That is not chance: the family's amplitude or count makes it fold."
+    )
+
+
 def known_truth_field(spec, pixel_size_um):
     """``{"field": field_stats}`` for a known-truth case (one with a pose), else nothing:
     each such case says in its own ``case.json`` how much of it moves and that its true
@@ -671,6 +718,8 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     if (d / "case.json").exists() and not force:
         return d
     d.mkdir(parents=True, exist_ok=True)
+    # a known-truth case whose true map folds is made with the next seed that does not
+    spec, reseed = settle(spec, PIXEL_SIZE_UM)
     patient = spec.get("patient")
     ref_p, mov_p = d / "ref.ome.tif", d / "mov.ome.tif"
     if patient:
@@ -714,6 +763,7 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
             "in_stare_model": spec.get("in_stare_model", ""),
             "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
             **known_truth_field(spec, PIXEL_SIZE_UM),
+            **({"reseed": reseed} if reseed else {}),
         },
     )
     g = forward_map(spec)

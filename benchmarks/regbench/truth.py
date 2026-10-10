@@ -19,6 +19,16 @@ SHA-256 of its own content; ``prepare`` refuses a file whose hash does not match
 the hash into every ``case.json`` it makes from it, and ``score`` refuses to mix cases of
 two hashes. Families are reported one by one and never pooled.
 
+**No case folds.** A true map that folds puts two moving points on one reference
+position: the "truth" of a probe there is not a registration any method could return. The
+spec's ``reseed`` block is the rule that keeps such a case out: a known-truth case of a
+continuous family is made with the seed its seed rule asks for only when the smallest
+Jacobian determinant of its map, on a lattice every ``lattice_px`` px, is above
+``min_jacobian``; otherwise the seed is skipped for ``seed + step``, and so on
+(``datasets.synthetic.settle``). The seed used, the seed asked for and every skipped seed
+with its determinant are written into the case (``case.json``: ``extra.reseed``). The
+``seams`` family is discontinuous on purpose and is not under the rule.
+
 **The patients.** The spec names no patient. The semi-synthetic cases are built from the
 cohort's own list (``prepare semisynth --truth --manifest``), or a declared subset of it,
 and the list used is written beside the cases as ``truth_patients.json``: the ids, the
@@ -138,12 +148,26 @@ def pose_kwargs(spec, name):
     raise KeyError(f"unknown pose {name!r}; expected one of {pose_names(spec)}")
 
 
+RESEED_KEYS = ("lattice_px", "min_jacobian", "step", "max_tries")
+
+
+def reseed_rule(spec, family_name):
+    """How a case of this family is re-seeded when its true map folds (the spec's
+    ``reseed`` block), or None for a family the rule does not cover (``seams``)."""
+    rule = spec.get("reseed") or {}
+    if family_name not in rule.get("families", ()):
+        return None
+    return {k: rule[k] for k in RESEED_KEYS}
+
+
 def case_extra(spec, family_name, frozen):
     """What a known-truth case records about the spec. The hash is written only for a case
-    made exactly as the spec says (``frozen``); a reduced copy for a test carries none."""
+    made exactly as the spec says (``frozen``); a reduced copy for a test carries none.
+    The re-seed rule goes with every copy, reduced or not."""
     return {
         "in_stare_model": in_stare_model(spec, family_name),
         "truth_spec_sha256": spec[HASH_KEY] if frozen else "",
+        "reseed": reseed_rule(spec, family_name),
     }
 
 

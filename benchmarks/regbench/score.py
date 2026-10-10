@@ -790,7 +790,7 @@ TRUTH_COLUMNS = (
 )
 
 
-def truth_header(spec_hashes, record, prepared, folded=()):
+def truth_header(spec_hashes, record, prepared, folded=(), reseeded=()):
     """The lines that say what the known-truth numbers rest on: the frozen spec, and the
     cohort patients the semi-synthetic cases were built from."""
     lines = []
@@ -817,6 +817,14 @@ def truth_header(spec_hashes, record, prepared, folded=()):
             f"{len(folded)} case(s) were made by a true map that folds somewhere "
             "(`extra.field.fold_pct` > 0 in their case.json): "
             + ", ".join(folded)
+            + "."
+        )
+    if reseeded:
+        lines.append(
+            f"{len(reseeded)} case(s) were re-seeded: the true map of the seed their "
+            "seed rule asks for folds, so the next seed that does not was used "
+            "(`extra.reseed` in their case.json has the skipped seeds): "
+            + ", ".join(reseeded)
             + "."
         )
     return lines
@@ -1003,7 +1011,7 @@ def score(
     """
     owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
     variants_of = {}
-    jobs, hashes, lists, prepared, folded = [], {}, {}, set(), []
+    jobs, hashes, lists, prepared, folded, reseeded = [], {}, {}, set(), [], []
     for ds in datasets or DATASETS:
         cs = [
             c for c in list_cases(cases_root, ds) if c.case_id.startswith("dev_") == dev
@@ -1017,6 +1025,9 @@ def score(
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
                 if (c.extra.get("field") or {}).get("fold_pct", 0) > 0:
                     folded.append(f"{ds}/{c.case_id}")
+                skipped = (c.extra.get("reseed") or {}).get("skipped") or []
+                if skipped:
+                    reseeded.append(f"{ds}/{c.case_id} ({len(skipped)} seed)")
                 if c.extra.get("truth_patients_sha256"):
                     lists.setdefault(
                         (ds, c.extra["truth_patients_sha256"]), f"{ds}/{c.case_id}"
@@ -1114,7 +1125,7 @@ def score(
     )
     for name, rows in tis.items():
         write_csv(tables / f"{name}.csv", rows)
-    known = truth_header(list(hashes), patients, prepared, folded)
+    known = truth_header(list(hashes), patients, prepared, folded, reseeded)
     text = summary_markdown(
         summary,
         fails,

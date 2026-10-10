@@ -206,6 +206,8 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
     if (d / "case.json").exists() and not force:
         return d
     d.mkdir(parents=True, exist_ok=True)
+    # a known-truth case whose true map folds is made with the next seed that does not
+    spec, reseed = synthetic.settle(spec, px)
     n = spec["n"]
     patient = spec.get("patient")
     ref_src = Source(a.image, a.channel)
@@ -265,6 +267,7 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
             "truth_patient": spec.get("truth_patient", ""),
             "truth_patients_sha256": spec.get("truth_patients_sha256", ""),
             **synthetic.known_truth_field(spec, px),
+            **({"reseed": reseed} if reseed else {}),
         },
     )
     return write_case(

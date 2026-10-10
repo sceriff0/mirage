@@ -407,13 +407,51 @@ Neither synthetic case folds, and the scorer's own `fold_pct` of the true map is
 both families. For `bumps25` a fold is a rare coincidence of bumps, not a matter of the
 count: 1 seed of 182 at 4000 bumps had a negative determinant at one point of a 4.2
 million point lattice, and so had 1 seed of 100 at 3400 bumps (0 of 100 at 3600 and
-3800), so a lower count inside the 20 to 30 % range does not remove it. The seeds of the
-semi-synthetic cases depend on the patients' ids, so each known-truth case records what
-its own map does (`case.json`: `extra.field` = `moved_frac_over_1um`, `min_jacobian`,
-`fold_pct` on a lattice every 8 px), and the summary's known-truth header lists any case
-whose true map folds. The test
+3800), so a lower count inside the 20 to 30 % range does not remove it. Each known-truth
+case records what its own map does (`case.json`: `extra.field` = `moved_frac_over_1um`,
+`min_jacobian`, `fold_pct` on a lattice every 8 px). The test
 `test_bumps_move_about_a_quarter_of_the_window_without_folding` measures both families at
 the frozen size and holds them to the fraction the spec records, within 0.02.
+
+**A case whose true map folds is re-seeded** (spec version 3, the `reseed` block; the
+user's ruling of 2026-10-11). Where a map folds, two moving points have one true
+position, and no registration can be right there. The seeds of the semi-synthetic cases
+depend on the patients' ids, so such a seed cannot be ruled out in advance; it is skipped
+when the case is made:
+
+- Before anything is drawn, `prepare` measures the smallest Jacobian determinant of the
+  case's true map (pose and field) on a lattice every 4 px over the whole window
+  (`synthetic.settle`). Above 0.05 the seed its seed rule asks for is used. Otherwise it
+  is skipped for `seed + 1000000007`, then `seed + 2 x 1000000007`, up to 8 seeds; if all
+  fold the case is refused, never made folded. The step is a prime above every seed a
+  seed rule can ask for (the largest is under 1.1e8), so a re-seeded case never takes the
+  seed another case asks for.
+- The rule depends on the case's spec alone, so every array task that prepares the case
+  settles on the same seed. The seed used replaces the asked one everywhere (field, noise,
+  probe draw). `case.json` holds the seed used (`extra.spec.seed`) and the record:
+  `extra.reseed` = `seed_asked`, `seed`, `skipped` (each skipped seed with its
+  determinant), `step`, `lattice_px`, `min_jacobian`, `min_jacobian_required`. The
+  summary's known-truth header names every re-seeded case, and still lists any case whose
+  recorded `fold_pct` is above 0.
+- **Why a margin, and why 4 px.** A determinant at or below 0 is a fold; a lattice only
+  sees one where it has a point. Measured on 240 `bumps25` seeds at 8192 px (seeds
+  3000000 to 3000239, 2026-10-11): the smallest determinant fell by 0.008 to 0.046
+  (median 0.022) from an 8 px to a 4 px lattice, and on four seeds near zero by 0.006 to
+  0.010 more at 2 px. Two seeds that an 8 px lattice passes at 0.018 fold at 4 px. A
+  case kept above 0.05 at 4 px therefore has no fold between lattice points. Of the 240
+  seeds 1 was at or below 0 at 4 px and 5 (2 %) were not above 0.05, so about one
+  `bumps25` case in fifty is re-seeded.
+- **Which families.** Every continuous one: `rigid`, `wave`, `grid`, `multiscale`,
+  `bumps100`, `bumps25`. Only `bumps25` has been seen to come near (the others' smallest
+  determinant, on the frozen synthetic cases at 4 px: 0.90 to 1.0, and 0.46 and 0.48 for
+  `bumps100`; 0.29 to 0.67 over 60 further `bumps100` seeds), so for them the rule is a
+  guarantee that costs one measurement. **`seams` is not under the rule**: it is
+  discontinuous on purpose, and a tile that shifts towards its neighbour overlaps it by
+  design; a lattice across a seam reads that as a negative determinant on almost every
+  seed (the two frozen cases: -0.85 and -1.0 at 4 px).
+- **None of the 14 frozen synthetic cases is re-seeded** (the 12 under the rule: 0.25 to
+  1.0); the test `test_no_frozen_synthetic_case_folds` measures all of them at 8192 px
+  and holds the list of skipped seeds (empty) written out.
 
 A reduced copy (a test, a smoke run at 1024 px) keeps the bumps' density, not their
 number: 4000 x (n / 8192)^2. A bump is summed out to 8 sigma and is exactly zero beyond

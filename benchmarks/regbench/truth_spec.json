@@ -1,7 +1,7 @@
 {
- "version": 2,
- "frozen_on": "2026-10-10",
- "what": "The known-truth cases of regbench: deformation families, amplitudes, scales, poses, window, probes and thresholds. Frozen before any method is scored; see truth.py. Version 2 (rulings of 2026-10-09, R3.6): seam block 1950 px, denser bumps, no patient named.",
+ "version": 3,
+ "frozen_on": "2026-10-11",
+ "what": "The known-truth cases of regbench: deformation families, amplitudes, scales, poses, window, probes, thresholds and the re-seed rule. Frozen before any method is scored; see truth.py. Version 3 (ruling of 2026-10-11, R3.11 e): a case whose true map folds is re-seeded. Version 2 (rulings of 2026-10-09, R3.6): seam block 1950 px, denser bumps, no patient named.",
  "n_px": 8192,
  "pixel_size_um": 0.325,
  "poses": [
@@ -63,7 +63,7 @@
    "sigma_px": 100.0,
    "count": 120,
    "in_stare_model": true,
-   "note": "the benchmark's choice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 24 % of the window moves by more than 1 um (0.218 to 0.250 over 82 seeds); no fold in any of them (smallest Jacobian determinant 0.37)",
+   "note": "the benchmark's choice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 24 % of the window moves by more than 1 um (0.218 to 0.250 over 82 seeds); no fold in any of them (smallest Jacobian determinant 0.37); under the reseed rule like every continuous family",
    "measured_moved_frac_over_1um": 0.24
   },
   {
@@ -72,7 +72,7 @@
    "sigma_px": 25.0,
    "count": 4000,
    "in_stare_model": false,
-   "note": "outside STARE's model: finer than its vector lattice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 23 % of the window moves by more than 1 um (0.229 to 0.237 over 182 seeds); the two synthetic cases do not fold (smallest Jacobian determinant 0.25 and 0.32); about 1 seed in 180 has a fold at one point, so every case records its own (case.json: extra.field)",
+   "note": "outside STARE's model: finer than its vector lattice; each bump peaks at 0.2 to 0.6 sigma. Measured on the generated field at n_px: 23 % of the window moves by more than 1 um (0.229 to 0.237 over 182 seeds); the two synthetic cases do not fold (smallest Jacobian determinant 0.25 and 0.32 on a 4 px lattice). A fold is a rare coincidence of bumps (1 seed of 240 on a 4 px lattice, see reseed); such a seed is skipped by the reseed rule",
    "measured_moved_frac_over_1um": 0.23
   },
   {
@@ -92,6 +92,22 @@
    1024,
    2048
   ]
+ },
+ "reseed": {
+  "families": [
+   "rigid",
+   "wave",
+   "grid",
+   "multiscale",
+   "bumps100",
+   "bumps25"
+  ],
+  "lattice_px": 4,
+  "min_jacobian": 0.05,
+  "step": 1000000007,
+  "max_tries": 8,
+  "rule": "a case of a listed family is made with the seed its seed_rule asks for only if the smallest Jacobian determinant of its true map (pose and field; central differences on a lattice every lattice_px px over the whole window) is above min_jacobian. Otherwise that seed is skipped and seed + step is measured, then seed + 2 step, up to max_tries seeds; if all fold the case is refused. The case records the seed asked for, the seed used and every skipped seed with its determinant (case.json: extra.reseed). The seed used replaces the asked one everywhere: field, noise and probe draw",
+  "note": "a determinant <= 0 is a fold. The margin is what a lattice cannot see between its points: over 240 bumps25 seeds at n_px (seeds 3000000 to 3000239, measured 2026-10-11) the smallest determinant fell by 0.008 to 0.046 (median 0.022) from an 8 px to a 4 px lattice, and on four seeds near zero by 0.006 to 0.010 more at 2 px, so above 0.05 at 4 px no fold is left between lattice points. Of those 240 seeds 1 had a determinant <= 0 at 4 px and 5 (2 %) were not above 0.05; all 5 would be skipped. The 12 frozen synthetic cases of the listed families are far above it (0.25 to 1.0) and none is re-seeded. seams is discontinuous on purpose (a negative jump at a seam is an overlap by design) and is not listed. step is a prime above every seed a seed_rule can ask for (the largest is under 1.1e8), so a re-seeded case never takes the seed another case asks for, and two re-seeded cases share a seed only if they asked for the same one"
  },
  "probes": {
   "max": 20000,
@@ -117,5 +133,5 @@
   "windows": "the windows_per_patient non-overlapping n_px windows with most tissue (semisynth.pick_windows)",
   "seed_rule": "seed + 1000 * (crc32(patient) % 100000) + 100 * window + 10 * family index + pose index"
  },
- "sha256": "719eca876107a49b9a70a6db357ee287e69ed7e04838d474c2c3358b5c814539"
+ "sha256": "6da2faa7525e2377744440e4579af08306178eb6b2c8510b2c7d1bd7502d1eb6"
 }
