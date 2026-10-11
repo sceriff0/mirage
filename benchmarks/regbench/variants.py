@@ -295,6 +295,50 @@ def run_variants():
     return {run_name(r): list(variants_of(r)) for r in RUNS}
 
 
+NO_RECORD = "no selfcheck record"
+
+
+def row_checks(selfcheck_dir, mine=None):
+    """``{result name: what the selfcheck says of THAT row}`` for every run.
+
+    A run's gate reads the rows that gate it; the others may never have been compared
+    with an image (``no_stage_image``: a stage the method's writer cannot draw, such
+    as ``stare_rigid``), and a run gated by another run's selfcheck has no check of
+    its own at all. Tables carry this beside every number (column ``selfcheck_row``):
+
+    ``ok`` / ``inconsistent`` / ``not_checked`` / ``crashed``   this row's own comparison
+    ``no_stage_image``            NEVER CHECKED: no image of this stage exists
+    ``via <run>: <status>``       not checked itself: its run is gated by ``<run>``'s
+    ``no selfcheck record``       nothing was found (a run outside the launcher)
+
+    ``mine(record)`` says whether a record belongs to what is being scored."""
+    import json
+    from pathlib import Path
+
+    out = {}
+    root = Path(selfcheck_dir) if selfcheck_dir else None
+    for run in RUNS:
+        name = run_name(run)
+        gate = gated_by(name)
+        record = None
+        if root is not None:
+            try:
+                record = json.loads((root / gate / "selfcheck.json").read_text())
+            except (OSError, ValueError):
+                record = None
+        if record is not None and mine is not None and not mine(record):
+            record = None
+        statuses = (record or {}).get("variants") or {}
+        for variant in variants_of(run):
+            if record is None:
+                out[variant] = NO_RECORD
+            elif gate != name:
+                out[variant] = f"via {gate}: {record.get('status', 'not_checked')}"
+            else:
+                out[variant] = statuses.get(variant, NO_RECORD)
+    return out
+
+
 def active_runs():
     """The runs that are launched and expected: ``RUNS`` without the paused ones."""
     return tuple(r for r in RUNS if r.active)

@@ -129,7 +129,8 @@ def test_sizes_are_the_ones_each_method_needs():
     assert sc.sizes_for("deeperhistreg_gpu") == sc.SIZES["deeperhistreg"]
     assert sc.sizes_for("deeperhistreg_hr_fluo_cpu") == sc.SIZES["deeperhistreg"]
     assert "deeperhistreg_hr" not in sc.SIZES
-    ((ref_hw, mov_hw),) = sc.SIZES["deeperhistreg"]
+    (ref_hw, mov_hw), swapped = sc.SIZES["deeperhistreg"]
+    assert swapped == (mov_hw, ref_hw)  # the same canvases, the reference padded
     assert min(ref_hw) > 20480 and min(mov_hw) > 20480
     assert all(v % 20 == 0 for v in (*ref_hw, *mov_hw))
 

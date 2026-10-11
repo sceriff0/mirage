@@ -156,6 +156,12 @@ SEAM_MARGIN_PX = (
 )
 DOT_MARGIN_PX = 8.0  # the selfcheck's dots are 7 px across
 MIN_SHIFTED_BLOCKS = 0.10  # below it the selfcheck cannot see a wrong sign or order
+# A block counts as shifted only when its shift is at least this long. A wrong sign or
+# block order then moves a dot by at least 1 px, 2.5 x the selfcheck's 0.40 px gate; a
+# shift under 0.1 px (PALOM fills rejected blocks from a regression, which rarely gives
+# exactly zero) would pass with its sign reversed.
+MIN_SHIFT_PX = 0.5
+MASK_FACTOR = 3.2  # the selfcheck's seams cap over the geometric share (1024 px blocks)
 MASKS = ("seams",)
 PREREAD = ("auto", "0", "1")
 CLOSED_FILE = "closed file"
@@ -544,6 +550,8 @@ def describe(geo, original_shifts):
         "n_blocks_replaced": int(replaced.sum()),
         "integer_shifts": float(whole[kept].mean()) if kept.any() else float("nan"),
         "shift_nonzero_fraction": float((length > 0).mean()),
+        # the share the selfcheck's "too little tested" guard reads (MIN_SHIFT_PX)
+        "shift_meaningful_fraction": float((length >= MIN_SHIFT_PX).mean()),
         "shift_px_p50": pct(length, 50),
         "shift_px_p95": pct(length, 95),
         "shift_px_max": float(length.max()) if len(length) else float("nan"),
@@ -859,20 +867,41 @@ def SELFCHECK_MASK(info, mask):
     return lambda xy: on_seam(geo, xy, xy, DOT_MARGIN_PX)
 
 
+def SELFCHECK_MASK_MAX(info, mask, frozen):
+    """The largest share of the dots ``--mask seams`` may hide on this run.
+
+    The selfcheck's frozen cap (0.10) is 3.2 x the share the seams of 1024 px blocks hold
+    when EVERY block edge is one (1 - (1 - 16/1024)^2 = 0.031: a band ``DOT_MARGIN_PX``
+    either side). The band is 16 px whatever the block, so the same factor is applied to
+    the blocks this run really has: 0.05 at the cohort's 2048 px, more on the small
+    blocks a test uses. Never above 0.70."""
+    blocks = (info or {}).get("blocks")
+    if not blocks:
+        return frozen
+    geo = Geometry.from_info(blocks)
+    share = 1.0
+    for edges in (geo.edges_y, geo.edges_x):
+        size = float(np.median(np.diff(edges)))
+        share *= max(0.0, 1.0 - 2.0 * DOT_MARGIN_PX / size)
+    return min(0.70, MASK_FACTOR * (1.0 - share))
+
+
 def SELFCHECK_NOT_CHECKED(info, variant):
     """Why an ``ok`` comparison of ``variant`` proves too little, or None.
 
     With (almost) every block shift at zero the block map IS the affine map: a swapped
-    axis, a wrong sign or a wrong block order would pass unseen."""
+    axis, a wrong sign or a wrong block order would pass unseen. "At zero" means shorter
+    than ``MIN_SHIFT_PX``: a regression-filled shift of a few hundredths of a pixel is
+    not zero and tests nothing."""
     if variant != VARIANTS[1]:
         return None
-    moved = (info or {}).get("shift_nonzero_fraction")
+    moved = (info or {}).get("shift_meaningful_fraction")
     if moved is None or moved >= MIN_SHIFTED_BLOCKS:
         return None
     return (
-        f"{100 * moved:.0f} % of the blocks have a non-zero shift (under "
-        f"{100 * MIN_SHIFTED_BLOCKS:.0f} %): the block map equals the affine map here, "
-        "so its sign and block order were not tested"
+        f"{100 * moved:.0f} % of the blocks have a shift of at least {MIN_SHIFT_PX} px "
+        f"(under {100 * MIN_SHIFTED_BLOCKS:.0f} %): the block map is the affine map to "
+        "within the gate here, so its sign and block order were not tested"
     )
 
 

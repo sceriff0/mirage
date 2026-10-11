@@ -564,14 +564,21 @@ def test_all_zero_shifts_are_not_checked(tmp_path, monkeypatch):
     rec, variants = _selfcheck(tmp_path)
     assert variants["palom_affine"]["status"] == sc.OK
     assert variants["palom"]["status"] == sc.NOT_CHECKED
-    assert "non-zero shift" in variants["palom"]["cause"]
+    assert "a shift of at least 0.5 px" in variants["palom"]["cause"]
     assert variants["palom"]["n_found"] == variants["palom"]["n_dots"]  # numbers kept
     assert rec["status"] == sc.NOT_CHECKED and rec["blocks_the_method"]
     # with all shifts at zero a wrong sign would indeed have passed
-    assert pa.SELFCHECK_NOT_CHECKED({"shift_nonzero_fraction": 0.09}, "palom")
-    assert pa.SELFCHECK_NOT_CHECKED({"shift_nonzero_fraction": 0.10}, "palom") is None
+    assert pa.SELFCHECK_NOT_CHECKED({"shift_meaningful_fraction": 0.09}, "palom")
     assert (
-        pa.SELFCHECK_NOT_CHECKED({"shift_nonzero_fraction": 0.0}, "palom_affine")
+        pa.SELFCHECK_NOT_CHECKED({"shift_meaningful_fraction": 0.10}, "palom") is None
+    )
+    # every block "non-zero" by a few hundredths of a pixel is still untested
+    tiny = {"shift_nonzero_fraction": 1.0, "shift_meaningful_fraction": 0.0}
+    assert "sign and block order were not tested" in pa.SELFCHECK_NOT_CHECKED(
+        tiny, "palom"
+    )
+    assert (
+        pa.SELFCHECK_NOT_CHECKED({"shift_meaningful_fraction": 0.0}, "palom_affine")
         is None
     )
 

@@ -444,6 +444,12 @@ def SELFCHECK_REFERENCE(info, native, pair):
         "channel": spec["channel"],
         "drop": drop,
         "expect_origin_xy": native.get("origin_xy"),
+        # where a reference dot belongs in the mosaic, to within the tiles' shifts: for
+        # the coverage half of the comparison (every drawn dot must be shown)
+        "expect": lambda xy: (
+            np.asarray(xy, dtype=float).reshape(-1, 2)
+            - np.asarray(native.get("origin_xy") or (0.0, 0.0), dtype=float)
+        ),
     }
 
 

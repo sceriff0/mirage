@@ -124,6 +124,7 @@ NUCLEAR_CHANNEL, DOTS_CHANNEL = 0, 1
 CHANNEL_NAMES = ("DAPI", "dots")
 DEFAULT_HW = (2048, 2560)
 DATASET = "selfcheck"
+VALIS_OVERHANG = (DEFAULT_HW, (2305, 2817))
 # (reference (H, W), moving (H, W) or None for the same canvas), by method or label. The
 # longest key that the label (else the method) equals or starts with applies.
 SIZES = {
@@ -140,9 +141,24 @@ SIZES = {
     # 3625 px, all above 2048, and the first field is applied at 14x (29x on a 60000 px
     # cohort slide). Not reached by either pair: the tiler (stored fields), which needs
     # more than 10 GB of images at registration size (`TILER_THRESH_GB`).
-    "valis": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
-    "valis_mirage": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
-    "valis120": [(DEFAULT_HW, None), ((24000, 30000), (23000, 29000))],
+    #
+    # The second pair (added 2026-10-11, review section C) has the MOVING slide larger
+    # than the reference, by an odd number of pixels each way (257): no other pair has a
+    # round that overhangs its reference, and half the difference is 128.5 px, so a
+    # centred placement is half a pixel off the grid. Whether VALIS's crop origin is
+    # then fractional is by reading only; the pair is small (a 2305 x 2817 moving
+    # slide: seconds to minutes, well under the first rung) and shows it either way.
+    "valis": [(DEFAULT_HW, None), VALIS_OVERHANG, ((24000, 30000), (23000, 29000))],
+    "valis_mirage": [
+        (DEFAULT_HW, None),
+        VALIS_OVERHANG,
+        ((24000, 30000), (23000, 29000)),
+    ],
+    "valis120": [
+        (DEFAULT_HW, None),
+        VALIS_OVERHANG,
+        ((24000, 30000), (23000, 29000)),
+    ],
     # DeeperHistReg, one pair for all eight labels (confirmed by Task 9 from the source:
     # MWod/DeeperHistReg main @ 42e7c9d `registration_params.py:484-565, 652-733`,
     # `dhr_utils/utils.py:530-540`, `60-64`, `435-464` [PARTIAL: see
@@ -158,7 +174,18 @@ SIZES = {
     # its issue #22). NOT reached by this pair: a non-integer second resampling at the
     # 8192 px set (short side above 40960 px: S between 5 and about 6.1), and sizes that
     # leave remainders; the realcheck is the check there.
-    "deeperhistreg": [((40000, 50000), (40000, 48000))],
+    #
+    # The second pair (added 2026-10-11, review section C) is the first with its two
+    # canvases swapped: the MOVING slide is the larger one, so the REFERENCE is padded
+    # (1000 px each side) and the writer's crop back to the reference grid runs with a
+    # non-zero pad. The first pair pads the moving slide only, and a cohort round
+    # larger than its reference would otherwise be first exercised on the cluster. Same
+    # canvases, so the same exact divisions and the same memory as the first pair; it
+    # doubles this selfcheck's time (not measured: nothing here ran DeeperHistReg).
+    "deeperhistreg": [
+        ((40000, 50000), (40000, 48000)),
+        ((40000, 48000), (40000, 50000)),
+    ],
     # ASHLAR at 1024 px tiles and a 922 px pitch: 3 x 3 tiles, then 5 x 6 with interior
     # tiles and four-tile corners. The same two pairs as `stare`, whose rigid matrix the
     # anchored rows read (`--m0-from`).
@@ -197,6 +224,35 @@ GATE_P95 = 0.40
 GATE_MEAN = 0.15
 GATE_FOUND = 0.99
 MIN_DETECTED = 0.5  # of the dots drawn; below it nothing was measured
+# `ref_to_mov`: a drawn dot must be shown when the generator's own map puts it this far
+# inside the output (a `mov_to_ref` map says that itself, to EDGE_PX). The margin is what
+# a registration may be wrong by at the border without a dot there being demanded.
+COVER_MARGIN_PX = 64
+# a dot whose own detection (within this of where it belongs) is masked is not demanded
+COVER_NEAR_PX = 16.0
+# The largest share of the dots a mask may hide. Above it the comparison is
+# `not_checked`: a mask that hides most of the image has checked little. From the
+# methods' real geometry (measured with `tilemap` on uniform points, 8 px dot margin):
+#   overlap  ASHLAR, 1024 px tiles at a 922 px pitch. The band share of an endless
+#            mosaic is 1 - (1 - 102/922)^2 = 0.21; small mosaics have more border
+#            tiles: 0.43 on the 4096 x 5120 pair (30 tiles), 0.62 on the 2048 x 2560
+#            pair (9 tiles, the largest share any pair has).
+#   seams    PALOM: 8 px either side of the edges between blocks with different shifts.
+#            All edges of 1024 px blocks: 1 - (1 - 16/1024)^2 = 0.03; 2048 px: 0.016.
+#            The cap is 3.2 x that share at 1024 px blocks; PALOM's adapter applies the
+#            same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`).
+MASK_MAX = {"overlap": 0.70, "seams": 0.10}
+_RING = (
+    (0, 0),
+    (1, 0),
+    (-1, 0),
+    (0, 1),
+    (0, -1),
+    (0.7, 0.7),
+    (0.7, -0.7),
+    (-0.7, 0.7),
+    (-0.7, -0.7),
+)
 
 OK, INCONSISTENT, CRASHED = "ok", "inconsistent", "crashed"
 NOT_CHECKED, NO_STAGE_IMAGE = "not_checked", "no_stage_image"
@@ -596,6 +652,19 @@ def _stats(resid, n_dots):
     return out
 
 
+def _in_box(xy, box, margin):
+    if box is None:
+        return np.ones(len(xy), bool)
+    x0, y0, x1, y1 = (float(v) for v in box)
+    with np.errstate(invalid="ignore"):
+        return (
+            (xy[:, 0] >= x0 + margin)
+            & (xy[:, 0] <= x1 - 1 - margin)
+            & (xy[:, 1] >= y0 + margin)
+            & (xy[:, 1] <= y1 - 1 - margin)
+        )
+
+
 def compare(
     point_map,
     dots_mov_xy,
@@ -603,6 +672,9 @@ def compare(
     expected_offset=None,
     origin_xy=(0.0, 0.0),
     drop=None,
+    expect=None,
+    valid_box=None,
+    mask_max=None,
 ):
     """Does ``point_map`` follow the dots drawn in ``native_dots_image``?
 
@@ -610,6 +682,34 @@ def compare(
     frame, its first pixel at ``origin_xy``. ``expected_offset`` is the declared
     point-mapping-minus-image offset: a constant ``(dx, dy)`` or a function of the points
     handed to ``fn``. ``drop`` marks points to leave out (True), at the same points.
+
+    **Two checks in each direction, the same thresholds.** (1) Every point the comparison
+    starts from must land on its partner: ``GATE_FOUND`` of them, whole image and per
+    block. (2) Nothing may be left over on the other side:
+
+    ``mov_to_ref``  starts from the DRAWN dots the map puts inside the image (``EDGE_PX``)
+                    and looks for a detection; left over = detections the mapping puts no
+                    dot on (``n_unexplained``, at most ``1 - GATE_FOUND`` of them).
+    ``ref_to_mov``  starts from the DETECTIONS and looks for a drawn dot; left over =
+                    drawn dots no detection came back to (``n_expected`` / ``n_covered``,
+                    at least ``GATE_FOUND`` covered, whole image and per block). Which
+                    dots must be in the image is not something a ``ref_to_mov`` map can
+                    say without being inverted (the benchmark never inverts a method's
+                    map), so ``expect`` says it: the GENERATOR's moving -> reference map.
+                    A dot is demanded when that puts it ``COVER_MARGIN_PX`` inside the
+                    image (and inside ``valid_box``, where the writer declares one).
+                    Without ``expect`` this half is not run and the record says so
+                    (``coverage_checked`` False).
+
+    That margin is the one asymmetry left: 16 px by the method's own map one way, 64 px
+    by the generator's map the other. A registration wrong by more than 64 px at the
+    border of the selfcheck pair would be reported as uncovered dots.
+
+    **A mask** (``drop``) leaves points out of check (1) only. Check (2) stays on
+    outside it: a detection is excused only when the mapped dot nearest to it is itself
+    masked, and a drawn dot only when it, or the detection found where it belongs, is
+    masked. ``masked_frac`` is reported, and above ``mask_max`` the comparison is
+    ``not_checked``.
 
     Returns the whole-image numbers (``n_drawn``, ``n_detected``, ``n_dots``, ``n_found``,
     ``err_px_p50``, ``err_px_p95``, ``offset_px_mean_x``, ``offset_px_mean_y``: the residual
@@ -631,8 +731,11 @@ def compare(
         "n_drawn": int(len(dots)),
         "n_detected": int(len(det)),
         "n_masked": 0,
+        "masked_frac": 0.0,
         "n_unexplained": 0,
+        "coverage_checked": True,
     }
+    uncovered = []
 
     def masked(xy):
         if drop is None or not len(xy):
@@ -641,8 +744,10 @@ def compare(
 
     if forward:
         # where the image should show each dot, if the points follow the image
-        src = dots[~masked(dots)]
+        hidden = masked(dots)
+        src = dots[~hidden]
         out["n_masked"] = int(len(dots) - len(src))
+        out["masked_frac"] = out["n_masked"] / len(dots) if len(dots) else 0.0
         off = declared(src)
         pred = np.asarray(point_map.fn(src), dtype=float).reshape(-1, 2) - off
         keep = _inside(pred - origin, hw, EDGE_PX)
@@ -652,15 +757,21 @@ def compare(
         where = pred - origin
         # the other way round: a dot the image shows and the mapping puts nothing on
         deep = det[_inside(det_px, hw, EDGE_PX + MATCH_PX)]
-        if drop is None:
-            every = np.asarray(point_map.fn(dots), dtype=float).reshape(-1, 2)
-            every = every - declared(dots)
-            out["n_unexplained"] = int((~_nearest(deep, every, MATCH_PX)[0]).sum())
-        n_deep = len(deep)
+        every = np.asarray(point_map.fn(dots), dtype=float).reshape(-1, 2)
+        every = every - declared(dots)
+        # the mapped dot nearest to each detection, however far: a detection is excused
+        # only when THAT dot is masked (a masked dot may be drawn twice, or torn)
+        near, k = _nearest(deep, every, np.inf)
+        excused = near & hidden[k]
+        far = ~_nearest(deep, every, MATCH_PX)[0]
+        out["n_unexplained"] = int((far & ~excused).sum())
+        n_deep = int((~excused).sum())
     else:
         src = det[_inside(det_px, hw, EDGE_PX)]
         hide = masked(src)
         out["n_masked"] = int(hide.sum())
+        out["masked_frac"] = float(hide.mean()) if len(src) else 0.0
+        gone = src[hide]
         src = src[~hide]
         off = declared(src)
         back = np.asarray(point_map.fn(src), dtype=float).reshape(-1, 2) - off
@@ -668,6 +779,45 @@ def compare(
         resid = back[found] - dots[j[found]]
         where = src - origin
         n_deep = 0
+        # the other way round: a dot that was drawn and that no detection came back to
+        if expect is None:
+            out["coverage_checked"] = False
+        else:
+            at = np.asarray(expect(dots), dtype=float).reshape(-1, 2)
+            must = _inside(at - origin, hw, COVER_MARGIN_PX)
+            must &= _in_box(at - origin, valid_box, COVER_MARGIN_PX)
+            covered = np.zeros(len(dots), bool)
+            covered[j[found]] = True
+            if drop is not None and must.any():
+                # Not demanded near the mask: a dot there may be torn or drawn twice
+                # (then it is not detected at all), and the method drew it where ITS
+                # registration says, not where the generator does. So the mask is
+                # widened by COVER_NEAR_PX plus how far this method's image is from the
+                # generator's map on this pair (99th percentile over the matched dots):
+                # a dot is excused when the mask holds any point within that distance
+                # of it, or a masked detection lies that close.
+                apart = np.hypot(*(src[found] - at[j[found]]).T) if found.any() else []
+                reach = COVER_NEAR_PX + (
+                    float(np.percentile(apart, 99)) if len(apart) else 0.0
+                )
+                out["cover_reach_px"] = reach
+                near = masked(at)
+                for radius in np.arange(4.0, reach + 4.0, 4.0):
+                    for dx, dy in _RING[1:]:
+                        near |= masked(at + radius * np.array([dx, dy]))
+                must &= ~near & ~_nearest(at, gone, reach)[0]
+            out["n_expected"] = int(must.sum())
+            out["n_covered"] = int((covered & must).sum())
+            if out["n_covered"] < GATE_FOUND * out["n_expected"]:
+                uncovered.append("drawn dots the image does not show")
+            if must.any():
+                key = np.floor((at[must] - origin) / BLOCK).astype(np.int64)
+                got = covered[must]
+                for bx, by in np.unique(key, axis=0):
+                    rows = (key[:, 0] == bx) & (key[:, 1] == by)
+                    n = int(rows.sum())
+                    if n >= MIN_BLOCK_DOTS and got[rows].sum() < GATE_FOUND * n:
+                        uncovered.append(f"uncovered block ({int(bx)}, {int(by)})")
         if found.any():
             # where the image's first pixel sits in the frame the mapping leads to, read
             # off the image: matched dot minus the pixel it was found at. A constant only
@@ -700,14 +850,23 @@ def compare(
         failed.insert(0, "whole image")
     if out["n_unexplained"] > (1.0 - GATE_FOUND) * max(n_deep, 1):
         failed.append("detections the mapping puts no dot on")
+    failed += uncovered
     out["failed"] = failed
     if out["n_detected"] < MIN_DETECTED * out["n_drawn"]:
         out["status"] = NOT_CHECKED
         out["cause"] = (
             f"{out['n_detected']} of {out['n_drawn']} dots were detected in the output"
         )
+    elif failed:
+        out["status"] = INCONSISTENT  # a measured failure is never softened
+    elif mask_max is not None and out["masked_frac"] > mask_max:
+        out["status"] = NOT_CHECKED
+        out["cause"] = (
+            f"the mask hides {100 * out['masked_frac']:.0f} % of the dots, above the "
+            f"{100 * mask_max:.0f} % a mask may hide: too little was checked"
+        )
     else:
-        out["status"] = INCONSISTENT if failed else OK
+        out["status"] = OK
     return out
 
 
@@ -740,6 +899,47 @@ def _dots_plane(native, default_channel):
         return None
     origin = native.get("origin_xy") or (0.0, 0.0)
     return _Plane(arr, int(channel)), close, origin
+
+
+def shape_problem(native, hw, ref_hw, origin_xy=(0.0, 0.0)):
+    """Why the image a method wrote has the wrong shape, or None.
+
+    The image must have the shape its method declares (``mosaic_shape``, (H, W)), and,
+    when it claims to be ON the reference grid (no ``origin_xy``, or a zero one, and no
+    declared shape), the reference's own shape: a run that warped onto the wrong slide,
+    or cropped, writes another one. An image with a non-zero origin and no declared
+    shape has nothing to be compared with (None)."""
+    hw = tuple(int(v) for v in hw)
+    declared = native.get("mosaic_shape") if isinstance(native, dict) else None
+    if declared:
+        want = tuple(int(v) for v in declared)[-2:]
+        if hw != want:
+            return f"the image is {hw[0]} x {hw[1]}, the method declares {want[0]} x {want[1]}"
+    elif not np.any(np.abs(np.asarray(origin_xy, dtype=float)) > 1e-9):
+        want = tuple(int(v) for v in ref_hw)
+        if hw != want:
+            return (
+                f"the image is {hw[0]} x {hw[1]} and claims the reference grid, which "
+                f"is {want[0]} x {want[1]}"
+            )
+    box = native.get("valid_box") if isinstance(native, dict) else None
+    if box:
+        x0, y0, x1, y1 = (float(v) for v in box)
+        if not (0 <= x0 < x1 <= hw[1] and 0 <= y0 < y1 <= hw[0]):
+            return f"valid_box {list(box)} is not inside the {hw[0]} x {hw[1]} image"
+    return None
+
+
+def mask_cap(mod, info, mask):
+    """The share of the dots ``mask`` may hide for this method on this run: the frozen
+    ``MASK_MAX``, unless the method scales it to its own geometry on this pair
+    (``SELFCHECK_MASK_MAX(info, mask, frozen)``: PALOM's seams are a fixed 16 px wide
+    whatever the block, so smaller blocks hide a larger share by geometry alone)."""
+    if not mask:
+        return None
+    frozen = MASK_MAX.get(mask)
+    hook = getattr(mod, "SELFCHECK_MASK_MAX", None)
+    return frozen if hook is None else hook(info, mask, frozen)
 
 
 def _proxy(mod, name, pair, extras):
@@ -824,8 +1024,19 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
     offsets = getattr(mod, "SELFCHECK_OFFSET", None)
     offset = (offsets(info) or {}).get(variant) if offsets else None
     drop = mod.SELFCHECK_MASK(info, mask) if mask else None
+    wrong_shape = shape_problem(native, plane.shape, pair["ref_hw"], origin)
     try:
-        out = compare(pmap, pair["dots_mov_xy"], plane, offset, origin, drop)
+        out = compare(
+            pmap,
+            pair["dots_mov_xy"],
+            plane,
+            offset,
+            origin,
+            drop,
+            pair["truth"],
+            native.get("valid_box"),
+            mask_cap(mod, info, mask),
+        )
     except MemoryError as exc:
         return {"status": NOT_CHECKED, "cause": "oom", "error": str(exc)}
     except Exception as exc:
@@ -839,6 +1050,11 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
         close()
     out["native"] = {k: v for k, v in native.items() if k != "error"}
     out["declared_offset"] = offset is not None
+    out["image_hw"] = [int(v) for v in plane.shape]
+    if wrong_shape:
+        out["failed"] = [*out.get("failed", []), f"image shape: {wrong_shape}"]
+        if out["status"] == OK:
+            out["status"] = INCONSISTENT
     too_little = getattr(mod, "SELFCHECK_NOT_CHECKED", None)
     if too_little is not None and out["status"] == OK:
         why = too_little(info, variant)
@@ -877,6 +1093,7 @@ def _check_reference(hook, info, native, pair):
             None,
             spec.get("origin_xy") or (0.0, 0.0),
             spec.get("drop"),
+            spec.get("expect"),
         )
         res.pop("blocks", None)
         res["file"], res["channel"] = str(spec["file"]), int(spec["channel"])
@@ -1075,9 +1292,15 @@ def run(
     submission = host.get("submission") or ""
     earlier = [e for e in earlier if (e.get("submission") or "") == submission]
     (work / "selfcheck.json").unlink(missing_ok=True)
-    results = []
+    results, used = [], set()
     for ref_hw, mov_hw in sizes:
-        sub = work / f"{ref_hw[0]}x{ref_hw[1]}" if len(sizes) > 1 or apart else work
+        # one folder per pair, named by the reference; a second pair on the same
+        # reference canvas (a larger moving slide) adds the moving one to the name
+        folder = f"{ref_hw[0]}x{ref_hw[1]}"
+        if folder in used:
+            folder += f"_mov_{mov_hw[0]}x{mov_hw[1]}" if mov_hw else "_again"
+        used.add(folder)
+        sub = work / folder if len(sizes) > 1 or apart else work
         if apart:
             size = (ref_hw, mov_hw)
             res = _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed)
@@ -1109,6 +1332,8 @@ def run(
             "min_block_dots": MIN_BLOCK_DOTS,
             "match_px": MATCH_PX,
             "edge_px": EDGE_PX,
+            "cover_margin_px": COVER_MARGIN_PX,
+            "mask_max": MASK_MAX.get(mask) if mask else None,
         },
         "host": {k: host.get(k) for k in ("host", "launch_id")},
         # the launch that wrote this record: a gate refuses one of another submission

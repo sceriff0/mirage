@@ -41,6 +41,7 @@ Run from the repository root.
 from __future__ import annotations
 
 import argparse
+import os
 
 from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, METHODS
 from .resources import n_cpus
@@ -773,7 +774,6 @@ def split_datasets(names):
 def _write_gate(path, run, status, dropped, blocked, reference):
     """One line a shell can read: run, status, rows to drop, blocked, reference, and
     the log of the gate job that wrote it (for the failure log)."""
-    import os
     from pathlib import Path
 
     from . import variants
@@ -1011,8 +1011,6 @@ def main(argv=None):
     from . import score, variants
 
     if getattr(a, "submission", None):
-        import os
-
         os.environ[score.SUBMISSION_ENV] = a.submission
 
     cohort, external = split_datasets(a.dataset)
@@ -1046,6 +1044,9 @@ def main(argv=None):
         pipeline_processes=(a.pipeline_convert_process, a.pipeline_merge_process),
         gates=a.gates,
         run_variants=variants.run_variants(),
+        row_checks=variants.row_checks(
+            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+        ),
     )
     from . import failure_log
 

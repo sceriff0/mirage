@@ -418,7 +418,7 @@ def _load_run(out, variant, case):
     return run, warped, str(run.get("problem") or ""), ""
 
 
-def _truth_rows(case, points, base):
+def _truth_rows(case, points, base, checks=None):
     """A function ``add(method, frame, direction, mapped, ...)`` and the rows it fills, for
     a case with paired truth probes; ``(None, [])`` for a case without."""
     if "truth_mov" not in points or not len(points["truth_mov"]):
@@ -460,6 +460,7 @@ def _truth_rows(case, points, base):
                 **seam,
                 "method": method,
                 "frame": frame,
+                "selfcheck_row": (checks or {}).get(method.split(NON)[0], ""),
                 **truth.error_stats(mapped, target, source, case.pixel_size_um),
                 **jac,
                 "imputed_initial": imputed,
@@ -526,8 +527,13 @@ def _truth_keep(points, keep_mov, band_truth):
     return keep
 
 
+# what a row's `selfcheck_row` says when its stage has no image to be checked against
+NEVER_CHECKED = "no_stage_image"
+
+
 def _score_case(job):
-    out, case, variants, owners = job
+    out, case, variants, owners = job[:4]
+    checks = job[4] if len(job) > 4 else {}
     points = load_points(case)
     ref, mov = polys(points, "ref"), polys(points, "mov")
     px = case.pixel_size_um
@@ -544,7 +550,7 @@ def _score_case(job):
     }
     dens = density(ref, px) if scorable else {}
     cell_rows, res_rows, non_cells, non_truth = [], [], [], []
-    add_truth, truth_rows = _truth_rows(case, points, base)
+    add_truth, truth_rows = _truth_rows(case, points, base, checks)
     masks, missing = (
         _seam_masks(out, case, variants, owners, ref, mov, points)
         if scorable
@@ -565,6 +571,9 @@ def _score_case(job):
             "method": method,
             "frame": frame,
             "selfcheck_status": status,
+            # THIS row's own check (variants.row_checks); selfcheck_status above is its
+            # run's gate, which a row that was never checked shares with its run
+            "selfcheck_row": checks.get(method.split(NON)[0], ""),
             **{k: rec[k] for k in pairs.RECORD_KEYS},
             **dens,
             **jac,
@@ -838,6 +847,7 @@ def summarise_cells(rows, primary=None, blocked=None):
                         "n_cases": len(mine),
                         "n_ok": n_ok,
                         "n_excluded_not_method": len(every) - len(mine),
+                        "selfcheck_row": every[0].get("selfcheck_row", ""),
                     }
                     for h in HEADLINES:
                         per = list(_per_patient(mine, h).values())
@@ -1177,6 +1187,13 @@ def markdown(rows, columns):
     return "\n".join(lines)
 
 
+def _check_text(value):
+    """A row's own selfcheck for a table: loud where it was never checked."""
+    if value == NEVER_CHECKED:
+        return "NEVER CHECKED (no image of this stage)"
+    return value or "-"
+
+
 def _summary_table(rows, primary):
     """Markdown rows: each headline as ``median [minimum over cases]``, its null beside it."""
     order = [p.split(NON)[0] for p in primary or []]
@@ -1197,6 +1214,7 @@ def _summary_table(rows, primary):
             {
                 "method": r["method"],
                 "units": r["n_patients"],
+                "selfcheck of this row": _check_text(r.get("selfcheck_row", "")),
                 "ok/cases": f"{r['n_ok']}/{r['n_cases']}",
                 "left out (not the method's)": r.get("n_excluded_not_method", 0),
             }
@@ -1311,6 +1329,7 @@ TRUTH_COLUMNS = (
     "frac_under_2um_med",
     "fold_pct_med",
     "n_excluded_not_method",
+    "selfcheck_row",
 )
 
 
@@ -1369,8 +1388,10 @@ def truth_by_family(rows):
         if _excluded(r):
             gone[key(r)] = gone.get(key(r), 0) + 1
     have = {key(r) for r in out}
+    checks = {key(r): r.get("selfcheck_row", "") for r in rows}
     for r in out:
         r["n_excluded_not_method"] = gone.get(key(r), 0)
+        r["selfcheck_row"] = checks.get(key(r), "")
     for k, n in gone.items():
         if k not in have:
             sample = next(r for r in rows if key(r) == k)
@@ -1585,6 +1606,12 @@ def summary_markdown(
         "registered, and a run that did not is scored at the unregistered pose.\n"
     )
     parts.append(SUBSET_RULE)
+    parts.append(
+        "`selfcheck of this row` is what the selfcheck measured for THAT row, not for "
+        "its run: `NEVER CHECKED` marks a stage the method's own writer draws no image "
+        "of (its points were compared with nothing), `via <run>` a row whose run is "
+        "gated by another run's selfcheck.\n"
+    )
     excluded = excluded or []
     if excluded:
         parts.append(
@@ -1769,8 +1796,14 @@ def score(
     pipeline_processes=(None, None),
     gates=None,
     run_variants=None,
+    row_checks=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``row_checks`` maps a result name to what the selfcheck says of THAT row
+    (``variants.row_checks``): column ``selfcheck_row`` of every table, so a row whose
+    stage was never compared with an image (``no_stage_image``) says so beside its
+    numbers. Without it the column is empty.
 
     ``run_variants`` maps a run's name to the result names it writes
     (``variants.run_variants()``): with the gate records it says which rows belong to a
@@ -1815,7 +1848,9 @@ def score(
         if cs:
             variants = find_variants(out, ds, expected, dropped)
             variants_of[ds] = variants
-            jobs += [(str(out), c, variants, owners) for c in cs]
+            jobs += [
+                (str(out), c, variants, owners, dict(row_checks or {})) for c in cs
+            ]
             for c in cs:
                 if c.extra.get("truth_spec_sha256"):
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")

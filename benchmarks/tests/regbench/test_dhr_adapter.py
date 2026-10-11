@@ -894,7 +894,9 @@ def test_the_selfcheck_pair_is_the_cohorts_class_for_every_label():
     S = 9.77 at the 4096 px set and S = 5.0 at the 8192 px set, and a coarsest pyramid
     level of 31 px under nine levels."""
     for label in LABELS:
-        ((ref_hw, mov_hw),) = sc.sizes_for(label)
+        # the second pair is the first with its canvases swapped (reference padded)
+        (ref_hw, mov_hw), swapped = sc.sizes_for(label)
+        assert swapped == (mov_hw, ref_hw)
         short = min(max(ref_hw[0], mov_hw[0]), max(ref_hw[1], mov_hw[1]))
         resolution = 8192 if "_hr" in label else 4096
         s, k = dhr.working_scale(short, resolution)
