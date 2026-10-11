@@ -49,6 +49,8 @@ mapping.py     PointMap: a point mapping and the direction it was estimated in
 cases.py       the on-disk contract: case.json + points.npz in, warped.npz + run.json out
 cells.py       nuclei of a native slide: the built-in segmenter, label images, cell GeoJSON
 arms_manifest.py  the arms cohort as a `prepare multiplex` manifest, one row per moving round
+nuclei.py      bare nuclei per native slide: check the label images that exist, re-run the
+               pipeline's StarDist where there is none ("Bare nuclei")
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
@@ -181,6 +183,19 @@ full polygon sets (`cells_<side>_xy`, `_ring_off`, `_ring_feat`, `_ring_hole`, `
 is `ref` or `mov`), read back with `cases.polys(points, side)`. A known-truth case also
 holds paired probes: `truth_mov`, `truth_ref` and `truth_cell` (see "Known-truth error").
 
+Since 2026-10-11 a side has **two polygon sets** (`cases.SETS`). The arrays above are the
+**outlines**; the **bare nuclei** are a second set with the same five arrays under
+`nuclei_<side>_*`, read with `cases.polys(points, side, "nuclei")`. `nuclei_<side>_outline`
+(the outline each nucleus belongs to) is written only where that is known by construction.
+`case.json: extra.cell_sets.<side>.<set>` records where each set came from: `source` is
+`arm_geojson`, `label_image:<path>`, `stardist_rerun`, `shrunk_outlines` or `builtin`, and
+the nuclei also carry `exact` (true or false) and, for a checked label image or a re-run,
+the measured `agreement`; a side without nuclei has `{"source": "", "reason": ...}`.
+**A case written before the second set existed still loads and scores**: it has no
+`nuclei_*` array and no `cell_sets`, its outline rows are what they were, and its nuclei
+rows are absent with the reason (`nuclei_missing.csv`;
+`test_nuclei_sets.py::test_a_case_written_before_the_second_set_still_loads_and_scores`).
+
 **A method** is a module with `SCOPE` (`"pair"` or `"group"`), `VARIANTS`, and one generator:
 
 - pair: `register(case, work, opts)` yields `(variant, PointMap, info)`;
@@ -211,13 +226,16 @@ variants by the replace rule declares the names in `VARIANT_LABELS` (`valis120_h
 **The driver** (`methods.run_case`, `methods.run_group`), at each yield, before it resumes
 the generator and with the clock paused: moves the nuclei through the map (the moving
 nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.npz`
-(`cells_xy`, `direction`, `band` when `info["band_mov"]` is given and `band_ref` when
+(`cells_xy`, and `nuclei_xy` = the bare nuclei of the same side through the same map;
+`direction`, `band` when `info["band_mov"]` is given and `band_ref` when
 `info["band_ref"]` is: a method's own seam mask, one bool per moving or per reference
 nucleus; `band_truth` when `info["band_truth"]` is: the same seams by known-truth probe,
 for a reference-side mask; `truth_xy` = the map
 applied to the truth probes of the side it starts from, and `grid`, `grid_shape`,
-`grid_step` = the map on a lattice for the Jacobian statistics), writes `run.json`, and
-calls `on_variant`.
+`grid_step` = the map on a lattice for the Jacobian statistics; `band_nuc` /
+`band_ref_nuc` = the owner's seam mask on the bare nuclei, see "Off the seams"), writes
+`run.json` (`nuclei_band` says how that mask was got), and calls `on_variant`. The second
+set costs the method nothing: it is moved with the clock paused, like the first.
 
 **`run.json`**: `ok`, `error`, `cause`, `problem`, `direction`, `launch_id`, `unit`
 (`pair` | `patient`), `group_cases`, `register_s`, `write_s`, `resources`, `native`,
@@ -520,8 +538,14 @@ Nuclei are segmented once on each native slide, before registration, so they do 
 on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
 (`pairs.py` loads that one file; `bin/utils` is not put on `sys.path`).
 
+- **Two polygon sets, every number on both.** The **outlines** are the headline: on the
+  cohort, each nucleus grown by 10 px, which is what the pipeline's QC publishes and what
+  the arms benchmark scores; every table and column that existed means the outlines and
+  is unchanged. The **bare nuclei** get the same numbers in tables of their own (below,
+  "Outlines and bare nuclei"). Neither set depends on any method.
 - **Gate:** `1.5 x median_equivalent_radius` of the two native sets, once per case, the same
-  for every method.
+  for every method. Each polygon set has its OWN gate, from its own areas: the nuclei's
+  is 1.5 x the median equivalent radius of the nuclei.
 - **Pairing:** linear sum assignment; mutual nearest neighbour beside it (`_mnn`).
 - **Per case and variant:** pair fraction, matched Dice, IoU p50, share of pairs with
   IoU >= 0.5, centroid displacement in µm (p50, p90).
@@ -646,14 +670,178 @@ follow for every method alike:
 
 A nuclear mask is NOT among the arm's published files: `SEG_QC_SEGMENT` publishes nothing
 (`conf/modules.config:1140-1149`), and only the GeoJSON of the cell mask is published. The
-segmentation arms publish `<patient>/segmentation/*_nuclei_mask.tif`, but that is one mask
-per patient on the REGISTERED, merged image, not one per native slide, so it cannot serve
-here. To score on bare nuclei, `prepare multiplex` would need per-slide nuclei in native
-pixels: either the arm re-run with the nuclei mask traced as well (a pipeline change), or
-the benchmark segmenting each native nuclear channel itself (`cells.load_cells` already
-does this for a manifest without outlines, with its own detector). Neither is done; the
-benchmark scores the outlines the arm published, and calls them nuclei as the pipeline's
-QC does.
+bare nuclei are therefore found or made by the benchmark, slide by slide: next section.
+
+### Outlines and bare nuclei
+
+**The two definitions.**
+
+| set | on the cohort | on `synthetic` (and dormant `semisynth`) |
+|---|---|---|
+| `outlines` (headline) | the arm's published QC outline of each native slide: a StarDist nucleus grown by 10 px until it meets a neighbour | the built-in segmenter's objects grown the same way: `skimage.segmentation.expand_labels(labels, distance=10)`, the call `bin/utils/segment_io.py::expand_labels_tiled` makes (`cells.grow`, `cells.EXPAND_PX`) |
+| `nuclei` | the StarDist nuclei themselves, from the first source below that applies | the built-in segmenter's objects (what these datasets scored before 2026-10-11) |
+
+**Why both.** Matched Dice on grown outlines is dominated by the rim: at a nuclear radius
+of about 12 px a 10 px rim is roughly two thirds of the outline's area, so a given
+displacement costs a grown outline a smaller share of its area than it costs the nucleus,
+and in dense tissue the outline's shape is clipped by its neighbours and not by the
+nucleus at all. Dice on the bare nuclei is stricter per micrometre and has no clipping.
+The outlines stay the headline because they are what the pipeline's own QC and the arms
+benchmark report; the nuclei say how much of an outline number is rim. Both sets are
+segmented on the NATIVE slides before any registration, so neither depends on a method.
+
+**Where the nuclei of a cohort slide come from**, in this order (user's ruling: reuse what
+exists, segment only what has none):
+
+1. **An existing label image of that slide.** `arms_manifest --nuclei-glob PATTERN` finds
+   masks of the QC segmentation kept in a Nextflow work directory (`{patient}`, `{slide}`,
+   `{stem}`; `segment.py` names its mask `<image stem>_nuclei_mask.tif`, e.g.
+   `P1.r2.ome_nuclei_mask.tif`); `--seg-arm ARM` offers, for each patient's REFERENCE
+   slide only, the `nuclei_mask` a segmentation arm lists in `csv/segmented.csv` (made on
+   the registered image, whose reference round is likely the native reference slide
+   unchanged: not verified, hence the check). A manifest of your own names them in
+   `ref_nuclei` / `mov_nuclei`. A label image is **used only if** its shape is the
+   slide's (refused with both sizes otherwise) **and** at least **0.90** of the slide's
+   published outlines hold exactly one of its nuclei's centroids
+   (`nuclei.ACCEPT_ONE_NUCLEUS`; the measured share is recorded). The second check is
+   applied to every label image, not only to a segmentation arm's: two rounds of a patient
+   have the same shape, and a mask of the wrong round would pass the first. Why 0.90: an
+   outline is its nucleus grown outwards, so the true nuclei put one centroid in nearly
+   every outline, while a mask of another slide or another frame puts centroids at random
+   (in the test: under 0.1). It is `exact` when that share is at least 0.99 and the two
+   counts agree within 1 % (`EXACT_ONE_NUCLEUS`, `EXACT_COUNT_TOL`: room for concave
+   nuclei, the 1 px simplification of the published polygons and a GPU's run-to-run
+   differences). These numbers were fixed before any cohort run and are not tuned.
+2. **A StarDist re-run** (`python -m benchmarks.regbench nuclei`, `slurm/nuclei.sbatch`:
+   an array over SLIDES): the pipeline's `bin/segment.py`, unchanged, on the native slide,
+   keeping its `*_nuclei_mask.tif`. The rendered command, and where each word is from:
+
+   ```
+   python <repo>/bin/segment.py --image <slide> --output-dir <nuclei dir>/<group>/<slide>/rerun \
+     --dapi-channel <c> --model-dir $REGBENCH_STARDIST_MODEL_DIR --model-name $REGBENCH_STARDIST_MODEL \
+     --n-tiles 16 16 --expand-distance 10 --pmin 1.0 --pmax 99.8 --use-gpu
+   ```
+
+   | word | from |
+   |---|---|
+   | `segment.py --image … --output-dir …` | `lib/SegBackends.groovy:100` (`entrypoint`), `modules/local/segment.nf:77-79` |
+   | `--dapi-channel` | `lib/SegBackends.groovy:101`, `modules/local/segment.nf:80`: the pipeline passes `0`, its preprocessing having put the nuclear channel first; here it is the manifest's `ref_channel` / `mov_channel`, which is 0 on the arms' slides |
+   | `--model-dir`, `--model-name` | `conf/modules.config:1021-1022` (`segmentation_model_dir`, `segmentation_model`); the arms take them from the site overlay `conf/ieo.config`, which is not in the repository, hence the two environment variables |
+   | `--n-tiles 16 16` | `conf/modules.config:1023`; `nextflow.config:273-274` |
+   | `--expand-distance 10` | `conf/modules.config:1024`; `nextflow.config:275` |
+   | `--pmin 1.0 --pmax 99.8` | `conf/modules.config:1025-1026`; `nextflow.config:268-269` |
+   | `--prob-thresh` | absent: `conf/modules.config:1029`, `nextflow.config:272` (`null`); `REGBENCH_STARDIST_PROB_THRESH` adds it if the site sets one |
+   | `--use-gpu` | `conf/modules.config:1057`, `nextflow.config:267` (`seg_gpu = true`); `REGBENCH_STARDIST_CPU=1` drops it |
+
+   None of these is set in `benchmarks/configs/arms.yaml` or `benchmark.config`
+   (`test_nuclei_cohort.py::test_the_rerun_follows_the_pipelines_own_configuration` reads
+   the defaults out of `nextflow.config` and the flag list out of `conf/modules.config`).
+   The same call also writes the cell mask it grows from its nuclei, and that is compared
+   with the arm's published outlines of the slide: the counts within 1 %, and at least
+   0.99 of the published centroids with a re-grown centroid within 1 px
+   (`RERUN_MATCH_PX`, `EXACT_MATCH`), beside the one-nucleus share above. A re-run that
+   fails any of it is printed as `DISAGREEMENT <slide>` with the numbers, its nuclei are
+   kept, and they are marked `exact: false`.
+3. **Fallback, only when asked** (`prepare multiplex --nuclei-fallback shrink`,
+   `REGBENCH_NUCLEI_FALLBACK=shrink`): the outline with a 10 px rim taken off again,
+   labelled `shrunk_outlines`, `exact: false`. It is NOT the nucleus: growth stops where
+   two cells meet, so taking the full rim off a clipped side cuts into the nucleus, and
+   it is too small wherever cells touch. Never used silently.
+
+A slide with nuclei from no allowed source is still prepared: its cases are scored on the
+outlines, their nuclei numbers are absent, and `nuclei_missing.csv` and the top of
+`summary.md` give the reason. Nothing is imputed.
+
+**Tracing.** The published outlines are polygons the pipeline simplified to 1 px
+(`bin/mask_to_geojson.py`); nuclei read from a label image are traced by
+`cells.polys_from_label_image`, unsimplified. On the known-truth datasets the grown
+outlines are simplified to the same 1 px (`cells.OUTLINE_TOLERANCE_PX`), as the cohort's
+are, and the nuclei are not (an unsimplified grown contour has about 125 vertices against
+about 10, and the pipeline's raster IoU, which scores every pair 18 times with the null,
+costs four times as much on it). Both rounds of a pair are traced the same
+way within a set, so this does not favour a round; it is one more reason not to compare
+an outline number with a nuclei number as if only the rim differed.
+
+**Tables.** The nuclei have the SAME tables as the outlines, with the same columns, in
+files of their own: `cells_nuclei.csv`, `summary_cells_nuclei.csv`,
+`common_block_nuclei.csv`, `paired_vs_primary_nuclei.csv`, `paired_summary_nuclei.csv`,
+`nonband_cells_nuclei.csv`, `nonband_summary_nuclei.csv`. Every cell table of either set
+carries a `set` column (`outlines` | `nuclei`), so two files can be stacked. This was
+chosen over `_nuc` columns (which would double the about 100 columns of `cells.csv`) and
+over one file with both sets (which would change the meaning of "one row per case and
+variant" for everything that reads `cells.csv`). On the nuclei the gate, the null, the
+excess, matched Dice, IoU, `within_<x>um`, displacement, the shared-subset numbers, the
+common block, the off-seam rows and the paired differences are all computed from the
+nuclei alone: the shared subset is the cases where every compared row qualifies ON THE
+NUCLEI. `summary.md` prints, under each dataset's table, "Outlines and bare nuclei, side
+by side" for the primary rows, each cell `outlines / nuclei`:
+
+```
+| method | cases: outlines / nuclei | pair_fraction: outlines / nuclei | ... | dice_matched: outlines / nuclei | dice_shared: outlines / nuclei | within_1um: outlines / nuclei | ...
+| stare | 1 / 1 | 1 / 1 | ... | 0.84 / 0.6923 | 0.84 / 0.6923 | 1 / 1 | ...
+```
+
+(the numbers of `test_nuclei_sets.py::test_the_summary_prints_the_nuclei_beside_the_outlines`:
+squares of 12 px and 6 px, 2 px off). A result made before its case had nuclei has outline
+rows and no nuclei row (`nuclei_missing.csv`: "Run it again"); it is not scored at the
+unregistered pose.
+
+**What it costs the scorer.** The pipeline's IoU rasterises each pair in a Python loop,
+and a row scores its pairs 18 times (two pairings, once registered and in eight null
+directions). Measured on one 625-cell synthetic case on a laptop: 2.5 s per row on the
+bare nuclei, and on the grown outlines 25 s unsimplified, about 9 s simplified. Two
+things were done about it, neither of which changes a number: the grown outlines are
+simplified as the pipeline's are (above), and a pair that both pairings chose is
+rasterised once (`pairs._pair_iou`; a pair's IoU depends on its two cells alone;
+`test_pairs.py::test_a_pair_both_pairings_share_is_rasterised_once`), which halves the
+IoU work on the cohort too. Scoring the known-truth datasets is still slower than before
+2026-10-11, because their outline rows are now grown outlines and a nuclei row is added.
+
+**Known truth.** The probes are the centroids of the NUCLEI, as before, and the truth
+spec is unchanged (version 4, `1f075463…`): the expansion distance is the pipeline's
+default, not a frozen parameter of the maps, the probes or the seeds, so it is recorded
+per case (`extra.cell_sets.<side>.outlines.expand_px`) and not in `truth_spec.json`.
+What DID change on `synthetic`: the columns that mean "outlines" (`cells.csv`,
+`summary_cells.csv`, the off-seam rows) are now the grown objects and no longer the bare
+ones; the numbers these datasets had before 2026-10-11 are the `_nuclei` tables. Cases
+must be prepared again (the launcher's `--prepare`).
+
+**Commands on the cluster** (after exporting what "What to export" lists):
+
+```bash
+# 0. the manifest, offering what already exists (both options are optional)
+python3 -m benchmarks.regbench.arms_manifest --root <arm_results> --out rounds.csv \
+    --nuclei-glob '<nextflow work>/*/*/{stem}_nuclei_mask.tif' --seg-arm <segmentation arm>
+# 1. which slides already have a usable mask (checks every offered label image; runs no StarDist)
+regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --workers 4
+regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --list
+# 2 + 3. the re-run for the rest, then prepare: one call
+REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare -- <site options>
+#    (by hand: N=$(regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --count)
+#     sbatch --array=0-$((N-1)) -c 8 --mem=128G -t 8:00:00 $REGBENCH_SBATCH_GPU benchmarks/regbench/slurm/nuclei.sbatch
+#     then: regbench_py STARE_REGBENCH prepare multiplex --cases "$REGBENCH_CASES" --manifest rounds.csv --nuclei-dir "$REGBENCH_NUCLEI")
+# afterwards: every slide, its source, whether it is exact, or why it has none
+regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --list
+grep -h DISAGREEMENT "$REGBENCH_OUT"/logs/rb-nuclei-*.log
+```
+
+Step 1 is optional: the array of step 2 does the same check for its slide first and runs
+StarDist only when the slide is left without usable nuclei. `--list` prints `index, slide,
+status (usable | needs_rerun | candidate | none), source, exact, one_nucleus_frac,
+n_nuclei, reason`. The allocation of the array (8 CPUs, 128 GB, 8 h, a GPU) follows the
+pipeline's `SEGMENT` block (`conf/modules.config:1062-1067`: 8 CPUs, 32 to 128 GB by file
+size, 4 h per attempt) at its upper end; `REGBENCH_NUCLEI_CPUS`, `_MEM`, `_TIME` change it.
+
+**Not verified until the cluster** (none of it was run: StarDist is not installed where
+this was written, the site's model is not in the repository, no arm's files were read):
+that the re-run reproduces the published outlines at all (same model, same image, the
+site overlay overriding none of the settings above: the `DISAGREEMENT` lines and
+`exact` will say); that `bolt3x/mirage-stardist:1.0.0` runs `bin/segment.py` from a bound
+checkout under `apptainer exec --cleanenv --nv`; that StarDist is deterministic enough
+between two GPU runs for the 0.99 thresholds; that a segmentation arm's mask passes for
+its reference slide; what a work directory still holds; the memory and time of tracing
+two label images of a whole slide in the scorer's image (`cells.polys_from_label_image`,
+tile by tile).
 
 ## Known-truth error
 
@@ -945,10 +1133,12 @@ method's fields is post hoc and names that method.
 
 | file | one row per | what |
 |---|---|---|
-| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`. Every row scores ALL nuclei |
+| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`, `set` (`outlines`: this file is the outlines; the nuclei are in `cells_nuclei.csv`). Every row scores ALL nuclei |
 | `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
 | `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept and `within_ceiling`: what the mask alone lets `within_*um` reach for any method |
 | `nonband_truth.csv`, `nonband_truth_by_family.csv` | as `truth.csv`, `truth_by_family.csv` | the known-truth error on the probes a moving-side mask leaves, with `owner, n_probes_all` |
+| `cells_nuclei.csv`, `summary_cells_nuclei.csv`, `common_block_nuclei.csv`, `paired_vs_primary_nuclei.csv`, `paired_summary_nuclei.csv`, `nonband_cells_nuclei.csv`, `nonband_summary_nuclei.csv` | as the table of the same name | the same columns on the BARE NUCLEI (`set = nuclei`), with their own gate, null and shared subset. Absent when no case has nuclei. See "Outlines and bare nuclei" |
+| `nuclei_missing.csv` | case, or case x variant | why there is no nuclei row: `dataset, case_id, group, …, method, reason`. `method` is empty when the CASE has no nuclei on a side (the prepared reason), and names a result that was made before its case had them |
 | `dropped.csv` | variant | written only when `score --drop` names rows: `variant, reason, had_results`. Rows whose own selfcheck failed without blocking their method; they are in no other table |
 | `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
 | `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`. `subset=common` repeats it on the cases every compared row registered |
@@ -981,6 +1171,20 @@ that case (which positions and shifts it accepted), though on no other method's 
 score.
 ASHLAR's is on the moving nuclei (`info["band_mov"]`, `band` in `warped.npz`); PALOM's is
 on the reference nuclei (`info["band_ref"]`, `band_ref`).
+
+**The mask on the bare nuclei** (`band_nuc`, `band_ref_nuc`; rows in
+`nonband_cells_nuclei.csv`). Where the case says which outline each nucleus belongs to
+(`nuclei_<side>_outline`: the known-truth datasets, the built-in segmenter and the shrunk
+fallback, where the two sets are the same objects by construction) **a nucleus inherits
+its outline's flag**, so both sets drop the same objects. Otherwise (the cohort's label
+images and re-runs, whose nuclei are not indexed like the published outlines) the mask is
+**recomputed from the owner's geometry**: the owner applies its own seam rule to the
+nuclei's polygons (`info["band_mov_nuc"]` / `info["band_ref_nuc"]`; ASHLAR: any vertex of
+the nucleus on a seam; PALOM: the nucleus's own bounding box, grown by its margin, over
+blocks with different shifts). A nucleus is smaller than its outline, so the recomputed
+mask marks fewer objects than the outlines' mask does. `run.json: nuclei_band` says which
+rule gave the mask (`inherited` | `geometry`). The known-truth probes are scored once,
+with the outlines' mask.
 
 **Which rows a reference-side mask removes.**
 
@@ -1525,6 +1729,12 @@ round).
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
 | `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |
+| `REGBENCH_NUCLEI` | with `--prepare`: where each slide's bare nuclei are kept ("Outlines and bare nuclei") | `$REGBENCH_CASES/_nuclei` |
+| `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the arms ran (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | none; the name is required |
+| `REGBENCH_SIF_STARDIST` | the pipeline's StarDist image (`bolt3x/mirage-stardist:1.0.0`), for the re-run only | none |
+| `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`, as the arms did); a detection threshold, only if the site's config sets one | `0`, none |
+| `REGBENCH_NUCLEI_SKIP`, `REGBENCH_NUCLEI_FALLBACK` | `1`: prepare without the nuclei step; `shrink`: the shrunk outline for a slide still without nuclei | `0`, none |
+| `REGBENCH_NUCLEI_CPUS`, `REGBENCH_NUCLEI_MEM`, `REGBENCH_NUCLEI_TIME` | the allocation of one slide's task | `8`, `128G`, `08:00:00` |
 | `REGBENCH_SCORE_MEM` | memory of the `tissue` and `score` jobs | `64G` |
 | `REGBENCH_HEAD_IMAGE` | the image the script itself reads the run list with, on the login node | `STARE_REGBENCH` |
 | `REGBENCH_WRITABLE_TMPFS_IMAGES` | images started with `--writable-tmpfs` | `VALIS120` |
@@ -1540,13 +1750,21 @@ variables: they are frozen (`ladder.py`).
 cd <checkout of this branch>
 source benchmarks/regbench/slurm/env.sh        # after exporting the variables above
 
-# 1. the cohort's list (standard library only: the login node's python will do)
+# 1. the cohort's list (standard library only: the login node's python will do).
+#    --nuclei-glob / --seg-arm offer label images of bare nuclei that already exist
+#    ("Outlines and bare nuclei"); without them every slide is segmented again
 python3 -m benchmarks.regbench.arms_manifest --root <arm_results> --out rounds.csv
 
 # 2. a walking skeleton: ONE patient, the cohort's cases only
 awk -F, 'NR==1 {print; next} NR==2 {p=$4} $4==p' rounds.csv > one.csv
 REGBENCH_MANIFEST=$PWD/one.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare --datasets multiplex -- <site options>
-#    ok: the log ends without a refused case, and
+#    (this first runs the bare-nuclei array, one task per slide: it needs
+#    REGBENCH_STARDIST_MODEL, REGBENCH_STARDIST_MODEL_DIR, REGBENCH_SIF_STARDIST and the GPU
+#    request; REGBENCH_NUCLEI_SKIP=1 leaves it out)
+#    ok: no DISAGREEMENT line in $REGBENCH_OUT/logs/rb-nuclei-*.log, `regbench_py
+#        STARE_REGBENCH nuclei --manifest one.csv --out "$REGBENCH_NUCLEI" --list` says
+#        `usable` and `True` (exact) for every slide; the prepare log ends without a
+#        refused case, and
 regbench_py STARE_REGBENCH list --cases "$REGBENCH_CASES" --dataset multiplex --sizes
 #    prints "<rounds> 1 <rounds>"
 
@@ -2715,5 +2933,14 @@ separation from the cohort's; it registers one stand-in pair with the installed 
 (at full resolution and on a 2 x reduced proxy) and runs the VALIS 1.2.0 adapter on a
 brightfield case against `fake_valis.py`. `test_submit_hyreco.py` reads the job graph
 of `submit_cohort.sh --datasets hyreco_b` off its dry run.
+`test_nuclei_sets.py` checks the two polygon sets on hand-made squares (a nucleus inside
+each outline): the contract and its backward compatibility, the driver moving both, the
+nuclei's own gate, the seam mask by inheritance and by geometry, the side-by-side lines
+of `summary.md`, and that growing the outlines changes neither the nuclei nor the truth
+spec. `test_nuclei_cohort.py` checks the cohort's sources on small label images: a mask of
+the slide is used, one of another size or another frame is refused with the reason, the
+rendered `segment.py` call against `nextflow.config` and `conf/modules.config`, and the
+re-run itself against a STAND-IN `segment.py` that writes the two masks under the real
+script's names (StarDist is not installed here; the real script was never executed).
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.
