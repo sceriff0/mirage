@@ -35,7 +35,7 @@ This package is being ported in steps. What exists now:
 | adapter `palom` (PALOM 2026.4.1 by its README recipe: `palom`, and `palom_b1024` with the reference rechunked to 1024 px blocks) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 19 runs, 37 result names, six primary rows, a flag that pauses a run (nothing is paused) |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost), `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the end-to-end cost view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. The pipeline's own steps are read from a Nextflow trace, tested with a trace written by hand; no real trace has been read |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
@@ -54,11 +54,14 @@ nuclei.py      bare nuclei per native slide: check the label images that exist, 
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      synthetic, semisynth, multiplex: each writes cases; hyreco writes the
-               external landmark set (hyreco_a, hyreco_b)
+datasets/      synthetic, semisynth, multiplex: each writes cases; hyreco and anhir write
+               the external landmark sets (hyreco_a, hyreco_b; anhir, anhir_tune)
+prep.py        the stare_prep row: the preprocessing candidates, the frozen choice
+               (prep_frozen.json), the check that none of them moves image content
 score.py       reads files only; writes <out>/tables
-landmarks.py   the scorer of an external landmark set: <out>/tables/<dataset>/, never the
-               cohort's tables
+landmarks.py   the scorer of HyReCo: <out>/tables/<dataset>/, never the cohort's tables
+challenge.py   the scorer of ANHIR's training pairs (rTRE, robustness, micrometres), its
+               own tables too; and the choice of the stare_prep preprocessing
 selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
@@ -119,7 +122,7 @@ runs per patient). `--label NAME` renames a method's variants
 `python -m benchmarks.regbench runs [--header] [--all]` prints what the cohort is
 registered with: one tab-separated line per run, in a documented column order that only
 ever grows at the end (the module's docstring; `-` for "none", never an empty field).
-18 runs, 35 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
+19 runs, 37 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
 names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
@@ -132,6 +135,19 @@ names and opens its summary on the six primary rows:
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
+- **STARE has two rows, and one STARE.** `stare` is the method as the pipeline runs it.
+  `stare_prep` (ruling R3.21) is the SAME package, version and parameters on a
+  benchmark-side preprocessing of the one image STARE registers on (`prep.py`: a small
+  closed candidate list; the candidate in force is frozen in `prep_frozen.json` and is
+  the run's one option, `prep=<candidate>`). It is an active, NON-primary row of STARE's
+  family on `multiplex`, on `synthetic` and on ANHIR. The candidate is chosen on ANHIR's
+  tuning-side pairs and on nothing else, never on the cohort; on the cohort it is applied
+  to the nuclear channel STARE reads, where each candidate has a stated meaning (two of
+  the five are the identity there). The image it writes is the ORIGINAL moving slide
+  moved by the transform estimated on the preprocessed copy, so every score is defined
+  as for `stare`. **Today the frozen candidate is PROVISIONAL (`grey_clahe`, chosen by no
+  evidence): the selection has not been run.** The launcher and every summary say so;
+  see "ANHIR: the challenge's training pairs".
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
   `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the
@@ -1914,9 +1930,9 @@ and array sections). None of the following was observed:
   it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
   rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
   of this benchmark, and it is the owner's to rule on.
-- **`MaxSubmit`.** The default submission is 18 gates, 48 selfcheck attempts, the tissue
+- **`MaxSubmit`.** The default submission is 19 gates, 51 selfcheck attempts, the tissue
   and score jobs, and eight arrays per run and dataset: with the two default datasets
-  374 jobs (the two runs with a realcheck gate have a second, one-task ladder and
+  394 jobs (the two runs with a realcheck gate have a second, one-task ladder and
   a gate more), and array TASKS count toward a per-user limit on many sites. Submit by
   `--datasets` or `--runs` if the limit is lower.
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
@@ -1933,8 +1949,9 @@ was ever opened]`. Paper: Lotz et al. 2023, J Med Imaging 10(6):067501,
 doi:10.1117/1.JMI.10.6.067501 `[PARTIAL: the Europe PMC text searched for the pixel size,
 the landmarks, the grey-scale conversion, MTRE and the observer errors, and those
 paragraphs read; figures and supplement not seen]`. Treated as CC BY-SA 4.0 (page and
-paper; the DataCite record of the same DOI says CC BY 4.0). ANHIR is not part of this
-harness: every ANHIR set is made of different sections.
+paper; the DataCite record of the same DOI says CC BY 4.0). ANHIR, whose sets are made
+of different (consecutive) sections, is a separate external set with its own section
+below.
 
 **It is never part of the cohort's results.** `score` without `--dataset` reads the
 cohort's datasets only; `score --dataset hyreco_b` writes `<out>/tables/hyreco_b/` and
@@ -2015,7 +2032,8 @@ nucleus. If they do not, an assumption above is wrong and no number means anythi
 
 It is brightfield, and the rule of this benchmark holds: a method is fed as its package
 intends. `python -m benchmarks.regbench runs --dataset hyreco_b` prints the runs;
-`--excluded` prints the rest with their reasons (`methods.NO_BRIGHTFIELD`, also in
+`--excluded` prints the rest with their reasons (`methods.NO_BRIGHTFIELD` for a method
+without a brightfield rule, `variants.NOT_ON` for a run this set does not take; also in
 `hyreco_excluded.csv`). An adapter without a rule REFUSES a brightfield case in the same
 words, before it imports its package, so no method can run on a wrong channel by hand.
 
@@ -2024,7 +2042,8 @@ words, before it imports its package, so no method can run on a wrong channel by
 | `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
 | `valis120`, `valis120_hires` | listed, but as built they FAIL on every pair (both slides of a pair have the same basename and the adapter refuses that: "Dormant datasets", item 1); never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
 | `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
-| `deeperhistreg_*` (8 runs) | no, not yet | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section), but this adapter hands it one fluorescence channel per slide: its conversion, its writer loop and its canvas arithmetic are per channel. The RGB input rule is not written; the `_fluo` rows would have no meaning here in any case |
+| `stare_prep` | no | the preprocessing row is defined for ANHIR, the cohort and the synthetic suite (R3.21); HyReCo is dormant and keeps its own proxy settings (`variants.NOT_ON`) |
+| `deeperhistreg_*` (8 runs) | no | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section). The adapter's RGB input rule was written for ANHIR's JPEG / PNG images (R3.20) and has not been extended to these BigTIFF slides: the adapter refuses a brightfield TIFF, and the runs are left out here by name (`variants.NOT_ON`) |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
 | `palom`, `palom_b1024` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
 
@@ -2164,6 +2183,244 @@ the table is not a comparison until that is fixed.
   Run two or three pairs of the tuning set by hand first (`run --index`), and decide
   `--reduce` from them.
 
+## ANHIR: the challenge's training pairs (its own tables)
+
+ANHIR (Automatic Non-rigid Histological Image Registration, ISBI 2019,
+https://anhir.grand-challenge.org) registers differently stained CONSECUTIVE sections:
+481 pairs in 49 tissue sets (lung lesions and lobes, mammary glands, mouse and human
+kidney, colon adenocarcinoma, gastric, breast), at about 1 to 9 um per pixel in its
+"medium" archive. The 230 pairs marked `training` in its cover table have public
+landmarks on both images; the 251 `evaluation` pairs do not, and are not part of this
+benchmark. Sources: the challenge's Data page and Evaluation page `[FULL: saved copies of
+both, fetched 2026-10-10]`; its evaluation code, Borda/BIRL at `f1648b29` `[PARTIAL: the
+functions that compute TRE, robustness and the aggregate scores; listed in
+challenge.py]`; the challenge paper, Borovec et al. 2020, IEEE TMI 39(10),
+doi:10.1109/TMI.2020.2986331 `[MEMORY: not read for this section; nothing here rests on
+it but the citation]`. Licence CC BY-NC-SA.
+
+**What these numbers are, and are not.**
+
+- They are computed on TRAINING pairs. Published leaderboard numbers are on the hidden
+  evaluation pairs (with a training column beside them) and are **not comparable row for
+  row** with anything here. Nothing is exported for submission and no rank among
+  published methods is claimed.
+- **The `stare_prep` row's preprocessing is tuned on part of this same training set.**
+  Its tuning-side numbers are fitted; its report-side numbers come from tissue sets the
+  choice never saw, but from the same challenge's public data. Neither side is blind.
+- STARE is built for re-imaged sections that hold the same nuclei in both rounds.
+  Consecutive sections do not, and at these pixel sizes a nucleus is a few pixels: both
+  STARE rows are an out-of-domain test here.
+- It is never part of the cohort's results and never part of the default submission: it
+  runs when named, alone (`--datasets anhir`), into `<out>/tables/anhir/`.
+
+### The cases, and the split
+
+`prepare anhir --source DIR` (`DIR` holds the cover table `dataset_medium.csv`, the
+unpacked image archive under `images/` and the unpacked landmark archive under
+`landmarks/`; it is only read) writes two datasets:
+
+- `anhir`: the 230 training pairs. The cover table's `Source image` is the moving image,
+  its `Target image` the reference; landmarks are paired by row, the common prefix
+  where the two files differ in length (the official rule). Each pair is its own group:
+  a set has several targets, so VALIS registers pair by pair with the target fixed,
+  which is not how a groupwise leaderboard entry is made.
+- `anhir_tune`: the tuning-side pairs again, alone.
+
+**The split is by tissue SET, never by pair** (pairs of one set share images, and most
+sets also hold hidden evaluation pairs), and nobody picked it: inside each tissue the
+sets are ordered by `sha256("regbench-anhir-split-v1:" + set name)`, the first
+`ceil(n / 4)` are the tuning side, and a tissue with one set is wholly on the report
+side. It is frozen in `anhir_split.json` (sha256 `c0fb810e29f2...`): **15 sets and 82
+pairs on the tuning side, 34 sets and 148 pairs on the report side.**
+
+| tissue | tuning side | pairs (tune / report) |
+|---|---|---|
+| COAD | `COAD_02`, `_08`, `_10`, `_11`, `_14` | 25 / 59 |
+| breast | `breast_3`, `_4` | 2 / 3 |
+| gastric | `gastric_2`, `_4`, `_5` | 5 / 8 |
+| kidney | `kidney_1`, `_5` | 2 / 3 |
+| lung-lesion | `lung-lesion_3` | 10 / 20 |
+| lung-lobes | `lung-lobes_2` | 10 / 30 |
+| mammary-gland | `mammary-gland_2` | 28 / 10 |
+| mice-kidney | none (one set) | 0 / 15 |
+
+`prepare` recomputes the split from the cover table and refuses a table that gives
+another; the scorer refuses cases of another split. **Headline numbers are the report
+side's.** The tuning side and both sides together are shown beside it, labelled.
+
+### Pixel size, per tissue
+
+The Data page gives one resolution per tissue, of the ORIGINAL image; the archive holds
+each set at the percentage its folder names. Micrometres per pixel are that resolution
+divided by the folder's fraction: derived arithmetic, recorded as such in every case.
+
+| tissue | original, um/px (Data page) | folder | um/px used | status |
+|---|---|---|---|---|
+| lung-lesion | 0.174 | 25 % / 50 % | 0.696 / 0.348 | derived |
+| lung-lobes | 1.274 | 100 % | 1.274 | as stated |
+| mice-kidney | 0.227 | 25 % | 0.908 | derived |
+| COAD | 0.468 | 25 % | 1.872 | derived |
+| gastric | 0.2528 | 15 % | 1.685 | derived |
+| breast | 0.2528 | 20 % | 1.264 | derived |
+| kidney | 0.2528 | 25 % | 1.011 | derived |
+| mammary-gland | 2.294 | 25 % | **none** | **NOT established: pixels only** |
+
+For the mammary glands the page states 2.294 um/pixel and, in the same paragraph, that
+the images "were acquired with the same microscope and set of acquisition parameters as
+the mice lung lobes" (1.274 um/pixel, the same 10x objective). Both cannot hold, and no
+other official source read settles it. Those 38 pairs are in every rTRE and pixel
+column and in no micrometre column (`n_pairs_um` says how many pairs a micrometre
+number rests on).
+
+### Which runs, and what each is given
+
+`python -m benchmarks.regbench runs --dataset anhir` prints them; `--excluded` the rest
+with reasons (also in `anhir_excluded.csv`). Eight runs, 18 result names.
+
+| run | on ANHIR | what it is given |
+|---|---|---|
+| `stare` | yes | each image as ONE channel, written by `prepare`: **inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, 8 bit, full resolution** (`prep.grey_plane`). `stare register` reads one channel per slide, so this conversion is part of the benchmark's input, not STARE's. The image it writes is that grey image, registered. For the mammary glands STITCH's header gets a placeholder pixel size of 1.0 (STARE uses the pixel size for nothing else) |
+| `stare_prep` | yes | the frozen candidate of `prep.py` instead of that grey image; STARE unchanged; the image it writes is the same plain grey image moved by its own transform |
+| `valis120`, `valis120_hires` | yes | the ORIGINAL RGB images (JPEG; PNG for the lung lobes), as for the cohort: upstream defaults, the target as the reference. VALIS picks its own brightfield processing. Never executed here; whether its reader opens these files as the adapter places them is by reading only |
+| `deeperhistreg_gpu`, `_cpu`, `_hr_gpu`, `_hr_cpu` | yes | the RGB image WHOLE, with the shipped parameter set as it stands (see below) |
+| `deeperhistreg_*_fluo_*` (4 runs) | no | `fluo=1` is the benchmark's configuration for a fluorescence channel (a black pad, no intensity flip); on RGB the shipped parameters are the ones to run |
+| `valis_mirage` | no | the pipeline's own VALIS call registers multichannel fluorescence rounds only |
+| `ashlar` (4 runs) | no | ASHLAR stitches unstitched tiles by one translation each; two whole images of two sections are not its input |
+| `palom`, `palom_b1024` | no | the adapter follows PALOM's README recipe on one channel by index (on RGB: the red channel, chosen by nobody); which of PALOM's own colour modes would be the input rule is undecided, and its README describes it as made for re-imaged slides of the same section |
+
+**DeeperHistReg's brightfield input rule**, from its own repository (MWod/DeeperHistReg
+main @ `42e7c9d` `[PARTIAL: README.md:1-128, registration_params.py:484-520 and 652-690,
+tiff_loader.py:20-120, general_preprocessing.py:1-66, dhr_utils/utils.py:25-37 and
+374-375, input_output.py; never executed]`): the package takes the source and the target
+image by path; the shipped sets load through `'tiff'` (`pyvips.Image.tiffload`), pad
+with 255, normalise each channel to its own range, convert to grey, invert and apply
+CLAHE. So the adapter hands over the RGB image, three 8-bit channels, values untouched,
+and changes no parameter beyond the two every row changes (device, `save_final_images`).
+Its one benchmark-side step is the container: each JPEG / PNG is decoded and written as
+a tiled, uncompressed RGB TIFF with one top-level page (clock paused, `convert_s`),
+because the shipped loader reads TIFF; switching the loader to the package's `'pil'`
+one would have been a changed parameter. The package's writer then draws the RGB image
+once and its own file is kept.
+
+The selfcheck gate applies as for the cohort, on a synthetic FLUORESCENCE pair: it says
+nothing about reading RGB. No realcheck gate, no tissue-level block, no off-seam rows
+(all three are defined on nuclei).
+
+### The `stare_prep` preprocessing: candidates, criterion, what is frozen
+
+STARE is not changed. Before it runs, both images are rewritten as one-channel files by
+one candidate; STARE registers those; the transform is applied to the original.
+
+| candidate | on an RGB image | on one channel (DAPI, synthetic) |
+|---|---|---|
+| `grey` | inverted luminance, nothing else (= the `stare` row) | identity (= the `stare` row) |
+| `haem` | the haematoxylin channel of a colour deconvolution (`skimage.color.rgb2hed`, channel 0, clipped to [0, 0.255], 8 bit) | identity: there is no colour to separate |
+| `grey_clahe` | CLAHE on `grey` | CLAHE on the channel |
+| `haem_clahe` | CLAHE on `haem` | CLAHE on the channel (the same as `grey_clahe`) |
+| `grey_smooth` | a Gaussian, sigma 2 px, on `grey` | the same Gaussian on the channel |
+
+CLAHE is OpenCV's, clip limit 2.0, contextual regions of 256 px, on 8 bits; a 16-bit
+channel is first mapped linearly to 0..255 between 0 and its own 99.9th percentile, so on
+the cohort the CLAHE candidates also reduce DAPI to 8 bits (stated, not hidden). The
+list is closed and was declared before any run. Why these five: `grey` so the choice
+can end on "nothing helps"; `haem` because the counterstain is the one signal two stains
+may share (whether every stain of these sets has one is not established by any source
+read); CLAHE to even out a pale and a dark section; `grey_smooth` to drop detail that
+consecutive sections do not share. No candidate resamples, crops or shifts:
+`prep.frame_check` measures, before every case, how far each candidate moves drawn dots
+(gate 0.02 px) and the run is refused otherwise, and the output's shape must be the
+input's. The selfcheck of the row compares, as for `stare`, the points with the image
+STARE's writer draws.
+
+**Criterion** (`prep.CRITERION`), on the tuning-side pairs only: the lowest median over
+pairs of the per-pair median rTRE, a pair that did not register counting at its
+unregistered landmarks; ties by the higher mean robustness, then by the order of the
+list. One candidate for all tissues.
+
+**Frozen today: `grey_clahe`, PROVISIONAL.** The selection has not been run. That value
+was chosen by no evidence, only because it is not the identity on either modality, so
+the row can be told from `stare` everywhere. To run the selection:
+
+```bash
+S=benchmarks/regbench/slurm; export REGBENCH_ANHIR=/data/anhir   # dataset_medium.csv, images/, landmarks/
+export REGBENCH_CASES=/scratch/anhir_cases REGBENCH_OUT=/scratch/anhir_out   # of their own
+$S/submit_cohort.sh --prepare --datasets anhir      # 230 tasks; writes anhir AND anhir_tune
+$S/submit_cohort.sh --dry-run --datasets anhir_tune && $S/submit_cohort.sh --datasets anhir_tune
+#    the five candidates on the 82 tuning pairs, each behind its own selfcheck
+#    -> $REGBENCH_OUT/tables/anhir_tune/summary.md (nothing in it is a result)
+python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT"            # the table
+python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --freeze   # writes prep_frozen.json
+#    put benchmarks/regbench/prep_frozen.json under version control: the choice, with its evidence table
+$S/submit_cohort.sh --datasets anhir                # every run ANHIR takes, on all 230 pairs
+#    -> $REGBENCH_OUT/tables/anhir/summary.md
+```
+
+`prep-select` refuses to choose while any candidate lacks a result on any tuning pair,
+or while the prepared tuning side is not the whole of the split's. The run list names
+the candidate itself (`prep=<candidate>`), and a reused result must have the same
+options: a `stare_prep` result made with another candidate, on the cohort too, is run
+again, never reused. A cohort submitted BEFORE the selection carries `stare_prep` rows
+made with the provisional candidate (marked in `run.json: info.prep.frozen` and in the
+summary); resubmitting after the freeze re-runs that one run.
+
+A pilot on this laptop (two tuning pairs of one set, `mammary-gland_2`; all five
+candidates through the installed STARE 1.2.1, about a minute each) ran end to end and
+is the proof that the machinery works, nothing more: two pairs choose nothing.
+
+### Scores and tables (`<out>/tables/anhir/`)
+
+Per pair, by the challenge's definitions (`challenge.py` cites the page and the code):
+TRE is the distance between a landmark's target position and its position after
+registration; **rTRE** is TRE over the diagonal of the target image; **robustness** is
+the share of a pair's landmarks whose TRE is strictly below their initial TRE. Per group,
+the official aggregates: the mean and the median over pairs of the per-pair median, mean
+and maximum rTRE and of robustness, and the same over the "robust" pairs (robustness
+above 0.5). Beside them, the landmark error in micrometres where the pixel size is
+established, and in pixels everywhere.
+
+**Failures, the official way and apart.** "All missing or incomplete registrations in
+the submission are considered to have the initial rTRE": a pair that did not register
+counts at its unregistered landmarks with robustness 0 in every official column, and a
+landmark returned as non-finite counts at its unregistered position. `n_failed`,
+`n_nonfinite`, the `*_registered` columns (the same statistic over the pairs that did
+register) and `anhir_failures.csv` show them separately.
+
+**Frame.** STARE maps moving to reference: its numbers are the challenge's own quantity.
+VALIS and DeeperHistReg map reference to moving: the target landmarks are moved into the
+source image and compared there, exactly and with no inverted transform, but in the
+source image's pixels (column `frame`; the summary names those rows).
+
+Not computed: the challenge's ranking criterion (a method's average RANK by median rTRE
+among all submitted methods), which needs the other methods' results on the same pairs.
+
+| file | content |
+|---|---|
+| `summary.md` | the report side first, then the tuning side, then both; what these numbers are not; the frozen preprocessing and whether it is provisional |
+| `anhir_pairs.csv` | one row per pair and result name: `rtre_median/mean/max`, `robustness`, `tre_um_p50/p90`, `tre_px_p50`, `frame`, `failed`, `cause` |
+| `anhir_summary.csv` | one row per side (`report`, `tune`, `all`), tissue (each, and `all`) and result name: the official aggregates, the robust subset, the registered-only columns, micrometres |
+| `anhir_by_set.csv` | the same per tissue SET, with the set's side |
+| `anhir_failures.csv`, `anhir_resources.csv`, `anhir_summary_resources.csv` | failures and cost, as for the cohort |
+| `anhir_excluded.csv` | the runs left out, each with its reason |
+| `anhir_prep_evidence.csv` | `anhir_tune` only: the candidates in the criterion's order |
+
+### Not verified (nothing of this ran outside this laptop)
+
+- **No ANHIR pair was registered by VALIS or DeeperHistReg** (neither is installed
+  here). By reading only: that VALIS 1.2.0 reads the JPEG / PNG files as placed; that
+  `pyvips.Image.tiffload` reads the adapter's RGB TIFF as three bands; that the package's
+  writer writes a three-channel file of the reference's size; every DeeperHistReg
+  number on RGB.
+- **Only 57 of the 245 images are unpacked on the laptop** (22 of the 49 sets). The
+  cover table, all 160 landmark files and the split were checked in full; the prepare
+  of the other 172 pairs was not.
+- **The selection.** Five candidates on 82 pairs have not run. Time and memory per pair
+  on the cluster are unmeasured; the laptop's pairs (20 megapixels) took about a minute
+  with 4 workers, and the largest images are 258 megapixels.
+- **CLAHE on a cohort slide** (about 2 gigapixels, 16 bit): the block-wise code is
+  tested for independence of the block size on small images only; its time and memory
+  on a whole slide are unmeasured (it runs with the clock paused, `info.prep.prep_s`).
+- The mammary glands' pixel size.
+
 ## Dormant datasets: known defects before any use
 
 `semisynth`, `hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
@@ -2266,6 +2523,15 @@ bootstrap interval over units ("Scoring").
    confines cores are unverified.
 
 ### STARE (`methods/stare.py`)
+
+**Two rows.** Everything below is the `stare` row. The `stare_prep` row is the same
+adapter with `--label stare_prep --opt prep=<frozen candidate>`: both images are first
+rewritten by `prep.py` (clock paused; `info.prep`), STARE registers those files at index
+0 with the same parameters, and the deferred STITCH draws what the plain row draws (the
+original moving slide; on a brightfield case its plain grey image) with this row's
+transform. A label and its option come together: `stare_prep` takes the frozen candidate
+and no other, `stare_prep_<candidate>` (ANHIR's tuning runs) that candidate, and `prep`
+without one of these labels is refused. See "ANHIR: the challenge's training pairs".
 
 One `stare register` process per pair, on the slides as the case has them
 (`ref_image`, `mov_image`), with `--nuclear-index` = the case's `mov_channel` (a case whose
@@ -2642,6 +2908,10 @@ published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
 `affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).
 
 ### DeeperHistReg (`methods/deeperhistreg.py`)
+
+**On a brightfield case (ANHIR)** the adapter hands the package the RGB image whole,
+with the shipped parameters: "ANHIR: the challenge's training pairs", "Which runs, and
+what each is given". Everything below describes the cohort's one-channel path.
 
 **The software is DeeperHistReg 1.0.1; the method is RegWSI** (Wodzinski et al. 2024,
 doi:10.1016/j.cmpb.2024.108187). There is no separate RegWSI code: the paper says the
@@ -3027,6 +3297,16 @@ the slide is used, one of another size or another frame is refused with the reas
 rendered `segment.py` call against `nextflow.config` and `conf/modules.config`, and the
 re-run itself against a STAND-IN `segment.py` that writes the two masks under the real
 script's names (StarDist is not installed here; the real script was never executed).
+`test_anhir.py` builds a stand-in for the challenge's folder (a cover table, small JPEG /
+PNG images, landmark files) and checks the split and its hash, the roles, the common
+prefix, the pixel sizes, the grey conversion, the run lists, the scores against a
+transcription of the official evaluation's functions, failures, the tables' wording and
+the choice of the preprocessing with its refusals; one test reads the real cover table
+when it is on this machine and skips otherwise. `test_prep.py` checks every candidate
+(no shift, independence of the block size, the identity where stated), the frozen file,
+and registers one synthetic pair three times with the installed STARE (plain, the
+identity candidate, CLAHE). `test_submit_anhir.py` reads the job graphs of
+`--datasets anhir` and `--datasets anhir_tune` off the dry run.
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs and the two rounds of
 ASHLAR's patient) and two real registrations.
