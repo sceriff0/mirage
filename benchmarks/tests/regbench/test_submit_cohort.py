@@ -208,7 +208,7 @@ def test_the_script_names_no_method():
 def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     jobs, _, _ = dry
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert laddered == set(RUNS) and len(RUNS) == 18
+    assert laddered == set(RUNS) and len(RUNS) == 19
     gated = {j.args[1] for j in jobs.values() if j.args[:1] == ["selfcheck"]}
     assert gated == set(RUNS)
 
@@ -362,7 +362,7 @@ def test_arrays_are_throttled(site):
 def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
     jobs, _, _ = dry
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
-    assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 16
+    assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 17
     for run in GATING:
         got = [jobs[f"rb-sc-{run}-{gb}g"] for gb in ladder.SELFCHECK_RUNGS_GB]
         assert [j.opt("--mem") for j in got] == ["64G", "256G", "512G"], run

@@ -46,12 +46,12 @@ from pathlib import Path
 
 import numpy as np
 
-from . import EXTERNAL_DATASETS, truth, variants
+from . import HYRECO_DATASETS, truth, variants
 from . import score as cohort
 from .cases import list_cases, load_points
 from .mapping import FRAME, MOV_TO_REF
 
-TUNING, REPORT = EXTERNAL_DATASETS
+TUNING, REPORT = HYRECO_DATASETS
 LOTZ = (
     "Lotz et al. 2023, J Med Imaging 10(6):067501, doi:10.1117/1.JMI.10.6.067501 "
     "[PARTIAL: main text searched and its results paragraphs read in the Europe PMC "
@@ -492,10 +492,8 @@ def score(cases_root, out, dataset, workers=1, expected=None, primary=None, drop
     """Score one external dataset; writes ``<out>/tables/<dataset>/`` and returns the
     rows. ``expected`` and ``primary`` are ``variants.expected_variants(dataset)`` and
     ``variants.primary_for(dataset)`` (None scores only what has results)."""
-    if dataset not in EXTERNAL_DATASETS:
-        raise SystemExit(
-            f"{dataset!r} is not an external landmark set {EXTERNAL_DATASETS}"
-        )
+    if dataset not in HYRECO_DATASETS:
+        raise SystemExit(f"{dataset!r} is not a HyReCo set {HYRECO_DATASETS}")
     cases = list_cases(cases_root, dataset)
     if not cases:
         raise SystemExit(f"no prepared {dataset} cases under {cases_root}")

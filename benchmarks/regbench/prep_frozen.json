@@ -1,0 +1,25 @@
+{
+  "candidates": [
+    "grey",
+    "haem",
+    "grey_clahe",
+    "haem_clahe",
+    "grey_smooth"
+  ],
+  "criterion": "on the tuning-side pairs only (dataset anhir_tune): the lowest median over pairs of the per-pair median rTRE, a pair that did not register counting at its unregistered landmarks (the official rule); ties by the higher mean robustness, then by the order of the candidate list",
+  "evidence": [],
+  "note": "PROVISIONAL: the selection has not been run. This candidate was put here without evidence, only because it is not the identity on either modality, so the row can be told from `stare` everywhere. Run the candidates on anhir_tune and `python -m benchmarks.regbench prep-select --freeze` before any number of the stare_prep row is used.",
+  "selected": "grey_clahe",
+  "selected_on": "",
+  "sha256": "71114d611a67a7d080ff5044adf85024c826edeac2f167125db91d0647a7e60c",
+  "single_channel": {
+    "grey": "identity (the channel as it is: the same input as the `stare` row)",
+    "grey_clahe": "CLAHE on the channel",
+    "grey_smooth": "Gaussian, sigma 2 px, on the channel",
+    "haem": "identity (no colour to separate: the same input as the `stare` row)",
+    "haem_clahe": "CLAHE on the channel (the same as grey_clahe)"
+  },
+  "split_sha256": "",
+  "status": "provisional",
+  "version": 1
+}

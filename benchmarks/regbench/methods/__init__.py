@@ -154,25 +154,27 @@ def patient_channels(cases):
 
 _LAUNCHES = itertools.count(1)
 
-# Methods with NO input rule for a brightfield case (an RGB whole-slide pair: HyReCo), and
-# why. Their adapters refuse such a case with this text (`require_fluorescence`), and the
-# run list leaves their runs out of a brightfield dataset (`variants.runs_for`). A method
-# not named here has a rule: STARE reads the case's one-channel proxy (methods/stare.py),
-# VALIS 1.2.0 reads the original RGB slides and picks its own brightfield processing.
+# Methods with NO input rule for a brightfield case (an RGB image pair: HyReCo, ANHIR),
+# and why. Their adapters refuse such a case with this text (`require_fluorescence`), and
+# the run list leaves their runs out of a brightfield dataset (`variants.runs_for`). A
+# method not named here has a rule: STARE reads the case's one-channel proxy
+# (methods/stare.py), VALIS 1.2.0 reads the original RGB images and picks its own
+# brightfield processing, DeeperHistReg reads the RGB image with its shipped parameters
+# (methods/deeperhistreg.py). A run of such a method can still be left out of ONE
+# dataset (`variants.NOT_ON`).
 NO_BRIGHTFIELD = {
     "valis_mirage": "it is the pipeline's own VALIS call, and the pipeline registers "
     "multichannel fluorescence rounds only: there is no shipped brightfield "
     "configuration of it to run",
-    "deeperhistreg": "the package is built for brightfield RGB, but this adapter hands "
-    "it one fluorescence channel per slide (its conversion, its writer loop and its "
-    "canvas arithmetic are per channel); the RGB input rule is not written yet",
     "ashlar": "ASHLAR stitches unstitched tiles by one translation per tile; a pair of "
-    "whole brightfield slides, re-mounted between the scans, is not its input (ruling "
-    "R3.8: ASHLAR is not run on HyReCo)",
+    "whole brightfield images of two sections (or of one section re-mounted between "
+    "the scans) is not its input (rulings R3.8 and R3.20: ASHLAR is run on neither "
+    "HyReCo nor ANHIR)",
     "palom": "this adapter follows PALOM's README recipe on one channel by index; on an "
     "RGB slide that would be the red channel, chosen by nobody. PALOM has colour "
     "modes of its own for an RGB slide (palom/color.py HaxProcessor: grayscale, "
-    "hematoxylin, aec, dab); which one is the input rule is not decided",
+    "hematoxylin, aec, dab); which one is the input rule is not decided, and PALOM "
+    "is described by its README as made for re-imaged slides of the same section",
 }
 
 

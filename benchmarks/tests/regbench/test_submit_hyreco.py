@@ -63,7 +63,7 @@ def test_only_the_runs_with_a_brightfield_rule_are_submitted(dry):
     assert checked == set(RUNS)
     # every other run of the cohort's list is named with its reason, not submitted
     left = [ln for ln in done.stdout.splitlines() if " is not run (" in ln]
-    assert len(left) == len(variants.active_runs()) - len(RUNS) == 15
+    assert len(left) == len(variants.active_runs()) - len(RUNS) == 16
     assert any(ln.startswith("# hyreco_b: ashlar is not run (") for ln in left)
 
 

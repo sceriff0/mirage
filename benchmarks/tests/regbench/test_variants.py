@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import pytest
 
-from benchmarks.regbench import METHODS, cli, methods, variants
+from benchmarks.regbench import METHODS, cli, methods, prep, variants
 from benchmarks.regbench.methods import ashlar, palom, valis
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
 EXPECTED = [
     "stare_rigid",
     "stare",
+    "stare_prep_rigid",
+    "stare_prep",
     "valis_mirage_rigid",
     "valis_mirage_nonrigid",
     "valis_mirage",
@@ -72,7 +74,7 @@ def by_name():
 
 
 def test_runs_produce_exactly_the_designs_variants():
-    assert len(EXPECTED) == 35 and len(set(EXPECTED)) == 35
+    assert len(EXPECTED) == 37 and len(set(EXPECTED)) == 37
     assert variants.expected_variants() == EXPECTED
 
 
@@ -90,7 +92,7 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 
 
 def test_counts():
-    assert variants.counts() == (18, 4, 7)
+    assert variants.counts() == (19, 4, 7)
     assert {variants.run_name(r) for r in variants.RUNS if r.gpu} == GPU
     per_patient = {
         variants.run_name(r)
@@ -102,9 +104,13 @@ def test_counts():
 
 def test_run_names_are_unique_and_no_stride_run_is_listed():
     names = [variants.run_name(r) for r in variants.RUNS]
-    assert len(names) == len(set(names)) == 18
+    assert len(names) == len(set(names)) == 19
     assert not [n for n in names if n.startswith("stare_s")]
-    assert [r.opts for r in variants.RUNS if r.method == "stare"] == [{}]
+    # STARE itself has ONE configuration; the second row only changes its input
+    assert [r.opts for r in variants.RUNS if r.method == "stare"] == [
+        {},
+        {"prep": prep.selected()},
+    ]
 
 
 def test_every_run_names_a_known_method_and_a_run_it_waits_for():
@@ -315,8 +321,10 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
     pinned OpenCV, in ONE image for a whole result."""
     from pathlib import Path
 
-    (stare,) = [r for r in variants.RUNS if r.method == "stare"]
-    assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
+    both = [r for r in variants.RUNS if r.method == "stare"]
+    assert [variants.run_name(r) for r in both] == ["stare", prep.ROW]
+    for stare in both:
+        assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
     assert "STARE" not in variants.BUILT_HERE  # the pipeline's image runs no row here
     assert variants.SCORER_IMAGE in variants.BUILT_HERE
     root = Path(__file__).resolve().parents[3]
@@ -387,7 +395,7 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert COLUMNS[:12] == FIRST_TWELVE == variants.RUNS_COLUMNS[:12]
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
-    assert len(got) == 18
+    assert len(got) == 19
     assert all(len(r) == len(COLUMNS) == 15 for r in got)
     assert [r[0] for r in got] == [variants.run_name(r) for r in variants.RUNS]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
@@ -469,7 +477,7 @@ def test_a_runs_line_round_trips_into_a_run_command(capsys):
 
 def test_runs_header_names_the_columns(capsys):
     got = rows(capsys, "--header")
-    assert tuple(got[0]) == COLUMNS and len(got) == 19
+    assert tuple(got[0]) == COLUMNS and len(got) == 20
 
 
 # ── `score` on the command line expects the whole list ────────────────────────
@@ -524,7 +532,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
         "deeperhistreg_fluo_gpu_asdrawn",
     }
     assert variants.expected_variants() == [v for v in EXPECTED if v not in gone]
-    assert variants.counts() == (16, 3, 6)
+    assert variants.counts() == (17, 3, 6)
     # the family keeps its primary, and its members are the runs that run
     assert variants.members("valis120") == ["valis120_hires"]
     assert variants.members("valis120", paused=True) == ["valis120", "valis120_hires"]
@@ -535,14 +543,14 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert variants.family("valis120_micro") == "valis120"
 
     got = rows(capsys)
-    assert len(got) == 16
+    assert len(got) == 17
     assert "valis120" not in [r[0] for r in got]
     assert {r[12] for r in got} == {"1"}
     everything = rows(capsys, "--all")
     assert [r[0] for r in everything] == [variants.run_name(r) for r in variants.RUNS]
     flags = {r[0]: r[12] for r in everything}
     assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
-    assert sum(v == "1" for v in flags.values()) == 16
+    assert sum(v == "1" for v in flags.values()) == 17
     # the same line, flag apart, as when it ran
     (line,) = [r for r in everything if r[0] == "valis120"]
     assert line[:12] == [
@@ -572,17 +580,17 @@ def test_score_does_not_expect_a_paused_run(monkeypatch):
     )
     assert cli.main(["score", "--cases", "c", "--out", "o"]) == 0
     assert "palom_b1024" not in seen["expected"] and "palom" in seen["expected"]
-    assert len(seen["expected"]) == 33
+    assert len(seen["expected"]) == len(EXPECTED) - 2
 
 
 def test_reactivating_is_one_field(monkeypatch):
     pause(monkeypatch, "valis120")
-    assert len(variants.expected_variants()) == 32
+    assert len(variants.expected_variants()) == len(EXPECTED) - 3
     monkeypatch.setattr(
         variants, "RUNS", tuple(r._replace(active=True) for r in variants.RUNS)
     )
     assert variants.expected_variants() == EXPECTED
-    assert variants.counts() == (18, 4, 7)
+    assert variants.counts() == (19, 4, 7)
 
 
 @pytest.mark.parametrize(
@@ -619,7 +627,7 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     # pausing the runs that wait as well is a consistent list
     pause(monkeypatch, "affine_ashlar", "affine_ashlar_clean")
     variants.check()
-    assert variants.counts() == (15, 4, 5)
+    assert variants.counts() == (16, 4, 5)
 
 
 def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):

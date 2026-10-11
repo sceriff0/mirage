@@ -2,7 +2,9 @@
 
 ``prepare <dataset>``  write the cases of ``synthetic`` / ``semisynth`` / ``multiplex`` (idempotent);
                        ``prepare hyreco --subset a|b`` writes the external landmark set
-                       ``hyreco_a`` (tuning) or ``hyreco_b`` (report)
+                       ``hyreco_a`` (tuning) or ``hyreco_b`` (report); ``prepare anhir
+                       --source DIR`` writes ANHIR's training pairs (``anhir``, and its
+                       tuning side again as ``anhir_tune``)
 ``list``               the number of prepared cases of a dataset (sizes a SLURM array), their
                        ids (``--ids``) or their patients (``--groups``)
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
@@ -17,10 +19,15 @@
                        paused runs; ``--dataset hyreco_b`` prints the runs of an
                        external brightfield set
 
-An external landmark set (``hyreco_a``, ``hyreco_b``) is never scored with the cohort:
-``score`` without ``--dataset`` reads the cohort's datasets only, and ``score --dataset
-hyreco_b`` writes that set's own tables (``<out>/tables/hyreco_b/``,
-``benchmarks/regbench/landmarks.py``). The two kinds cannot be named in one call.
+An external landmark set (``hyreco_a``, ``hyreco_b``, ``anhir_tune``, ``anhir``) is never
+scored with the cohort: ``score`` without ``--dataset`` reads the cohort's datasets only,
+and ``score --dataset hyreco_b`` writes that set's own tables (``<out>/tables/hyreco_b/``,
+``benchmarks/regbench/landmarks.py``; for ANHIR ``benchmarks/regbench/challenge.py``).
+The two kinds cannot be named in one call.
+``prep-select``        from the results of the preprocessing candidates on ANHIR's tuning
+                       side (``anhir_tune``): the evidence table and the candidate the
+                       ``stare_prep`` row is to run with; ``--freeze`` writes it into the
+                       tracked ``prep_frozen.json``
 ``gate``               from one run's ``selfcheck.json``: the status that decides whether
                        the run may start, and the rows to leave out of the results
                        (``score --drop``). Exit code as ``selfcheck``
@@ -274,6 +281,47 @@ def build_parser():
         "in the report set. Only when the files show they are different slides",
     )
 
+    an = prep.add_parser(
+        "anhir",
+        help="ANHIR's 230 training pairs (benchmarks/regbench/datasets/anhir.py): "
+        "`anhir`, and its tuning side again as `anhir_tune`",
+    )
+    common(an)
+    an.add_argument(
+        "--source",
+        default=None,
+        help="a folder holding dataset_medium.csv, images/ and landmarks/ (the "
+        "unpacked archives); it is only read",
+    )
+    an.add_argument("--table", default=None, help="the cover table, if elsewhere")
+    an.add_argument("--images", default=None, help="the unpacked image archive")
+    an.add_argument("--landmarks", default=None, help="the unpacked landmark archive")
+    an.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="prepare the pairs whose images are there; every case is marked",
+    )
+    an.add_argument(
+        "--count",
+        action="store_true",
+        help="print the number of training pairs and exit (sizes a prepare array)",
+    )
+
+    ps = sub.add_parser(
+        "prep-select",
+        help="choose the stare_prep preprocessing from the tuning side's results",
+    )
+    ps.add_argument("--cases", required=True)
+    ps.add_argument("--out", required=True)
+    ps.add_argument("--workers", type=int, default=n_cpus())
+    ps.add_argument(
+        "--freeze",
+        action="store_true",
+        help="write the choice and its evidence into benchmarks/regbench/"
+        "prep_frozen.json (then commit it)",
+    )
+    ps.add_argument("--frozen-file", default=None, help="another file to write (tests)")
+
     lst = sub.add_parser("list")
     lst.add_argument("--cases", required=True)
     lst.add_argument("--dataset", required=True, choices=ALL_DATASETS)
@@ -430,7 +478,8 @@ def build_parser():
         default=None,
         choices=ALL_DATASETS,
         help="default: the cohort's datasets. An external landmark set (hyreco_a, "
-        "hyreco_b) is scored only when named, alone, into tables of its own",
+        "hyreco_b, anhir_tune, anhir) is scored only when named, alone, into tables "
+        "of its own",
     )
     sc.add_argument("--workers", type=int, default=n_cpus())
     sc.add_argument(
@@ -578,7 +627,13 @@ def build_parser():
         default=None,
         choices=ALL_DATASETS,
         help="the runs of this dataset: for an external brightfield set, only the "
-        "runs whose method has an input rule for it",
+        "runs it takes; for anhir_tune, the preprocessing candidates",
+    )
+    rn.add_argument(
+        "--prep-status",
+        action="store_true",
+        help="print only `<status>\t<candidate>\t<run>` of the frozen preprocessing "
+        "(status: provisional or selected; run: the row that uses it)",
     )
     rn.add_argument(
         "--excluded",
@@ -793,6 +848,12 @@ def _runs(a):
 
     if a.scorer_image:
         print(variants.SCORER_IMAGE)
+        return 0
+    if a.prep_status:
+        from . import prep
+
+        record = prep.load_frozen()
+        print(f"{record['status']}\t{record['selected']}\t{prep.ROW}")
         return 0
     if a.excluded:
         for name, why in variants.excluded_for(a.dataset):
@@ -1035,6 +1096,13 @@ def main(argv=None):
         return nuclei.main(a)
     if a.cmd == "prepare":
         return _prepare(a)
+    if a.cmd == "prep-select":
+        from . import challenge
+
+        challenge.select_prep(
+            a.cases, a.out, freeze=a.freeze, path=a.frozen_file, workers=a.workers
+        )
+        return 0
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":
@@ -1070,9 +1138,10 @@ def main(argv=None):
 
     cohort, external = split_datasets(a.dataset)
     if external:
-        from . import landmarks
+        from . import ANHIR_DATASETS, challenge, landmarks
 
-        landmarks.score(
+        scorer = challenge if external in ANHIR_DATASETS else landmarks
+        scorer.score(
             a.cases,
             a.out,
             external,

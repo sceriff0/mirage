@@ -25,6 +25,7 @@ from benchmarks.regbench import (
     ALL_DATASETS,
     DATASETS,
     EXTERNAL_DATASETS,
+    HYRECO_DATASETS,
     cli,
     landmarks,
     methods,
@@ -143,7 +144,7 @@ def test_the_id_lists_are_the_dataset_pages():
     assert len(hyreco.SUBSET_A_IDS) == len(set(hyreco.SUBSET_A_IDS)) == 9
     assert len(hyreco.SUBSET_B_IDS) == len(set(hyreco.SUBSET_B_IDS)) == 54
     assert hyreco.SHARED_IDS == ("29", "108", "361", "464")
-    assert EXTERNAL_DATASETS == ("hyreco_a", "hyreco_b")
+    assert EXTERNAL_DATASETS == ("hyreco_a", "hyreco_b", "anhir_tune", "anhir")
     assert hyreco.DATASET == {"a": "hyreco_a", "b": "hyreco_b"}
     assert not set(EXTERNAL_DATASETS) & set(DATASETS)
     assert ALL_DATASETS == DATASETS + EXTERNAL_DATASETS
@@ -729,7 +730,10 @@ def test_the_tables_are_the_sets_own(tmp_path):
     left = text.split("that are not run here")[1].split("## Not computed")[0]
     for name in ("valis_mirage", "deeperhistreg_hr_gpu", "ashlar", "palom_b1024"):
         assert f"`{name}`" in left
-    assert left.count("\n- ") == len(methods.NO_BRIGHTFIELD)  # one line per reason
+    # one line per reason: a method without a rule, or a run HyReCo does not take
+    assert left.count("\n- ") == len(methods.NO_BRIGHTFIELD) + len(
+        variants.NOT_ON["hyreco_a"]
+    )
 
 
 def test_the_published_number_is_quoted_with_its_source_and_core_is_not():
@@ -874,7 +878,7 @@ def test_prepare_through_the_command_line(tmp_path, data, capsys):
 
 # ── which methods run on it ───────────────────────────────────────────────────
 def test_the_run_list_of_an_external_set():
-    for ds in EXTERNAL_DATASETS:
+    for ds in HYRECO_DATASETS:
         names = [variants.run_name(r) for r in variants.runs_for(ds)]
         assert names == ["stare", "valis120", "valis120_hires"]
         assert variants.primary_for(ds) == ["stare", "valis120_hires"]
@@ -884,7 +888,7 @@ def test_the_run_list_of_an_external_set():
             *methods.variant_names("valis", "valis120_hires"),
         ]
         left = dict(variants.excluded_for(ds))
-        assert len(left) == 15 and not set(left) & set(names)
+        assert len(left) == 16 and not set(left) & set(names)
         assert all(len(why) > 40 for why in left.values())
         table = variants.runs_table(dataset=ds)
         assert [r[0] for r in table] == names
@@ -892,7 +896,7 @@ def test_the_run_list_of_an_external_set():
     # the cohort's list is untouched
     assert variants.runs_for("multiplex") == variants.active_runs()
     assert variants.excluded_for("multiplex") == []
-    assert len(variants.runs_table()) == 18 and len(variants.expected_variants()) == 35
+    assert len(variants.runs_table()) == 19 and len(variants.expected_variants()) == 37
     assert variants.primary_for() == list(variants.PRIMARY)
 
 
@@ -901,7 +905,9 @@ def test_the_run_list_names_every_method_once():
     methods_of = {r.method for r in variants.active_runs()}
     with_rule = {r.method for r in variants.runs_for("hyreco_b")}
     assert with_rule == {"stare", "valis"}
-    assert with_rule | set(methods.NO_BRIGHTFIELD) == methods_of
+    # DeeperHistReg has a rule (ANHIR) and is left out of HyReCo by name
+    assert with_rule | set(methods.NO_BRIGHTFIELD) | {"deeperhistreg"} == methods_of
+    assert "deeperhistreg_hr_gpu" in dict(variants.excluded_for("hyreco_b"))
     assert not with_rule & set(methods.NO_BRIGHTFIELD)
 
 
@@ -915,9 +921,9 @@ def test_runs_prints_an_external_sets_list(capsys):
     ]
     assert cli.main(["runs", "--dataset", "hyreco_b", "--excluded"]) == 0
     left = capsys.readouterr().out.splitlines()
-    assert len(left) == 15 and left[0].startswith("valis_mirage\t")
+    assert len(left) == 16 and left[0].startswith("stare_prep\t")
     assert cli.main(["runs"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 18
+    assert len(capsys.readouterr().out.splitlines()) == 19
 
 
 def brightfield(tmp_path, **kw):

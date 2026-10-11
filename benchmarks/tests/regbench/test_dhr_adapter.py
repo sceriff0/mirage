@@ -827,9 +827,10 @@ def test_another_version_is_refused(tmp_path, case, monkeypatch):
     assert "1.0.1 is the pinned release; found 1.0.0" in run["error"]
 
 
-def test_a_brightfield_case_is_refused(tmp_path, case):
+def test_a_brightfield_slide_that_is_not_a_jpeg_or_png_is_refused(tmp_path, case):
+    """The RGB input rule is ANHIR's (ruling R3.20); a whole-slide TIFF has none."""
     case.modality = "brightfield"
-    with pytest.raises(ValueError, match="fluorescence channel"):
+    with pytest.raises(ValueError, match="written for JPEG / PNG"):
         next(dhr.register(case, tmp_path / "work", {}))
 
 
@@ -913,3 +914,88 @@ def test_the_selfcheck_pair_is_the_cohorts_class_for_every_label():
             assert full == tuple(5 * v for v in small)
         levels = 9 if "_hr" in label else 8
         assert (short * 0.2 / k) / 2 ** (levels - 1) >= 31
+
+
+# ── a brightfield case (ANHIR): the RGB image, the shipped parameters ─────────
+def _rgb_case(case, tmp_path):
+    """The pair's case as a brightfield one: two JPEGs of the pair's sizes."""
+    import dataclasses
+
+    from PIL import Image
+
+    rng = np.random.default_rng(5)
+    paths = {}
+    for side, hw in (("ref", case.ref_hw), ("mov", case.mov_hw)):
+        a = rng.integers(60, 250, (hw[0] // 8, hw[1] // 8, 3), dtype=np.uint8)
+        a = np.kron(a, np.ones((8, 8, 1), np.uint8))  # blocks survive JPEG well
+        paths[side] = tmp_path / f"{side}.jpg"
+        Image.fromarray(a).save(paths[side], quality=95)
+    return dataclasses.replace(
+        case,
+        modality="brightfield",
+        ref_image=str(paths["ref"]),
+        mov_image=str(paths["mov"]),
+    )
+
+
+def test_a_brightfield_case_is_given_whole_with_the_shipped_parameters(
+    tmp_path, case, fake, monkeypatch
+):
+    import sys
+
+    from benchmarks.regbench.prep import read_rgb
+
+    rgb = _rgb_case(case, tmp_path)
+    drawn = []
+
+    def writer(source, target, warped, field, **kw):
+        drawn.append({"source": source, "target": target, **kw})
+        tifffile.imwrite(
+            warped, np.zeros((*rgb.ref_hw, 3), np.uint8), photometric="rgb"
+        )
+
+    adf = sys.modules["deeperhistreg"].direct_registration.adf
+    monkeypatch.setattr(adf, "apply_deformation_pyvips", writer)
+    out = tmp_path / "out"
+    done = methods.run_case("deeperhistreg", rgb, out, keep_work=True)
+    assert done == ["deeperhistreg", "deeperhistreg_asdrawn"]
+    work = result_dir(out, "deeperhistreg_asdrawn", rgb) / "work"
+    # the container alone changed: one top-level page, three 8-bit samples, the decoded
+    # values of the JPEG untouched
+    with tifffile.TiffFile(work / "moving.tif") as tif:
+        assert len(tif.pages) == 1 and tif.pages[0].photometric.name == "RGB"
+        assert tif.pages[0].compression.name == "NONE" and tif.pages[0].is_tiled
+        assert np.array_equal(tif.pages[0].asarray(), read_rgb(rgb.mov_image))
+    (call,) = fake.calls("run_registration")
+    assert call["source_path"] == str(work / "moving.tif")  # the moving image is SOURCE
+    params = call["parameters"]
+    # the shipped brightfield settings, as they stand
+    assert params["loading_params"]["pad_value"] == 255.0
+    assert params["loading_params"]["loader"] == "tiff"
+    assert params["preprocessing_params"]["flip_intensity"] is True
+    assert params["preprocessing_params"]["convert_to_gray"] is True
+    run = run_json(out, "deeperhistreg_asdrawn", rgb)
+    info = run["info"]
+    assert info["fluo"] is False and "RGB image" in info["implementation"]["input"]
+    assert info["grey_levels"] == {"reference": None, "moving": None}
+    assert any("JPEG / PNG" in s for s in info["implementation"]["benchmark_side"])
+    assert not [k for k in info["implementation"]["changed_keys"] if "pad" in k]
+    # the writer once, on the RGB file; its own file is the native image
+    (one,) = drawn
+    assert one["source"] == str(work / "moving.tif") and one["pad_value"] == 255.0
+    native = run["native"]
+    assert native["channels"] == ["R", "G", "B"] and native["origin_xy"] == [0.0, 0.0]
+    assert "once, on the RGB image" in native["writer"]
+
+
+def test_brightfield_refuses_the_fluorescence_configuration_and_a_slide_tiff(
+    tmp_path, case
+):
+    import dataclasses
+
+    rgb = _rgb_case(case, tmp_path)
+    with pytest.raises(ValueError, match="fluo=1 configures DeeperHistReg"):
+        next(dhr.register(rgb, tmp_path / "w", {"fluo": 1}))
+    slide = dataclasses.replace(rgb, mov_image="/data/HyReCo/PHH3/29.tif")
+    with pytest.raises(ValueError, match="written for JPEG / PNG"):
+        next(dhr.register(slide, tmp_path / "w", {}))

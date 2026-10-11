@@ -6,7 +6,8 @@ whether it needs a GPU, and the run that must have finished first. The launcher 
 list (``python -m benchmarks.regbench runs``); the scorer is told which result names to
 expect (``expected_variants()``) and which are the primary rows (``PRIMARY``).
 
-Totals: 18 runs, 35 result names, 4 runs on a GPU, 7 runs per patient (the rest per pair).
+Totals (``counts()``, ``expected_variants()``; nothing here is a second copy to keep in
+step): 19 runs, 37 result names, 4 runs on a GPU, 7 runs per patient (the rest per pair).
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
@@ -49,13 +50,27 @@ only ever added at the end, so a position never changes.
                        ahead with ``run --realcheck`` and starts the rest only when
                        that row's ``realcheck.json`` is not flagged.
 
-**An external brightfield dataset** (HyReCo: ``hyreco_a``, ``hyreco_b``) has a shorter
-list: the active runs whose method has an input rule for a brightfield case
-(``runs_for(dataset)``; today ``stare``, ``valis120``, ``valis120_hires``). The others are
-left out with a reason each (``excluded_for``, from ``methods.NO_BRIGHTFIELD``), and their
-adapters refuse such a case in the same words. ``runs --dataset hyreco_b`` prints that
-list in the same columns; ``expected_variants(dataset)`` and ``primary_for(dataset)``
-are what its scorer (``regbench.landmarks``) is told.
+**An external brightfield dataset** has a shorter list (``runs_for(dataset)``), every
+other active run being left out with a reason (``excluded_for(dataset)``: a method
+without an input rule for a brightfield case, ``methods.NO_BRIGHTFIELD``, whose adapter
+refuses such a case in the same words; or a run this dataset does not take,
+``NOT_ON``). ``runs --dataset <name>`` prints the list in the same columns;
+``expected_variants(dataset)`` and ``primary_for(dataset)`` are what its scorer is told.
+
+``hyreco_a``, ``hyreco_b``  ``stare``, ``valis120``, ``valis120_hires``
+``anhir``                  ``stare``, ``stare_prep``, ``valis120``, ``valis120_hires`` and
+                           the four DeeperHistReg runs that are not configured for
+                           fluorescence (8 runs, 18 result names)
+``anhir_tune``             none of the cohort's runs: the preprocessing candidates of
+                           ``stare_prep`` alone (``TUNING_RUNS``, one run per candidate of
+                           ``regbench.prep.CANDIDATES``), each behind its own selfcheck
+
+**The ``stare_prep`` run** (ruling R3.21) is STARE unchanged on a preprocessed copy of the
+image it registers on (``regbench.prep``). Its one option, ``prep``, is the candidate
+frozen in ``prep_frozen.json``, read when this module is imported: the run list always
+names the candidate itself, so a result made with another candidate is never reused as
+this one. It is an active, non-primary row of STARE's family on the cohort's datasets
+and on ``anhir``.
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -75,7 +90,14 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import EXTERNAL_DATASETS, methods
+from . import (
+    ANHIR,
+    ANHIR_TUNE,
+    EXTERNAL_DATASETS,
+    HYRECO_DATASETS,
+    methods,
+    prep,
+)
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
 # list starts no adapter; the tests hold the two equal.
@@ -96,6 +118,8 @@ class Run(NamedTuple):
 
 RUNS = (
     Run("stare", None, {}, "STARE_REGBENCH", False, None),
+    # STARE unchanged, on the frozen benchmark-side preprocessing of its input
+    Run("stare", prep.ROW, {"prep": prep.selected()}, "STARE_REGBENCH", False, None),
     Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
@@ -192,6 +216,13 @@ RUNS = (
     Run("palom", "palom_b1024", {"block": "1024"}, "PALOM", False, None),
 )
 
+# The tuning side of ANHIR (`anhir_tune`) runs these and nothing else: one run per
+# preprocessing candidate, so the choice can look at no other data.
+TUNING_RUNS = tuple(
+    Run("stare", f"{prep.ROW}_{c}", {"prep": c}, "STARE_REGBENCH", False, None)
+    for c in prep.CANDIDATES
+)
+
 # Ruling R3.12 (2026-10-11): the high-resolution row is primary for both methods that
 # have one. Each is one line to switch back to upstream's default setting:
 # "valis120" (register at 512 / 2048 px) and "deeperhistreg_gpu_asdrawn" (the 4096 px
@@ -239,6 +270,38 @@ GATE_SUFFIXES = {"deeperhistreg": ("_asdrawn",)}
 # package, so it is also checked on a real case before the cohort is spent on it. The
 # gate reads the run's PRIMARY row; a run of these methods without one has none.
 REALCHECK_METHODS = ("valis_mirage", "valis")
+
+# Runs an external dataset does not take although their method has a brightfield input
+# rule: `[(which runs, why)]` per dataset. HyReCo is dormant and keeps the list it was
+# built with.
+_HYRECO_NOT = (
+    (
+        lambda r: r.method == "deeperhistreg",
+        "its RGB input rule was written for ANHIR's JPEG / PNG images (ruling R3.20) "
+        "and has not been extended to HyReCo's BigTIFF slides; HyReCo is dormant",
+    ),
+    (
+        lambda r: run_name(r) == prep.ROW,
+        "the preprocessing row is defined for ANHIR, the cohort and the synthetic "
+        "suite (ruling R3.21); HyReCo is dormant and keeps its own proxy settings",
+    ),
+)
+NOT_ON = {
+    **{d: _HYRECO_NOT for d in HYRECO_DATASETS},
+    ANHIR: (
+        (
+            lambda r: r.method == "deeperhistreg" and r.opts.get("fluo") == "1",
+            "`fluo=1` is the benchmark's configuration of DeeperHistReg for a "
+            "fluorescence channel (a black pad, no intensity flip); on an RGB "
+            "brightfield image the shipped parameters are the ones to run",
+        ),
+    ),
+}
+TUNING_ONLY = (
+    "the tuning side of ANHIR runs the preprocessing candidates of the stare_prep "
+    "row and nothing else: no other run may be looked at there, and every run of the "
+    "list is scored on those pairs anyway, labelled, in the `anhir` dataset"
+)
 
 # Image -> the build context under containers/ (images.json) for the ones this repository
 # builds, and the upstream reference for the ones it pulls.
@@ -293,6 +356,11 @@ def variants_of(run):
 def run_variants():
     """``{run name: [the result names it writes]}`` for every run, paused or not."""
     return {run_name(r): list(variants_of(r)) for r in RUNS}
+
+
+def tuning_final(candidate):
+    """The result name of a candidate's FINAL transform on the tuning side."""
+    return f"{prep.ROW}_{candidate}"
 
 
 NO_RECORD = "no selfcheck record"
@@ -351,7 +419,7 @@ def paused_names():
 
 def run_of(name):
     """The run stored under ``name``, paused or not; KeyError for a name of no run."""
-    for run in RUNS:
+    for run in RUNS + TUNING_RUNS:
         if run_name(run) == name:
             return run
     raise KeyError(f"no run named {name!r}")
@@ -389,6 +457,15 @@ def check():
     unknown = set(methods.NO_BRIGHTFIELD) - {r.method for r in RUNS}
     if unknown:
         raise ValueError(f"NO_BRIGHTFIELD names no method of the list: {unknown}")
+    names = {run_name(r) for r in RUNS}
+    if len(names) != len(RUNS) or names & {run_name(r) for r in TUNING_RUNS}:
+        raise ValueError("two runs share a name")
+    for dataset, rules in NOT_ON.items():
+        if dataset not in EXTERNAL_DATASETS:
+            raise ValueError(f"NOT_ON names no external dataset: {dataset!r}")
+        for pick, _ in rules:
+            if not any(pick(r) for r in RUNS):
+                raise ValueError(f"a rule of NOT_ON[{dataset!r}] matches no run")
     for dataset in EXTERNAL_DATASETS:
         kept = {run_name(r) for r in runs_for(dataset)}
         for run in runs_for(dataset):
@@ -401,23 +478,36 @@ def check():
                     )
 
 
+def _not_on(dataset, run):
+    """Why an active run is left out of an external dataset, or None."""
+    if run.method in methods.NO_BRIGHTFIELD:
+        return methods.NO_BRIGHTFIELD[run.method]
+    for pick, why in NOT_ON.get(dataset, ()):
+        if pick(run):
+            return why
+    return None
+
+
 def runs_for(dataset=None):
     """The active runs of a dataset: all of them for the cohort's datasets (and for
-    None); for an external brightfield set, those whose method has an input rule for a
-    brightfield case."""
+    None); for an external brightfield set, those not left out (``excluded_for``); for
+    ANHIR's tuning side, the preprocessing candidates and nothing else."""
+    if dataset == ANHIR_TUNE:
+        return TUNING_RUNS
     if dataset not in EXTERNAL_DATASETS:
         return active_runs()
-    return tuple(r for r in active_runs() if r.method not in methods.NO_BRIGHTFIELD)
+    return tuple(r for r in active_runs() if _not_on(dataset, r) is None)
 
 
 def excluded_for(dataset):
-    """``[(run name, reason)]`` of the active runs left out of ``dataset``."""
-    if dataset not in EXTERNAL_DATASETS:
+    """``[(run name, reason)]`` of the active runs left out of ``dataset``. ANHIR's
+    tuning side takes none of them (``TUNING_ONLY``, said once, not per run)."""
+    if dataset not in EXTERNAL_DATASETS or dataset == ANHIR_TUNE:
         return []
     return [
-        (run_name(r), methods.NO_BRIGHTFIELD[r.method])
+        (run_name(r), _not_on(dataset, r))
         for r in active_runs()
-        if r.method in methods.NO_BRIGHTFIELD
+        if _not_on(dataset, r) is not None
     ]
 
 
@@ -429,7 +519,7 @@ def primary_for(dataset=None):
 
 def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs (35 with nothing paused). For an external dataset, the names of
+    the active runs (37 with nothing paused). For an external dataset, the names of
     ``runs_for(dataset)``."""
     check()
     return [v for run in runs_for(dataset) for v in variants_of(run)]

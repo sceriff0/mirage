@@ -10,7 +10,7 @@
 #                                REGBENCH_PIPELINE_TRACE names one
 #
 #   score_cohort.sbatch score <external dataset>
-#                                an external landmark set (hyreco_a, hyreco_b), alone:
+#                                an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir), alone:
 #                                its own tables under $REGBENCH_OUT/tables/<dataset>/,
 #                                never the cohort's
 #

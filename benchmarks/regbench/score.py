@@ -83,7 +83,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, cost, failure_log, pairs, tissue, truth
+from . import DATASETS, cost, failure_log, pairs, prep, tissue, truth
 from .cases import (
     NUCLEI,
     OUTLINES,
@@ -1826,6 +1826,14 @@ def summary_markdown(
         "of (its points were compared with nothing), `via <run>` a row whose run is "
         "gated by another run's selfcheck.\n"
     )
+    if any(str(r.get("method", "")).startswith(prep.ROW) for r in summary):
+        parts.append(
+            prep.frozen_summary()
+            + ". STARE and its parameters are the same in `stare` and `stare_prep`; "
+            "only the image it registers on differs (`benchmarks/regbench/prep.py`), "
+            "and the candidate was chosen on ANHIR's tuning-side pairs, not on this "
+            "cohort.\n"
+        )
     excluded = excluded or []
     if excluded:
         parts.append(

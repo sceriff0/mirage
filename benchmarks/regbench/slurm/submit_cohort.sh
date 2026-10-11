@@ -57,6 +57,20 @@
 # $REGBENCH_OUT/tables/<name>/ and none of the cohort's tables. Use a REGBENCH_OUT of
 # its own.
 #
+# ANHIR's TRAINING PAIRS are another external landmark set, in two datasets from one
+# prepare (README, "ANHIR: the challenge's training pairs"):
+#
+#   submit_cohort.sh --prepare --datasets anhir         (writes anhir AND anhir_tune)
+#   submit_cohort.sh --datasets anhir_tune              the preprocessing candidates
+#                                                       alone, on the tuning side
+#   python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" \
+#       --out "$REGBENCH_OUT" --freeze                  (then commit prep_frozen.json)
+#   submit_cohort.sh --datasets anhir                   every run ANHIR takes, on all 230
+#                                                       training pairs
+#
+# Neither is part of the default. While prep_frozen.json says `provisional`, every
+# submission that holds the preprocessing row says so, in a dry run too.
+#
 # ENVIRONMENT (env.sh has the paths and the images)
 #   REGBENCH_CASES, REGBENCH_OUT      prepared cases; results
 #   REGBENCH_SIF_<image>              one per image of the run list (column `image`)
@@ -117,6 +131,10 @@
 #                                     REGBENCH_CASES)
 #   REGBENCH_HYRECO_B_ARGS            more `prepare hyreco --subset b` options (never a
 #                                     setting: --proxy and --reduce are refused there)
+#   REGBENCH_ANHIR                    with --prepare --datasets anhir: the folder holding
+#                                     dataset_medium.csv, images/ and landmarks/ (the
+#                                     challenge's unpacked archives; only read)
+#   REGBENCH_ANHIR_ARGS               more `prepare anhir` options (--allow-incomplete)
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
 # The rungs, 4 CPUs and the 7-day limit are frozen (benchmarks/regbench/ladder.py).
@@ -136,6 +154,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
 # multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
+# The ANHIR sets (anhir, anhir_tune) are never part of the default either.
 DEFAULT_DATASETS="multiplex synthetic"
 DORMANT_DATASETS="semisynth hyreco_a hyreco_b"
 prepare=0 only_runs="" datasets="$DEFAULT_DATASETS"
@@ -166,10 +185,10 @@ done
 EXTERNAL="" n_named=0
 for ds in $datasets; do
     n_named=$((n_named + 1))
-    case "$ds" in hyreco_a|hyreco_b) EXTERNAL="$ds" ;; esac
+    case "$ds" in hyreco_a|hyreco_b|anhir|anhir_tune) EXTERNAL="$ds" ;; esac
 done
 if [ -n "$EXTERNAL" ] && [ "$n_named" -ne 1 ]; then
-    die "--datasets '$datasets': an external landmark set (hyreco_a, hyreco_b) is submitted alone, with its own run list and its own tables. hyreco_a is the tuning set, hyreco_b the report set. Nothing was submitted."
+    die "--datasets '$datasets': an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir) is submitted alone, with its own run list and its own tables. hyreco_a and anhir_tune are tuning sets. Nothing was submitted."
 fi
 
 # seconds <[D-]HH:MM:SS> ; limit <seconds> -> D-HH:MM:SS, never above the site's maximum
@@ -243,6 +262,7 @@ if [ -n "$EXTERNAL" ]; then
     regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" --excluded | \
         while IFS=$'\t' read -r name why; do echo "# $EXTERNAL: $name is not run ($why)"; done
 fi
+[ "$EXTERNAL" = anhir_tune ] && echo "# anhir_tune: the preprocessing candidates and no other run (the tuning side is the only data that choice may look at)"
 REGBENCH_SCORER_IMAGE="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --scorer-image)"
 export REGBENCH_SCORER_IMAGE
 
@@ -253,6 +273,16 @@ for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
 for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_UNCHECKED: no run named '$r'"; done
+# the preprocessing row: said aloud while its preprocessing has not been selected
+IFS=$'\t' read -r prep_status prep_candidate prep_run < <(regbench_py "$REGBENCH_HEAD_IMAGE" runs --prep-status) \
+    || die "cannot read the frozen preprocessing (benchmarks/regbench/prep_frozen.json)"
+if has "$selected" "$prep_run"; then
+    if [ "$prep_status" = selected ]; then
+        echo "# $prep_run: preprocessing '$prep_candidate', selected on ANHIR's tuning side (prep_frozen.json)"
+    else
+        echo "# WARNING $prep_run: its preprocessing ('$prep_candidate') is PROVISIONAL: the selection on ANHIR's tuning side has not been run. Its results will say so, and are run again once prep_frozen.json names the selected candidate (submit_cohort.sh --datasets anhir_tune, then prep-select --freeze)."
+    fi
+fi
 
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
@@ -320,12 +350,23 @@ if [ "$prepare" = 1 ]; then
                 given=(${REGBENCH_HYRECO_B_ARGS:-})
                 what=(hyreco --subset b --ref-dir "$REGBENCH_HYRECO_B_HE" --mov-dir "$REGBENCH_HYRECO_B_PHH3"
                       --settings-from "${REGBENCH_HYRECO_TUNED:-$REGBENCH_CASES}" ${given[@]+"${given[@]}"}) ;;
-            *) die "--datasets: '$ds' is not one of multiplex, semisynth, synthetic, hyreco_a, hyreco_b" ;;
+            anhir|anhir_tune)
+                [ -n "${REGBENCH_ANHIR:-}" ] || die "--prepare --datasets $ds needs REGBENCH_ANHIR (the folder holding dataset_medium.csv, images/ and landmarks/). Nothing was submitted."
+                [ "$ds" = anhir_tune ] && echo "# anhir_tune is written by the prepare of anhir: one prepare, both datasets"
+                # shellcheck disable=SC2206  # several words
+                given=(${REGBENCH_ANHIR_ARGS:-})
+                what=(anhir --source "$REGBENCH_ANHIR" ${given[@]+"${given[@]}"}) ;;
+            *) die "--datasets: '$ds' is not one of multiplex, semisynth, synthetic, hyreco_a, hyreco_b, anhir, anhir_tune" ;;
         esac
         if [ -n "$EXTERNAL" ]; then
-            # one pair per task: a slide is about 21 gigapixels, and its proxy is written here
-            n_pairs="$(regbench_py "$REGBENCH_HEAD_IMAGE" prepare hyreco --cases "$REGBENCH_CASES" \
-                --subset "${ds#hyreco_}" --count)" || die "cannot size the $ds prepare array"
+            # one pair per task: a HyReCo slide is about 21 gigapixels, and a proxy of
+            # each image is written here
+            case "$ds" in
+                hyreco_*) count=(hyreco --subset "${ds#hyreco_}") ;;
+                *) count=(anhir --source "$REGBENCH_ANHIR") ;;
+            esac
+            n_pairs="$(regbench_py "$REGBENCH_HEAD_IMAGE" prepare "${count[@]}" --cases "$REGBENCH_CASES" \
+                --count)" || die "cannot size the $ds prepare array"
             array=(--array="0-$((n_pairs - 1))%$REGBENCH_ARRAY_LIMIT")
             log="$LOG_ARRAY"
         fi
@@ -549,6 +590,8 @@ echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dro
 if [ -n "$EXTERNAL" ]; then
     echo "# results     -> $REGBENCH_OUT/tables/$EXTERNAL/summary.md (this set's own tables; none of the cohort's)"
     [ "$EXTERNAL" = hyreco_a ] && echo "# hyreco_a is the TUNING set: nothing in its tables is a result"
+    [ "$EXTERNAL" = anhir_tune ] && echo "# anhir_tune is the TUNING side: nothing in its tables is a result. When it is done: python -m benchmarks.regbench prep-select --cases $REGBENCH_CASES --out $REGBENCH_OUT --freeze, commit benchmarks/regbench/prep_frozen.json, then submit_cohort.sh --datasets anhir"
+    [ "$EXTERNAL" = anhir ] && echo "# anhir: the challenge's TRAINING pairs; no number is comparable with a leaderboard row (hidden evaluation pairs)"
 else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi

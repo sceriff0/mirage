@@ -61,6 +61,29 @@ nuclear channel is therefore written as a tiled TIFF with ONE top-level page: 16
 values untouched, uncompressed (``single_page_tiff``). The clock is paused while this is
 done; ``convert_s`` is recorded.
 
+**A brightfield case** (ANHIR: ``case.modality == "brightfield"``; ruling R3.20). The
+package is built for this input: its README lists the stains it "was tested on" (H&E,
+ER, PGR, HER2, KI67, CC10, CD8, CD31, CD45, PR, PHH3, DAPI) and its examples pass the
+source and the target image by path (``README.md:10-32``, ``:44-128``). The input rule
+follows the shipped parameter sets, which are for RGB brightfield as they stand
+(``registration_params.py:484-520``, ``:652-690``): the loader is ``'tiff'``
+(``pyvips.Image.tiffload``), the pad value 255 (a white slide), and the preprocessing
+normalises each channel to its own minimum and maximum, converts to grey
+(``torchvision`` ``Grayscale``, ``dhr_utils/utils.py:374-375``), inverts (``flip_intensity``)
+and applies CLAHE (``general_preprocessing.py:47-66``). So each RGB image is given to the
+package WHOLE, three 8-bit channels, values untouched, and the parameter set is run as
+shipped (the same ``changed_keys`` as every row: device and ``save_final_images``). The
+one benchmark-side step is the container: ANHIR's images are JPEG or PNG and the shipped
+loader reads TIFF, so each is decoded and written as a tiled, uncompressed RGB TIFF with
+one top-level page (``rgb_single_page_tiff``; clock paused, ``convert_s``). The loader is
+NOT switched to the package's ``'pil'`` one: that would be a changed parameter.
+``fluo=1`` is refused on such a case. The package's writer then draws the RGB image in
+one call and its file is kept as it is (three channels, pyramidal TIFF). Nothing of this
+path was run with the package (module docstring, last paragraph); its input rule was
+read from MWod/DeeperHistReg main @ ``42e7c9d`` ``[PARTIAL: as listed below, plus
+README.md:1-128, dhr_input_output/input_output.py, tiff_loader.py:20-120,
+pil_loader.py:1-35, general_preprocessing.py:1-66 in full]``.
+
 **Options** (``--opt key=value``): ``config`` (one of ``CONFIGS``), ``device`` (``cpu``
 or ``cuda:N``; default ``cpu``; a CUDA request without CUDA is refused, because the
 package would fall back silently, ``full_resolution.py:58``), ``fluo`` (``pad_value = 0``
@@ -102,7 +125,6 @@ from pathlib import Path
 import numpy as np
 
 from ..mapping import REF_TO_MOV, PointMap
-from . import require_fluorescence
 
 SCOPE = "pair"
 VARIANTS = ("deeperhistreg", "deeperhistreg_asdrawn")
@@ -303,6 +325,38 @@ def single_page_tiff(src, channel, dst):
             else int(len(np.unique(((seen - seen[0]) / span * 255).astype(np.uint8))))
         )
     return {"hw": [h, w], "dtype": str(dtype), "levels": levels}
+
+
+def rgb_single_page_tiff(src, dst):
+    """An RGB image file (JPEG, PNG) as a tiled, uncompressed TIFF with ONE top-level
+    page: three 8-bit samples per pixel, the decoded values untouched. Returns ``{"hw",
+    "dtype", "levels"}`` like ``single_page_tiff`` (``levels`` None: three channels)."""
+    import tifffile
+
+    from ..prep import read_rgb
+
+    rgb = np.ascontiguousarray(read_rgb(src))
+    if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
+        raise ValueError(f"{src}: expected an 8-bit RGB image, got {rgb.shape}")
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(
+        str(dst),
+        rgb,
+        bigtiff=True,
+        tile=(TILE, TILE),
+        photometric="rgb",
+        planarconfig="contig",
+        metadata=None,
+    )
+    return {
+        "hw": [int(rgb.shape[0]), int(rgb.shape[1])],
+        "dtype": "uint8",
+        "levels": None,
+    }
+
+
+def is_brightfield(case):
+    return case.modality == "brightfield"
 
 
 def _nuclear(case, side):
@@ -552,7 +606,18 @@ def run_package(package, source, target, out, params, token, tmp):
 
 
 def register(case, work, opts):
-    require_fluorescence(case, "deeperhistreg")  # before the package is imported
+    rgb = is_brightfield(case)
+    if rgb and settings(opts)[2]:  # before the package is imported
+        raise ValueError(
+            f"{case.case_id}: fluo=1 configures DeeperHistReg for a fluorescence "
+            "channel (a black pad, no intensity flip); a brightfield RGB case is run "
+            "with the shipped parameters"
+        )
+    if rgb and not str(case.mov_image).lower().endswith((".jpg", ".jpeg", ".png")):
+        raise ValueError(
+            f"{case.case_id}: the RGB input rule is written for JPEG / PNG images "
+            "(ANHIR); a whole-slide RGB TIFF is not converted here"
+        )
     import deeperhistreg
     import SimpleITK as sitk
     import torch
@@ -579,8 +644,12 @@ def register(case, work, opts):
     t0 = time.perf_counter()
     try:
         ref_p, mov_p = work / "reference.tif", work / "moving.tif"
-        ref_meta = single_page_tiff(*_nuclear(case, "ref"), ref_p)
-        mov_meta = single_page_tiff(*_nuclear(case, "mov"), mov_p)
+        if rgb:
+            ref_meta = rgb_single_page_tiff(case.ref_image, ref_p)
+            mov_meta = rgb_single_page_tiff(case.mov_image, mov_p)
+        else:
+            ref_meta = single_page_tiff(*_nuclear(case, "ref"), ref_p)
+            mov_meta = single_page_tiff(*_nuclear(case, "mov"), mov_p)
     finally:
         convert_s = time.perf_counter() - t0
         mon.resume()
@@ -656,8 +725,19 @@ def register(case, work, opts):
             "point_warp": "dhr_utils.warping.warp_landmarks (deeperhistreg): a cubic-"
             "spline lookup of the saved field",
             "writer": WRITER,
+            "input": "the RGB image, three 8-bit channels, shipped parameters "
+            "(brightfield)"
+            if rgb
+            else "the nuclear channel of each slide",
             "benchmark_side": [
-                "each slide's nuclear channel written as a tiled TIFF with one top-level "
+                (
+                    "each RGB image (JPEG / PNG) decoded and written as a tiled, "
+                    "uncompressed RGB TIFF with one top-level page, values untouched: "
+                    "the shipped loader reads TIFF. Clock paused; "
+                    f"convert_s = {convert_s:.1f}"
+                )
+                if rgb
+                else "each slide's nuclear channel written as a tiled TIFF with one top-level "
                 "page, same dtype and values, uncompressed: the package does not read "
                 "OME-TIFF (issue #4) and its TIFF loader counts top-level pages as "
                 f"pyramid levels. Clock paused; convert_s = {convert_s:.1f}",
@@ -677,8 +757,10 @@ def register(case, work, opts):
                 "on disk can be scored: full-resolution centre pads, the field's index "
                 "image read at X / S - 0.5 with linear interpolation and edge copying, "
                 "times S = canvas / field size",
-                "the writer run once per channel of the moving slide; its per-channel "
-                "files stacked into one OME-TIFF, values unchanged",
+                "the writer run once on the RGB image; its file is kept as it is"
+                if rgb
+                else "the writer run once per channel of the moving slide; its "
+                "per-channel files stacked into one OME-TIFF, values unchanged",
                 "stdout captured around run_registration (the package prints its "
                 "exception there and continues); a new case_name per call",
             ],
@@ -692,7 +774,8 @@ def register(case, work, opts):
         "field": field_p,
         "target": ref_p,
         "source": mov_p,
-        "source_channel": _nuclear(case, "mov")[1],
+        "source_channel": None if rgb else _nuclear(case, "mov")[1],
+        "rgb": rgb,
         "asdrawn": asdrawn,
         "ref_hw": geo.ref_hw,
         "mov_hw": geo.mov_hw,
@@ -743,6 +826,8 @@ def write_native(state, case_id, dest_dir):
     loading, saving = params["loading_params"], params["saving_params"]
     loader = pipeline.loader_mapper[loading["loader"]]
     saver = pipeline.saver_mapper[saving["final_saver"]]
+    if state.get("rgb"):
+        return _write_native_rgb(state, dest, loader, saver, loading, saving)
     src_path, nuclear = _nuclear(case, "mov")
     arr, _, close = open_lazy(src_path)
     try:
@@ -839,6 +924,60 @@ def write_native(state, case_id, dest_dir):
         "by the reference's own pads",
         "written": own,
         "write_parts_s": parts,
+    }
+    state["native"] = native
+    return native
+
+
+def _write_native_rgb(state, dest, loader, saver, loading, saving):
+    """A brightfield case: the package's writer, once, on the RGB image. Its own file
+    is the native image (three channels, the reference image's size)."""
+    import tifffile
+
+    from .. import imageio
+
+    pipeline = state["pipeline"]
+    out = dest / f"registered{saving['final_extension']}"
+    t0 = time.perf_counter()
+    pipeline.adf.apply_deformation_pyvips(
+        str(state["source"]),
+        str(state["target"]),
+        str(out),
+        str(state["field"]),
+        loader=loader,
+        saver=saver,
+        level=loading["final_level"],
+        pad_value=loading["pad_value"],
+        save_source_only=True,
+        to_template_shape=True,
+    )
+    writer_s = time.perf_counter() - t0
+    h, w = state["ref_hw"]
+    with tifffile.TiffFile(str(out)) as tif:
+        page = tif.pages[0]
+        shape, dtype = tuple(int(v) for v in page.shape), str(page.dtype)
+    if shape[:2] != (h, w):
+        raise RuntimeError(
+            f"the writer's image is {shape}, the reference image is {(h, w)}: the "
+            "declared origin (0, 0) would not hold"
+        )
+    pad_value = loading["pad_value"]
+    native = {
+        "files": [str(out)],
+        "format": "the package's own pyramidal RGB TIFF, as written",
+        "writer": WRITER.replace(
+            ", once per channel of the moving slide", ", once, on the RGB image"
+        ),
+        "fill": f"{pad_value:g} counts inside the padded canvas (the writer's "
+        "pad_value), 0 beyond it",
+        "origin_xy": [0.0, 0.0],
+        "valid_box": footprint_box(state["asdrawn"], (h, w), state["mov_hw"]),
+        "channels": ["R", "G", "B"],
+        "dtype": dtype,
+        "frame": "the reference image's grid: the writer crops the padded canvas "
+        "back by the reference's own pads",
+        "written": imageio.describe_written(out),
+        "write_parts_s": {"convert": 0.0, "writer": writer_s, "benchmark": 0.0},
     }
     state["native"] = native
     return native
