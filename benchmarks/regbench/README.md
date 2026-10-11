@@ -61,8 +61,7 @@ selfcheck.py   do a method's points follow the image its own writer produced? (a
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
 cost.py        cost from the cohort's files to a merged image, step by step (secondary)
-slurm/         the cohort launcher (submit_cohort.sh) and what its jobs run; two older
-               one-allocation launchers (submit.sh, submit_scale.sh)
+slurm/         the cohort launcher (submit_cohort.sh) and what its jobs run
 ```
 
 Three seams: datasets write cases, method adapters run the method's own software and return
@@ -1056,7 +1055,7 @@ and array sections). None of the following was observed:
   jobs, and array TASKS count toward a per-user limit on many sites. Submit by
   `--datasets` or `--runs` if the limit is lower.
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
-  into the job, as the two older launchers already assume.
+  into the job.
 
 ## HyReCo: an external landmark set (its own tables)
 

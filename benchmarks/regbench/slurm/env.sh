@@ -36,10 +36,8 @@
 # method's own core-count option is set to the allocation by the driver, and what its
 # pools saw is recorded.
 #
-# The two older launchers (submit.sh, submit_scale.sh) submit at ONE allocation and name
-# an environment by method: REGBENCH_CPUS (4), REGBENCH_MEM (16G), REGBENCH_TIME, and per
-# method M: REGBENCH_SIF_M / REGBENCH_CONDA_M / REGBENCH_VENV_M, REGBENCH_SBATCH_M,
-# REGBENCH_OPTS_M, REGBENCH_LABEL_M.
+# REGBENCH_CPUS (4) and REGBENCH_MEM (16G) are the defaults of jobs outside the ladder
+# (prepare, gate, score).
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
@@ -61,7 +59,7 @@ _regbench_var() {  # _regbench_var SIF valis120 -> value of REGBENCH_SIF_VALIS12
 }
 
 # regbench_py <image> <regbench args...>: run `python -m benchmarks.regbench` in that
-# image (or, for the older launchers, that method's environment), from the repository
+# image, from the repository
 # root (in a subshell: the caller's directory and environment are left alone).
 regbench_py() (
     local method="$1"; shift
@@ -82,7 +80,7 @@ regbench_py() (
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done
         # --nv only for a run that asked for a GPU. The cohort launcher says so in
-        # REGBENCH_GPU; the older launchers do not set it, and a visible device decides.
+        # REGBENCH_GPU; unset, a visible device decides.
         if [ "${REGBENCH_GPU:-}" = 1 ]; then
             nv=(--nv)
         elif [ -z "${REGBENCH_GPU:-}" ] && [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
