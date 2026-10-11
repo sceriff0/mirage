@@ -407,6 +407,82 @@ def row_checks(selfcheck_dir, mine=None):
     return out
 
 
+def _gate_records(selfcheck_dir, mine=None):
+    """``[(run, name, gate name, record or None)]`` for every run: the selfcheck record
+    that gates it, when one is there and ``mine`` accepts it."""
+    import json
+    from pathlib import Path
+
+    root = Path(selfcheck_dir) if selfcheck_dir else None
+    out = []
+    for run in RUNS:
+        name = run_name(run)
+        gate = gated_by(name)
+        record = None
+        if root is not None:
+            try:
+                record = json.loads((root / gate / "selfcheck.json").read_text())
+            except (OSError, ValueError):
+                record = None
+        if record is not None and mine is not None and not mine(record):
+            record = None
+        out.append((run, name, gate, record))
+    return out
+
+
+MASK_NOT_OVER = "no"
+
+
+def mask_flags(selfcheck_dir, mine=None):
+    """``{result name: flag}`` for every run: did the selfcheck's mask hide more of the
+    dots than its cap (``selfcheck.MASK_MAX``) on some case of the selfcheck that gates
+    the row's run. Column ``selfcheck_mask_over_cap`` of every table (ruling R3.22: over
+    the cap a run is flagged, never blocked):
+
+    ``no``                         checked, and the mask stayed under its cap (or the
+                                   method has no mask)
+    ``yes: 0.57 masked, cap 0.50`` over the cap on the worst case; ``(via <run>)`` when
+                                   the row's run is gated by another run's selfcheck
+    empty                          no selfcheck record was found"""
+    from . import selfcheck
+
+    out = {}
+    for run, name, gate, record in _gate_records(selfcheck_dir, mine):
+        over = selfcheck.over_cap(record) if record is not None else {}
+        for variant in variants_of(run):
+            if record is None:
+                out[variant] = ""
+                continue
+            hit = over.get(variant) if gate == name else None
+            if gate != name and over:
+                hit = max(over.values(), key=lambda v: v["masked_frac"])
+            if not hit:
+                out[variant] = MASK_NOT_OVER
+                continue
+            cap = hit["cap"]
+            out[variant] = (
+                f"yes: {hit['masked_frac']:.2f} masked, cap "
+                + ("?" if cap is None else f"{cap:.2f}")
+                + (f" (via {gate})" if gate != name else "")
+            )
+    return out
+
+
+def selfcheck_mask_rows(selfcheck_dir, mine=None):
+    """The rows of ``selfcheck_masks.csv``: every selfcheck record of the run list, per
+    case, result name and dot set (``selfcheck.mask_rows``). A record that gates several
+    runs is listed once, under the run that made it."""
+    from . import selfcheck
+
+    rows, seen = [], set()
+    for _, _, gate, record in _gate_records(selfcheck_dir, mine):
+        if record is None or gate in seen:
+            continue
+        seen.add(gate)
+        rows += selfcheck.mask_rows(record, gate)
+    return rows
+
+
 def active_runs():
     """The runs that are launched and expected: ``RUNS`` without the paused ones."""
     return tuple(r for r in RUNS if r.active)

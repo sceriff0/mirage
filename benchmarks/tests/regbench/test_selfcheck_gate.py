@@ -95,13 +95,133 @@ def band(x0, x1):
     return lambda xy: (np.asarray(xy)[:, 0] >= x0) & (np.asarray(xy)[:, 0] < x1)
 
 
-def test_a_mask_that_hides_most_dots_is_not_checked(dots):
+def test_a_mask_over_its_cap_is_flagged_and_never_changes_the_verdict(dots):
+    """R3.22: the cap is a flag. Over it the row keeps its verdict and says so."""
     hide = band(100, HW[1])  # 93 % of the image
-    for res in both(dots, image(to_ref(dots)), drop=hide, mask_max=0.70):
-        assert res["status"] == sc.NOT_CHECKED and res["masked_frac"] > 0.9
-        assert "the mask hides" in res["cause"]
-    for res in both(dots, image(to_ref(dots)), drop=band(0, 400), mask_max=0.70):
+    for res in both(
+        dots, image(to_ref(dots)), drop=hide, mask_max=0.70, mask="overlap"
+    ):
+        assert res["status"] == sc.OK and res["masked_frac"] > 0.9
+        assert res["mask_over_cap"] is True and res["mask_cap"] == 0.70
+        assert "flagged" in res["mask_note"] and "cause" not in res
+        # under every cap of the fixed list but "none", this row would not pass
+        assert res["caps"] == {
+            "none": True,
+            "0.70": False,
+            "0.50": False,
+            "0.45": False,
+        }
+    for res in both(
+        dots, image(to_ref(dots)), drop=band(0, 400), mask_max=0.70, mask="overlap"
+    ):
         assert res["status"] == sc.OK and 0.2 < res["masked_frac"] < 0.35
+        assert res["mask_over_cap"] is False and "mask_note" not in res
+        assert res["caps"] == {"none": True, "0.70": True, "0.50": True, "0.45": True}
+    assert sc.MASK_CAPS == {
+        "overlap": (None, 0.70, 0.50, 0.45),
+        "seams": (None, 0.10, 0.05),
+    }
+    # the frozen cap of each mask is one of the caps a verdict is reported under
+    for name, cap in sc.MASK_MAX.items():
+        assert cap in sc.MASK_CAPS[name]
+
+
+def test_the_three_dot_sets_are_recorded_whatever_the_mask_hides(dots):
+    """All dots, the unmasked dots and the masked dots alone: a map wrong only under
+    the mask passes on the unmasked set, and the other two sets show the error."""
+    hide = band(0, 400)
+
+    def wrong_there(xy):
+        xy = np.asarray(xy, dtype=float)
+        return to_ref(xy) + np.where(hide(xy)[:, None], [2.0, 0.0], [0.0, 0.0])
+
+    res = sc.compare(
+        PointMap(wrong_there, MOV_TO_REF),
+        dots,
+        image(to_ref(dots)),
+        drop=hide,
+        mask_max=0.50,
+        mask="overlap",
+    )
+    sets = res["sets"]
+    assert set(sets) == set(sc.SETS) == {"all", "unmasked", "masked"}
+    assert res["status"] == sc.OK and res["mask_over_cap"] is False
+    # the unmasked set IS what the verdict was computed on
+    for key in ("n_dots", "n_found", "err_px_p95", "offset_px_mean_x"):
+        assert sets["unmasked"][key] == pytest.approx(res[key])
+    assert sets["unmasked"]["passes"] is True
+    assert (
+        sets["unmasked"]["n_dots"] + sets["masked"]["n_dots"] == sets["all"]["n_dots"]
+    )
+    assert sets["masked"]["n_dots"] / sets["all"]["n_dots"] == pytest.approx(
+        res["masked_frac"]
+    )
+    # the masked dots alone are 2 px off; with no mask at all the row would fail
+    assert sets["masked"]["err_px_p95"] == pytest.approx(2.0, abs=0.2)
+    assert sets["masked"]["offset_px_mean_x"] == pytest.approx(2.0, abs=0.1)
+    assert sets["masked"]["passes"] is False and sets["all"]["passes"] is False
+    assert sets["all"]["worst_block_err_px_p95"] == pytest.approx(2.0, abs=0.2)
+    assert sets["unmasked"]["worst_block_err_px_p95"] < 0.4
+    assert sets["all"]["found_frac"] == 1.0 and sets["all"]["err_px_mean"] > 0.3
+    # the same three sets in the other direction
+    back = sc.compare(
+        PointMap(lambda xy: np.asarray(xy, float) - SHIFT, REF_TO_MOV),
+        dots,
+        image(to_ref(dots)),
+        drop=lambda xy: hide(np.asarray(xy) - SHIFT),
+        mask_max=0.50,
+        mask="overlap",
+    )
+    assert back["sets"]["all"]["passes"] and back["sets"]["masked"]["passes"]
+    assert 0 < back["sets"]["masked"]["n_dots"] < back["sets"]["all"]["n_dots"]
+    # without a mask: all dots are the unmasked dots, and no dot is masked
+    plain = sc.compare(FORWARD, dots, image(to_ref(dots)))
+    assert plain["sets"]["masked"]["n_dots"] == 0 and plain["caps"] == {"none": True}
+    assert plain["sets"]["all"] == plain["sets"]["unmasked"]
+    assert plain["mask_over_cap"] is False
+
+
+def test_a_measured_failure_still_blocks_whatever_the_cap_says(dots):
+    """The accuracy thresholds on the unmasked dots are unchanged, and no cap passes."""
+    off = PointMap(lambda xy: to_ref(xy) + [1.0, 0.0], MOV_TO_REF)
+    res = sc.compare(
+        off, dots, image(to_ref(dots)), drop=band(0, 400), mask_max=0.5, mask="overlap"
+    )
+    assert res["status"] == sc.INCONSISTENT and sc.INCONSISTENT in sc.BLOCKING
+    assert not any(res["caps"].values()) and res["mask_over_cap"] is False
+
+
+def test_the_flag_and_the_rows_of_the_mask_table_come_out_of_the_record():
+    def variant(share, cap, status="ok"):
+        st = {"n_dots": 10, "found_frac": 1.0, "err_px_p95": 0.1, "passes": True}
+        return {
+            "status": status,
+            "mask": "overlap",
+            "masked_frac": share,
+            "mask_cap": cap,
+            "mask_over_cap": share > cap,
+            "caps": {"none": True, "0.70": share <= 0.7, "0.50": share <= 0.5},
+            "sets": {name: dict(st) for name in sc.SETS},
+        }
+
+    record = {
+        "method": "ashlar",
+        "pairs": [
+            {"case_id": "pair", "variants": {"ashlar": variant(0.30, 0.50)}},
+            {"case_id": "round1", "variants": {"ashlar": variant(0.57, 0.50)}},
+            {"case_id": "round2", "variants": {"ashlar": variant(0.64, 0.50)}},
+        ],
+    }
+    assert sc.over_cap(record) == {
+        "ashlar": {"masked_frac": 0.64, "cap": 0.50, "case_id": "round2"}
+    }
+    rows = sc.mask_rows(record)
+    assert len(rows) == 3 * 3 and {r["set"] for r in rows} == set(sc.SETS)
+    assert set(sc.MASK_COLUMNS) <= set(rows[0])
+    worst = [r for r in rows if r["case_id"] == "round2"][0]
+    assert worst["mask_over_cap"] is True and worst["passes_cap_0.50"] is False
+    assert worst["passes_cap_0.70"] is True and worst["passes_cap_none"] is True
+    assert sc.over_cap({"pairs": [{"variants": {"stare": {"status": "ok"}}}]}) == {}
 
 
 def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0):
@@ -336,3 +456,100 @@ def test_a_stage_without_an_image_is_marked_in_every_table(tmp_path):
     text = (out / "tables" / "summary.md").read_text()
     assert "| stare_rigid | 1 | NEVER CHECKED (no image of this stage) |" in text
     assert "| stare | 1 | ok |" in text
+
+
+# ── a mask over its cap: the run is scored, and every table row says so (R3.22) ──────
+def _masked_variant(share, cap=0.50):
+    st = {"n_dots": 40, "found_frac": 1.0, "err_px_p95": 0.1, "err_px_mean": 0.05}
+    return {
+        "status": "ok",
+        "mask": "overlap",
+        "masked_frac": share,
+        "mask_cap": cap,
+        "mask_over_cap": share > cap,
+        "caps": {
+            sc.cap_name(c): c is None or share <= c for c in sc.MASK_CAPS["overlap"]
+        },
+        "sets": {name: {**st, "passes": True} for name in sc.SETS},
+    }
+
+
+def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(tmp_path, capsys):
+    from benchmarks.regbench import cli
+
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = toy_case(root, "P1_r1", "P1")
+    for name in ("stare", "ashlar", "ashlar_clean"):
+        methods.run_case(good(name), case, out)
+    checks = out / "logs" / "selfcheck"
+    records = {
+        "stare": {"status": "ok", "variants": {"stare": "ok"}, "pairs": []},
+        "ashlar": {
+            "status": "ok",  # over the cap, and NOT blocked
+            "method": "ashlar",
+            "variants": {"ashlar": "ok"},
+            "pairs": [
+                {"case_id": "pair", "variants": {"ashlar": _masked_variant(0.31)}},
+                {"case_id": "round2", "variants": {"ashlar": _masked_variant(0.57)}},
+            ],
+        },
+    }
+    for run, rec in records.items():
+        (checks / run).mkdir(parents=True)
+        (checks / run / "selfcheck.json").write_text(json.dumps(rec))
+    # the gate lets the run start: the cap is no status
+    assert variants.gate_status("ashlar", records["ashlar"]) == sc.OK
+    assert (
+        cli.main(
+            [
+                "gate",
+                "--name",
+                "ashlar",
+                "--selfcheck",
+                str(checks / "ashlar" / "selfcheck.json"),
+            ]
+        )
+        == 0
+    )
+    flags = variants.mask_flags(checks)
+    assert flags["ashlar"] == "yes: 0.57 masked, cap 0.50"
+    assert flags["ashlar_clean"] == "yes: 0.57 masked, cap 0.50 (via ashlar)"
+    assert flags["stare"] == flags["stare_rigid"] == variants.MASK_NOT_OVER
+    assert flags["palom"] == ""  # no selfcheck record at all
+    assert set(flags) == set(variants.expected_variants())
+    rows = variants.selfcheck_mask_rows(checks)
+    assert {(r["run"], r["case_id"]) for r in rows} == {
+        ("ashlar", "pair"),
+        ("ashlar", "round2"),
+    }
+    capsys.readouterr()
+    res = score.score(
+        root,
+        out,
+        ["multiplex"],
+        with_tissue=False,
+        mask_flags=flags,
+        selfcheck_masks=rows,
+    )
+    for table in ("cells", "summary_cells", "resources"):
+        got = {r["method"]: r[score.MASK_FLAG] for r in res[table] if "method" in r}
+        assert got["ashlar"].startswith("yes: 0.57") and got["stare"] == "no", table
+        assert got["ashlar_clean"].endswith("(via ashlar)"), table
+    scored = next(r for r in res["cells"] if r["method"] == "ashlar")
+    assert not scored["imputed_initial"]  # it ran, and its own result is what is scored
+    tables = out / "tables"
+    head = (tables / "cells.csv").read_text().splitlines()[0].split(",")
+    assert score.MASK_FLAG in head
+    lines = (tables / "selfcheck_masks.csv").read_text().splitlines()
+    assert len(lines) == 1 + 2 * 3 and "passes_cap_0.45" in lines[0]
+    assert "passes_cap_none" in lines[0] and "worst_block_err_px_p95" in lines[0]
+    text = (tables / "summary.md").read_text()
+    assert "## Selfcheck masks: nothing is hidden behind a cap" in text
+    assert "`ashlar` (0.57 masked, cap 0.50)" in text
+    assert "the cap is a flag, not a gate" in text
+    assert "| ashlar | ashlar | round2 | masked |" in text
+    # a score outside the launcher (no selfcheck records): no flag column, no table
+    res = score.score(root, out, ["multiplex"], with_tissue=False)
+    assert score.MASK_FLAG not in res["cells"][0]
+    assert not (tables / "selfcheck_masks.csv").exists()
+    assert "Selfcheck masks" not in (tables / "summary.md").read_text()

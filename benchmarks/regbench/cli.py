@@ -1171,6 +1171,12 @@ def main(argv=None):
         row_checks=variants.row_checks(
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
         ),
+        mask_flags=variants.mask_flags(
+            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+        ),
+        selfcheck_masks=variants.selfcheck_mask_rows(
+            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+        ),
     )
     from . import failure_log
 

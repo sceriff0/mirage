@@ -1786,6 +1786,60 @@ def blocked_rows(launch, run_variants=None):
     return out
 
 
+MASK_FLAG = "selfcheck_mask_over_cap"
+MASK_SUMMARY_COLUMNS = (
+    "run",
+    "variant",
+    "case_id",
+    "set",
+    "n_dots",
+    "found_frac",
+    "err_px_p95",
+    "err_px_mean",
+    "worst_block_err_px_p95",
+    "masked_frac",
+)
+
+
+def flag_rows(rows, flags):
+    """Column ``selfcheck_mask_over_cap`` on every row that names a method: what the
+    selfcheck's mask hid for that row's run (``variants.mask_flags``)."""
+    for r in rows or []:
+        if isinstance(r, dict) and "method" in r:
+            r[MASK_FLAG] = (flags or {}).get(str(r["method"]).split(NON)[0], "")
+    return rows
+
+
+def mask_section(flags, rows):
+    """The summary's lines on the selfcheck's masks: the runs over their cap, by name,
+    and the numbers with and without the mask for every masked selfcheck."""
+    over = {k: v for k, v in (flags or {}).items() if str(v).startswith("yes")}
+    masked = [r for r in rows or [] if r.get("mask")]
+    if not over and not masked:
+        return []
+    parts = ["## Selfcheck masks: nothing is hidden behind a cap\n"]
+    if over:
+        parts.append(
+            "**The selfcheck's mask hid more of the dots than its cap for these rows. "
+            "They ran and are scored all the same (the cap is a flag, not a gate); "
+            f"every table row of theirs says so in `{MASK_FLAG}`:** "
+            + "; ".join(f"`{k}` ({v[5:]})" for k, v in over.items())
+            + ".\n"
+        )
+    else:
+        parts.append("No row's selfcheck mask hid more of the dots than its cap.\n")
+    if masked:
+        caps = sorted({k for r in masked for k in r if k.startswith("passes_cap_")})
+        parts.append(
+            "The selfcheck's own numbers on ALL dots (no mask), on the unmasked dots "
+            "(what the verdict rests on) and on the masked dots alone; `passes_cap_*`: "
+            "would the row pass with the mask allowed to hide at most that share "
+            "(`selfcheck_masks.csv` has every column and every unmasked method too).\n"
+        )
+        parts += [markdown(masked, [*MASK_SUMMARY_COLUMNS, *caps]), ""]
+    return parts
+
+
 def summary_markdown(
     summary,
     fails,
@@ -1807,6 +1861,7 @@ def summary_markdown(
     events=None,
     cost_summary=None,
     nuclei=None,
+    masks=None,
 ):
     nuc, nuclei_missing, n_cases = nuclei or ({}, [], 0)
     nuc_summary = nuc.get("summary_cells") or []
@@ -1834,6 +1889,7 @@ def summary_markdown(
             "and the candidate was chosen on ANHIR's tuning-side pairs, not on this "
             "cohort.\n"
         )
+    parts += mask_section(*(masks or ({}, [])))
     excluded = excluded or []
     if excluded:
         parts.append(
@@ -2023,6 +2079,8 @@ def score(
     gates=None,
     run_variants=None,
     row_checks=None,
+    mask_flags=None,
+    selfcheck_masks=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
 
@@ -2213,6 +2271,26 @@ def score(
         *tissue.TABLES,
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
+    # what the selfcheck's mask hid for each row's run, on every row of every table
+    for rows in (
+        cells,
+        summary,
+        paired,
+        res,
+        res_summary,
+        cost_summary,
+        truth_rows,
+        by_family,
+        non_cells,
+        non_summary,
+        non_truth,
+        *(nuc[name] for name in NUCLEI_TABLES),
+    ):
+        if mask_flags is not None:  # a score outside the launcher has no selfcheck
+            flag_rows(rows, mask_flags)
+    (tables / "selfcheck_masks.csv").unlink(missing_ok=True)
+    if selfcheck_masks is not None:
+        write_csv(tables / "selfcheck_masks.csv", list(selfcheck_masks))
     for name in NUCLEI_TABLES:
         write_csv(tables / f"{name}{NUCLEI_SUFFIX}.csv", nuc[name])
     write_csv(tables / "nuclei_missing.csv", nuclei_missing)
@@ -2281,6 +2359,7 @@ def score(
         events,
         cost_summary,
         (nuc, nuclei_missing, len(jobs)),
+        (mask_flags, selfcheck_masks),
     )
     (tables / "summary.md").write_text(text)
     print(text)

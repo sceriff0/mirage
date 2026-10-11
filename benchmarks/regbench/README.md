@@ -443,9 +443,28 @@ adapters') records `coverage_checked: false`.
 **A mask** (`--mask overlap` for ASHLAR, `--mask seams` for PALOM) takes points out of
 check (1) only:
 
-- **It has a cap** (`selfcheck.MASK_MAX`, frozen): `overlap` 0.50, `seams` 0.10 of the
-  dots. Above it a comparison that found no failure is `not_checked`, which blocks; a
-  measured failure stays `inconsistent`.
+- **A mask never hides a result** (ruling R3.22, 2026-10-11). For every case and round
+  the record holds the numbers of check (1) on THREE sets of dots (`sets`): `all` (no
+  mask at all), `unmasked` (what the verdict rests on) and `masked` (the masked dots
+  alone), each with its 95th percentile, mean, found share and worst 512 px block, and
+  the masked share (`masked_frac`). The scorer writes them as `selfcheck_masks.csv`
+  (one row per run, case, result name and set) and the summary shows them under
+  "Selfcheck masks".
+- **Its cap is a flag, not a gate** (`selfcheck.MASK_MAX`, frozen: `overlap` 0.50,
+  `seams` 0.10 of the dots). A row whose mask hid more than the cap KEEPS its verdict:
+  the run starts on every dataset and is scored. It is flagged instead
+  (`mask_over_cap` in the record; column `selfcheck_mask_over_cap` on every row of
+  every table: `no`, or `yes: 0.57 masked, cap 0.50`, with `(via <run>)` for a run
+  gated by another run's selfcheck), and `summary.md` names it. What still blocks is
+  unchanged: the accuracy thresholds on the unmasked dots (95th percentile at most
+  0.40 px, mean offset at most 0.15 px per axis, at least 99 % found, per block too),
+  the coverage of the drawn dots and the image's shape. Until this ruling a share
+  above the cap read `not_checked`, which blocked the run.
+- **The verdict under a fixed list of caps** (`selfcheck.MASK_CAPS`): `overlap`: none,
+  0.70, 0.50, 0.45; `seams`: none, 0.10, 0.05. One column per cap (`caps` in the record,
+  `passes_cap_<cap>` in the table): would the row pass the accuracy gate on its
+  unmasked dots if the mask could hide at most that share. `passes_cap_none` is the
+  verdict in force.
   - **`overlap` 0.50, measured on 2026-10-11** on ASHLAR's only selfcheck canvas (4096
     x 5120: 5 x 6 tiles of 1024 px at a 922 px pitch) with the adapter's own geometry:
     its tile grid, `tilemap.on_seam` at its 8 px dot margin, on the selfcheck's own
@@ -468,7 +487,8 @@ check (1) only:
     0.62) computed on a tile grid clamped to the canvas; the adapter's grid is padded
     (rows at 0, 922, ..., 3688), and on it that pair holds 0.21 to 0.31 as well. What
     ASHLAR really does on this canvas is not known until it runs: a share above 0.50
-    would read `not_checked` with the share in the message, not a silent pass.
+    is flagged on every row of the run, with the share, and the numbers on all dots
+    and on the masked dots alone are in the record either way.
   - **`seams` 0.10** is 3.2 times the share the seams of 1024 px blocks hold when every
     block edge is one (8 px either side: 1 - (1 - 16/1024)^2 = 0.03). PALOM's adapter
     applies the same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`):
@@ -550,7 +570,7 @@ drawn):
 | 7 % of it undrawn | `inconsistent` | `ok` | `inconsistent` (drawn dots the image does not show; uncovered blocks) |
 | 20 % undrawn | `inconsistent` | `ok` | `inconsistent` |
 | 45 % undrawn | `inconsistent` | `ok` | `inconsistent` |
-| a mask hiding 93 % of the dots, nothing else wrong | `ok` before, `not_checked` now | `ok` | `not_checked` |
+| a mask hiding 93 % of the dots, nothing else wrong | `ok`, flagged `mask_over_cap` (R3.22; `not_checked` between 2026-10-11 and that ruling) | `ok` | `ok`, flagged |
 | 12 stray detections outside a mask that hides a quarter | not looked at before, `inconsistent` now | | |
 
 So the smallest constant offset the gate objects to is 0.15 px per axis, the detector's
@@ -1235,6 +1255,7 @@ method's fields is post hoc and names that method.
 | `paired_vs_primary.csv` | unit x variant (x family) | the difference of each headline against the `stare` row, on the cases both have |
 | `paired_summary.csv` | dataset x family x variant | the median over units of each difference with its bootstrap interval (`d_<headline>_med, _lo, _hi`), `n_patients` |
 | `excluded_rounds.csv` | lost round | written only when a round was lost for a cause that is not the method's: `dataset, method, case_id, group, cause` |
+| `selfcheck_masks.csv` | selfcheck run x case (round) x variant x dot set | the selfcheck's numbers on `all` dots, the `unmasked` dots and the `masked` dots alone (`n_dots, found_frac, err_px_p95, err_px_mean, worst_block_err_px_p95, worst_block_found_frac, passes_accuracy`), `masked_frac, mask_cap, mask_over_cap`, and one `passes_cap_<cap>` column per cap of `selfcheck.MASK_CAPS`. Written when the scorer is given the selfchecks (the launcher's `score`). Every table with a `method` column also carries `selfcheck_mask_over_cap` then |
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
 | `failure_log.csv` | failed or lost EVENT | always written (a header alone when nothing failed). See "The failure log" |
 | `resources.csv` | case x variant | the cost recorded at that variant's yield |

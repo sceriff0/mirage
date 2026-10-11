@@ -292,8 +292,12 @@ MIN_DETECTED = 0.5  # of the dots drawn; below it nothing was measured
 COVER_MARGIN_PX = 64
 # a dot whose own detection (within this of where it belongs) is masked is not demanded
 COVER_NEAR_PX = 16.0
-# The largest share of the dots a mask may hide. Above it the comparison is
-# `not_checked`: a mask that hides most of the image has checked little.
+# The share of the dots a mask is expected to hide at most. It is a FLAG, not a gate
+# (ruling R3.22, 2026-10-11): a comparison over it keeps its verdict, the run still
+# runs and is scored, and the share is carried to every table row of the run
+# (`mask_over_cap`, `selfcheck_mask_over_cap`). Nothing is hidden behind it: the
+# numbers on all dots, on the unmasked dots and on the masked dots alone are recorded
+# for every case (`sets`), with the verdict under each cap of `MASK_CAPS`.
 #   overlap  ASHLAR, 1024 px tiles at a 922 px pitch, on the 4096 x 5120 canvas (5 x 6
 #            tiles; the only canvas its selfcheck has since 2026-10-11). MEASURED on
 #            that canvas on 2026-10-11 with the adapter's own geometry (its tile grid,
@@ -321,6 +325,16 @@ COVER_NEAR_PX = 16.0
 #            same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`): 0.05
 #            at the 2048 px blocks of the `palom` row's pairs.
 MASK_MAX = {"overlap": 0.50, "seams": 0.10}
+# The caps a verdict is reported under, per mask (None = no cap): would the row pass
+# the accuracy gate on its unmasked dots if the mask could hide at most this share.
+MASK_CAPS = {"overlap": (None, 0.70, 0.50, 0.45), "seams": (None, 0.10, 0.05)}
+SETS = ("all", "unmasked", "masked")
+
+
+def cap_name(cap):
+    return "none" if cap is None else f"{cap:.2f}"
+
+
 _RING = (
     (0, 0),
     (1, 0),
@@ -814,6 +828,7 @@ def compare(
     expect=None,
     valid_box=None,
     mask_max=None,
+    mask=None,
 ):
     """Does ``point_map`` follow the dots drawn in ``native_dots_image``?
 
@@ -847,8 +862,12 @@ def compare(
     **A mask** (``drop``) leaves points out of check (1) only. Check (2) stays on
     outside it: a detection is excused only when the mapped dot nearest to it is itself
     masked, and a drawn dot only when it, or the detection found where it belongs, is
-    masked. ``masked_frac`` is reported, and above ``mask_max`` the comparison is
-    ``not_checked``.
+    masked. A mask never hides a result (ruling R3.22): ``sets`` holds the numbers of
+    check (1) on ALL the points (no mask at all), on the unmasked points (what the
+    verdict rests on) and on the masked points alone; ``masked_frac`` is the masked
+    share; above ``mask_max`` the comparison is FLAGGED (``mask_over_cap``) and keeps
+    its verdict; and ``caps`` says, for each cap of ``MASK_CAPS[mask]``, whether the row
+    passes with that cap in force.
 
     Returns the whole-image numbers (``n_drawn``, ``n_detected``, ``n_dots``, ``n_found``,
     ``err_px_p50``, ``err_px_p95``, ``offset_px_mean_x``, ``offset_px_mean_y``: the residual
@@ -881,9 +900,52 @@ def compare(
             return np.zeros(len(xy), bool)
         return np.asarray(drop(xy), dtype=bool).reshape(len(xy))
 
+    def numbers(points):
+        """Check (1) on one set of points (drawn dots for ``mov_to_ref``, detections
+        for ``ref_to_mov``): the whole-image numbers and the worst judged block."""
+        points = np.asarray(points, dtype=float).reshape(-1, 2)
+        shift = declared(points)
+        if forward:
+            to = np.asarray(point_map.fn(points), dtype=float).reshape(-1, 2) - shift
+            inside = _inside(to - origin, hw, EDGE_PX)
+            to = to[inside]
+            hit, k = _nearest(to, det, MATCH_PX)
+            res, at = to[hit] - det[k[hit]], to - origin
+        else:
+            to = np.asarray(point_map.fn(points), dtype=float).reshape(-1, 2) - shift
+            hit, k = _nearest(to, dots, MATCH_PX)
+            res, at = to[hit] - dots[k[hit]], points - origin
+        st = _stats(res, len(at))
+        st["found_frac"] = st["n_found"] / st["n_dots"] if st["n_dots"] else math.nan
+        st["err_px_mean"] = float(np.hypot(*res.T).mean()) if len(res) else math.nan
+        worst_p95, worst_found, bad = math.nan, math.nan, 0
+        if len(at):
+            key = np.floor(at / BLOCK).astype(np.int64)
+            row = np.cumsum(hit) - 1
+            for bx, by in np.unique(key, axis=0):
+                rows = (key[:, 0] == bx) & (key[:, 1] == by)
+                if rows.sum() < MIN_BLOCK_DOTS:
+                    continue
+                b = _stats(res[row[rows & hit]], int(rows.sum()))
+                bad += not b["passes"]
+                share = b["n_found"] / b["n_dots"]
+                if not worst_p95 >= b["err_px_p95"]:  # NaN: nothing found there
+                    worst_p95 = b["err_px_p95"]
+                worst_found = (
+                    share if math.isnan(worst_found) else min(worst_found, share)
+                )
+        st.update(
+            worst_block_err_px_p95=worst_p95,
+            worst_block_found_frac=worst_found,
+            n_blocks_failed=int(bad),
+        )
+        st["passes"] = bool(st["passes"] and not bad)
+        return st
+
     if forward:
         # where the image should show each dot, if the points follow the image
         hidden = masked(dots)
+        sets = {"all": dots, "unmasked": dots[~hidden], "masked": dots[hidden]}
         src = dots[~hidden]
         out["n_masked"] = int(len(dots) - len(src))
         out["masked_frac"] = out["n_masked"] / len(dots) if len(dots) else 0.0
@@ -908,6 +970,7 @@ def compare(
     else:
         src = det[_inside(det_px, hw, EDGE_PX)]
         hide = masked(src)
+        sets = {"all": src, "unmasked": src[~hide], "masked": src[hide]}
         out["n_masked"] = int(hide.sum())
         out["masked_frac"] = float(hide.mean()) if len(src) else 0.0
         gone = src[hide]
@@ -991,6 +1054,7 @@ def compare(
         failed.append("detections the mapping puts no dot on")
     failed += uncovered
     out["failed"] = failed
+    out["sets"] = {name: numbers(points) for name, points in sets.items()}
     if out["n_detected"] < MIN_DETECTED * out["n_drawn"]:
         out["status"] = NOT_CHECKED
         out["cause"] = (
@@ -998,15 +1062,109 @@ def compare(
         )
     elif failed:
         out["status"] = INCONSISTENT  # a measured failure is never softened
-    elif mask_max is not None and out["masked_frac"] > mask_max:
-        out["status"] = NOT_CHECKED
-        out["cause"] = (
-            f"the mask hides {100 * out['masked_frac']:.0f} % of the dots, above the "
-            f"{100 * mask_max:.0f} % a mask may hide: too little was checked"
-        )
     else:
         out["status"] = OK
+    # The cap is a flag, never a verdict (R3.22): over it the row keeps its status and
+    # says so; under each cap of the fixed list, would it pass.
+    out["mask"] = mask or ""
+    out["mask_cap"] = mask_max
+    out["mask_over_cap"] = bool(mask_max is not None and out["masked_frac"] > mask_max)
+    if out["mask_over_cap"]:
+        out["mask_note"] = (
+            f"the mask hides {100 * out['masked_frac']:.0f} % of the dots, above the "
+            f"{100 * mask_max:.0f} % expected: flagged, the verdict rests on the rest"
+        )
+    out["caps"] = {
+        cap_name(cap): bool(
+            out["status"] == OK and (cap is None or out["masked_frac"] <= cap)
+        )
+        for cap in MASK_CAPS.get(mask, (None,))
+    }
     return out
+
+
+def over_cap(record):
+    """``{result name: {"masked_frac", "cap", "case_id"}}`` of the rows of a selfcheck
+    record whose mask hid more than its cap on some case: the worst case of each."""
+    found = {}
+    for pair in record.get("pairs") or []:
+        for variant, v in (pair.get("variants") or {}).items():
+            if not isinstance(v, dict) or not v.get("mask_over_cap"):
+                continue
+            share = float(v.get("masked_frac") or 0.0)
+            if variant not in found or share > found[variant]["masked_frac"]:
+                found[variant] = {
+                    "masked_frac": share,
+                    "cap": v.get("mask_cap"),
+                    "case_id": pair.get("case_id", ""),
+                }
+    return found
+
+
+MASK_COLUMNS = (
+    "run",
+    "variant",
+    "case_id",
+    "mask",
+    "set",
+    "n_dots",
+    "found_frac",
+    "err_px_p95",
+    "err_px_mean",
+    "offset_px_mean_x",
+    "offset_px_mean_y",
+    "worst_block_err_px_p95",
+    "worst_block_found_frac",
+    "passes_accuracy",
+    "masked_frac",
+    "mask_cap",
+    "mask_over_cap",
+    "status",
+)
+
+
+def mask_rows(record, run=""):
+    """One row per case (round), result name and dot set of a selfcheck record: the
+    numbers on all dots, on the unmasked dots and on the masked dots, the masked share,
+    and one ``passes_cap_<cap>`` column per cap of ``MASK_CAPS`` (``selfcheck_masks.csv``)."""
+    rows = []
+    for pair in record.get("pairs") or []:
+        for variant, v in (pair.get("variants") or {}).items():
+            if not isinstance(v, dict) or "sets" not in v:
+                continue
+            for name in SETS:
+                st = v["sets"].get(name) or {}
+                rows.append(
+                    {
+                        "run": run or record.get("label") or record.get("method", ""),
+                        "variant": variant,
+                        "case_id": pair.get("case_id", ""),
+                        "mask": v.get("mask", ""),
+                        "set": name,
+                        "n_dots": st.get("n_dots", 0),
+                        "found_frac": st.get("found_frac", math.nan),
+                        "err_px_p95": st.get("err_px_p95", math.nan),
+                        "err_px_mean": st.get("err_px_mean", math.nan),
+                        "offset_px_mean_x": st.get("offset_px_mean_x", math.nan),
+                        "offset_px_mean_y": st.get("offset_px_mean_y", math.nan),
+                        "worst_block_err_px_p95": st.get(
+                            "worst_block_err_px_p95", math.nan
+                        ),
+                        "worst_block_found_frac": st.get(
+                            "worst_block_found_frac", math.nan
+                        ),
+                        "passes_accuracy": st.get("passes", ""),
+                        "masked_frac": v.get("masked_frac", 0.0),
+                        "mask_cap": "" if v.get("mask_cap") is None else v["mask_cap"],
+                        "mask_over_cap": bool(v.get("mask_over_cap")),
+                        "status": v.get("status", ""),
+                        **{
+                            f"passes_cap_{k}": ok
+                            for k, ok in (v.get("caps") or {}).items()
+                        },
+                    }
+                )
+    return rows
 
 
 # ── running a method on the pair ──────────────────────────────────────────────
@@ -1178,6 +1336,7 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
             pair["truth"],
             native.get("valid_box"),
             mask_cap(mod, info, mask),
+            mask,
         )
     except MemoryError as exc:
         return {"status": NOT_CHECKED, "cause": "oom", "error": str(exc)}
@@ -1558,6 +1717,8 @@ def run(
             "edge_px": EDGE_PX,
             "cover_margin_px": COVER_MARGIN_PX,
             "mask_max": MASK_MAX.get(mask) if mask else None,
+            "mask_max_is": "a flag, not a gate: over it a row keeps its verdict",
+            "mask_caps": [cap_name(c) for c in MASK_CAPS.get(mask, ())],
         },
         "host": {k: host.get(k) for k in ("host", "launch_id")},
         # the launch that wrote this record: a gate refuses one of another submission
@@ -1569,6 +1730,8 @@ def run(
     }
     # The selfcheck climbs in memory like a run (64 -> 256 -> 512 GB): the allocation
     # and the outcome of every attempt made in this folder, this one last.
+    # rows whose mask hid more than its cap: flagged, never blocked (R3.22)
+    record["mask_over_cap"] = over_cap(record)
     record["attempts"] = [
         *earlier,
         {
