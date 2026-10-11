@@ -5,8 +5,9 @@
 #   benchmarks/regbench/slurm/submit.sh [--datasets "synthetic semisynth multiplex"] \
 #       [--methods "stare valis deeperhistreg"] [--max-parallel 20] [-- extra sbatch args]
 #
-# Every job is submitted at the first rung of the ladder (REGBENCH_CPUS, REGBENCH_MEM). This
-# script does not escalate a run that ran out of memory and does not gate on the selfcheck.
+# Every job is submitted at ONE allocation (REGBENCH_CPUS, REGBENCH_MEM, REGBENCH_TIME). This
+# script does not escalate a run that ran out of memory and does not gate on the selfcheck:
+# the cohort is submitted with submit_cohort.sh, which does both.
 #
 # The cases must already be prepared (`python -m benchmarks.regbench prepare ...` or
 # prepare.sbatch): the array sizes come from them. Extra sbatch args (after --) go to every
@@ -14,7 +15,9 @@
 # --constraint if the cluster is heterogeneous, or the timings compare CPUs, not methods.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=benchmarks/regbench/slurm/env.sh
 source "$HERE/env.sh"
+: "${REGBENCH_TIME:=04:00:00}"
 
 datasets="synthetic semisynth multiplex" methods="stare valis deeperhistreg"
 maxpar=20
@@ -37,7 +40,7 @@ for ds in $datasets; do
     n=$(regbench_py stare list --cases "$REGBENCH_CASES" --dataset "$ds")
     if [ "$n" -eq 0 ]; then echo "$ds: no prepared cases under $REGBENCH_CASES, skipped"; continue; fi
     for m in $methods; do
-        # shellcheck disable=SC2206
+        # shellcheck disable=SC2206,SC2207
         per_method=($(_regbench_var SBATCH "$m"))
         j=$(sbatch --parsable --export="ALL,METHOD=$m,DATASET=$ds" --job-name="rb-$m-$ds" \
             --array="0-$((n - 1))%$maxpar" "${alloc[@]}" "${extra[@]}" "${per_method[@]}" \

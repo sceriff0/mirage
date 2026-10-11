@@ -298,6 +298,7 @@ def test_nuclei_in_bands_get_a_second_truth_row(reduced, tmp_path):
     assert not [r for r in res["truth_by_family"] if NON in r["method"]]
 
 
+@pytest.mark.slow
 def test_a_reference_side_owner_drops_the_probes_its_own_run_marked(reduced, tmp_path):
     """A mask on reference nuclei has no probe index (a probe is a MOVING nucleus's
     centroid and its true reference position), so the owner says which probes are on its
@@ -667,6 +668,7 @@ def test_the_spec_says_which_cases_are_reseeded_and_how():
     assert largest < 1.1e8 < rule["step"]
 
 
+@pytest.mark.slow
 def test_a_seed_that_folds_is_skipped_for_the_next_that_does_not():
     """The real thing, at the frozen size: a seed measured to fold is not used."""
     asked = {**synthetic.truth_suite()["blob_bumps25_shift"], "seed": FOLDING_SEED}
@@ -756,6 +758,7 @@ def test_the_reseed_rule_step_by_step(monkeypatch):
     assert seen == []
 
 
+@pytest.mark.slow
 def test_no_frozen_synthetic_case_folds():
     """THE guard: every frozen synthetic known-truth case, at the frozen size, is made
     with a seed whose true map does not fold. `SKIPPED` is written out so that a spec
@@ -840,6 +843,7 @@ def test_a_semisynthetic_case_is_reseeded_too(monkeypatch, real_like, tmp_path):
     assert "reseed" not in seams.extra
 
 
+@pytest.mark.slow
 def test_reseeded_cases_are_named_in_the_summary(reduced, tmp_path):
     src = [c for c in reduced[1] if c.family == "bumps25"][0]
     root, out = tmp_path / "cases", tmp_path / "out"
@@ -869,6 +873,7 @@ def _hashed_copy(src, root, case_id, sha):
     return load_case(dst)
 
 
+@pytest.mark.slow
 def test_spec_hash_is_enforced(reduced, tmp_path):
     assert SPEC["sha256"] == truth.spec_hash(SPEC)
     changed = json.loads(truth.SPEC_PATH.read_text())
@@ -915,6 +920,7 @@ def test_spec_hash_is_enforced(reduced, tmp_path):
         score(root, out, ["synthetic"])
 
 
+@pytest.mark.slow
 def test_a_case_whose_true_map_folds_is_named_in_the_summary(reduced, tmp_path):
     src = reduced[1][0]
     root, out = tmp_path / "cases", tmp_path / "out"
@@ -955,6 +961,7 @@ def test_folding_is_reported():
 
 
 # ── a row dropped by its own failed selfcheck (R3.12 b) ────────────────────────
+@pytest.mark.slow
 def test_a_dropped_variant_is_in_no_table_and_is_named(scored, reduced, tmp_path):
     out, _ = scored
     root, _cases = reduced

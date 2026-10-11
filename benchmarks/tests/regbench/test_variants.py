@@ -364,6 +364,7 @@ COLUMNS = (
     "variants",
     "active",
     "gate_variants",
+    "realcheck",
 )
 # The twelve columns of the first version: a launcher written against them reads the
 # same positions for ever; new columns only go on the end.
@@ -387,7 +388,7 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
     assert len(got) == 18
-    assert all(len(r) == len(COLUMNS) == 14 for r in got)
+    assert all(len(r) == len(COLUMNS) == 15 for r in got)
     assert [r[0] for r in got] == [variants.run_name(r) for r in variants.RUNS]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
     assert all(field for r in got for field in r)
@@ -410,6 +411,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "variants": "stare_rigid,stare",
         "active": "1",
         "gate_variants": "stare_rigid,stare",
+        "realcheck": "-",
     }
     assert got["affine_ashlar_clean"] == {
         "name": "affine_ashlar_clean",
@@ -426,6 +428,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "variants": "affine_ashlar_clean",
         "active": "1",
         "gate_variants": "affine_ashlar_clean",
+        "realcheck": "-",
     }
     hr = got["deeperhistreg_hr_fluo_gpu"]
     assert hr["opts"] == f"device=cuda:0,config={variants.HR_CONFIG},fluo=1"
@@ -747,3 +750,25 @@ def test_gate_prints_the_status_and_the_rows_to_drop(capsys, tmp_path):
         cli.main(
             ["gate", "--name", "nope", "--selfcheck", str(tmp_path / "palom.json")]
         )
+
+
+def test_the_realcheck_gates_the_primary_rows_of_the_two_valis_adapters(capsys):
+    """Column 15: which row's realcheck.json the launcher reads before it starts the
+    rest of a run. Only a run with a primary row has one."""
+    gated = {
+        variants.run_name(r): variants.realcheck_gate(variants.run_name(r))
+        for r in variants.RUNS
+    }
+    assert {k: v for k, v in gated.items() if v} == {
+        "valis_mirage": "valis_mirage",
+        "valis120_hires": "valis120_hires",
+    }
+    assert gated["valis120"] is None  # the same adapter, no primary row
+    got = {r[0]: r[14] for r in rows(capsys)}
+    assert got == {k: v or "-" for k, v in gated.items()}
+    assert set(variants.REALCHECK_METHODS) <= set(METHODS)
+
+
+def test_runs_names_the_image_the_scorer_runs_in(capsys):
+    assert cli.main(["runs", "--scorer-image"]) == 0
+    assert capsys.readouterr().out.split() == [variants.SCORER_IMAGE]

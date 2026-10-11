@@ -265,6 +265,7 @@ def test_native_output_is_what_stare_register_writes(ran, tmp_path):
     assert run_json(out, "stare_rigid", case)["native"] is None
 
 
+@pytest.mark.slow
 def test_selfcheck_is_ok(tmp_path):
     rec = sc.run("stare", tmp_path)
     assert rec["status"] == "ok"

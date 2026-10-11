@@ -44,6 +44,10 @@ only ever added at the end, so a position never changes.
                        commas (``gate_variants()``): all of the run's names, except for
                        DeeperHistReg, whose gate is the row of the written image
                        (``<label>_asdrawn``) alone.
+15. ``realcheck``      the result name whose realcheck gates the run, or ``-``
+                       (``realcheck_gate()``): the launcher sends the run's first unit
+                       ahead with ``run --realcheck`` and starts the rest only when
+                       that row's ``realcheck.json`` is not flagged.
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -222,6 +226,12 @@ GATED_BY = {"ashlar_clean": "ashlar", "affine_ashlar_clean": "affine_ashlar"}
 # it fails, that row is dropped from the results and the method still runs.
 GATE_SUFFIXES = {"deeperhistreg": ("_asdrawn",)}
 
+# The methods whose realcheck is a GATE (Task 5 and Task 7 of the port's plan): the two
+# VALIS adapters. Their point path is derived by the benchmark, not handed over by the
+# package, so it is also checked on a real case before the cohort is spent on it. The
+# gate reads the run's PRIMARY row; a run of these methods without one has none.
+REALCHECK_METHODS = ("valis_mirage", "valis")
+
 # Image -> the build context under containers/ (images.json) for the ones this repository
 # builds, and the upstream reference for the ones it pulls.
 BUILT_HERE = {
@@ -257,6 +267,7 @@ RUNS_COLUMNS = (
     "variants",
     "active",
     "gate_variants",
+    "realcheck",
 )
 NONE = "-"
 
@@ -393,6 +404,17 @@ def gate_variants(name):
     return gate
 
 
+def realcheck_gate(name):
+    """The result name whose ``realcheck.json`` gates the run ``name``, or None: the
+    run's primary row, for a method in ``REALCHECK_METHODS``. Not the exit code of ``run
+    --realcheck``, which is also 3 when a non-primary row of the run is flagged."""
+    run = run_of(name)
+    if run.method not in REALCHECK_METHODS:
+        return None
+    primary = [v for v in variants_of(run) if v in PRIMARY]
+    return primary[0] if primary else None
+
+
 def _statuses(name, record, names):
     """The status of each name in a selfcheck record. ``selfcheck.json`` has
     ``variants: {name: status}``; the dict per variant inside ``pairs`` is read too."""
@@ -476,6 +498,7 @@ def runs_table(paused=False):
                 ",".join(names),
                 "1" if run.active else "0",
                 ",".join(gate_variants(run_name(run))),
+                realcheck_gate(run_name(run)) or NONE,
             )
         )
     return table

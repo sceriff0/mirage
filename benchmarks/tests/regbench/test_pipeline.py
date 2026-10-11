@@ -8,9 +8,11 @@ ends the run as ``oom``.
 
 import csv
 import json
+import os
 import shutil
 import time
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -305,6 +307,7 @@ def test_paired_differences_are_against_stare(scored):
     assert d["d_pair_fraction_excess"] < 0  # unregistered is below STARE
 
 
+@pytest.mark.slow
 def test_a_failed_method_is_scored_at_the_initial_pose(
     cases_root, synthetic_cases, tmp_path, monkeypatch
 ):
@@ -843,18 +846,52 @@ def test_summary_says_descriptive_under_six_patients(tmp_path):
 
 
 # ── cost, per variant ────────────────────────────────────────────────────────
+# A worker that holds 600 MB and KEEPS it resident. Two things made the earlier version
+# (one byte written per page, then sleep) depend on what else the machine was doing: an
+# operating system short of memory compresses or pages out idle pages, and pages that are
+# all zeros but one byte compress to nothing, so the worker's resident size could fall
+# far below 600 MB before the driver read it. Here every page is filled with random bytes
+# (nothing to compress) and written again five times a second (never idle).
 HOLD = """
-import sys, time
-block = bytearray(600 * 1024 * 1024)
-for i in range(0, len(block), 4096):
-    block[i] = 1                      # touch every page so it is resident
+import os, sys, time
+MB = 1024 * 1024
+block = bytearray(600 * MB)
+chunk = os.urandom(MB)
+for i in range(600):
+    block[i * MB:(i + 1) * MB] = chunk
 print("ready", flush=True)
-time.sleep(60)
+end = time.time() + 120
+while time.time() < end:
+    for i in range(0, len(block), 4096):
+        block[i] ^= 1
+    time.sleep(0.2)
 """
 
 
+def _resident_mb(pid):
+    """A process's resident size by an instrument that is NOT the driver's monitor, or
+    None where there is none (no psutil and no /proc)."""
+    try:
+        import psutil
+
+        return psutil.Process(pid).memory_info().rss / 2**20
+    except ImportError:
+        pass
+    try:
+        fields = Path(f"/proc/{pid}/statm").read_text().split()
+        return int(fields[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def test_each_variant_has_its_own_clock_and_peak(toy):
-    """A variant yielded before a later stage is not billed for that stage."""
+    """A variant yielded before a later stage is not billed for that stage.
+
+    What is proved is unchanged: the first variant's bill stops at its yield (it has
+    neither the later stage's 0.4 s nor its 600 MB), and the second variant's bill, read
+    by the DRIVER's own monitor, has both. The test only makes sure the 600 MB are there
+    to be seen: it waits, with an independent reading, until the worker really is
+    resident, instead of trusting that it still is after a fixed sleep."""
     import subprocess
     import sys
 
@@ -867,6 +904,17 @@ def test_each_variant_has_its_own_clock_and_peak(toy):
         worker = subprocess.Popen([sys.executable, "-c", HOLD], stdout=subprocess.PIPE)
         try:
             assert worker.stdout.readline().strip() == b"ready"
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                seen = _resident_mb(worker.pid)
+                if seen is None or seen > 550:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail(
+                    f"the worker holds 600 MB and only {seen:.0f} MB are resident "
+                    "after 60 s: this machine cannot keep it in memory"
+                )
             time.sleep(0.4)
             yield "fake_b", true_map(), {}
         finally:

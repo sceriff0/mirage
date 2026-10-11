@@ -6,6 +6,7 @@
 # Submitted by submit.sh, which sets METHOD, DATASET and the allocation.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
+# shellcheck disable=SC2153  # METHOD and DATASET come from the submitter (--export)
 work="${REGBENCH_WORK:-${TMPDIR:-/tmp}}/regbench-$METHOD-${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}-${SLURM_ARRAY_TASK_ID:-0}"
 args=(run --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "$DATASET" --method "$METHOD"
       --work "$work")

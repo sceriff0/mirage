@@ -16,12 +16,16 @@
 ``gate``               from one run's ``selfcheck.json``: the status that decides whether
                        the run may start, and the rows to leave out of the results
                        (``score --drop``). Exit code as ``selfcheck``
+``realgate``           from the realcheck of a run's first unit: may the rest of the run
+                       start. Exit 1 when the gating row is flagged
 ``selfcheck``          check that a method's points follow the image its own writer produced,
                        on a synthetic pair; exit 0 ``ok``, 1 ``inconsistent``, 2
                        ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
 
 ``run --realcheck`` does the same kind of check on the real case it has just registered
-and exits 3 when it is flagged.
+and exits 3 when it is flagged. ``run --retry-oom`` and ``selfcheck --retry-memory`` are
+what a later rung of the memory ladder runs: they do nothing unless the attempt before
+ran out of memory (``benchmarks/regbench/ladder.py``).
 
 Run from the repository root.
 """
@@ -157,6 +161,12 @@ def build_parser():
     what.add_argument(
         "--groups", action="store_true", help="print the patients, one per line"
     )
+    what.add_argument(
+        "--sizes",
+        action="store_true",
+        help="print three numbers on one line: cases, patients, and the rounds of the "
+        "largest patient (what the launcher sizes its arrays and time limits from)",
+    )
 
     r = sub.add_parser("run")
     r.add_argument("--cases", required=True)
@@ -195,6 +205,18 @@ def build_parser():
         help="after the method's writer, check that each mapping follows the image "
         "written for it (realcheck.json); exit 3 when one is flagged",
     )
+    r.add_argument(
+        "--retry-oom",
+        action="store_true",
+        help="a later rung of the memory ladder: run only when this unit's last "
+        "run.json says it ran out of memory; otherwise leave it alone and exit 0",
+    )
+    r.add_argument(
+        "--previous-state",
+        default="",
+        help="with --retry-oom: the scheduler's state of this unit's task at the rung "
+        "below (sacct). It decides only where run.json still says `killed`",
+    )
 
     chk = sub.add_parser("selfcheck")
     chk.add_argument("--method", required=True, choices=METHODS)
@@ -228,6 +250,17 @@ def build_parser():
         action="store_true",
         help="do not start a process per pair (what that process itself is given)",
     )
+    chk.add_argument(
+        "--retry-memory",
+        action="store_true",
+        help="a later attempt with more memory: run only when the record already in "
+        "--work ended for memory; otherwise leave it and exit with its status",
+    )
+    chk.add_argument(
+        "--previous-state",
+        default="",
+        help="with --retry-memory: the scheduler's state of the earlier attempt",
+    )
 
     sc = sub.add_parser("score")
     sc.add_argument("--cases", required=True)
@@ -256,6 +289,42 @@ def build_parser():
         "them). Repeatable",
     )
     sc.add_argument(
+        "--pipeline-trace",
+        default=None,
+        metavar="TRACE.TXT",
+        help="a Nextflow trace of an earlier pipeline run on this cohort: the "
+        "end-to-end cost view (cost_end_to_end.csv) reads the pipeline's own convert "
+        "and merge-and-pyramid steps from it, per patient (the task's tag). Nothing "
+        "is run. Without it those columns say `not available`",
+    )
+    sc.add_argument(
+        "--pipeline-trace-label",
+        default=None,
+        help="what to call the run the trace is of (default: the file's folder)",
+    )
+    sc.add_argument(
+        "--pipeline-convert-process",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="the trace's conversion process (default CONVERT_IMAGE); repeatable",
+    )
+    sc.add_argument(
+        "--pipeline-merge-process",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help="the trace's merge-and-pyramid process (default MERGE_AND_PYRAMID); "
+        "repeatable",
+    )
+    sc.add_argument(
+        "--gates",
+        default=None,
+        metavar="DIR",
+        help="the launcher's gate records (<out>/logs/gates): every run a gate blocked "
+        "is named in the summary and in launch.csv",
+    )
+    sc.add_argument(
         "--no-tissue",
         action="store_true",
         help="leave out the tissue-level block of the written images (tissue*.csv)",
@@ -280,10 +349,50 @@ def build_parser():
     )
     gt.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
     gt.add_argument("--selfcheck", required=True, help="the run's selfcheck.json")
+    gt.add_argument(
+        "--for",
+        dest="run",
+        default=None,
+        help="the run that is gated, when it stands behind another run's selfcheck "
+        "(default: --name)",
+    )
+    gt.add_argument(
+        "--record",
+        default=None,
+        help="also write the verdict here, one tab-separated line: run, status, rows "
+        "to drop (or -), blocked 0|1, the reference comparison (or -)",
+    )
+    gt.add_argument(
+        "--allow-unchecked",
+        action="store_true",
+        help="record the verdict and exit 0 whatever it is (REGBENCH_ALLOW_UNCHECKED)",
+    )
+
+    rg = sub.add_parser(
+        "realgate",
+        help="from the realcheck of a run's first unit: may the rest of the run start",
+    )
+    rg.add_argument("--cases", required=True)
+    rg.add_argument("--out", required=True)
+    rg.add_argument("--dataset", required=True, choices=DATASETS)
+    rg.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
+    rg.add_argument("--method", required=True, choices=METHODS)
+    rg.add_argument("--label", default=None)
+    rg.add_argument(
+        "--variant", required=True, help="the row whose realcheck gates the run"
+    )
+    rg.add_argument("--index", type=int, default=0, help="the unit that went ahead")
+    rg.add_argument("--record", default=None, help="as `gate --record`")
+    rg.add_argument("--allow-unchecked", action="store_true")
 
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
+    )
+    rn.add_argument(
+        "--scorer-image",
+        action="store_true",
+        help="print only the image `prepare`, `gate`, `tissue` and `score` run in",
     )
     rn.add_argument(
         "--all",
@@ -329,6 +438,19 @@ def _run(a):
             )
             return 0
         picked = units[a.index]
+    if a.retry_oom:
+        from . import ladder
+
+        go, why = ladder.unit_retry(
+            ladder.unit_paths(a.out, a.method, a.label, picked), a.previous_state
+        )
+        ids = "+".join(c.case_id for c in picked)
+        print(
+            f"{a.dataset}/{ids} [{a.label or a.method}]: {why}; "
+            + ("going up a rung" if go else "nothing to do")
+        )
+        if not go:
+            return 0
     opts = parse_opts(a.opt)
     rest = (opts, a.label, a.work, a.keep_work)
     if per_patient or a.group is not None:
@@ -376,6 +498,23 @@ def _selfcheck(a):
     from . import selfcheck
     from .methods import parse_opts
 
+    if a.retry_memory:
+        import json
+        from pathlib import Path
+
+        from . import ladder
+
+        path = Path(a.work) / "selfcheck.json"
+        go, why = ladder.selfcheck_retry(path, a.previous_state)
+        print(f"selfcheck [{a.label or a.method}]: {why}")
+        if not go:
+            try:
+                status = json.loads(path.read_text()).get("status")
+            except (OSError, ValueError):
+                status = selfcheck.NOT_CHECKED
+            return selfcheck.EXIT_CODE.get(
+                status, selfcheck.EXIT_CODE[selfcheck.CRASHED]
+            )
     record = selfcheck.run(
         a.method,
         a.work,
@@ -402,6 +541,9 @@ def _list(a):
         print("\n".join(c.case_id for c in cases))
     elif a.groups:
         print("\n".join(groups(cases)))
+    elif a.sizes:
+        by_group = groups(cases)
+        print(len(cases), len(by_group), max(map(len, by_group.values()), default=0))
     else:
         print(len(cases))
     return 0
@@ -410,6 +552,9 @@ def _list(a):
 def _runs(a):
     from . import variants
 
+    if a.scorer_image:
+        print(variants.SCORER_IMAGE)
+        return 0
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))
     for row in variants.runs_table(paused=a.all):
@@ -417,24 +562,120 @@ def _runs(a):
     return 0
 
 
+def _write_gate(path, run, status, dropped, blocked, reference):
+    """One line a shell can read: run, status, rows to drop, blocked, reference."""
+    from pathlib import Path
+
+    from . import variants
+
+    if not path:
+        return
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(
+        "\t".join(
+            [
+                run,
+                status,
+                ",".join(dropped) or variants.NONE,
+                "1" if blocked else "0",
+                reference or variants.NONE,
+            ]
+        )
+        + "\n"
+    )
+
+
+def _reference_status(record, names):
+    """The worst status of the second comparison a method that redraws the reference
+    has (ASHLAR): ``pairs[].variants.<row>.reference.status``. It is already folded
+    into each row's own status; it is recorded apart so the summary can name it."""
+    from . import selfcheck
+
+    found = [
+        ((pair.get("variants") or {}).get(v) or {}).get("reference", {}).get("status")
+        for pair in record.get("pairs") or []
+        for v in names
+    ]
+    found = [f for f in found if f]
+    return selfcheck.worst(found) if found else ""
+
+
 def _gate(a):
     """One line, tab-separated: the status that decides whether the run may start (the
     worst over its gating rows), and the rows to leave out of the results (``-`` for
-    none). The exit code is that status's, as ``selfcheck`` returns it: 0 only for ok."""
+    none). The exit code is that status's, as ``selfcheck`` returns it: 0 only for ok.
+
+    A selfcheck that left no record (its job was cancelled, or killed before it could
+    write) is ``not_checked``: the run is blocked, and the record says why."""
     import json
     from pathlib import Path
 
     from . import selfcheck, variants
 
+    run = a.run or a.name
     try:
         variants.run_of(a.name)
+        variants.run_of(run)
     except KeyError as exc:
         raise SystemExit(f"gate: {exc.args[0]}; see `runs --all`") from None
-    record = json.loads(Path(a.selfcheck).read_text())
+    try:
+        record = json.loads(Path(a.selfcheck).read_text())
+    except (OSError, ValueError) as exc:
+        print(f"gate: no selfcheck record at {a.selfcheck} ({type(exc).__name__})")
+        record = {}
     status = variants.gate_status(a.name, record)
-    dropped = variants.dropped_variants(a.name, record)
+    # rows are dropped from the run whose selfcheck this is, and from no other
+    dropped = variants.dropped_variants(a.name, record) if run == a.name else []
+    reference = _reference_status(record, variants.gate_variants(a.name))
+    blocked = status in selfcheck.BLOCKING and not a.allow_unchecked
     print(f"{status}\t{','.join(dropped) or variants.NONE}")
+    _write_gate(a.record, run, status, dropped, blocked, reference)
+    if status in selfcheck.BLOCKING and a.allow_unchecked:
+        print(f"gate: {run} is allowed to start unchecked ({status})")
+        return 0
     return selfcheck.EXIT_CODE[status]
+
+
+REAL_OK, REAL_FLAGGED, REAL_NOT_CHECKED = "ok", "flagged", "not_checked"
+
+
+def _realgate(a):
+    """May the rest of a run start, from the realcheck of the unit that went ahead.
+
+    Reads ``realcheck.json`` of the gating row for every case of that unit. ``flagged``
+    (exit 1) when one is flagged; ``not_checked`` when there is none (the unit failed,
+    or wrote no image), which does NOT block: only a measured disagreement does."""
+    import json
+
+    from .cases import groups, list_cases, result_dir
+    from .methods import scope_of
+
+    cases = list_cases(a.cases, a.dataset)
+    by_group = groups(cases)
+    units = (
+        list(by_group.values())
+        if scope_of(a.method) == "group"
+        else [[c] for c in cases]
+    )
+    picked = units[a.index] if a.index < len(units) else []
+    found, flagged = 0, []
+    for case in picked:
+        path = result_dir(a.out, a.variant, case) / "realcheck.json"
+        try:
+            check = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        found += 1
+        if check.get("flag"):
+            flagged.append(case.case_id)
+    status = REAL_FLAGGED if flagged else REAL_OK if found else REAL_NOT_CHECKED
+    blocked = bool(flagged) and not a.allow_unchecked
+    print(
+        f"{status}\t{a.variant}\t{found} of {len(picked)} realcheck(s)"
+        + (f"\tflagged: {','.join(flagged)}" if flagged else "")
+    )
+    _write_gate(a.record, a.name, f"realcheck_{status}", [], blocked, "")
+    return 1 if blocked else 0
 
 
 def _dropped(names):
@@ -496,6 +737,8 @@ def main(argv=None):
         return _runs(a)
     if a.cmd == "gate":
         return _gate(a)
+    if a.cmd == "realgate":
+        return _realgate(a)
     if a.cmd == "tissue":
         return _tissue(a)
     from . import score, variants
@@ -512,5 +755,9 @@ def main(argv=None):
         primary=primary,
         with_tissue=not a.no_tissue,
         dropped=_dropped(a.drop),
+        pipeline_trace=a.pipeline_trace,
+        pipeline_trace_label=a.pipeline_trace_label,
+        pipeline_processes=(a.pipeline_convert_process, a.pipeline_merge_process),
+        gates=a.gates,
     )
     return 0

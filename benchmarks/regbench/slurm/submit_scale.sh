@@ -31,6 +31,7 @@ base="${SCRATCH:-$HOME}/regbench_scale"
 export REGBENCH_REPO="${REGBENCH_REPO:-$(cd "$HERE/../../.." && pwd)}"
 export REGBENCH_CASES="${REGBENCH_CASES:-$base/cases}"
 export REGBENCH_OUT="${REGBENCH_OUT:-$base/results-$(git -C "$REGBENCH_REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+# shellcheck source=benchmarks/regbench/slurm/env.sh
 source "$HERE/env.sh"
 
 all_sizes=(1024 2048 4096 8192 16384 32768 65536)
@@ -65,7 +66,7 @@ for size in $sizes; do
     jp="${jp%%;*}"
     echo "$size px: generate -> job $jp (${alloc[*]})"
     for m in $methods; do
-        # shellcheck disable=SC2206
+        # shellcheck disable=SC2206,SC2207
         per_method=($(_regbench_var SBATCH "$m"))
         j=$(sbatch --parsable --export=ALL,METHOD="$m",DATASET=synthetic,CASE_ID="$case_id" \
             --job-name="rb-$m-$size" --dependency=afterok:"$jp" "${alloc[@]}" "${extra[@]}" \

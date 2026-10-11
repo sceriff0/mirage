@@ -44,12 +44,16 @@ concurrency:
 jobs:
   benchmarks:
     runs-on: ubuntu-latest
-    # 15, down from 60. The 60 was sized for the deleted synthetic ground-truth unit
-    # rung, which ran the DISK+LightGlue COARSE front-end on CPU (23m33s locally). What
-    # remains is the plan/analysis layer on tiny synthetic fixtures, ~5s locally. Left
-    # well above the measured time so an under-provisioned runner does not flake, but low
-    # enough that a hang fails in minutes instead of an hour.
-    timeout-minutes: 15
+    # 45. It was 15, set when what ran here was the plan/analysis layer on tiny
+    # fixtures (~5 s). benchmarks/tests/regbench now runs STARE for real, twice through
+    # its whole selfcheck, and scores small known-truth suites: the whole directory was
+    # measured at 17-22 minutes locally, so 15 could only time out. 45 is about twice
+    # the measured time, for a slower runner, and still fails a hang within the hour.
+    # Every test runs: the ones that take tens of seconds carry the `slow` marker
+    # (benchmarks/tests/conftest.py) so that a developer can leave them out locally with
+    # `-m "not slow"`; this job never does, and
+    # benchmarks/tests/test_ci_time_budget.py fails if a deselection appears here.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

@@ -753,13 +753,20 @@ def write_native(state, case_id, dest_dir):
     finally:
         close()
     warped = []
+    # the three parts of this step, timed apart (the driver's `write_s` is their sum):
+    # the conversion the package needs for each further channel, its own writer, and
+    # the benchmark's copy of its files into one
+    parts = {"convert": 0.0, "writer": 0.0, "benchmark": 0.0}
     for c in range(n_channels):
+        t0 = time.perf_counter()
         if c == nuclear:
             source = Path(state["source"])
         else:
             source = work / f"moving_c{c}.tif"
             single_page_tiff(src_path, c, source)
+        parts["convert"] += time.perf_counter() - t0
         target = dest / f"warped_c{c}{saving['final_extension']}"
+        t0 = time.perf_counter()
         pipeline.adf.apply_deformation_pyvips(
             str(source),
             str(state["target"]),
@@ -772,10 +779,19 @@ def write_native(state, case_id, dest_dir):
             save_source_only=True,
             to_template_shape=True,
         )
+        parts["writer"] += time.perf_counter() - t0
         if c != nuclear:
             source.unlink(missing_ok=True)
         warped.append(target)
 
+    # what the PACKAGE wrote, before its files are copied and removed: one file per
+    # channel (the nuclear channel's is described; `bytes` is all of them)
+    own = imageio.describe_written(warped[nuclear])
+    if "unread" not in own:
+        own["files"] = n_channels
+        own["bytes"] = int(sum(p.stat().st_size for p in warped if p.exists()))
+        own["of"] = "the package's own files, one per channel"
+    t0 = time.perf_counter()
     h, w = state["ref_hw"]
     opened = [_first_page(p) for p in warped]
     try:
@@ -808,6 +824,7 @@ def write_native(state, case_id, dest_dir):
             done()
     for p in warped:
         p.unlink(missing_ok=True)
+    parts["benchmark"] = time.perf_counter() - t0
     pad_value = loading["pad_value"]
     native = {
         "files": [str(out)],
@@ -823,6 +840,8 @@ def write_native(state, case_id, dest_dir):
         "nuclear_channel": int(nuclear),
         "frame": "the reference slide's grid: the writer crops the padded canvas back "
         "by the reference's own pads",
+        "written": own,
+        "write_parts_s": parts,
     }
     state["native"] = native
     return native

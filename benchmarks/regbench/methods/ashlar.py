@@ -92,7 +92,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import resources, tilemap
+from .. import imageio, resources, tilemap
 from ..cases import load_points, polys
 from ..mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 
@@ -758,6 +758,12 @@ def _results(
     for case, grid in zip(cases, grids[1:]):
         names.append(_channel_names(case, "mov", int(grid["n_channels"])))
         files.append(homes[case.case_id] / f"{case.case_id}.ome.tif")
+    # what ASHLAR itself wrote, before the benchmark's copies are cut from it: one file
+    # for the patient, every cycle's channels
+    own = imageio.describe_written(mosaic)
+    if "unread" not in own:
+        own["of"] = "ASHLAR's own mosaic: every cycle of the patient in one file"
+    writer_s = write_s
     t0 = time.perf_counter()
     split_error = None
     try:
@@ -773,8 +779,11 @@ def _results(
         except OSError as exc:
             split_error = split_error or _error(exc)
             kept = None
-    write_s_patient = write_s + time.perf_counter() - t0
+    split_s = time.perf_counter() - t0
+    write_s_patient = write_s + split_s
     write_s = write_s_patient / rounds  # one writer call draws the whole patient
+    # a round's share of the two parts: ASHLAR's writer, and the benchmark's own split
+    parts = {"writer": writer_s / rounds, "convert": 0.0, "benchmark": split_s / rounds}
 
     out = []
     plane = n_ref
@@ -821,6 +830,8 @@ def _results(
                     "files": [str(files[k + 1])],
                     "format": "ome-tiff",
                     "writer": WRITER,
+                    "written": own,
+                    "write_parts_s": parts,
                     "fill": "zero (the tiles' padding and what no tile covers)",
                     "channels": names[k + 1],
                     "dtype": str(np.dtype(_dtype_of(files[k + 1]))),

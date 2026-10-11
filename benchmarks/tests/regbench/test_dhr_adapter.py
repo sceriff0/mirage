@@ -29,7 +29,7 @@ import numpy as np
 import pytest
 import tifffile
 
-from benchmarks.regbench import METHODS, imageio, methods
+from benchmarks.regbench import METHODS, cost, imageio, methods
 from benchmarks.regbench import selfcheck as sc
 from benchmarks.regbench.cases import result_dir
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
@@ -694,6 +694,18 @@ def test_the_written_image_is_on_the_reference_grid(tmp_path, case, pair):
     native = run["native"]
     assert run["write_s"] > 0 and native["origin_xy"] == [0.0, 0.0]
     assert native["nuclear_channel"] == 0 and native["channels"] == ["DAPI", "dots"]
+    # the write step in its three parts (the driver's write_s is the whole of it): the
+    # conversion of the further channel, the package's writer, the benchmark's stack
+    parts = native["write_parts_s"]
+    assert set(parts) == {"convert", "writer", "benchmark"}
+    assert all(v >= 0 for v in parts.values()) and parts["writer"] > 0
+    assert sum(parts.values()) <= run["write_s"]
+    # what the PACKAGE wrote, described before the benchmark stacked it: one file per
+    # channel, so it is not one image that holds every channel
+    own = native["written"]
+    assert own["files"] == 2 and own["channels"] == 1 and own["bytes"] > 0
+    assert "one per channel" in own["of"]
+    assert cost.complete_image(own) is False
     assert native["dtype"] == "uint16" and "255 counts" in native["fill"]
     (path,) = native["files"]
     assert (

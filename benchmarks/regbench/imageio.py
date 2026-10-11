@@ -247,3 +247,48 @@ def tiff_mm_per_px(path):
         if not per_unit or not num:
             return None
         return per_unit * den / num
+
+
+def describe_written(path):
+    """What a writer left on disk, read from the file's own headers: ``channels``,
+    ``levels`` (1 without a pyramid), ``pyramid``, ``compression``, ``tile``, ``bigtiff``,
+    ``dtype``, ``shape`` and ``bytes``. ``{"unread": reason}`` when it cannot be read.
+
+    A pyramid is counted both ways writers store one: as reduced levels of the first
+    series (SubIFDs, what OME-TIFF writers do) and as further series smaller than the
+    first (top-level pages, what libvips does without SubIFDs).
+    """
+    import tifffile
+
+    try:
+        path = Path(path)
+        with tifffile.TiffFile(str(path)) as tif:
+            series, page = tif.series[0], tif.pages[0]
+            axes = str(getattr(series, "axes", ""))
+            shape = [int(v) for v in series.shape]
+            channels = shape[axes.index("C")] if "C" in axes else 1
+            if "S" in axes and "C" not in axes:
+                channels = shape[axes.index("S")]
+            levels = len(getattr(series, "levels", [series]))
+            if levels == 1:
+                plane = shape[-2] * shape[-1] if "S" not in axes else 0
+                levels += sum(
+                    1
+                    for other in tif.series[1:]
+                    if plane and int(np.prod(other.shape[-2:])) < plane
+                )
+            return {
+                "channels": int(channels),
+                "levels": int(levels),
+                "pyramid": bool(levels > 1),
+                "compression": str(getattr(page.compression, "name", page.compression)),
+                "tile": [int(page.tilelength), int(page.tilewidth)]
+                if page.is_tiled
+                else None,
+                "bigtiff": bool(tif.is_bigtiff),
+                "dtype": str(np.dtype(series.dtype)),
+                "shape": shape,
+                "bytes": int(path.stat().st_size),
+            }
+    except Exception as exc:
+        return {"unread": f"{type(exc).__name__}: {exc}"}

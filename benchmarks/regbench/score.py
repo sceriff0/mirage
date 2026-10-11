@@ -64,6 +64,12 @@ scale. Secondary: a block of its own, in no summary of the primary rows, no pair
 difference and no ranking. A variant without a written image has no row there and a line
 in ``tissue_missing.csv``.
 
+``cost_end_to_end.csv`` and ``cost_end_to_end_summary.csv`` are a second, secondary view
+of cost (``regbench.cost``): the method's own conversion, the estimate and the write in
+separate columns, and the pipeline's convert and merge-and-pyramid steps read from a
+Nextflow trace when one is given (``pipeline_trace``). ``launch.csv`` lists what the
+launcher's gates decided (``gates``).
+
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
 """
 
@@ -76,7 +82,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, pairs, tissue, truth
+from . import DATASETS, cost, pairs, tissue, truth
 from .cases import list_cases, load_points, polys, result_dir
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -186,6 +192,13 @@ def resource_row(run):
 
     after = gb("peak_rss_after_register_mb", info)
     on_gpu = str(info.get("device", "")).startswith("cuda")
+    adapter = str(run.get("method") or "")
+    convert_key = cost.CLOCK.get(adapter, {}).get("convert", cost.NONE)
+    native = run.get("native") if isinstance(run.get("native"), dict) else {}
+    written = native.get("written")
+    complete = cost.complete_image(written)
+    parts = native.get("write_parts_s")
+    parts = parts if isinstance(parts, dict) else {}
     previous = list(run.get("previous_attempts") or [])
     wasted = [(_f(p.get("wall_s")), _f(p.get("cpu_s"))) for p in previous]
     return {
@@ -215,6 +228,25 @@ def resource_row(run):
         "wasted_cpu_h": float(np.nansum([c for _, c in wasted])) / 3600.0,
         "wasted_wall_s": float(np.nansum([w for w, _ in wasted])),
         "rss_method": r.get("rss_method", ""),
+        # for the end-to-end view (regbench.cost): the method's own conversion where it
+        # is timed apart, the device, and what its writer left on disk
+        "adapter": adapter,
+        # what the scheduler was asked for, with no fallback (NaN outside a scheduler)
+        "cpus_asked": _f(run.get("cpus_requested")),
+        "device": str(info.get("device") or "cpu") if run.get("method") else "",
+        "method_convert_s": _f(info.get(convert_key))
+        if convert_key not in (cost.NONE, cost.NOT_SEPARABLE)
+        else math.nan,
+        # where the adapter times the parts of its write step apart: the package's own
+        # writer, a conversion that writer needed, and the benchmark's own copying
+        "write_writer_s": _f(parts.get("writer")),
+        "write_convert_s": _f(parts.get("convert")),
+        "write_benchmark_s": _f(parts.get("benchmark")),
+        "written": cost.written_text(written),
+        "written_complete": "" if complete is None else complete,
+        "written_file": str((native.get("files") or [""])[0]),
+        "cpus_affinity": _f(run.get("cpus_affinity")),
+        "cpus_node": _f(run.get("cpus_node")),
         "host": run.get("host", ""),
         "cpu_model": run.get("cpu_model", ""),
         "blas": run.get("blas", ""),
@@ -723,10 +755,10 @@ def summarise_resources(res_rows):
 
 
 # ── output ────────────────────────────────────────────────────────────────────
-def write_csv(path, rows):
+def write_csv(path, rows, fields=None):
     if not rows:
         return
-    fields = list(dict.fromkeys(k for r in rows for k in r))
+    fields = fields or list(dict.fromkeys(k for r in rows for k in r))
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields, restval="")
         w.writeheader()
@@ -910,6 +942,71 @@ def _nonband_markdown(summary, missing):
     return parts
 
 
+def read_gates(directory):
+    """What the launcher's gate jobs decided (``<out>/logs/gates/*.tsv``): one dict per
+    record with ``run``, ``gate`` (``selfcheck`` | ``realcheck``), ``status``,
+    ``dropped`` (result names), ``blocked`` and ``reference``. Empty without a
+    directory."""
+    out = []
+    if not directory or not Path(directory).is_dir():
+        return out
+    for path in sorted(Path(directory).glob("*.tsv")):
+        fields = path.read_text().strip().split("\t")
+        if len(fields) < 4:
+            continue
+        run, status, dropped, blocked = fields[:4]
+        reference = fields[4] if len(fields) > 4 else "-"
+        out.append(
+            {
+                "run": run,
+                "gate": "realcheck"
+                if path.name.endswith(".realcheck.tsv")
+                else "selfcheck",
+                "status": status,
+                "blocked": blocked.strip() != "0",
+                "dropped": "" if dropped == "-" else dropped,
+                "reference": "" if reference == "-" else reference,
+            }
+        )
+    return out
+
+
+def launch_markdown(launch):
+    """The block that names every run a gate blocked and every row a gate dropped."""
+    if not launch:
+        return []
+    blocked = [g for g in launch if g["blocked"]]
+    unchecked = [
+        g
+        for g in launch
+        if not g["blocked"] and g["status"] not in ("ok", "realcheck_ok")
+    ]
+    dropped = [g for g in launch if g["dropped"]]
+    parts = ["## What the gates decided\n"]
+    if blocked:
+        parts.append(
+            "Runs that did NOT start (their rows above are `not run`, scored at the "
+            "unregistered pose): "
+            + "; ".join(f"`{g['run']}` ({g['gate']}: {g['status']})" for g in blocked)
+            + ".\n"
+        )
+    else:
+        parts.append("No run was blocked.\n")
+    if unchecked:
+        parts.append(
+            "Runs that started although a check did not say ok: "
+            + "; ".join(f"`{g['run']}` ({g['gate']}: {g['status']})" for g in unchecked)
+            + ".\n"
+        )
+    if dropped:
+        parts.append(
+            "Rows a gate said to leave out: "
+            + "; ".join(f"`{g['dropped']}` (of `{g['run']}`)" for g in dropped)
+            + ".\n"
+        )
+    return parts
+
+
 def summary_markdown(
     summary,
     fails,
@@ -921,6 +1018,9 @@ def summary_markdown(
     nonband_lost=None,
     tissue_tables=None,
     dropped=None,
+    confined="",
+    end_to_end=None,
+    launch=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
@@ -974,6 +1074,7 @@ def summary_markdown(
             )
             + ".\n",
         ]
+    parts += launch_markdown(launch or [])
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
         parts += [markdown(fails, list(fails[0])), ""]
@@ -1001,9 +1102,12 @@ def summary_markdown(
             "`peak_rss_gb` is the process tree's peak while registering. "
             "`cgroup_peak_gb` is the whole job, writers included. No single column is "
             "the cost.\n",
+            *([confined + "\n"] if confined else []),
             markdown(res_summary, cols),
             "",
         ]
+    if end_to_end:
+        parts += cost.markdown(*end_to_end, markdown)
     return "\n".join(parts)
 
 
@@ -1018,8 +1122,19 @@ def score(
     seam_owners=None,
     with_tissue=True,
     dropped=None,
+    pipeline_trace=None,
+    pipeline_trace_label=None,
+    pipeline_processes=(None, None),
+    gates=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``pipeline_trace`` is a Nextflow ``trace.txt`` of an earlier pipeline run on the
+    cohort: the end-to-end cost view reads the pipeline's convert and merge-and-pyramid
+    steps from it (``regbench.cost``; nothing is run). ``pipeline_trace_label`` names
+    that run in every imported number; ``pipeline_processes`` overrides the two process
+    names. ``gates`` is the launcher's directory of gate records; what they decided is
+    written to ``launch.csv`` and named in the summary.
 
     ``dropped`` names variants that are left out of every table although they may have
     results: rows whose own selfcheck failed without blocking their method
@@ -1118,6 +1233,21 @@ def score(
     frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
     res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
     res_summary = summarise_resources(res)
+    confined = cost.cores_confined(res)
+    steps, source = None, ""
+    if pipeline_trace:
+        convert, merge = pipeline_processes
+        steps = cost.pipeline_steps(
+            cost.read_trace(pipeline_trace),
+            tuple(convert or cost.PIPELINE_CONVERT),
+            tuple(merge or cost.PIPELINE_MERGE),
+        )
+        trace_path = Path(pipeline_trace)
+        label = pipeline_trace_label or trace_path.resolve().parent.name
+        source = f"{label} ({trace_path})"
+    e2e = cost.end_to_end(res, steps, source)
+    e2e_summary = cost.summarise(e2e)
+    launch = read_gates(gates)
 
     tables = Path(out) / ("tables_dev" if dev else "tables")
     tables.mkdir(parents=True, exist_ok=True)
@@ -1135,6 +1265,9 @@ def score(
         "nonband_truth",
         "nonband_truth_by_family",
         "nonband_missing",
+        "cost_end_to_end",
+        "cost_end_to_end_summary",
+        "launch",
         *tissue.TABLES,
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
@@ -1144,6 +1277,9 @@ def score(
     write_csv(tables / "failures.csv", fails)
     write_csv(tables / "resources.csv", res)
     write_csv(tables / "summary_resources.csv", res_summary)
+    write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
+    write_csv(tables / "cost_end_to_end_summary.csv", e2e_summary)
+    write_csv(tables / "launch.csv", launch)
     write_csv(tables / "truth.csv", truth_rows)
     write_csv(tables / "truth_by_family.csv", by_family)
     write_csv(tables / "nonband_cells.csv", non_cells)
@@ -1173,6 +1309,9 @@ def score(
         non_lost,
         tis,
         dropped_rows,
+        confined,
+        (e2e, e2e_summary, source),
+        launch,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -1192,5 +1331,9 @@ def score(
         "nonband_truth": non_truth,
         "nonband_missing": non_lost,
         "dropped": dropped_rows,
+        "cost_end_to_end": e2e,
+        "cost_end_to_end_summary": e2e_summary,
+        "cores_confined": confined,
+        "launch": launch,
         **tis,
     }

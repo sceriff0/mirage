@@ -387,6 +387,13 @@ def test_the_run_record_holds_the_transform_and_the_diagnostics(tmp_path, small)
         "noise on the reference" in s for s in info["implementation"]["benchmark_side"]
     )
     assert run["write_s"] > 0 and run["native"]["origin_xy"] == [-7.0, -4.0]
+    # ASHLAR's writer and the benchmark's split, apart; together they are write_s
+    parts = run["native"]["write_parts_s"]
+    assert parts["convert"] == 0.0 and parts["writer"] >= 0 and parts["benchmark"] > 0
+    assert parts["writer"] + parts["benchmark"] == pytest.approx(run["write_s"])
+    # what ASHLAR itself wrote: the patient's mosaic, described before it was split
+    own = run["native"]["written"]
+    assert own["channels"] == 4 and "every cycle" in own["of"]
     assert "band" not in np.load(path.parent / "warped.npz").files  # no nuclei here
 
 

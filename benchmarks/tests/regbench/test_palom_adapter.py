@@ -1039,6 +1039,7 @@ def _run_b256(case, out):
     )
 
 
+@pytest.mark.slow
 def test_every_variant_gets_rows_off_paloms_seams_on_identical_nuclei(
     truth_case, tmp_path
 ):

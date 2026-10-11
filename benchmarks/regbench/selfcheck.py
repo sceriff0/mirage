@@ -1063,6 +1063,13 @@ def run(
     apart = getattr(mod, "SELFCHECK_SUBPROCESS", False) and not in_process
     if apart and not isinstance(method, str):
         raise SystemExit("a method run in a subprocess must be named in METHODS")
+    host = resources.host_info()
+    try:
+        earlier = list(
+            json.loads((work / "selfcheck.json").read_text()).get("attempts") or []
+        )
+    except (OSError, ValueError, AttributeError):
+        earlier = []
     results = []
     for ref_hw, mov_hw in sizes:
         sub = work / f"{ref_hw[0]}x{ref_hw[1]}" if len(sizes) > 1 or apart else work
@@ -1098,9 +1105,21 @@ def run(
             "match_px": MATCH_PX,
             "edge_px": EDGE_PX,
         },
-        "host": {k: resources.host_info().get(k) for k in ("host", "launch_id")},
+        "host": {k: host.get(k) for k in ("host", "launch_id")},
         "pairs": results,
     }
+    # The selfcheck climbs in memory like a run (64 -> 256 -> 512 GB): the allocation
+    # and the outcome of every attempt made in this folder, this one last.
+    record["attempts"] = [
+        *earlier,
+        {
+            "attempt": host.get("attempt"),
+            "mem_requested_gb": host.get("mem_requested_gb"),
+            "cpus_requested": host.get("cpus_requested"),
+            "launch_id": host.get("launch_id"),
+            "status": record["status"],
+        },
+    ]
     write_json(work / "selfcheck.json", record)
     return record
 

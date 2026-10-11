@@ -542,6 +542,21 @@ def _run(
                     {**cost, **end},
                     tb,
                 )
+    # Clock stopped, writers done: what each written image IS (channels, pyramid or not,
+    # compression, size), read from the file. A method whose own output is not the file
+    # it hands over (ASHLAR's mosaic, DeeperHistReg's per-channel files) says so itself
+    # in `native["written"]`, and that is kept.
+    from .. import imageio
+
+    for (case_id, variant), rec in done.items():
+        native = rec.get("native")
+        if not (isinstance(native, dict) and native.get("files")):
+            continue
+        if "written" not in native:
+            native["written"] = imageio.describe_written(native["files"][0])
+            write_json(
+                result_dir(out, names[variant], by_id[case_id]) / "run.json", rec
+            )
     if not opts.get("stage_images"):  # a selfcheck's pair carries dots, not tissue
         # Clock stopped, writers done: the nuclear channel of each written image, reduced
         # to the evaluation size of the tissue-level block (regbench.tissue). One channel
