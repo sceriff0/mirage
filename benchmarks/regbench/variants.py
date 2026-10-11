@@ -96,6 +96,7 @@ from . import (
     EXTERNAL_DATASETS,
     HYRECO_DATASETS,
     methods,
+    plugins,
     prep,
 )
 
@@ -216,6 +217,9 @@ RUNS = (
     Run("palom", "palom_b1024", {"block": "1024"}, "PALOM", False, None),
 )
 
+# Runs of a private method plug-in (regbench.plugins): none unless one is enabled.
+RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
+
 # The tuning side of ANHIR (`anhir_tune`) runs these and nothing else: one run per
 # preprocessing candidate, so the choice can look at no other data.
 TUNING_RUNS = tuple(
@@ -255,9 +259,13 @@ FAMILY = {
     "palom": "palom",
 }
 
+FAMILY.update(plugins.get("FAMILY", {}) or {})
+
 # Which run's selfcheck gates a run, when it is not its own. `palom_b1024` is not here:
 # its block grid differs from `palom`'s, so it stands behind its own selfcheck.
 GATED_BY = {"ashlar_clean": "ashlar", "affine_ashlar_clean": "affine_ashlar"}
+
+GATED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
 
 # Method -> the suffixes of the result names whose selfcheck status gates its runs, when
 # that is not all of them. DeeperHistReg (ruling R3.12 b): only the row of the image its
@@ -297,6 +305,11 @@ NOT_ON = {
         ),
     ),
 }
+for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
+    NOT_ON[_dataset] = tuple(NOT_ON.get(_dataset, ())) + tuple(
+        (lambda r, n=_name: (r.label or r.method) == n, _why)
+        for _name, _why in _left_out.items()
+    )
 TUNING_ONLY = (
     "the tuning side of ANHIR runs the preprocessing candidates of the stare_prep "
     "row and nothing else: no other run may be looked at there, and every run of the "

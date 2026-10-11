@@ -258,3 +258,7 @@ docs/figures/failure-schematic.html
 # Git worktrees. Was ignored only via .git/info/exclude, which is LOCAL and never
 # committed -- so on a fresh clone the whole tree showed up untracked.
 .worktrees/
+
+# private method plug-ins of the registration benchmark (benchmarks/regbench/plugins.py):
+# never tracked
+benchmarks/regbench/private/

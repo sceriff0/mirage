@@ -83,7 +83,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, cost, failure_log, pairs, prep, tissue, truth
+from . import DATASETS, cost, failure_log, pairs, plugins, prep, tissue, truth
 from .cases import (
     NUCLEI,
     OUTLINES,
@@ -107,7 +107,9 @@ NON = ":non_"
 # Methods whose primary row carries a seam mask (``warped.npz``: ``band`` on the moving
 # nuclei, ``band_ref`` on the reference nuclei, ``band_truth`` on the known-truth probes
 # of a reference-side owner). The owner's name is its primary variant.
-SEAM_OWNERS = ("ashlar", "palom", "palom_b1024")
+SEAM_OWNERS = ("ashlar", "palom", "palom_b1024") + tuple(
+    plugins.get("SEAM_OWNERS", ())  # of a private method plug-in, when one is enabled
+)
 # Every overlap number is computed on two polygon sets (``cases.SETS``). The OUTLINES are
 # the headline and keep every table and column they had; the bare NUCLEI get the same
 # tables under ``<name>_nuclei.csv`` with the same columns, and both carry ``set``.
@@ -374,6 +376,11 @@ def resource_row(run):
         # what the scheduler was asked for, with no fallback (NaN outside a scheduler)
         "cpus_asked": _f(run.get("cpus_requested")),
         "device": str(info.get("device") or "cpu") if run.get("method") else "",
+        # extra cost columns a private method plug-in declares (none without one)
+        **{
+            column: info.get(key, "")
+            for column, key in (plugins.get("COST_COLUMNS", {}) or {}).items()
+        },
         "method_convert_s": _f(info.get(convert_key))
         if convert_key not in (cost.NONE, cost.NOT_SEPARABLE)
         else math.nan,

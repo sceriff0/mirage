@@ -288,6 +288,18 @@ at that moment (the driver cannot see inside it). `writer_oom` is a writer that 
 the failure (VALIS's, ASHLAR's split), `write_native`, or a kill the watcher saw while the
 method itself had the clock paused.
 
+### Private method plug-ins (`plugins.py`)
+
+A method that cannot be published is benchmarked without entering the repository. Its
+adapter lives in `benchmarks/regbench/private/` (ignored by git), with a `plugin.py` that
+declares its methods, runs, seam owners, selfcheck cases and dataset exclusions
+(`plugins.py` lists the names). It is read only with `REGBENCH_PRIVATE=1`; without the
+variable, or without the folder, the run list, the counts, the tables and the tests are
+exactly those of this document. With it, `runs`, `run`, `selfcheck`, `gate`, `score` and
+the launcher pick the plug-in's runs up through that one hook: an image is named like any
+other (`REGBENCH_SIF_<image>`), and the launcher's jobs inherit the environment. A
+plug-in's rows are never primary. Nothing of a plug-in is built, pushed or tested by CI.
+
 ## Methods (the design; see "State of this port" for what exists)
 
 | variant(s) | software | run unit | native transform | how nuclei are moved |

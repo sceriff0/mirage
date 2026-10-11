@@ -50,8 +50,12 @@ from __future__ import annotations
 import argparse
 import os
 
-from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, METHODS
+from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, plugins
+from . import METHODS as PUBLIC_METHODS
 from .resources import n_cpus
+
+# the public methods, and those of a private method plug-in when one is enabled
+METHODS = PUBLIC_METHODS + plugins.method_names()
 
 
 def build_parser():

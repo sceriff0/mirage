@@ -108,7 +108,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import cells, imageio, pairs, resources
+from . import cells, imageio, pairs, plugins, resources
 from .cases import (
     Case,
     load_case,
@@ -361,6 +361,9 @@ REAL_OFFSET_PX = 0.3
 REAL_MATCHED = 0.7  # of the baseline's matched fraction
 REAL_MIN_NUCLEI = 20  # a crop with fewer detections is reported and not judged
 REALCHECK_EXIT = 3  # `run --realcheck` when a realcheck is flagged
+
+
+SIZES.update(plugins.get("SELFCHECK_SIZES", {}) or {})  # private method plug-ins
 
 
 def sizes_for(name):
@@ -1648,6 +1651,10 @@ def run(
     from . import methods
 
     mod, name = methods.load(method), methods.method_name(method)
+    # a private method plug-in may name options its run is CHECKED with
+    extra = (plugins.get("SELFCHECK_OPTS", {}) or {}).get(label or name)
+    if extra:
+        opts = {**(opts or {}), **extra}
     if mask and not hasattr(mod, "SELFCHECK_MASK"):
         raise SystemExit(f"{name} has no SELFCHECK_MASK: --mask {mask} means nothing")
     work = Path(work)

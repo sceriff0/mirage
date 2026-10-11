@@ -107,7 +107,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import METHODS, resources
+from .. import METHODS, plugins, resources
 from ..cases import (
     load_points,
     points_fingerprint,
@@ -224,6 +224,9 @@ def load(method):
     """The method's module. A module-like object (tests) is returned as it is."""
     if not isinstance(method, str):
         return method
+    private = plugins.method(method)  # a private method plug-in (regbench.plugins)
+    if private is not None:
+        return private
     if method not in METHODS:
         raise SystemExit(f"unknown method {method!r}; expected one of {METHODS}")
     return importlib.import_module(f"{__name__}.{method}")
