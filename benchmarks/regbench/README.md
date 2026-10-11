@@ -36,7 +36,7 @@ This package is being ported in steps. What exists now:
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
 | the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
-| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, four chained job arrays per run and dataset, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
+| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost), `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the end-to-end cost view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. The pipeline's own steps are read from a Nextflow trace, tested with a trace written by hand; no real trace has been read |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
 
@@ -186,7 +186,8 @@ holds paired probes: `truth_mov`, `truth_ref` and `truth_cell` (see "Known-truth
 - pair: `register(case, work, opts)` yields `(variant, PointMap, info)`;
 - group: `register_group(cases, work, opts)` yields `(case_id, variant, PointMap | None,
   info)`. `cases` is every case of one patient. A failed round is
-  `(case_id, variant, None, {"error": msg})`; a degraded one carries `info["problem"]`.
+  `(case_id, variant, None, {"error": msg})` (`"cause"` may say why: a memory cause
+  goes up the ladder); a degraded one carries `info["problem"]`.
 
 `mapping.PointMap(fn, direction)`: `fn(xy (N, 2)) -> (N, 2)` in full-resolution pixels of the
 native slides; `direction` is `mapping.MOV_TO_REF` or `mapping.REF_TO_MOV`.
@@ -194,7 +195,12 @@ native slides; `direction` is `mapping.MOV_TO_REF` or `mapping.REF_TO_MOV`.
 Optional: `write_native(state, case_id, dest_dir)` (the method's own writer, called after
 the generator ends with the clock paused; `state` is what the method put in
 `info["_state"]`), or an image written at a yield inside `opts["monitor"].pause()` /
-`.resume()` and handed over as `info["native"]`.
+`.resume()` and handed over as `info["native"]`. **A row is `ok` only when its image
+exists, for every method alike:** a writer that fails, at a yield (`native: {"error":
+...}`) or in `write_native`, fails the row it was writing for (`cause: writer`, or
+`writer_oom` when the error names memory), and while `write_native` runs that row's
+`run.json` says `ok: false, cause: killed, phase: writer`, so a kill there leaves a failed
+row too. The registration clock is not touched: the writer stays outside it.
 
 The driver hands a method three things through `opts` that are not options of the run and
 are not recorded as such: `monitor` (the clock), `native_dir` (`f(case_id, variant)`: where
@@ -217,10 +223,36 @@ calls `on_variant`.
 (`pair` | `patient`), `group_cases`, `register_s`, `write_s`, `resources`, `native`,
 `selfcheck_status`, `attempt`, `mem_requested_gb`, `cpus_requested`, `cpus_affinity`,
 `blas`, `cpu_model`, `previous_attempts`, `info`, and `realcheck` (`status`, `flag`) when
-`run --realcheck` was given. It is written as
+`run --realcheck` was given; `retry`, `submissions` (the launcher's id of every submission
+that ran or reused the result), `reused_by`, `time_limit`, `oom_watch` (`readable`,
+`started`, `path`: was the cgroup's out-of-memory counter readable, did the watcher
+start), and, where the scheduler had to say how the task ended, `cause_from` and
+`scheduler` (`state`, `elapsed_s`, `cpu_s`). It is written as
 `ok: false, cause: killed` before the method starts, so a task the scheduler kills leaves a
-failed row. `cause` is one of `exception`, `killed`, `not_run`, `oom`, `timeout`,
-`gpu_oom`.
+failed row; `realcheck.json` of an earlier attempt is removed at the same moment.
+
+| `cause` | what happened | goes up a rung | counted as |
+|---|---|---|---|
+| `exception` | the method raised, or reported a failed round | no | the method's |
+| `oom` | the method ran out of host memory while registering (its own error text, `resources.MEMORY_ERRORS`; the cgroup counter; the scheduler's `OUT_OF_MEMORY`) | yes | the method's |
+| `writer_oom` | the method's own writer ran out of memory: no image | yes | the method's |
+| `writer` | the method's own writer failed for another reason: no image | no | the method's |
+| `gpu_oom`, `timeout` | as named | no | the method's |
+| `killed` | the process died and neither it nor the scheduler could say why | no | the method's |
+| `benchmark_oom` | the BENCHMARK's own step ran out of memory with the clock stopped (moving the nuclei through the map) | yes | NOT the method's |
+| `infrastructure` | the scheduler lost the attempt (`NODE_FAIL`, `PREEMPTED`, `BOOT_FAIL`, `CANCELLED`, `REQUEUED`, `REVOKED`), twice at one rung, or the task never started | no: the same rung once more, then it stands | NOT the method's |
+| `not_run` | the scorer's word for a result with no record, or with a record of another submission | | neither |
+
+`failures.csv` and the summary count the last two groups apart
+(`launches_failed_method`, `launches_lost_not_method`, `rounds_lost_not_method`). A round
+lost for a reason that is not the method's is still scored at the unregistered pose in the
+cell tables, and the summary says so in bold above the failure table: submit it again
+before reading those rows.
+
+A memory error raised inside a method's generator is `oom` whatever the method was doing
+at that moment (the driver cannot see inside it). `writer_oom` is a writer that REPORTED
+the failure (VALIS's, ASHLAR's split), `write_native`, or a kill the watcher saw while the
+method itself had the clock paused.
 
 ## Methods (the design; see "State of this port" for what exists)
 
@@ -817,20 +849,59 @@ peak memory, GPU-hours with the device named, and total time to the registered i
 - **The clock and the peak are per variant.** Each `run.json` holds the cumulative time and
   the process-tree RSS peak up to its own yield. Warping the benchmark's points and a
   method's own writer run with both paused (`resources.Monitor.pause()` / `.resume()`).
-- **`peak_rss_gb` is the cross-method memory number.** `cgroup_peak_gb` is the whole job's
-  high-water mark, writers included, for every method: it cannot be paused.
+- **`peak_rss_gb` is the process tree's peak up to that result, and it is NOT writer-free
+  for every row.** A pause keeps out what a paused stretch allocates and frees. What that
+  stretch leaves resident is seen again once the clock runs. So for a method whose writer
+  runs between two results (VALIS, ASHLAR: the writer is inside the generator), every
+  result AFTER the first written one has a peak that can include what an earlier writer
+  left in memory; the first written result, and every method whose writer runs after the
+  generator has ended (STARE, PALOM, DeeperHistReg), have a peak without any writer.
+  ASHLAR also records `peak_rss_after_register_gb`, read before its writer starts.
+  `cgroup_peak_gb` is the whole job's high-water mark, writers included, for every
+  method: it cannot be paused.
 - **The ladder.** Every method runs at 4 CPUs. Memory starts at 16 GB and moves up one rung
   (64, 256, 512 GB) only when the run ran out of memory. `attempt`, `mem_requested_gb` and
   `cpus_requested` are recorded per run; earlier failed attempts are kept in
-  `previous_attempts` and reported as `wasted_*`. `slurm/submit_cohort.sh` submits the
-  four rungs as four chained job arrays; a task of a later rung starts, reads its unit's
-  last `run.json`, and does nothing unless that says `oom` (`ladder.py`, `run
-  --retry-oom`). The driver reads `REGBENCH_ATTEMPT` and `REGBENCH_MEM_GB`.
+  `previous_attempts` and reported as `wasted_*`. `slurm/submit_cohort.sh` submits each
+  rung as two chained job arrays (the attempt, then the same rung once more for a unit
+  the scheduler lost); a task of a later rung starts, reads its unit's last `run.json`,
+  and does nothing unless that names a memory cause (`ladder.py`, `run --ladder
+  climb|again`). The driver reads `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
+  `REGBENCH_MEM_GB`.
+- **`wasted_*` for an attempt the scheduler killed.** Such an attempt could not bill
+  itself: its record is the placeholder. The next task of the ladder (and, for the last
+  rung, `regbench settle` before the scorer) asks `sacct` for that task's state, elapsed
+  and CPU time and writes them into the record (`scheduler`). The attempt is then billed
+  by the scheduler's elapsed time of the WHOLE task, an upper bound (the container's
+  start and the benchmark's own steps are in it), and counted in `wasted_from_scheduler`.
+  Where `sacct` gave nothing the attempt is counted in `wasted_unknown` and is in no
+  wasted total: unknown, never zero.
+- **The time limit is one rule for both kinds of unit, with one consequence to know.**
+  One `REGBENCH_TIME` per round: a pair task gets it once; a patient task gets it times
+  the rounds of the LARGEST patient of its array (an array has one limit), never above 7
+  days. So a patient with fewer rounds than the largest has more time per round than a
+  pair has, and a patient with more than seven rounds less (at the default 24 h). Each
+  `run.json` records its task's limit (`time_limit`), the cost header prints the limits
+  seen per kind of unit, and `timeout` is never retried.
 - **What counts as out of memory.** The driver watches the task's own cgroup counter
-  (`oom_kill`) and ends the run as `cause: oom` when it rises, because the kernel may kill
-  one worker and leave the parent waiting. `resources.MEMORY_ERRORS` is the fixed list of
-  self-reported memory errors that are also `oom`. `timeout`, `exception` and `gpu_oom`
-  never escalate.
+  (`oom_kill`), from before the method starts until its writer has finished, and ends the
+  run when it rises, because the kernel may kill one worker and leave the parent waiting:
+  `oom` while the method registers, `writer_oom` while its writer runs, `benchmark_oom`
+  while the benchmark moves the nuclei. `resources.MEMORY_ERRORS` is the fixed list of
+  self-reported memory errors that are also `oom`; VALIS prints its exception and
+  returns, so what it printed is put back into the error first (below, "VALIS"). All
+  three memory causes go up a rung. `timeout`, `exception`, `writer` and `gpu_oom` never
+  escalate.
+- **The watcher can be absent, and the tables say so.** Where the counter is not readable
+  from inside the job (not observed under `apptainer exec --cleanenv`), no watcher
+  starts; `run.json: oom_watch` records it, and the cost tables open with `out-of-memory
+  watcher: N of M results ran WITHOUT one`. A `timeout` among those runs may be a worker
+  the kernel killed.
+- **A unit that is already done is not run again.** `run` (and so every array task) leaves
+  a unit alone when every one of its results is `ok` for the same method, label, options
+  and cases: nothing runs, no placeholder is written, and each record gains the
+  submission's id (`submissions`, `reused_by`). `REGBENCH_FORCE=1` or `run --force` runs
+  it anyway. The cost tables open with `reused: N of M results`.
 - **Threads.** No thread variable is exported. Where a method has its own core-count option
   it is set to `resources.n_cpus()` = `min(SLURM_CPUS_PER_TASK, affinity)`; both numbers
   are recorded. `cpu_efficiency` (CPU time over wall x CPUs) is reported because a method
@@ -882,7 +953,7 @@ result that wrote an image:
 | `write_s` | the package's own writer | here, 4 CPUs, clock paused |
 | `benchmark_copy_s` | the benchmark's own copying of a package's output (ASHLAR, DeeperHistReg). In NO total | here |
 | `pipeline_convert_s` | the pipeline's `CONVERT_IMAGE` on that patient's slides: the files every method reads | IMPORTED from a trace |
-| `pipeline_merge_s` | the pipeline's `MERGE_AND_PYRAMID` on that patient, added only where the method's own written image is not already a pyramid that holds every channel in one file; `not needed` otherwise | IMPORTED from a trace |
+| `pipeline_merge_s` | the pipeline's `MERGE_AND_PYRAMID` on that patient, added for every method whose writer does not leave ONE pyramidal file per PATIENT holding every round's channels; `not needed` for the one that does | IMPORTED from a trace |
 | `measured_here_s` | `method_convert_s + estimate_s + write_s` | |
 | `total_s` | the sum of all of the above that apply; empty for a patient the trace does not have | |
 | `written` | what the method's writer left: channels, pyramid or not, compression, size | the file |
@@ -905,14 +976,21 @@ python -m benchmarks.regbench score --cases CASES --out OUT \
   adds seconds measured under two allocations, and says so.
 - **Without a trace** the two pipeline columns read `not available`, there is no total,
   and everything measured here is unchanged.
-- **A merge is never added on a guess.** Whether a method's image is already a complete
-  pyramid is read from the file it wrote. A run that recorded no description gets
-  `not available` there, not an assumption either way.
-- **What the rule does and does not say.** VALIS and PALOM write one pyramidal file per
-  round with every channel of that round; by the rule above no merge is added for them.
-  The pipeline's own product is one file per PATIENT with every round's channels, which
-  only ASHLAR's mosaic is. The table follows the rule as ruled and `written` shows the
-  difference; it does not claim the outputs are equivalent.
+- **The rule (ruling R3.14).** The pipeline's product is one pyramidal file per PATIENT
+  with every round's channels. The merge-and-pyramid step is therefore added for every
+  method whose writer does not leave exactly that, and it is decided from the file each
+  run wrote, never from the method's name (`cost.complete_image`): the file has a
+  pyramid, it is one file, and it holds at least as many channels as the patient's
+  slides hold together (`native.written.patient_channels`, which the driver records
+  beside the file's own description: the reference's channels plus those of every
+  moving round of that launch). With the adapters as built that means: STARE (one flat
+  file per round), both VALIS adapters and PALOM (one pyramid per ROUND), and
+  DeeperHistReg (one file per channel) get the step; ASHLAR's mosaic (one pyramid, every
+  cycle of the patient) does not. An anchored ASHLAR row that dropped a round has a
+  mosaic without that round's channels and gets the step too.
+- **A merge is never added on a guess.** A run that recorded no description, or a case
+  that does not list its channels (so the patient's total is unknown), gets `not
+  available` there and no total, not an assumption either way.
 - Other process names: `--pipeline-convert-process`, `--pipeline-merge-process`
   (repeatable; the last part of the trace's `process` column). The pipeline's
   `SPLIT_CHANNELS`, which feeds its merge step, is not counted by default.
@@ -922,7 +1000,7 @@ python -m benchmarks.regbench score --cases CASES --out OUT \
 `slurm/submit_cohort.sh` submits everything from a login node and returns; nothing waits
 there, and no job submits a job. **It has never been submitted**: what is tested is the
 job graph its dry run prints, and the same graph through a stand-in `sbatch`
-(`test_submit_cohort.py`), plus the rules its jobs apply (`test_ladder.py`,
+(`test_submit_cohort.py`), plus the rules its jobs apply (`test_ladder.py`, `test_failures.py`,
 `test_gates.py`).
 
 ### What it submits
@@ -933,7 +1011,8 @@ script names no method.
 1. **Selfchecks**, one per run that gates a run (16), in that run's image with that run's
    options and mask (`overlap` for ASHLAR, `seams` for PALOM), at 64 GB and 4 CPUs. Two
    more attempts wait behind it at 256 and 512 GB; each runs only when the one before
-   ended for memory (`selfcheck --retry-memory`) and otherwise leaves the record as it
+   ended for memory or left no record of this submission (it was lost to the scheduler,
+   or never started: `selfcheck --retry-memory`), and otherwise leaves the record as it
    is. `selfcheck.json: attempts` holds the allocation and outcome of each. The anchored
    ASHLAR rows' selfcheck waits for STARE's and reads its work (`--m0-from`). Records:
    `<out>/logs/selfcheck/<run>/selfcheck.json`.
@@ -944,31 +1023,77 @@ script names no method.
    cancelled instead of pending for ever. The task itself reads the gate's record again
    before it runs. `<out>/logs/gates/<run>.tsv`: run, status, rows to drop, blocked,
    the reference comparison.
-3. **The ladder**: per run and dataset, four job arrays at 16, 64, 256 and 512 GB, 4 CPUs
-   each, each waiting for the one before with `afterany`. One task is one case for a run
-   that works per pair and one patient for a run that works per patient. A task of a
-   later array exits at once unless its unit's last `run.json` says `oom`; where the
-   record still says `killed` (the process died before it could say why), the scheduler's
-   state for that task at the rung below decides: `OUT_OF_MEMORY` makes it `oom`,
-   `TIMEOUT` makes it `timeout`, and the record is rewritten with `cause_from`. The
-   output directory is kept between rungs, so the cost of a failed attempt is kept
-   (`previous_attempts`). `REGBENCH_ATTEMPT` and `REGBENCH_MEM_GB` reach the task (the
-   pipeline's VALIS sizes its JVM heap from them). The anchored ASHLAR rows wait for
-   STARE's last array on the same dataset.
+3. **The ladder**: per run and dataset, EIGHT job arrays, two per rung (16, 64, 256 and
+   512 GB, 4 CPUs each), each waiting for the one before with `afterany`: the attempt at
+   that rung (`run --ladder first` at 16 GB, `climb` above), then `-again`, the same
+   rung once more (`run --ladder again`). One task is one case for a run that works per
+   pair and one patient for a run that works per patient.
+   - A `climb` task exits at once unless its unit's last `run.json` names a memory cause
+     (`oom`, `writer_oom`, `benchmark_oom`).
+   - An `again` task exits at once unless the attempt before it was lost to the
+     scheduler: the record says `infrastructure`, or there is no record of this
+     submission where one should be (the task never started). **One retry per rung**
+     (`ladder.RETRIES_PER_RUNG`); an attempt lost twice stays `infrastructure`, and a
+     unit that never left a record is written down as `infrastructure` by the next
+     `climb` task. Infrastructure is never read as the method's failure and never sends
+     a unit up a rung.
+   - Where a record still says `killed` (the process died before it could say why), the
+     scheduler's state for THE TASK THAT WROTE IT decides. Each task asks `sacct` for
+     the state, elapsed and CPU time of its unit in every earlier job of the ladder
+     (`<out>/logs/accounting/`), and a record is matched to its task by `launch_id`:
+     `OUT_OF_MEMORY` makes it `oom`, `TIMEOUT` makes it `timeout`, a lost task makes it
+     `infrastructure`, anything else leaves it `killed`. The record is rewritten with
+     `cause_from` and `scheduler`. The last rung has no later task, so the scorer's job
+     runs `regbench settle` on the accounting of every job first.
+   - The output directory is kept between rungs, so the cost of a failed attempt is
+     kept (`previous_attempts`). `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
+     `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
+   - **`multiplex` first.** Every array of a run on the next dataset waits for that
+     run's last array on the one before, and `multiplex` is always first: the cohort is
+     done before the known-truth cases start. The anchored ASHLAR rows also wait for
+     STARE's last array on the same dataset.
 4. **The realcheck gate** of `valis_mirage` and `valis120_hires`: the first patient of
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
    it.
 5. **`tissue`, then `score`**, in the scorer's image (`variants.SCORER_IMAGE`), after
-   everything, whatever failed. `score` is given `--drop` for every row a gate said to
-   drop, `--gates` (the summary's block "What the gates decided" names every blocked run
-   and every dropped row) and, when `REGBENCH_PIPELINE_TRACE` is set, `--pipeline-trace`.
+   everything, whatever failed. The score job first settles every result that still says
+   `killed` against the scheduler's accounting (`regbench settle`). `score` is given
+   `--submission` (below), `--drop` for every row a gate said to drop, `--gates` (the
+   summary's block "What the gates decided" names every blocked run and every dropped
+   row) and, when `REGBENCH_PIPELINE_TRACE` is set, `--pipeline-trace`.
+
+**What is submitted by default: `multiplex`, then `synthetic`.** `semisynth` and the two
+HyReCo sets are DORMANT (ruling R3.14): implemented and tested, never part of the default,
+and submitted only when `--datasets` names them, with a line saying so. Read "Dormant
+datasets: known defects before any use" first.
+
+**One submission, one id, and no stale record.** Each call of the script has an id
+(`REGBENCH_SUBMISSION`, default the time and the process id) that every job carries into
+its records (`run.json: submissions`, `selfcheck.json: submission`). `REGBENCH_OUT`
+defaults to the commit, so a second submission at the same commit writes into the same
+folder; these rules keep one from answering for the other:
+
+- a selfcheck removes the record in its folder before it runs and writes its own last; a
+  later attempt (`--retry-memory`) and the gate take a record of another submission as
+  no record. A selfcheck attempt the scheduler lost, or that never started, is run again
+  at the next of its three attempts, not read as `not_checked`;
+- the gate records of the selected runs are removed when the script submits;
+- an attempt removes `realcheck.json` before the method starts, and the realcheck gate
+  counts a realcheck only beside an `ok` result of this submission;
+- the ladder takes a result of another submission as no record;
+- the scorer is given `--submission`: a result this submission neither ran nor reused is
+  `not run`. A blocked run's older folders are therefore not scored as if it had run.
+  Reuse is the exception that is meant: a unit already `ok` for the same configuration is
+  not run again, its records gain this submission's id, and it is scored
+  (`REGBENCH_FORCE=1` runs everything again).
 
 A GPU is asked for only for the runs whose `gpu` column is 1, with the site's own
 request string, and the script refuses to submit them without it. An image is given the
 GPU (`--nv`) only for those runs. VALIS 1.2.0's image is started with `--writable-tmpfs`.
 No job asks for more than 7 days: a run that works per patient gets `REGBENCH_TIME`
-times the rounds of the largest patient, capped there.
+times the rounds of the largest patient, capped there ("Cost" says what that means per
+round).
 
 ### What to export
 
@@ -983,6 +1108,8 @@ times the rounds of the largest patient, capped there.
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
+| `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
+| `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
 | `REGBENCH_ALLOW_UNCHECKED` | run names that start whatever their gates say (the verdict is still recorded and shown) | none |
 | `REGBENCH_PIPELINE_TRACE`, `REGBENCH_PIPELINE_TRACE_LABEL` | a `trace.txt` of a pipeline run on this cohort, and what to call it ("Cost") | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
@@ -1048,11 +1175,39 @@ and array sections). None of the following was observed:
 - **Cores are confined** (`ConstrainCores`): `sbatch -c 4 --wrap 'python3 -c "import os; print(len(os.sched_getaffinity(0)), os.cpu_count())"'` should print `4` and the node's
   count. The cost tables report what each run saw either way.
 - **Memory is enforced through cgroups and a killed job is `OUT_OF_MEMORY` in `sacct`**,
-  and `sacct` can be called from inside a job (the later rungs ask it for the state of the
-  rung below). Without `sacct` a unit whose record still says `killed` is not retried.
+  and `sacct` can be called from inside a job (every later task of a ladder asks it about
+  the earlier ones). Without `sacct` a unit whose record still says `killed` is neither
+  taken up a rung nor tried again, and its cost is `wasted_unknown`.
+- **The states of a lost task.** `ladder.STATES_INFRASTRUCTURE` (`NODE_FAIL`,
+  `PREEMPTED`, `BOOT_FAIL`, `CANCELLED`, `REQUEUED`, `REVOKED`) is from memory of the
+  `sacct` manual's JOB STATE CODES `[MEMORY]`; a state matches by prefix (`CANCELLED by
+  <uid>`). Check on the site: what `sacct -n -X -P -j <array job>_<task> -o
+  JobID,State,ElapsedRaw,TotalCPU` prints for an array task (the first field must be
+  `<array job>_<task>`, which is what a record's `launch_id` is built from:
+  `SLURM_ARRAY_JOB_ID` and `SLURM_ARRAY_TASK_ID`), for a task killed for memory, and for
+  one cancelled with `scancel`. A `scancel` by the user is also read as `infrastructure`
+  and retried once: cancel the whole submission, not single tasks, to stop it. Whether a
+  preempted job is requeued under the same job id on this site (then the retry array and
+  the scheduler's own requeue would both run the unit; the second finds the first's
+  result and reuses it) was not observed.
+- **The out-of-memory counter is readable inside the image.** `run.json: oom_watch` and
+  the first line of the cost tables say whether it was. Not observed under `apptainer
+  exec --cleanenv`. One STARE unit is enough to see it.
+- **The JVM heap VALIS really gets.** As read in both sdists, `valis.registration.
+  init_jvm(jar=None, mem_gb=10)` passes the literal 10 on and ignores its argument
+  (1.0.0 `registration.py:115-118`, 1.2.0 `:132-135` `[PARTIAL: those lines and
+  slide_io.init_jvm]`). For VALIS 1.2.0 the adapter therefore starts the JVM itself
+  through `valis.slide_io.init_jvm(mem_gb=...)`. For the pipeline's VALIS the adapter
+  changes nothing (it runs the pipeline's call), so the heap the pipeline asks for may
+  never arrive. `run.json: info.jvm_max_heap_gb` is the JVM's own
+  `Runtime.maxMemory()`: read it on the first `valis_mirage` and `valis120` patient. If
+  it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
+  rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
+  of this benchmark, and it is the owner's to rule on.
 - **`MaxSubmit`.** The default submission is 18 gates, 48 selfcheck attempts, the tissue
-  and score jobs, and four arrays per run and dataset: with three datasets about 290
-  jobs, and array TASKS count toward a per-user limit on many sites. Submit by
+  and score jobs, and eight arrays per run and dataset: with the two default datasets
+  374 jobs (the two runs with a realcheck gate have a second, one-task ladder and
+  a gate more), and array TASKS count toward a per-user limit on many sites. Submit by
   `--datasets` or `--runs` if the limit is lower.
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
   into the job.
@@ -1297,6 +1452,62 @@ with `n_ok` equal to `n_pairs`, an `initial` row far above them, and for `hyreco
   Run two or three pairs of the tuning set by hand first (`run --index`), and decide
   `--reduce` from them.
 
+## Dormant datasets: known defects before any use
+
+`semisynth`, `hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
+and its tests are kept, the default submission never includes them, and
+`submit_cohort.sh --datasets <name>` is the only way to submit one. The independent
+review of 2026-10-11 found the defects below. **None of them is fixed.** Each must be
+fixed, or ruled acceptable by the owner, before a number from that dataset is read. Where
+a sentence elsewhere in this README disagrees with this section, this section is right.
+
+### `hyreco_a`, `hyreco_b` (review items 1 and 10)
+
+1. **VALIS fails on every HyReCo pair, and is then scored as unregistered.** A HyReCo
+   pair is `HE/<id>.tif` and `PHH3/<id>.tif`: both slides have the same basename.
+   `methods/_valis_points.py::patient_slides` refuses two slides of one name ("VALIS
+   names a slide by its basename"), so every VALIS row on every pair is `ok: false` and
+   imputed at the initial pose. The table is then STARE against a competitor that never
+   ran. Removing the refusal is not enough: `place_slides` links by basename into one
+   folder and would overwrite the first slide with the second. The HyReCo section's "yes,
+   by construction" for `valis120` / `valis120_hires` and its expectation of `n_ok` equal
+   to `n_pairs` cannot hold as built. The test that should catch it builds its VALIS case
+   with distinct names.
+2. **The A/B split is enforced per cases folder only, and the method's configuration is
+   not frozen.**
+   - The settings hash holds `{proxy, reduce, version}` and nothing else. `run --dataset
+     hyreco_b --opt ... --label ...` is accepted, and the scorer scores any result
+     folder it finds.
+   - Several B folders can be prepared from several A settings; each prints "REPORT SET.
+     Nothing was chosen on it."
+   - `--pixel-size-um` and `--keep-shared-ids` are free on B; inside the 2 % pixel-size
+     window that moves a TRE by micrometres.
+   - The tuned-set check is skipped when the tuning folder is absent.
+   - A refused pair leaves every denominator instead of being scored at the initial
+     pose; only the like-for-like block notices.
+   - `--reduce` is in effect a STARE hyperparameter (it doubles the lattice and the
+     capture range in micrometres). VALIS has no equivalent, and its primary row there
+     is the one most likely to end for memory on 21-gigapixel slides.
+
+### `semisynth` (review item 9)
+
+3. **The `same` cases hand pixel-correlation methods a signal real rounds never have.**
+   The moving slide is a cubic resample of the reference's OWN pixels plus fresh noise;
+   the reference gets no noise. For the `shift` pose (an integer translation) with a
+   rigid or low-gradient field the moving slide is a pixel-exact shifted copy, so phase
+   correlation on an empty background window recovers the shift (the reviewer measured a
+   peak over s.d. of 579 there, against 4.6 for independent noise). STARE, ASHLAR and
+   PALOM can be "right" on empty tiles; VALIS and DeeperHistReg, which work on
+   downsampled features, gain nothing. "Every error is a lower bound" does not say this.
+4. **The noise can be exactly zero.** Its s.d. is a MAD and is 0 on zero-filled
+   background; the generator adds noise only `if self.noise_sd`, so every case of such a
+   patient is noise-free without a refusal or a note.
+
+Two further findings of the same review touch these datasets and are the scorer's to
+fix: `semisynth` groups are `<patient>_w<i>_<family>`, so one real patient counts as 14
+"patients" and the "under six patients, no ranking" line is never printed for it (item
+8); and no table carries an uncertainty estimate.
+
 ## Caveats that travel with the results
 
 1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
@@ -1375,6 +1586,33 @@ example; both run, and `valis120_hires` is the primary row by the user's ruling 
 | `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x rung, GiB - 4)` (the module's formula: 12, 60, 80, 96 GiB on the four rungs), `stage_checkpoint_dir=None` (files only) |
 | `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()`, `.register_micro()` with no argument | the reference slide. `align_to_reference` stays `False` |
 | `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
+
+**Memory failures, and the heap.** `Valis.register()` catches its own exception, prints
+it and returns `(None, None, None)`; the adapters used to raise a fixed text, so a Java
+`OutOfMemoryError` or a NumPy memory error was `cause: exception` and VALIS never went up
+the ladder while STARE's `MemoryError` did. Both adapters now wrap `valtils.print_warning`
+for the duration of the call (`_valis_points.swallowed_errors`: it notes what VALIS hands
+it and calls the original with the same arguments) and put that text into the error, so a
+memory failure is `oom` and climbs.
+
+- `valis120`, `valis120_hires`: the JVM is started by the adapter through VALIS's own
+  `slide_io.init_jvm(mem_gb=...)` before `Valis(...)` is built, with
+  `min(32 + 16 x rung, GiB - 4)` (12, 60, 80, 96 GiB on the four rungs: the pipeline
+  module's formula), because VALIS's `registration.init_jvm` passes the literal 10 on
+  whatever it is given. This is the ONE thing besides the reference slide that the
+  benchmark sets for those rows, and it is not a registration parameter. Off the ladder
+  (no memory request known) nothing is started and VALIS's 10 GB stands.
+- `valis_mirage`: the pipeline's call is run as it is, with `jvm_heap_gb` from the same
+  formula. Whether that value reaches the JVM is recorded, not assumed
+  (`info.jvm_max_heap_gb`; "Not verified").
+- `valis_mirage`'s micro pass: `bin/register.py` catches ANY exception of
+  `register_micro` and writes the non-rigid result. When that exception is a memory
+  error the `valis_mirage` row is FAILED with `cause: oom` and the patient goes up a
+  rung, instead of being kept with a `problem`: the row's name is the full method, every
+  other method's memory failure is retried with more memory, and a cheaper stage under
+  the full method's name would misdescribe the method and flatter its cost. The
+  `valis_mirage_nonrigid` row still holds that stage. A micro pass that fails for another
+  reason is kept as the pipeline ships it, with `problem`.
 
 **Which file each row reads.** The patient's ORIGINAL multichannel slides
 (`case.ref_image`, every round's `case.mov_image`), hard-linked under their own names
