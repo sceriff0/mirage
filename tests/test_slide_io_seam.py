@@ -118,7 +118,10 @@ PIXEL_WRITERS = {
         1,
         "generic helper; the caller supplies the decisions",
     ),
-    "bin/utils/qc.py": (2, "QC raster output, not a pipeline artifact"),
+    # 3 since d0737dad: the full-resolution composite has two write_tiff calls, an ImageJ
+    # classic TIFF below ome_io.BIGTIFF_THRESHOLD_BYTES and an OME BigTIFF above it (a
+    # classic TIFF cannot hold more than 4 GiB); the third is the downsampled composite.
+    "bin/utils/qc.py": (3, "QC raster output, not a pipeline artifact"),
 }
 
 # Writers that emit a (C, H, W) stack and pass photometric THEMSELVES. Every one of these
