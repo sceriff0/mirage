@@ -372,15 +372,16 @@ def build_parser():
     chk.add_argument(
         "--m0-from",
         default=None,
-        help="the --work of a `stare` selfcheck on the same pair (anchored methods)",
+        help="the --work of a `stare` selfcheck on the same cases (anchored methods)",
     )
     chk.add_argument(
         "--size",
         action="append",
         default=None,
-        metavar="HxW[:HxW]",
-        help="check on this pair (reference[:moving]) instead of the method's own "
-        "sizes; repeatable",
+        metavar="HxW[:HxW[:HxW]]",
+        help="check on this case instead of the method's own: a pair "
+        "(reference[:moving]), or one patient (reference:moving:moving, every round "
+        "registered in one run by a per-patient method); repeatable",
     )
     chk.add_argument("--seed", type=int, default=0)
     chk.add_argument("--keep-work", action="store_true")

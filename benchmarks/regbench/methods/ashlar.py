@@ -182,13 +182,18 @@ def anchor_paths(opts, case, root):
 
     On the cohort: ``<out>/<affine_from>/<dataset>/<case>/run.json``. In the selfcheck
     (``opts["m0_from"]`` = the ``--work`` of a ``stare`` selfcheck): that folder's ``out``,
-    directly or under the pair's size."""
+    directly, under the pair's size, or under the patient's name (the folder
+    ``selfcheck.case_folder`` gives a case of several rounds: its group)."""
     variant = str(opts.get("affine_from", "stare"))
     tail = Path(variant) / case.dataset / str(case.case_id) / "run.json"
     if opts.get("m0_from"):
         base = Path(opts["m0_from"])
         h, w = (int(v) for v in case.ref_hw)
-        return [base / f"{h}x{w}" / "out" / tail, base / "out" / tail]
+        return [
+            base / f"{h}x{w}" / "out" / tail,
+            base / str(case.group) / "out" / tail,
+            base / "out" / tail,
+        ]
     return [Path(root) / tail] if root is not None else []
 
 

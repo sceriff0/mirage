@@ -806,7 +806,8 @@ def _torch_stub():
 def main(argv=None):
     """One scenario in this (fresh) process: ``fake_valis.py <request.json>``.
 
-    The request names the method, the work folder, the fake's settings and the options;
+    The request names the method, the work folder, the fake's settings and the options
+    (``rounds``: the moving rounds of the case, 1 for a pair, 2 for a patient);
     the answer (the selfcheck record, the calls, what VALIS's pools were left with) is
     written beside it as ``answer.json``."""
     import multiprocessing
@@ -823,7 +824,7 @@ def main(argv=None):
         request["work"],
         request.get("opts"),
         label=request.get("label"),
-        sizes=[(tuple(request["size"]), None)],
+        sizes=[(tuple(request["size"]), *([None] * int(request.get("rounds", 1))))],
         in_process=True,
         keep_work=True,
     )

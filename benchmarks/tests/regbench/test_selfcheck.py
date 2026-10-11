@@ -10,6 +10,7 @@ or a wrong block must be ``inconsistent``; an output the dots cannot be seen in 
 
 import json
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -125,6 +126,16 @@ def test_sizes_are_the_ones_each_method_needs():
     assert sc.sizes_for("stare")[1][0] == (4096, 5120)  # a four-tile junction
     for name in ("valis", "valis_mirage", "valis120", "valis120_hires"):
         assert max(sc.sizes_for(name)[-1][0]) >= 30000, name
+    # every per-patient method has ONE patient of three slides; a pair method has none
+    # of its own (`stare` runs ASHLAR's, round by round, for the anchored rows)
+    for name in ("valis_mirage", "valis120", "valis120_hires"):
+        assert [s for s in sc.sizes_for(name) if sc.is_patient(s)] == [sc.VALIS_PATIENT]
+    for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
+        assert sc.sizes_for(name) == [(sc.LARGE_HW, None), sc.ASHLAR_PATIENT], name
+        assert set(sc.sizes_for(name)) <= set(sc.sizes_for("stare"))  # the anchor
+    assert sc.rounds_of(sc.ASHLAR_PATIENT) == (sc.LARGE_HW, [None, None])
+    for name in ("deeperhistreg_hr_gpu", "palom", "palom_b1024", "initial"):
+        assert not any(sc.is_patient(s) for s in sc.sizes_for(name)), name
     # one pair for every DeeperHistReg label, the high-resolution ones included
     assert sc.sizes_for("deeperhistreg_gpu") == sc.SIZES["deeperhistreg"]
     assert sc.sizes_for("deeperhistreg_hr_fluo_cpu") == sc.SIZES["deeperhistreg"]
@@ -397,8 +408,13 @@ def test_the_overall_status_is_the_worst_checked_one():
 
 
 # ── run(): fake methods through the real driver ───────────────────────────────
+def _round(case):
+    cid = str(case.case_id)
+    return int(cid.rsplit("_round", 1)[1]) if "_round" in cid else 1
+
+
 def _truths(case):
-    spec = sc.pair_spec(case.ref_hw, case.mov_hw, 0)
+    spec = sc.round_spec(case.ref_hw, case.mov_hw, 0, _round(case))
     from benchmarks.regbench.datasets import synthetic
 
     return synthetic.forward_map(spec), sc.inverse_of(spec)
@@ -433,6 +449,7 @@ def fake_method(
     one_channel=False,
     declare=None,
     group=False,
+    wrong_round=None,
 ):
     """A method whose writer draws through the truth and whose points are the truth plus
     ``wrong``. ``stage``: ``"yield"`` (a first variant with its image handed over at the
@@ -446,7 +463,8 @@ def fake_method(
         if raises is not None:
             raise raises
         fn = truth if direction == MOV_TO_REF else inverse
-        pmap = PointMap(lambda xy: fn(xy) + np.asarray(wrong), direction)
+        off = wrong if wrong_round in (None, _round(case)) else (0.0, 0.0)
+        pmap = PointMap(lambda xy: fn(xy) + np.asarray(off), direction)
         if stage:
             info = {}
             if stage == "yield" and opts.get("stage_images"):
@@ -459,12 +477,18 @@ def fake_method(
         yield name, pmap, {"_state": {"case": case, "inverse": inverse}, "k": 1.0}
 
     def register_group(cases, work, opts):
+        seen.setdefault("groups", []).append([c.case_id for c in cases])
+        rounds = {}  # one state for the patient, as a per-patient method keeps it
         for case in cases:
             for variant, pmap, info in register(case, work, opts):
+                if "_state" in info:
+                    rounds[str(case.case_id)] = info["_state"]
+                    info["_state"] = {"rounds": rounds}
                 yield case.case_id, variant, pmap, info
 
     def write_native(state, case_id, dest_dir):
         channels = [0] if one_channel else None
+        state = state.get("rounds", {}).get(str(case_id), state)
         case = state["case"]
         return _draw(
             case, case.mov_image, dest_dir, state["inverse"], channels=channels
@@ -644,12 +668,23 @@ def test_a_killed_selfcheck_process_is_not_checked_and_a_broken_one_crashed(
         monkeypatch.setattr(sc.subprocess, "run", lambda *a, **k: done)
         return sc._in_subprocess("stare", tmp_path, size, {}, None, None, None, 0)
 
-    assert with_exit(-9)["status"] == sc.NOT_CHECKED
-    assert with_exit(137)["status"] == sc.NOT_CHECKED
-    assert "out of memory" in with_exit(137)["cause"]
-    assert with_exit(1)["status"] == sc.CRASHED  # exit 1 and no selfcheck.json
-    write_json(tmp_path / "selfcheck.json", {"pairs": [{"status": sc.INCONSISTENT}]})
-    assert with_exit(1) == {"status": sc.INCONSISTENT}
+    (killed,) = with_exit(-9)
+    assert killed["status"] == sc.NOT_CHECKED and killed["case_id"] == "pair_512x640"
+    assert with_exit(137)[0]["status"] == sc.NOT_CHECKED
+    assert "out of memory" in with_exit(137)[0]["cause"]
+    assert with_exit(1)[0]["status"] == sc.CRASHED  # exit 1 and no selfcheck.json
+    # a patient whose process died: one record per round, none of them checked
+    size = ((512, 640), None, (500, 600))
+    lost = with_exit(-9)
+    assert [r["case_id"] for r in lost] == [
+        "patient_512x640_round1",
+        "patient_512x640_round2",
+    ]
+    assert [r["mov_hw"] for r in lost] == [[512, 640], [500, 600]]
+    assert {r["status"] for r in lost} == {sc.NOT_CHECKED}
+    both = [{"status": sc.INCONSISTENT}, {"status": sc.OK}]
+    write_json(tmp_path / "selfcheck.json", {"pairs": both})
+    assert with_exit(1) == both  # every round's record comes back
 
 
 def test_a_method_that_asks_for_it_gets_one_process_per_pair(tmp_path, monkeypatch):
@@ -669,8 +704,14 @@ def test_a_method_that_asks_for_it_gets_one_process_per_pair(tmp_path, monkeypat
     monkeypatch.setattr(stare, "SELFCHECK_SUBPROCESS", True, raising=False)
     monkeypatch.setattr(sc.subprocess, "run", run)
     rec = sc.run("stare", tmp_path, {"tile": 1024}, sizes=sc.sizes_for("stare"))
-    assert rec["status"] == sc.OK and len(calls) == 2
+    assert rec["status"] == sc.OK and len(calls) == 3
     assert calls[1][calls[1].index("--size") + 1] == "4096x5120"
+    # a patient is ONE process: every round's canvas is named
+    patient = "4096x5120:4096x5120:4096x5120"
+    assert calls[2][calls[2].index("--size") + 1] == patient
+    assert Path(calls[2][calls[2].index("--work") + 1]).name == "patient_4096x5120"
+    assert cli.build_parser().parse_args(calls[2][3:]).size == [patient]
+    assert sc.parse_size(patient) == ((4096, 5120),) * 3
     assert "--in-process" in calls[0] and "tile=1024" in calls[0]
     assert cli.build_parser().parse_args(calls[0][3:]).in_process is True
 
@@ -690,9 +731,122 @@ def test_the_cli_runs_stare_for_real_and_exits_by_status(tmp_path, capsys):
 def test_parse_size():
     assert sc.parse_size("1024x1280") == ((1024, 1280), None)
     assert sc.parse_size("40x60:30X50") == ((40, 60), (30, 50))
-    for bad in ("1024", "1x2x3", "axb", "1x2:3x4:5x6"):
+    assert sc.parse_size("10x20:30x40:50x60") == ((10, 20), (30, 40), (50, 60))
+    for size in (((10, 20), None), ((10, 20), (30, 40))):
+        assert sc.parse_size(sc._size_text(*size)) == size
+    # a patient's rounds are written out: "same canvas" is the reference's size
+    text = sc._size_text((10, 20), None, (5, 6))
+    assert text == "10x20:10x20:5x6"
+    assert sc.parse_size(text) == ((10, 20), (10, 20), (5, 6))
+    for bad in ("1024", "1x2x3", "axb", "1x2:3x4:5x6:7x8:9x10"):
         with pytest.raises(SystemExit):
             sc.parse_size(bad)
+
+
+# ── a patient: three slides, one native run ───────────────────────────────────
+PATIENT = (SMALL, None, (500, 600))
+
+
+def test_a_patient_shares_its_reference_and_each_round_has_its_own_map(tmp_path):
+    one = sc.make_pair(tmp_path / "pair", SMALL)
+    first, second = sc.make_group(tmp_path / "group", PATIENT)
+    assert first["reference"] == second["reference"]
+    assert Path(second["moving"]).name == "moving_2.ome.tif"
+    # round 1 IS the pair: the same files, the same dots, the same map
+    for name in ("reference", "moving"):
+        assert np.array_equal(tifffile.imread(one[name]), tifffile.imread(first[name]))
+    assert np.array_equal(one["dots_mov_xy"], first["dots_mov_xy"])
+    assert (first["case_id"], first["group"]) == (
+        "patient_512x640_round1",
+        "patient_512x640",
+    )
+    assert (second["round"], second["rounds"], second["mov_hw"]) == (2, 2, (500, 600))
+    # round 2: another pose, another field, other dots, the same tissue
+    xy = np.array([[100.0, 100.0], [400.0, 300.0]])
+    assert np.abs(first["truth"](xy) - second["truth"](xy)).min() > 5.0
+    assert second["spec"]["scene_seed"] == first["spec"]["seed"] == 0
+    assert len(second["dots_mov_xy"]) != len(first["dots_mov_xy"]) or not np.allclose(
+        second["dots_mov_xy"], first["dots_mov_xy"]
+    )
+    back = second["truth_inverse"](second["truth"](xy))
+    assert np.abs(back - xy).max() < 1e-3
+    assert sc.case_names(PATIENT) == (
+        "patient_512x640",
+        ["patient_512x640_round1", "patient_512x640_round2"],
+    )
+    assert sc.case_folder(PATIENT) == "patient_512x640"
+    assert sc.case_folder((SMALL, None)) == "512x640"
+    assert sc.case_folder((SMALL, (500, 600)), {"512x640"}) == "512x640_mov_500x600"
+    with pytest.raises(SystemExit, match="at most"):
+        sc.round_spec(SMALL, None, 0, len(sc.ROUND_POSES) + 2)
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_per_patient_method_gets_every_round_in_one_run(tmp_path, direction):
+    method = fake_method(group=True, direction=direction)
+    rec = sc.run(method, tmp_path / "w", {"workers": 1}, sizes=[PATIENT])
+    # ONE native run with both rounds, not one per round
+    assert method.seen["groups"] == [
+        ["patient_512x640_round1", "patient_512x640_round2"]
+    ]
+    assert rec["status"] == sc.OK and rec["variants"] == {"fake": sc.OK}
+    first, second = rec["pairs"]  # one entry per ROUND
+    assert (first["round"], second["round"]) == (1, 2)
+    assert first["group"] == second["group"] == "patient_512x640"
+    assert second["case_id"] == "patient_512x640_round2"
+    assert second["mov_hw"] == [500, 600] and first["mov_hw"] == list(SMALL)
+    for r in (first, second):  # each round against the gate, on its own dots
+        v = r["variants"]["fake"]
+        assert v["status"] == sc.OK and v["n_found"] >= 0.99 * v["n_dots"] > 20
+        assert v["err_px_p95"] < 0.25
+    assert first["n_drawn"] != second["n_drawn"]
+    assert rec["cases"] == [
+        {
+            "folder": "",
+            "group": "patient_512x640",
+            "size": "512x640:512x640:500x600",
+            "rounds": 2,
+            "patient": True,
+            "status": sc.OK,
+        }
+    ]
+
+
+def test_a_second_round_that_is_wrong_blocks_the_method(tmp_path):
+    """The round a pair never had: right on round 1, 0.6 px off on round 2."""
+    method = fake_method(group=True, wrong=(0.6, 0.0), wrong_round=2)
+    rec = sc.run(method, tmp_path / "w", {"workers": 1}, sizes=[PATIENT])
+    first, second = rec["pairs"]
+    assert first["status"] == sc.OK and second["status"] == sc.INCONSISTENT
+    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"]
+    assert rec["variants"] == {"fake": sc.INCONSISTENT}
+    assert rec["cases"][0]["status"] == sc.INCONSISTENT
+    assert "patient_512x640" not in rec["attempts"][-1]["why"]  # names the variant
+
+
+def test_a_pair_method_takes_a_patient_round_by_round(tmp_path):
+    method = fake_method(one_channel=True)  # and its dots image is the round's own
+    sizes = [(SMALL, None), PATIENT]
+    rec = sc.run(method, tmp_path / "w", {"workers": 1}, sizes=sizes)
+    assert rec["status"] == sc.OK, rec
+    assert [p["case_id"] for p in rec["pairs"]] == [
+        "pair_512x640",
+        "patient_512x640_round1",
+        "patient_512x640_round2",
+    ]
+    assert [c["folder"] for c in rec["cases"]] == ["512x640", "patient_512x640"]
+    out = tmp_path / "w" / "patient_512x640" / "out" / "fake" / "selfcheck"
+    assert sorted(p.name for p in out.iterdir()) == [
+        "patient_512x640_round1",
+        "patient_512x640_round2",
+    ]
+    assert (tmp_path / "w" / "patient_512x640" / "pair" / "dots_2.ome.tif").exists()
+
+
+def test_a_patient_that_raises_is_crashed_on_every_round(tmp_path):
+    method = fake_method(group=True, raises=RuntimeError("no keypoints"))
+    rec = sc.run(method, tmp_path / "w", {"workers": 1}, sizes=[PATIENT])
+    assert [p["status"] for p in rec["pairs"]] == [sc.CRASHED, sc.CRASHED]
 
 
 # ── realcheck ─────────────────────────────────────────────────────────────────

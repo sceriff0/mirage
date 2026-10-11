@@ -112,11 +112,12 @@ def test_ashlar_points_follow_its_mosaic(tmp_path):
     mosaic ASHLAR wrote, and the reference dots against its re-stitched reference."""
     need_ashlar()
     rec = selfcheck.run(
-        "ashlar", tmp_path, mask="overlap", sizes=[(selfcheck.DEFAULT_HW, None)]
+        "ashlar", tmp_path, mask="overlap", sizes=[(selfcheck.LARGE_HW, None)]
     )
     assert rec["variants"] == {"ashlar": selfcheck.OK}, rec
     check = rec["pairs"][0]["variants"]["ashlar"]
     assert check["reference"]["status"] == selfcheck.OK, check
+    assert check["masked_frac"] <= selfcheck.MASK_MAX["overlap"]
     (path,) = (tmp_path / "out").rglob("run.json")
     info = json.loads(path.read_text())["info"]
     for key in (
@@ -314,13 +315,17 @@ def test_palom_writer_follows_the_point_map_pixel_for_pixel():
     "label, opts", [(None, None), ("palom_b1024", {"block": "1024"})]
 )
 def test_palom_points_follow_its_written_image(tmp_path, label, opts):
-    """The selfcheck on both of its pairs (8 x 10 blocks of 1024 px), seams left out."""
+    """The selfcheck on both of its pairs (8 x 10 blocks: of 2048 px for `palom`, the
+    cohort's block size; of 1024 px for the rechunked row), seams left out."""
     need_palom()
     rec = selfcheck.run("palom", tmp_path, opts, label=label, mask="seams")
     name = label or "palom"
     assert rec["variants"] == {f"{name}_affine": selfcheck.OK, name: selfcheck.OK}, rec
     for pair in rec["pairs"]:
-        assert pair["tile"] == (2048 if label else 1024)
+        assert pair["tile"] == 2048  # the cohort's layout, for both rows
+        seams = pair["variants"][name]
+        # the seam mask did something, and stayed under the cap of this block size
+        assert 0 < seams["masked_frac"] <= (0.10 if label else 0.05)
 
 
 def test_palom_on_equal_shifts_everywhere():

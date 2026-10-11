@@ -320,12 +320,14 @@ registration accuracy enters neither.
 
 ```bash
 python -m benchmarks.regbench selfcheck --method M [--label L] [--opt k=v ...] --work W \
-    [--mask overlap|seams] [--m0-from DIR] [--size HxW[:HxW] ...]
+    [--mask overlap|seams] [--m0-from DIR] [--size HxW[:HxW[:HxW]] ...]
 ```
 
 Exit 0 `ok`, 1 `inconsistent`, 2 `not_checked`, 3 `crashed`. **Anything but 0 blocks the
-method** on the cohort. It writes `W/selfcheck.json` (every variant's numbers, per pair and
-per 512 px block).
+method** on the cohort. It writes `W/selfcheck.json`: `cases` (each case's folder, group
+and number of rounds) and `pairs`, every variant's numbers per ROUND and per 512 px block
+(one entry for a pair, one per moving round for a patient, each with `case_id`, `group`,
+`round`, `rounds`).
 
 **The pair** (`selfcheck.make_pair`): two-channel 16-bit OME-TIFFs at 0.325 µm per pixel,
 channel 0 nuclei (`DAPI`), channel 1 `dots`, on a canvas that is not square (2048 x 2560 by
@@ -334,7 +336,7 @@ seen through a known map (1.5 degrees, a shift, a smooth 10 px field). Its dots 
 holds Gaussian dots (sigma 1.5 px, 20000 counts, zero background) on a 96 px lattice, each
 jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass. The
 reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
-Methods with a size-dependent code path are checked on more than one pair
+Methods with a size-dependent code path are checked on more than one case
 (`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction), both VALIS
 adapters also on a pair with a 30000 px side, every DeeperHistReg label on a pair of
 40000 x 50000 against 40000 x 48000 (the cohort's size class, with sizes that divide
@@ -352,14 +354,40 @@ that overhangs its reference was otherwise first met on the cluster):
   crop origin is then fractional is by reading only. Seconds to minutes, under the first
   rung.
 
-Not added, and why: a **three-slide** pair for the per-patient methods (VALIS's serial
-chaining, a second ASHLAR cycle). The harness runs one reference and one moving slide per
-pair; a second round needs the pair, the proxy writer and the record keyed by case, which
-was not done in this task. It stays first exercised on the cohort, where the realcheck
-(VALIS) and the off-seam rows (ASHLAR) are the checks. A **2048 px block pair for
-`palom`**: a pair's TIFF tile is chosen per row (`SELFCHECK_PAIR_TILE`), not per pair, so
-it needs the same harness change; `palom`'s cohort blocks (2048 px) stay unexercised by
-the gate, as before.
+**One patient of three slides for the methods that register a patient together** (user
+ruling R3.19, 2026-10-11). The VALIS adapters (`valis_mirage`, `valis120`,
+`valis120_hires`) and ASHLAR take every round of a patient in one run, and every cohort
+patient has more than one moving round, so a pair alone never exercised the path the
+cohort takes. Their `SIZES` now hold a case of the form `(reference, moving, moving)`:
+one reference and two moving rounds that share it (`selfcheck.make_group`; round 2 keeps
+the tissue and has its own rotation, shift, smooth field and dots: -1.0 degree, (-14, 9)
+px). The whole patient goes to the driver in ONE `run_group` call, natively, and **each
+moving round is checked against the gate on its own**: its points against its image.
+
+| rows | the patient | what it adds to the pairs |
+|---|---|---|
+| `valis_mirage`, `valis120`, `valis120_hires` | 2048 x 2560, three slides (`patient_2048x2560`), before the large pair | VALIS orders the slides and, at upstream's defaults (`valis120*`), registers each to its neighbour in that order, so a round may reach the reference through the other round; the pipeline's settings register each to the reference. One `Valis` object, one `register`, a written image per round |
+| the four ASHLAR rows | 4096 x 5120, three slides (`patient_4096x5120`) | two moving cycles in one command and one mosaic: each cycle's planes, the shared `origin_xy`, the shared reference tiles. The anchored rows read STARE's matrix of the same round |
+| `stare` | ASHLAR's patient, run round by round | nothing for STARE itself (it is a pair method): it is what the anchored ASHLAR rows read (`--m0-from`), at the cost of two more registrations of the large canvas |
+
+Pair methods keep their pair cases. A case's folder under `--work` is `<H>x<W>` for a pair
+and the group's name for a patient (`patient_4096x5120`); case ids are `pair_<H>x<W>` and
+`patient_<H>x<W>_round<i>`. `--size 4096x5120:4096x5120:4096x5120` runs one patient by
+hand. A method that runs each case in its own process (`SELFCHECK_SUBPROCESS`: VALIS)
+runs a patient in ONE process.
+
+**ASHLAR is checked on the 4096 x 5120 canvas only** (the same ruling): the 2048 x 2560
+pair is dropped. It has 3 x 3 tiles, eight of them on the border, and it was the reason
+for a mask cap of 0.70 (below).
+
+**`palom` is checked on the block size its cohort row has.** PALOM's blocks are the
+reference file's TIFF tiles, 2048 px on the cohort. Both rows now read files with 2048
+px tiles (`methods/palom.py::SELFCHECK_PAIR_TILE`): `palom` on 16384 x 20480 (and
+against a 15566 x 19456 moving slide), the smallest canvas with 8 x 10 blocks of 2048
+px, so the tiling has 7 x 9 interior block corners and the seam rule is exercised at
+that block size (cap 0.05 there, below); `palom_b1024` on 8192 x 10240 as before, the
+same tiles cut to 1024 px blocks. Before, `palom` was checked on 1024 px tiles and its
+cohort blocks were first met on the cluster.
 
 **The check.** The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (`find_dots`: a 15 px median background,
@@ -399,18 +427,36 @@ adapters') records `coverage_checked: false`.
 **A mask** (`--mask overlap` for ASHLAR, `--mask seams` for PALOM) takes points out of
 check (1) only:
 
-- **It has a cap** (`selfcheck.MASK_MAX`, frozen): `overlap` 0.70, `seams` 0.10 of the
-  dots (0.10 is 3.2 times the share the seams of 1024 px blocks hold; PALOM's adapter
-  applies the same factor to the blocks a pair really has, `SELFCHECK_MASK_MAX`: 0.05 at
-  2048 px). Above it a comparison that found no failure is `not_checked`, which blocks;
-  a measured failure stays `inconsistent`. The numbers come from the
-  methods' geometry, measured with `tilemap` on uniform points at the 8 px dot margin:
-  ASHLAR's overlap bands at 1024 px tiles and a 922 px pitch hold 0.21 of an endless
-  mosaic (1 - (1 - 102/922)^2) but 0.43 of the 4096 x 5120 pair (30 tiles) and 0.62 of
-  the 2048 x 2560 pair (9 tiles: mostly border), so the cap sits just above the small
-  pair; PALOM's seams are 8 px either side of the edges between blocks with different
-  shifts, 0.03 of the image if every edge of 1024 px blocks is one. The cap is loose for
-  ASHLAR on purpose and says so: on the small pair only 38 % of the dots are judged.
+- **It has a cap** (`selfcheck.MASK_MAX`, frozen): `overlap` 0.50, `seams` 0.10 of the
+  dots. Above it a comparison that found no failure is `not_checked`, which blocks; a
+  measured failure stays `inconsistent`.
+  - **`overlap` 0.50, measured on 2026-10-11** on ASHLAR's only selfcheck canvas (4096
+    x 5120: 5 x 6 tiles of 1024 px at a 922 px pitch) with the adapter's own geometry:
+    its tile grid, `tilemap.on_seam` at its 8 px dot margin, on the selfcheck's own
+    dots, both rounds of the patient. No image enters, so ASHLAR is not needed
+    (`test_selfcheck_gate.py::test_the_overlap_cap_stands_above_the_measured_share`
+    repeats it).
+
+    | where ASHLAR draws the moving tiles | share of the dots masked |
+    |---|---|
+    | where they were cut (and the anchored rows, cut by STARE's matrix: 0.22 to 0.24) | 0.22 |
+    | each tile following the pair's true map | 0.27 to 0.30 |
+    | the same, tiles beyond ASHLAR's maximum shift reset to the cycle's offset | 0.27 to 0.28 |
+    | the true map plus 46 px on both axes on every tile (15 µm, ASHLAR's whole maximum shift), worst of four signs | 0.36 |
+    | the same with 92 px | 0.39 |
+
+    The share grows with the shifts because a moving tile drawn away from where it was
+    cut lies over other reference tiles. The cap is the worst case within ASHLAR's own
+    limit, 0.36, plus a margin of 0.14, so at least half of the dots are always judged.
+    Until this date it was 0.70, set for the 2048 x 2560 pair from shares (0.43 and
+    0.62) computed on a tile grid clamped to the canvas; the adapter's grid is padded
+    (rows at 0, 922, ..., 3688), and on it that pair holds 0.21 to 0.31 as well. What
+    ASHLAR really does on this canvas is not known until it runs: a share above 0.50
+    would read `not_checked` with the share in the message, not a silent pass.
+  - **`seams` 0.10** is 3.2 times the share the seams of 1024 px blocks hold when every
+    block edge is one (8 px either side: 1 - (1 - 16/1024)^2 = 0.03). PALOM's adapter
+    applies the same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`):
+    0.10 for `palom_b1024`, 0.05 for `palom` on its 2048 px blocks.
 - **`masked_frac` is in the record** for every variant, so the share that was not looked
   at is never implicit.
 - **Check (2) stays on outside the mask.** A detection is excused only when the mapped
@@ -1628,7 +1674,10 @@ script names no method.
    ended for memory or left no record of this submission (it was lost to the scheduler,
    or never started: `selfcheck --retry-memory`), and otherwise leaves the record as it
    is. `selfcheck.json: attempts` holds the allocation and outcome of each. The anchored
-   ASHLAR rows' selfcheck waits for STARE's and reads its work (`--m0-from`). Records:
+   ASHLAR rows' selfcheck waits for STARE's and reads its work (`--m0-from`), case by
+   case: STARE's selfcheck runs ASHLAR's patient of three slides too, for that reason.
+   One job per run covers all of its cases, the patient included, so the number of jobs
+   and the rungs (64 / 256 / 512 GB) are unchanged. Records:
    `<out>/logs/selfcheck/<run>/selfcheck.json`.
 2. **A gate per run** (18; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
    that gates the run is anything but `ok`, a selfcheck that left no record included.
@@ -2347,8 +2396,9 @@ function that moves a point is VALIS's own.
   bounding box, and for 1.2.0 the last slide of `slide_dict` (its micro pass prepares
   every slide's image with the last slide's field, `registration.py:3944-3968, 4045-4062`).
 
-**What the selfcheck reaches.** `SIZES` checks every VALIS row on 2048 x 2560 and on
-24000 x 30000 against 23000 x 29000. On the small pair `valis120_hires`'s micro pass
+**What the selfcheck reaches.** `SIZES` checks every VALIS row on 2048 x 2560 (a pair, a
+pair with an overhanging moving slide, and one patient of three slides: see "selfcheck")
+and on 24000 x 30000 against 23000 x 29000. On the small pair `valis120_hires`'s micro pass
 cannot run (its size, 640 px, is under the first pass's 2048 px, and 1.2.0 returns
 early: `registration.py:4862-4871`), and the pipeline's runs on a coarser grid than the
 first pass; on the large pair all three micro passes run and the first field is applied
@@ -2368,8 +2418,9 @@ python -m benchmarks.regbench selfcheck --method valis --label valis120_hires --
     --work W/valis120_hires
 ```
 
-Add `--size 2048x2560` for the small pair alone (minutes, a few GB); without it the
-large pair runs too. `python -m pytest benchmarks/tests/regbench/test_external_methods.py`
+Add `--size 2048x2560` for the small pair alone (minutes, a few GB), or `--size
+2048x2560:2048x2560:2048x2560` for the patient of three slides alone; without it every
+case runs, the large pair included. `python -m pytest benchmarks/tests/regbench/test_external_methods.py`
 runs the small pair of each row whose VALIS version is installed.
 
 ### ASHLAR (`methods/ashlar.py`, `tilemap.py`, `benchmarks/ashlar/`)
@@ -2544,7 +2595,7 @@ imports `stare.manifest`, as `run_ashlar_original_arm.sh:63-80` arranges):
 python -m benchmarks.regbench selfcheck --method ashlar --mask overlap --work W/ashlar
 python -m benchmarks.regbench selfcheck --method ashlar --label ashlar_clean \
     --opt noise=none --mask overlap --work W/ashlar_clean
-# the anchored rows read STARE's matrix from a STARE selfcheck on the same pairs
+# the anchored rows read STARE's matrix from a STARE selfcheck on the same cases
 python -m benchmarks.regbench selfcheck --method stare --work W/stare          # STARE's image
 python -m benchmarks.regbench selfcheck --method ashlar --label affine_ashlar \
     --opt affine=stare --mask overlap --m0-from W/stare --work W/affine_ashlar
@@ -2553,9 +2604,11 @@ python -m benchmarks.regbench selfcheck --method ashlar --label affine_ashlar_cl
     --work W/affine_ashlar_clean
 ```
 
-`ok` is exit 0 and `"status": "ok"` in `W/<row>/selfcheck.json`, for both pairs (2048 x
-2560: 3 x 3 tiles; 4096 x 5120: 5 x 6 tiles with four-tile corners); in each pair's
-record, `variants.<row>.reference.status` is `ok` too. A clean row may end `crashed` with
+`ok` is exit 0 and `"status": "ok"` in `W/<row>/selfcheck.json`, for all three entries of
+`pairs`: the 4096 x 5120 pair (5 x 6 tiles with four-tile corners) and both rounds of
+the patient of three slides on the same canvas (two moving cycles in one mosaic); in
+each entry, `variants.<row>.reference.status` is `ok` too and `masked_frac` is at most
+0.50 (expected 0.22 to 0.36: see "selfcheck"). A clean row may end `crashed` with
 ASHLAR's `correlation > total_amplitude`: that is the known numerical failure, it is
 published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
 `affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).
@@ -2855,10 +2908,11 @@ clock paused.
 **Selfcheck.** Always with `--mask seams`: a dot drawn across two blocks with different
 shifts is torn in the image, and its centroid follows neither half (without the mask the
 stand-in's `palom` row is `inconsistent` for that reason alone). The mask leaves out
-detections within 8 px of such an edge; the affine stage has none. Pairs: 8192 x 10240
-twice (8 x 10 blocks of 1024 px; the second with a smaller moving slide, so the two
-thumbnail down-factors differ). `palom` reads files with 1024 px tiles; `palom_b1024`
-reads files with 2048 px tiles, the cohort's layout, and cuts them to 1024. If under 10 %
+detections within 8 px of such an edge; the affine stage has none. Pairs: two per row,
+8 x 10 blocks each (the second with a smaller moving slide, so the two thumbnail
+down-factors differ). Both rows read files with 2048 px tiles, the cohort's layout:
+`palom` on 16384 x 20480, so its blocks are the 2048 px ones of its cohort row (since
+2026-10-11); `palom_b1024` on 8192 x 10240, cut to 1024 px blocks. If under 10 %
 of the blocks have a shift of at least 0.5 px (`MIN_SHIFT_PX`; `run.json:
 info.shift_meaningful_fraction`) the `palom` variant is `not_checked`: the block map
 then equals the affine map to within the gate and a wrong sign or block order could not
@@ -2873,7 +2927,9 @@ What the dots cannot see, and what covers it:
   `block_affine_transformed_moving_img` and compares every output pixel with the map;
 - content PALOM draws twice or never at a seam (a backward check counts neither);
   `seam_jump_px_*` and `band_fraction` say how much is at stake;
-- the cohort's 2048 px blocks for the `palom` row: the realcheck is the only check there.
+- a slide of the cohort's size (the `palom` row's 2048 px blocks are checked since
+  2026-10-11, on 8 x 10 of them; a cohort slide has about 30 x 30): the realcheck is
+  the check there.
 
 **First commands in a PALOM image** (from the repository root; Python 3.10,
 `palom==2026.4.1` with its own pins, `psutil`, plus the pinned STARE release installed
@@ -2897,7 +2953,8 @@ PALOM's filter does on equal shifts. If step 1 fails with `seek of closed file`,
 workaround is needed: step 3 still runs (the adapter applies it) and `closed_file.applied`
 is true in each `run.json`. `ok` for 3 is exit 0 and, in `W/<row>/selfcheck.json`,
 `"status": "ok"` with `variants.<row>_affine` and `variants.<row>` both `ok` on both
-pairs, `n_masked` a few percent of `n_detected` for `<row>` and 0 for `<row>_affine`.
+pairs, `n_masked` a few percent of `n_detected` for `<row>` (under 5 % for `palom`,
+under 10 % for `palom_b1024`: the caps) and 0 for `<row>_affine`.
 `inconsistent` on `<row>` with step 2 green means torn dots outside the mask or a shift
 the image does not show: report the numbers and stop.
 
@@ -2943,4 +3000,5 @@ rendered `segment.py` call against `nextflow.config` and `conf/modules.config`, 
 re-run itself against a STAND-IN `segment.py` that writes the two masks under the real
 script's names (StarDist is not installed here; the real script was never executed).
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
-`test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.
+`test_stare_adapter.py` runs STARE's whole selfcheck (both pairs and the two rounds of
+ASHLAR's patient) and two real registrations.

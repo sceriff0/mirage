@@ -163,6 +163,7 @@ MIN_SHIFTED_BLOCKS = 0.10  # below it the selfcheck cannot see a wrong sign or o
 MIN_SHIFT_PX = 0.5
 MASK_FACTOR = 3.2  # the selfcheck's seams cap over the geometric share (1024 px blocks)
 MASKS = ("seams",)
+COHORT_TILE = 2048  # px: the TIFF tile of the cohort's slides, hence `palom`'s blocks
 PREREAD = ("auto", "0", "1")
 CLOSED_FILE = "closed file"
 IDENTITY_PROBLEM = "coarse matching failed; PALOM continued with the identity"
@@ -910,12 +911,15 @@ def SELFCHECK_NOT_CHECKED(info, variant):
 
 
 def SELFCHECK_PAIR_TILE(opts):
-    """The TIFF tile of the selfcheck pair, or None for the generator's own (1024 px).
+    """The TIFF tile of the selfcheck pair: 2048 px, the cohort's layout, for both rows.
 
-    The rechunked row is checked on files with 2048 px tiles, the cohort's layout, so
-    that the rechunk does something: 1024 px blocks cut from 2048 px tiles."""
+    ``palom`` takes its blocks from the reference file's tiles, so its selfcheck runs
+    on the 2048 px blocks its cohort row has (since 2026-10-11; before, it read the
+    generator's 1024 px tiles and the cohort's block size was not checked). The
+    rechunked row reads the same layout so that the rechunk does something: 1024 px
+    blocks cut from 2048 px tiles (twice the block, whatever block a test names)."""
     try:
         block = block_option(opts)
     except ValueError:
         return None
-    return None if block is None else 2 * block
+    return COHORT_TILE if block is None else 2 * block

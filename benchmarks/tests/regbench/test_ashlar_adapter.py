@@ -136,7 +136,9 @@ def test_registered_and_named():
     assert (am.TILE, am.OVERLAP, am.MAX_SHIFT_UM) == (1024, 0.1, 15.0)
     assert (am.NOISE_FRAC, am.NOISE_MIN_COUNTS) == (0.002, 3.0)
     assert sc.sizes_for("ashlar_clean") == sc.sizes_for("affine_ashlar_clean")
-    assert sc.sizes_for("ashlar")[-1] == ((4096, 5120), None)
+    # the large canvas only (5 x 6 tiles), as a pair and as a patient of three slides
+    assert sc.sizes_for("ashlar") == [((4096, 5120), None), ((4096, 5120), None, None)]
+    assert sc.sizes_for("ashlar") == sc.sizes_for("affine_ashlar_clean")
 
 
 def test_the_primary_row_is_slight_noise_and_no_anchor():
@@ -684,6 +686,106 @@ def test_the_anchored_row_passes_its_selfcheck(tmp_path, small):
     v = rec["pairs"][0]["variants"]["affine_ashlar"]
     assert rec["status"] == sc.OK, v
     assert v["reference"]["status"] == sc.OK
+
+
+# ── one patient of three slides: two moving cycles in ONE command ─────────────
+def _patient(small):
+    return [(small[0][0], None, None)]
+
+
+def test_a_patient_of_three_slides_is_one_ashlar_command(tmp_path, small):
+    rec = sc.run("ashlar", tmp_path, mask="overlap", sizes=_patient(small))
+    assert rec["status"] == sc.OK and not rec["blocks_the_method"], rec["pairs"]
+    h, w = SMALL
+    assert [p["case_id"] for p in rec["pairs"]] == [
+        f"patient_{h}x{w}_round1",
+        f"patient_{h}x{w}_round2",
+    ]
+    (call,) = fa.calls("main")  # every cycle in one run of ASHLAR's own command
+    cycles = call["argv"][1:4]  # the reference and both moving cycles
+    assert call["argv"][4] == "-o" and all(c.startswith("filepattern|") for c in cycles)
+    assert [c.split("|")[1].rsplit("/", 1)[1] for c in cycles[1:]] == [
+        "cycle_1",
+        "cycle_2",
+    ]
+    first, second = (p["variants"]["ashlar"] for p in rec["pairs"])
+    # one mosaic, each round's own planes of it, each round's own dots
+    assert first["native"]["dots_file"] == second["native"]["dots_file"]
+    assert first["native"]["mosaic_planes"] == [2, 4]
+    assert second["native"]["mosaic_planes"] == [4, 6]
+    assert (first["native"]["dots_channel"], second["native"]["dots_channel"]) == (3, 5)
+    for v in (first, second):
+        assert v["status"] == sc.OK and v["n_found"] == v["n_dots"] > 30
+        assert v["err_px_p95"] < 0.2 and 0 < v["masked_frac"] <= sc.MASK_MAX["overlap"]
+        assert v["reference"]["status"] == sc.OK  # the reference as redrawn, once each
+    assert first["n_drawn"] != second["n_drawn"] or first["n_dots"] != second["n_dots"]
+
+
+def test_a_second_cycle_drawn_elsewhere_than_its_map_is_inconsistent(
+    tmp_path, small, monkeypatch
+):
+    """Round 2 of the patient is checked on its own: a map that is right for cycle 1
+    and half a pixel off for cycle 2 blocks the method."""
+    real = am.point_map
+    seen = []
+
+    def off_on_the_second(placement):
+        seen.append(1)
+        pmap = real(placement)
+        if len(seen) < 2:
+            return pmap
+        return PointMap(lambda xy: pmap.fn(xy) + [0.5, 0.0], pmap.direction)
+
+    monkeypatch.setattr(am, "point_map", off_on_the_second)
+    rec = sc.run("ashlar", tmp_path, mask="overlap", sizes=_patient(small))
+    assert len(seen) == 2
+    assert [p["status"] for p in rec["pairs"]] == [sc.OK, sc.INCONSISTENT]
+    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"]
+
+
+def test_the_anchored_row_reads_each_rounds_matrix_of_the_patient(tmp_path, small):
+    """`--m0-from`: STARE's selfcheck ran the same patient round by round, in the folder
+    named after the group."""
+    h, w = SMALL
+    group = f"patient_{h}x{w}"
+    for i, shift in ((1, (18.0, -12.0)), (2, (-14.0, 9.0))):
+        d = tmp_path / "stare_work" / group / "out" / "stare" / "selfcheck"
+        d = d / f"{group}_round{i}"
+        d.mkdir(parents=True)
+        m0 = np.eye(3)
+        m0[:2, 2] = shift
+        (d / "run.json").write_text(
+            json.dumps({"ok": True, "info": {"m0": m0.tolist()}})
+        )
+    rec = sc.run(
+        "ashlar",
+        tmp_path / "check",
+        {"affine": "stare"},
+        label="affine_ashlar",
+        mask="overlap",
+        m0_from=tmp_path / "stare_work",
+        sizes=_patient(small),
+    )
+    assert rec["status"] == sc.OK, rec["pairs"]
+    out = tmp_path / "check" / "out" / "affine_ashlar" / "selfcheck"
+    anchors = [
+        json.loads((out / f"{group}_round{i}" / "run.json").read_text())["info"]
+        for i in (1, 2)
+    ]
+    for i, a in enumerate(anchors, 1):
+        want = f"stare_work/{group}/out/stare/selfcheck/{group}_round{i}/run.json"
+        assert a["anchor_from"].endswith(want)
+    # without STARE's run of the patient the anchored row is not ok
+    rec = sc.run(
+        "ashlar",
+        tmp_path / "none",
+        {"affine": "stare"},
+        label="affine_ashlar",
+        mask="overlap",
+        m0_from=tmp_path / "elsewhere",
+        sizes=_patient(small),
+    )
+    assert rec["status"] != sc.OK
 
 
 def test_reference_tiles_are_cut_once_per_noise_level(

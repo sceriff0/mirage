@@ -9,6 +9,9 @@
 #
 # The record is $REGBENCH_OUT/logs/selfcheck/<name>/selfcheck.json. It is kept: the gate
 # job reads it, and an anchored run's selfcheck reads the anchor run's (`--m0-from`).
+# One job covers every case of the run (`selfcheck.SIZES`): its pairs, and for a method
+# that registers a patient together (VALIS, ASHLAR) one patient of three slides, under
+# <work>/patient_<H>x<W>; the anchor run (`stare`) has that patient too, round by round.
 # The selfcheck climbs in memory like a run: an attempt above the first runs only when
 # the one before ended for memory (`selfcheck --retry-memory`), and otherwise leaves the
 # record as it is and exits with its status. Exit: 0 ok, 1 inconsistent, 2 not checked,

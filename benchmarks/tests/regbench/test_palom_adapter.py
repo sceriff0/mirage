@@ -612,13 +612,41 @@ def test_the_command_line_takes_paloms_mask_and_rows():
 
 
 def test_the_selfcheck_pairs_are_enough_blocks_for_both_labels():
-    want = [((8192, 10240), None), ((8192, 10240), (7782, 9728))]
-    assert sc.sizes_for("palom") == sc.sizes_for("palom_b1024") == want
-    assert (8192 // 1024, 10240 // 1024) == (8, 10)
-    # the README's row reads the generator's 1024 px tiles; the rechunked row reads
-    # 2048 px tiles (the cohort's layout) cut to 1024 px blocks
-    assert PAIR_TILE({}) is None and PAIR_TILE({"label": "palom"}) is None
+    """8 x 10 blocks for either row, of the size the row has on the cohort."""
+    assert sc.sizes_for("palom") == [
+        ((16384, 20480), None),
+        ((16384, 20480), (15566, 19456)),
+    ]
+    assert sc.sizes_for("palom_b1024") == [
+        ((8192, 10240), None),
+        ((8192, 10240), (7782, 9728)),
+    ]
+    # both rows read 2048 px tiles, the cohort's layout: `palom`'s blocks ARE those
+    # tiles, the rechunked row cuts them to 1024 px
+    assert pa.COHORT_TILE == 2048
+    assert PAIR_TILE({}) == PAIR_TILE({"label": "palom"}) == 2048
     assert PAIR_TILE({"label": "palom_b1024", "block": "1024"}) == 2048
+    for label, block in (("palom", 2048), ("palom_b1024", 1024)):
+        for ref_hw, mov_hw in sc.sizes_for(label):
+            assert (ref_hw[0] // block, ref_hw[1] // block) == (8, 10), label
+            assert ref_hw[0] % block == 0 and ref_hw[1] % block == 0
+    # the second pair of each row: slides of different sizes whose thumbnail factors
+    # differ (an odd row count at the second 2 x 2 mean is trimmed)
+    for ref_hw, mov_hw in (sc.sizes_for("palom")[1], sc.sizes_for("palom_b1024")[1]):
+        assert (mov_hw[0] // 2) % 2 == 1 and mov_hw[0] / (mov_hw[0] // 4) > 4.0004
+    # the cap the seam mask is held to at each row's block size
+    for block, cap in ((2048, 0.05), (1024, 0.10)):
+        blocks = {
+            "edges_y": list(range(0, 8 * block + 1, block)),
+            "edges_x": list(range(0, 10 * block + 1, block)),
+        }
+        blocks.update(
+            affine=np.eye(3).tolist(),
+            shifts_yx=np.zeros((8, 10, 2)).tolist(),
+            grid_shape=[8, 10],
+        )
+        got = pa.SELFCHECK_MASK_MAX({"blocks": blocks}, "seams", sc.MASK_MAX["seams"])
+        assert got == pytest.approx(cap, abs=0.002), (block, got)
 
 
 # ── the rechunked row ─────────────────────────────────────────────────────────

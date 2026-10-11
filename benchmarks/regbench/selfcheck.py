@@ -38,6 +38,14 @@ Statuses, per variant and overall (the worst over the checked variants):
 Two blind spots travel with the result: a defect the writer and the point path SHARE passes
 this check, and a stage with no image of its own is not checked.
 
+**Cases** (``SIZES``, per method or label). A case is a PAIR, ``(reference (H, W), moving
+(H, W) | None)``, or one PATIENT, ``(reference, moving, moving, ...)``: one reference and
+two or more moving rounds that share it, each round with its own map and its own dots.
+A method that registers a patient's rounds together (``SCOPE = "group"``: the VALIS
+adapters, ASHLAR) gets the whole patient in ONE native run, as on the cohort, and every
+round is checked against the gate; a pair method is run on each round in turn. The record
+has one entry of ``pairs`` per ROUND (``case_id``, ``group``, ``round``, ``rounds``).
+
 **What a method provides** (all optional, used here only):
 
 ``write_native(state, case_id, dest_dir)``   as for a cohort run: the final variant's image.
@@ -125,11 +133,20 @@ CHANNEL_NAMES = ("DAPI", "dots")
 DEFAULT_HW = (2048, 2560)
 DATASET = "selfcheck"
 VALIS_OVERHANG = (DEFAULT_HW, (2305, 2817))
-# (reference (H, W), moving (H, W) or None for the same canvas), by method or label. The
-# longest key that the label (else the method) equals or starts with applies.
+LARGE_HW = (4096, 5120)
+# One patient of three slides (user ruling R3.19, 2026-10-11): the reference and two
+# moving rounds on the same canvas, each round with its own map (`ROUND_POSES`).
+VALIS_PATIENT = (DEFAULT_HW, None, None)
+ASHLAR_PATIENT = (LARGE_HW, None, None)
+# A case, by method or label: a PAIR `(reference (H, W), moving (H, W) or None for the
+# same canvas)`, or a PATIENT `(reference, moving, moving, ...)` (three or more entries).
+# The longest key that the label (else the method) equals or starts with applies.
 SIZES = {
-    # two REG_TILE tiles and one seam, then a pair with a four-tile junction
-    "stare": [(DEFAULT_HW, None), ((4096, 5120), None)],
+    # two REG_TILE tiles and one seam, then a pair with a four-tile junction. The third
+    # case is ASHLAR's patient, run round by round (STARE is a pair method): it is there
+    # for the anchored ASHLAR rows, which read STARE's rigid matrix of the SAME round
+    # (`--m0-from`), and it costs STARE two more registrations of the large canvas.
+    "stare": [(DEFAULT_HW, None), (LARGE_HW, None), ASHLAR_PATIENT],
     # Confirmed from VALIS's source by Task 7 (sdists 1.0.0 and 1.2.0 [PARTIAL: see
     # methods/_valis_points.py]). On the default pair the stages run at or near full
     # resolution (rigid 512 or 2048 px, first field 2048 px on a 2560 px slide), and two
@@ -148,15 +165,31 @@ SIZES = {
     # centred placement is half a pixel off the grid. Whether VALIS's crop origin is
     # then fractional is by reading only; the pair is small (a 2305 x 2817 moving
     # slide: seconds to minutes, well under the first rung) and shows it either way.
-    "valis": [(DEFAULT_HW, None), VALIS_OVERHANG, ((24000, 30000), (23000, 29000))],
+    #
+    # The patient (added 2026-10-11, R3.19) is the only case with more than one moving
+    # round, which is what every cohort patient is: VALIS orders the slides and, at
+    # upstream's defaults (`valis120*`: `align_to_reference=False`), registers each to
+    # its NEIGHBOUR in that order, so a round may reach the reference through the other
+    # round; the pipeline's settings (`valis_mirage`) register each to the reference.
+    # A pair cannot show either path apart from the other. Small on purpose (three
+    # 2048 x 2560 slides, under the first rung); the large pair stays the one that
+    # reaches the micro passes, and it stays last.
+    "valis": [
+        (DEFAULT_HW, None),
+        VALIS_OVERHANG,
+        VALIS_PATIENT,
+        ((24000, 30000), (23000, 29000)),
+    ],
     "valis_mirage": [
         (DEFAULT_HW, None),
         VALIS_OVERHANG,
+        VALIS_PATIENT,
         ((24000, 30000), (23000, 29000)),
     ],
     "valis120": [
         (DEFAULT_HW, None),
         VALIS_OVERHANG,
+        VALIS_PATIENT,
         ((24000, 30000), (23000, 29000)),
     ],
     # DeeperHistReg, one pair for all eight labels (confirmed by Task 9 from the source:
@@ -186,24 +219,44 @@ SIZES = {
         ((40000, 50000), (40000, 48000)),
         ((40000, 48000), (40000, 50000)),
     ],
-    # ASHLAR at 1024 px tiles and a 922 px pitch: 3 x 3 tiles, then 5 x 6 with interior
-    # tiles and four-tile corners. The same two pairs as `stare`, whose rigid matrix the
-    # anchored rows read (`--m0-from`).
-    "ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
-    "affine_ashlar": [(DEFAULT_HW, None), ((4096, 5120), None)],
-    # PALOM (both labels): 8 x 10 blocks of 1024 px. Its filter thresholds the
-    # distribution of the block shifts and fits a regression on them
-    # (labsyspharm/palom v2026.4.1 `align.py:54-80` [FULL]), which the default pair's
-    # 2 x 3 blocks cannot feed; the maintainer says small tiles break it too (issue #12
-    # [PARTIAL: the maintainer's comments]). The second pair gives the two slides
-    # different sizes, hence different thumbnail down-factors (`reader.py:70-79`): on
-    # the one-level files written here PALOM builds its own levels by 2 x 2 means with
-    # the excess trimmed, so 7782 rows give 1945 at level 2 and a factor of 4.0005.
-    # `palom` reads files with 1024 px tiles; `palom_b1024` files with 2048 px tiles
-    # (the cohort's layout) rechunked to 1024 (`methods/palom.py::SELFCHECK_PAIR_TILE`).
-    # NOT reached: the cohort's 2048 px blocks for `palom` (the realcheck is the check).
-    "palom": [((8192, 10240), None), ((8192, 10240), (7782, 9728))],
+    # ASHLAR at 1024 px tiles and a 922 px pitch, on the large canvas only: 5 x 6 tiles
+    # with interior tiles and four-tile corners. The 2048 x 2560 pair (3 x 3 tiles, all
+    # but one on the border) was dropped on 2026-10-11 (R3.19): the mask hid most of it,
+    # so it forced a cap under which little is checked (see `MASK_MAX`). The second case
+    # is one patient of three slides: ASHLAR takes every cycle in one command and aligns
+    # each later cycle to the reference stitch, so two moving cycles in one mosaic (its
+    # planes, its `origin_xy`, its shared reference tiles) are checked together, each
+    # round against the gate. Both cases are among `stare`'s, whose rigid matrix the
+    # anchored rows read round by round (`--m0-from`).
+    "ashlar": [(LARGE_HW, None), ASHLAR_PATIENT],
+    "affine_ashlar": [(LARGE_HW, None), ASHLAR_PATIENT],
+    # PALOM: 8 x 10 blocks for either row. Its filter thresholds the distribution of
+    # the block shifts and fits a regression on them (labsyspharm/palom v2026.4.1
+    # `align.py:54-80` [FULL]), which the default pair's 2 x 3 blocks cannot feed; the
+    # maintainer says small tiles break it too (issue #12 [PARTIAL: the maintainer's
+    # comments]). The second pair gives the two slides different sizes, hence different
+    # thumbnail down-factors (`reader.py:70-79`): on the one-level files written here
+    # PALOM builds its own levels by 2 x 2 means with the excess trimmed, so 7782 rows
+    # give 1945 at level 2 and a factor of 4.0005 (15566 rows: 3891, the same factor).
+    # Both rows read files with 2048 px tiles, the cohort's layout
+    # (`methods/palom.py::SELFCHECK_PAIR_TILE`), and PALOM's blocks are the reference
+    # file's tiles:
+    #   palom        2048 px blocks, the block size its cohort row has (R3.19,
+    #                2026-10-11; before, this row was checked on 1024 px tiles and its
+    #                cohort blocks were first met on the cluster). 16384 x 20480 is the
+    #                smallest canvas with 8 x 10 of them: 7 x 9 interior block corners,
+    #                142 interior edges, so the seam mask and its cap (`MASK_MAX`,
+    #                0.05 at this block size) are exercised.
+    #   palom_b1024  the same tiles rechunked to 1024 px blocks, on the canvas that has
+    #                8 x 10 of those.
+    "palom": [((16384, 20480), None), ((16384, 20480), (15566, 19456))],
+    "palom_b1024": [((8192, 10240), None), ((8192, 10240), (7782, 9728))],
 }
+# A moving round after the first: (rotation in degrees, shift (x, y) px). The first round
+# is the pair's own (1.5 degrees, (18, -12)); every round also has its own smooth field.
+ROUND_POSES = ((-1.0, (-14.0, 9.0)), (0.75, (7.0, 21.0)))
+ROUND_SEED = 1009  # x (round - 1), added to the seed of a later round's map and noise
+ROUND_DOT_SEED = 10  # the same for its dots lattice (the reference's own is seed + 1)
 
 # ── the detector ──────────────────────────────────────────────────────────────
 MEDIAN_PX = 15  # background: a median of this side ...
@@ -231,17 +284,34 @@ COVER_MARGIN_PX = 64
 # a dot whose own detection (within this of where it belongs) is masked is not demanded
 COVER_NEAR_PX = 16.0
 # The largest share of the dots a mask may hide. Above it the comparison is
-# `not_checked`: a mask that hides most of the image has checked little. From the
-# methods' real geometry (measured with `tilemap` on uniform points, 8 px dot margin):
-#   overlap  ASHLAR, 1024 px tiles at a 922 px pitch. The band share of an endless
-#            mosaic is 1 - (1 - 102/922)^2 = 0.21; small mosaics have more border
-#            tiles: 0.43 on the 4096 x 5120 pair (30 tiles), 0.62 on the 2048 x 2560
-#            pair (9 tiles, the largest share any pair has).
+# `not_checked`: a mask that hides most of the image has checked little.
+#   overlap  ASHLAR, 1024 px tiles at a 922 px pitch, on the 4096 x 5120 canvas (5 x 6
+#            tiles; the only canvas its selfcheck has since 2026-10-11). MEASURED on
+#            that canvas on 2026-10-11 with the adapter's own geometry (its tile grid,
+#            `tilemap.on_seam` at the adapter's 8 px dot margin, on the selfcheck's own
+#            dots, both rounds of the patient, seeds 0 to 2; no image is involved, so
+#            this needs no ASHLAR; `test_selfcheck_gate.py::
+#            test_the_overlap_cap_stands_above_the_measured_share` repeats it):
+#              tiles drawn where they were cut                      0.22
+#              anchored rows (tiles cut by STARE's matrix)          0.22 to 0.24
+#              each tile following the pair's true map              0.27 to 0.30
+#              the same, tiles beyond ASHLAR's maximum shift reset  0.27 to 0.28
+#              the true map plus 46 px (the whole maximum shift)
+#              on both axes on every tile, the worst of four signs  0.36
+#              the same with 92 px                                  0.39
+#            The share grows with the shifts because a moving tile drawn away from
+#            where it was cut overlaps other reference tiles. The cap is the worst
+#            measured case within ASHLAR's own limit, 0.36, plus a margin of 0.14: at
+#            least half of the dots are always judged. It was 0.70 while the 2048 x
+#            2560 pair was checked, from shares (0.43 and 0.62) computed on a tile grid
+#            clamped to the canvas; the adapter's grid is padded (`retile.tile_grid`:
+#            rows at 0, 922, ..., 3688), and on it that pair holds 0.21 to 0.31 too.
 #   seams    PALOM: 8 px either side of the edges between blocks with different shifts.
 #            All edges of 1024 px blocks: 1 - (1 - 16/1024)^2 = 0.03; 2048 px: 0.016.
 #            The cap is 3.2 x that share at 1024 px blocks; PALOM's adapter applies the
-#            same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`).
-MASK_MAX = {"overlap": 0.70, "seams": 0.10}
+#            same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`): 0.05
+#            at the 2048 px blocks of the `palom` row's pairs.
+MASK_MAX = {"overlap": 0.50, "seams": 0.10}
 _RING = (
     (0, 0),
     (1, 0),
@@ -274,6 +344,48 @@ def sizes_for(name):
     """The pairs a method (or a label) is checked on."""
     keys = [k for k in SIZES if name == k or str(name).startswith(k + "_")]
     return list(SIZES[max(keys, key=len)]) if keys else [(DEFAULT_HW, None)]
+
+
+def rounds_of(size):
+    """``(reference (H, W), [moving (H, W) | None, ...])`` of one case of ``SIZES``."""
+    ref_hw, *movs = size
+    ref_hw = tuple(int(v) for v in ref_hw)
+    return ref_hw, [tuple(int(v) for v in m) if m else None for m in movs] or [None]
+
+
+def is_patient(size):
+    """A case with more than one moving round."""
+    return len(size) > 2
+
+
+def case_names(size):
+    """``(group, [case_id per round])`` of one case: ``pair_<H>x<W>`` for a pair;
+    ``patient_<H>x<W>`` with rounds ``patient_<H>x<W>_round<i>`` for a patient."""
+    (h, w), movs = rounds_of(size)
+    if not is_patient(size):
+        return f"pair_{h}x{w}", [f"pair_{h}x{w}"]
+    group = f"patient_{h}x{w}"
+    return group, [f"{group}_round{i + 1}" for i in range(len(movs))]
+
+
+def round_spec(ref_hw=DEFAULT_HW, mov_hw=None, seed=0, rnd=1):
+    """The generator spec of one moving round of a case. Round 1 is ``pair_spec``; a
+    later round keeps the tissue and the reference (``scene_seed``) and has its own
+    rotation, shift (``ROUND_POSES``) and smooth field."""
+    spec = pair_spec(ref_hw, mov_hw, seed)
+    if rnd > 1:
+        if rnd - 2 >= len(ROUND_POSES):
+            raise SystemExit(
+                f"a selfcheck patient has at most {len(ROUND_POSES) + 1} moving rounds"
+            )
+        theta, shift = ROUND_POSES[rnd - 2]
+        spec.update(
+            scene_seed=int(seed),
+            seed=int(seed) + ROUND_SEED * (rnd - 1),
+            theta=theta,
+            shift=shift,
+        )
+    return spec
 
 
 def pair_spec(ref_hw=DEFAULT_HW, mov_hw=None, seed=0):
@@ -375,11 +487,23 @@ def make_pair(
     for a method that redraws the reference; no method registers on that channel.
     ``tile`` is the TIFF tile of every file written (default: the generator's).
     """
+    size = (ref_hw, mov_hw)
+    return make_group(work, size, seed, workers, dots_image, ref_dots, tile)[0]
+
+
+def make_group(
+    work, size, seed=0, workers=1, dots_image=False, ref_dots=False, tile=None
+):
+    """Write one case of ``SIZES`` under ``work``: a list with one ``make_pair`` dict per
+    moving round. The rounds share ``reference`` (one file); round ``i`` has its own
+    ``moving`` (``moving.ome.tif``, then ``moving_<i>.ome.tif``), map (``round_spec``)
+    and dots, and carries ``case_id``, ``group``, ``round`` and ``rounds``. A pair is
+    the one-round case, written exactly as before."""
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
-    spec = pair_spec(ref_hw, mov_hw, seed)
-    ref_hw, mov_hw = spec["ref_hw"], spec["mov_hw"]
-    dots = lattice_dots(mov_hw, seed)
+    ref_hw, movs = rounds_of(size)
+    group, ids = case_names(size)
+    specs = [round_spec(ref_hw, m, seed, i + 1) for i, m in enumerate(movs)]
     dots_ref = lattice_dots(ref_hw, seed + 1) if ref_dots else np.empty((0, 2))
     tile = int(tile or synthetic.TILE)
 
@@ -387,54 +511,60 @@ def make_pair(
         for x0, y0, x1, y1 in synthetic.tile_boxes(hw, tile):
             yield np.rint(render_dots(xy, x0, y0, x1, y1)).astype(np.uint16)
 
-    def both(which, hw, xy):
-        yield from synthetic._tiles(spec, which, workers, tile)
-        yield from dot_tiles(hw, xy)
+    def write(path, spec, which, hw, xy):
+        def both():
+            yield from synthetic._tiles(spec, which, workers, tile)
+            yield from dot_tiles(hw, xy)
 
-    paths = {}
-    for which, name, hw, xy in (
-        ("ref", "reference", ref_hw, dots_ref),
-        ("mov", "moving", mov_hw, dots),
-    ):
-        paths[name] = work / f"{name}.ome.tif"
         imageio.write_channel_tiles(
-            paths[name],
-            hw,
-            np.uint16,
-            both(which, hw, xy),
-            tile,
-            CHANNEL_NAMES,
-            PIXEL_SIZE_UM,
+            path, hw, np.uint16, both(), tile, CHANNEL_NAMES, PIXEL_SIZE_UM
         )
-    dots_path = None
-    if dots_image:
-        dots_path = work / "dots.ome.tif"
-        imageio.write_channel_tiles(
-            dots_path,
-            mov_hw,
-            np.uint16,
-            dot_tiles(mov_hw, dots),
-            tile,
-            (CHANNEL_NAMES[DOTS_CHANNEL],),
-            PIXEL_SIZE_UM,
+
+    reference = work / "reference.ome.tif"
+    write(reference, specs[0], "ref", ref_hw, dots_ref)
+    out = []
+    for i, spec in enumerate(specs):
+        tag = "" if i == 0 else f"_{i + 1}"
+        mov_hw = spec["mov_hw"]
+        dots = lattice_dots(mov_hw, seed + ROUND_DOT_SEED * i)
+        moving = work / f"moving{tag}.ome.tif"
+        write(moving, spec, "mov", mov_hw, dots)
+        dots_path = None
+        if dots_image:
+            dots_path = work / f"dots{tag}.ome.tif"
+            imageio.write_channel_tiles(
+                dots_path,
+                mov_hw,
+                np.uint16,
+                dot_tiles(mov_hw, dots),
+                tile,
+                (CHANNEL_NAMES[DOTS_CHANNEL],),
+                PIXEL_SIZE_UM,
+            )
+        out.append(
+            {
+                "reference": str(reference),
+                "moving": str(moving),
+                "dots_image": str(dots_path) if dots_path else None,
+                "dots_mov_xy": dots,
+                "dots_ref_xy": dots_ref,
+                "truth": synthetic.forward_map(spec),
+                "truth_inverse": inverse_of(spec),
+                "spec": spec,
+                "ref_hw": tuple(ref_hw),
+                "mov_hw": tuple(mov_hw),
+                "seed": int(seed),
+                "pixel_size_um": PIXEL_SIZE_UM,
+                "nuclear_channel": NUCLEAR_CHANNEL,
+                "dots_channel": DOTS_CHANNEL,
+                "tile": tile,
+                "case_id": ids[i],
+                "group": group,
+                "round": i + 1,
+                "rounds": len(specs),
+            }
         )
-    return {
-        "reference": str(paths["reference"]),
-        "moving": str(paths["moving"]),
-        "dots_image": str(dots_path) if dots_path else None,
-        "dots_mov_xy": dots,
-        "dots_ref_xy": dots_ref,
-        "truth": synthetic.forward_map(spec),
-        "truth_inverse": inverse_of(spec),
-        "spec": spec,
-        "ref_hw": tuple(ref_hw),
-        "mov_hw": tuple(mov_hw),
-        "seed": int(seed),
-        "pixel_size_um": PIXEL_SIZE_UM,
-        "nuclear_channel": NUCLEAR_CHANNEL,
-        "dots_channel": DOTS_CHANNEL,
-        "tile": tile,
-    }
+    return out
 
 
 def pair_case(pair, cases_root):
@@ -442,8 +572,8 @@ def pair_case(pair, cases_root):
     h, w = pair["ref_hw"]
     case = Case(
         dataset=DATASET,
-        case_id=f"pair_{h}x{w}",
-        group=f"pair_{h}x{w}",
+        case_id=pair.get("case_id") or f"pair_{h}x{w}",
+        group=pair.get("group") or f"pair_{h}x{w}",
         ref_nuclear=pair["reference"],
         mov_nuclear=pair["moving"],
         ref_image=pair["reference"],
@@ -942,8 +1072,10 @@ def mask_cap(mod, info, mask):
     return frozen if hook is None else hook(info, mask, frozen)
 
 
-def _proxy(mod, name, pair, extras):
-    """The method, with a writer that also asks for what only the selfcheck needs."""
+def _proxy(mod, name, by_case, extras):
+    """The method, with a writer that also asks for what only the selfcheck needs.
+    ``by_case`` is ``{case_id: pair}``; ``extras`` is filled as ``{case_id: {(kind,
+    variant): native dict}}``."""
     real = getattr(mod, "write_native", None)
     write_stage = getattr(mod, "write_stage", None)
     warp_extra = getattr(mod, "warp_extra", None)
@@ -962,13 +1094,14 @@ def _proxy(mod, name, pair, extras):
                     if key == "stage":
                         got = hook(state, case_id, variant, d)
                     else:
-                        got = hook(state, case_id, variant, pair["dots_image"], d)
+                        image = by_case[str(case_id)]["dots_image"]
+                        got = hook(state, case_id, variant, image, d)
                         if got is not None:
                             got = {"dots_channel": 0, **got}
                 except Exception as exc:
                     got = {"error": f"{type(exc).__name__}: {exc}"}
                 if got is not None:
-                    extras[(key, variant)] = got
+                    extras.setdefault(str(case_id), {})[(key, variant)] = got
         return native
 
     ns = types.SimpleNamespace(
@@ -1137,6 +1270,28 @@ def run_pair(
 ):
     """The selfcheck of one method on one pair, in this process: a dict with ``status`` and
     every variant's numbers under ``variants``."""
+    size = (ref_hw, mov_hw)
+    return run_case(method, work, size, opts, label, mask, m0_from, seed, keep_work)[0]
+
+
+def run_case(
+    method,
+    work,
+    size=(DEFAULT_HW, None),
+    opts=None,
+    label=None,
+    mask=None,
+    m0_from=None,
+    seed=0,
+    keep_work=False,
+):
+    """The selfcheck of one method on one case of ``SIZES``, in this process: a list
+    with one record per moving round (``status``, every variant's numbers under
+    ``variants``, ``case_id``, ``group``, ``round``, ``rounds``).
+
+    Every round of the case goes to the driver in ONE ``run_group`` call: a per-patient
+    method registers them together, natively, as it does a cohort patient; a pair
+    method is run on each in turn."""
     from . import methods
 
     mod, name = methods.load(method), methods.method_name(method)
@@ -1147,10 +1302,9 @@ def run_pair(
     ref_dots = bool(getattr(mod, "SELFCHECK_REF_DOTS", False))
     pair_tile = getattr(mod, "SELFCHECK_PAIR_TILE", None)
     tile = pair_tile({**opts, "label": label or ""}) if pair_tile else None
-    pair = make_pair(
-        work / "pair", ref_hw, mov_hw, seed, workers, wants_dots, ref_dots, tile
-    )
-    case = pair_case(pair, work / "cases")
+    rounds = make_group(work / "pair", size, seed, workers, wants_dots, ref_dots, tile)
+    cases = [pair_case(pair, work / "cases") for pair in rounds]
+    by_case = {str(c.case_id): pair for c, pair in zip(cases, rounds)}
     out = work / "out"
     opts["stage_images"] = "1"
     if m0_from:
@@ -1160,73 +1314,113 @@ def run_pair(
     back = {v: k for k, v in labelled.items()}
 
     def on_variant(case_, variant, pmap, info):
-        got[back[variant]] = (pmap, info)
+        got[(str(case_.case_id), back[variant])] = (pmap, info)
 
-    proxy = _proxy(mod, name, pair, extras)
+    proxy = _proxy(mod, name, by_case, extras)
     args = (out, opts, label, work / "work", True, on_variant)
     error = ""
     try:
-        if methods.scope_of(proxy) == "pair":
-            methods.run_case(proxy, case, *args)
+        if methods.scope_of(proxy) == "pair" and len(cases) == 1:
+            methods.run_case(proxy, cases[0], *args)
         else:
-            methods.run_group(proxy, [case], *args)
+            methods.run_group(proxy, cases, *args)
     except MemoryError as exc:
         error = f"oom: {exc}"
     except (Exception, SystemExit) as exc:
         error = f"{type(exc).__name__}: {exc}"
 
-    variants = {}
-    for i, variant in enumerate(mod.VARIANTS):
-        try:
-            rec = json.loads(
-                (result_dir(out, labelled[variant], case) / "run.json").read_text()
-            )
-        except (OSError, ValueError):
-            rec = None
-        if error and (rec is None or rec.get("cause") == "killed"):
-            oom = error.startswith("oom")
-            res = {"status": NOT_CHECKED if oom else CRASHED, "cause": error}
-        else:
-            final = i == len(mod.VARIANTS) - 1
-            res = _check_variant(
-                mod, variant, final, rec, got.get(variant), extras, pair, mask
-            )
-        if rec:
-            res["register_s"] = rec.get("register_s")
-            res["version"] = (rec.get("info") or {}).get("version")
-        variants[labelled[variant]] = res
+    records = []
+    for case, pair in zip(cases, rounds):
+        cid = str(case.case_id)
+        variants = {}
+        for i, variant in enumerate(mod.VARIANTS):
+            try:
+                rec = json.loads(
+                    (result_dir(out, labelled[variant], case) / "run.json").read_text()
+                )
+            except (OSError, ValueError):
+                rec = None
+            if error and (rec is None or rec.get("cause") == "killed"):
+                oom = error.startswith("oom")
+                res = {"status": NOT_CHECKED if oom else CRASHED, "cause": error}
+            else:
+                final = i == len(mod.VARIANTS) - 1
+                res = _check_variant(
+                    mod,
+                    variant,
+                    final,
+                    rec,
+                    got.get((cid, variant)),
+                    extras.get(cid, {}),
+                    pair,
+                    mask,
+                )
+            if rec:
+                res["register_s"] = rec.get("register_s")
+                res["version"] = (rec.get("info") or {}).get("version")
+            variants[labelled[variant]] = res
+        records.append(
+            {
+                "ref_hw": list(pair["ref_hw"]),
+                "mov_hw": list(pair["mov_hw"]),
+                "seed": int(seed),
+                "case_id": cid,
+                "group": str(case.group),
+                "round": int(pair["round"]),
+                "rounds": int(pair["rounds"]),
+                "n_drawn": int(len(pair["dots_mov_xy"])),
+                "tile": int(pair["tile"]),
+                "status": worst(v["status"] for v in variants.values()),
+                "variants": variants,
+            }
+        )
     got.clear()
     if not keep_work:
         shutil.rmtree(work / "work", ignore_errors=True)
-    return {
-        "ref_hw": list(pair["ref_hw"]),
-        "mov_hw": list(pair["mov_hw"]),
-        "seed": int(seed),
-        "n_drawn": int(len(pair["dots_mov_xy"])),
-        "tile": int(pair["tile"]),
-        "status": worst(v["status"] for v in variants.values()),
-        "variants": variants,
-    }
+    return records
 
 
-def _size_text(ref_hw, mov_hw):
+def _size_text(ref_hw, *movs):
+    """A case as ``--size`` takes it. A patient names every moving round's canvas."""
     text = f"{ref_hw[0]}x{ref_hw[1]}"
-    return text + (f":{mov_hw[0]}x{mov_hw[1]}" if mov_hw else "")
+    if len(movs) > 1:
+        movs = [m or ref_hw for m in movs]
+    return text + "".join(f":{m[0]}x{m[1]}" for m in movs if m)
 
 
 def parse_size(text):
-    """``HxW`` or ``HxW:HxW`` (reference, moving) as ``(ref_hw, mov_hw | None)``."""
+    """One case: ``HxW`` or ``HxW:HxW`` (reference, moving) as ``(ref_hw, mov_hw |
+    None)``, or a patient ``HxW:HxW:HxW[:HxW]`` (reference, then each moving round) as
+    ``(ref_hw, mov_hw, mov_hw, ...)``."""
+    most = len(ROUND_POSES) + 2
     try:
         parts = [tuple(int(v) for v in p.lower().split("x")) for p in text.split(":")]
-        if not 1 <= len(parts) <= 2 or any(len(p) != 2 for p in parts):
+        if not 1 <= len(parts) <= most or any(len(p) != 2 for p in parts):
             raise ValueError
     except ValueError:
-        raise SystemExit(f"--size wants HxW or HxW:HxW, got {text!r}") from None
+        raise SystemExit(
+            f"--size wants HxW, HxW:HxW or a patient HxW:HxW:HxW, got {text!r}"
+        ) from None
+    if len(parts) > 2:
+        return tuple(parts)
     return parts[0], (parts[1] if len(parts) == 2 else None)
 
 
+def case_folder(size, used=()):
+    """The folder of one case under ``--work``: ``<H>x<W>`` of the reference for a pair,
+    the group's name (``patient_<H>x<W>``) for a patient; a second case that would get
+    the same name adds the moving canvas, or ``_again``."""
+    (h, w), movs = rounds_of(size)
+    folder = case_names(size)[0] if is_patient(size) else f"{h}x{w}"
+    if folder in used:
+        mov = None if is_patient(size) else movs[0]
+        folder += f"_mov_{mov[0]}x{mov[1]}" if mov else "_again"
+    return folder
+
+
 def _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed):
-    """One pair in its own process: the pair's record, whatever happened to the process."""
+    """One case in its own process: its records (one per round), whatever happened to
+    the process."""
     argv = [sys.executable, "-m", "benchmarks.regbench", "selfcheck", "--in-process"]
     argv += ["--method", name, "--work", str(sub), "--size", _size_text(*size)]
     argv += ["--seed", str(seed)]
@@ -1240,18 +1434,30 @@ def _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed):
     try:
         if done.returncode not in EXIT_CODE.values():
             raise ValueError
-        return json.loads((Path(sub) / "selfcheck.json").read_text())["pairs"][0]
-    except (OSError, ValueError, KeyError, IndexError):
+        records = json.loads((Path(sub) / "selfcheck.json").read_text())["pairs"]
+        if not isinstance(records, list) or not records:
+            raise ValueError
+        return records
+    except (OSError, ValueError, KeyError):
         killed = done.returncode < 0 or done.returncode == 137
-        return {
-            "ref_hw": list(size[0]),
-            "mov_hw": list(size[1] or size[0]),
-            "seed": int(seed),
-            "status": NOT_CHECKED if killed else CRASHED,
-            "cause": f"the selfcheck process exited {done.returncode}"
-            + (" (killed: out of memory?)" if killed else ""),
-            "variants": {},
-        }
+        ref_hw, movs = rounds_of(size)
+        group, ids = case_names(size)
+        return [
+            {
+                "ref_hw": list(ref_hw),
+                "mov_hw": list(mov or ref_hw),
+                "seed": int(seed),
+                "case_id": ids[i],
+                "group": group,
+                "round": i + 1,
+                "rounds": len(movs),
+                "status": NOT_CHECKED if killed else CRASHED,
+                "cause": f"the selfcheck process exited {done.returncode}"
+                + (" (killed: out of memory?)" if killed else ""),
+                "variants": {},
+            }
+            for i, mov in enumerate(movs)
+        ]
 
 
 def run(
@@ -1266,9 +1472,11 @@ def run(
     in_process=False,
     keep_work=False,
 ):
-    """Run a method's selfcheck on every pair it is checked on and write
-    ``<work>/selfcheck.json``. Returns that record: ``status`` (the worst over pairs),
-    ``variants`` (each variant's worst status) and ``pairs`` (the numbers)."""
+    """Run a method's selfcheck on every case it is checked on and write
+    ``<work>/selfcheck.json``. Returns that record: ``status`` (the worst over every
+    round of every case), ``variants`` (each variant's worst status), ``cases`` (each
+    case's folder, group and rounds) and ``pairs`` (the numbers, one entry per ROUND:
+    a patient of two moving rounds has two)."""
     from . import methods
 
     mod, name = methods.load(method), methods.method_name(method)
@@ -1292,23 +1500,30 @@ def run(
     submission = host.get("submission") or ""
     earlier = [e for e in earlier if (e.get("submission") or "") == submission]
     (work / "selfcheck.json").unlink(missing_ok=True)
-    results, used = [], set()
-    for ref_hw, mov_hw in sizes:
-        # one folder per pair, named by the reference; a second pair on the same
-        # reference canvas (a larger moving slide) adds the moving one to the name
-        folder = f"{ref_hw[0]}x{ref_hw[1]}"
-        if folder in used:
-            folder += f"_mov_{mov_hw[0]}x{mov_hw[1]}" if mov_hw else "_again"
+    results, used, listed = [], set(), []
+    for size in sizes:
+        # one folder per case: a pair's is named by the reference, a patient's by its
+        # group; a second pair on the same reference canvas adds the moving one
+        folder = case_folder(size, used)
         used.add(folder)
         sub = work / folder if len(sizes) > 1 or apart else work
         if apart:
-            size = (ref_hw, mov_hw)
             res = _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed)
         else:
-            res = run_pair(
-                method, sub, ref_hw, mov_hw, opts, label, mask, m0_from, seed, keep_work
+            res = run_case(
+                method, sub, size, opts, label, mask, m0_from, seed, keep_work
             )
-        results.append(res)
+        listed.append(
+            {
+                "folder": folder if sub != work else "",
+                "group": case_names(size)[0],
+                "size": _size_text(*size),
+                "rounds": len(rounds_of(size)[1]),
+                "patient": is_patient(size),
+                "status": worst(r["status"] for r in res),
+            }
+        )
+        results.extend(res)
     by_variant = {}
     for res in results:
         for variant, v in res["variants"].items():
@@ -1340,6 +1555,7 @@ def run(
         "submission": submission,
         "launch_id": host.get("launch_id"),
         "log_path": host.get("log_path") or "",
+        "cases": listed,
         "pairs": results,
     }
     # The selfcheck climbs in memory like a run (64 -> 256 -> 512 GB): the allocation

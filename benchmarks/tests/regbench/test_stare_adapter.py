@@ -270,7 +270,19 @@ def test_selfcheck_is_ok(tmp_path):
     rec = sc.run("stare", tmp_path)
     assert rec["status"] == "ok"
     assert rec["variants"] == {"stare_rigid": sc.NO_STAGE_IMAGE, "stare": sc.OK}
-    assert [tuple(p["ref_hw"]) for p in rec["pairs"]] == [(2048, 2560), (4096, 5120)]
+    # its two pairs, then ASHLAR's patient round by round (the anchored rows' anchor)
+    assert [p["case_id"] for p in rec["pairs"]] == [
+        "pair_2048x2560",
+        "pair_4096x5120",
+        "patient_4096x5120_round1",
+        "patient_4096x5120_round2",
+    ]
+    m0 = []
+    for i in (1, 2):
+        case = f"patient_4096x5120_round{i}"
+        path = tmp_path / "patient_4096x5120" / "out" / "stare" / "selfcheck" / case
+        m0.append(np.array(json.loads((path / "run.json").read_text())["info"]["m0"]))
+    assert m0[0].shape == (3, 3) and np.abs(m0[0] - m0[1]).max() > 5.0  # own poses
     for pair in rec["pairs"]:
         final = pair["variants"]["stare"]
         assert final["err_px_p95"] < 0.25

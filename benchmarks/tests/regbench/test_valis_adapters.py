@@ -139,6 +139,9 @@ def test_selfcheck_sizes_reach_every_stage():
         assert math.floor(smallest_long_side * 0.125) > 2048  # valis_mirage's micro
         assert math.floor(smallest_long_side * valis120.MICRO_REG_FRACTION) > 2048
         assert smallest_long_side / 2048 > 14  # the first field, scaled up 14x
+        # one patient of three slides, before the large pair
+        assert sizes[2] == (sc.DEFAULT_HW, None, None) and sc.is_patient(sizes[2])
+        assert len(sizes) == 4
     # on the default pair the hires micro pass cannot run, and the row says so
     assert math.floor(max(sc.DEFAULT_HW) * valis120.MICRO_REG_FRACTION) < 2048
 
@@ -543,6 +546,78 @@ def test_valis120_is_upstreams_default_call_and_its_points_follow_its_images(tmp
     order = [c["call"] for c in fv.CALLS]
     assert order.count("kill_jvm") == 1
     assert "warp_xy_inv" in order[order.index("kill_jvm") :]
+
+
+PATIENT = (SMALL, None, None)
+ROUNDS = ["patient_512x640_round1", "patient_512x640_round2"]
+SLIDES = ["reference.ome.tif", "moving.ome.tif", "moving_2.ome.tif"]
+
+
+@pytest.mark.parametrize(
+    "label, opts, names",
+    [("valis120", None, V120), ("valis120_hires", {"hires": 1}, HIRES)],
+)
+def test_a_patient_of_three_slides_is_one_valis_run(tmp_path, label, opts, names):
+    """The path every cohort patient takes: both moving rounds handed to ONE ``Valis``
+    object, one ``register``, and each round's points against that round's image."""
+    fv.configure()
+    rec = sc.run(
+        "valis",
+        tmp_path / "w",
+        {"workers": 1, **(opts or {})},
+        label=label,
+        sizes=[PATIENT],
+        in_process=True,
+        keep_work=True,
+    )
+    assert rec["status"] == sc.OK and rec["variants"] == dict.fromkeys(names, sc.OK)
+    assert [p["case_id"] for p in rec["pairs"]] == ROUNDS
+    (built,) = fv.calls("Valis")  # one run for the patient
+    assert [Path(f).name for f in built["kwargs"]["img_list"]] == SLIDES
+    assert Path(built["kwargs"]["reference_img_f"]).name == "reference.ome.tif"
+    assert len(fv.calls("register")) == 1
+    seen = set()
+    for p in rec["pairs"]:
+        for name in names:
+            v = p["variants"][name]
+            assert v["status"] == sc.OK and v["err_px_p95"] < 0.25, (p["round"], name)
+            assert v["n_found"] >= 0.99 * v["n_dots"] > 20
+            assert v["n_covered"] >= 0.99 * v["n_expected"] > 20
+            seen.add(v["native"]["files"][0])
+    assert len(seen) == 2 * len(names)  # an image of its own per round and stage
+    assert rec["cases"][0]["group"] == "patient_512x640" and rec["cases"][0]["patient"]
+
+
+def test_a_round_whose_image_is_another_rounds_is_inconsistent(tmp_path, monkeypatch):
+    """What the patient case is for: round 2's points checked against round 1's image
+    (a writer or an adapter that mixes the rounds up) cannot pass."""
+    fv.configure()
+    real = sc._check_variant
+
+    def swapped(mod, variant, final, rec, got, extras, pair, mask):
+        if pair["round"] == 2 and rec and rec.get("native"):
+            native = dict(rec["native"])
+            native["files"] = [
+                f.replace("round2", "round1").replace("moving_2", "moving")
+                for f in native["files"]
+            ]
+            assert all(Path(f).exists() for f in native["files"])
+            rec = {**rec, "native": native}
+        return real(mod, variant, final, rec, got, extras, pair, mask)
+
+    monkeypatch.setattr(sc, "_check_variant", swapped)
+    rec = sc.run(
+        "valis",
+        tmp_path / "w",
+        {"workers": 1},
+        label="valis120",
+        sizes=[PATIENT],
+        in_process=True,
+        keep_work=True,
+    )
+    first, second = rec["pairs"]
+    assert first["status"] == sc.OK and second["status"] == sc.INCONSISTENT
+    assert rec["blocks_the_method"]
 
 
 def test_the_default_row_is_written_before_micro_runs(tmp_path, pair):
@@ -976,7 +1051,7 @@ def test_the_wrappers_are_removed_after_the_call():
     assert Owner.method is before
 
 
-def run_mirage(work, fake=None, opts=None, env=None):
+def run_mirage(work, fake=None, opts=None, env=None, rounds=1):
     """``valis_mirage``'s selfcheck in a fresh process: the REAL ``bin/register.py`` on
     the fake VALIS. Returns the answer and the process."""
     work = Path(work)
@@ -985,6 +1060,7 @@ def run_mirage(work, fake=None, opts=None, env=None):
         "method": "valis_mirage",
         "work": str(work),
         "size": list(SMALL),
+        "rounds": rounds,
         "opts": {"workers": 4, **(opts or {})},
         "fake": {"version": "1.0.0", "rounding": "trunc", **(fake or {})},
         "env": {"REGBENCH_MEM_GB": "64", "REGBENCH_ATTEMPT": "2", **(env or {})},
@@ -1031,6 +1107,20 @@ def test_valis_mirage_points_follow_the_images_the_pipeline_wrote(mirage):
     for name, v in rec["pairs"][0]["variants"].items():
         assert v["err_px_p95"] < 0.25 and v["direction"] == REF_TO_MOV, name
     assert "REGISTRATION COMPLETED SUCCESSFULLY" in mirage.log
+
+
+def test_valis_mirage_takes_a_patient_of_three_slides_in_one_run(tmp_path_factory):
+    """The pipeline's function on one patient with two moving rounds, as on the cohort."""
+    answer, done = run_mirage(tmp_path_factory.mktemp("mirage3"), rounds=2)
+    rec = answer["selfcheck"]
+    assert rec["status"] == sc.OK, (done.stdout + done.stderr)[-3000:]
+    assert rec["variants"] == dict.fromkeys(MIRAGE, sc.OK)
+    assert [p["case_id"] for p in rec["pairs"]] == ROUNDS
+    for p in rec["pairs"]:
+        for name, v in p["variants"].items():
+            assert v["err_px_p95"] < 0.25 and v["direction"] == REF_TO_MOV, name
+    assert len(named(answer["calls"], "Valis")) == 1
+    assert len(named(answer["calls"], "register")) == 1
 
 
 def test_the_pipelines_settings_reach_valis(mirage):

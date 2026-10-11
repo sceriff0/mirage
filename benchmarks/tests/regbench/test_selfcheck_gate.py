@@ -104,29 +104,73 @@ def test_a_mask_that_hides_most_dots_is_not_checked(dots):
         assert res["status"] == sc.OK and 0.2 < res["masked_frac"] < 0.35
 
 
-def test_the_frozen_caps_are_above_what_the_real_geometry_hides():
+def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0):
+    """The share of the selfcheck's own dots that ASHLAR's overlap mask hides, from the
+    adapter's geometry alone: its tile grid (``retile.tile_grid`` at the adapter's tile
+    and overlap, padded, not clamped to the canvas) and ``tilemap.on_seam`` at its dot
+    margin. ``follow``: every moving tile drawn where the round's true map puts its
+    centre, plus ``offset`` px; otherwise where it was cut."""
+    from benchmarks.ashlar import retile
     from benchmarks.regbench import tilemap as tm
+    from benchmarks.regbench.datasets import synthetic
+    from benchmarks.regbench.methods import ashlar as am
 
-    assert sc.MASK_MAX == {"overlap": 0.70, "seams": 0.10}
-    tile, pitch = 1024, 922
-    rng = np.random.default_rng(0)
-    for (h, w), low, high in (((2048, 2560), 0.55, 0.70), ((4096, 5120), 0.35, 0.50)):
-        ys = sorted({*range(0, h - tile, pitch), h - tile})
-        xs = sorted({*range(0, w - tile, pitch), w - tile})
-        origins = np.array([(y, x) for y in ys for x in xs], dtype=float)
-        placement = dict(
-            tile=tile,
-            mov_true_yx=origins,
-            mov_pos_yx=origins,
-            ref_true_yx=origins,
-            ref_pos_yx=origins,
-        )
-        share = tm.on_seam(
-            placement, rng.uniform([0, 0], [w, h], (50000, 2)), 8.0
-        ).mean()
-        assert low < share < high <= sc.MASK_MAX["overlap"], (h, w, share)
+    h, w = hw
+    grid = retile.tile_grid(w, h, am.TILE, am.OVERLAP)
+    origins = np.array([[t.y, t.x] for t in grid], dtype=float)
+    shift = np.zeros_like(origins)
+    if follow:
+        g = synthetic.forward_map(sc.round_spec(hw, None, seed, rnd))
+        centres = origins[:, ::-1] + am.TILE / 2.0
+        shift = (g(centres) - centres + np.asarray(offset, dtype=float))[:, ::-1]
+    placement = dict(
+        tile=am.TILE,
+        mov_true_yx=origins,
+        mov_pos_yx=origins + shift,
+        ref_true_yx=origins,
+        ref_pos_yx=origins,
+    )
+    dots = sc.lattice_dots(hw, seed + sc.ROUND_DOT_SEED * (rnd - 1))
+    return float(tm.on_seam(placement, dots, am.DOT_MARGIN_PX).mean()), len(origins)
+
+
+def test_the_overlap_cap_stands_above_the_measured_share():
+    """The measurement the frozen cap is derived from (2026-10-11), repeated: ASHLAR's
+    only selfcheck canvas, both rounds of its patient."""
+    from benchmarks.regbench.methods import ashlar as am
+
+    assert sc.MASK_MAX == {"overlap": 0.50, "seams": 0.10}
+    assert (am.TILE, am.OVERLAP, am.DOT_MARGIN_PX) == (1024, 0.1, 8.0)
+    reach = am.MAX_SHIFT_UM / sc.PIXEL_SIZE_UM  # 46 px: ASHLAR's whole maximum shift
+    assert 46.0 < reach < 46.5
+    on_grid, followed, pushed = [], [], []
+    for rnd in (1, 2):
+        share, n_tiles = overlap_share(sc.LARGE_HW, rnd, follow=False)
+        assert n_tiles == 30  # 5 x 6
+        on_grid.append(share)
+        followed.append(overlap_share(sc.LARGE_HW, rnd)[0])
+        for sx in (-reach, reach):
+            for sy in (-reach, reach):
+                pushed.append(overlap_share(sc.LARGE_HW, rnd, (sx, sy))[0])
+    assert 0.21 < min(on_grid) <= max(on_grid) < 0.23, on_grid
+    assert 0.27 < min(followed) <= max(followed) < 0.31, followed
+    worst = max(pushed)
+    assert 0.34 < worst < 0.37, pushed
+    # the cap: the worst measured case plus a margin, and never half of the dots
+    assert worst + 0.10 < sc.MASK_MAX["overlap"] <= worst + 0.16
+    # twice ASHLAR's limit is still under it; an endless mosaic holds 0.21
+    assert overlap_share(sc.LARGE_HW, 1, (2 * reach, 2 * reach))[0] < 0.40
+    assert abs(1 - (1 - 102 / 922) ** 2 - 0.209) < 1e-3
     # PALOM: 8 px either side of every edge of 1024 px blocks
     assert 1 - (1 - 16 / 1024) ** 2 < sc.MASK_MAX["seams"] / 3
+
+
+def test_the_small_canvas_is_no_longer_one_of_ashlars():
+    """Dropped on 2026-10-11: 3 x 3 tiles, eight of them on the border."""
+    for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
+        canvases = {sc.rounds_of(s)[0] for s in sc.sizes_for(name)}
+        assert canvases == {sc.LARGE_HW}, name
+    assert overlap_share(sc.DEFAULT_HW, 1, follow=False)[1] == 9
 
 
 def test_a_detection_nothing_explains_fails_outside_the_mask_and_is_excused_inside(
@@ -247,14 +291,23 @@ def test_two_pairs_on_one_reference_canvas_get_folders_of_their_own(
 ):
     seen = []
 
-    def fake_pair(method, sub, ref_hw, mov_hw, *rest):
+    def fake_case(method, sub, size, *rest):
         seen.append(sub.name)
-        return {"status": "ok", "variants": {"m": {"status": "ok"}}}
+        return [{"status": "ok", "variants": {"m": {"status": "ok"}}}]
 
-    monkeypatch.setattr(sc, "run_pair", fake_pair)
+    monkeypatch.setattr(sc, "run_case", fake_case)
     sizes = [((64, 64), None), ((64, 64), (65, 67)), ((128, 64), None)]
-    sc.run(good("m"), tmp_path, sizes=sizes, in_process=True)
-    assert seen == ["64x64", "64x64_mov_65x67", "128x64"]
+    sizes += [((64, 64), None, None), ((64, 64), None, (65, 67))]
+    rec = sc.run(good("m"), tmp_path, sizes=sizes, in_process=True)
+    assert seen == [
+        "64x64",
+        "64x64_mov_65x67",
+        "128x64",
+        "patient_64x64",
+        "patient_64x64_again",
+    ]
+    assert [c["folder"] for c in rec["cases"]] == seen
+    assert [c["patient"] for c in rec["cases"]] == [False] * 3 + [True] * 2
 
 
 # ── a row that was never checked says so in every table ──────────────────────────────
