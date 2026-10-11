@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 import tifffile
 
-from benchmarks.regbench import arms_manifest, cells, nuclei, pairs
+from benchmarks.regbench import arms_manifest, cells, nuclei, pairs, site_config
 from benchmarks.regbench import cases as cases_mod
 from benchmarks.regbench.cases import list_cases, load_points, polys
 from benchmarks.regbench.datasets import multiplex
@@ -27,6 +27,16 @@ from benchmarks.regbench.imageio import write_nuclear
 
 REPO = Path(__file__).resolve().parents[3]
 HW = (360, 420)
+
+
+@pytest.fixture(autouse=True)
+def no_site_config(monkeypatch, tmp_path):
+    """No test reads the real site overlay (conf/ieo.config exists on a cluster
+    checkout): the default is a path that is not there, and the variable is unset."""
+    monkeypatch.setattr(site_config, "DEFAULT_SITE_CONFIG", tmp_path / "no.config")
+    monkeypatch.delenv(site_config.ENV_SITE_CONFIG, raising=False)
+
+
 PITCH = 40
 
 
@@ -114,6 +124,7 @@ def args(**kw):
         count=False,
         command=False,
         segment=False,
+        settings=False,
     )
     return argparse.Namespace(**{**base, **kw})
 
@@ -393,7 +404,8 @@ def test_a_rerun_that_disagrees_with_the_outlines_is_loud_and_not_exact(
     cohort, monkeypatch, capsys
 ):
     tmp, lab, row = cohort
-    fake_segment(tmp, labels_of(drop=8), monkeypatch)  # another model's nuclei
+    # another model's nuclei, 5 of 56 missing: 0.911, kept (under 0.90 it is refused)
+    fake_segment(tmp, labels_of(drop=5), monkeypatch)
     a = args(manifest=manifest_of(tmp, row), out=tmp / "nuc", segment=True, index=0)
     assert nuclei.main(a) == 0
     (ref, _) = nuclei.slides(multiplex.read_manifest(a.manifest))
@@ -401,6 +413,238 @@ def test_a_rerun_that_disagrees_with_the_outlines_is_loud_and_not_exact(
     assert rec["usable"] and not rec["exact"]
     assert rec["agreement"]["centroid_match_frac"] < nuclei.EXACT_MATCH
     assert "DISAGREEMENT P1/P1.r1" in capsys.readouterr().out
+
+
+def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
+    """User ruling 2026-10-11: under 0.90 of the outlines with exactly one nucleus the
+    re-run is another segmentation. It is not used, and everything says so."""
+    tmp, lab, row = cohort
+    fake_segment(tmp, labels_of(shift=(20, 20)), monkeypatch)  # nuclei of elsewhere
+    manifest = manifest_of(tmp, row)
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.main(args(**base, segment=True, index=0)) == 1  # the task fails
+    (ref, mov) = nuclei.slides(multiplex.read_manifest(manifest))
+    store = nuclei.store_of(tmp / "nuc", ref)
+    rec = nuclei.load(store)
+    frac = rec["agreement"]["one_nucleus_frac"]
+    assert frac < nuclei.ACCEPT_ONE_NUCLEUS
+    assert rec["refused"] and not rec["usable"] and not rec["exact"]
+    assert rec["source"] == "" and not rec["needs_rerun"]
+    assert not (store / "nuclei.npz").exists()
+    n_out, n_nuc = rec["agreement"]["n_outlines"], rec["agreement"]["n_nuclei"]
+    assert (
+        f"only {frac:.3f} of this slide's {n_out} published outlines" in (rec["reason"])
+    )
+    assert f"{n_nuc} nuclei (at least 0.9 is required)" in rec["reason"]
+    said = capsys.readouterr().out
+    assert f"REFUSED P1/P1.r1: {rec['reason']}" in said
+    assert "DISAGREEMENT" not in said  # that line is for a re-run that is KEPT
+    # the list: its own status, the share and the reason
+    assert nuclei.main(args(**base, list=True)) == 0
+    listed = capsys.readouterr()
+    line = listed.out.splitlines()[1].split("\t")
+    assert line[:3] == ["0", "P1/P1.r1", "refused"] and line[4] == "False"
+    assert line[5] == f"{frac:.4f}" and "REFUSED" in line[7]
+    assert "1 whose re-run was REFUSED" in listed.err
+    # it is not segmented again unasked, and no command is printed for it
+    calls = []
+    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or 0)
+    assert nuclei.main(args(**base, segment=True, index=0)) == 1 and not calls
+    capsys.readouterr()
+    assert nuclei.main(args(**base, command=True, index=0)) == 0
+    assert capsys.readouterr().out == ""
+    assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 1 and calls
+    # the case is prepared on its outlines, without nuclei, with that reason
+    cases_root = tmp / "cases"
+    a = mx_args(cases_root, manifest, nuclei_dir=str(tmp / "nuc"))
+    assert multiplex.prepare(a) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    points = load_points(case)
+    assert polys(points, "ref", "nuclei") is None
+    info = cases_mod.set_info(case, "ref", "nuclei")
+    assert info["source"] == "" and info["reason"] == rec["reason"]
+    assert "REFUSED" in cases_mod.nuclei_reason(case, points)
+
+
+def test_a_rerun_between_the_thresholds_is_still_kept_and_not_exact(
+    cohort, monkeypatch, capsys
+):
+    tmp, lab, row = cohort
+    fake_segment(tmp, labels_of(drop=3), monkeypatch)  # 0.946: over 0.90, under 0.99
+    a = args(manifest=manifest_of(tmp, row), out=tmp / "nuc", segment=True, index=0)
+    assert nuclei.main(a) == 0
+    (ref, _) = nuclei.slides(multiplex.read_manifest(a.manifest))
+    rec = nuclei.load(nuclei.store_of(tmp / "nuc", ref))
+    frac = rec["agreement"]["one_nucleus_frac"]
+    assert nuclei.ACCEPT_ONE_NUCLEUS <= frac < nuclei.EXACT_ONE_NUCLEUS
+    assert rec["usable"] and not rec["exact"] and not rec.get("refused")
+    said = capsys.readouterr().out
+    assert "DISAGREEMENT P1/P1.r1" in said and "REFUSED" not in said
+
+
+# ── the model and the settings come from the site config ──────────────────────
+SITE = """\
+// a site overlay
+params {
+    // segmentation_model     = 'commented_out'
+    segmentation_model     = 'site_net'      // the model the arms ran
+    segmentation_model_dir = "/site/models/" /* its folder */
+    seg_pmax               = 99.5
+    seg_n_tiles_y          = 16
+    outdir                 = '/site/out//x'
+    /* seg_expand_distance = 4 */
+}
+"""
+
+
+def site_file(tmp_path, text=SITE):
+    path = tmp_path / "site.config"
+    path.write_text(text)
+    return path
+
+
+def test_the_site_config_is_read_comment_blind_and_two_keys_only(tmp_path):
+    got = site_config.read(site_file(tmp_path))
+    assert got == {
+        "segmentation_model": "site_net",
+        "segmentation_model_dir": "/site/models/",
+        "seg_pmax": 99.5,
+        "seg_n_tiles_y": 16,
+    }  # no `outdir`, nothing from a comment
+    assert site_config.strip_comments("a = 'x//y' // c\n/* b */d") == "a = 'x//y' \n d"
+    for raw, want in (("'a'", "a"), ("null", None), ("3", 3), ("0.5", 0.5)):
+        assert site_config.literal(raw) == want
+    with pytest.raises(ValueError):
+        site_config.literal("params.other + 1")
+
+
+def test_the_model_and_the_settings_resolve_from_the_site_config(tmp_path, cohort):
+    tmp, lab, row = cohort
+    path = site_file(tmp_path)
+    env = {site_config.ENV_SITE_CONFIG: str(path)}
+    values = nuclei.settings(env)["values"]
+    where = f"site config ({path})"
+    assert values["segmentation_model"] == {"value": "site_net", "source": where}
+    assert values["segmentation_model_dir"]["value"] == "/site/models/"
+    assert values["seg_pmax"] == {
+        "value": 99.5,
+        "source": where,
+        "default": 99.8,
+        "differs": True,
+    }
+    assert values["seg_n_tiles_y"]["source"] == where  # set there, to the default
+    assert not values["seg_n_tiles_y"]["differs"]
+    assert values["seg_pmin"]["source"] == site_config.FROM_DEFAULT
+    assert values["seg_expand_distance"]["value"] == 10  # the commented 4 is not read
+    # the rendered command carries the site's values
+    (ref, _) = nuclei.slides([row])
+    argv = nuclei.command(ref, tmp / "dest", env)
+    assert argv[argv.index("--model-name") + 1] == "site_net"
+    assert argv[argv.index("--model-dir") + 1] == "/site/models/"
+    assert argv[argv.index("--pmax") + 1] == "99.5"
+    assert argv[argv.index("--pmin") + 1] == "1.0" and "--prob-thresh" not in argv
+    # explicit variables win, value by value
+    both = {**env, **ENV, "REGBENCH_STARDIST_PROB_THRESH": "0.3"}
+    values = nuclei.settings(both)["values"]
+    assert values["segmentation_model"] == {
+        "value": "site_model",
+        "source": "environment (REGBENCH_STARDIST_MODEL)",
+    }
+    assert values["segmentation_model_dir"]["value"] == "/models"
+    assert values["seg_prob_thresh"]["source"].startswith("environment")
+    argv = nuclei.command(ref, tmp / "dest", both)
+    assert argv[argv.index("--model-name") + 1] == "site_model"
+    assert argv[argv.index("--pmax") + 1] == "99.5"  # still the site's
+    assert argv[argv.index("--prob-thresh") + 1] == "0.3"
+    # the lines a log prints: name, value, source, and what differs
+    lines = site_config.lines(nuclei.settings(env))
+    assert f"segmentation_model\tsite_net\t{where}" in lines
+    assert any(
+        ln.startswith("seg_pmax\t99.5\t")
+        and "differs from the repository default 99.8" in ln
+        for ln in lines
+    )
+    assert "seg_prob_thresh\tnull\t" + site_config.FROM_DEFAULT in lines
+
+
+def test_where_the_site_config_is_looked_for(tmp_path, monkeypatch):
+    path = site_file(tmp_path)
+    # the checkout's own overlay when nothing is named
+    monkeypatch.setattr(site_config, "DEFAULT_SITE_CONFIG", path)
+    assert nuclei.settings({})["site_config"] == str(path)
+    assert nuclei.settings({})["values"]["segmentation_model"]["value"] == "site_net"
+    # `none` reads no file; a named file that is not there is an error, not a fallback
+    off = nuclei.settings({site_config.ENV_SITE_CONFIG: "none"})
+    assert off["site_config"] == "" and off["values"]["seg_pmax"]["value"] == 99.8
+    assert off["values"]["segmentation_model"] == {
+        "value": "",
+        "source": site_config.NOT_SET,
+    }
+    with pytest.raises(SystemExit, match="no such file"):
+        nuclei.settings({site_config.ENV_SITE_CONFIG: str(tmp_path / "gone.config")})
+    # the repository's defaults are read from nextflow.config, not restated
+    assert site_config.repository_defaults() == {
+        "seg_n_tiles_y": nuclei.STARDIST["n_tiles"][0],
+        "seg_n_tiles_x": nuclei.STARDIST["n_tiles"][1],
+        "seg_expand_distance": nuclei.STARDIST["expand_distance"],
+        "seg_pmin": nuclei.STARDIST["pmin"],
+        "seg_pmax": nuclei.STARDIST["pmax"],
+        "seg_prob_thresh": None,
+    }
+    # the shipped template has the two keys in the form that is read
+    template = site_config.read(REPO / "conf" / "site.config.template")
+    assert set(template) >= set(site_config.MODEL_KEYS)
+
+
+def test_a_site_config_that_cannot_be_read_plainly_is_refused(tmp_path):
+    twice = (
+        SITE
+        + "profiles {\n  a {\n    params.segmentation_model = 'other_net'\n  }\n}\n"
+    )
+    with pytest.raises(SystemExit, match="set 2 times.*REGBENCH_STARDIST_MODEL"):
+        site_config.read(site_file(tmp_path, twice))
+    same = SITE + "params.segmentation_model = 'site_net'\n"
+    assert site_config.read(site_file(tmp_path, same))["segmentation_model"] == (
+        "site_net"
+    )
+    computed = SITE.replace("99.5", "params.other * 2")
+    with pytest.raises(SystemExit, match="seg_pmax = params.other \\* 2"):
+        site_config.read(site_file(tmp_path, computed))
+
+
+def test_the_settings_are_printed_and_recorded(cohort, monkeypatch, capsys, tmp_path):
+    tmp, lab, row = cohort
+    path = site_file(tmp_path)
+    fake_segment(tmp, lab, monkeypatch)
+    for k in ENV:
+        monkeypatch.delenv(k)
+    monkeypatch.setenv(site_config.ENV_SITE_CONFIG, str(path))
+    manifest = manifest_of(tmp, row)
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    # `--settings`: every value and its source, on stdout
+    assert nuclei.main(args(**base, settings=True)) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f"segmentation_model\tsite_net\tsite config ({path})"
+    assert len(out) == len(site_config.KEYS)
+    # `--command`: the shell line alone on stdout, the sources on stderr
+    assert nuclei.main(args(**base, command=True, index=0)) == 0
+    said = capsys.readouterr()
+    (line,) = said.out.splitlines()
+    assert "--model-name site_net" in line and "--pmax 99.5" in line
+    assert f"# segmentation_model\tsite_net\tsite config ({path})" in said.err
+    # the slide's record keeps what the re-run was rendered with
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    rec = nuclei.load(nuclei.store_of(tmp / "nuc", ref))
+    assert rec["usable"] and rec["settings"]["site_config"] == str(path)
+    assert rec["settings"]["values"]["seg_pmax"]["differs"] is True
+    assert "--pmax 99.5" in rec["command"]
+    rerun = nuclei.store_of(tmp / "nuc", ref) / "rerun"
+    assert "--pmax 99.5" in (rerun / "argv.txt").read_text()
+    # without a model anywhere `--settings` fails, having said what it found
+    monkeypatch.setenv(site_config.ENV_SITE_CONFIG, "none")
+    with pytest.raises(SystemExit, match="no StarDist model"):
+        nuclei.main(args(**base, settings=True))
 
 
 def test_the_list_says_which_slides_have_nuclei_and_which_need_the_rerun(

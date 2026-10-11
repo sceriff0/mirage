@@ -101,6 +101,7 @@ def launch(site, *args, env=None, dry=True, log="calls"):
         REGBENCH_CASES=str(cases),
         REGBENCH_OUT=str(out),
         REGBENCH_SBATCH_GPU=GPU,
+        REGBENCH_SITE_CONFIG="none",  # never the real site overlay of a checkout
         SBATCH_LOG=str(tmp / f"{log}.tsv"),
     )
     base.update(env or {})
@@ -736,6 +737,27 @@ def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
     ]  # fmt: skip
     assert "REGBENCH_SIF_STARDIST" in done.stdout  # named, since it is not set
     assert not log.exists()
+    # the dry run says where the model and each setting came from
+    said = "# StarDist re-run: segmentation_model\tsite_model\tenvironment"
+    assert said in done.stdout
+    assert "# StarDist re-run: seg_pmax\t99.8\trepository default" in done.stdout
+    # from a site config when the two variables are not exported
+    config = tmp_path / "site.config"
+    config.write_text(
+        "params {\n    segmentation_model     = 'site_net'\n"
+        "    segmentation_model_dir = '/site/models'\n    seg_pmax = 99.5\n}\n"
+    )
+    from_site = {
+        "REGBENCH_MANIFEST": env["REGBENCH_MANIFEST"],
+        "REGBENCH_SITE_CONFIG": str(config),
+    }
+    done, _, _ = launch(
+        site, "--prepare", "--datasets", "multiplex", env=from_site, log="nuc1"
+    )
+    assert "rb-nuclei" in jobs_of(done)
+    where = f"site config ({config})"
+    assert f"# StarDist re-run: segmentation_model\tsite_net\t{where}" in done.stdout
+    assert f"# StarDist re-run: seg_pmax\t99.5\t{where} [differs" in done.stdout
     # on CPUs when asked; the shrunk outline only when asked
     more = {**env, "REGBENCH_STARDIST_CPU": "1", "REGBENCH_NUCLEI_FALLBACK": "shrink"}
     done, _, _ = launch(

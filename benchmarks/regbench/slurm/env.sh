@@ -21,6 +21,10 @@
 #   REGBENCH_SIF_STARDIST         the pipeline's StarDist image (bolt3x/mirage-stardist:1.0.0):
 #                                 only for the re-run of the bare nuclei (nuclei.sbatch)
 #
+# REGBENCH_SITE_CONFIG (default: conf/ieo.config of the checkout, if it is there) is where
+# that re-run reads the site's StarDist model and settings when REGBENCH_STARDIST_MODEL
+# and REGBENCH_STARDIST_MODEL_DIR are not exported (benchmarks/regbench/site_config.py).
+#
 # In place of an image, REGBENCH_CONDA_X (a conda environment) or REGBENCH_VENV_X (a
 # virtualenv) is taken; with none of the three, the `python` on PATH.
 #
@@ -116,13 +120,15 @@ regbench_exec() (
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # the StarDist re-run of the bare nuclei reads the site's model and writes here
         bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"
+        # a site config outside the checkout (the model and settings of that re-run)
+        case "${REGBENCH_SITE_CONFIG:-none}" in none|-) ;; *) bind="$bind,$REGBENCH_SITE_CONFIG" ;; esac
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
         for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS \
                  REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
                  REGBENCH_LOG REGBENCH_END_FILE \
                  REGBENCH_STARDIST_MODEL_DIR REGBENCH_STARDIST_MODEL \
-                 REGBENCH_STARDIST_PROB_THRESH REGBENCH_STARDIST_CPU \
+                 REGBENCH_STARDIST_PROB_THRESH REGBENCH_STARDIST_CPU REGBENCH_SITE_CONFIG \
                  CUDA_VISIBLE_DEVICES; do
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done

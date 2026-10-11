@@ -772,7 +772,7 @@ exists, segment only what has none):
    |---|---|
    | `segment.py --image … --output-dir …` | `lib/SegBackends.groovy:100` (`entrypoint`), `modules/local/segment.nf:77-79` |
    | `--dapi-channel` | `lib/SegBackends.groovy:101`, `modules/local/segment.nf:80`: the pipeline passes `0`, its preprocessing having put the nuclear channel first; here it is the manifest's `ref_channel` / `mov_channel`, which is 0 on the arms' slides |
-   | `--model-dir`, `--model-name` | `conf/modules.config:1021-1022` (`segmentation_model_dir`, `segmentation_model`); the arms take them from the site overlay `conf/ieo.config`, which is not in the repository, hence the two environment variables |
+   | `--model-dir`, `--model-name` | `conf/modules.config:1021-1022` (`segmentation_model_dir`, `segmentation_model`); the arms take them from the site overlay `conf/ieo.config`, which is not in the repository: the two environment variables, or, when they are unset, that file's two keys (below) |
    | `--n-tiles 16 16` | `conf/modules.config:1023`; `nextflow.config:273-274` |
    | `--expand-distance 10` | `conf/modules.config:1024`; `nextflow.config:275` |
    | `--pmin 1.0 --pmax 99.8` | `conf/modules.config:1025-1026`; `nextflow.config:268-269` |
@@ -785,9 +785,34 @@ exists, segment only what has none):
    The same call also writes the cell mask it grows from its nuclei, and that is compared
    with the arm's published outlines of the slide: the counts within 1 %, and at least
    0.99 of the published centroids with a re-grown centroid within 1 px
-   (`RERUN_MATCH_PX`, `EXACT_MATCH`), beside the one-nucleus share above. A re-run that
-   fails any of it is printed as `DISAGREEMENT <slide>` with the numbers, its nuclei are
-   kept, and they are marked `exact: false`.
+   (`RERUN_MATCH_PX`, `EXACT_MATCH`), beside the one-nucleus share above. What a re-run
+   is then (user ruling 2026-10-11):
+
+   | the re-run's share of published outlines holding exactly one of its nuclei | what happens |
+   |---|---|
+   | under 0.90 (`ACCEPT_ONE_NUCLEUS`, the threshold every label image is held to) | **REFUSED**: not used. A `REFUSED <slide>` line with the share and both counts is printed, the task exits 1, `--list` shows status `refused` with that reason, the slide has no nuclei rows, and the reason is in its cases' `cell_sets` and in `nuclei_missing.csv`. It is not segmented again unless `--force` is given: the same command gives the same nuclei, so the model, the channel or a site setting is what to look at |
+   | 0.90 or more, but short of any exact threshold (0.99 of outlines, counts within 1 %, 0.99 of centroids within 1 px) | kept, marked `exact: false`, printed as `DISAGREEMENT <slide>` with the numbers |
+   | every exact threshold met | kept, `exact: true` |
+
+   **The model and the settings come from the site config** when the two variables are
+   not exported (`benchmarks/regbench/site_config.py`). The site overlay holds, in its
+   params block, `segmentation_model = '<name>'` and `segmentation_model_dir =
+   '<dir>'` (as `conf/site.config.template` does). Order, per value: an exported
+   `REGBENCH_STARDIST_MODEL` / `REGBENCH_STARDIST_MODEL_DIR` /
+   `REGBENCH_STARDIST_PROB_THRESH` wins; else the site config, which is
+   `REGBENCH_SITE_CONFIG` when set (`none` reads no file) and otherwise
+   `conf/ieo.config` of the checkout if it is there; else, for the settings only, the
+   default in `nextflow.config`. From the same file the re-run takes any override of
+   `seg_n_tiles_y`, `seg_n_tiles_x`, `seg_expand_distance`, `seg_pmin`, `seg_pmax` and
+   `seg_prob_thresh`, renders the site's value into the `segment.py` call, and keeps
+   every value with its source in the slide's record (`nuclei.json: settings`). The
+   file is read comment-blind, those keys only, as plain `key = literal` lines; a key
+   set twice to different values (two profiles), or to an expression, is refused with
+   the way out instead of guessed. `nuclei --settings` prints `name, value, source`
+   for each (a value that differs from the repository's default says so), `nuclei
+   --command` prints the same on stderr, and the launcher prints them as `# StarDist
+   re-run:` lines, in a dry run too. The site config is read, never written, and
+   nothing from it is copied into the repository.
 3. **Fallback, only when asked** (`prepare multiplex --nuclei-fallback shrink`,
    `REGBENCH_NUCLEI_FALLBACK=shrink`): the outline with a 10 px rim taken off again,
    labelled `shrunk_outlines`, `exact: false`. It is NOT the nucleus: growth stops where
@@ -873,7 +898,7 @@ grep -h DISAGREEMENT "$REGBENCH_OUT"/logs/rb-nuclei-*.log
 
 Step 1 is optional: the array of step 2 does the same check for its slide first and runs
 StarDist only when the slide is left without usable nuclei. `--list` prints `index, slide,
-status (usable | needs_rerun | candidate | none), source, exact, one_nucleus_frac,
+status (usable | needs_rerun | refused | candidate | none), source, exact, one_nucleus_frac,
 n_nuclei, reason`. The allocation of the array (8 CPUs, 128 GB, 8 h, a GPU) follows the
 pipeline's `SEGMENT` block (`conf/modules.config:1062-1067`: 8 CPUs, 32 to 128 GB by file
 size, 4 h per attempt) at its upper end; `REGBENCH_NUCLEI_CPUS`, `_MEM`, `_TIME` change it.
@@ -881,8 +906,10 @@ size, 4 h per attempt) at its upper end; `REGBENCH_NUCLEI_CPUS`, `_MEM`, `_TIME`
 **Not verified until the cluster** (none of it was run: StarDist is not installed where
 this was written, the site's model is not in the repository, no arm's files were read):
 that the re-run reproduces the published outlines at all (same model, same image, the
-site overlay overriding none of the settings above: the `DISAGREEMENT` lines and
-`exact` will say); that `bolt3x/mirage-stardist:1.0.0` runs `bin/segment.py` from a bound
+site's settings as its config's plain `key = value` lines give them: the `REFUSED` and
+`DISAGREEMENT` lines and `exact` will say); that the site overlay is readable that way
+(the real file was never read here: a key set in two profiles, or by an expression, is
+refused with a message, not guessed); that `bolt3x/mirage-stardist:1.0.0` runs `bin/segment.py` from a bound
 checkout under `apptainer exec --cleanenv --nv`; that StarDist is deterministic enough
 between two GPU runs for the 0.99 thresholds; that a segmentation arm's mask passes for
 its reference slide; what a work directory still holds; the memory and time of tracing
@@ -1779,7 +1806,8 @@ round).
 | `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |
 | `REGBENCH_NUCLEI` | with `--prepare`: where each slide's bare nuclei are kept ("Outlines and bare nuclei") | `$REGBENCH_CASES/_nuclei` |
-| `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the arms ran (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | none; the name is required |
+| `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the arms ran (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | the site config's `segmentation_model` and `segmentation_model_dir`; a name is required from one of the two |
+| `REGBENCH_SITE_CONFIG` | with `--prepare`: the site config the StarDist model and any override of the StarDist settings are read from when the two variables above are unset; `none` reads no file | `conf/ieo.config` of the checkout, if it is there |
 | `REGBENCH_SIF_STARDIST` | the pipeline's StarDist image (`bolt3x/mirage-stardist:1.0.0`), for the re-run only | none |
 | `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`, as the arms did); a detection threshold, only if the site's config sets one | `0`, none |
 | `REGBENCH_NUCLEI_SKIP`, `REGBENCH_NUCLEI_FALLBACK` | `1`: prepare without the nuclei step; `shrink`: the shrunk outline for a slide still without nuclei | `0`, none |

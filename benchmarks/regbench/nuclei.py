@@ -21,7 +21,11 @@ Sources, tried in this order for each slide:
 2. **a StarDist re-run**: the pipeline's ``bin/segment.py``, unchanged, on the native
    slide with the arguments the pipeline renders for the arms (:func:`command`). It
    writes the nuclei mask and the cell mask it grows from it; the cell mask is compared
-   with the published outlines (:func:`rerun_agreement`).
+   with the published outlines (:func:`rerun_agreement`). The model and any setting
+   the site overrides come from the environment, else from the site config
+   (:mod:`site_config`). A re-run under ``ACCEPT_ONE_NUCLEUS`` is REFUSED like any
+   other label image (user ruling 2026-10-11): the slide has no nuclei and its record
+   says why; between that and the exact thresholds it is kept as ``exact: false``.
 
 Anything else (shrinking the outlines) is ``prepare multiplex --nuclei-fallback shrink``
 and is never chosen here. ``exact`` in a record means: these nuclei are, within the stated
@@ -56,7 +60,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import arms_manifest, cells, pairs
+from . import arms_manifest, cells, pairs, site_config
 from .cases import polys, polyset_arrays, write_json, write_npz
 
 REPO = Path(__file__).resolve().parents[2]
@@ -65,10 +69,11 @@ ENV_MODEL_DIR = "REGBENCH_STARDIST_MODEL_DIR"
 ENV_MODEL = "REGBENCH_STARDIST_MODEL"
 ENV_PROB_THRESH = "REGBENCH_STARDIST_PROB_THRESH"
 ENV_CPU = "REGBENCH_STARDIST_CPU"
-# What the pipeline renders for `--seg_method stardist`, and where each value is from.
-# The arms set none of them (benchmarks/configs/arms.yaml, benchmark.config); the site
-# overlay (conf/ieo.config) is not in the repository, so a value it overrides would not
-# show here: the agreement check of every re-run is what would catch it.
+# What the pipeline renders for `--seg_method stardist` at the repository's defaults,
+# and where each value is from. The arms set none of them (benchmarks/configs/arms.yaml,
+# benchmark.config). The site overlay may: `site_config.resolve` reads the model and any
+# override of these from it (conf/ieo.config, or REGBENCH_SITE_CONFIG), and `command`
+# renders the resolved values, so the re-run matches what the outlines were made with.
 STARDIST = {
     "n_tiles": (16, 16),  # nextflow.config: seg_n_tiles_y, seg_n_tiles_x
     "expand_distance": cells.EXPAND_PX,  # nextflow.config: seg_expand_distance
@@ -228,22 +233,31 @@ def command(slide, dest, env=None):
     (``modules/local/segment.nf``: the entry point, ``--image``, ``--output-dir``, the
     backend's flag, then ``ext.args`` of ``conf/modules.config``).
 
-    The model is the site's and comes from the environment: ``REGBENCH_STARDIST_MODEL``
-    (``segmentation_model``) and ``REGBENCH_STARDIST_MODEL_DIR``
-    (``segmentation_model_dir``). The pipeline passes ``--dapi-channel 0`` because its
+    The model is the site's: ``REGBENCH_STARDIST_MODEL`` (``segmentation_model``) and
+    ``REGBENCH_STARDIST_MODEL_DIR`` (``segmentation_model_dir``) when set, else the
+    site config's two keys (:func:`settings`). The segmentation settings are the
+    repository's defaults unless the site config overrides one, and then the site's
+    value is rendered. The pipeline passes ``--dapi-channel 0`` because its
     preprocessing puts the nuclear channel first; this passes the manifest's index of
     the nuclear channel, which is 0 on the arms' slides."""
     env = os.environ if env is None else env
-    model = (env.get(ENV_MODEL) or "").strip()
+    got = settings(env)["values"]
+    model = got["segmentation_model"]["value"]
     if not model:
         raise SystemExit(
             f"{ENV_MODEL} is not set: the name of the StarDist model the arms ran "
             f"(the pipeline's segmentation_model), with {ENV_MODEL_DIR} for its "
-            "folder (segmentation_model_dir)."
+            "folder (segmentation_model_dir). Neither is in a site config either "
+            f"({site_config.ENV_SITE_CONFIG}, else conf/ieo.config of this checkout)."
         )
-    model_dir = (env.get(ENV_MODEL_DIR) or "").strip()
-    prob = (env.get(ENV_PROB_THRESH) or "").strip()
+    model_dir = got["segmentation_model_dir"]["value"]
+    prob = got["seg_prob_thresh"]["value"]
+    prob = "" if prob is None else str(prob)
     cpu = (env.get(ENV_CPU) or "").strip() not in ("", "0")
+
+    def of(key):
+        return str(got[key]["value"])
+
     return [
         "python",
         str(SEGMENT_PY),
@@ -257,13 +271,14 @@ def command(slide, dest, env=None):
         "--model-name",
         model,
         "--n-tiles",
-        *(str(v) for v in STARDIST["n_tiles"]),
+        of("seg_n_tiles_y"),
+        of("seg_n_tiles_x"),
         "--expand-distance",
-        str(STARDIST["expand_distance"]),
+        of("seg_expand_distance"),
         "--pmin",
-        str(STARDIST["pmin"]),
+        of("seg_pmin"),
         "--pmax",
-        str(STARDIST["pmax"]),
+        of("seg_pmax"),
         *(["--prob-thresh", prob] if prob else []),
         *([] if cpu else ["--use-gpu"]),
     ]
@@ -373,6 +388,29 @@ def check_rerun(slide, store, a):
             agreement.update(rerun_agreement(outlines, _trace(cell_mask, a)))
         exact = bool(agreement["exact"] and agreement.get("cells_agree"))
         agreement["exact"] = exact
+        if not agreement["one_nucleus_frac"] >= ACCEPT_ONE_NUCLEUS:
+            # user ruling 2026-10-11: a re-run this far from the published outlines is
+            # another segmentation (another model, channel or setting). It is REFUSED:
+            # the slide has no nuclei, and says why wherever nuclei are missing.
+            rec.update(
+                refused=True,
+                needs_rerun=False,
+                agreement=agreement,
+                settings=_settings_or_none(),
+                command=shlex.join(_command_or_none(slide, dest) or []),
+                reason=(
+                    f"the StarDist re-run was REFUSED: only "
+                    f"{agreement['one_nucleus_frac']:.3f} of this slide's "
+                    f"{agreement['n_outlines']} published outlines hold exactly one "
+                    f"of its {agreement['n_nuclei']} nuclei (at least "
+                    f"{ACCEPT_ONE_NUCLEUS} is required): not the segmentation the "
+                    "outlines were made with. Check the model, the channel and the "
+                    "site's segmentation settings"
+                ),
+            )
+            (Path(store) / "nuclei.npz").unlink(missing_ok=True)
+            print(f"REFUSED {slide['key']}: {rec['reason']}", flush=True)
+            return rec
         if not exact:
             print(
                 f"DISAGREEMENT {slide['key']}: the re-run does not reproduce the "
@@ -387,10 +425,24 @@ def check_rerun(slide, store, a):
         exact=exact,
         agreement=agreement,
         source="stardist_rerun",
+        settings=_settings_or_none(),
         command=shlex.join(_command_or_none(slide, dest) or []),
     )
     _keep(store, rec, nuclei)
     return rec
+
+
+def settings(env=None):
+    """The model and settings of the re-run with the source of each
+    (``site_config.resolve``): the environment, a site config, the repository."""
+    return site_config.resolve(env)
+
+
+def _settings_or_none():
+    try:
+        return settings()
+    except SystemExit as exc:
+        return {"error": str(exc)}
 
 
 def _command_or_none(slide, dest):
@@ -466,6 +518,8 @@ def table(all_slides, out):
             )
         elif rec.get("usable"):
             status = "usable"
+        elif rec.get("refused"):
+            status = "refused"
         elif rec.get("needs_rerun"):
             status = "needs_rerun"
         else:
@@ -490,6 +544,19 @@ def main(a):
     """``python -m benchmarks.regbench nuclei`` (``cli.py`` has the options)."""
     from .datasets.multiplex import read_manifest
 
+    if getattr(a, "settings", False):
+        # the model and settings of the re-run and where each is from (the launcher's
+        # dry run prints this); a model nothing names is an error here, before any job
+        got = settings()
+        for line in site_config.lines(got):
+            print(line)
+        if not got["values"]["segmentation_model"]["value"]:
+            raise SystemExit(
+                f"no StarDist model: {ENV_MODEL} is not set and no site config names "
+                f"segmentation_model ({site_config.ENV_SITE_CONFIG}, else "
+                "conf/ieo.config of this checkout)."
+            )
+        return 0
     all_slides = slides(read_manifest(a.manifest))
     if a.count:
         print(len(all_slides))
@@ -499,11 +566,13 @@ def main(a):
         print("\t".join(COLUMNS))
         for r in rows:
             print("\t".join(str(r[c]) for c in COLUMNS))
-        n = {s: sum(r["status"] == s for r in rows) for s in ("usable", "needs_rerun")}
+        kinds = ("usable", "needs_rerun", "refused")
+        n = {s: sum(r["status"] == s for r in rows) for s in kinds}
         print(
             f"# {len(rows)} slide(s): {n['usable']} with usable nuclei, "
             f"{n['needs_rerun']} needing the StarDist re-run, "
-            f"{len(rows) - n['usable'] - n['needs_rerun']} other",
+            f"{n['refused']} whose re-run was REFUSED, "
+            f"{len(rows) - sum(n.values())} other",
             file=sys.stderr,
         )
         return 0
@@ -515,18 +584,26 @@ def main(a):
     if a.command:
         # what a slide still needs, as one shell line each; nothing for a slide that
         # has usable nuclei (the sbatch script runs the line in the StarDist image)
+        said = False
         for slide in chosen:
             rec = load(store_of(a.out, slide))
-            if rec and rec.get("usable") and not a.force:
+            # nothing either for a slide whose re-run was refused: running the same
+            # command again gives the same nuclei (--force runs it again)
+            if rec and (rec.get("usable") or rec.get("refused")) and not a.force:
                 continue
             dest = store_of(a.out, slide) / "rerun"
             dest.mkdir(parents=True, exist_ok=True)
-            print(shlex.join(command(slide, dest)))
+            line = shlex.join(command(slide, dest))
+            if not said:  # on stderr: stdout is the command, one shell line a slide
+                for text in site_config.lines(settings()):
+                    print("# " + text, file=sys.stderr)
+                said = True
+            print(line)
         return 0
     bad = 0
     for slide in chosen:
         rec = resolve(slide, a.out, a)
-        if not rec["usable"] and a.segment:
+        if not rec["usable"] and a.segment and (rec.get("needs_rerun") or a.force):
             code = segment(slide, a.out)
             if code:
                 print(f"nuclei/{slide['key']}: segment.py exited {code}")

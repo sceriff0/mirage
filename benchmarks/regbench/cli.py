@@ -143,6 +143,12 @@ def build_parser():
         action="store_true",
         help="run that call here (an environment with StarDist), then check it",
     )
+    mode.add_argument(
+        "--settings",
+        action="store_true",
+        help="print the StarDist model and settings of the re-run and where each is "
+        "from (REGBENCH_STARDIST_*, a site config, the repository's defaults)",
+    )
 
     ss = prep.add_parser("semisynth")
     common(ss)

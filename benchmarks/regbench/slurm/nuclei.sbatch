@@ -13,9 +13,14 @@
 # 3. In the scorer's image again: the re-run is compared with the published outlines and
 #    the slide's record is written. A disagreement is printed and recorded (exact: false).
 #
-# Needs REGBENCH_MANIFEST, REGBENCH_NUCLEI, REGBENCH_STARDIST_MODEL and
-# REGBENCH_STARDIST_MODEL_DIR (the site's model: the pipeline's segmentation_model and
-# segmentation_model_dir). REGBENCH_STARDIST_CPU=1 runs StarDist without a GPU.
+#    A re-run under 0.90 of the outlines with exactly one nucleus is REFUSED: the slide
+#    gets no nuclei, a `REFUSED <slide>` line says why, and this task exits 1.
+#
+# Needs REGBENCH_MANIFEST and REGBENCH_NUCLEI, and the site's model (the pipeline's
+# segmentation_model and segmentation_model_dir): REGBENCH_STARDIST_MODEL and
+# REGBENCH_STARDIST_MODEL_DIR, or, when they are unset, a site config that sets the two
+# keys (REGBENCH_SITE_CONFIG, else conf/ieo.config of the checkout; any StarDist setting
+# it overrides is rendered too). REGBENCH_STARDIST_CPU=1 runs StarDist without a GPU.
 set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
@@ -30,10 +35,18 @@ mkdir -p "$REGBENCH_NUCLEI"
 regbench_py "$scorer" "${what[@]}"
 line="$(regbench_py "$scorer" "${what[@]}" --command)"
 if [ -z "$line" ]; then
-    echo "slide $SLURM_ARRAY_TASK_ID: usable nuclei exist; StarDist is not run"
+    echo "slide $SLURM_ARRAY_TASK_ID: nothing to segment (usable nuclei exist, or its re-run was refused: nuclei --list); StarDist is not run"
     exit 0
 fi
 echo "+ $line"
+# where the model and each setting came from; a model folder named by the site config
+# only (no REGBENCH_STARDIST_MODEL_DIR) is bound into the StarDist image here
+settings="$(regbench_py "$scorer" "${what[@]}" --settings)"
+while IFS= read -r said; do echo "# StarDist re-run: $said"; done <<< "$settings"
+model_dir="$(awk -F'\t' '$1 == "segmentation_model_dir" { print $2 }' <<< "$settings")"
+if [ -n "$model_dir" ] && [ -z "${REGBENCH_STARDIST_MODEL_DIR:-}" ]; then
+    export REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$model_dir"
+fi
 script="$(mktemp "$REGBENCH_NUCLEI/.segment-$SLURM_ARRAY_TASK_ID-XXXXXX.sh")"
 trap 'rm -f "$script"' EXIT
 printf 'set -euo pipefail\n%s\n' "$line" > "$script"

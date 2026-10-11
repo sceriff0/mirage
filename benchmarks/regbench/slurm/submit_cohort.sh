@@ -86,9 +86,18 @@
 #                                     multiplex`: an existing label image is checked,
 #                                     and only a slide without one is segmented again
 #   REGBENCH_STARDIST_MODEL, REGBENCH_STARDIST_MODEL_DIR
-#                                     REQUIRED for that step: the StarDist model the arms
-#                                     ran (the pipeline's segmentation_model and
-#                                     segmentation_model_dir), with REGBENCH_SIF_STARDIST
+#                                     the StarDist model the arms ran (the pipeline's
+#                                     segmentation_model and segmentation_model_dir).
+#                                     Unset, both are read from the site config; set,
+#                                     they win. One of the two routes is REQUIRED for
+#                                     that step, with REGBENCH_SIF_STARDIST
+#   REGBENCH_SITE_CONFIG              the site config to read them from, and any
+#                                     override of the StarDist settings (seg_n_tiles_*,
+#                                     seg_pmin, seg_pmax, seg_prob_thresh,
+#                                     seg_expand_distance). Default: conf/ieo.config of
+#                                     this checkout if it exists; `none` reads no file.
+#                                     Where each value came from is printed (`# StarDist
+#                                     re-run:` lines), in a dry run too
 #   REGBENCH_STARDIST_CPU=1           run that StarDist without a GPU (else it asks for
 #                                     REGBENCH_SBATCH_GPU, as the arms did)
 #   REGBENCH_NUCLEI_SKIP=1            prepare without that step: cases whose slides have
@@ -267,7 +276,11 @@ if [ "$prepare" = 1 ]; then
                 if [ "${REGBENCH_NUCLEI_SKIP:-0}" != 1 ]; then
                     : "${REGBENCH_NUCLEI:=$REGBENCH_CASES/_nuclei}"
                     export REGBENCH_NUCLEI REGBENCH_MANIFEST
-                    [ -n "${REGBENCH_STARDIST_MODEL:-}" ] || die "--prepare: the bare nuclei need REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR (the StarDist model the arms ran: the pipeline's segmentation_model and segmentation_model_dir). REGBENCH_NUCLEI_SKIP=1 prepares without them: nuclei numbers are then absent wherever no label image exists. Nothing was submitted."
+                    # the model and settings of the re-run, and where each is from: the
+                    # environment, else the site config (conf/ieo.config, REGBENCH_SITE_CONFIG)
+                    stardist="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
+                        --out "$REGBENCH_NUCLEI" --settings)" || die "--prepare: the bare nuclei need the StarDist model the arms ran (the pipeline's segmentation_model and segmentation_model_dir): export REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR, or point REGBENCH_SITE_CONFIG at the site config that sets them (default: conf/ieo.config of this checkout). REGBENCH_NUCLEI_SKIP=1 prepares without them: nuclei numbers are then absent wherever no label image exists. Nothing was submitted."
+                    while IFS= read -r said; do echo "# StarDist re-run: $said"; done <<< "$stardist"
                     nuc_gpu=()
                     if [ "${REGBENCH_STARDIST_CPU:-0}" = 0 ]; then
                         [ -n "${REGBENCH_SBATCH_GPU:-}" ] || die "--prepare: the StarDist re-run of the bare nuclei asks for a GPU, as the arms did, and REGBENCH_SBATCH_GPU is not set. Export the site's request, or REGBENCH_STARDIST_CPU=1 to run it on CPUs. Nothing was submitted."
