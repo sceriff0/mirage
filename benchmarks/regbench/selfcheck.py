@@ -1114,6 +1114,7 @@ def run(
         # the launch that wrote this record: a gate refuses one of another submission
         "submission": submission,
         "launch_id": host.get("launch_id"),
+        "log_path": host.get("log_path") or "",
         "pairs": results,
     }
     # The selfcheck climbs in memory like a run (64 -> 256 -> 512 GB): the allocation
@@ -1127,6 +1128,17 @@ def run(
             "launch_id": host.get("launch_id"),
             "submission": submission,
             "status": record["status"],
+            "log_path": host.get("log_path") or "",
+            # the first cause a variant that is not ok gives, for the failure log
+            "why": next(
+                (
+                    f"{name}: {v.get('cause') or v.get('error') or v['status']}"
+                    for res in results
+                    for name, v in res["variants"].items()
+                    if v["status"] in BLOCKING
+                ),
+                "",
+            ),
         },
     ]
     write_json(work / "selfcheck.json", record)

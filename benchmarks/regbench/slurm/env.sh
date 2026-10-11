@@ -66,6 +66,41 @@ _regbench_var() {  # _regbench_var SIF valis120 -> value of REGBENCH_SIF_VALIS12
 # regbench_py <image> <regbench args...>: run `python -m benchmarks.regbench` in that
 # image, from the repository
 # root (in a subshell: the caller's directory and environment are left alone).
+# ── the task's log, and its last line ────────────────────────────────────────────────
+# REGBENCH_LOG is this task's scheduler log, as submit_cohort.sh names it (%x-%A_%a.log
+# for an array task, %x-%j.log otherwise). It goes into run.json, selfcheck.json and the
+# gate records (`log_path`), so the scorer's failure log can point at it.
+# REGBENCH_END_FILE is where the Python step leaves its end line; regbench_end prints it
+# as the LAST line of the log, or a fallback when the step died before writing one:
+#   REGBENCH_END kind=... run=... status=... cause=... whose=... log=...
+# (benchmarks/regbench/failure_log.py has the vocabulary; `whose` is method, benchmark,
+# infrastructure or launcher.)
+regbench_task_log() {
+    [ -n "${REGBENCH_OUT:-}" ] || return 0
+    local id="${SLURM_JOB_ID:-}" name="${SLURM_JOB_NAME:-}"
+    [ -n "$id" ] && [ -n "$name" ] || return 0
+    if [ -n "${SLURM_ARRAY_JOB_ID:-}" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+        id="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+    fi
+    export REGBENCH_LOG="$REGBENCH_OUT/logs/$name-$id.log"
+    export REGBENCH_END_FILE="$REGBENCH_OUT/logs/end/$name-$id.end"
+    mkdir -p "$REGBENCH_OUT/logs/end" 2>/dev/null && rm -f "$REGBENCH_END_FILE"
+}
+regbench_task_log
+
+# regbench_end <kind> <exit code of the Python step> [key=value ...]
+regbench_end() {
+    local kind="$1" code="$2"; shift 2
+    if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+        cat "$REGBENCH_END_FILE"
+    else
+        # the step wrote no end line: it died (killed for memory or time, a crash of the
+        # interpreter, a container that did not start). The scheduler's accounting may
+        # later say `infrastructure`; until then a dead process is counted as the method's.
+        echo "REGBENCH_END kind=$kind $* status=no_end_line cause=killed whose=method exit=$code log=${REGBENCH_LOG:--}"
+    fi
+}
+
 regbench_py() (
     local method="$1"; shift
     local sif conda venv upper
@@ -82,6 +117,7 @@ regbench_py() (
         for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS \
                  REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
+                 REGBENCH_LOG REGBENCH_END_FILE \
                  CUDA_VISIBLE_DEVICES; do
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done

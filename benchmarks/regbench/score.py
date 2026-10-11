@@ -83,7 +83,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, cost, pairs, tissue, truth
+from . import DATASETS, cost, failure_log, pairs, tissue, truth
 from .cases import list_cases, load_points, polys, result_dir
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -127,6 +127,28 @@ CAUSES = (
     "not_run",
 )
 NOT_THE_METHOD = ("benchmark_oom", "infrastructure")
+# What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
+# of that method's summaries and, being unregistered, of the common block for every
+# method; it is counted and named, and its row stays in cells.csv. "impute": it is
+# scored at the unregistered pose like a failure of the method (the rule before
+# 2026-10-11). ONE switch: every summary reads `_excluded`.
+NOT_THE_METHOD_ROUNDS = "exclude"
+# Datasets made by known maps: their cell summaries are per deformation family, never
+# pooled over families (a family outside a method's model must show in its own row).
+PER_FAMILY = ("synthetic", "semisynth")
+# What one independent unit is, per dataset: `n_patients`, the "under six" line and
+# every across-unit statistic count THIS, not the case's group.
+UNIT_IS = {
+    "multiplex": "patient",
+    "synthetic": "generated scene (one per family; its two poses are the same scene "
+    "and are not independent)",
+    "semisynth": "real patient (its windows, families and poses are cut from one "
+    "slide and are not independent)",
+}
+# the paired bootstrap of the differences against PAIRED_AGAINST
+BOOTSTRAP_N = 2000
+BOOTSTRAP_SEED = 20261011
+BOOTSTRAP_LEVEL = 0.95
 
 
 def tier_of(case):
@@ -138,6 +160,40 @@ def tier_of(case):
 
 
 jacobian_stats = truth.jacobian_stats
+
+
+def unit_of(case):
+    """The independent unit a case belongs to (``UNIT_IS``). A semi-synthetic case is
+    cut from a real patient's slide: that patient, whatever its window, family or pose.
+    A synthetic case's unit is its generated scene (its group: one per family)."""
+    if case.dataset == "semisynth":
+        return str(case.extra.get("truth_patient") or case.group)
+    return case.group
+
+
+def _unit(row):
+    return row.get("unit") or row["group"]
+
+
+def _stratum(row):
+    """The family a row is summarised in: its own on a known-truth dataset, none else."""
+    return (row.get("family") or "") if row["dataset"] in PER_FAMILY else ""
+
+
+def _excluded(row):
+    """True for a round lost for a cause that is not the method's, when such rounds
+    are left out of the summaries (``NOT_THE_METHOD_ROUNDS``)."""
+    return (
+        NOT_THE_METHOD_ROUNDS == "exclude"
+        and bool(row.get("imputed_initial"))
+        and row.get("cause") in NOT_THE_METHOD
+    )
+
+
+def _is_run(method):
+    """A registration the driver ran (or should have): not ``initial`` or ``truth``,
+    with or without an off-seam suffix."""
+    return method.split(NON)[0] not in PSEUDO
 
 
 def density(ps, pixel_size_um):
@@ -482,6 +538,7 @@ def _score_case(job):
         "tier": tier_of(case),
         "case_id": case.case_id,
         "group": case.group,
+        "unit": unit_of(case),
         "family": case.family,
         "pose": case.pose,
     }
@@ -514,6 +571,10 @@ def _score_case(job):
             "imputed_initial": imputed,
             "problem": problem[:200],
             "cause": cause,
+            # the row stays; no summary of this method reads it (NOT_THE_METHOD_ROUNDS)
+            "excluded_from_summaries": _excluded(
+                {"imputed_initial": imputed, "cause": cause}
+            ),
         }
 
     def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
@@ -635,10 +696,10 @@ def _stat(values, fn):
 
 
 def _per_patient(rows, key):
-    """``{patient: median over its rounds}``."""
+    """``{independent unit: median over its rounds}`` (``UNIT_IS``)."""
     by = {}
     for r in rows:
-        by.setdefault(r["group"], []).append(_f(r.get(key)))
+        by.setdefault(_unit(r), []).append(_f(r.get(key)))
     return {g: _stat(v, np.median) for g, v in by.items()}
 
 
@@ -646,89 +707,274 @@ def _methods(rows):
     return list(dict.fromkeys(r["method"] for r in rows))
 
 
-def common_cases(rows, primary=None):
-    """Case ids every primary variant registered (every run variant when none is named)."""
-    judged = [r for r in rows if NON not in r["method"]]
-    if primary:
-        judged = [r for r in judged if r["method"] in primary]
-    else:
-        judged = [r for r in judged if r["method"] not in PSEUDO]
+NOT_LAUNCHED = "not launched by this submission (it has no result on this dataset)"
+NO_ROW = "it has no row on this dataset (dropped, or not expected here)"
+
+
+def compared_rows(rows, primary=None, blocked=None):
+    """``(inside, outside)`` for the rows of ONE dataset: the rows the common block and
+    the shared subsets are computed among, and ``{row: why it is not one of them}``.
+
+    A row is compared when it is a primary row (every registration row when no primary
+    is named) that actually RAN in what is being scored: a gate did not block its run
+    (``blocked``: ``{row: reason}``, from the launcher's gate records) and at least one
+    of its cases has a record. A run that was never launched (a submission of some of
+    the runs) or that a gate stopped has every case ``not run``; counting it would
+    empty the block for everyone."""
+    blocked = blocked or {}
+    names = list(primary) if primary else [m for m in _methods(rows) if _is_run(m)]
+    inside, outside = [], {}
+    for name in names:
+        mine = [r for r in rows if r["method"] == name]
+        if name in blocked:
+            outside[name] = blocked[name]
+        elif not mine:
+            outside[name] = NO_ROW
+        elif all(r.get("cause") == "not_run" for r in mine):
+            outside[name] = NOT_LAUNCHED
+        else:
+            inside.append(name)
+    return inside, outside
+
+
+def common_cases(rows, primary=None, blocked=None):
+    """Case ids every compared row registered (``compared_rows``). A round lost for a
+    cause that is not the method's is unregistered, so it is in no common block."""
+    inside, _ = compared_rows(rows, primary, blocked)
+    judged = [r for r in rows if r["method"] in inside]
     failed = {r["case_id"] for r in judged if r["imputed_initial"]}
     return {r["case_id"] for r in rows} - failed
 
 
-def summarise_cells(rows, primary=None):
-    """One row per (dataset, method, subset): ``all`` and ``common``."""
+def _shared(rows, inside, qualifies):
+    """Case ids where EVERY compared row qualifies. Empty when nothing is compared."""
+    if not inside:
+        return set()
+    cases = None
+    for name in inside:
+        mine = {
+            r["case_id"]
+            for r in rows
+            if r["method"] == name and not _excluded(r) and qualifies(r)
+        }
+        cases = mine if cases is None else cases & mine
+    return cases or set()
+
+
+def _clears_null(r):
+    return r["pair_fraction"] > r["pair_fraction_null_max"]
+
+
+def _readable(r):
+    return bool(r["displacement_readable"])
+
+
+def common_block(rows, primary=None, blocked=None):
+    """One row per (dataset, compared-or-not row): who is in the common block, and why
+    the others are not. Written as ``common_block.csv`` and printed, always."""
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
-        common = common_cases(of_ds, primary)
-        for subset in ("all", "common"):
-            for m in _methods(of_ds):
-                mine = [r for r in of_ds if r["method"] == m]
-                if subset == "common":
-                    mine = [r for r in mine if r["case_id"] in common]
-                if not mine:
-                    continue
-                n_ok = sum(not r["imputed_initial"] for r in mine)
-                rec = {
+        inside, outside = compared_rows(of_ds, primary, blocked)
+        common = common_cases(of_ds, primary, blocked)
+        n_all = len({r["case_id"] for r in of_ds})
+        for name in [*inside, *outside]:
+            out.append(
+                {
                     "dataset": ds,
-                    "method": m,
-                    "subset": subset,
-                    "n_patients": len({r["group"] for r in mine}),
-                    "n_cases": len(mine),
-                    "n_ok": n_ok,
+                    "method": name,
+                    "in_common_block": name in inside,
+                    "why_not": outside.get(name, ""),
+                    "n_cases_common": len(common) if inside else 0,
+                    "n_cases": n_all,
                 }
-                for h in HEADLINES:
-                    per = list(_per_patient(mine, h).values())
-                    rec[f"{h}_med"] = _stat(per, np.median)
-                    rec[f"{h}_min"] = _stat(per, np.min)
-                    rec[f"{h}_max"] = _stat(per, np.max)
-                    rec[f"{h}_min_case"] = _stat(_values(mine, h), np.min)
-                    if h in HAS_NULL:
-                        null = list(_per_patient(mine, f"{h}_null").values())
-                        rec[f"{h}_null_med"] = _stat(null, np.median)
-                # Dice may be ranked only where pair fraction clears the null's maximum
-                clear = [
-                    r for r in mine if r["pair_fraction"] > r["pair_fraction_null_max"]
-                ]
-                per = list(_per_patient(clear, "dice_matched").values())
-                rec["dice_matched_ranked_med"] = _stat(per, np.median)
-                rec["n_dice_ranked"] = len(clear)
-                # displacement is read only on the readable cases
-                readable = [r for r in mine if r["displacement_readable"]]
-                per = list(_per_patient(readable, "displacement_um_p50").values())
-                rec["displacement_um_p50_med"] = _stat(per, np.median)
-                rec["n_readable"] = len(readable)
-                rec["readable_share"] = len(readable) / len(mine)
-                rec["fold_pct_max"] = _stat(_values(mine, "fold_pct"), np.max)
-                rec["coverage_med"] = _stat(_values(mine, "coverage"), np.median)
-                out.append(rec)
+            )
     return out
 
 
-def paired_vs_primary(rows, against=PAIRED_AGAINST):
-    """Per patient and variant: each headline's patient median minus the ``against`` row's."""
+def summarise_cells(rows, primary=None, blocked=None):
+    """One row per (dataset, family, method, subset): ``all`` and ``common``.
+
+    ``family`` is empty on the cohort and one deformation family on a known-truth
+    dataset (``PER_FAMILY``): those are never pooled over families. ``n_patients``
+    counts independent units (``UNIT_IS``). A round lost for a cause that is not the
+    method's is left out of that method's rows and counted (``n_excluded_not_method``).
+
+    Two numbers are read on a subset of cases, and each is given twice. ``*_ranked`` /
+    the readable displacement: on the cases where THIS method qualifies (its pair
+    fraction clears its null's maximum / by ``READABLE_MARGIN``), with their count; a
+    method that fails its hard cases is then read on its easy ones. ``*_shared``: on the
+    cases where EVERY compared row qualifies (``compared_rows``), the same cases for
+    every method: the only one of the two that may be set beside another method's.
+    ``<headline>_n_nan`` counts the cases whose value does not exist (no pair): they
+    cannot enter a median, and are shown instead of vanishing."""
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
-        ref = [r for r in of_ds if r["method"] == against]
-        if not ref:
-            continue
-        base = {h: _per_patient(ref, h) for h in HEADLINES}
-        for m in _methods(of_ds):
-            if m == against:
+        inside, _ = compared_rows(of_ds, primary, blocked)
+        common = common_cases(of_ds, primary, blocked)
+        for fam in dict.fromkeys(_stratum(r) for r in of_ds):
+            of_fam = [r for r in of_ds if _stratum(r) == fam]
+            for subset in ("all", "common"):
+                pool = of_fam
+                if subset == "common":
+                    if not inside:
+                        continue  # nothing to be common to: said in the summary
+                    pool = [r for r in of_fam if r["case_id"] in common]
+                clear_all = _shared(pool, inside, _clears_null)
+                readable_all = _shared(pool, inside, _readable)
+                for m in _methods(of_fam):
+                    every = [r for r in pool if r["method"] == m]
+                    mine = [r for r in every if not _excluded(r)]
+                    if not every:
+                        continue
+                    n_ok = sum(not r["imputed_initial"] for r in mine)
+                    rec = {
+                        "dataset": ds,
+                        "family": fam,
+                        "method": m,
+                        "subset": subset,
+                        "n_patients": len({_unit(r) for r in mine}),
+                        "n_cases": len(mine),
+                        "n_ok": n_ok,
+                        "n_excluded_not_method": len(every) - len(mine),
+                    }
+                    for h in HEADLINES:
+                        per = list(_per_patient(mine, h).values())
+                        rec[f"{h}_med"] = _stat(per, np.median)
+                        rec[f"{h}_min"] = _stat(per, np.min)
+                        rec[f"{h}_max"] = _stat(per, np.max)
+                        rec[f"{h}_min_case"] = _stat(_values(mine, h), np.min)
+                        rec[f"{h}_n_nan"] = int(np.isnan(_values(mine, h)).sum())
+                        if h in HAS_NULL:
+                            null = list(_per_patient(mine, f"{h}_null").values())
+                            rec[f"{h}_null_med"] = _stat(null, np.median)
+                    # Dice where pair fraction clears the null's maximum: this method's
+                    # own cases, then the cases every compared row clears
+                    clear = [r for r in mine if _clears_null(r)]
+                    per = list(_per_patient(clear, "dice_matched").values())
+                    rec["dice_matched_ranked_med"] = _stat(per, np.median)
+                    rec["n_dice_ranked"] = len(clear)
+                    shared = [r for r in mine if r["case_id"] in clear_all]
+                    per = list(_per_patient(shared, "dice_matched").values())
+                    rec["dice_matched_shared_med"] = _stat(per, np.median)
+                    rec["n_dice_shared"] = len(shared)
+                    # displacement is read only on the readable cases
+                    readable = [r for r in mine if _readable(r)]
+                    per = list(_per_patient(readable, "displacement_um_p50").values())
+                    rec["displacement_um_p50_med"] = _stat(per, np.median)
+                    rec["n_readable"] = len(readable)
+                    rec["readable_share"] = len(readable) / len(mine) if mine else 0.0
+                    shared = [r for r in mine if r["case_id"] in readable_all]
+                    per = list(_per_patient(shared, "displacement_um_p50").values())
+                    rec["displacement_um_p50_shared_med"] = _stat(per, np.median)
+                    rec["n_readable_shared"] = len(shared)
+                    rec["unmapped_frac_max"] = _stat(
+                        _values(mine, "unmapped_frac"), np.max
+                    )
+                    rec["fold_pct_max"] = _stat(_values(mine, "fold_pct"), np.max)
+                    rec["coverage_med"] = _stat(_values(mine, "coverage"), np.median)
+                    out.append(rec)
+    return out
+
+
+def excluded_rounds(rows):
+    """The rounds no summary of their method reads, named: one dict per (dataset,
+    method, case, cause). Empty when ``NOT_THE_METHOD_ROUNDS`` is ``impute``."""
+    return [
+        {
+            "dataset": r["dataset"],
+            "method": r["method"],
+            "case_id": r["case_id"],
+            "group": r["group"],
+            "cause": r["cause"],
+        }
+        for r in rows
+        if _excluded(r)
+    ]
+
+
+def paired_vs_primary(rows, against=PAIRED_AGAINST):
+    """Per independent unit and variant: each headline's unit median minus the
+    ``against`` row's, on the cases BOTH have (a round either lost for a cause that is
+    not the method's is in neither median)."""
+    out = []
+    for ds in sorted({r["dataset"] for r in rows}):
+        of_ds = [r for r in rows if r["dataset"] == ds]
+        for fam in dict.fromkeys(_stratum(r) for r in of_ds):
+            of_fam = [r for r in of_ds if _stratum(r) == fam]
+            ref = [r for r in of_fam if r["method"] == against and not _excluded(r)]
+            if not ref:
                 continue
-            mine = [r for r in of_ds if r["method"] == m]
-            per = {h: _per_patient(mine, h) for h in HEADLINES}
-            for g in dict.fromkeys(r["group"] for r in mine):
-                if g not in base[HEADLINES[0]]:
+            for m in _methods(of_fam):
+                if m == against:
                     continue
-                rec = {"dataset": ds, "group": g, "method": m, "against": against}
-                rec["n_rounds"] = sum(r["group"] == g for r in mine)
-                for h in HEADLINES:
-                    rec[f"d_{h}"] = per[h][g] - base[h][g]
-                out.append(rec)
+                mine = [r for r in of_fam if r["method"] == m and not _excluded(r)]
+                both = {r["case_id"] for r in mine} & {r["case_id"] for r in ref}
+                mine = [r for r in mine if r["case_id"] in both]
+                theirs = [r for r in ref if r["case_id"] in both]
+                per = {h: _per_patient(mine, h) for h in HEADLINES}
+                base = {h: _per_patient(theirs, h) for h in HEADLINES}
+                for g in dict.fromkeys(_unit(r) for r in mine):
+                    rec = {
+                        "dataset": ds,
+                        "family": fam,
+                        "group": g,
+                        "method": m,
+                        "against": against,
+                    }
+                    rec["n_rounds"] = sum(_unit(r) == g for r in mine)
+                    for h in HEADLINES:
+                        rec[f"d_{h}"] = per[h][g] - base[h][g]
+                    out.append(rec)
+    return out
+
+
+def bootstrap_interval(values, n=BOOTSTRAP_N, seed=BOOTSTRAP_SEED):
+    """``(low, high)`` of the median of ``values`` (one per independent unit) by a
+    percentile bootstrap: units are drawn with replacement ``n`` times. NaN with fewer
+    than two units. With a handful of units the interval is coarse (the median of a
+    resample can only take a few values) and narrower than the truth; it is a
+    description of the spread between units, not a test."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size < 2:
+        return math.nan, math.nan
+    rng = np.random.default_rng(seed)
+    draws = np.median(v[rng.integers(0, v.size, size=(n, v.size))], axis=1)
+    tail = (1.0 - BOOTSTRAP_LEVEL) / 2.0 * 100.0
+    low, high = np.percentile(draws, [tail, 100.0 - tail])
+    return float(low), float(high)
+
+
+def summarise_paired(paired):
+    """Per (dataset, family, variant): the median over units of each paired difference
+    against ``PAIRED_AGAINST``, with a bootstrap interval over units. The rounds of a
+    unit stay together (they are already one median per unit), so the interval is over
+    what is independent. No p-value and no ranking are derived from it."""
+    out = []
+    keys = dict.fromkeys((r["dataset"], r["family"], r["method"]) for r in paired)
+    for ds, fam, m in keys:
+        mine = [
+            r
+            for r in paired
+            if (r["dataset"], r["family"], r["method"]) == (ds, fam, m)
+        ]
+        rec = {
+            "dataset": ds,
+            "family": fam,
+            "method": m,
+            "against": mine[0]["against"],
+            "n_patients": len(mine),
+        }
+        for h in HEADLINES:
+            d = _values(mine, f"d_{h}")
+            low, high = bootstrap_interval(d)
+            rec[f"d_{h}_med"] = _stat(d, np.median)
+            rec[f"d_{h}_lo"] = low
+            rec[f"d_{h}_hi"] = high
+            rec[f"d_{h}_n_nan"] = int(np.isnan(d).sum())
+        out.append(rec)
     return out
 
 
@@ -782,7 +1028,12 @@ def summarise_resources(res_rows):
     """Per (dataset, patient, method). A patient's cost is the sum over its rounds for a
     pair method and the launch's own total for a per-patient one; the peak is the maximum
     and is never divided by rounds. Only completed runs are a cost. ``wasted_*`` is the
-    earlier attempts of the ladder plus a last attempt that failed outright."""
+    earlier attempts of the ladder plus a last attempt that failed outright.
+
+    ``write_s`` and ``total_to_image_s`` are the patient's totals for both units. A
+    patient is ``complete`` when every round of it registered; ``summarise_cost`` reads
+    only complete patients, because the cost of some of a patient's rounds is not the
+    cost of the patient."""
     out = []
     keys = dict.fromkeys((r["dataset"], r["group"], r["method"]) for r in res_rows)
     for ds, g, m in keys:
@@ -799,13 +1050,24 @@ def summarise_resources(res_rows):
             "unit": "patient" if patient else "pair",
             "n_rounds": len(mine),
             "n_ok": len(ok),
+            "complete": len(ok) == len(mine),
+            # False when no round of it has a record (a run that was not launched)
+            "launched": any(r["cause"] != "not_run" for r in mine),
             "attempt": _stat(_values(mine, "attempt"), np.max),
             "mem_requested_gb": _stat(_values(mine, "mem_requested_gb"), np.max),
             "cpus_requested": _stat(_values(mine, "cpus_requested"), np.max),
         }
-        for key in ("register_s", "cpu_h", "gpu_h", "total_to_image_s"):
+        for key in ("register_s", "cpu_h", "gpu_h"):
             rec[key] = _stat(_values(ok, key), total)
+        # The writer's time is the SUM over the rounds for both units: a per-patient
+        # method records each round's share of one writer call (or each slide's own
+        # time), a pair method each round's own. The time to an image is the
+        # registration plus that sum. (Until 2026-10-11 a per-patient launch reported
+        # the largest single round: one share of the writer, not the whole.)
         rec["write_s"] = _stat(_values(ok, "write_s"), np.sum)
+        rec["total_to_image_s"] = (
+            float(np.nansum([rec["register_s"], rec["write_s"]])) if ok else math.nan
+        )
         rec["cpu_efficiency"] = _stat(_values(ok, "cpu_efficiency"), np.median)
         for key in ("peak_rss_gb", "peak_rss_after_register_gb", "cgroup_peak_gb"):
             rec[key] = _stat(_values(ok, key), np.max)
@@ -825,6 +1087,67 @@ def summarise_resources(res_rows):
             rec[key] = float(np.nansum([earlier, extra]))
         for key in ("wasted_from_scheduler", "wasted_unknown"):
             rec[key] = _stat(_values(mine, key), total)
+        out.append(rec)
+    return out
+
+
+COST_KEYS = (
+    "register_s",
+    "cpu_h",
+    "gpu_h",
+    "write_s",
+    "total_to_image_s",
+    "peak_rss_gb",
+    "cgroup_peak_gb",
+)
+
+
+def common_patients(res_summary, primary=None):
+    """``{dataset: (patients complete for every compared row, [compared rows])}``. A
+    row is compared as in the cell tables: a primary row (any run when none is named)
+    with at least one result that is not ``not run``."""
+    out = {}
+    for ds in dict.fromkeys(r["dataset"] for r in res_summary):
+        of_ds = [r for r in res_summary if r["dataset"] == ds]
+        names = list(primary) if primary else _methods(of_ds)
+        inside = [
+            m for m in names if any(r["method"] == m and r["launched"] for r in of_ds)
+        ]
+        patients = {r["group"] for r in of_ds}
+        for m in inside:
+            patients &= {
+                r["group"] for r in of_ds if r["method"] == m and r["complete"]
+            }
+        out[ds] = (patients if inside else set(), inside)
+    return out
+
+
+def summarise_cost(res_summary, primary=None):
+    """Per (dataset, method): the median over patients of each cost, TWICE. Over the
+    patients this method completed (``n_patients_complete`` of ``n_patients``): a
+    method that fails on the largest patients is then read on the small ones and looks
+    cheaper. And over the patients EVERY compared row completed
+    (``n_patients_common``, ``*_common``): the same patients for every method, the only
+    numbers that may be set beside each other."""
+    common = common_patients(res_summary, primary)
+    out = []
+    for ds, m in dict.fromkeys((r["dataset"], r["method"]) for r in res_summary):
+        mine = [r for r in res_summary if (r["dataset"], r["method"]) == (ds, m)]
+        done = [r for r in mine if r["complete"]]
+        shared = [r for r in done if r["group"] in common[ds][0]]
+        rec = {
+            "dataset": ds,
+            "method": m,
+            "unit": mine[0]["unit"],
+            "n_patients": len(mine),
+            "n_patients_complete": len(done),
+            "n_patients_partial": sum(0 < r["n_ok"] < r["n_rounds"] for r in mine),
+            "n_patients_common": len(shared),
+            "common_among": ", ".join(common[ds][1]),
+        }
+        for key in COST_KEYS:
+            rec[f"{key}_med"] = _stat(_values(done, key), np.median)
+            rec[f"{key}_common_med"] = _stat(_values(shared, key), np.median)
         out.append(rec)
     return out
 
@@ -856,31 +1179,119 @@ def markdown(rows, columns):
 
 def _summary_table(rows, primary):
     """Markdown rows: each headline as ``median [minimum over cases]``, its null beside it."""
-    order = list(primary or [])
+    order = [p.split(NON)[0] for p in primary or []]
+    families = list(dict.fromkeys(r.get("family", "") for r in rows))
     rows = sorted(
         rows,
-        key=lambda r: order.index(r["method"]) if r["method"] in order else len(order),
+        key=lambda r: (
+            families.index(r.get("family", "")),
+            order.index(r["method"].split(NON)[0])
+            if r["method"].split(NON)[0] in order
+            else len(order),
+        ),
     )
     table = []
     for r in rows:
-        line = {
-            "method": r["method"],
-            "patients": r["n_patients"],
-            "ok/cases": f"{r['n_ok']}/{r['n_cases']}",
-        }
+        line = {"family": r.get("family", "")} if any(families) else {}
+        line.update(
+            {
+                "method": r["method"],
+                "units": r["n_patients"],
+                "ok/cases": f"{r['n_ok']}/{r['n_cases']}",
+                "left out (not the method's)": r.get("n_excluded_not_method", 0),
+            }
+        )
         for h in HEADLINES:
             line[h] = f"{_fmt(r[f'{h}_med'])} [{_fmt(r[f'{h}_min_case'])}]"
             if h in HAS_NULL:
                 line[f"{h}_null"] = r[f"{h}_null_med"]
-        line["dice_ranked (n)"] = (
+        line["dice_shared (n)"] = (
+            f"{_fmt(r['dice_matched_shared_med'])} ({r['n_dice_shared']})"
+        )
+        line["dice_own_cases (n)"] = (
             f"{_fmt(r['dice_matched_ranked_med'])} ({r['n_dice_ranked']})"
         )
-        line["displacement_um_p50 (readable n)"] = (
+        line["dice NaN cases"] = r["dice_matched_n_nan"]
+        line["displacement_um_p50 shared (n)"] = (
+            f"{_fmt(r['displacement_um_p50_shared_med'])} ({r['n_readable_shared']})"
+        )
+        line["displacement_um_p50 own cases (n)"] = (
             f"{_fmt(r['displacement_um_p50_med'])} ({r['n_readable']})"
         )
+        line["unmapped_frac_max"] = r["unmapped_frac_max"]
         line["fold_pct_max"] = r["fold_pct_max"]
         table.append(line)
     return markdown(table, list(table[0])) if table else ""
+
+
+SUBSET_RULE = (
+    "`dice_shared` and the shared displacement are read on the cases where EVERY "
+    "compared row qualifies (pair fraction above its null's maximum; for displacement "
+    "by the readable margin): the same cases for every row, with their count. Only "
+    "these may be set beside another row's. `own cases` is the same number on the "
+    "cases where that row alone qualifies: a row that fails its hard cases is read on "
+    "its easy ones there. `dice NaN cases` are cases with no pair at all: they have no "
+    "Dice and are in no median.\n"
+)
+
+
+def _common_lines(block, ds):
+    """Who is in the common block of one dataset and who is not, always said."""
+    mine = [r for r in block if r["dataset"] == ds]
+    inside = [r["method"] for r in mine if r["in_common_block"]]
+    outside = [r for r in mine if not r["in_common_block"]]
+    if not mine:
+        return []
+    n = f"{mine[0]['n_cases_common']} of {mine[0]['n_cases']} case(s)"
+    if inside:
+        text = (
+            "Compared rows (they ran in what is scored here): "
+            + ", ".join(f"`{m}`" for m in inside)
+            + f". Cases every one of them registered: {n}."
+        )
+    else:
+        text = "No compared row ran in what is scored here: there is no common block."
+    if outside:
+        text += (
+            " NOT among them: "
+            + "; ".join(f"`{r['method']}` ({r['why_not']})" for r in outside)
+            + "."
+        )
+    return [text + "\n"]
+
+
+def _paired_markdown(summary, ds):
+    """Differences against ``PAIRED_AGAINST`` with their bootstrap interval."""
+    mine = [r for r in summary if r["dataset"] == ds and _is_run(r["method"])]
+    if not mine:
+        return []
+    families = any(r["family"] for r in mine)
+    table = []
+    for r in mine:
+        line = {"family": r["family"]} if families else {}
+        line.update({"method": r["method"], "units": r["n_patients"]})
+        for h in HEADLINES:
+            interval = (
+                "no interval: one unit"
+                if math.isnan(r[f"d_{h}_lo"])
+                else f"{_fmt(r[f'd_{h}_lo'])}, {_fmt(r[f'd_{h}_hi'])}"
+            )
+            line[f"d_{h}"] = f"{_fmt(r[f'd_{h}_med'])} [{interval}]"
+        table.append(line)
+    few = max(r["n_patients"] for r in mine) < MIN_PATIENTS_TO_RANK
+    return [
+        f"### Differences against `{mine[0]['against']}` (paired within unit)\n",
+        "Each cell is the median over units of (this row minus "
+        f"`{mine[0]['against']}`), each unit's rounds first reduced to their median on "
+        "the cases both rows have, with a "
+        f"{BOOTSTRAP_LEVEL:.0%} percentile bootstrap interval over units "
+        f"({BOOTSTRAP_N} resamples of the units, seed {BOOTSTRAP_SEED}; a unit's "
+        "rounds stay together). With few units the interval is coarse and too narrow; "
+        "it describes the spread between units and is not a test"
+        + (f". {DESCRIPTIVE.capitalize()}.\n" if few else ".\n"),
+        markdown(table, list(table[0])),
+        "",
+    ]
 
 
 TRUTH_COLUMNS = (
@@ -899,6 +1310,7 @@ TRUTH_COLUMNS = (
     "frac_under_1um_med",
     "frac_under_2um_med",
     "fold_pct_med",
+    "n_excluded_not_method",
 )
 
 
@@ -942,13 +1354,55 @@ def truth_header(spec_hashes, record, prepared, folded=(), reseeded=()):
     return lines
 
 
-def summarise_nonband(rows):
+def truth_by_family(rows):
+    """``truth.by_family`` without the rounds lost for a cause that is not the
+    method's, each (dataset, family, pose, method) saying how many it left out. A key
+    with nothing left keeps a row (``n_cases`` 0): a row is never missing silently."""
+    kept = [r for r in rows if not _excluded(r)]
+    out = truth.by_family(kept)
+
+    def key(r):
+        return r["dataset"], r["family"], r["pose"], r["method"]
+
+    gone = {}
+    for r in rows:
+        if _excluded(r):
+            gone[key(r)] = gone.get(key(r), 0) + 1
+    have = {key(r) for r in out}
+    for r in out:
+        r["n_excluded_not_method"] = gone.get(key(r), 0)
+    for k, n in gone.items():
+        if k not in have:
+            sample = next(r for r in rows if key(r) == k)
+            out.append(
+                {
+                    "dataset": k[0],
+                    "family": k[1],
+                    "pose": k[2],
+                    "in_stare_model": sample["in_stare_model"],
+                    "method": k[3],
+                    "n_cases": 0,
+                    "n_ok": 0,
+                    "n_excluded_not_method": n,
+                }
+            )
+    return out
+
+
+def summarise_nonband(rows, primary=None, blocked=None):
     """One row per (dataset, owner, variant): the summary of ``summarise_cells`` on the
-    off-seam rows, with the nuclei kept. Never merged with the primary summary."""
+    off-seam rows, with the nuclei kept. Never merged with the primary summary.
+
+    ``within_ceiling`` is what the mask alone allows ``within_*um`` to reach for ANY
+    method: the curve is the smaller of the two one-sided shares, and a mask that
+    removes nuclei on one side only leaves at most (fewer kept nuclei) / (more kept
+    nuclei) of the larger side with a partner, one partner per nucleus."""
     out = []
     for owner in dict.fromkeys(r["owner"] for r in rows):
         mine = [r for r in rows if r["owner"] == owner]
-        for rec in summarise_cells(mine):
+        names = [f"{p}{NON}{owner}" for p in primary] if primary else None
+        gone = {f"{k}{NON}{owner}": v for k, v in (blocked or {}).items()}
+        for rec in summarise_cells(mine, names, gone):
             if rec["subset"] != "all":
                 continue
             of = [
@@ -960,6 +1414,8 @@ def summarise_nonband(rows):
             del rec["subset"]
             for key in ("n_mov_kept", "n_mov_all", "n_ref_kept", "n_ref_all"):
                 rec[key] = int(sum(r[key] for r in of))
+            kept = sorted((rec["n_mov_kept"], rec["n_ref_kept"]))
+            rec["within_ceiling"] = kept[0] / kept[1] if kept[1] else math.nan
             out.append(rec)
     return out
 
@@ -993,7 +1449,8 @@ def _nonband_markdown(summary, missing):
         "## Off the seams (a block of its own; not ranked)\n",
         "Every variant scored a second time WITHOUT the nuclei that straddle one "
         "method's joins (`<variant>:non_<owner>`): all rows of a block use the same "
-        "nuclei, chosen from the owner's geometry alone. These numbers are not "
+        "nuclei, chosen by where the owner put its tiles or blocks and by no score. "
+        "These numbers are not "
         "comparable with the full-slide tables above and enter no ranking. A case the "
         "owner did not register has no row here for any method.\n",
     ]
@@ -1004,7 +1461,10 @@ def _nonband_markdown(summary, missing):
         kept = (
             f"{block[0]['n_mov_kept']} of {block[0]['n_mov_all']} moving and "
             f"{block[0]['n_ref_kept']} of {block[0]['n_ref_all']} reference nuclei "
-            "kept, the same for every row. "
+            "kept, the same for every row. The mask alone caps `within_*um` at about "
+            f"{_fmt(block[0]['within_ceiling'])} for every row here (the fewer kept "
+            "nuclei over the more, one partner per nucleus); pair fraction is over "
+            "the smaller kept set and has no such cap. "
             if block
             else ""
         )
@@ -1031,6 +1491,7 @@ def read_gates(directory):
             continue
         run, status, dropped, blocked = fields[:4]
         reference = fields[4] if len(fields) > 4 else "-"
+        log_path = fields[5] if len(fields) > 5 else "-"
         out.append(
             {
                 "run": run,
@@ -1041,6 +1502,7 @@ def read_gates(directory):
                 "blocked": blocked.strip() != "0",
                 "dropped": "" if dropped == "-" else dropped,
                 "reference": "" if reference == "-" else reference,
+                "log_path": "" if log_path == "-" else log_path,
             }
         )
     return out
@@ -1061,7 +1523,7 @@ def launch_markdown(launch):
     if blocked:
         parts.append(
             "Runs that did NOT start (their rows above are `not run`, scored at the "
-            "unregistered pose): "
+            "unregistered pose, and they are not among the compared rows): "
             + "; ".join(f"`{g['run']}` ({g['gate']}: {g['status']})" for g in blocked)
             + ".\n"
         )
@@ -1082,6 +1544,18 @@ def launch_markdown(launch):
     return parts
 
 
+def blocked_rows(launch, run_variants=None):
+    """``{result name: why}`` for every row of a run a gate blocked."""
+    out = {}
+    for g in launch or []:
+        if g["blocked"]:
+            for v in (run_variants or {}).get(g["run"], [g["run"]]):
+                out[v] = (
+                    f"its run `{g['run']}` was blocked ({g['gate']}: {g['status']})"
+                )
+    return out
+
+
 def summary_markdown(
     summary,
     fails,
@@ -1097,27 +1571,59 @@ def summary_markdown(
     end_to_end=None,
     launch=None,
     header=None,
+    common=None,
+    paired=None,
+    excluded=None,
+    events=None,
+    cost_summary=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
         "Nuclear overlap after registration, on nuclei segmented on the native slides. "
         "It is self-consistency on the registration channel, not accuracy. Each cell is "
-        "`median over patients [minimum over cases]`; `ok/cases` counts the runs that "
+        "`median over units [minimum over cases]`; `ok/cases` counts the runs that "
         "registered, and a run that did not is scored at the unregistered pose.\n"
     )
+    parts.append(SUBSET_RULE)
+    excluded = excluded or []
+    if excluded:
+        parts.append(
+            f"**{len(excluded)} round(s) were lost for a cause that is not the "
+            "method's (`infrastructure`, `benchmark_oom`). They are left out of that "
+            "method's rows (column `left out`), of its differences, and, being "
+            "unregistered, of the common block for every method; their rows stay in "
+            "`cells.csv` (`excluded_from_summaries`). Submit them again:** "
+            + "; ".join(
+                f"`{e['method']}` {e['dataset']}/{e['case_id']} ({e['cause']})"
+                for e in excluded[:50]
+            )
+            + (f"; and {len(excluded) - 50} more" if len(excluded) > 50 else "")
+            + ".\n"
+        )
     for ds in sorted({r["dataset"] for r in summary}):
         of_ds = [r for r in summary if r["dataset"] == ds]
-        n_patients = max(r["n_patients"] for r in of_ds)
+        n_units = max(r["n_patients"] for r in of_ds)
         parts.append(f"## {ds}\n")
-        if n_patients < MIN_PATIENTS_TO_RANK:
-            parts.append(f"{n_patients} patient(s): {DESCRIPTIVE}.\n")
-        for subset, title in (
-            ("all", "All cases"),
-            ("common", "Cases every primary variant registered"),
-        ):
-            block = [r for r in of_ds if r["subset"] == subset]
-            if block:
-                parts += [f"### {title}\n", _summary_table(block, primary), ""]
+        what = UNIT_IS.get(ds, "patient")
+        per = " per family" if ds in PER_FAMILY else ""
+        parts.append(
+            f"The independent unit is the {what}. At most {n_units} unit(s){per}"
+            + (f": {DESCRIPTIVE}.\n" if n_units < MIN_PATIENTS_TO_RANK else ".\n")
+        )
+        if ds in PER_FAMILY:
+            parts.append(
+                "One row per deformation family: families are never pooled, so a "
+                "family outside a method's model shows in its own row.\n"
+            )
+        block = [r for r in of_ds if r["subset"] == "all"]
+        if block:
+            parts += ["### All cases\n", _summary_table(block, primary), ""]
+        parts.append("### Cases every compared row registered\n")
+        parts += _common_lines(common or [], ds)
+        block = [r for r in of_ds if r["subset"] == "common"]
+        if block:
+            parts += [_summary_table(block, primary), ""]
+        parts += _paired_markdown(paired or [], ds)
     if by_family:
         parts += [
             "## Known-truth error, per deformation family\n",
@@ -1151,8 +1657,10 @@ def summary_markdown(
             + ".\n",
         ]
     parts += launch_markdown(launch or [])
+    if events is not None:
+        parts += failure_log.markdown(events, markdown)
     if fails:
-        parts += ["## Failures (launches and rounds)\n"]
+        parts += ["## Failures, counted (launches and rounds)\n"]
         lost = sum(r["rounds_lost_not_method"] for r in fails)
         parts.append(
             "`launches_failed_method` counts what the method did (it raised, ran out "
@@ -1163,8 +1671,12 @@ def summary_markdown(
             "at the last rung). "
             + (
                 f"**{lost} round(s) are lost for a reason that is not the method's "
-                "and are still scored at the unregistered pose above: submit them "
-                "again before reading those rows.**\n"
+                + (
+                    "and are left out of that method's rows above"
+                    if NOT_THE_METHOD_ROUNDS == "exclude"
+                    else "and are still scored at the unregistered pose above"
+                )
+                + ": submit them again before reading those rows.**\n"
                 if lost
                 else "No round is lost for a reason that is not the method's.\n"
             )
@@ -1205,6 +1717,37 @@ def summary_markdown(
             markdown(res_summary, cols),
             "",
         ]
+    if cost_summary:
+        table = []
+        for r in cost_summary:
+            line = {
+                "dataset": r["dataset"],
+                "method": r["method"],
+                "patients complete / all": f"{r['n_patients_complete']}/"
+                f"{r['n_patients']}",
+                "common": r["n_patients_common"],
+            }
+            for key in COST_KEYS:
+                line[f"{key}: complete / common"] = (
+                    f"{_fmt(r[f'{key}_med']) or '-'} / "
+                    f"{_fmt(r[f'{key}_common_med']) or '-'}"
+                )
+            table.append(line)
+        parts += [
+            "### Cost per method (median over patients), on two sets of patients\n",
+            "A patient is `complete` for a method when every round of it registered; "
+            "a cost is read on complete patients only (the cost of some of a "
+            "patient's rounds is not the patient's). Each cell is `over the patients "
+            "this method completed / over the patients EVERY compared row completed`. "
+            "The first is over survivors: a method that fails on the largest patients "
+            "looks cheaper there. Only the second is on the same patients for every "
+            "method (compared rows: "
+            + (cost_summary[0]["common_among"] or "none ran")
+            + "). `write_s` and `total_to_image_s` are the patient's totals for both "
+            "kinds of unit.\n",
+            markdown(table, list(table[0])),
+            "",
+        ]
     if end_to_end:
         parts += cost.markdown(*end_to_end, markdown)
     return "\n".join(parts)
@@ -1225,8 +1768,13 @@ def score(
     pipeline_trace_label=None,
     pipeline_processes=(None, None),
     gates=None,
+    run_variants=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``run_variants`` maps a run's name to the result names it writes
+    (``variants.run_variants()``): with the gate records it says which rows belong to a
+    run a gate blocked. Without it a gate record names its run only.
 
     ``pipeline_trace`` is a Nextflow ``trace.txt`` of an earlier pipeline run on the
     cohort: the end-to-end cost view reads the pipeline's convert and merge-and-pyramid
@@ -1320,18 +1868,24 @@ def score(
     # off the seams: tables of their own, never merged into the ones above
     non_cells = [r for rows in done for r in rows[3]]
     non_truth = [r for rows in done for r in rows[4]]
-    non_summary = summarise_nonband(non_cells)
     non_lost = nonband_missing(
         [r for rows in done for r in rows[5]], jobs, owners, variants_of
     )
-    by_family = truth.by_family(truth_rows)
-    summary = summarise_cells(cells, primary)
+    launch = read_gates(gates)
+    blocked = blocked_rows(launch, run_variants)
+    non_summary = summarise_nonband(non_cells, primary, blocked)
+    by_family = truth_by_family(truth_rows)
+    summary = summarise_cells(cells, primary, blocked)
+    common = common_block(cells, primary, blocked)
+    excluded = excluded_rounds(cells)
     paired = paired_vs_primary(cells)
+    paired_summary = summarise_paired(paired)
     fails = failures(res)  # every run, the frozen known-truth cases included
     # cost is read on the cohort: the frozen known-truth cases are left out of it
     frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
     res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
     res_summary = summarise_resources(res)
+    cost_summary = summarise_cost(res_summary, primary)
     confined = cost.cores_confined(res)
     cost_header = cost.header_lines(res)
     steps, source = None, ""
@@ -1346,8 +1900,11 @@ def score(
         label = pipeline_trace_label or trace_path.resolve().parent.name
         source = f"{label} ({trace_path})"
     e2e = cost.end_to_end(res, steps, source)
-    e2e_summary = cost.summarise(e2e)
-    launch = read_gates(gates)
+    e2e_summary = cost.summarise(
+        e2e,
+        {ds: got[0] for ds, got in common_patients(res_summary, primary).items()},
+        {(r["dataset"], r["method"]): r["n_patients"] for r in cost_summary},
+    )
 
     tables = Path(out) / ("tables_dev" if dev else "tables")
     tables.mkdir(parents=True, exist_ok=True)
@@ -1368,6 +1925,11 @@ def score(
         "cost_end_to_end",
         "cost_end_to_end_summary",
         "launch",
+        "common_block",
+        "paired_summary",
+        "excluded_rounds",
+        "cost_summary",
+        "failure_log",
         *tissue.TABLES,
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
@@ -1377,6 +1939,10 @@ def score(
     write_csv(tables / "failures.csv", fails)
     write_csv(tables / "resources.csv", res)
     write_csv(tables / "summary_resources.csv", res_summary)
+    write_csv(tables / "cost_summary.csv", cost_summary)
+    write_csv(tables / "common_block.csv", common)
+    write_csv(tables / "paired_summary.csv", paired_summary)
+    write_csv(tables / "excluded_rounds.csv", excluded)
     write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
     write_csv(tables / "cost_end_to_end_summary.csv", e2e_summary)
     write_csv(tables / "launch.csv", launch)
@@ -1385,7 +1951,7 @@ def score(
     write_csv(tables / "nonband_cells.csv", non_cells)
     write_csv(tables / "nonband_summary.csv", non_summary)
     write_csv(tables / "nonband_truth.csv", non_truth)
-    write_csv(tables / "nonband_truth_by_family.csv", truth.by_family(non_truth))
+    write_csv(tables / "nonband_truth_by_family.csv", truth_by_family(non_truth))
     write_csv(tables / "nonband_missing.csv", non_lost)
     (tables / "dropped.csv").unlink(missing_ok=True)  # never a stale list
     write_csv(tables / "dropped.csv", dropped_rows)
@@ -1397,6 +1963,19 @@ def score(
     )
     for name, rows in tis.items():
         write_csv(tables / f"{name}.csv", rows)
+    events = failure_log.build(
+        out,
+        [(j[1], j[2]) for j in jobs],
+        launch,
+        run_variants,
+        tis.get("tissue_missing", ()),
+        of_this_submission,
+    )
+    # always written, a header alone when nothing failed: an absent log is not "none"
+    with open(tables / "failure_log.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(failure_log.COLUMNS), restval="")
+        w.writeheader()
+        w.writerows(events)
     known = truth_header(list(hashes), patients, prepared, folded, reseeded)
     text = summary_markdown(
         summary,
@@ -1413,6 +1992,11 @@ def score(
         (e2e, e2e_summary, source),
         launch,
         cost_header,
+        common,
+        paired_summary,
+        excluded,
+        events,
+        cost_summary,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -1421,6 +2005,11 @@ def score(
         "cells": cells,
         "summary_cells": summary,
         "paired_vs_primary": paired,
+        "paired_summary": paired_summary,
+        "common_block": common,
+        "excluded_rounds": excluded,
+        "cost_summary": cost_summary,
+        "failure_log": events,
         "failures": fails,
         "resources": res,
         "summary_resources": res_summary,

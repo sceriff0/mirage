@@ -598,9 +598,24 @@ def end_to_end(res_rows, steps=None, source=""):
     return out
 
 
-def summarise(rows):
+def _median(numbers):
+    numbers = sorted(numbers)
+    if not numbers:
+        return math.nan
+    mid = len(numbers) // 2
+    return numbers[mid] if len(numbers) % 2 else (numbers[mid - 1] + numbers[mid]) / 2.0
+
+
+def summarise(rows, common=None, cohort=None):
     """Per (dataset, result): the median over patients of every step, how many patients
-    have each, and the texts the patients share."""
+    have each, and the texts the patients share.
+
+    The medians are over the patients for which this result WROTE AN IMAGE
+    (``n_patients``, of the ``n_patients_cohort`` it was run on; ``cohort`` maps
+    (dataset, result) to that count): survivors, so a result that fails on the largest
+    patients looks cheaper. ``common`` maps a dataset to the patients every compared
+    row completed (``score.common_patients``); ``*_common`` are the same medians on
+    those patients only (``n_patients_common``), the same ones for every result."""
     out = []
     for ds, method in dict.fromkeys((r["dataset"], r["method"]) for r in rows):
         mine = [r for r in rows if (r["dataset"], r["method"]) == (ds, method)]
@@ -610,7 +625,18 @@ def summarise(rows):
             "device": "; ".join(sorted({r["device"] for r in mine})),
             "gpu_model": "; ".join(sorted({r["gpu_model"] for r in mine} - {""})),
             "n_patients": len(mine),
+            "n_patients_cohort": (cohort or {}).get((ds, method), len(mine)),
         }
+        shared = (
+            [r for r in mine if r["group"] in common.get(ds, ())]
+            if common is not None
+            else []
+        )
+        rec["n_patients_common"] = len(shared) if common is not None else math.nan
+        for key in ("estimate_s", "write_s", "total_s"):
+            rec[f"{key}_common"] = _median(
+                [r[key] for r in shared if _is_number(r[key])]
+            )
         for key in (
             "method_convert_s",
             "estimate_s",
@@ -646,12 +672,17 @@ SUMMARY_COLUMNS = (
     "device",
     "gpu_model",
     "n_patients",
+    "n_patients_cohort",
+    "n_patients_common",
     "method_convert_s",
     "estimate_s",
+    "estimate_s_common",
     "write_s",
+    "write_s_common",
     "pipeline_convert_s",
     "pipeline_merge_s",
     "total_s",
+    "total_s_common",
     "n_total",
     "written",
 )
@@ -682,7 +713,13 @@ def markdown(rows, summary, source, table):
         "writers, so the outputs differ: `written` says what each leaves on disk. "
         f"`{NOT_SEPARABLE}` means the package does that step inside its registration "
         "call (it is in `estimate_s`); no number is guessed. `method_convert_s`, "
-        "`estimate_s` and `write_s` were measured in this benchmark at 4 CPUs.\n",
+        "`estimate_s` and `write_s` were measured in this benchmark at 4 CPUs "
+        "(DeeperHistReg's GPU rows also had one GPU: column `device`). Each median is "
+        "over the `n_patients` for which that result wrote an image, of the "
+        "`n_patients_cohort` it was run on: survivors only, so a result that fails "
+        "on the largest patients looks cheaper. The `*_common` columns are the same "
+        "medians on the `n_patients_common` patients every compared row completed: "
+        "only those are on the same patients for every result.\n",
     ]
     if source:
         parts.append(

@@ -468,6 +468,12 @@ def _run(
                         "scheduler_state": sched.get("state"),
                         "scheduler_elapsed_s": sched.get("elapsed_s"),
                         "scheduler_cpu_s": sched.get("cpu_s"),
+                        # for the failure log: what that attempt said of itself
+                        "error": str(old.get("error") or "")[:400],
+                        "cause_from": old.get("cause_from") or "",
+                        "phase": old.get("phase") or "",
+                        "peak_rss_mb": res.get("peak_rss_mb"),
+                        "log_path": old.get("log_path") or "",
                     },
                 ]
             fail(case, variant, KILLED, "killed")

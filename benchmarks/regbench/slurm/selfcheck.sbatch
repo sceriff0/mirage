@@ -36,3 +36,11 @@ if [ "$attempt" -gt 1 ]; then
     fi
 fi
 regbench_py "$image" "${args[@]}"
+code=$?
+if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+    cat "$REGBENCH_END_FILE"
+else
+    # no record line: the selfcheck process died. Not evidence about the method.
+    echo "REGBENCH_END kind=selfcheck run=$name rung=$attempt status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+fi
+exit "$code"

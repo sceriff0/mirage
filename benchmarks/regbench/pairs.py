@@ -95,6 +95,8 @@ RECORD_KEYS = (
     "pair_fraction_null_max",
     "pair_fraction_excess",
     "displacement_readable",
+    "n_unmapped",
+    "unmapped_frac",
 )
 
 
@@ -248,6 +250,14 @@ def record(ref_native, mov_native, ref_in_frame, mov_in_frame, pixel_size_um):
     }
     rec.update(_both_pairings(a, b, radius, pixel_size_um))
     rec.update(within_curve(a, b, pixel_size_um))
+    # Cells the method's map sent nowhere (a non-finite centroid: outside the image it
+    # wrote). They stay in every denominator as unpaired cells, in both directions; the
+    # count is reported because pair fraction alone cannot show a loss on the LARGER set.
+    lost = sum(
+        int((~np.isfinite(_area_cent(side)[1]).all(axis=1)).sum()) for side in (a, b)
+    )
+    rec["n_unmapped"] = lost
+    rec["unmapped_frac"] = lost / (n_r + n_m) if n_r + n_m else math.nan
 
     per_direction = []
     for k in range(NULL_DIRECTIONS):

@@ -595,6 +595,7 @@ def _run(a):
             n = ladder.mark_lost(heads, host["attempt"] - 1, host["submission"])
             print(f"{a.dataset}/{ids}: {n} result(s) recorded as infrastructure")
         if not go:
+            _unit_end(a, picked)
             return 0
     opts = parse_opts(a.opt)
     rest = (opts, a.label, a.work, a.keep_work)
@@ -610,6 +611,7 @@ def _run(a):
             f"{a.dataset}/{case_id} [{a.label or a.method}]: "
             f"{', '.join(variants) if variants else 'FAILED'}"
         )
+    _unit_end(a, picked)
     # A failure is recorded in run.json and scored at the unregistered pose; the exit code
     # says whether the method produced anything at all.
     if not any(done.values()):
@@ -617,6 +619,31 @@ def _run(a):
     if a.realcheck and _realcheck_flagged(a, picked, done):
         return 3
     return 0
+
+
+def _unit_end(a, picked):
+    """The task's end line (``failure_log.end_line``): what the unit's records say now,
+    in the failure log's words."""
+    import json
+
+    from . import failure_log, ladder
+
+    records = []
+    for path in ladder.unit_paths(a.out, a.method, a.label, picked):
+        try:
+            records.append(json.loads(open(path).read()))
+        except (OSError, ValueError):
+            records.append({})
+    status, cause = failure_log.unit_end(records)
+    failure_log.emit_end(
+        "run",
+        status,
+        cause,
+        run=a.label or a.method,
+        dataset=a.dataset,
+        unit="+".join(c.case_id for c in picked),
+        rung=next((r.get("attempt") for r in records if r), "-"),
+    )
 
 
 def _realcheck_flagged(a, picked, done):
@@ -659,6 +686,7 @@ def _selfcheck(a):
                 status = json.loads(path.read_text()).get("status")
             except (OSError, ValueError):
                 status = selfcheck.NOT_CHECKED
+            _selfcheck_end(a, status if status in selfcheck.EXIT_CODE else "crashed")
             return selfcheck.EXIT_CODE.get(
                 status, selfcheck.EXIT_CODE[selfcheck.CRASHED]
             )
@@ -677,7 +705,19 @@ def _selfcheck(a):
     for variant, status in record["variants"].items():
         print(f"selfcheck [{variant}]: {status}")
     print(f"selfcheck [{a.label or a.method}]: {record['status']}")
+    _selfcheck_end(a, record["status"])
     return selfcheck.EXIT_CODE[record["status"]]
+
+
+def _selfcheck_end(a, status):
+    from . import failure_log
+
+    failure_log.emit_end(
+        "selfcheck",
+        status,
+        failure_log.SELFCHECK_CAUSE.get(status, ""),
+        run=a.label or a.method,
+    )
 
 
 def _list(a):
@@ -731,7 +771,9 @@ def split_datasets(names):
 
 
 def _write_gate(path, run, status, dropped, blocked, reference):
-    """One line a shell can read: run, status, rows to drop, blocked, reference."""
+    """One line a shell can read: run, status, rows to drop, blocked, reference, and
+    the log of the gate job that wrote it (for the failure log)."""
+    import os
     from pathlib import Path
 
     from . import variants
@@ -747,6 +789,7 @@ def _write_gate(path, run, status, dropped, blocked, reference):
                 ",".join(dropped) or variants.NONE,
                 "1" if blocked else "0",
                 reference or variants.NONE,
+                os.environ.get("REGBENCH_LOG") or variants.NONE,
             ]
         )
         + "\n"
@@ -809,6 +852,17 @@ def _gate(a):
     blocked = status in selfcheck.BLOCKING and not a.allow_unchecked
     print(f"{status}\t{','.join(dropped) or variants.NONE}")
     _write_gate(a.record, run, status, dropped, blocked, reference)
+    from . import failure_log
+
+    failure_log.emit_end(
+        "gate",
+        "blocked" if blocked else "may_start",
+        "gate_blocked" if blocked else "",
+        run=run,
+        gate="selfcheck",
+        verdict=status,
+        dropped=",".join(dropped) or "-",
+    )
     if status in selfcheck.BLOCKING and a.allow_unchecked:
         print(f"gate: {run} is allowed to start unchecked ({status})")
         return 0
@@ -860,6 +914,16 @@ def _realgate(a):
         + (f"\tflagged: {','.join(flagged)}" if flagged else "")
     )
     _write_gate(a.record, a.name, f"realcheck_{status}", [], blocked, "")
+    from . import failure_log
+
+    failure_log.emit_end(
+        "gate",
+        "blocked" if blocked else "may_start",
+        "gate_blocked" if blocked else ("realcheck_flagged" if flagged else ""),
+        run=a.name,
+        gate="realcheck",
+        verdict=status,
+    )
     return 1 if blocked else 0
 
 
@@ -981,5 +1045,9 @@ def main(argv=None):
         pipeline_trace_label=a.pipeline_trace_label,
         pipeline_processes=(a.pipeline_convert_process, a.pipeline_merge_process),
         gates=a.gates,
+        run_variants=variants.run_variants(),
     )
+    from . import failure_log
+
+    failure_log.emit_end("score", "ok")
     return 0

@@ -330,12 +330,14 @@ def test_a_failed_method_is_scored_at_the_initial_pose(
     # the three cases it was never run on are rows too
     never = _row(res["cells"], "smooth", "stare")
     assert never["problem"] == "not run" and never["cause"] == "not_run"
-    (agg,) = [
+    # synthetic cells are summarised per family, never pooled: one row per family
+    agg = [
         a
         for a in res["summary_cells"]
         if a["method"] == "stare" and a["subset"] == "all"
     ]
-    assert agg["n_cases"] == 4 and agg["n_ok"] == 0
+    assert sum(a["n_cases"] for a in agg) == 4 and not any(a["n_ok"] for a in agg)
+    assert len({a["family"] for a in agg}) == len(agg)
     assert not [a for a in res["summary_cells"] if a["subset"] == "common"]
     (f,) = [f for f in res["failures"] if f["method"] == "stare"]
     assert f["launches"] == 1 and f["launches_failed_exception"] == 1
@@ -842,7 +844,9 @@ def test_summary_says_descriptive_under_six_patients(tmp_path):
     shutil.rmtree(root / "multiplex" / "P5_r1")
     score(root, out, ["multiplex"])
     text = (out / "tables" / "summary.md").read_text()
-    assert f"5 patient(s): {DESCRIPTIVE}" in text
+    assert (
+        f"The independent unit is the patient. At most 5 unit(s): {DESCRIPTIVE}" in text
+    )
 
 
 # ── cost, per variant ────────────────────────────────────────────────────────

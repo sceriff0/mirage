@@ -254,6 +254,9 @@ def host_info():
         # the submission this launch belongs to (the cohort launcher's id); "" outside
         "submission": os.environ.get("REGBENCH_SUBMISSION") or "",
         "time_limit": os.environ.get("REGBENCH_TIME_LIMIT") or "",
+        # the scheduler's log of this task (set by the batch scripts): where a human
+        # reads what the failure log's row is about; "" outside the launcher
+        "log_path": os.environ.get("REGBENCH_LOG") or "",
         "mem_requested_gb": _mem_requested_gb(),
         # the scheduler's job id, or this process when there is no scheduler
         "launch_id": job or f"pid{os.getpid()}",

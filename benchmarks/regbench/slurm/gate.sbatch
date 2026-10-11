@@ -32,3 +32,11 @@ else
 fi
 [ "$allowed" = 1 ] && args+=(--allow-unchecked)
 regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
+code=$?
+# a gate that could not run is the benchmark's failure, and the run stays blocked
+if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+    cat "$REGBENCH_END_FILE"
+else
+    echo "REGBENCH_END kind=gate run=$run gate=$kind status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+fi
+exit "$code"

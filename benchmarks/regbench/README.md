@@ -426,6 +426,18 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
 - **Pairing:** linear sum assignment; mutual nearest neighbour beside it (`_mnn`).
 - **Per case and variant:** pair fraction, matched Dice, IoU p50, share of pairs with
   IoU >= 0.5, centroid displacement in µm (p50, p90).
+- **Pair fraction is pairs over the smaller NATIVE count, in both directions.** A cell the
+  method's map sends nowhere (outside the image it wrote: a non-finite centroid) stays in
+  the denominator as an unpaired cell whether the method maps the moving cells
+  (`mov_to_ref`) or the reference cells (`ref_to_mov`): the same lost cells give the same
+  number (`test_score_units.py::test_cells_mapped_nowhere_count_the_same_in_both_directions`,
+  with equal and unequal counts). The review's reading that the two directions are
+  treated differently was checked and is NOT what the code does; what is true, in both
+  directions alike, is that losing only cells of the LARGER set (cells that had no
+  partner to lose) does not lower pair fraction. Since 2026-10-11 every row therefore
+  also reports `n_unmapped` and `unmapped_frac` (cells mapped nowhere, over all cells of
+  both sides), the summary has `unmapped_frac_max`, and `within_*um` (below) does object.
+  Nothing changed in `pair_fraction` itself.
 - **Null (`_null`):** the same with one set shifted four nuclear radii, averaged over eight
   directions, with the minimum and maximum. The null depends strongly on density: every
   case reports `coverage` (nuclear area over the area of the 16-radius bins that hold
@@ -443,12 +455,61 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
 - **Reading rule, fixed before any cohort run:** displacement is censored at the gate and
   conditional on being paired, so it is not used to rank methods. It is published for every
   case with the `displacement_readable` flag (pair fraction exceeds the null's maximum by at
-  least 0.10) and summarised over the readable cases only, with their count. Dice is ranked
-  only where pair fraction clears the null's maximum (`dice_matched_ranked`).
+  least 0.10). Dice is read only where pair fraction clears the null's maximum.
+- **Both are read on a subset of cases, and the subset is the SAME for every row.**
+  `dice_matched_shared` and `displacement_um_p50_shared` are over the cases where EVERY
+  compared row qualifies (below: the primary rows that ran), with `n_dice_shared` and
+  `n_readable_shared`: these are the numbers that may be set beside another row's. The
+  per-row versions (`dice_matched_ranked` with `n_dice_ranked`, `displacement_um_p50` with
+  `n_readable`: the cases where that row alone qualifies) stay beside them and are NOT
+  comparable between rows: a method that fails its hard cases is read there on its easy
+  ones. A case with no pair has no Dice; it cannot enter a median and is counted
+  (`<headline>_n_nan`, "dice NaN cases" in `summary.md`) instead of vanishing.
 - **No pixel size:** µm columns and the curve are NaN, not zero.
 
 A failed, killed or never-started run is a row scored at the unregistered pose
 (`imputed_initial`), with `problem` and `cause` filled; never a gap.
+
+**A round lost for a cause that is not the method's is not imputed** (`infrastructure`: the
+scheduler lost the attempt; `benchmark_oom`: the benchmark's own step ran out of memory).
+Scoring it at the unregistered pose would charge the method for the cluster, and dropping
+it silently would hide it, so: it is left out of that method's summaries, differences and
+known-truth rows (`n_excluded_not_method`, "left out" in `summary.md`), it is in no common
+block for any method (it is unregistered), it is named at the top of `summary.md` and in
+`excluded_rounds.csv`, and its row stays in `cells.csv` with `excluded_from_summaries`.
+This is the coordinator's decision pending the owner's; `score.NOT_THE_METHOD_ROUNDS`
+(`"exclude"` | `"impute"`) is the one switch.
+
+**The unit.** `n_patients`, the "under six" line and every across-unit statistic count the
+independent unit (`score.UNIT_IS`, column `unit` of `cells.csv`), not the case's group:
+
+| dataset | one unit is | so |
+|---|---|---|
+| `multiplex` | a patient | rounds of a patient are reduced to their median first |
+| `synthetic` | a generated scene: ONE per deformation family (its two poses are the same scene) | every family has one unit: always descriptive, never ranked |
+| `semisynth` (dormant) | the real patient the window was cut from | its windows, families and poses are one unit, however many cases they make |
+
+On the two known-truth datasets the cell summaries are **per deformation family** and never
+pooled over families, as the known-truth table already was: a family outside a method's
+model (and ASHLAR's `rot` rows) shows in its own row. Before 2026-10-11 a synthetic family
+counted as a patient (seven "patients", so the "under six" line never printed) and one
+real patient's 28 semi-synthetic cases counted as 14.
+
+**The common block** (`subset=common`, `common_block.csv`) is the cases every COMPARED row
+registered. A row is compared when it is a primary row (any registration row when no
+primary list is given) that ran in what is being scored: no gate blocked its run (the
+launcher's gate records, `score --gates`) and at least one of its cases has a record of
+this submission. A primary run that was blocked, or never launched (`submit_cohort.sh
+--runs "stare ashlar"`), is named with its reason and is not allowed to empty the block
+for everyone, which it did before. The block is always printed, even when it is empty.
+
+**Uncertainty** (`paired_summary.csv`, "Differences against `stare`" in `summary.md`): for
+each row, the median over units of its paired difference against the `stare` row (each
+unit's rounds reduced to their median on the cases both rows have), with a 95 % percentile
+bootstrap interval over UNITS (2000 resamples, seed 20261011; a unit's rounds are never
+split). With a handful of units this interval is coarse and too narrow, and under two
+units there is none. It describes the spread between units. No p-value is computed and no
+ranking is derived; under six units the line "descriptive; no ranking is claimed" stays.
 
 It is self-consistency on the registration channel: there is no held-out structure and no
 landmarks on real slides.
@@ -636,32 +697,40 @@ method's fields is post hoc and names that method.
 
 | file | one row per | what |
 |---|---|---|
-| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`. Every row scores ALL nuclei |
+| `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`. Every row scores ALL nuclei |
 | `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
-| `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept |
+| `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept and `within_ceiling`: what the mask alone lets `within_*um` reach for any method |
 | `nonband_truth.csv`, `nonband_truth_by_family.csv` | as `truth.csv`, `truth_by_family.csv` | the known-truth error on the probes a moving-side mask leaves, with `owner, n_probes_all` |
 | `dropped.csv` | variant | written only when `score --drop` names rows: `variant, reason, had_results`. Rows whose own selfcheck failed without blocking their method; they are in no other table |
 | `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
-| `summary_cells.csv` | dataset x variant x subset | per patient the median over rounds, then median, min, max over patients; `n_patients, n_cases, n_ok`; the minimum over cases; each headline beside its null; Dice over the cases that clear the null; displacement over the readable cases with `n_readable`. `subset=common` repeats it on the cases every primary variant registered |
-| `paired_vs_primary.csv` | patient x variant | the difference of each headline against the `stare` row |
+| `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`. `subset=common` repeats it on the cases every compared row registered |
+| `common_block.csv` | dataset x primary row | `in_common_block`, `why_not`, `n_cases_common`, `n_cases` |
+| `paired_vs_primary.csv` | unit x variant (x family) | the difference of each headline against the `stare` row, on the cases both have |
+| `paired_summary.csv` | dataset x family x variant | the median over units of each difference with its bootstrap interval (`d_<headline>_med, _lo, _hi`), `n_patients` |
+| `excluded_rounds.csv` | lost round | written only when a round was lost for a cause that is not the method's: `dataset, method, case_id, group, cause` |
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
+| `failure_log.csv` | failed or lost EVENT | always written (a header alone when nothing failed). See "The failure log" |
 | `resources.csv` | case x variant | the cost recorded at that variant's yield |
-| `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; peaks are maxima, never divided by rounds |
+| `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
+| `cost_summary.csv` | dataset x variant | the median over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`) and over the patients every compared row completed (`*_common_med`, `n_patients_common`) |
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
 | `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv`, `tissue_dose.csv`, `tissue_dose_summary.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
 | `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart: `method_convert_s`, `estimate_s`, `write_s`, `benchmark_copy_s`, `pipeline_convert_s`, `pipeline_merge_s`, `total_s`, the peaks, `device`, `gpu_model`, `written`, and where each imported number came from. Secondary; see "Cost" |
-| `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step, and how many patients have a total |
-| `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference`) |
-| `summary.md` | | the summary, with the line "descriptive; no ranking is claimed" under six patients, and the known-truth table |
+| `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step, how many patients have a total, `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
+| `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
+| `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" under six units, the compared rows and who is not among them, the paired differences with their interval, the known-truth table, the failure log's section, cost on survivors and on the common patients |
 
 ### Off the seams
 
 A method that builds its image from tiles or blocks draws some nuclei across a join, and
 its point map is not exactly its image there. Such a method (`score.SEAM_OWNERS`: `ashlar`,
 `palom`, `palom_b1024`) writes a **seam mask** with its primary row:
-one bool per nucleus, from its own geometry alone (ASHLAR: the tile grid and the positions
-it accepted; PALOM: its block grid and the shifts it accepted; never any method's scores).
+one bool per nucleus, from where it put its tiles or blocks and from no score (ASHLAR: the
+tile grid and the positions it accepted; PALOM: its block grid and the shifts it accepted).
+The mask is therefore NOT fixed before the run: it depends on the owner's own outcome on
+that case (which positions and shifts it accepted), though on no other method's and on no
+score.
 ASHLAR's is on the moving nuclei (`info["band_mov"]`, `band` in `warped.npz`); PALOM's is
 on the reference nuclei (`info["band_ref"]`, `band_ref`).
 
@@ -696,10 +765,86 @@ failed keeps its row, at the unregistered pose.
   prints how many such cases there are (`nonband_missing.csv`).
 - The old name `:nonband`, and a second row only for the method that has the band, are
   gone.
+- **The mask caps `within_*um` for every row of the block.** The curve is the smaller of
+  the two one-sided shares, and a mask that removes nuclei on one side only (ASHLAR's:
+  moving nuclei; PALOM's: reference nuclei) leaves at most (fewer kept) / (more kept) of
+  the other side with a partner, one partner per nucleus. `nonband_summary.csv:
+  within_ceiling` is that ratio per owner, and the block's header prints it: with a
+  quarter of the moving nuclei removed no method can exceed about 0.75 there. Pair
+  fraction is over the smaller kept set and has no such cap. Read an off-seam
+  `within_*um` against its ceiling and against the `truth` row, never against a
+  full-slide number.
 
 The cases of the frozen known-truth spec are left out of `resources.csv` and
 `summary_resources.csv` (cost is read on the cohort); their failures are still counted in
 `failures.csv`.
+
+## The failure log (`failure_log.csv`): every event, and whose it is
+
+`failures.csv` counts. `failure_log.csv` (ruling R3.17, `failure_log.py`) is what the
+counts are made of: **one row per failed or lost event**, written by every `score` (a
+header alone when nothing failed).
+
+- every failed attempt of every unit: the attempt a result ended with, and every earlier
+  attempt of the memory ladder kept in `run.json: previous_attempts`, even when the unit
+  ended `ok` at a higher rung;
+- every run a gate blocked (`gate_blocked`) and every row a gate dropped (`dropped_row`);
+- every selfcheck attempt that did not end `ok` (`selfcheck_inconsistent`,
+  `selfcheck_not_checked`, `selfcheck_crashed`) and every flagged realcheck
+  (`realcheck_flagged`);
+- every written image the tissue block could not score because of an error
+  (`tissue_missing`), every record the scorer could not parse (`unreadable_record`), and,
+  folded into one row per result name, the results nobody ran (`not_run`).
+
+A per-patient launch that fails loses every round at once: one event per result name, the
+rounds joined in `case_id`.
+
+Columns: `dataset, run, variant, unit, group, case_id, attempt, rung_gb, retry, submission,
+launch_id, stage` (`selfcheck | gate | realcheck | register | writer | benchmark_points |
+tissue | score`), `cause, whose, cause_from` (how the cause was decided: the attempt's own
+record, the scheduler's state, a gate's record), `scheduler_state, exit_code, elapsed_s,
+peak_rss_gb, message` (the first line of the error), `log_path` (the scheduler's log of
+that task), `climbed_to` (the next rung, "the same rung again", or `-` when the unit ended
+there), `final_outcome_of_unit` (`ok at rung N | failed | lost | blocked`).
+
+**`whose` is total and is one table** (`failure_log.WHOSE`; a test walks every cause the
+code can write against it, so a new cause cannot be added unclassified):
+
+| whose | causes | means |
+|---|---|---|
+| `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting says the node did it |
+| `benchmark` | `benchmark_oom`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
+| `infrastructure` | `infrastructure`, `selfcheck_lost` | the scheduler or the node lost the attempt |
+| `launcher` | `gate_blocked`, `dropped_row`, `not_run` | a gate kept the run from starting, a row was dropped, the unit was never submitted |
+
+`summary.md` has a "Failures: every event, and whose it is" section: the count of events
+per run, stage, cause and whose; then every unit whose FINAL outcome is not ok, with its
+cause, whose, message and log path; and a bold line when a unit ended for a reason that
+is not the method's.
+
+**Where the log path comes from.** Every batch script sources `slurm/env.sh`, which
+derives the task's own log name from the scheduler's variables by the launcher's pattern
+(`$REGBENCH_OUT/logs/%x-%A_%a.log` for an array task, `%x-%j.log` otherwise) and exports
+it as `REGBENCH_LOG`. The driver writes it into `run.json` (`log_path`, and into each
+`previous_attempts` entry with that attempt's error text, phase and peak), the selfcheck
+into `selfcheck.json` (`log_path`, and per attempt with `why`), and the gate into its
+record (a sixth tab-separated field). It was not checked on a cluster that `%x` equals
+`SLURM_JOB_NAME` for these jobs ("Not verified").
+
+**The same words in the logs.** Every batch script ends with one machine-readable line:
+
+```
+REGBENCH_END kind=run run=palom dataset=multiplex unit=P03_r2 rung=2 status=failed cause=writer_oom whose=method log=/.../rb-palom-multiplex-r2-812_4.log
+```
+
+`kind` is `run`, `selfcheck`, `gate`, `tissue` or `score`; `status` is `ok`, `failed`
+(the method's), `lost` (anything else), `blocked`, `may_start`, a selfcheck status, or
+`no_end_line`. The Python step writes the line; the script repeats it as the log's last
+line, and writes a fallback itself (`status=no_end_line cause=killed whose=method
+exit=<code>`) when the step died before it could. `grep -h REGBENCH_END
+$REGBENCH_OUT/logs/*.log` is the same classification as the table. Not recorded:
+`exit_code` (the scheduler's accounting is asked for state, elapsed and CPU time only),
+and the cost of a selfcheck attempt.
 
 ## Tissue-level agreement of the written images (secondary)
 
@@ -845,6 +990,20 @@ evaluation pixel, a 50000 px slide 4.06 µm.
 Per round and per patient: registration wall time, CPU-hours of the whole process tree,
 peak memory, GPU-hours with the device named, and total time to the registered image
 (`register_s + write_s`). No single column is "the" cost.
+
+- **A patient's writer time and time-to-image are the patient's totals, for both kinds of
+  unit.** A per-patient method records each round's SHARE of one writer call (ASHLAR:
+  the call divided by the rounds; VALIS 1.2.0: by the slides written), so the patient's
+  `write_s` is the sum of the shares and `total_to_image_s` is the launch's registration
+  time plus that sum. Until 2026-10-11 `total_to_image_s` of a per-patient launch was the
+  largest single round, i.e. the registration plus ONE share: with five rounds, four
+  fifths of the writer were missing. `resources.csv` keeps the per-round share.
+- **Survivors.** A cost exists only for what completed. `summary.md` and `cost_summary.csv`
+  therefore give each method's median cost twice: over the patients that method
+  completed (every round registered; `n_patients_complete` of `n_patients`), and over
+  the patients EVERY compared row completed (`n_patients_common`). Only the second is on
+  the same patients for every method; in the first a method that fails on the largest
+  patients looks cheaper. The end-to-end table has the same pair (`*_common`).
 
 - **The clock and the peak are per variant.** Each `run.json` holds the cumulative time and
   the process-tree RSS peak up to its own yield. Warping the benchmark's points and a
@@ -1172,6 +1331,11 @@ and array sections). None of the following was observed:
   scorer would be cancelled too. Three dummy jobs show it:
   `a=$(sbatch --parsable --wrap 'exit 1'); b=$(sbatch --parsable --dependency=afterok:$a --kill-on-invalid-dep=yes --wrap true); sbatch --dependency=afterany:$b --kill-on-invalid-dep=yes --wrap 'echo ran'`:
   the second must end `CANCELLED` and the third must run.
+- **The log names.** `slurm/env.sh` rebuilds each task's log path as
+  `$REGBENCH_OUT/logs/$SLURM_JOB_NAME-<job or array_task>.log`, assuming `%x`, `%A_%a` and
+  `%j` expand to `SLURM_JOB_NAME`, `SLURM_ARRAY_JOB_ID_SLURM_ARRAY_TASK_ID` and
+  `SLURM_JOB_ID` (sbatch manual, filename patterns `[MEMORY]`). After the first job:
+  `tail -n 1` of any task log must be a `REGBENCH_END` line whose `log=` is that file.
 - **Cores are confined** (`ConstrainCores`): `sbatch -c 4 --wrap 'python3 -c "import os; print(len(os.sched_getaffinity(0)), os.cpu_count())"'` should print `4` and the node's
   count. The cost tables report what each run saw either way.
 - **Memory is enforced through cgroups and a killed job is `OUT_OF_MEMORY` in `sacct`**,

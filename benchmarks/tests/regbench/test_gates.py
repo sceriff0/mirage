@@ -40,15 +40,17 @@ def _gate(tmp_path, name, *extra, **statuses):
 # ── the selfcheck gate ────────────────────────────────────────────────────────
 def test_the_record_is_one_line_a_shell_can_read(tmp_path, capsys):
     code, line = _gate(tmp_path, "stare", stare_rigid="ok", stare="ok")
-    assert (code, line) == (0, ["stare", "ok", "-", "0", "-"])
+    assert (code, line) == (0, ["stare", "ok", "-", "0", "-", "-"])
     assert all(line)  # no empty field: a tab-separated `read` merges them
+    # the sixth field is the gate job's own log, for the failure log ("-" outside a job)
+    assert len(line) == 6
     code, line = _gate(tmp_path, "stare", stare_rigid="ok", stare="inconsistent")
-    assert (code, line) == (1, ["stare", "inconsistent", "-", "1", "-"])
+    assert (code, line) == (1, ["stare", "inconsistent", "-", "1", "-", "-"])
 
 
 def test_a_dropped_row_does_not_block_and_is_recorded(tmp_path):
     code, line = _gate(tmp_path, HR, **{HR: "inconsistent", f"{HR}_asdrawn": "ok"})
-    assert (code, line) == (0, [HR, "ok", HR, "0", "-"])
+    assert (code, line) == (0, [HR, "ok", HR, "0", "-", "-"])
 
 
 def test_a_selfcheck_that_left_no_record_blocks_the_run(tmp_path, capsys):
@@ -60,7 +62,7 @@ def test_a_selfcheck_that_left_no_record_blocks_the_run(tmp_path, capsys):
 
 def test_an_allowed_run_starts_and_its_verdict_is_still_recorded(tmp_path):
     code, line = _gate(tmp_path, "palom", "--allow-unchecked", palom_affine="crashed")
-    assert code == 0 and line == ["palom", "crashed", "-", "0", "-"]
+    assert code == 0 and line == ["palom", "crashed", "-", "0", "-", "-"]
 
 
 def test_a_run_behind_another_runs_selfcheck_is_recorded_under_its_own_name(tmp_path):
@@ -105,7 +107,7 @@ def test_the_reference_comparison_is_recorded_beside_the_status(tmp_path):
     argv = ["gate", "--name", "ashlar", "--selfcheck", str(rec), "--record", str(out)]
     assert cli.main(argv) == 1
     assert out.read_text().rstrip("\n").split("\t") == [
-        "ashlar", "inconsistent", "-", "1", "inconsistent",
+        "ashlar", "inconsistent", "-", "1", "inconsistent", "-",
     ]  # fmt: skip
 
 

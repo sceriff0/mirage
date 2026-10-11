@@ -722,7 +722,10 @@ def gate(capsys, tmp_path, name, rec):
     path = tmp_path / f"{name}.json"
     path.write_text(json.dumps(rec))
     code = cli.main(["gate", "--name", name, "--selfcheck", str(path)])
-    return code, capsys.readouterr().out.rstrip("\n").split("\t")
+    # the first line is the gate's verdict; the task's REGBENCH_END line follows it
+    first, end = capsys.readouterr().out.rstrip("\n").split("\n")
+    assert end.startswith("REGBENCH_END kind=gate ")
+    return code, first.split("\t")
 
 
 def test_gate_prints_the_status_and_the_rows_to_drop(capsys, tmp_path):

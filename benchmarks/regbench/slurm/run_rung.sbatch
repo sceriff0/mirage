@@ -39,6 +39,7 @@ if [ -s "$gate" ]; then
 fi
 if [ "$blocked" != 0 ]; then
     echo "$name: the gate says $status and the run is not allowed to start unchecked; nothing run"
+    echo "REGBENCH_END kind=run run=$name dataset=$dataset unit=index_${SLURM_ARRAY_TASK_ID:-0} rung=$attempt status=blocked cause=gate_blocked whose=launcher log=${REGBENCH_LOG:--}"
     exit 0
 fi
 export REGBENCH_SELFCHECK_STATUS="$status"
@@ -73,6 +74,8 @@ if [ "$task" != first ]; then
     fi
 fi
 regbench_py "$image" "${args[@]}"
-echo "$name $dataset unit $index rung $attempt $task (${mem_gb} GB): python exited $?"
+code=$?
+echo "$name $dataset unit $index rung $attempt $task (${mem_gb} GB): python exited $code"
 rm -rf "$work"
+regbench_end run "$code" "run=$name" "dataset=$dataset" "unit=index_$index" "rung=$attempt"
 exit 0

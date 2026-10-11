@@ -290,6 +290,11 @@ def variants_of(run):
     return methods.variant_names(run.method, run.label)
 
 
+def run_variants():
+    """``{run name: [the result names it writes]}`` for every run, paused or not."""
+    return {run_name(r): list(variants_of(r)) for r in RUNS}
+
+
 def active_runs():
     """The runs that are launched and expected: ``RUNS`` without the paused ones."""
     return tuple(r for r in RUNS if r.active)

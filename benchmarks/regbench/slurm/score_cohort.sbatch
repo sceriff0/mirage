@@ -23,7 +23,9 @@ workers="${SLURM_CPUS_PER_TASK:-1}"
 if [ "$kind" = tissue ]; then
     regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
         --out "$REGBENCH_OUT" --workers "$workers"
-    echo "tissue: python exited $? (the scorer computes whatever is missing)"
+    code=$?
+    echo "tissue: python exited $code (the scorer computes whatever is missing)"
+    echo "REGBENCH_END kind=tissue status=$([ "$code" = 0 ] && echo ok || echo failed) cause=$([ "$code" = 0 ] && echo - || echo tissue_missing) whose=$([ "$code" = 0 ] && echo - || echo benchmark) exit=$code log=${REGBENCH_LOG:--}"
     exit 0
 fi
 
@@ -73,5 +75,10 @@ if [ -s "$jobs" ] && command -v sacct >/dev/null; then
         > "$REGBENCH_OUT/tables/slurm_accounting.psv" || true
     cp "$jobs" "$REGBENCH_OUT/tables/slurm_jobs.tsv"
     echo "scheduler accounting -> $REGBENCH_OUT/tables/slurm_accounting.psv"
+fi
+if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+    cat "$REGBENCH_END_FILE"
+else
+    echo "REGBENCH_END kind=score status=failed cause=unreadable_record whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
 fi
 exit "$code"
