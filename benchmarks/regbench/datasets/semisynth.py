@@ -40,7 +40,7 @@ deformation family; one more window makes the ``dev_*`` cases, the only ones met
 may be chosen on. Test and development windows never overlap.
 
 **The frozen known-truth cases** (``--truth``, ``regbench.truth``). ``truth_spec.json``
-fixes the windows per patient, the seven families with their amplitudes, and the two poses;
+fixes the windows per patient, the six families with their amplitudes, and the two poses;
 it names no patient. The patients are the cohort's own::
 
     prepare semisynth --truth --manifest rounds.csv [--patients 046,052 | --patients-file F]
@@ -57,7 +57,7 @@ same for ONE patient given by hand (tests); it declares a list of that one patie
 A patient here is (window, family): the untouched window is its reference, kept once, and
 each pose is one round. Variant ``same`` only. The window side, the noise and every
 amplitude come from the spec, not from the command line. Each cohort patient gives
-``windows_per_patient`` x families x poses cases (2 x 7 x 2 = 28) of ``n_px`` (8192) px.
+``windows_per_patient`` x families x poses cases (2 x 6 x 2 = 24) of ``n_px`` (8192) px.
 """
 
 from __future__ import annotations
@@ -335,7 +335,8 @@ def plan_truth(a, spec=None, n=None):
     key = zlib.crc32(patient.encode()) % 100_000
     jobs = []
     for i, (x, y, _) in enumerate(windows):
-        for j, family in enumerate(truth.family_names(spec)):
+        for family in truth.family_names(spec):
+            j = truth.family_index(spec, family)  # its own index, not its position
             group = f"{patient}_w{i}_{family}"
             for k, pose in enumerate(truth.pose_names(spec)):
                 job = {

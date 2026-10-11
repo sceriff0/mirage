@@ -159,12 +159,12 @@ def test_a_declared_subset_must_be_in_the_manifest(real_like, tmp_path):
     a = _truth_args(tmp_path / "c", manifest=str(rounds))
     jobs, record = semisynth.plan_truth_manifest(a, spec)
     assert record["patients"] == ["046", "052", "107"]
-    assert len(jobs) == 3 * 28 == 3 * semisynth.cases_per_patient(spec)
+    assert len(jobs) == 3 * 24 == 3 * semisynth.cases_per_patient(spec)
     assert record["manifest"] == str(rounds.resolve())
     assert record["manifest_sha256"] == hashlib.sha256(rounds.read_bytes()).hexdigest()
     assert record["truth_spec_sha256"] == spec["sha256"]
     assert record["sha256"] == truth.patients_hash(record)
-    name, job, origin, pa, noise, px = jobs[28]
+    name, job, origin, pa, noise, px = jobs[24]
     assert name == "052_w0_rigid_shift" and pa.name == "052" and px == 0.5
     assert pa.image == str(real_like) and pa.channel == 0 and noise > 0
     assert job["truth_spec_sha256"] == spec["sha256"]
@@ -174,13 +174,13 @@ def test_a_declared_subset_must_be_in_the_manifest(real_like, tmp_path):
     # a subset, in the manifest's order whatever order it is declared in
     sub = _truth_args(tmp_path / "c", manifest=str(rounds), patients="107,046")
     jobs_sub, rec_sub = semisynth.plan_truth_manifest(sub, spec)
-    assert rec_sub["patients"] == ["046", "107"] and len(jobs_sub) == 56
+    assert rec_sub["patients"] == ["046", "107"] and len(jobs_sub) == 48
     assert rec_sub["sha256"] != record["sha256"]
     # the same patient gets the same cases whoever else is in the list
-    assert jobs_sub[28][0] == "107_w0_rigid_shift"
+    assert jobs_sub[24][0] == "107_w0_rigid_shift"
     assert {
-        k: v for k, v in jobs_sub[28][1].items() if k != "truth_patients_sha256"
-    } == {k: v for k, v in jobs[56][1].items() if k != "truth_patients_sha256"}
+        k: v for k, v in jobs_sub[24][1].items() if k != "truth_patients_sha256"
+    } == {k: v for k, v in jobs[48][1].items() if k != "truth_patients_sha256"}
     listed = tmp_path / "ids.txt"
     listed.write_text("# the pilot\n107\n046, 052\n")
     by_file = _truth_args(
@@ -204,10 +204,10 @@ def test_a_declared_subset_must_be_in_the_manifest(real_like, tmp_path):
             spec,
         )
     # --index plans one patient only and reaches the same case
-    one = _truth_args(tmp_path / "c", manifest=str(rounds), index=57)
+    one = _truth_args(tmp_path / "c", manifest=str(rounds), index=49)
     (only,), rec_one = semisynth.plan_truth_manifest(one, spec)
-    assert only[0] == jobs[57][0] == "107_w0_rigid_rot" and rec_one == record
-    past = _truth_args(tmp_path / "c", manifest=str(rounds), index=84)
+    assert only[0] == jobs[49][0] == "107_w0_rigid_rot" and rec_one == record
+    past = _truth_args(tmp_path / "c", manifest=str(rounds), index=72)
     assert semisynth.plan_truth_manifest(past, spec)[0] == []
 
 
@@ -222,7 +222,7 @@ def test_the_patient_list_is_written_beside_the_cases(real_like, tmp_path, capsy
     spec = _small_spec()
     root = tmp_path / "cases"
     _prepared(real_like, root, rounds, spec, 0)
-    _prepared(real_like, root, rounds, spec, 29)  # another array task, the same list
+    _prepared(real_like, root, rounds, spec, 25)  # another array task, the same list
     record = json.loads((root / "semisynth" / truth.PATIENTS_FILE).read_text())
     assert record["patients"] == ["046", "052", "107"]
     assert record["manifest"] == str(rounds.resolve())

@@ -289,9 +289,11 @@ def truth_suite(spec=None, n=None, families=None):
     names = truth.family_names(spec)
     frozen = n is None and families is None
     out = {}
-    for j, family in enumerate(names):
+    for family in names:
         if families is not None and family not in families:
             continue
+        # the family's own index, not its position: see truth.family_index
+        j = truth.family_index(spec, family)
         scene_seed = spec["synthetic"]["scene_seed"] + 100 * j
         patient = f"{TRUTH_WINDOW}_{family}"
         for k, pose in enumerate(truth.pose_names(spec)):

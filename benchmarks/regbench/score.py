@@ -1660,9 +1660,11 @@ def summary_markdown(
             "False for the families a B-spline mesh on STARE's lattice cannot "
             "represent. A run that did not register is scored at the unregistered "
             "pose; a point a method could not map counts as an infinite error. The "
-            "amplitudes are literature values as recorded in STARE's README; the "
-            "families, their smoothness and the multiscale spectrum were chosen by "
-            "STARE's authors.\n",
+            "amplitudes are set against published measurements and are probably "
+            "larger than what rounds of cyclic IF do (README, 'Where the families "
+            "come from'); the families, their smoothness and the multiscale spectrum "
+            "were chosen by STARE's authors. One generated scene per family: "
+            "descriptive, never ranked.\n",
             *[line + "\n" for line in known_truth or []],
             markdown(by_family, list(TRUTH_COLUMNS)),
             "",

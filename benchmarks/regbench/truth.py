@@ -91,6 +91,17 @@ def family_names(spec):
     return [f["name"] for f in spec["families"]]
 
 
+def family_index(spec, name):
+    """The number a family's seeds are derived from: its own ``index`` in the spec, NOT
+    its position in the list. A family can then be removed (``wave``, index 1, in
+    version 4) without any other family's cases moving to other seeds. A reduced or
+    hand-made spec without the key falls back to the position."""
+    for position, f in enumerate(spec["families"]):
+        if f["name"] == name:
+            return int(f.get("index", position))
+    raise KeyError(f"unknown family {name!r}; expected one of {family_names(spec)}")
+
+
 def pose_names(spec):
     return [p["name"] for p in spec["poses"]]
 
@@ -119,8 +130,6 @@ def family_kwargs(spec, name, pixel_size_um, n=None):
     kind = f["field"]
     if kind == "none":
         return dict(field="wave", amp=0.0)
-    if kind == "wave":
-        return dict(field="wave", amp=f["amp_px"], wavelength=f["wavelength_px"])
     if kind == "grid":
         return dict(field="grid", amp=0.0, grid_sd=f["sd_px"], grid_nodes=f["nodes"])
     if kind == "multiscale":

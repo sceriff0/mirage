@@ -386,7 +386,6 @@ def test_out_of_model_families_are_present_and_marked(scored):
     names = truth.family_names(SPEC)
     assert names == [
         "rigid",
-        "wave",
         "grid",
         "multiscale",
         "bumps100",
@@ -400,7 +399,7 @@ def test_out_of_model_families_are_present_and_marked(scored):
         assert r["in_stare_model"] is (r["family"] == "rigid"), r["family"]
     # the frozen amplitudes and scales
     fam = {n: truth.family(SPEC, n) for n in names}
-    assert (fam["wave"]["amp_px"], fam["wave"]["wavelength_px"]) == (10.0, 1500.0)
+    assert "wave" not in fam  # removed in version 4 (R3.16)
     assert (fam["grid"]["sd_px"], fam["grid"]["nodes"]) == (5.0, 9)
     assert fam["multiscale"]["rms_um"] == 2.0
     assert fam["multiscale"]["scales_um"] == [333.0, 166.0, 83.0]
@@ -561,19 +560,19 @@ def test_multiscale_scales_do_not_depend_on_window_size():
 
 def test_a_synthetic_patient_is_one_family(reduced, real_like, tmp_path):
     suite = synthetic.truth_suite()
-    assert len(suite) == 14
+    assert len(suite) == 12
     patients = {}
     for name, spec in suite.items():
         assert spec["n"] == 8192 and name == f"{spec['patient']}_{spec['pose']}"
         patients.setdefault(spec["patient"], []).append(spec)
-    assert len(patients) == 7
+    assert len(patients) == 6
     for rounds in patients.values():
         assert len({s["family"] for s in rounds}) == 1
         assert [s["pose"] for s in rounds] == ["shift", "rot"]
         assert len({s["scene_seed"] for s in rounds}) == 1  # one tissue, one reference
         assert len({s["seed"] for s in rounds}) == 2  # its own map and noise per round
         assert [s["theta"] for s in rounds] == [0.0, 2.0]
-    assert len({s["scene_seed"] for s in suite.values()}) == 7
+    assert len({s["scene_seed"] for s in suite.values()}) == 6
 
     # as prepared: a patient is one family, its rounds share ONE reference file
     by_patient = groups(reduced[1])
@@ -584,21 +583,21 @@ def test_a_synthetic_patient_is_one_family(reduced, real_like, tmp_path):
         assert len({c.ref_nuclear for c in rounds}) == 1
         assert len({c.mov_nuclear for c in rounds}) == 2
 
-    # semisynth: (window, family) is the patient; 2 windows x 7 families x 2 poses for
+    # semisynth: (window, family) is the patient; 2 windows x 6 families x 2 poses for
     # each cohort patient, whose id the spec no longer names
     assert "patients" not in SPEC["semisynth"]
     a = semisynth_args(real_like, tmp_path, name="046", truth=True)
     jobs, noise = semisynth.plan_truth(a, n=512)
-    assert noise > 0 and len(jobs) == 28
-    assert len({spec["patient"] for _, spec, _ in jobs}) == 14
+    assert noise > 0 and len(jobs) == 24
+    assert len({spec["patient"] for _, spec, _ in jobs}) == 12
     assert len({origin for _, _, origin in jobs}) == 2
-    assert len({spec["seed"] for _, spec, _ in jobs}) == 28
+    assert len({spec["seed"] for _, spec, _ in jobs}) == 24
     for name, spec, _ in jobs:
         assert name == f"{spec['patient']}_{spec['pose']}"
         assert spec["patient"].endswith(spec["family"])
         assert spec["truth_spec_sha256"] == ""  # a reduced copy is not the frozen suite
     assert SPEC["semisynth"]["windows_per_patient"] == 2
-    assert semisynth.cases_per_patient(SPEC) == 28
+    assert semisynth.cases_per_patient(SPEC) == 24
     # another patient: other seeds, the same windows of the same image
     b = semisynth_args(real_like, tmp_path, name="052", truth=True)
     other, _ = semisynth.plan_truth(b, n=512)
@@ -631,7 +630,7 @@ def test_semisynth_rounds_share_the_untouched_window(real_like, tmp_path):
 
 
 # ── a case whose true map folds is re-seeded (R3.11 e) ─────────────────────────
-CONTINUOUS = ("rigid", "wave", "grid", "multiscale", "bumps100", "bumps25")
+CONTINUOUS = ("rigid", "grid", "multiscale", "bumps100", "bumps25")
 # Found by measuring 240 seeds of the frozen bumps25 field (8192 px, 4000 bumps): at this
 # one the Jacobian determinant of the true map is negative at lattice points.
 FOLDING_SEED = 3000044
@@ -639,7 +638,7 @@ FOLDING_SEED = 3000044
 
 def test_the_spec_says_which_cases_are_reseeded_and_how():
     rule = SPEC["reseed"]
-    assert SPEC["version"] == 3
+    assert SPEC["version"] == 4
     assert rule["lattice_px"] == 4 and rule["min_jacobian"] == 0.05
     assert rule["max_tries"] >= 4
     # every family whose field is continuous; `seams` jumps on purpose and is left alone
@@ -765,7 +764,7 @@ def test_no_frozen_synthetic_case_folds():
     change which starts skipping a seed is seen here."""
     SKIPPED = {}  # case id -> the seeds skipped; none in the shipped spec
     suite = synthetic.truth_suite()
-    assert len(suite) == 14
+    assert len(suite) == 12
     got = {}
     for name, job in suite.items():
         used, settled = synthetic.settle(job, PX)
@@ -1017,3 +1016,50 @@ def test_score_drop_on_the_command_line(monkeypatch):
     seen.clear()
     assert cli.main(["score", "--cases", "c", "--out", "o"]) == 0
     assert seen["dropped"] == []
+
+
+# ── version 4: `wave` removed, and nothing else moved (R3.16) ──────────────────────────
+V4_SHA256 = "1f0754631862f03740ce35836d2d5eb6449c8332a7f5a0be24609f397edc8f61"
+V3_SHA256 = "6da2faa7525e2377744440e4579af08306178eb6b2c8510b2c7d1bd7502d1eb6"
+# (scene seed, round seeds) of every family that version 3 had and version 4 keeps,
+# written out from version 3 (commit 27ed36d0) before `wave` was removed
+V3_SEEDS = {
+    "rigid": (7000, [7001, 7002]),
+    "grid": (7200, [7201, 7202]),
+    "multiscale": (7300, [7301, 7302]),
+    "bumps100": (7400, [7401, 7402]),
+    "bumps25": (7500, [7501, 7502]),
+    "seams": (7600, [7601, 7602]),
+}
+
+
+def test_version_four_removes_wave_and_moves_no_other_case():
+    assert SPEC["version"] == 4 and SPEC["sha256"] == V4_SHA256 != V3_SHA256
+    assert truth.family_names(SPEC) == list(V3_SEEDS)
+    assert "wave" not in json.dumps(SPEC["families"])
+    # every family carries the index it had in version 3; 1 (wave) is retired
+    assert [f["index"] for f in SPEC["families"]] == [0, 2, 3, 4, 5, 6]
+    assert list(SPEC["retired_family_indices"]) == ["1"]
+    suite = synthetic.truth_suite()
+    got = {}
+    for job in suite.values():
+        scene, rounds = got.setdefault(job["family"], (job["scene_seed"], []))
+        assert scene == job["scene_seed"]
+        rounds.append(job["seed"])
+    assert got == V3_SEEDS
+    # the amplitudes and scales that were ruled to stay
+    fam = {n: truth.family(SPEC, n) for n in V3_SEEDS}
+    assert (fam["grid"]["sd_px"], fam["grid"]["nodes"]) == (5.0, 9)
+    assert (fam["seams"]["sd_px"], fam["seams"]["block_px"]) == (3.0, 1950)
+
+
+def test_a_family_s_seeds_come_from_its_index_not_its_position():
+    spec = json.loads(json.dumps(SPEC))
+    assert truth.family_index(spec, "grid") == 2
+    del spec["families"][0]  # drop `rigid`: `grid` is now first in the list
+    assert truth.family_index(spec, "grid") == 2
+    for f in spec["families"]:
+        del f["index"]  # a hand-made spec without the key falls back to the position
+    assert truth.family_index(spec, "grid") == 0
+    with pytest.raises(KeyError):
+        truth.family_index(spec, "wave")
