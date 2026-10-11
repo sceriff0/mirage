@@ -379,11 +379,11 @@ def test_selfcheck_removes_the_old_record_before_it_runs(tmp_path, monkeypatch):
     )
     seen = {}
 
-    def run_pair(*args, **kwargs):
+    def run_case(*args, **kwargs):  # what `run` calls per case since the patient cases
         seen["old_record_there"] = (work / "selfcheck.json").exists()
-        return {"status": "ok", "variants": {"initial": {"status": "ok"}}}
+        return [{"status": "ok", "variants": {"initial": {"status": "ok"}}}]
 
-    monkeypatch.setattr(selfcheck, "run_pair", run_pair)
+    monkeypatch.setattr(selfcheck, "run_case", run_case)
     monkeypatch.setenv("REGBENCH_SUBMISSION", "new")
     record = selfcheck.run(
         "initial", work, sizes=[((64, 64), (64, 64))], in_process=True
