@@ -227,7 +227,16 @@ def test_cell_scores_agree_with_the_known_map(scored):
         full = _row(res["cells"], name, "stare")
         truth = _row(res["cells"], name, "truth")
         assert full["frame"] == "reference"
-        assert full["dice_matched"] > 0.85 > init["dice_matched"]
+        # Dice separates the registered from the unregistered pose on the BARE nuclei;
+        # on the grown outlines the 10 px rim can keep the unregistered pose's Dice
+        # high (0.85 on `rigid`), which is why both sets are reported
+        nuc_init = _row(res["cells_nuclei"], name, "initial")
+        nuc_full = _row(res["cells_nuclei"], name, "stare")
+        assert nuc_full["dice_matched"] > 0.85 > nuc_init["dice_matched"]
+        assert (
+            full["dice_matched"] > 0.85 and full["dice_matched"] > init["dice_matched"]
+        )
+        assert init["dice_matched"] > nuc_init["dice_matched"]
         assert full["displacement_px_p50"] < 1.0
         assert full["pair_fraction"] > 0.9
         assert full["within_1um"] > init["within_1um"]

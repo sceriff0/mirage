@@ -5,6 +5,10 @@ This module makes the cells; it does not score them. Pairing, IoU and every scor
 
 * each slide's nuclei are segmented on its NATIVE image, never on a warped one, so no method
   is scored on pixels it interpolated itself;
+* a slide has TWO polygon sets (``cases.SETS``): the bare nuclei, and the outlines, each
+  nucleus grown by ``EXPAND_PX`` until it meets a neighbour (:func:`grow`: what the
+  pipeline's StarDist backend publishes as its cell mask). :func:`segment_slide_sets` makes
+  both from one segmentation, nucleus ``k`` and outline ``k`` being the same object;
 * :class:`Polys` is one outer ring per cell, which is what the built-in segmenter and a
   label image give. Cells read from a GeoJSON (:func:`cells_from_geojson`) are a
   ``cell_pairs.PolySet`` from the pipeline's own ``from_feature_collection``: they keep
@@ -135,18 +139,63 @@ def segment_tile(img, threshold, diameter):
     return watershed(-dist, markers, mask=fg)
 
 
-def label_polys(labels, origin_xy=(0.0, 0.0), core=None, min_area=0.0):
+# The pipeline's cell mask is its nuclei grown by this many pixels: `seg_expand_distance`
+# (nextflow.config; `segment.py --expand-distance`), 3.25 um at the cohort's 0.325 um.
+EXPAND_PX = 10
+
+
+def grow(labels, distance=EXPAND_PX):
+    """Each label grown by ``distance`` px, no label growing into another: the call the
+    pipeline makes (``bin/utils/segment_io.py``, ``expand_labels_tiled``, whose result is
+    by its own test that of one whole-image ``skimage.segmentation.expand_labels``)."""
+    from skimage.segmentation import expand_labels
+
+    return expand_labels(np.asarray(labels), distance=int(distance))
+
+
+# The pipeline publishes its cell mask as polygons simplified to this tolerance
+# (bin/mask_to_geojson.py: `approximate_polygon(contour, tolerance=1.0)`). The grown
+# outlines made here are traced the same way: it is what the cohort's outlines are, and
+# an unsimplified grown contour has about 125 vertices where the simplified one has
+# about 10, which the pipeline's per-pair raster IoU pays for four times over.
+OUTLINE_TOLERANCE_PX = 1.0
+
+
+def _ring(mask, x0, y0, tolerance=0.0):
+    """The longest contour of a boolean mask whose first pixel is at ``(x0, y0)``, or
+    None; with ``tolerance`` > 0 simplified as the pipeline simplifies its outlines."""
+    from skimage.measure import approximate_polygon, find_contours
+
+    contours = find_contours(np.pad(mask, 1).astype(np.float32), 0.5)
+    if not contours:
+        return None
+    c = max(contours, key=len)
+    if tolerance > 0:
+        simple = approximate_polygon(c, tolerance=tolerance)
+        c = simple if len(simple) >= 4 else c
+    c = c[:-1]  # closed contour: drop the repeated last vertex
+    if len(c) < 3:
+        return None
+    return np.stack([c[:, 1] - 1 + x0, c[:, 0] - 1 + y0], axis=1)
+
+
+def label_polys(labels, origin_xy=(0.0, 0.0), core=None, min_area=0.0, grown=None):
     """One outline per label; with ``core=(x0, y0, x1, y1)`` only cells whose centroid lies in it.
 
     ``core`` is in the tile's own pixels. It is how a slide is segmented tile by tile without
     duplicates: tiles overlap by a halo wider than a nucleus, and every nucleus belongs to
     the one tile whose core holds its centroid, where it is also complete.
+
+    With ``grown`` (the same labels after :func:`grow`) the result is ``(nuclei,
+    outlines)``: the labels kept are decided on the NUCLEI alone, and outline ``k`` is the
+    grown label of nucleus ``k``, simplified to ``OUTLINE_TOLERANCE_PX`` as the pipeline's
+    published outlines are. The nuclei are never simplified.
     """
     from scipy import ndimage as ndi
-    from skimage.measure import find_contours
 
-    rings = []
+    rings, big = [], []
     ox, oy = origin_xy
+    grown_at = ndi.find_objects(grown) if grown is not None else None
     for lab, sl in enumerate(ndi.find_objects(labels), start=1):
         if sl is None:
             continue
@@ -160,24 +209,33 @@ def label_polys(labels, origin_xy=(0.0, 0.0), core=None, min_area=0.0):
             core[0] <= cx < core[2] and core[1] <= cy < core[3]
         ):
             continue
-        contours = find_contours(np.pad(mask, 1).astype(np.float32), 0.5)
-        if not contours:
+        ring = _ring(mask, sl[1].start + ox, sl[0].start + oy)
+        if ring is None:
             continue
-        c = max(contours, key=len)[:-1]  # closed contour: drop the repeated last vertex
-        if len(c) < 3:
-            continue
-        rings.append(
-            np.stack(
-                [c[:, 1] - 1 + sl[1].start + ox, c[:, 0] - 1 + sl[0].start + oy], axis=1
+        rings.append(ring)
+        if grown is not None:
+            gsl = grown_at[lab - 1] if lab <= len(grown_at) else None
+            outer = (
+                None
+                if gsl is None
+                else _ring(
+                    grown[gsl] == lab,
+                    gsl[1].start + ox,
+                    gsl[0].start + oy,
+                    OUTLINE_TOLERANCE_PX,
+                )
             )
-        )
-    return from_rings(rings)
+            big.append(ring if outer is None else outer)
+    if grown is None:
+        return from_rings(rings)
+    return from_rings(rings), from_rings(big)
 
 
 def _tile_job(job):
     from stare.slide_io import open_lazy
 
-    path, channel, mode, threshold, diameter, (x0, y0, x1, y1), halo, (h, w) = job
+    path, channel, mode, threshold, diameter, (x0, y0, x1, y1), halo, (h, w) = job[:8]
+    expand = job[8] if len(job) > 8 else None
     ax0, ay0, ax1, ay1 = (
         max(x0 - halo, 0),
         max(y0 - halo, 0),
@@ -192,10 +250,16 @@ def _tile_job(job):
     min_area = math.pi * (diameter / 4.0) ** 2
     labels = tile if mode == "labels" else segment_tile(tile, threshold, diameter)
     core = (x0 - ax0, y0 - ay0, x1 - ax0, y1 - ay0)
-    return label_polys(labels, (ax0, ay0), core, min_area if mode == "image" else 0.0)
+    return label_polys(
+        labels,
+        (ax0, ay0),
+        core,
+        min_area if mode == "image" else 0.0,
+        grow(labels, expand) if expand else None,
+    )
 
 
-def _over_tiles(path, channel, mode, threshold, diameter, tile, workers):
+def _over_tiles(path, channel, mode, threshold, diameter, tile, workers, expand=None):
     from stare.slide_io import open_lazy
 
     arr, _, close = open_lazy(path)
@@ -212,6 +276,7 @@ def _over_tiles(path, channel, mode, threshold, diameter, tile, workers):
             (x0, y0, min(x0 + tile, w), min(y0 + tile, h)),
             halo,
             (h, w),
+            expand,
         )
         for y0 in range(0, h, tile)
         for x0 in range(0, w, tile)
@@ -223,6 +288,8 @@ def _over_tiles(path, channel, mode, threshold, diameter, tile, workers):
             parts = pool.map(_tile_job, jobs)
     else:
         parts = [_tile_job(j) for j in jobs]
+    if expand:
+        return concat([p[0] for p in parts]), concat([p[1] for p in parts])
     return concat(parts)
 
 
@@ -252,6 +319,32 @@ def segment_slide(path, channel=0, diameter=20.0, tile=2048, workers=1, threshol
     return _over_tiles(
         path, channel, "image", threshold, float(diameter), tile, workers
     )
+
+
+def segment_slide_sets(
+    path,
+    channel=0,
+    diameter=20.0,
+    tile=2048,
+    workers=1,
+    threshold=None,
+    expand=EXPAND_PX,
+):
+    """``(nuclei, outlines)`` of one channel: the nuclei exactly as :func:`segment_slide`
+    gives them, and each one's label grown by ``expand`` px (:func:`grow`), in the same
+    order. The halo of a tile is not widened for the growth, so the nuclei do not depend
+    on it; it is at least 32 px, wider than a nucleus's reach plus the 10 px rim.
+    """
+    if threshold is None:
+        threshold = slide_threshold(path, channel)
+    nuclei, outlines = _over_tiles(
+        path, channel, "image", threshold, float(diameter), tile, workers, int(expand)
+    )
+    if len(nuclei) != len(outlines):  # from_rings drops nothing label_polys kept
+        raise RuntimeError(
+            f"{len(nuclei)} nuclei and {len(outlines)} outlines from one segmentation"
+        )
+    return nuclei, outlines
 
 
 def polys_from_label_image(path, diameter=20.0, tile=2048, workers=1):
@@ -305,3 +398,92 @@ def load_cells(path, diameter=20.0, tile=2048, workers=1, hw=None):
     if is_geojson(path):
         return cells_from_geojson(path, hw)
     return polys_from_label_image(path, diameter, tile, workers)
+
+
+# ── points in polygons, and the outline shrunk back ───────────────────────────
+def inside(ps, feat, pts, chunk=4_000_000):
+    """For each pair ``(feat[i], pts[i])``: is the point inside that feature of a
+    ``PolySet``? Even-odd over every ring of the feature, so a hole is outside."""
+    from . import pairs
+
+    ps = pairs.as_polyset(ps)
+    feat = np.asarray(feat, dtype=np.int64).ravel()
+    pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+    out = np.zeros(len(feat), dtype=bool)
+    if not len(feat) or not len(ps.xy):
+        return out
+    lens = np.diff(ps.ring_off)
+    nxt = np.arange(len(ps.xy)) + 1
+    nxt[ps.ring_off[1:] - 1] = ps.ring_off[:-1]
+    edge_feat = np.repeat(ps.ring_feat, lens)
+    order = np.argsort(edge_feat, kind="stable")
+    count = np.bincount(edge_feat, minlength=ps.n_features)
+    start = np.concatenate([[0], np.cumsum(count)])[:-1]
+    x1, y1 = ps.xy[order, 0], ps.xy[order, 1]
+    x2, y2 = ps.xy[nxt[order], 0], ps.xy[nxt[order], 1]
+    n_edges = count[feat]
+    bounds = np.concatenate([[0], np.cumsum(n_edges)])
+    lo = 0
+    while lo < len(feat):
+        hi = max(
+            int(np.searchsorted(bounds, bounds[lo] + chunk, side="right")) - 1, lo + 1
+        )
+        n = n_edges[lo:hi]
+        pair = np.repeat(np.arange(hi - lo), n)
+        within = np.arange(int(n.sum())) - np.repeat(bounds[lo:hi] - bounds[lo], n)
+        e = start[feat[lo:hi]][pair] + within
+        px, py = pts[lo:hi, 0][pair], pts[lo:hi, 1][pair]
+        ya, yb, xa, xb = y1[e], y2[e], x1[e], x2[e]
+        straddles = (ya > py) != (yb > py)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            x_at = (xb - xa) * (py - ya) / (yb - ya) + xa
+        crossings = np.bincount(pair[straddles & (px < x_at)], minlength=hi - lo)
+        out[lo:hi] = crossings % 2 == 1
+        lo = hi
+    return out
+
+
+def shrink(ps, distance=EXPAND_PX):
+    """``(polys, parent)``: each outline of a ``PolySet`` with the rim of ``distance`` px
+    taken off again, and the outline each result came from.
+
+    NOT the nucleus the outline was grown from: growth stops where two cells meet, so
+    taking the full rim off a clipped side cuts into the nucleus, and a small outline
+    between neighbours can vanish (it then has no entry). It is the fallback of
+    ``prepare multiplex --nuclei-fallback shrink`` and is labelled ``shrunk_outlines``.
+    """
+    from scipy import ndimage as ndi
+    from skimage.draw import polygon as fill
+
+    from . import pairs
+
+    ps = pairs.as_polyset(ps)
+    rings_of = [[] for _ in range(ps.n_features)]
+    for r, f in enumerate(ps.ring_feat):
+        rings_of[f].append(ps.xy[ps.ring_off[r] : ps.ring_off[r + 1]])
+    rings, parent = [], []
+    pad = 2
+    for f, own in enumerate(rings_of):
+        if not own:
+            continue
+        xy = np.concatenate(own)
+        if not np.isfinite(xy).all():
+            continue
+        x0, y0 = np.floor(xy.min(axis=0)).astype(int) - pad
+        x1, y1 = np.ceil(xy.max(axis=0)).astype(int) + pad
+        mask = np.zeros((y1 - y0 + 1, x1 - x0 + 1), dtype=bool)
+        for ring in own:  # even-odd: a hole clears what its outer ring set
+            rr, cc = fill(ring[:, 1] - y0, ring[:, 0] - x0, mask.shape)
+            mask[rr, cc] ^= True
+        core = ndi.distance_transform_edt(mask) > distance
+        if not core.any():
+            continue
+        lab, n = ndi.label(core)
+        if n > 1:
+            core = lab == 1 + int(np.argmax(np.bincount(lab.ravel())[1:]))
+        ring = _ring(core, x0, y0)
+        if ring is None:
+            continue
+        rings.append(ring)
+        parent.append(f)
+    return from_rings(rings), np.asarray(parent, dtype=np.int64)

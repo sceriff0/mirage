@@ -347,11 +347,12 @@ def _boxes(ps):
     return lo, hi
 
 
-def nucleus_band(geo, points):
+def nucleus_band(geo, points, which="outlines"):
     """One bool per REFERENCE nucleus: True where its outline's bounding box, grown by
     ``SEAM_MARGIN_PX``, touches blocks with different shifts. None for a case without
-    reference nuclei."""
-    ps = polys(points, "ref")
+    reference nuclei. ``which`` is the polygon set (``cases.SETS``): the outlines, or
+    the bare nuclei (then the box is the nucleus's own)."""
+    ps = polys(points, "ref", which)
     if ps is None or not ps.n_features:
         return None
     return on_seam(geo, *_boxes(ps))
@@ -738,6 +739,7 @@ def register(case, work, opts):
         info.update(describe(geo, original))
         points = load_points(case)
         band_ref, band_truth = nucleus_band(geo, points), probe_band(geo, points)
+        band_ref_nuc = nucleus_band(geo, points, "nuclei")
         info["band_fraction"] = None if band_ref is None else float(band_ref.mean())
         info["closed_file"] = reads.describe()
         if reads.applied:
@@ -773,6 +775,8 @@ def register(case, work, opts):
         final["band_ref"] = band_ref
     if band_truth is not None:
         final["band_truth"] = band_truth
+    if band_ref_nuc is not None:  # the same rule on the bare nuclei
+        final["band_ref_nuc"] = band_ref_nuc
     yield VARIANTS[1], PointMap(fn, DIRECTION), final
 
 

@@ -385,9 +385,10 @@ def discards(layer, edge, max_shift_px):
     }
 
 
-def nucleus_band(placement, points):
-    """One bool per moving nucleus: True where any vertex is on one of ASHLAR's seams."""
-    ps = polys(points, "mov")
+def nucleus_band(placement, points, which="outlines"):
+    """One bool per moving nucleus: True where any vertex is on one of ASHLAR's seams.
+    ``which`` is the polygon set (``cases.SETS``): the outlines, or the bare nuclei."""
+    ps = polys(points, "mov", which)
     if ps is None or not ps.n_features:
         return None
     on = tilemap.on_seam(placement, ps.xy, NUCLEUS_MARGIN_PX)
@@ -834,7 +835,9 @@ def _results(
             jumps = tilemap.neighbour_jumps(
                 d_yx, int(grid["n_rows"]), int(grid["n_cols"])
             )
-            band = nucleus_band(placement, load_points(case))
+            case_points = load_points(case)
+            band = nucleus_band(placement, case_points)
+            band_nuc = nucleus_band(placement, case_points, "nuclei")
             info = {
                 **shared,
                 "placement": placement,
@@ -854,6 +857,8 @@ def _results(
                 info["anchor_from"] = anchors[cid][1]
             if band is not None:
                 info["band_mov"] = band
+            if band_nuc is not None:  # the same rule on the bare nuclei
+                info["band_mov_nuc"] = band_nuc
             if split_error:
                 info["native"] = {"error": split_error}
             else:

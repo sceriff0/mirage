@@ -28,6 +28,10 @@ full-resolution pixels of the native slides. Optional hooks:
 ``SELFCHECK_SUBPROCESS``  used by the selfcheck and the realcheck only; their signatures are
         in ``regbench.selfcheck``. A point mapping must stay valid until the run ends: the
         realcheck calls it after the writer.
+``info["band_mov_nuc"]`` / ``info["band_ref_nuc"]``  the same seam rule applied to the
+        BARE nuclei of that side (``cases.polys(points, side, "nuclei")``). Used only
+        where the case does not say which outline each nucleus belongs to
+        (``_nuclei_band``); stored as ``band_nuc`` / ``band_ref_nuc``.
 ``info["band_mov"]`` / ``info["band_ref"]``  a seam mask: one bool per moving (reference)
         nucleus, True where the nucleus straddles one of the method's own joins (ASHLAR's
         tile overlaps, PALOM's block edges). Stored in ``warped.npz`` as ``band`` /
@@ -245,6 +249,29 @@ def _warp_chunked(fn, xy, chunk=2_000_000):
     if out.shape != xy.shape:
         raise RuntimeError(f"point map returned {out.shape} for {xy.shape} points")
     return out
+
+
+def _nuclei_band(points, side, outline_band, own):
+    """``(seam flag per bare nucleus of ``side``, how it was got)``, or ``(None, "")``.
+
+    ``inherited``: the case says which outline each nucleus belongs to
+    (``nuclei_<side>_outline``, written only where it is known by construction: both sets
+    cut from one segmentation), so a nucleus takes its outline's flag and the two sets
+    drop the same objects. Otherwise ``geometry``: the method applied its own seam rule
+    to the nuclei (``info["band_mov_nuc"]`` / ``info["band_ref_nuc"]``). With neither
+    there is no flag, and the scorer makes no off-seam row for the nuclei."""
+    if f"nuclei_{side}_n" not in points:
+        return None, ""
+    n = int(points[f"nuclei_{side}_n"])
+    parent = points.get(f"nuclei_{side}_outline")
+    if outline_band is not None and parent is not None and len(parent) == n:
+        flags = np.asarray(outline_band, dtype=bool).ravel()
+        parent = np.asarray(parent, dtype=np.int64)
+        if not n or (parent.min() >= 0 and parent.max() < len(flags)):
+            return flags[parent], "inherited"
+    if own is not None and len(np.ravel(own)) == n:
+        return np.asarray(own, dtype=bool).ravel(), "geometry"
+    return None, ""
 
 
 def jacobian_grid(hw, max_side=512):
@@ -544,6 +571,8 @@ def _run(
             band = info.pop("band_mov", None)
             band_ref = info.pop("band_ref", None)
             band_truth = info.pop("band_truth", None)
+            band_nuc_own = info.pop("band_mov_nuc", None)
+            band_ref_nuc_own = info.pop("band_ref_nuc", None)
             native = info.pop("native", None)
             try:
                 if watch.rose():
@@ -617,6 +646,20 @@ def _run(
                     arrays["band_ref"] = np.asarray(band_ref, dtype=bool).ravel()
                 if band_truth is not None:  # the same seams, by known-truth probe
                     arrays["band_truth"] = np.asarray(band_truth, dtype=bool).ravel()
+                # the SECOND polygon set, the bare nuclei, through the same map in the
+                # same direction; and the owner's seam mask on them (_nuclei_band)
+                nuclei_band = {}
+                if f"nuclei_{side}_xy" in pts:
+                    arrays["nuclei_xy"] = _warp_chunked(
+                        pmap.fn, pts[f"nuclei_{side}_xy"]
+                    ).astype(np.float32)
+                for name_nuc, where, flags, own in (
+                    ("band_nuc", "mov", band, band_nuc_own),
+                    ("band_ref_nuc", "ref", band_ref, band_ref_nuc_own),
+                ):
+                    got, how = _nuclei_band(pts, where, flags, own)
+                    if got is not None:
+                        arrays[name_nuc], nuclei_band[where] = got, how
                 warp_s = time.perf_counter() - t0
                 d = result_dir(out, names[variant], case)
                 write_npz(d / "warped.npz", **arrays)
@@ -634,6 +677,8 @@ def _run(
                     "write_s": float(info.get("write_s") or 0.0),
                     "info": _jsonable(info),
                 }
+                if nuclei_band:  # how each side's nuclei got their seam flag
+                    rec["nuclei_band"] = nuclei_band
                 write_json(d / "run.json", rec)
                 done[key] = rec
                 final_maps[key] = pmap

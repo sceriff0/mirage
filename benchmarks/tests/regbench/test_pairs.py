@@ -229,3 +229,33 @@ def test_record_keys_are_complete():
     rec = pairs.record(g, g, g, g, 0.5)
     assert set(pairs.RECORD_KEYS) == set(rec)
     assert len(pairs.RECORD_KEYS) == len(set(pairs.RECORD_KEYS))
+
+
+def test_a_pair_both_pairings_share_is_rasterised_once(monkeypatch):
+    """The two pairings mostly pick the same pairs; a pair's IoU depends on its two
+    cells alone, so it is computed once and the numbers do not move."""
+    rng = np.random.default_rng(4)
+    centres = rng.uniform(40, 900, size=(150, 2))
+    ref = pairs.as_polyset(squares(centres, 6.0))
+    mov = pairs.as_polyset(squares(centres + rng.normal(0, 2.0, centres.shape), 6.0))
+    apart = {}
+    for pairing, mid in (("lsa", ""), ("mutual_nn", "_mnn")):
+        got = pairs.score(ref, mov, 14.0, 0.5, pairing)
+        apart.update({f"{k}{mid}": v for k, v in got.items()})
+    calls = []
+    real = pairs.cp.pair_iou
+
+    def counting(a, b, ia, ib, *args, **kw):
+        calls.append(len(ia))
+        return real(a, b, ia, ib, *args, **kw)
+
+    monkeypatch.setattr(pairs.cp, "pair_iou", counting)
+    together = pairs._both_pairings(ref, mov, 14.0, 0.5)
+    assert together.keys() == apart.keys()
+    for key, value in apart.items():
+        same = together[key] == value or (
+            value != value and together[key] != together[key]
+        )
+        assert same, key
+    n_lsa, n_mnn = together["n_pairs"], together["n_pairs_mnn"]
+    assert n_mnn > 100 and sum(calls) < n_lsa + 0.2 * n_mnn

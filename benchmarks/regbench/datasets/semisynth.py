@@ -229,9 +229,10 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
         if mov_src is not ref_src:
             mov_src.close()
     seg = dict(diameter=a.diameter, workers=a.workers)
-    mov_cells, ref_cells = (
-        cells.segment_slide(mov_p, **seg),
-        cells.segment_slide(ref_p, **seg),
+    # the segmented objects are the bare nuclei; the outlines are the same labels grown
+    (mov_cells, mov_outlines), (ref_cells, ref_outlines) = (
+        cells.segment_slide_sets(mov_p, **seg),
+        cells.segment_slide_sets(ref_p, **seg),
     )
     if not len(ref_cells) or not len(mov_cells):
         raise RuntimeError(
@@ -268,6 +269,7 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
             "truth_patients_sha256": spec.get("truth_patients_sha256", ""),
             **synthetic.known_truth_field(spec, px),
             **({"reseed": reseed} if reseed else {}),
+            "cell_sets": synthetic.BUILTIN_SETS,
         },
     )
     return write_case(
@@ -275,10 +277,8 @@ def prepare_one(cases_root, name, spec, a, origin, noise_sd, px, force=False):
         case,
         probes["truth_mov"],
         probes["truth_ref"],
-        mov_cells,
-        ref_cells,
         truth_cell=probes["truth_cell"],
-        cells_mov_xy_truth=g(mov_cells.xy).astype(np.float32),
+        **synthetic.two_sets(mov_cells, mov_outlines, ref_cells, ref_outlines, g),
     )
 
 

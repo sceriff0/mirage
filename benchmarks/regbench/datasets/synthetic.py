@@ -715,6 +715,38 @@ def write_once(path, write):
     return path
 
 
+# What ``case.json: extra.cell_sets`` says of a known-truth case, either side. The
+# expansion distance is the pipeline's (``cells.EXPAND_PX``); it is recorded here, per
+# case, and NOT in ``truth_spec.json``: the spec freezes the maps, the probes and the
+# seeds, none of which the outlines enter (the probes are the nuclei's centroids), so the
+# second set changes no frozen quantity and the spec's hash stands.
+_BUILTIN_SIDE = {
+    "outlines": {"source": "builtin", "expand_px": cells.EXPAND_PX},
+    "nuclei": {"source": "builtin", "exact": True},
+}
+BUILTIN_SETS = {"ref": _BUILTIN_SIDE, "mov": _BUILTIN_SIDE}
+
+
+def two_sets(mov_nuclei, mov_outlines, ref_nuclei, ref_outlines, g):
+    """The ``write_case`` arguments of both polygon sets of a known-truth case.
+
+    The nuclei are the built-in segmenter's objects; outline ``k`` is nucleus ``k`` grown
+    (``cells.segment_slide_sets``), which ``nuclei_<side>_outline`` records. ``g`` is the
+    true map: where a perfect registration puts each moving set, which gives the cell
+    metric's ceiling for this pair (noise, resampling and dropout, no registration error).
+    """
+    return dict(
+        cells_mov=mov_outlines,
+        cells_ref=ref_outlines,
+        nuclei_mov=mov_nuclei,
+        nuclei_ref=ref_nuclei,
+        nuclei_mov_outline=np.arange(len(mov_nuclei), dtype=np.int64),
+        nuclei_ref_outline=np.arange(len(ref_nuclei), dtype=np.int64),
+        cells_mov_xy_truth=g(mov_outlines.xy).astype(np.float32),
+        nuclei_mov_xy_truth=g(mov_nuclei.xy).astype(np.float32),
+    )
+
+
 def prepare_one(cases_root, name, spec, workers=1, force=False):
     d = case_dir(cases_root, "synthetic", name)
     if (d / "case.json").exists() and not force:
@@ -732,10 +764,12 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     else:
         _write_slide(spec, "ref", ref_p, workers)
     scene = _write_slide(spec, "mov", mov_p, workers)
+    # `mov_cells` / `ref_cells` are the segmented objects, the BARE nuclei; the outlines
+    # are the same labels grown as the pipeline grows its cell mask (two_sets)
     seg = dict(diameter=NUCLEUS_DIAMETER, workers=workers)
-    mov_cells, ref_cells = (
-        cells.segment_slide(mov_p, **seg),
-        cells.segment_slide(ref_p, **seg),
+    (mov_cells, mov_outlines), (ref_cells, ref_outlines) = (
+        cells.segment_slide_sets(mov_p, **seg),
+        cells.segment_slide_sets(ref_p, **seg),
     )
     cap = spec.get("max_cells")
     if cap and len(mov_cells) > cap:
@@ -743,7 +777,7 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
         keep = np.sort(
             np.random.default_rng(0).choice(len(mov_cells), cap, replace=False)
         )
-        mov_cells = mov_cells.take(keep)
+        mov_cells, mov_outlines = mov_cells.take(keep), mov_outlines.take(keep)
     hw = [spec["n"], spec["n"]]
     case = Case(
         dataset="synthetic",
@@ -766,23 +800,21 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
             "truth_spec_sha256": spec.get("truth_spec_sha256", ""),
             **known_truth_field(spec, PIXEL_SIZE_UM),
             **({"reseed": reseed} if reseed else {}),
+            "cell_sets": BUILTIN_SETS,
         },
     )
     g = forward_map(spec)
     # Paired probes for the known-truth error: moving nuclei and where the map puts them.
+    # They are the centroids of the NUCLEI, as they were before the outlines were grown.
     _, centroids = cells.area_centroid(mov_cells)
     probes = truth.probe_arrays(centroids, g, hw, spec["seed"])
-    # Where a perfect registration puts the moving outlines: scoring them gives the cell
-    # metric's ceiling for this pair (noise, resampling and dropout, no registration error).
     return write_case(
         cases_root,
         case,
         probes["truth_mov"],
         probes["truth_ref"],
-        mov_cells,
-        ref_cells,
         truth_cell=probes["truth_cell"],
-        cells_mov_xy_truth=g(mov_cells.xy).astype(np.float32),
+        **two_sets(mov_cells, mov_outlines, ref_cells, ref_outlines, g),
     )
 
 

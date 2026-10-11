@@ -106,8 +106,9 @@ def test_probes_are_exact_pairs(reduced):
         g = synthetic.forward_map(case.extra["spec"])
         assert len(pts["truth_mov"]) > 100
         np.testing.assert_allclose(g(pts["truth_mov"]), pts["truth_ref"], atol=1e-9)
-        # a probe is the centroid of a nucleus segmented on the native moving slide
-        mov = polys(pts, "mov")
+        # a probe is the centroid of a nucleus segmented on the native moving slide:
+        # of the BARE nucleus, as before the outlines were grown from them
+        mov = polys(pts, "mov", "nuclei")
         _, cent = cells.area_centroid(cells.Polys(mov.xy, mov.ring_off))
         np.testing.assert_allclose(cent[pts["truth_cell"]], pts["truth_mov"], atol=1e-3)
         # the case says what its own true map does: how much moves, and no fold

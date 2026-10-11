@@ -37,9 +37,13 @@ def test_semisynth_cases_carry_the_truth(real_like, tmp_path):
         synthetic.forward_map(spec)(pts["truth_mov"]), pts["truth_ref"]
     )
     done = score.score(a.cases, tmp_path / "out", ["semisynth"])
-    by = {r["method"]: r for r in done["cells"]}
+    # on the bare nuclei: what this dataset's cell rows were before the outlines were
+    # grown from them (the grown outlines are in `cells`, the headline)
+    by = {r["method"]: r for r in done["cells_nuclei"]}
     assert by["truth"]["dice_matched"] > 0.8 > by["initial"]["dice_matched"]
     assert by["truth"]["displacement_px_p50"] < 1.0
+    grown = {r["method"]: r for r in done["cells"]}
+    assert grown["truth"]["dice_matched"] > grown["initial"]["dice_matched"]
     # a real-image case under a literature-derived map is in the headline tier
     assert {r["tier"] for r in done["cells"]} == {"headline"}
     # and it has a known-truth row: the unregistered pose is tens of pixels off

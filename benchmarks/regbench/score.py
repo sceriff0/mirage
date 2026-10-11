@@ -84,7 +84,15 @@ from pathlib import Path
 import numpy as np
 
 from . import DATASETS, cost, failure_log, pairs, tissue, truth
-from .cases import list_cases, load_points, polys, result_dir
+from .cases import (
+    NUCLEI,
+    OUTLINES,
+    list_cases,
+    load_points,
+    nuclei_reason,
+    polys,
+    result_dir,
+)
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
 # "cache": what methods share between runs (ASHLAR's reference tiles), never a variant
@@ -99,6 +107,31 @@ NON = ":non_"
 # nuclei, ``band_ref`` on the reference nuclei, ``band_truth`` on the known-truth probes
 # of a reference-side owner). The owner's name is its primary variant.
 SEAM_OWNERS = ("ashlar", "palom", "palom_b1024")
+# Every overlap number is computed on two polygon sets (``cases.SETS``). The OUTLINES are
+# the headline and keep every table and column they had; the bare NUCLEI get the same
+# tables under ``<name>_nuclei.csv`` with the same columns, and both carry ``set``.
+NUCLEI_SUFFIX = "_nuclei"
+# what a set's arrays are called in ``warped.npz``: the moved polygons, and the owner's
+# seam mask on the moving and on the reference side
+WARPED_KEYS = {
+    OUTLINES: ("cells_xy", "band", "band_ref"),
+    NUCLEI: ("nuclei_xy", "band_nuc", "band_ref_nuc"),
+}
+TRUTH_XY = {OUTLINES: "cells_mov_xy_truth", NUCLEI: "nuclei_mov_xy_truth"}
+# the tables that exist once per polygon set
+NUCLEI_TABLES = (
+    "cells",
+    "summary_cells",
+    "common_block",
+    "paired_vs_primary",
+    "paired_summary",
+    "nonband_cells",
+    "nonband_summary",
+)
+NO_NUCLEI_IN_RESULT = (
+    "this result holds no bare nuclei: it was made before the case had them. "
+    "Run it again (REGBENCH_FORCE=1) to score it on nuclei; its outline rows stand"
+)
 # pair_fraction_excess is already "above the null", so it has no null column of its own
 HEADLINES = (
     "pair_fraction",
@@ -472,19 +505,23 @@ def _truth_rows(case, points, base, checks=None):
     return add, rows
 
 
-def _seam_masks(out, case, variants, owners, ref, mov, points):
+def _seam_masks(out, case, variants, owners, ref, mov, points, which=OUTLINES):
     """``({owner: (keep_ref | None, keep_mov | None, keep_truth | None)}, [owners without
     a mask])`` for the owners that have a row on this dataset. The mask is read from the
     owner's own primary run and from nothing else: no other method's result can change it.
 
-    ``keep_truth`` is one bool per known-truth probe (``_truth_keep``)."""
+    ``which`` is the polygon set: the mask of the bare nuclei is the owner's ``band_nuc``
+    / ``band_ref_nuc`` (``methods._nuclei_band`` says how the driver got them).
+    ``keep_truth`` is one bool per known-truth probe (``_truth_keep``); the probes are
+    scored once, with the outlines."""
+    _, key, key_ref = WARPED_KEYS[which]
     masks, missing = {}, []
     for owner in owners:
         if owner not in variants:
             continue
         _, warped, _, _ = _load_run(out, owner, case)
-        band = warped.get("band") if warped is not None else None
-        band_ref = warped.get("band_ref") if warped is not None else None
+        band = warped.get(key) if warped is not None else None
+        band_ref = warped.get(key_ref) if warped is not None else None
         fits = (band is None or len(band) == mov.n_features) and (
             band_ref is None or len(band_ref) == ref.n_features
         )
@@ -495,7 +532,9 @@ def _seam_masks(out, case, variants, owners, ref, mov, points):
         masks[owner] = (
             None if band_ref is None else ~np.asarray(band_ref, dtype=bool),
             keep_mov,
-            _truth_keep(points, keep_mov, warped.get("band_truth")),
+            _truth_keep(points, keep_mov, warped.get("band_truth"))
+            if which == OUTLINES
+            else None,
         )
     return masks, missing
 
@@ -532,13 +571,14 @@ NEVER_CHECKED = "no_stage_image"
 
 
 def _score_case(job):
+    """Every row of one case: ``(cell rows, resource rows, truth rows, off-seam cell rows,
+    off-seam truth rows, owners without a mask, nuclei)``. The first six are the OUTLINES'
+    (and what does not depend on a polygon set); ``nuclei`` is ``{"cells", "non_cells",
+    "missing"}``: the same cell rows on the bare nuclei, and, where there are none, why."""
     out, case, variants, owners = job[:4]
     checks = job[4] if len(job) > 4 else {}
     points = load_points(case)
-    ref, mov = polys(points, "ref"), polys(points, "mov")
     px = case.pixel_size_um
-    scorable = bool(ref is not None and mov is not None and ref.n_features)
-    scorable = scorable and bool(mov.n_features)
     base = {
         "dataset": case.dataset,
         "tier": tier_of(case),
@@ -548,149 +588,220 @@ def _score_case(job):
         "family": case.family,
         "pose": case.pose,
     }
-    dens = density(ref, px) if scorable else {}
-    cell_rows, res_rows, non_cells, non_truth = [], [], [], []
+    res_rows, non_truth = [], []
     add_truth, truth_rows = _truth_rows(case, points, base, checks)
-    masks, missing = (
-        _seam_masks(out, case, variants, owners, ref, mov, points)
-        if scorable
-        else ({}, [])
-    )
-    unregistered = {}
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
     nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
+    loaded = {}
 
-    def at_initial():
-        if not unregistered:
-            unregistered.update(pairs.record(ref, mov, ref, mov, px))
-        return unregistered
+    def load(v):
+        if v not in loaded:
+            loaded[v] = _load_run(out, v, case)
+        return loaded[v]
 
-    def row(method, frame, status, rec, jac, imputed, problem, cause):
-        return {
-            **base,
-            "method": method,
-            "frame": frame,
-            "selfcheck_status": status,
-            # THIS row's own check (variants.row_checks); selfcheck_status above is its
-            # run's gate, which a row that was never checked shares with its run
-            "selfcheck_row": checks.get(method.split(NON)[0], ""),
-            **{k: rec[k] for k in pairs.RECORD_KEYS},
-            **dens,
-            **jac,
-            "imputed_initial": imputed,
-            "problem": problem[:200],
-            "cause": cause,
-            # the row stays; no summary of this method reads it (NOT_THE_METHOD_ROUNDS)
-            "excluded_from_summaries": _excluded(
-                {"imputed_initial": imputed, "cause": cause}
-            ),
-        }
+    def one_set(which):
+        """The cell rows of one polygon set. The resource rows and the known-truth rows
+        do not depend on the set: they are made once, with the outlines."""
+        first = which == OUTLINES
+        xy_key = WARPED_KEYS[which][0]
+        ref, mov = polys(points, "ref", which), polys(points, "mov", which)
+        scorable = bool(ref is not None and mov is not None and ref.n_features)
+        scorable = scorable and bool(mov.n_features)
+        dens = density(ref, px) if scorable else {}
+        cell_rows, non_cells, absent = [], [], []
+        masks, missing = (
+            _seam_masks(out, case, variants, owners, ref, mov, points, which)
+            if scorable
+            else ({}, [])
+        )
+        unregistered = {}
 
-    def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
-        """The same variant on the nuclei each owner's mask leaves, one row per owner."""
-        for owner, (keep_ref, keep_mov, _) in masks.items():
-            r_in = ref_in if keep_ref is None else _keep_features(ref_in, keep_ref)
-            m_in = mov_in if keep_mov is None else _keep_features(mov_in, keep_mov)
-            # the gate still comes from ALL native nuclei: one gate per case
-            rec = pairs.record(ref, mov, r_in, m_in, px)
-            non_cells.append(
-                {
-                    **row(
+        def at_initial():
+            if not unregistered:
+                unregistered.update(pairs.record(ref, mov, ref, mov, px))
+            return unregistered
+
+        def row(method, frame, status, rec, jac, imputed, problem, cause):
+            return {
+                **base,
+                "set": which,
+                "method": method,
+                "frame": frame,
+                "selfcheck_status": status,
+                # THIS row's own check (variants.row_checks); selfcheck_status above is
+                # its run's gate, which a row that was never checked shares with its run
+                "selfcheck_row": checks.get(method.split(NON)[0], ""),
+                **{k: rec[k] for k in pairs.RECORD_KEYS},
+                **dens,
+                **jac,
+                "imputed_initial": imputed,
+                "problem": problem[:200],
+                "cause": cause,
+                # the row stays; no summary of this method reads it
+                # (NOT_THE_METHOD_ROUNDS)
+                "excluded_from_summaries": _excluded(
+                    {"imputed_initial": imputed, "cause": cause}
+                ),
+            }
+
+        def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
+            """The same variant on the nuclei each owner's mask leaves, one row per owner."""
+            for owner, (keep_ref, keep_mov, _) in masks.items():
+                r_in = ref_in if keep_ref is None else _keep_features(ref_in, keep_ref)
+                m_in = mov_in if keep_mov is None else _keep_features(mov_in, keep_mov)
+                # the gate still comes from ALL native nuclei: one gate per case and set
+                rec = pairs.record(ref, mov, r_in, m_in, px)
+                non_cells.append(
+                    {
+                        **row(
+                            f"{v}{NON}{owner}",
+                            frame,
+                            status,
+                            rec,
+                            jac,
+                            imputed,
+                            problem,
+                            cause,
+                        ),
+                        "variant": v,
+                        "owner": owner,
+                        "n_mov_all": int(mov.n_features),
+                        "n_mov_kept": int(m_in.n_features),
+                        "n_ref_all": int(ref.n_features),
+                        "n_ref_kept": int(r_in.n_features),
+                    }
+                )
+
+        for v in variants:
+            if v == "initial":
+                run, warped, problem, cause = {}, None, "", ""
+            else:
+                run, warped, problem, cause = load(v)
+                if first:
+                    res_rows.append(
+                        {
+                            **base,
+                            "method": v,
+                            **resource_row(run or {"cause": "not_run"}),
+                        }
+                    )
+            failed = v != "initial" and warped is None
+            if first and add_truth is not None:
+                direction = (
+                    str(warped["direction"]) if warped is not None else MOV_TO_REF
+                )
+                mapped = warped.get("truth_xy") if warped is not None else None
+                t_problem, t_cause, t_failed = problem, cause, failed
+                if warped is not None and (
+                    direction not in FRAME
+                    or mapped is None
+                    or len(mapped) != len(points["truth_mov"])
+                ):
+                    mapped, direction, t_failed = None, MOV_TO_REF, True
+                    t_problem = "warped.npz does not fit the case's truth probes"
+                    t_cause = "exception"
+                jac = flat if mapped is None else jacobian_stats(warped)
+                args = (jac, t_failed, t_problem, t_cause)
+                add_truth(v, FRAME[direction], direction, mapped, *args)
+                # the same probes for every variant of the case: those the owner's seam
+                # mask leaves (``_truth_keep``)
+                for owner, (_, _, keep_truth) in masks.items():
+                    if keep_truth is None:
+                        continue
+                    add_truth(
                         f"{v}{NON}{owner}",
-                        frame,
+                        FRAME[direction],
+                        direction,
+                        mapped,
+                        *args,
+                        keep_truth,
+                        into=non_truth,
+                        owner=owner,
+                    )
+            if not scorable:
+                continue
+            if warped is not None and xy_key not in warped:
+                # a result that registered but never moved THIS set (the nuclei, for a
+                # run made before the case had them): no row, and the reason; never the
+                # unregistered pose, which would charge the method for it
+                absent.append({**base, "method": v, "reason": NO_NUCLEI_IN_RESULT})
+                continue
+            direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
+            if warped is not None:
+                moved_side = mov if direction == MOV_TO_REF else ref
+                if direction not in FRAME or len(warped[xy_key]) != len(moved_side.xy):
+                    problem = "warped.npz does not fit the case's nuclei"
+                    warped, cause, direction = None, "exception", MOV_TO_REF
+            imputed = v != "initial" and warped is None
+            status = run.get("selfcheck_status", "") if run else ""
+            if warped is None:
+                cell_rows.append(
+                    row(
+                        v,
+                        "reference",
                         status,
-                        rec,
-                        jac,
+                        at_initial(),
+                        flat,
                         imputed,
                         problem,
                         cause,
-                    ),
-                    "variant": v,
-                    "owner": owner,
-                    "n_mov_all": int(mov.n_features),
-                    "n_mov_kept": int(m_in.n_features),
-                    "n_ref_all": int(ref.n_features),
-                    "n_ref_kept": int(r_in.n_features),
-                }
-            )
-
-    for v in variants:
-        if v == "initial":
-            run, warped, problem, cause = {}, None, "", ""
-        else:
-            run, warped, problem, cause = _load_run(out, v, case)
-            res_rows.append(
-                {**base, "method": v, **resource_row(run or {"cause": "not_run"})}
-            )
-        failed = v != "initial" and warped is None
-        if add_truth is not None:
-            direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
-            mapped = warped.get("truth_xy") if warped is not None else None
-            t_problem, t_cause, t_failed = problem, cause, failed
-            if warped is not None and (
-                direction not in FRAME
-                or mapped is None
-                or len(mapped) != len(points["truth_mov"])
-            ):
-                mapped, direction, t_failed = None, MOV_TO_REF, True
-                t_problem = "warped.npz does not fit the case's truth probes"
-                t_cause = "exception"
-            jac = flat if mapped is None else jacobian_stats(warped)
-            args = (jac, t_failed, t_problem, t_cause)
-            add_truth(v, FRAME[direction], direction, mapped, *args)
-            # the same probes for every variant of the case: those the owner's seam
-            # mask leaves (``_truth_keep``)
-            for owner, (_, _, keep_truth) in masks.items():
-                if keep_truth is None:
-                    continue
-                add_truth(
-                    f"{v}{NON}{owner}",
-                    FRAME[direction],
-                    direction,
-                    mapped,
-                    *args,
-                    keep_truth,
-                    into=non_truth,
-                    owner=owner,
+                    )
                 )
-        if not scorable:
-            continue
-        direction = str(warped["direction"]) if warped is not None else MOV_TO_REF
-        if warped is not None:
-            moved_side = mov if direction == MOV_TO_REF else ref
-            if direction not in FRAME or len(warped["cells_xy"]) != len(moved_side.xy):
-                problem = "warped.npz does not fit the case's nuclei"
-                warped, cause, direction = None, "exception", MOV_TO_REF
-        imputed = v != "initial" and warped is None
-        status = run.get("selfcheck_status", "") if run else ""
-        if warped is None:
-            cell_rows.append(
-                row(v, "reference", status, at_initial(), flat, imputed, problem, cause)
+                off_seams(
+                    v, "reference", status, ref, mov, flat, imputed, problem, cause
+                )
+                continue
+            xy = warped[xy_key].astype(float)
+            if direction == REF_TO_MOV:
+                ref_in, mov_in = pairs.with_xy(ref, xy), mov
+            else:
+                ref_in, mov_in = ref, pairs.with_xy(mov, xy)
+            jac = jacobian_stats(warped)
+            rec = pairs.record(ref, mov, ref_in, mov_in, px)
+            frame = FRAME[direction]
+            cell_rows.append(row(v, frame, status, rec, jac, False, problem, cause))
+            off_seams(v, frame, status, ref_in, mov_in, jac, False, problem, cause)
+        if first and add_truth is not None:
+            # the true map itself: zero by construction, shown so the table has its floor
+            add_truth(
+                "truth",
+                "reference",
+                MOV_TO_REF,
+                points["truth_ref"],
+                nan,
+                False,
+                "",
+                "",
             )
-            off_seams(v, "reference", status, ref, mov, flat, imputed, problem, cause)
-            continue
-        xy = warped["cells_xy"].astype(float)
-        if direction == REF_TO_MOV:
-            ref_in, mov_in = pairs.with_xy(ref, xy), mov
-        else:
-            ref_in, mov_in = ref, pairs.with_xy(mov, xy)
-        jac = jacobian_stats(warped)
-        rec = pairs.record(ref, mov, ref_in, mov_in, px)
-        frame = FRAME[direction]
-        cell_rows.append(row(v, frame, status, rec, jac, False, problem, cause))
-        off_seams(v, frame, status, ref_in, mov_in, jac, False, problem, cause)
-    if add_truth is not None:
-        # the true map itself: zero by construction, shown so the table has its floor
-        add_truth(
-            "truth", "reference", MOV_TO_REF, points["truth_ref"], nan, False, "", ""
-        )
-    if scorable and "cells_mov_xy_truth" in points:
-        moved = pairs.with_xy(mov, points["cells_mov_xy_truth"].astype(float))
-        rec = pairs.record(ref, mov, ref, moved, px)
-        cell_rows.append(row("truth", "reference", "", rec, nan, False, "", ""))
-        off_seams("truth", "reference", "", ref, moved, nan, False, "", "")
-    lost = [{**base, "owner": owner} for owner in missing]
-    return cell_rows, res_rows, truth_rows, non_cells, non_truth, lost
+        if scorable and TRUTH_XY[which] in points:
+            moved = pairs.with_xy(mov, points[TRUTH_XY[which]].astype(float))
+            rec = pairs.record(ref, mov, ref, moved, px)
+            cell_rows.append(row("truth", "reference", "", rec, nan, False, "", ""))
+            off_seams("truth", "reference", "", ref, moved, nan, False, "", "")
+        lost = [{**base, "owner": owner} for owner in missing]
+        return cell_rows, non_cells, lost, absent, scorable
+
+    cell_rows, non_cells, lost, _, scorable = one_set(OUTLINES)
+    why = nuclei_reason(case, points)
+    if not scorable:
+        # no outlines either (a landmark set): there is nothing the nuclei are missing from
+        nuclei = {"cells": [], "non_cells": [], "missing": []}
+    elif why:
+        # a case without bare nuclei is scored on its outlines; nothing is imputed
+        nuclei = {
+            "cells": [],
+            "non_cells": [],
+            "missing": [{**base, "method": "", "reason": why}],
+        }
+    else:
+        nuc_rows, nuc_non, _, absent, _ = one_set(NUCLEI)
+        nuclei = {"cells": nuc_rows, "non_cells": nuc_non, "missing": absent}
+    return cell_rows, res_rows, truth_rows, non_cells, non_truth, lost, nuclei
+
+
+def _in_set(rows, which):
+    """The rows of a summary with the polygon set they were computed on (column ``set``)."""
+    return [{**r, "set": which} for r in rows]
 
 
 # ── summaries ─────────────────────────────────────────────────────────────────
@@ -1253,6 +1364,104 @@ SUBSET_RULE = (
 )
 
 
+SETS_RULE = (
+    "Every overlap number exists on two polygon sets. The tables below are the "
+    "**outlines** (the headline: on the cohort, each StarDist nucleus grown by 10 px, "
+    "what the pipeline's QC publishes and the arms benchmark scores). The **bare "
+    "nuclei** have the same tables in `<name>_nuclei.csv`, with their own gate (1.5 x "
+    "the median equivalent radius of the nuclei), their own null and their own shared "
+    "subset; 'Outlines and bare nuclei, side by side' sets the two beside each other "
+    "for the primary rows. Neither set depends on any method.\n"
+)
+# the headline numbers set side by side, as (label, summary key)
+SIDE_BY_SIDE = (
+    ("pair_fraction", "pair_fraction_med"),
+    ("pair_fraction_null", "pair_fraction_null_med"),
+    ("pair_fraction_excess", "pair_fraction_excess_med"),
+    ("dice_matched", "dice_matched_med"),
+    ("dice_shared", "dice_matched_shared_med"),
+    ("within_1um", "within_1um_med"),
+    ("displacement_um_p50 shared", "displacement_um_p50_shared_med"),
+)
+
+
+def _nuclei_missing_lines(missing, n_cases, any_scored):
+    """What the summary says of the cases (and results) without bare nuclei."""
+    if not missing:
+        return []
+    cases = {(r["dataset"], r["case_id"]) for r in missing if not r["method"]}
+    results = [r for r in missing if r["method"]]
+    lines = []
+    if cases:
+        reasons = {}
+        for r in missing:
+            if not r["method"]:
+                reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
+        lines.append(
+            f"**{len(cases)} of {n_cases} case(s) have no bare nuclei** and are scored "
+            "on the outlines alone; their nuclei numbers are absent, never imputed "
+            "(`nuclei_missing.csv`): "
+            + "; ".join(f"{n} x {why}" for why, n in sorted(reasons.items())[:5])
+            + ("; ..." if len(reasons) > 5 else "")
+            + ("." if any_scored else ". No nuclei table is written.")
+            + "\n"
+        )
+    if results:
+        names = sorted({r["method"] for r in results})
+        lines.append(
+            f"**{len(results)} result(s) hold no bare nuclei** (made before their case "
+            f"had them: {', '.join(f'`{n}`' for n in names)}); they have outline rows "
+            "and no nuclei row until they are run again (`nuclei_missing.csv`).\n"
+        )
+    return lines
+
+
+def _side_by_side(block, nuclei_summary, primary):
+    """The headline numbers of each primary row on both sets: ``outlines / nuclei``."""
+    if not nuclei_summary:
+        return []
+
+    def key(r):
+        return r["dataset"], r.get("family", ""), r["method"], r["subset"]
+
+    def show(v):
+        nothing = v is None or (isinstance(v, float) and math.isnan(v))
+        return "-" if nothing else _fmt(v)
+
+    by = {key(r): r for r in nuclei_summary}
+    wanted = [p.split(NON)[0] for p in primary or []]
+    table = []
+    for r in block:
+        if wanted and r["method"] not in wanted:
+            continue
+        n = by.get(key(r))
+        line = {"family": r["family"]} if r.get("family") else {}
+        line["method"] = r["method"]
+        line["cases: outlines / nuclei"] = (
+            f"{r['n_cases']} / {n['n_cases'] if n else 0}"
+        )
+        for label, k in SIDE_BY_SIDE:
+            line[f"{label}: outlines / nuclei"] = (
+                f"{show(r.get(k))} / {show(n.get(k) if n else None)}"
+            )
+        line["n_dice_shared: outlines / nuclei"] = (
+            f"{show(r.get('n_dice_shared'))} / "
+            f"{show(n.get('n_dice_shared') if n else None)}"
+        )
+        table.append(line)
+    if not table:
+        return []
+    return [
+        "#### Outlines and bare nuclei, side by side\n",
+        "Each cell is `outlines / nuclei`: the median over units of the same number "
+        "on the two sets. Matched Dice on the outlines is dominated by the 10 px rim "
+        "and is clipped where cells touch; on the nuclei it is stricter per "
+        "micrometre. `dice_shared` is read on each set's own shared subset.\n",
+        markdown(table, list(table[0])),
+        "",
+    ]
+
+
 def _common_lines(block, ds):
     """Who is in the common block of one dataset and who is not, always said."""
     mine = [r for r in block if r["dataset"] == ds]
@@ -1597,7 +1806,10 @@ def summary_markdown(
     excluded=None,
     events=None,
     cost_summary=None,
+    nuclei=None,
 ):
+    nuc, nuclei_missing, n_cases = nuclei or ({}, [], 0)
+    nuc_summary = nuc.get("summary_cells") or []
     parts = ["# Registration benchmark\n"]
     parts.append(
         "Nuclear overlap after registration, on nuclei segmented on the native slides. "
@@ -1606,6 +1818,8 @@ def summary_markdown(
         "registered, and a run that did not is scored at the unregistered pose.\n"
     )
     parts.append(SUBSET_RULE)
+    parts.append(SETS_RULE)
+    parts += _nuclei_missing_lines(nuclei_missing, n_cases, bool(nuc_summary))
     parts.append(
         "`selfcheck of this row` is what the selfcheck measured for THAT row, not for "
         "its run: `NEVER CHECKED` marks a stage the method's own writer draws no image "
@@ -1645,11 +1859,13 @@ def summary_markdown(
         block = [r for r in of_ds if r["subset"] == "all"]
         if block:
             parts += ["### All cases\n", _summary_table(block, primary), ""]
+            parts += _side_by_side(block, nuc_summary, primary)
         parts.append("### Cases every compared row registered\n")
         parts += _common_lines(common or [], ds)
         block = [r for r in of_ds if r["subset"] == "common"]
         if block:
             parts += [_summary_table(block, primary), ""]
+            parts += _side_by_side(block, nuc_summary, primary)
         parts += _paired_markdown(paired or [], ds)
     if by_family:
         parts += [
@@ -1910,13 +2126,30 @@ def score(
     )
     launch = read_gates(gates)
     blocked = blocked_rows(launch, run_variants)
-    non_summary = summarise_nonband(non_cells, primary, blocked)
+    non_summary = _in_set(summarise_nonband(non_cells, primary, blocked), OUTLINES)
     by_family = truth_by_family(truth_rows)
-    summary = summarise_cells(cells, primary, blocked)
-    common = common_block(cells, primary, blocked)
+    summary = _in_set(summarise_cells(cells, primary, blocked), OUTLINES)
+    common = _in_set(common_block(cells, primary, blocked), OUTLINES)
     excluded = excluded_rounds(cells)
-    paired = paired_vs_primary(cells)
-    paired_summary = summarise_paired(paired)
+    paired = _in_set(paired_vs_primary(cells), OUTLINES)
+    paired_summary = _in_set(summarise_paired(paired), OUTLINES)
+    # the same tables on the BARE NUCLEI: tables of their own (``<name>_nuclei.csv``),
+    # same columns, read with the nuclei's own gate, null and shared subset. A case
+    # without nuclei has no row there and is listed with its reason, never imputed.
+    nuc = {
+        "cells": [r for rows in done for r in rows[6]["cells"]],
+        "nonband_cells": [r for rows in done for r in rows[6]["non_cells"]],
+    }
+    nuclei_missing = [r for rows in done for r in rows[6]["missing"]]
+    nuc["summary_cells"] = _in_set(
+        summarise_cells(nuc["cells"], primary, blocked), NUCLEI
+    )
+    nuc["common_block"] = _in_set(common_block(nuc["cells"], primary, blocked), NUCLEI)
+    nuc["paired_vs_primary"] = _in_set(paired_vs_primary(nuc["cells"]), NUCLEI)
+    nuc["paired_summary"] = _in_set(summarise_paired(nuc["paired_vs_primary"]), NUCLEI)
+    nuc["nonband_summary"] = _in_set(
+        summarise_nonband(nuc["nonband_cells"], primary, blocked), NUCLEI
+    )
     fails = failures(res)  # every run, the frozen known-truth cases included
     # cost is read on the cohort: the frozen known-truth cases are left out of it
     frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
@@ -1967,9 +2200,14 @@ def score(
         "excluded_rounds",
         "cost_summary",
         "failure_log",
+        "nuclei_missing",
+        *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
         *tissue.TABLES,
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
+    for name in NUCLEI_TABLES:
+        write_csv(tables / f"{name}{NUCLEI_SUFFIX}.csv", nuc[name])
+    write_csv(tables / "nuclei_missing.csv", nuclei_missing)
     write_csv(tables / "cells.csv", cells)
     write_csv(tables / "summary_cells.csv", summary)
     write_csv(tables / "paired_vs_primary.csv", paired)
@@ -2034,6 +2272,7 @@ def score(
         excluded,
         events,
         cost_summary,
+        (nuc, nuclei_missing, len(jobs)),
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -2063,5 +2302,7 @@ def score(
         "cores_confined": confined,
         "cost_header": cost_header,
         "launch": launch,
+        **{f"{name}{NUCLEI_SUFFIX}": rows for name, rows in nuc.items()},
+        "nuclei_missing": nuclei_missing,
         **tis,
     }

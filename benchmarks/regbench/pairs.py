@@ -147,8 +147,40 @@ def _pct(v, q):
     return float(np.percentile(v, q)) if v.size else math.nan
 
 
-def score(a, b, radius_px, pixel_size_um, pairing="lsa"):
-    """``a`` is the reference side, ``b`` the moving side, both already in ONE frame."""
+def _pair_iou(a, b, ia, ib, seen):
+    """``cell_pairs.pair_iou`` for these pairs, computing only those not in ``seen``.
+
+    A pair's IoU is rasterised in the window of its own two cells and depends on nothing
+    else, so the value of a pair both pairings chose (most of them) is the same number
+    and is computed once. ``seen`` is ``{"key", "iou", "scored"}`` of one ``(a, b)`` and
+    is updated; None computes everything."""
+    ia, ib = np.asarray(ia, dtype=np.int64), np.asarray(ib, dtype=np.int64)
+    if seen is None:
+        return cp.pair_iou(a, b, ia, ib)
+    key = ia * (int(b.n_features) + 1) + ib
+    iou = np.full(len(key), np.nan)
+    scored = np.zeros(len(key), dtype=bool)
+    have = np.zeros(len(key), dtype=bool)
+    if len(seen.get("key", ())):
+        pos = np.minimum(np.searchsorted(seen["key"], key), len(seen["key"]) - 1)
+        have = seen["key"][pos] == key
+        iou[have], scored[have] = seen["iou"][pos[have]], seen["scored"][pos[have]]
+    new = ~have
+    if new.any():
+        iou[new], scored[new] = cp.pair_iou(a, b, ia[new], ib[new])
+        keys = np.concatenate([seen.get("key", np.empty(0, np.int64)), key[new]])
+        order = np.argsort(keys, kind="stable")
+        seen["key"] = keys[order]
+        seen["iou"] = np.concatenate([seen.get("iou", np.empty(0)), iou[new]])[order]
+        seen["scored"] = np.concatenate(
+            [seen.get("scored", np.empty(0, bool)), scored[new]]
+        )[order]
+    return iou, scored
+
+
+def score(a, b, radius_px, pixel_size_um, pairing="lsa", seen=None):
+    """``a`` is the reference side, ``b`` the moving side, both already in ONE frame.
+    ``seen`` shares the per-pair IoU between calls on the same two sets (``_pair_iou``)."""
     a, b = as_polyset(a), as_polyset(b)
     n_r, n_m = a.n_features, b.n_features
     out = {
@@ -168,7 +200,7 @@ def score(a, b, radius_px, pixel_size_um, pairing="lsa"):
     out["pair_fraction"] = ia.size / min(n_r, n_m)
     if not ia.size:
         return out
-    iou, scored = cp.pair_iou(a, b, ia, ib)
+    iou, scored = _pair_iou(a, b, ia, ib, seen)
     out["n_pairs_scored"] = int(scored.sum())
     out["displacement_px_p50"] = _pct(dist, 50)
     out["displacement_px_p90"] = _pct(dist, 90)
@@ -227,9 +259,9 @@ def _nanmean(values):
 
 
 def _both_pairings(a, b, radius, pixel_size_um):
-    one = {}
+    one, seen = {}, {}
     for pairing, mid in (("lsa", ""), ("mutual_nn", "_mnn")):
-        got = score(a, b, radius, pixel_size_um, pairing)
+        got = score(a, b, radius, pixel_size_um, pairing, seen)
         one.update({f"{k}{mid}": v for k, v in got.items()})
     return one
 
