@@ -1090,12 +1090,17 @@ def test_valis120_is_given_the_original_slides_of_a_brightfield_case(
         pair = sc.make_pair(tmp_path / "pair", (512, 640))
         h, w = pair["ref_hw"]
         settings = hyreco.make_settings()
+        # the proxies exist (the driver refuses a case whose files cannot be read) and
+        # are not images: an adapter that opened one would fail
+        proxies = [tmp_path / f"{side}.proxy.ome.tif" for side in ("ref", "mov")]
+        for proxy in proxies:
+            proxy.write_bytes(b"never read")
         case = Case(
             dataset="hyreco_a",
             case_id="29",
             group="29",
-            ref_nuclear="/never/read/ref.proxy.ome.tif",
-            mov_nuclear="/never/read/mov.proxy.ome.tif",
+            ref_nuclear=str(proxies[0]),
+            mov_nuclear=str(proxies[1]),
             ref_image=pair["reference"],
             mov_image=pair["moving"],
             modality="brightfield",

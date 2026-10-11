@@ -697,10 +697,10 @@ def test_a_blocked_or_never_started_run_is_not_a_method_failure(
     expected = ["stare", "stare_prep", "valis120_hires", "deeperhistreg_hr_gpu_asdrawn"]
     result = challenge.score(prepared, out, ANHIR, expected=expected, gates=gates)
     lost = {(r["method"], r["cause"]): r for r in result["not_run"]}
-    assert lost[("valis120_hires", "blocked")]["n_pairs"] == len(cases)
+    assert lost[("valis120_hires", "gate_blocked")]["n_pairs"] == len(cases)
     assert (
         "blocked by its selfcheck gate (inconsistent)"
-        in lost[("valis120_hires", "blocked")]["why"]
+        in lost[("valis120_hires", "gate_blocked")]["why"]
     )
     assert lost[("deeperhistreg_hr_gpu_asdrawn", "not_run")]["n_pairs"] == len(cases)
     assert lost[("stare_prep", "not_run")]["n_pairs"] == len(cases) - 4
@@ -733,7 +733,7 @@ def test_a_blocked_or_never_started_run_is_not_a_method_failure(
     assert "valis120_hires" in (tables / "anhir_not_run.csv").read_text()
     text = (tables / "summary.md").read_text()
     assert "## Not run, for a reason that is not the method's" in text
-    assert "| valis120_hires | blocked |" in text
+    assert "| valis120_hires | gate_blocked |" in text
 
 
 def test_aggregates_are_by_side_tissue_and_set(scored, site):

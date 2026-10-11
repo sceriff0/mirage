@@ -106,7 +106,7 @@ TABLES = (
 # nothing about it); it is counted (`n_not_run`) and listed (`anhir_not_run.csv`). A
 # pair the method itself failed on counts at its unregistered landmarks, as the
 # challenge counts a missing registration.
-NOT_RUN_CAUSES = ("not_run", "blocked", *resources.NOT_THE_METHOD)
+NOT_RUN_CAUSES = ("not_run", "gate_blocked", *resources.NOT_THE_METHOD)
 UNKNOWN_FRAME = "unknown (no pair of this row registered)"
 SKIPPED = {
     "tissue-level block": "it compares the nuclear channel of a written image with the "
@@ -315,7 +315,7 @@ def settle_frames(pairs, blocked=None):
     method's failed pair is not "the challenge's own quantity".
 
     **Blocked.** ``blocked`` is ``{result name: why}`` for the rows of a run its gate did
-    not let start: their pairs are ``not_run`` with cause ``blocked``, whatever is on
+    not let start: their pairs are ``not_run`` with cause ``gate_blocked``, whatever is on
     disk from an earlier submission. Returns ``{result name: frames}``."""
     frames = {}
     for r in pairs:
@@ -325,7 +325,7 @@ def settle_frames(pairs, blocked=None):
     for r in pairs:
         why = (blocked or {}).get(r["method"])
         if why and r["method"] != "initial":
-            r.update(failed=True, not_run=True, cause="blocked", problem=why[:200])
+            r.update(failed=True, not_run=True, cause="gate_blocked", problem=why[:200])
             r["robustness"] = 0.0
         if not r["failed"]:
             continue
