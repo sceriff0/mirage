@@ -785,7 +785,17 @@ exists, segment only what has none):
    `ref_nuclei` / `mov_nuclei`. A label image is **used only if** its shape is the
    slide's (refused with both sizes otherwise) **and** at least **0.90** of the slide's
    published outlines hold exactly one of its nuclei's centroids
-   (`nuclei.ACCEPT_ONE_NUCLEUS`; the measured share is recorded). The second check is
+   (`nuclei.ACCEPT_ONE_NUCLEUS`; the measured share is recorded) **and** its objects
+   are the bare nuclei, not the cell mask grown from them and not nuclei in a shifted
+   frame (`nuclei.identity`; the grown cell mask, and a nuclear mask 3 px off, both put
+   one centroid in every outline). Over the objects that sit alone in an outline, with
+   fixed thresholds: the median area ratio object / outline at most **0.90** (a
+   nucleus of 12 px radius in an outline grown by 10 px gives 0.30; the cell mask
+   gives 1.00 and is refused as "looks like the cell mask", with the number); at least
+   **0.90** of the objects' vertices inside their own outline; and the median offset
+   of an object's centroid from its outline's at most **1.0 px** on each axis. The
+   three numbers are in the slide's record (`agreement.identity`), and `exact` needs
+   them too. The second check is
    applied to every label image, not only to a segmentation arm's: two rounds of a patient
    have the same shape, and a mask of the wrong round would pass the first. Why 0.90: an
    outline is its nucleus grown outwards, so the true nuclei put one centroid in nearly
@@ -826,9 +836,18 @@ exists, segment only what has none):
 
    | the re-run's share of published outlines holding exactly one of its nuclei | what happens |
    |---|---|
-   | under 0.90 (`ACCEPT_ONE_NUCLEUS`, the threshold every label image is held to) | **REFUSED**: not used. A `REFUSED <slide>` line with the share and both counts is printed, the task exits 1, `--list` shows status `refused` with that reason, the slide has no nuclei rows, and the reason is in its cases' `cell_sets` and in `nuclei_missing.csv`. It is not segmented again unless `--force` is given: the same command gives the same nuclei, so the model, the channel or a site setting is what to look at |
+   | under 0.90 (`ACCEPT_ONE_NUCLEUS`, the threshold every label image is held to) | **REFUSED**: not used. A `REFUSED <slide>` line with the share and both counts is printed, the task exits 1, `--list` shows status `refused` with that reason, the slide has no nuclei rows, and the reason is in its cases' `cell_sets` and in `nuclei_missing.csv`. It is not segmented again unless `--force` is given (`REGBENCH_NUCLEI_FORCE=1` through the launcher, which the array task passes on): the same command gives the same nuclei, so the model, the channel or a site setting is what to look at. The array task of such a slide says so and exits 1 without running StarDist |
    | 0.90 or more, but short of any exact threshold (0.99 of outlines, counts within 1 %, 0.99 of centroids within 1 px) | kept, marked `exact: false`, printed as `DISAGREEMENT <slide>` with the numbers |
    | every exact threshold met | kept, `exact: true` |
+
+   **A kept re-run is the re-run of its settings.** When the command of a re-run is
+   rendered, the model and every setting it is rendered with are written beside its
+   masks (`rerun/produced_by.json`), and the slide's record keeps THAT (`settings`,
+   `settings_recorded`), not what resolves on the day the mask is checked. When the
+   model or a setting later resolves to another value (another `REGBENCH_STARDIST_*`,
+   another site config), a kept re-run (usable or refused) is not reused: a `STALE
+   <slide>` line names what changed, the old masks are set aside under `rerun_stale/`,
+   and the slide needs its re-run again.
 
    **The model and the settings come from the site config** when the two variables are
    not exported (`benchmarks/regbench/site_config.py`). The site overlay holds, in its
@@ -1626,6 +1645,13 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   and cases: nothing runs, no placeholder is written, and each record gains the
   submission's id (`submissions`, `reused_by`). `REGBENCH_FORCE=1` or `run --force` runs
   it anyway. The cost tables open with `reused: N of M results`.
+  A result is also made FOR its case's points: `run.json: points_sha256` holds a hash of
+  each group of arrays of the case's `points.npz` (`outlines`, `nuclei`, `truth`). A
+  case prepared again with other points (a forced re-prepare; outlines whose meaning
+  changed) makes its earlier results stale: they are not reused, and the scorer counts
+  them as `not_run` ("made for an earlier version of this case"), never as a failure of
+  the method. Adding a group the result never had (bare nuclei to a case with outlines
+  only) leaves it valid.
 - **Threads.** No thread variable is exported. Where a method has its own core-count option
   it is set to `resources.n_cpus()` = `min(SLURM_CPUS_PER_TASK, affinity)`; both numbers
   are recorded. `cpu_efficiency` (CPU time over wall x CPUs) is reported because a method
@@ -1654,6 +1680,15 @@ call; it is then part of the estimate and no number is guessed for it.
 | `ashlar` | inside the clock: ASHLAR's reading of the tiles it is given | `retile_s` | the command up to the last aligner; a round's share is its `layer_s` plus the reference stitch over the rounds | ASHLAR's writer, inside the same command, timed from the last aligner; then the benchmark's split of the mosaic per round, timed apart (`native.write_parts_s`) | one pyramidal OME-TIFF for the patient, every cycle's channels (BigTIFF, deflate); the benchmark's per-round copies have no pyramid |
 | `palom` | inside the clock: PALOM's reader, lazily, on the cohort's OME-TIFFs | none | `Aligner.coarse_register_affine`, `compute_shifts`, `constrain_shifts` | `block_affine_transformed_moving_img` and `write_pyramid`, timed on their own | one pyramidal OME-TIFF per round, every channel (BigTIFF, zlib) |
 
+**The `stare_prep` row** runs the `stare` adapter, so its line is `stare`'s, with one
+step before it: both images are preprocessed by the benchmark (`prep.py`) BEFORE the
+registration clock starts. Its `register_s` (the headline cost) is therefore STARE's
+alone and does not hold that step, while DeeperHistReg's and VALIS's own preprocessing
+are inside their clocks. So the step is recorded apart (`run.json: info.prep.prep_s`,
+`peak_rss_mb`), shown as `benchmark_prep_s` / `benchmark_prep_peak_gb` in
+`cost_end_to_end.csv`, and added to that row's `measured_here_s` and `total_s`: read the
+end-to-end total, not `register_s`, to compare `stare_prep`'s cost with another method's.
+
 What a writer leaves is described twice: here from each package's source (the tags are
 in `cost.py`), and per run from the file itself (`run.json: native.written`: channels,
 pyramid levels, compression, tile, bytes, read with tifffile after the writer has
@@ -1673,12 +1708,13 @@ result that wrote an image:
 | column | what | measured |
 |---|---|---|
 | `method_convert_s` | a conversion the method needs before it can read the slides: DeeperHistReg's single-page TIFFs (`convert_s`, plus the further channels its writer needs), ASHLAR's tiles (`retile_s`, once per patient). `none` when it reads the cohort's files as they are; `not separable` for VALIS | here, 4 CPUs, clock paused |
+| `benchmark_prep_s` | the `stare_prep` row only (`none` elsewhere): the benchmark's preprocessing of both images before STARE starts (`run.json: info.prep.prep_s`), with the process's peak at its end in `benchmark_prep_peak_gb`. It is outside the registration clock and INSIDE this row's `measured_here_s` and `total_s`: the other methods' own preprocessing is inside their clocks | here, 4 CPUs |
 | `estimate_s` | the registration clock | here, 4 CPUs |
 | `write_s` | the package's own writer | here, 4 CPUs, clock paused |
 | `benchmark_copy_s` | the benchmark's own copying of a package's output (ASHLAR, DeeperHistReg). In NO total | here |
 | `pipeline_convert_s` | the pipeline's `CONVERT_IMAGE` on that patient's slides: the files every method reads | IMPORTED from a trace |
 | `pipeline_merge_s` | the pipeline's `MERGE_AND_PYRAMID` on that patient, added for every method whose writer does not leave ONE pyramidal file per PATIENT holding every round's channels; `not needed` for the one that does | IMPORTED from a trace |
-| `measured_here_s` | `method_convert_s + estimate_s + write_s` | |
+| `measured_here_s` | `method_convert_s + benchmark_prep_s + estimate_s + write_s` | |
 | `total_s` | the sum of all of the above that apply; empty for a patient the trace does not have | |
 | `written` | what the method's writer left: channels, pyramid or not, compression, size | the file |
 | `device`, `gpu_model` | DeeperHistReg's CPU and GPU rows are in this one table, told apart here | |
@@ -2364,6 +2400,9 @@ the row can be told from `stare` everywhere. To run the selection:
 
 ```bash
 S=benchmarks/regbench/slurm; export REGBENCH_ANHIR=/data/anhir   # dataset_medium.csv, images/, landmarks/
+#    REGBENCH_ANHIR stays exported for EVERY step below: the cases name the original
+#    images inside it, and it is bound into every image from that variable (a run that
+#    cannot read them is refused at its start, cause `infrastructure`, not the method's)
 export REGBENCH_CASES=/scratch/anhir_cases REGBENCH_OUT=/scratch/anhir_out   # of their own
 $S/submit_cohort.sh --prepare --datasets anhir      # 230 tasks; writes anhir AND anhir_tune
 $S/submit_cohort.sh --dry-run --datasets anhir_tune && $S/submit_cohort.sh --datasets anhir_tune
@@ -2400,16 +2439,32 @@ above 0.5). Beside them, the landmark error in micrometres where the pixel size 
 established, and in pixels everywhere.
 
 **Failures, the official way and apart.** "All missing or incomplete registrations in
-the submission are considered to have the initial rTRE": a pair that did not register
-counts at its unregistered landmarks with robustness 0 in every official column, and a
-landmark returned as non-finite counts at its unregistered position. `n_failed`,
-`n_nonfinite`, the `*_registered` columns (the same statistic over the pairs that did
-register) and `anhir_failures.csv` show them separately.
+the submission are considered to have the initial rTRE": a pair the METHOD did not
+register counts at its unregistered landmarks with robustness 0 in every official
+column, and a landmark returned as non-finite counts at its unregistered position.
+`n_failed`, `n_nonfinite`, the `*_registered` columns (the same statistic over the pairs
+that did register) and `anhir_failures.csv` show them separately. In the micrometre
+column a pair that lost most of its landmarks has an infinite median and COUNTS (it is
+the worst there is); only a pair without a pixel size is left out of it.
+
+**Not run is not failed.** A pair that was never registered for a reason that is not the
+method's is in NO median: its run was blocked by its selfcheck gate (the scorer reads
+the launcher's gates, as the cohort's does), its task never started, the attempt was
+lost to the scheduler or to the benchmark's own step, or its images could not be read
+where the run was (`infrastructure`: the source folder not bound into the image). Such
+pairs are counted (`n_not_run`), listed by cause in `anhir_not_run.csv` and in a block
+of `summary.md`; a row with no other pair is in no table at all, so a blocked run can
+never read as "fails on every pair". This is a departure from the challenge's rule for
+those pairs only, and it is why `n_pairs` can be below the side's pair count.
 
 **Frame.** STARE maps moving to reference: its numbers are the challenge's own quantity.
 VALIS and DeeperHistReg map reference to moving: the target landmarks are moved into the
 source image and compared there, exactly and with no inverted transform, but in the
-source image's pixels (column `frame`; the summary names those rows).
+source image's pixels (column `frame`; the summary names those rows). A pair that did
+not register has no map of its own: its row takes the frame of the same result name's
+registered pairs, else the direction its run record declares, else `unknown`; never a
+default, so a failed pair of a reference -> moving method is not called the challenge's
+quantity.
 
 Not computed: the challenge's ranking criterion (a method's average RANK by median rTRE
 among all submitted methods), which needs the other methods' results on the same pairs.
@@ -2422,6 +2477,7 @@ among all submitted methods), which needs the other methods' results on the same
 | `anhir_by_set.csv` | the same per tissue SET, with the set's side |
 | `anhir_failures.csv`, `anhir_resources.csv`, `anhir_summary_resources.csv` | failures and cost, as for the cohort |
 | `anhir_excluded.csv` | the runs left out, each with its reason |
+| `anhir_not_run.csv` | per result name and cause: the pairs never registered for a reason that is not the method's (in no median) |
 | `anhir_prep_evidence.csv` | `anhir_tune` only: the candidates in the criterion's order |
 
 ### Not verified (nothing of this ran outside this laptop)
@@ -2478,6 +2534,15 @@ a sentence elsewhere in this README disagrees with this section, this section is
    - `--reduce` is in effect a STARE hyperparameter (it doubles the lattice and the
      capture range in micrometres). VALIS has no equivalent, and its primary row there
      is the one most likely to end for memory on 21-gigapixel slides.
+
+3. **A blocked or never-started run reads as a method that fails everywhere.**
+   `regbench.landmarks` (HyReCo's scorer) scores every pair of every expected row, and a
+   pair without a result counts at the unregistered pose whatever the reason: a run its
+   selfcheck gate blocked, an array task that never started and a method's own failure
+   look the same in `hyreco_summary.csv`. ANHIR's scorer reads the gates and lists such
+   pairs apart (`anhir_not_run.csv`); HyReCo's was left as it is while the set is
+   dormant. It also takes the frame of a failed pair of a reference -> moving method
+   to be `reference` (the same default ANHIR's scorer no longer has).
 
 ### `semisynth` (review item 9)
 

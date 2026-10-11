@@ -2,7 +2,7 @@
 
 What must hold: the candidate list is closed and frozen with a hash; no candidate moves
 image content or changes a shape; a candidate said to be the identity on one channel IS
-(same transform as the plain row, bit for bit); the written image is the ORIGINAL slide,
+(the same transform as the plain row); the written image is the ORIGINAL slide,
 never the preprocessed pixels; and a label cannot carry another candidate's result.
 """
 
@@ -122,12 +122,37 @@ def test_no_candidate_moves_image_content(name, brightfield):
     )
 
 
-def test_a_preprocessing_that_shifts_by_a_pixel_is_caught():
+def test_a_preprocessing_that_shifts_by_a_pixel_is_caught(monkeypatch):
     def shifted(reader, name):
         return np.roll(prep.to_array(reader, name), 1, axis=1)
 
     check = prep.frame_check("grey_clahe", False, process=shifted)
     assert not check["ok"] and check["dx"] == pytest.approx(1.0, abs=0.05)
+
+    # a move with a ZERO mean: the left half one pixel right, the right half one left
+    # (a rotation or a scaling about the centre has the same signature)
+    def torn(reader, name):
+        a = prep.to_array(reader, name)
+        half = a.shape[1] // 2
+        return np.hstack(
+            [np.roll(a[:, :half], 1, axis=1), np.roll(a[:, half:], -1, axis=1)]
+        )
+
+    whole = prep.frame_check("grey", False)["n"]
+    monkeypatch.setattr(prep, "FRAME_GATE_PX", 5.0)  # the mean cannot object here
+    check = prep.frame_check("grey", False, process=torn)
+    assert check["n"] == whole  # every dot was found: only the per-dot gate is left
+    assert not check["ok"] and check["max"] == pytest.approx(1.0, abs=0.05)
+    assert abs(check["dx"]) < 0.3  # +1 px and -1 px nearly cancel in the mean
+    monkeypatch.undo()
+
+    def turned(reader, name):
+        from scipy.ndimage import rotate
+
+        return rotate(prep.to_array(reader, name), 0.2, reshape=False, order=1)
+
+    check = prep.frame_check("grey", False, process=turned)
+    assert not check["ok"] and check["max"] > 1.0
 
     def cropped(reader, name):
         return prep.to_array(reader, name)[:-2]
@@ -232,11 +257,13 @@ def test_the_identity_candidate_gives_the_plain_rows_transform(ran):
     _, plain = load(out, "stare", case)
     run, same = load(out, "stare_prep_grey", case)
     assert run["info"]["prep"]["identity_here"] is True
-    assert np.array_equal(plain["truth_xy"], same["truth_xy"])
-    assert np.array_equal(plain["grid"], same["grid"])
+    # the same pixels in another file: the same transform, to the last digits STARE's
+    # worker pool reproduces (two runs of the plain row differ by about 1e-7 px)
+    assert np.abs(plain["truth_xy"] - same["truth_xy"]).max() < 1e-4
+    assert np.abs(plain["grid"] - same["grid"]).max() < 1e-4
     run, other = load(out, "stare_prep_grey_clahe", case)
     assert run["info"]["prep"]["identity_here"] is False
-    assert not np.array_equal(plain["truth_xy"], other["truth_xy"])
+    assert np.abs(plain["truth_xy"] - other["truth_xy"]).max() > 1e-3
 
 
 def test_stare_registers_the_preprocessed_copy_and_writes_the_original(ran):

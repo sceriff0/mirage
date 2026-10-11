@@ -92,6 +92,7 @@ from .cases import (
     nuclei_reason,
     polys,
     result_dir,
+    stale_points,
 )
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -127,6 +128,11 @@ NUCLEI_TABLES = (
     "paired_summary",
     "nonband_cells",
     "nonband_summary",
+)
+NO_SEAM_MASK_ON_NUCLEI = (
+    "no off-seam row on the bare nuclei for any method: the seam owner's primary run "
+    "left no mask on this case's nuclei (it did not register the case, or its result "
+    "was made before the case had nuclei)"
 )
 NO_NUCLEI_IN_RESULT = (
     "this result holds no bare nuclei: it was made before the case had them. "
@@ -373,6 +379,10 @@ def resource_row(run):
         else math.nan,
         # where the adapter times the parts of its write step apart: the package's own
         # writer, a conversion that writer needed, and the benchmark's own copying
+        # the stare_prep row: the benchmark's preprocessing of both images, done before
+        # the registration clock starts, and the process's peak when it ended
+        "prep_s": _f((info.get("prep") or {}).get("prep_s")),
+        "prep_peak_gb": _f((info.get("prep") or {}).get("peak_rss_mb")) / 1024.0,
         "write_writer_s": _f(parts.get("writer")),
         "write_convert_s": _f(parts.get("convert")),
         "write_benchmark_s": _f(parts.get("benchmark")),
@@ -426,6 +436,12 @@ def of_this_submission(run):
     return ladder.mine(run, os.environ.get(SUBMISSION_ENV) or "")
 
 
+STALE_CASE = (
+    "the result was made for an earlier version of this case (its points.npz has "
+    "changed since: the case was prepared again): not run on the case as it is"
+)
+
+
 def _load_run(out, variant, case):
     """``(run, warped, problem, cause)`` of one (variant, case); ``warped`` is None on failure."""
     d = result_dir(out, variant, case)
@@ -439,6 +455,10 @@ def _load_run(out, variant, case):
         return {}, None, "not run", "not_run"
     if not of_this_submission(run):
         return {}, None, STALE, "not_run"
+    changed = stale_points(run.get("points_sha256"), case)
+    if changed:
+        # not the method's failure: its polygons no longer fit because the CASE changed
+        return {}, None, f"{STALE_CASE} ({', '.join(changed)})", "not_run"
     if not run.get("ok") or not (d / "warped.npz").exists():
         return (
             run,
@@ -794,7 +814,18 @@ def _score_case(job):
             "missing": [{**base, "method": "", "reason": why}],
         }
     else:
-        nuc_rows, nuc_non, _, absent, _ = one_set(NUCLEI)
+        nuc_rows, nuc_non, nuc_lost, absent, _ = one_set(NUCLEI)
+        # an owner without a seam mask on the bare nuclei of this case: no off-seam
+        # nuclei row for ANY method here, and that has to be said somewhere
+        absent += [
+            {
+                **base,
+                "method": f"*{NON}{r['owner']}",
+                "owner": r["owner"],
+                "reason": NO_SEAM_MASK_ON_NUCLEI,
+            }
+            for r in nuc_lost
+        ]
         nuclei = {"cells": nuc_rows, "non_cells": nuc_non, "missing": absent}
     return cell_rows, res_rows, truth_rows, non_cells, non_truth, lost, nuclei
 
@@ -1390,8 +1421,18 @@ def _nuclei_missing_lines(missing, n_cases, any_scored):
     if not missing:
         return []
     cases = {(r["dataset"], r["case_id"]) for r in missing if not r["method"]}
-    results = [r for r in missing if r["method"]]
+    seams = [r for r in missing if r.get("owner")]
+    results = [r for r in missing if r["method"] and not r.get("owner")]
     lines = []
+    if seams:
+        owners = sorted({r["owner"] for r in seams})
+        lines.append(
+            f"**{len(seams)} case-and-owner pair(s) have no off-seam rows on the bare "
+            f"nuclei** (owner(s): {', '.join(f'`{o}`' for o in owners)}): the owner's "
+            "primary run left no seam mask on those nuclei, so `nonband_cells_nuclei."
+            "csv` has no row for any method there (`nuclei_missing.csv`, `method` = "
+            "`*:non_<owner>`).\n"
+        )
     if cases:
         reasons = {}
         for r in missing:

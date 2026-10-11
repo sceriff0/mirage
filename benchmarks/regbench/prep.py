@@ -98,6 +98,10 @@ CLAHE_WINDOW_PERCENTILE, CLAHE_WINDOW_STEP = 99.9, 16
 SMOOTH_SIGMA = 2.0
 BLOCK, HALO, TILE = 2048, 512, 1024
 FRAME_GATE_PX = 0.02  # the mean displacement of the dots through a candidate
+# ... and the largest displacement of any ONE dot: a rotation or a scaling about the
+# image centre moves every dot and leaves the mean at zero. The centroid of a single
+# dot after CLAHE or 8-bit rounding is good to a few hundredths of a pixel.
+FRAME_GATE_MAX_PX = 0.15
 
 FROZEN_PATH = Path(__file__).with_name("prep_frozen.json")
 STATUSES = ("provisional", "selected")
@@ -441,8 +445,9 @@ def _centroids(image, xy, r=9):
 def frame_check(name, brightfield, hw=(700, 900), seed=0, process=None):
     """How far a candidate moves image content: the mean displacement ``(dx, dy)`` px of
     isolated dots drawn at known positions, through the SAME code that preprocesses a
-    slide. ``{"dx", "dy", "n", "ok"}``; ``ok`` when both are under ``FRAME_GATE_PX`` and
-    the output has the input's shape. ``process`` replaces ``to_array`` (tests)."""
+    slide. ``{"dx", "dy", "max", "n", "ok"}``; ``ok`` when both means are under
+    ``FRAME_GATE_PX``, no single dot moved by ``FRAME_GATE_MAX_PX`` or more, every dot
+    was found and the output has the input's shape. ``process`` replaces ``to_array`` (tests)."""
     xy = _dots(hw, seed)
     # dots further apart than the centroid window, so each window holds one dot
     keep = [0]
@@ -459,14 +464,44 @@ def frame_check(name, brightfield, hw=(700, 900), seed=0, process=None):
     reader = array_reader(image)
     out = (process or to_array)(reader, name)
     if out.shape != tuple(hw):
-        return {"dx": math.nan, "dy": math.nan, "n": 0, "ok": False, "shape": out.shape}
+        return {
+            "dx": math.nan,
+            "dy": math.nan,
+            "max": math.nan,
+            "n": 0,
+            "ok": False,
+            "shape": out.shape,
+        }
     found = _centroids(out, xy)
     good = np.isfinite(found).all(axis=1)
     if good.sum() < len(xy) // 2:
-        return {"dx": math.nan, "dy": math.nan, "n": int(good.sum()), "ok": False}
-    dx, dy = (float(v) for v in (found[good] - xy[good]).mean(axis=0))
-    ok = abs(dx) < FRAME_GATE_PX and abs(dy) < FRAME_GATE_PX
-    return {"dx": dx, "dy": dy, "n": int(good.sum()), "ok": bool(ok)}
+        return {
+            "dx": math.nan,
+            "dy": math.nan,
+            "max": math.nan,
+            "n": int(good.sum()),
+            "ok": False,
+        }
+    moved = found[good] - xy[good]
+    dx, dy = (float(v) for v in moved.mean(axis=0))
+    worst = float(np.hypot(*moved.T).max())
+    ok = (
+        abs(dx) < FRAME_GATE_PX
+        and abs(dy) < FRAME_GATE_PX
+        and worst < FRAME_GATE_MAX_PX
+        and good.sum() == len(xy)  # a dot that is gone was moved out of its window
+    )
+    return {"dx": dx, "dy": dy, "max": worst, "n": int(good.sum()), "ok": bool(ok)}
+
+
+def _peak_rss_mb():
+    """The process's peak resident memory so far, MB (``ru_maxrss``: bytes on macOS,
+    kilobytes on Linux)."""
+    import resource
+    import sys
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return float(peak) / (1024.0**2 if sys.platform == "darwin" else 1024.0)
 
 
 # ── a case ────────────────────────────────────────────────────────────────────
@@ -511,12 +546,20 @@ def write_inputs(case, dest, name, channel=0):
             )
         out["reference" if side == "ref" else "moving"] = str(path)
     out["record"] = {
+        "peak_rss_mb": _peak_rss_mb(),
+        "peak_rss_is": "the process's peak when the preprocessing ended (it is the "
+        "first thing the run does; the registration's own peak is measured apart)",
         "candidate": name,
         "base": c["base"] if brightfield else "the channel itself",
         "operation": c["op"] or "none",
         "single_channel_rule": SINGLE_CHANNEL[name],
         "identity_here": is_identity(name, brightfield),
-        "frame_check_px": {"dx": check["dx"], "dy": check["dy"], "n": check["n"]},
+        "frame_check_px": {
+            "dx": check["dx"],
+            "dy": check["dy"],
+            "max": check["max"],
+            "n": check["n"],
+        },
         "prep_s": time.perf_counter() - t0,
         "hw": {k: list(v) for k, v in shapes.items()},
     }

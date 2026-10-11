@@ -32,10 +32,22 @@ what=(nuclei --manifest "$REGBENCH_MANIFEST" --out "$REGBENCH_NUCLEI"
       --index "$SLURM_ARRAY_TASK_ID" --workers "${SLURM_CPUS_PER_TASK:-1}")
 mkdir -p "$REGBENCH_NUCLEI"
 
-regbench_py "$scorer" "${what[@]}"
-line="$(regbench_py "$scorer" "${what[@]}" --command)"
+# REGBENCH_NUCLEI_FORCE=1: check and segment again whatever is kept (a refused re-run,
+# after the model or a setting was corrected)
+force=()
+[ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && force=(--force)
+# what is there first. It exits 1 for a slide whose kept re-run was REFUSED: that is
+# this task's verdict when nothing is run again, not a reason to stop before asking
+# what the slide still needs.
+first=0
+regbench_py "$scorer" "${what[@]}" ${force[@]+"${force[@]}"} || first=$?
+line="$(regbench_py "$scorer" "${what[@]}" --command ${force[@]+"${force[@]}"})"
 if [ -z "$line" ]; then
-    echo "slide $SLURM_ARRAY_TASK_ID: nothing to segment (usable nuclei exist, or its re-run was refused: nuclei --list); StarDist is not run"
+    if [ "$first" -ne 0 ]; then
+        echo "slide $SLURM_ARRAY_TASK_ID: its StarDist re-run was REFUSED and is not run again (nuclei --list has the reason). Correct the model or the settings, then REGBENCH_NUCLEI_FORCE=1 runs it again. This task fails."
+        exit "$first"
+    fi
+    echo "slide $SLURM_ARRAY_TASK_ID: nothing to segment (usable nuclei exist: nuclei --list); StarDist is not run"
     exit 0
 fi
 echo "+ $line"

@@ -203,6 +203,55 @@ def list_cases(cases_root, dataset):
     return [load_case(d) for d in dirs]
 
 
+_FINGERPRINTS = {}
+POINT_GROUPS = {"cells_": "outlines", "nuclei_": "nuclei", "truth_": "truth"}
+
+
+def points_fingerprint(case):
+    """``{"outlines", "nuclei", "truth"}`` -> sha256 of that group of arrays of the
+    case's ``points.npz`` as it is on disk now (``""`` for a group it does not have).
+
+    A result is made FOR these points: it moved them. A case prepared again with other
+    points makes every earlier result of it stale, never a failure of the method
+    (:func:`stale_points`). The groups are apart so that ADDING one (bare nuclei to a
+    case that had outlines only) leaves the results of the others valid. Cached per
+    file state (path, size, modification time)."""
+    import hashlib
+
+    path = Path(case.points_path)
+    out = dict.fromkeys(POINT_GROUPS.values(), "")
+    try:
+        st = path.stat()
+    except OSError:
+        return out
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _FINGERPRINTS:
+        hashes = {}
+        with np.load(path) as z:
+            for name in sorted(z.files):
+                group = next(
+                    (g for p, g in POINT_GROUPS.items() if name.startswith(p)), None
+                )
+                if group is None:
+                    continue
+                h = hashes.setdefault(group, hashlib.sha256())
+                a = np.ascontiguousarray(z[name])
+                h.update(f"{name}:{a.dtype}:{a.shape}:".encode())
+                h.update(a.tobytes())
+        _FINGERPRINTS[key] = {**out, **{g: h.hexdigest() for g, h in hashes.items()}}
+    return dict(_FINGERPRINTS[key])
+
+
+def stale_points(made_for, case):
+    """The groups of points a result was made for that the case no longer has in that
+    form (``made_for`` is the result's recorded fingerprint; a record without one, or a
+    group the result never had, is not stale)."""
+    if not isinstance(made_for, dict):
+        return []
+    now = points_fingerprint(case)
+    return [g for g, h in made_for.items() if h and h != now.get(g, "")]
+
+
 def load_points(case):
     with np.load(case.points_path) as z:
         return {k: z[k] for k in z.files}

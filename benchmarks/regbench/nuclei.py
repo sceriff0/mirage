@@ -41,6 +41,19 @@ The thresholds, and why:
     exactly one nucleus and the two counts within 1 %: what is left for concave nuclei
     (centroid outside the outline), the 1 px simplification of the published polygons and
     a GPU's run-to-run differences. Stated before any cohort run; not tuned on results.
+``IDENTITY_*``  a label image must also BE nuclei, not the cell mask grown from them
+    and not a mask in a shifted frame; one centroid per outline cannot tell (the cell
+    mask itself, or the nuclei moved by a few pixels, pass it). Over the nuclei that sit
+    alone in an outline (:func:`identity`): the median area ratio nucleus / outline at
+    most ``IDENTITY_AREA_RATIO_MAX`` 0.90 (an outline is its nucleus grown by up to
+    10 px: a nucleus of radius 12 px gives 0.30, and only a nucleus hemmed in on all
+    sides approaches 1; the cell mask gives 1.00); at least ``IDENTITY_INSIDE_MIN`` 0.90
+    of the nuclei's vertices inside their own outline (a nucleus is contained in the
+    outline grown from it; the published outlines are simplified to 1 px, hence not
+    1.00); and the median offset of the nucleus's centroid from its outline's at most
+    ``IDENTITY_OFFSET_MAX_PX`` 1.0 px on each axis (growing is isotropic, so the two
+    centroids coincide but for neighbours in the way; a mask shifted by 3 px keeps one
+    centroid per outline and fails here). Fixed before any cohort run.
 ``RERUN_MATCH_PX`` 1.0, ``EXACT_MATCH`` 0.99  a re-run's own cell mask must put a
     centroid within 1 px of 99 % of the published outlines' centroids (the published
     polygons are simplified to 1 px, which moves a centroid by a fraction of a pixel).
@@ -85,6 +98,9 @@ ACCEPT_ONE_NUCLEUS = 0.90
 EXACT_ONE_NUCLEUS = 0.99
 EXACT_COUNT_TOL = 0.01
 RERUN_MATCH_PX = 1.0
+IDENTITY_AREA_RATIO_MAX = 0.90
+IDENTITY_INSIDE_MIN = 0.90
+IDENTITY_OFFSET_MAX_PX = 1.0
 EXACT_MATCH = 0.99
 NEEDS_RERUN = (
     "no usable nuclear label image for this slide; the StarDist re-run has not run "
@@ -175,6 +191,88 @@ def one_nucleus_fraction(outlines, centroids):
     return float((held == 1).mean())
 
 
+def holders(outlines, centroids):
+    """For each centroid, the index of the outline that holds it (the first of the four
+    nearest by centroid), or -1."""
+    from scipy.spatial import cKDTree
+
+    outlines = pairs.as_polyset(outlines)
+    cent = np.asarray(centroids, dtype=float).reshape(-1, 2)
+    out = np.full(len(cent), -1, dtype=np.int64)
+    good = np.isfinite(cent).all(axis=1)
+    _, own = pairs.cp.feature_area_centroid(outlines)
+    ok = np.isfinite(own).all(axis=1)
+    index = np.flatnonzero(ok)
+    if not len(index) or not good.any():
+        return out
+    k = min(4, len(index))
+    _, near = cKDTree(own[ok]).query(cent[good], k=k)
+    near = index[np.asarray(near).reshape(int(good.sum()), k)]
+    rows = np.flatnonzero(good)
+    for j in range(k - 1, -1, -1):  # the nearest holder wins
+        hit = cells.inside(outlines, near[:, j], cent[good])
+        out[rows[hit]] = near[hit, j]
+    return out
+
+
+def identity(outlines, nuclei):
+    """Are these the NUCLEI the outlines were grown from (module docstring,
+    ``IDENTITY_*``)? ``{"area_ratio_med", "vertices_inside_frac", "centroid_offset_px",
+    "n_paired", "is_nuclei", "why"}`` over the nuclei that sit alone in an outline."""
+    outlines, nuclei = pairs.as_polyset(outlines), pairs.as_polyset(nuclei)
+    area_n, cent_n = pairs.cp.feature_area_centroid(nuclei)
+    area_o, cent_o = pairs.cp.feature_area_centroid(outlines)
+    holder = holders(outlines, cent_n)
+    alone = np.bincount(holder[holder >= 0], minlength=outlines.n_features) == 1
+    paired = (holder >= 0) & alone[np.clip(holder, 0, None)]
+    paired &= np.isfinite(area_n) & (area_n > 0)
+    out = {
+        "n_paired": int(paired.sum()),
+        "area_ratio_med": float("nan"),
+        "vertices_inside_frac": float("nan"),
+        "centroid_offset_px": [float("nan"), float("nan")],
+        "area_ratio_max": IDENTITY_AREA_RATIO_MAX,
+        "vertices_inside_min": IDENTITY_INSIDE_MIN,
+        "centroid_offset_max_px": IDENTITY_OFFSET_MAX_PX,
+        "is_nuclei": False,
+        "why": "no nucleus sits alone in an outline",
+    }
+    if not paired.any():
+        return out
+    ratio = area_n[paired] / area_o[holder[paired]]
+    offset = np.median(cent_n[paired] - cent_o[holder[paired]], axis=0)
+    vertex_feat = np.repeat(nuclei.ring_feat, np.diff(nuclei.ring_off))
+    use = paired[vertex_feat]
+    inside = cells.inside(outlines, holder[vertex_feat[use]], nuclei.xy[use])
+    out.update(
+        area_ratio_med=float(np.median(ratio)),
+        vertices_inside_frac=float(inside.mean()) if len(inside) else float("nan"),
+        centroid_offset_px=[float(offset[0]), float(offset[1])],
+    )
+    problems = []
+    if not out["area_ratio_med"] <= IDENTITY_AREA_RATIO_MAX:
+        problems.append(
+            f"its objects are as large as the outlines (median area ratio "
+            f"{out['area_ratio_med']:.2f}, at most {IDENTITY_AREA_RATIO_MAX} for nuclei "
+            "inside outlines grown by up to 10 px): it looks like the cell mask"
+        )
+    if not out["vertices_inside_frac"] >= IDENTITY_INSIDE_MIN:
+        problems.append(
+            f"only {out['vertices_inside_frac']:.2f} of its objects' vertices lie "
+            f"inside their own outline (at least {IDENTITY_INSIDE_MIN}): not contained "
+            "in the outlines"
+        )
+    if not max(abs(offset[0]), abs(offset[1])) <= IDENTITY_OFFSET_MAX_PX:
+        problems.append(
+            f"its objects sit ({offset[0]:+.1f}, {offset[1]:+.1f}) px from the centres "
+            f"of their outlines (at most {IDENTITY_OFFSET_MAX_PX} px on each axis): a "
+            "mask in a shifted frame"
+        )
+    out["is_nuclei"] = not problems
+    out["why"] = "; ".join(problems)
+    return out
+
+
 def _counts_agree(a, b):
     return bool(max(a, b) and abs(a - b) / max(a, b) <= EXACT_COUNT_TOL)
 
@@ -184,11 +282,17 @@ def label_agreement(outlines, nuclei):
     area, cent = pairs.cp.feature_area_centroid(pairs.as_polyset(nuclei))
     n_out, n_nuc = pairs.n_cells(outlines), pairs.n_cells(nuclei)
     frac = one_nucleus_fraction(outlines, cent)
+    same = identity(outlines, nuclei)
     return {
         "n_outlines": n_out,
         "n_nuclei": n_nuc,
         "one_nucleus_frac": frac,
-        "exact": bool(frac >= EXACT_ONE_NUCLEUS and _counts_agree(n_out, n_nuc)),
+        "identity": same,
+        "exact": bool(
+            frac >= EXACT_ONE_NUCLEUS
+            and _counts_agree(n_out, n_nuc)
+            and same["is_nuclei"]
+        ),
         "accept_threshold": ACCEPT_ONE_NUCLEUS,
         "exact_threshold": EXACT_ONE_NUCLEUS,
         "count_tolerance": EXACT_COUNT_TOL,
@@ -349,6 +453,13 @@ def check_label_image(slide, path, store, a, outlines=None, origin=""):
                 "required): not the nuclei of this slide in its native frame"
             )
             return rec
+        if not got["identity"]["is_nuclei"]:
+            # one centroid per outline is also what the CELL mask gives, and a mask a
+            # few pixels off: a label image has to be the nuclei themselves
+            rec["reason"] = (
+                f"{path}: not the bare nuclei of this slide: {got['identity']['why']}"
+            )
+            return rec
         rec["exact"] = got["exact"]
     rec.update(usable=True, needs_rerun=False, source=f"label_image:{path}")
     _keep(store, rec, nuclei)
@@ -396,8 +507,7 @@ def check_rerun(slide, store, a):
                 refused=True,
                 needs_rerun=False,
                 agreement=agreement,
-                settings=_settings_or_none(),
-                command=shlex.join(_command_or_none(slide, dest) or []),
+                **_made_with(slide, dest),
                 reason=(
                     f"the StarDist re-run was REFUSED: only "
                     f"{agreement['one_nucleus_frac']:.3f} of this slide's "
@@ -425,8 +535,7 @@ def check_rerun(slide, store, a):
         exact=exact,
         agreement=agreement,
         source="stardist_rerun",
-        settings=_settings_or_none(),
-        command=shlex.join(_command_or_none(slide, dest) or []),
+        **_made_with(slide, dest),
     )
     _keep(store, rec, nuclei)
     return rec
@@ -452,6 +561,78 @@ def _command_or_none(slide, dest):
         return None
 
 
+PRODUCED = "produced_by.json"
+AT_SEGMENTATION = "when the re-run was rendered (rerun/produced_by.json)"
+AT_CHECK = "when the mask was checked: no record of the segmentation itself was found"
+
+
+def write_produced(slide, dest):
+    """Leave, beside the masks a re-run is about to write, the command and the settings
+    it is rendered with NOW. A record made later (when the mask is checked) could carry
+    the settings of another day."""
+    record = {"command": shlex.join(command(slide, dest)), "settings": settings()}
+    write_json(Path(dest) / PRODUCED, record)
+    return record
+
+
+def _made_with(slide, dest):
+    """``settings`` / ``command`` / ``settings_recorded`` of a re-run's record: what the
+    masks under ``dest`` were PRODUCED with, when that was written down."""
+    path = Path(dest) / PRODUCED
+    if path.is_file():
+        try:
+            made = json.loads(path.read_text())
+            return {
+                "settings": made["settings"],
+                "command": made["command"],
+                "settings_recorded": AT_SEGMENTATION,
+            }
+        except (ValueError, KeyError):
+            pass
+    return {
+        "settings": _settings_or_none(),
+        "command": shlex.join(_command_or_none(slide, dest) or []),
+        "settings_recorded": AT_CHECK,
+    }
+
+
+def _values(resolved):
+    return {
+        k: str(v.get("value", ""))
+        for k, v in ((resolved or {}).get("values") or {}).items()
+    }
+
+
+def settings_changed(rec):
+    """What differs between the settings a kept re-run was made with and the ones that
+    resolve now, as ``["key: old -> new"]``. Empty for a record that is no re-run, that
+    recorded no settings, or when nothing resolves now (no model named)."""
+    if not rec or not (rec.get("source") == "stardist_rerun" or rec.get("refused")):
+        return []
+    old = _values(rec.get("settings"))
+    now = _values(_settings_or_none())
+    if not old or not now:
+        return []
+    return [
+        f"{k}: {old.get(k, '')!r} -> {now.get(k, '')!r}"
+        for k in sorted(set(old) | set(now))
+        if old.get(k, "") != now.get(k, "")
+    ]
+
+
+def set_aside(store):
+    """Move a re-run that is no longer the one to use out of the way (``rerun_stale/``,
+    the one before it removed) and drop its polygons."""
+    import shutil
+
+    store = Path(store)
+    stale = store / "rerun_stale"
+    if (store / "rerun").is_dir():
+        shutil.rmtree(stale, ignore_errors=True)
+        (store / "rerun").rename(stale)
+    (store / "nuclei.npz").unlink(missing_ok=True)
+
+
 def _keep(store, rec, nuclei):
     store = Path(store)
     write_npz(store / "nuclei.npz", **polyset_arrays(nuclei, "ref"))
@@ -463,7 +644,21 @@ def resolve(slide, out, a):
     finished re-run, else ``needs_rerun``."""
     store = store_of(out, slide)
     old = load(store)
-    if old and old.get("usable") and not getattr(a, "force", False):
+    force = getattr(a, "force", False)
+    # A re-run kept here (usable, or refused) was made with the model and settings of
+    # ITS day. When they resolve to something else now, it is not the re-run to keep:
+    # said aloud, set aside, and the slide needs its re-run again.
+    changed = [] if force else settings_changed(old)
+    if changed:
+        print(
+            f"STALE {slide['key']}: its StarDist re-run was made with other settings "
+            f"({'; '.join(changed)}). It is set aside (rerun_stale/) and the slide is "
+            "segmented again.",
+            flush=True,
+        )
+        set_aside(store)
+        old = None
+    if old and old.get("usable") and not force:
         return old
     rec = None
     if slide["candidate"]:
@@ -477,6 +672,12 @@ def resolve(slide, out, a):
             rec["candidate_refused"] = refused
             if not rec["usable"]:
                 rec["reason"] = f"{refused}; {rec['reason']}"
+    if changed and rec.get("needs_rerun"):
+        rec["stale_settings"] = changed
+        rec["reason"] = (
+            "the re-run kept for this slide was made with other settings "
+            f"({'; '.join(changed)}); it is set aside and must be run again"
+        )
     write_json(store / "nuclei.json", rec)
     return rec
 
@@ -487,6 +688,7 @@ def segment(slide, out):
     dest = store_of(out, slide) / "rerun"
     dest.mkdir(parents=True, exist_ok=True)
     argv = command(slide, dest)
+    write_produced(slide, dest)
     argv[0] = sys.executable
     print("+ " + shlex.join(argv), flush=True)
     return subprocess.run(argv, check=False).returncode
@@ -593,7 +795,8 @@ def main(a):
                 continue
             dest = store_of(a.out, slide) / "rerun"
             dest.mkdir(parents=True, exist_ok=True)
-            line = shlex.join(command(slide, dest))
+            # the line is about to be run: what it is rendered with is written down
+            line = write_produced(slide, dest)["command"]
             if not said:  # on stderr: stdout is the command, one shell line a slide
                 for text in site_config.lines(settings()):
                     print("# " + text, file=sys.stderr)

@@ -333,6 +333,14 @@ def classify_text(text):
     return "exception"
 
 
+class InputUnreadable(OSError):
+    """A file the case names cannot be read from where the run is (a folder that is
+    not bound into the container, a path of another machine). The method never saw
+    its input: the failure is not its own (``infrastructure``)."""
+
+    regbench_cause = "infrastructure"
+
+
 def classify_error(exc):
     """The ``cause`` of a method's own failure: ``gpu_oom``, ``oom``, ``timeout`` or ``exception``.
 
@@ -342,6 +350,9 @@ def classify_error(exc):
     """
     import subprocess
 
+    declared = getattr(exc, "regbench_cause", None)
+    if declared in CAUSES:  # an error that says whose it is (`InputUnreadable`)
+        return declared
     text = f"{type(exc).__name__}: {exc}"
     if any(s in text for s in GPU_MEMORY_ERRORS):
         return "gpu_oom"

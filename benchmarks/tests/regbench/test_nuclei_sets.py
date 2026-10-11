@@ -208,6 +208,14 @@ def test_no_alignment_and_no_geometry_gives_no_off_seam_nuclei_row(tmp_path):
     res = score(root, out, ["multiplex"], seam_owners=("tiles",))
     assert res["nonband_cells"] and res["nonband_cells_nuclei"] == []
     assert row(res["cells_nuclei"], "tiles")["pair_fraction"] == 1.0
+    # ... and the reason is on record (review item 8): the missing rows are named,
+    # with the owner, and the summary says so
+    (why,) = [r for r in res["nuclei_missing"] if r.get("owner")]
+    assert why["method"] == "*:non_tiles" and why["case_id"] == case.case_id
+    assert "left no mask on this case's nuclei" in why["reason"]
+    text = (out / "tables" / "summary.md").read_text()
+    assert "have no off-seam rows on the bare nuclei" in text and "`tiles`" in text
+    assert "hold no bare nuclei" not in text  # not mistaken for a result without nuclei
 
 
 # ── the scorer ────────────────────────────────────────────────────────────────

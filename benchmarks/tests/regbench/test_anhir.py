@@ -52,7 +52,9 @@ HEADER = [
     "Warped source landmarks",
     "Execution time [minutes]",
 ]
-HW = (240, 320)
+HW = (240, 320)  # every target (reference) image
+HW_MOV = (200, 352)  # every source (moving) image: another shape, another diagonal
+TARGETS = ("HE", "b")
 # (set, scale folder, extension, [(source, target, status)])
 SETS = [
     *[
@@ -73,13 +75,13 @@ SETS = [
 ]
 
 
-def _image(path, seed):
+def _image(path, seed, hw):
     from PIL import Image
 
     rng = np.random.default_rng(seed)
-    a = np.full((*HW, 3), 235, np.uint8)
+    a = np.full((*hw, 3), 235, np.uint8)
     for _ in range(40):
-        y, x = rng.integers(8, HW[0] - 8), rng.integers(8, HW[1] - 8)
+        y, x = rng.integers(8, hw[0] - 8), rng.integers(8, hw[1] - 8)
         a[y - 4 : y + 4, x - 4 : x + 4] = rng.integers(40, 160, 3)
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(a).save(path)
@@ -106,16 +108,17 @@ def build(root, sets=SETS):
                 if rel in seen:
                     continue
                 seen.add(rel)
-                _image(root / "images" / f"{rel}.{ext}", len(seen))
+                hw = HW if stem in TARGETS else HW_MOV
+                _image(root / "images" / f"{rel}.{ext}", len(seen), hw)
                 n = 12 + (2 if stem == "c" else 0)
-                xy = rng.uniform(20, 200, (n, 2)).round(1)
+                xy = rng.uniform(20, 190, (n, 2)).round(1)
                 _landmarks(root / "landmarks" / f"{rel}.csv", xy)
             # paired by row: the source's are the target's, moved
             target = anhir.read_landmarks(
                 root / "landmarks" / f"{name}/{scale}/{tgt}.csv"
             )
             extra = 2 if src == "c" else 0
-            moved = np.vstack([target + (6.0, -4.0), rng.uniform(20, 200, (extra, 2))])
+            moved = np.vstack([target + (6.0, -4.0), rng.uniform(20, 190, (extra, 2))])
             _landmarks(root / "landmarks" / f"{name}/{scale}/{src}.csv", moved, first=1)
             rows.append(
                 [
@@ -268,8 +271,12 @@ def test_prepare_writes_the_training_pairs_and_the_tuning_side_again(prepared, s
         assert c.group == cid and c.modality == "brightfield"
         assert c.extra["split_sha256"] == split["sha256"]
         assert c.extra["side"] == anhir.side_of(split, c.extra["set"])
-        assert c.extra["status"] == "training" and c.ref_hw == list(HW)
+        assert c.extra["status"] == "training"
+        # the TARGET is the reference: its size, and its diagonal for the rTRE
+        assert c.ref_hw == list(HW) and c.mov_hw == list(HW_MOV)
         assert c.diagonal == pytest.approx(math.hypot(*HW))
+        assert abs(c.diagonal - math.hypot(*HW_MOV)) > 1.0
+        assert c.extra["landmarks_outside_image"] == {"ref": 0, "mov": 0}
         assert c.extra["table_diagonal_agrees"] is True
     for cid, c in tune.items():  # the same pair, the same files, another dataset
         assert c.dataset == ANHIR_TUNE and c.ref_image == cases[cid].ref_image
@@ -335,6 +342,7 @@ def test_the_plain_rows_grey_image_is_the_stated_conversion(prepared):
     want = 255.0 - (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2])
     grey = tifffile.imread(c.ref_nuclear)
     assert grey.dtype == np.uint8 and grey.shape[-2:] == HW
+    assert tifffile.imread(c.mov_nuclear).shape[-2:] == HW_MOV
     assert np.abs(grey.reshape(HW) - want).max() <= 0.5 + 1e-3
     assert "0.299" in c.extra["grey"] and c.extra["settings"]["reduce"] == 1
     # one file per IMAGE: the two pairs with the target `b` share it
@@ -574,6 +582,160 @@ def test_a_failed_pair_counts_at_its_unregistered_landmarks(scored):
     assert any(f["method"] == "rough" for f in result["failures"])
 
 
+def _row(method, case_id, um, **kw):
+    base = {
+        "method": method,
+        "case_id": case_id,
+        "side": "report",
+        "tissue": "COAD",
+        "set": "COAD_01",
+        "frame": "reference",
+        "challenge_quantity": True,
+        "rtre_median": 0.01,
+        "rtre_mean": 0.01,
+        "rtre_max": 0.02,
+        "robustness": 1.0,
+        "initial_rtre_median": 0.05,
+        "n_landmarks": 10,
+        "n_nonfinite": 0,
+        "tre_um_p50": um,
+        "tre_px_p50": 1.0,
+        "failed": False,
+        "not_run": False,
+        "cause": "",
+        "problem": "",
+    }
+    return {**base, **kw}
+
+
+def test_a_pair_that_lost_most_landmarks_counts_in_micrometres_and_is_the_worst():
+    """An INFINITE median (6 of 10 landmarks lost) is a result; only NaN (no pixel
+    size) leaves a pair out of the micrometre column."""
+    rows = [_row("m", "a", 1.0), _row("m", "b", 2.0), _row("m", "c", math.inf)]
+    got = challenge.aggregate(rows)
+    assert got["n_pairs_um"] == 3 and got["median_tre_um_p50"] == 2.0
+    assert challenge.aggregate([*rows, _row("m", "d", math.inf)])[
+        "median_tre_um_p50"
+    ] == pytest.approx(math.inf)
+    no_size = challenge.aggregate([*rows, _row("m", "d", math.nan)])
+    assert no_size["n_pairs_um"] == 3 and no_size["n_pairs"] == 4
+
+
+def test_a_majority_lost_pair_through_the_scorer(prepared, frozen, tmp_path):
+    """The same, from a result on disk: 8 of 12 landmarks non-finite."""
+    out = tmp_path / "out"
+    cases = [c for c in list_cases(prepared, ANHIR) if c.extra["tissue"] == "COAD"]
+    for i, case in enumerate(cases):
+        methods.run_case(
+            Fake("lossy", MOV_TO_REF, (-6.0, 4.0), lose=8 if i == 0 else 0), case, out
+        )
+    result = challenge.score(prepared, out, ANHIR, write=False)
+    first = pair_row(result, "lossy", cases[0].case_id)
+    assert first["n_nonfinite"] == 8 and first["tre_um_p50"] == math.inf
+    (line,) = [
+        r
+        for r in result["summary"]
+        if (r["side"], r["tissue"], r["method"]) == ("all", "COAD", "lossy")
+    ]
+    assert line["n_pairs_um"] == line["n_pairs"] == len(cases) == 5
+
+
+def test_a_failed_pair_of_a_reverse_method_is_not_called_the_challenges_quantity(
+    prepared, frozen, tmp_path
+):
+    """A failed pair has no map. Its frame is its row's (the registered pairs'), never
+    a default, and one registered reverse pair is enough to name the row."""
+    out = tmp_path / "out"
+    cases = list_cases(prepared, ANHIR)
+    reverse = Fake(
+        "reverse", REF_TO_MOV, (6.0, -4.0), fail={c.case_id for c in cases[1:]}
+    )
+    dead = Fake("dead", REF_TO_MOV, (6.0, -4.0), fail={c.case_id for c in cases})
+    for case in cases:
+        methods.run_case(reverse, case, out)
+        methods.run_case(dead, case, out)
+    result = challenge.score(prepared, out, ANHIR)
+    rows = [r for r in result["pairs"] if r["method"] == "reverse"]
+    assert sum(r["failed"] for r in rows) == len(cases) - 1
+    assert {r["frame"] for r in rows} == {"moving"}  # the LAST row is a failed one
+    assert not any(r["challenge_quantity"] for r in rows)
+    assert result["frames"]["reverse"] == ["moving"]
+    # no pair registered at all: the frame is unknown, not "reference"
+    assert {r["frame"] for r in result["pairs"] if r["method"] == "dead"} == {
+        challenge.UNKNOWN_FRAME
+    }
+    assert not any(
+        r["challenge_quantity"] for r in result["pairs"] if r["method"] == "dead"
+    )
+    text = (Path(result["tables"]) / "summary.md").read_text()
+    sentence = next(ln for ln in text.splitlines() if "SOURCE image's frame" in ln)
+    assert "`reverse`" in sentence and "`dead`" in sentence
+    assert "`initial`" not in sentence
+
+
+def test_a_blocked_or_never_started_run_is_not_a_method_failure(
+    prepared, frozen, tmp_path
+):
+    """All pairs at the initial rTRE with robustness 0 would read as a method that
+    fails everywhere. A run its gate blocked, or one that never started, is listed
+    apart and is in no median; a method's own failure still counts."""
+    out = tmp_path / "out"
+    cases = list_cases(prepared, ANHIR)
+    for case in cases:
+        methods.run_case(Fake("stare", MOV_TO_REF, (-6.0, 4.0)), case, out)
+        methods.run_case(Fake("valis120_hires", REF_TO_MOV, (6.0, -4.0)), case, out)
+    for case in cases[:4]:  # stare_prep ran on four pairs only; one of them failed
+        fake = Fake("stare_prep", MOV_TO_REF, (-6.0, 4.0), fail={cases[0].case_id})
+        methods.run_case(fake, case, out)
+    gates = out / "logs" / "gates"
+    gates.mkdir(parents=True)
+    # the gate blocked valis120_hires in THIS submission; its folders are older results
+    (gates / "valis120_hires.tsv").write_text(
+        "valis120_hires\tinconsistent\t-\t1\t-\t-\n"
+    )
+    (gates / "stare.tsv").write_text("stare\tok\t-\t0\t-\t-\n")
+    expected = ["stare", "stare_prep", "valis120_hires", "deeperhistreg_hr_gpu_asdrawn"]
+    result = challenge.score(prepared, out, ANHIR, expected=expected, gates=gates)
+    lost = {(r["method"], r["cause"]): r for r in result["not_run"]}
+    assert lost[("valis120_hires", "blocked")]["n_pairs"] == len(cases)
+    assert (
+        "blocked by its selfcheck gate (inconsistent)"
+        in lost[("valis120_hires", "blocked")]["why"]
+    )
+    assert lost[("deeperhistreg_hr_gpu_asdrawn", "not_run")]["n_pairs"] == len(cases)
+    assert lost[("stare_prep", "not_run")]["n_pairs"] == len(cases) - 4
+    summary = {
+        r["method"]: r
+        for r in result["summary"]
+        if (r["side"], r["tissue"]) == ("all", "all")
+    }
+    # in no median: no row at all for a run that registered nothing
+    assert "valis120_hires" not in summary
+    assert "deeperhistreg_hr_gpu_asdrawn" not in summary
+    # stare_prep: its medians are over the four pairs it ran, one of them ITS failure
+    line = summary["stare_prep"]
+    assert (line["n_pairs"], line["n_not_run"], line["n_failed"]) == (
+        4,
+        len(cases) - 4,
+        1,
+    )
+    mine = [
+        r for r in result["pairs"] if r["method"] == "stare_prep" and not r["not_run"]
+    ]
+    assert len(mine) == 4
+    assert line["median_rtre_median"] == pytest.approx(
+        np.median([r["rtre_median"] for r in mine])
+    )
+    assert summary["stare"]["n_not_run"] == 0 and summary["stare"]["n_pairs"] == len(
+        cases
+    )
+    tables = Path(result["tables"])
+    assert "valis120_hires" in (tables / "anhir_not_run.csv").read_text()
+    text = (tables / "summary.md").read_text()
+    assert "## Not run, for a reason that is not the method's" in text
+    assert "| valis120_hires | blocked |" in text
+
+
 def test_aggregates_are_by_side_tissue_and_set(scored, site):
     result, _, _ = scored
     split = site[1]
@@ -764,3 +926,45 @@ def test_stare_is_given_the_grey_image_and_a_placeholder_size_where_none_is_know
     changed = [i for i, (a, b) in enumerate(zip(plain, prepped)) if a != b]
     assert [plain[i - 1] for i in changed] == ["--reference", "--moving"]
     assert len(plain) == len(prepped)
+
+
+def test_an_image_that_cannot_be_read_from_here_is_not_the_methods_failure(
+    prepared, frozen, tmp_path
+):
+    """Review item 7: a case names its original images inside the source folder. Where
+    that folder is not there (not bound into the container), the run is refused before
+    the method starts, with a cause that is not the method's."""
+    import dataclasses
+
+    from benchmarks.regbench import resources
+    from benchmarks.regbench.cases import result_dir
+
+    case = list_cases(prepared, ANHIR)[0]
+    gone = dataclasses.replace(case, mov_image="/not/bound/anhir/images/S1.jpg")
+    started = []
+
+    class Reads(Fake):
+        def register(self, case, work, opts):
+            started.append(case.case_id)
+            yield from super().register(case, work, opts)
+
+    out = tmp_path / "out"
+    assert methods.run_case(Reads("m", MOV_TO_REF, (0.0, 0.0)), gone, out) == []
+    assert started == []  # the method never saw the case
+    run = json.loads((result_dir(out, "m", gone) / "run.json").read_text())
+    assert run["ok"] is False and run["cause"] == "infrastructure"
+    assert run["cause"] in resources.NOT_THE_METHOD
+    assert "cannot be read from where this run is" in run["error"]
+    assert "REGBENCH_ANHIR" in run["error"]
+    # and it is scored as not run, not as a failure of the method
+    result = challenge.score(prepared, out, ANHIR, write=False)
+    (row,) = [
+        r
+        for r in result["pairs"]
+        if r["method"] == "m" and r["case_id"] == case.case_id
+    ]
+    assert row["not_run"] is True and row["cause"] == "infrastructure"
+    # a readable case runs
+    assert methods.run_case(
+        Reads("m", MOV_TO_REF, (0.0, 0.0)), case, tmp_path / "o2"
+    ) == ["m"]

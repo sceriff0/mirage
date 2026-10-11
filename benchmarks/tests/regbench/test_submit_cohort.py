@@ -801,13 +801,17 @@ def test_the_nuclei_task_runs_stardist_only_for_a_slide_that_needs_it():
         if not ln.lstrip().startswith("#")
     ]
     code = "\n".join(ln for ln in lines if ln)
-    first = code.index('regbench_py "$scorer" "${what[@]}"\n')
-    asked = code.index('line="$(regbench_py "$scorer" "${what[@]}" --command)"')
+    # the first check may exit 1 (a refused re-run): the task still asks what is needed
+    first = code.index(
+        'regbench_py "$scorer" "${what[@]}" ${force[@]+"${force[@]}"} || first=$?'
+    )
+    asked = code.index('line="$(regbench_py "$scorer" "${what[@]}" --command')
     stop = code.index('if [ -z "$line" ]; then')
     run = code.index('regbench_exec STARDIST bash "$script"')
     check = code.rindex('regbench_py "$scorer" "${what[@]}"')
     assert first < asked < stop < run < check
-    assert "exit 0" in code[stop:run]
+    assert "exit 0" in code[stop:run] and 'exit "$first"' in code[stop:run]
+    assert '[ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && force=(--force)' in code[:first]
     assert '--index "$SLURM_ARRAY_TASK_ID"' in code
 
 

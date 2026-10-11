@@ -448,6 +448,7 @@ COLUMNS = (
     "gpu_model",
     "n_rounds",
     "method_convert_s",
+    "benchmark_prep_s",
     "estimate_s",
     "write_s",
     "measured_here_s",
@@ -456,6 +457,7 @@ COLUMNS = (
     "pipeline_merge_s",
     "total_s",
     "estimate_peak_gb",
+    "benchmark_prep_peak_gb",
     "job_peak_gb",
     "pipeline_convert_peak_gb",
     "pipeline_merge_peak_gb",
@@ -519,7 +521,12 @@ def end_to_end(res_rows, steps=None, source=""):
             for r in ok
         )
         copy = _sum(r.get("write_benchmark_s") for r in ok)
-        here = _sum([convert, estimate, write])
+        # The stare_prep row: the benchmark's preprocessing of both images. It runs
+        # before the registration clock, so it is NOT in `estimate_s`; it is what that
+        # row needs before STARE can start, so it IS in this row's totals (the other
+        # methods' own preprocessing is inside their clocks).
+        prep = _sum(r.get("prep_s") for r in ok)
+        here = _sum([convert, prep, estimate, write])
 
         described = [r.get("written") for r in ok if r.get("written")]
         complete = {r.get("written_complete") for r in ok} - {None, ""}
@@ -566,6 +573,7 @@ def end_to_end(res_rows, steps=None, source=""):
                 ),
                 "n_rounds": len(ok),
                 "method_convert_s": convert,
+                "benchmark_prep_s": prep if _is_number(prep) else NONE,
                 "estimate_s": estimate,
                 "write_s": write,
                 "measured_here_s": here,
@@ -574,6 +582,7 @@ def end_to_end(res_rows, steps=None, source=""):
                 "pipeline_merge_s": p_merge,
                 "total_s": total,
                 "estimate_peak_gb": _max(r["peak_rss_gb"] for r in ok),
+                "benchmark_prep_peak_gb": _max(r.get("prep_peak_gb") for r in ok),
                 "job_peak_gb": _max(r["cgroup_peak_gb"] for r in ok),
                 "pipeline_convert_peak_gb": conv["peak_gb"] if conv else math.nan,
                 "pipeline_merge_peak_gb": merge["peak_gb"]
@@ -589,9 +598,14 @@ def end_to_end(res_rows, steps=None, source=""):
                 "pipeline_source": (source if step else why)
                 if steps is not None
                 else why,
-                "measured_here": "method_convert, estimate, write"
-                if _is_number(convert)
-                else "estimate, write",
+                "measured_here": ", ".join(
+                    [
+                        *(["method_convert"] if _is_number(convert) else []),
+                        *(["benchmark_prep"] if _is_number(prep) else []),
+                        "estimate",
+                        "write",
+                    ]
+                ),
                 "imported": ", ".join(imported) or NONE,
             }
         )
@@ -639,6 +653,7 @@ def summarise(rows, common=None, cohort=None):
             )
         for key in (
             "method_convert_s",
+            "benchmark_prep_s",
             "estimate_s",
             "write_s",
             "pipeline_convert_s",
@@ -675,6 +690,7 @@ SUMMARY_COLUMNS = (
     "n_patients_cohort",
     "n_patients_common",
     "method_convert_s",
+    "benchmark_prep_s",
     "estimate_s",
     "estimate_s_common",
     "write_s",

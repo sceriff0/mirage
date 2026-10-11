@@ -267,6 +267,53 @@ def test_a_label_image_that_does_not_sit_in_the_outlines_is_refused(cohort):
     assert not (nuclei.store_of(tmp / "nuc", ref) / "nuclei.npz").exists()
 
 
+def test_the_cell_mask_offered_as_nuclei_is_refused(cohort):
+    """Review item 3: the grown cell mask puts exactly one centroid in every outline
+    and has the right count, and so does a nuclear mask a few pixels off. Neither is
+    the bare nuclei of the slide."""
+    tmp, lab, row = cohort
+    grown = mask_file(tmp / "seg" / "P1_cell_mask.tif", cells.grow(lab))
+    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(grown)}])
+    outlines = nuclei._outlines(ref)
+    got = nuclei.label_agreement(outlines, cells.label_polys(cells.grow(lab)))
+    assert got["one_nucleus_frac"] == 1.0 and got["n_nuclei"] == got["n_outlines"]
+    assert got["exact"] is False and got["identity"]["is_nuclei"] is False
+    assert got["identity"]["area_ratio_med"] > 0.95
+    rec = nuclei.resolve(ref, tmp / "nuc", args())
+    assert not rec["usable"] and rec["needs_rerun"]
+    assert "looks like the cell mask" in rec["candidate_refused"]
+    assert "median area ratio" in rec["candidate_refused"]
+    assert not (nuclei.store_of(tmp / "nuc", ref) / "nuclei.npz").exists()
+    # the true nuclei: clearly smaller than, centred in, and inside their outlines
+    same = nuclei.identity(outlines, cells.label_polys(lab))
+    assert same["is_nuclei"] and same["why"] == ""
+    assert same["area_ratio_med"] < 0.25  # 9 px squares in outlines 29 px across
+    assert same["vertices_inside_frac"] == 1.0
+    assert max(abs(v) for v in same["centroid_offset_px"]) < 0.5
+    assert same["n_paired"] == lab.max()
+
+
+def test_a_nuclear_mask_a_few_pixels_off_is_refused(cohort):
+    tmp, lab, row = cohort
+    moved = labels_of(shift=(3, 3))  # still one centroid in every outline
+    mask = mask_file(tmp / "seg" / "P1_nuclei_mask.tif", moved)
+    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(mask)}])
+    got = nuclei.label_agreement(nuclei._outlines(ref), cells.label_polys(moved))
+    assert got["one_nucleus_frac"] == 1.0 and not got["identity"]["is_nuclei"]
+    assert got["identity"]["centroid_offset_px"] == pytest.approx([3.0, 3.0], abs=0.3)
+    rec = nuclei.resolve(ref, tmp / "nuc", args())
+    assert not rec["usable"]
+    assert "a mask in a shifted frame" in rec["candidate_refused"]
+    assert "(+3.0, +3.0) px" in rec["candidate_refused"]
+    # further off (centroid still inside): not contained in the outlines either
+    far = nuclei.identity(
+        nuclei._outlines(ref), cells.label_polys(labels_of(shift=(13, 0)))
+    )
+    assert far["n_paired"] == lab.max() and not far["is_nuclei"]
+    assert far["vertices_inside_frac"] < nuclei.IDENTITY_INSIDE_MIN
+    assert "not contained in the outlines" in far["why"]
+
+
 def test_a_few_missing_nuclei_are_usable_but_not_exact(cohort):
     tmp, lab, row = cohort
     fewer = labels_of(drop=3)  # 3 of 56 outlines have no nucleus: 0.946
@@ -464,6 +511,116 @@ def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     info = cases_mod.set_info(case, "ref", "nuclei")
     assert info["source"] == "" and info["reason"] == rec["reason"]
     assert "REFUSED" in cases_mod.nuclei_reason(case, points)
+
+
+def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
+    cohort, monkeypatch, capsys
+):
+    """Review item 6a: the record holds what the masks were PRODUCED with; when the
+    model or a setting resolves to something else, the kept re-run is not reused."""
+    tmp, lab, row = cohort
+    fake_segment(tmp, labels_of(drop=5), monkeypatch)  # kept, exact: false
+    manifest = manifest_of(tmp, row)
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    store = nuclei.store_of(tmp / "nuc", ref)
+    rec = nuclei.load(store)
+    assert rec["usable"] and not rec["exact"]
+    assert rec["settings_recorded"] == nuclei.AT_SEGMENTATION
+    made = json.loads((store / "rerun" / nuclei.PRODUCED).read_text())
+    assert made["settings"] == rec["settings"] and made["command"] == rec["command"]
+    assert rec["settings"]["values"]["segmentation_model"]["value"] == "site_model"
+    # the same settings: reused, nothing said
+    capsys.readouterr()
+    assert nuclei.resolve(ref, tmp / "nuc", args()) == rec
+    assert "STALE" not in capsys.readouterr().out
+    # another model now: said aloud, set aside, and the slide needs its re-run again
+    monkeypatch.setenv("REGBENCH_STARDIST_MODEL", "corrected_model")
+    again = nuclei.resolve(ref, tmp / "nuc", args())
+    said = capsys.readouterr().out
+    assert "STALE P1/P1.r1" in said and "'site_model' -> 'corrected_model'" in said
+    assert not again["usable"] and again["needs_rerun"]
+    assert "made with other settings" in again["reason"]
+    assert again["stale_settings"] == [
+        "segmentation_model: 'site_model' -> 'corrected_model'"
+    ]
+    assert not (store / "nuclei.npz").exists()
+    assert (store / "rerun_stale").is_dir() and not (store / "rerun").exists()
+    # the command is printed for it again, and the new run records the new model
+    assert nuclei.main(args(**base, command=True, index=0)) == 0
+    assert "--model-name corrected_model" in capsys.readouterr().out
+    fake_segment(tmp, lab, monkeypatch)  # (this resets the model's name)
+    monkeypatch.setenv("REGBENCH_STARDIST_MODEL", "corrected_model")
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    new = nuclei.load(store)
+    assert new["usable"] and new["exact"]
+    assert new["settings"]["values"]["segmentation_model"]["value"] == "corrected_model"
+    assert nuclei.settings_changed(new) == []
+
+
+def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
+    cohort, monkeypatch, tmp_path
+):
+    """Review item 6b: under `set -e` the first check (exit 1 for a refused slide)
+    ended the task before it asked what the slide needs. It still fails (user ruling),
+    with the reason, and REGBENCH_NUCLEI_FORCE=1 reaches the re-run."""
+    import os
+
+    tmp, lab, row = cohort
+    fake_segment(tmp, labels_of(shift=(20, 20)), monkeypatch)
+    manifest = manifest_of(tmp, row)
+    assert (
+        nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True, index=0))
+        == 1
+    )
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
+    }
+    env.update(
+        PATH=f"{Path(sys.executable).parent}:{env['PATH']}",
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES=str(tmp / "cases"),
+        REGBENCH_OUT=str(tmp / "out"),
+        REGBENCH_MANIFEST=str(manifest),
+        REGBENCH_NUCLEI=str(tmp / "nuc"),
+        REGBENCH_SITE_CONFIG="none",
+        SLURM_ARRAY_TASK_ID="0",
+        **ENV,
+    )
+    script = REPO / "benchmarks" / "regbench" / "slurm" / "nuclei.sbatch"
+    done = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True, cwd=REPO
+    )
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "its StarDist re-run was REFUSED and is not run again" in done.stdout
+    assert "REGBENCH_NUCLEI_FORCE=1" in done.stdout
+    assert "nothing to segment" not in done.stdout and "+ python" not in done.stdout
+    # forced: the task gets as far as the re-run's command (the stand-in segment.py is
+    # not what this process's `python bin/segment.py` runs, so only the line is checked)
+    forced = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "REGBENCH_NUCLEI_FORCE": "1"},
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert "+ python" in forced.stdout and "bin/segment.py" in forced.stdout
+    assert "is not run again" not in forced.stdout
+    # a slide with usable nuclei: nothing to do, exit 0
+    fake_segment(tmp, lab, monkeypatch)
+    assert (
+        nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True, index=1))
+        == 0
+    )
+    ok = subprocess.run(
+        ["bash", str(script)],
+        env={**env, "SLURM_ARRAY_TASK_ID": "1"},
+        capture_output=True,
+        text=True,
+        cwd=REPO,
+    )
+    assert ok.returncode == 0 and "nothing to segment" in ok.stdout
 
 
 def test_a_rerun_between_the_thresholds_is_still_kept_and_not_exact(

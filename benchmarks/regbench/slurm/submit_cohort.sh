@@ -114,6 +114,11 @@
 #                                     re-run:` lines), in a dry run too
 #   REGBENCH_STARDIST_CPU=1           run that StarDist without a GPU (else it asks for
 #                                     REGBENCH_SBATCH_GPU, as the arms did)
+#   REGBENCH_NUCLEI_FORCE=1           check and segment every slide again, whatever is
+#                                     kept: for a slide whose re-run was REFUSED, after
+#                                     the model or a setting was corrected. (A kept
+#                                     re-run whose settings no longer resolve to the
+#                                     same values is set aside and redone without it.)
 #   REGBENCH_NUCLEI_SKIP=1            prepare without that step: cases whose slides have
 #                                     no nuclei are scored on the outlines alone
 #   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline
@@ -131,9 +136,11 @@
 #                                     REGBENCH_CASES)
 #   REGBENCH_HYRECO_B_ARGS            more `prepare hyreco --subset b` options (never a
 #                                     setting: --proxy and --reduce are refused there)
-#   REGBENCH_ANHIR                    with --prepare --datasets anhir: the folder holding
-#                                     dataset_medium.csv, images/ and landmarks/ (the
-#                                     challenge's unpacked archives; only read)
+#   REGBENCH_ANHIR                    for EVERY ANHIR submission, prepare and runs: the
+#                                     folder holding dataset_medium.csv, images/ and
+#                                     landmarks/ (the challenge's unpacked archives;
+#                                     only read). The cases name its images, so it is
+#                                     bound into every image (env.sh)
 #   REGBENCH_ANHIR_ARGS               more `prepare anhir` options (--allow-incomplete)
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
@@ -325,6 +332,7 @@ if [ "$prepare" = 1 ]; then
                     fi
                     n_slides="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
                         --out "$REGBENCH_NUCLEI" --count)" || die "cannot size the nuclei array from $REGBENCH_MANIFEST"
+                    [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && echo "# REGBENCH_NUCLEI_FORCE=1: every slide is checked and segmented again (--export=ALL carries it to the array)"
                     submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
                         --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
                         --time="$(limit "$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")")" \
@@ -378,6 +386,9 @@ if [ "$prepare" = 1 ]; then
 fi
 
 # ── refusals, before anything is submitted ────────────────────────────────────────────
+case "$EXTERNAL" in anhir|anhir_tune)
+    [ -n "${REGBENCH_ANHIR:-}" ] || die "--datasets $EXTERNAL needs REGBENCH_ANHIR for the runs too (the folder the cases were prepared from): its cases name the original images inside it, and it is bound into every image from that variable. Nothing was submitted." ;;
+esac
 gpu_runs="" images=""
 while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$selected" "$name" || continue

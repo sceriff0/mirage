@@ -9,11 +9,12 @@ import pytest
 
 from benchmarks.regbench import ladder, prep, variants
 
-from .test_submit_cohort import _case, jobs_of, launch
+from .test_submit_cohort import SCRIPT, _case, jobs_of, launch
 
 RUNS = [variants.run_name(r) for r in variants.runs_for("anhir")]
 CANDIDATES = [variants.run_name(r) for r in variants.TUNING_RUNS]
 PER_RUN = len(ladder.SELFCHECK_RUNGS_GB) + 1 + 2 * len(ladder.RUNGS_GB)
+SOURCE = {"REGBENCH_ANHIR": "/data/anhir"}  # bound into every image: the cases name it
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +37,7 @@ def site(tmp_path_factory):
 
 
 def test_anhir_runs_its_own_list_on_every_training_pair(site):
-    done, log, out = launch(site, "--datasets", "anhir", log="anhir")
+    done, log, out = launch(site, "--datasets", "anhir", env=SOURCE, log="anhir")
     assert done.returncode == 0, done.stderr
     jobs = jobs_of(done)
     assert not log.exists()
@@ -62,7 +63,7 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
 
 
 def test_the_provisional_preprocessing_is_said_aloud(site):
-    done, _, _ = launch(site, "--datasets", "anhir", log="warn")
+    done, _, _ = launch(site, "--datasets", "anhir", env=SOURCE, log="warn")
     warned = [ln for ln in done.stdout.splitlines() if ln.startswith("# WARNING")]
     record = prep.load_frozen()
     if record["status"] == "provisional":
@@ -71,7 +72,9 @@ def test_the_provisional_preprocessing_is_said_aloud(site):
     else:
         assert not warned and "selected on ANHIR's tuning side" in done.stdout
     # a submission without that row says nothing about it
-    done, _, _ = launch(site, "--datasets", "anhir", "--runs", "stare", log="quiet")
+    done, _, _ = launch(
+        site, "--datasets", "anhir", "--runs", "stare", env=SOURCE, log="quiet"
+    )
     assert done.returncode == 0 and "WARNING" not in done.stdout
     # and the cohort's default, which holds the row, says it too
     done, _, _ = launch(site, "--runs", f"stare {prep.ROW}", log="cohort")
@@ -81,7 +84,7 @@ def test_the_provisional_preprocessing_is_said_aloud(site):
 
 
 def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
-    done, _, out = launch(site, "--datasets", "anhir_tune", log="tune")
+    done, _, out = launch(site, "--datasets", "anhir_tune", env=SOURCE, log="tune")
     assert done.returncode == 0, done.stderr
     jobs = jobs_of(done)
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
@@ -103,7 +106,7 @@ def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
     "named", ["anhir multiplex", "anhir anhir_tune", "hyreco_b anhir"]
 )
 def test_anhir_is_never_submitted_with_anything_else(site, named):
-    done, log, _ = launch(site, "--datasets", named, log="mixed")
+    done, log, _ = launch(site, "--datasets", named, env=SOURCE, log="mixed")
     assert done.returncode == 2 and "submitted alone" in done.stderr
     assert not log.exists() and "sbatch" not in done.stdout
 
@@ -143,3 +146,19 @@ def test_prepare_is_one_pair_per_task_from_the_source_folder(site, tmp_path):
     (job,) = jobs_of(done).values()
     assert job.name == "rb-prepare-anhir" and job.opt("--array") == "0-229%20"
     assert job.args == ["anhir", "--source", str(REAL), "--allow-incomplete"]
+
+
+def test_the_runs_need_the_source_folder_too(site):
+    """The cases name the original images inside it; without it bound, VALIS,
+    DeeperHistReg and the preprocessing row would fail every pair while plain STARE
+    (cached grey images) would not."""
+    for ds in ("anhir", "anhir_tune"):
+        done, log, _ = launch(site, "--datasets", ds, log="nosource")
+        assert (
+            done.returncode == 2
+            and "needs REGBENCH_ANHIR for the runs too" in done.stderr
+        )
+        assert not log.exists() and "sbatch" not in done.stdout
+    text = (SCRIPT.parent / "env.sh").read_text()
+    code = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert 'bind="$bind${REGBENCH_ANHIR:+,$REGBENCH_ANHIR}"' in code

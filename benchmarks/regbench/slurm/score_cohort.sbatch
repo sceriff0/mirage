@@ -47,11 +47,10 @@ gates="$REGBENCH_OUT/logs/gates"
 args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers")
 # only what THIS submission ran or reused: a blocked run's older folders are not scored
 [ -n "${REGBENCH_SUBMISSION:-}" ] && args+=(--submission "$REGBENCH_SUBMISSION")
-if [ -n "$external" ]; then
-    args+=(--dataset "$external")
-else
-    args+=(--gates "$gates")
-fi
+# the gates' verdicts, for the cohort and for an external set alike: a run a gate
+# blocked is not a method failure (ANHIR's scorer lists it apart; HyReCo's ignores it)
+args+=(--gates "$gates")
+[ -n "$external" ] && args+=(--dataset "$external")
 for f in "$gates"/*.tsv; do
     [ -s "$f" ] || continue
     IFS=$'\t' read -r _ _ dropped _ _ < "$f"

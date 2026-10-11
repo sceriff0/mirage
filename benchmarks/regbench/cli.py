@@ -1140,16 +1140,18 @@ def main(argv=None):
     if external:
         from . import ANHIR_DATASETS, challenge, landmarks
 
-        scorer = challenge if external in ANHIR_DATASETS else landmarks
-        scorer.score(
-            a.cases,
-            a.out,
-            external,
-            a.workers,
+        common = dict(
             expected=None if a.only_run else variants.expected_variants(external),
             primary=variants.primary_for(external),
             dropped=_dropped(a.drop),
         )
+        if external in ANHIR_DATASETS:
+            # the gates' verdicts, as for the cohort: a blocked run is not a failure
+            challenge.score(
+                a.cases, a.out, external, a.workers, gates=a.gates, **common
+            )
+        else:
+            landmarks.score(a.cases, a.out, external, a.workers, **common)
         return 0
     expected = None if a.only_run else variants.expected_variants()
     primary = None if a.only_run else list(variants.PRIMARY)

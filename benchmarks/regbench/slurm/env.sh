@@ -120,6 +120,10 @@ regbench_exec() (
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # the StarDist re-run of the bare nuclei reads the site's model and writes here
         bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"
+        # ANHIR's source folder: its cases name the ORIGINAL images inside it, which
+        # VALIS, DeeperHistReg and the preprocessing row read (run.json says
+        # `infrastructure` for a run that cannot)
+        bind="$bind${REGBENCH_ANHIR:+,$REGBENCH_ANHIR}"
         # a site config outside the checkout (the model and settings of that re-run)
         case "${REGBENCH_SITE_CONFIG:-none}" in none|-) ;; *) bind="$bind,$REGBENCH_SITE_CONFIG" ;; esac
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.

@@ -108,7 +108,14 @@ from pathlib import Path
 import numpy as np
 
 from .. import METHODS, resources
-from ..cases import load_points, result_dir, write_json, write_npz
+from ..cases import (
+    load_points,
+    points_fingerprint,
+    result_dir,
+    stale_points,
+    write_json,
+    write_npz,
+)
 from ..mapping import MOV_TO_REF, PointMap
 
 SCOPES = ("pair", "group")
@@ -185,6 +192,32 @@ def require_fluorescence(case, method):
             f"{case.case_id}: {method} has no input rule for a {case.modality} case: "
             f"{NO_BRIGHTFIELD[method]}"
         )
+
+
+def check_inputs(cases):
+    """Refuse a brightfield case whose image files cannot be read from here, before the
+    method starts. Such a case names its ORIGINAL images inside the dataset's own folder
+    (ANHIR: ``REGBENCH_ANHIR``); when that folder is not bound into the method's
+    container, every method that reads the originals would fail on every pair while one
+    that reads the cached one-channel copies would not. That is the launch's fault, not
+    a method's: ``resources.InputUnreadable``, cause ``infrastructure``."""
+    for case in cases:
+        if case.modality != "brightfield":
+            continue
+        for path in (
+            case.ref_image,
+            case.mov_image,
+            case.ref_nuclear,
+            case.mov_nuclear,
+        ):
+            if path and not os.access(str(path), os.R_OK):
+                raise resources.InputUnreadable(
+                    f"{case.dataset}/{case.case_id}: {path} cannot be read from where "
+                    "this run is. Its folder is not bound into the image, or the cases "
+                    "were prepared on another machine: export the dataset's folder "
+                    "(REGBENCH_ANHIR for ANHIR) or name it in REGBENCH_BIND, with the "
+                    "path the cases were prepared with."
+                )
 
 
 def load(method):
@@ -445,6 +478,9 @@ def _run(
             "dataset": case.dataset,
             "case_id": case.case_id,
             "variant": names[variant],
+            # the points this result is made for: a case prepared again with others
+            # makes it stale (never reused, and scored as not run)
+            "points_sha256": points_fingerprint(case),
             "previous_attempts": earlier.get((case.case_id, variant), []),
         }
 
@@ -552,6 +588,7 @@ def _run(
     watch.start()
     base["oom_watch"] = watch.record()
     try:
+        check_inputs(cases)
         gen = (
             mod.register(cases[0], work, opts)
             if scope == "pair"
@@ -933,6 +970,10 @@ def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id)
                 and rec.get("label", "") == (label or "")
                 and rec.get("opts") == recorded
                 and rec.get("group_cases") == ids
+                # made for the case as it is NOW: a forced re-prepare changes the
+                # points, and a result for the old ones is not this case's
+                and isinstance(rec.get("points_sha256"), dict)
+                and not stale_points(rec["points_sha256"], case)
                 and (result_dir(out, variant, case) / "warped.npz").exists()
             )
             if not same:

@@ -75,7 +75,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import ANHIR, ANHIR_DATASETS, ANHIR_TUNE, prep, truth, variants
+from . import ANHIR, ANHIR_DATASETS, ANHIR_TUNE, prep, resources, truth, variants
 from . import score as cohort
 from .cases import list_cases, load_points
 from .landmarks import landmark_errors
@@ -98,7 +98,16 @@ TABLES = (
     "anhir_summary_resources",
     "anhir_excluded",
     "anhir_prep_evidence",
+    "anhir_not_run",
 )
+# A pair that was never registered for a reason that is not the method's: its run was
+# blocked by a gate, its task never started, or the attempt was lost to the scheduler or
+# to the benchmark's own step. Such a pair is in NO median of the method (it says
+# nothing about it); it is counted (`n_not_run`) and listed (`anhir_not_run.csv`). A
+# pair the method itself failed on counts at its unregistered landmarks, as the
+# challenge counts a missing registration.
+NOT_RUN_CAUSES = ("not_run", "blocked", *resources.NOT_THE_METHOD)
+UNKNOWN_FRAME = "unknown (no pair of this row registered)"
 SKIPPED = {
     "tissue-level block": "it compares the nuclear channel of a written image with the "
     "reference's; a brightfield case has none",
@@ -110,6 +119,7 @@ SKIPPED = {
 SUMMARY_COLUMNS = (
     "method",
     "n_pairs",
+    "n_not_run",
     "n_failed",
     "median_rtre_median",
     "avg_rtre_median",
@@ -180,6 +190,13 @@ def _score_case(job):
                 case, points, None
             )
         failed = v != "initial" and warped is None
+        if failed and not cause:
+            cause = "exception"
+        # a failed pair has no map, hence no direction of its own: the run's record
+        # says it when there is one, else `score` takes it from the row's other pairs
+        declared = str((run or {}).get("direction") or "")
+        if failed:
+            direction = declared if declared in FRAME else ""
         stats = pair_stats(err, init, case.diagonal)
         if failed:  # the official rule: the initial rTRE, and no landmark improved
             stats["robustness"] = 0.0
@@ -188,8 +205,9 @@ def _score_case(job):
             {
                 **base,
                 "method": v,
-                "frame": FRAME[direction],
+                "frame": FRAME.get(direction, ""),
                 "challenge_quantity": direction == MOV_TO_REF,
+                "not_run": failed and cause in NOT_RUN_CAUSES,
                 **stats,
                 "tre_px_p50": float(np.median(np.where(np.isfinite(err), err, init))),
                 "tre_um_p50": um["tre_um_p50"],
@@ -218,12 +236,19 @@ def _median(v):
 
 
 def aggregate(rows):
-    """BIRL's aggregates over one group of per-pair rows (module docstring)."""
+    """BIRL's aggregates over one group of per-pair rows (module docstring). Pairs that
+    were never registered for a reason that is not the method's (``not_run``) are in no
+    statistic: ``n_not_run`` counts them, ``n_pairs`` is what is left."""
+    n_not_run = sum(bool(r.get("not_run")) for r in rows)
+    rows = [r for r in rows if not r.get("not_run")]
     robust = [r for r in rows if r["robustness"] > ROBUST_ABOVE]
     registered = [r for r in rows if not r["failed"]]
-    with_um = [r for r in rows if math.isfinite(r["tre_um_p50"])]
+    # NaN = no pixel size for the pair. An INFINITE median (most landmarks lost) is a
+    # result: it counts, and is the worst there is.
+    with_um = [r for r in rows if not math.isnan(r["tre_um_p50"])]
     out = {
         "n_pairs": len(rows),
+        "n_not_run": n_not_run,
         "n_failed": len(rows) - len(registered),
         "n_landmarks": int(sum(r["n_landmarks"] for r in rows)),
         "n_nonfinite": int(sum(r["n_nonfinite"] for r in rows)),
@@ -245,7 +270,7 @@ def aggregate(rows):
     out["n_pairs_um"] = len(with_um)
     out["median_tre_um_p50"] = _median([r["tre_um_p50"] for r in with_um])
     out["median_tre_px_p50"] = _median([r["tre_px_p50"] for r in rows])
-    out["frames"] = "+".join(sorted({r["frame"] for r in rows}))
+    out["frames"] = "+".join(sorted({r["frame"] for r in rows if r["frame"]}))
     return out
 
 
@@ -268,7 +293,7 @@ def summarise(pairs, dataset):
                     and (side == "all" or r["side"] == side)
                     and (tissue == "all" or r["tissue"] == tissue)
                 ]
-                if mine:
+                if mine and not all(r.get("not_run") for r in mine):
                     out.append(
                         {
                             "dataset": dataset,
@@ -278,6 +303,80 @@ def summarise(pairs, dataset):
                             **aggregate(mine),
                         }
                     )
+    return out
+
+
+def settle_frames(pairs, blocked=None):
+    """Fill in what a failed row cannot know by itself, in place.
+
+    **Frame.** A pair that did not register has no map; its row takes the frame of the
+    same result name's registered pairs (a method maps one way), else the direction its
+    run record declares, else ``UNKNOWN_FRAME``. Never a default: a reference -> moving
+    method's failed pair is not "the challenge's own quantity".
+
+    **Blocked.** ``blocked`` is ``{result name: why}`` for the rows of a run its gate did
+    not let start: their pairs are ``not_run`` with cause ``blocked``, whatever is on
+    disk from an earlier submission. Returns ``{result name: frames}``."""
+    frames = {}
+    for r in pairs:
+        if not r["failed"] and r["frame"]:
+            frames.setdefault(r["method"], set()).add(r["frame"])
+    reference = FRAME[MOV_TO_REF]
+    for r in pairs:
+        why = (blocked or {}).get(r["method"])
+        if why and r["method"] != "initial":
+            r.update(failed=True, not_run=True, cause="blocked", problem=why[:200])
+            r["robustness"] = 0.0
+        if not r["failed"]:
+            continue
+        known = frames.get(r["method"]) or ({r["frame"]} if r["frame"] else set())
+        r["frame"] = "+".join(sorted(known)) if known else UNKNOWN_FRAME
+        r["challenge_quantity"] = known == {reference}
+    return {
+        m: sorted({r["frame"] for r in pairs if r["method"] == m})
+        for m in dict.fromkeys(r["method"] for r in pairs)
+    }
+
+
+def not_run_rows(pairs):
+    """One row per result name with pairs that were never registered for a reason that
+    is not the method's (``anhir_not_run.csv``), by cause."""
+    out = []
+    for m in dict.fromkeys(r["method"] for r in pairs):
+        mine = [r for r in pairs if r["method"] == m]
+        for cause in dict.fromkeys(r["cause"] for r in mine if r.get("not_run")):
+            hit = [r for r in mine if r.get("not_run") and r["cause"] == cause]
+            out.append(
+                {
+                    "method": m,
+                    "cause": cause,
+                    "n_pairs": len(hit),
+                    "of": len(mine),
+                    "in_no_median": True,
+                    "why": hit[0]["problem"],
+                    "pairs": " ".join(r["case_id"] for r in hit[:20])
+                    + (" ..." if len(hit) > 20 else ""),
+                }
+            )
+    return out
+
+
+def blocked_rows(gates):
+    """``{result name: why}`` for every row of a run a gate of this submission blocked
+    (``<out>/logs/gates/*.tsv``, as the cohort's scorer reads them)."""
+    out = {}
+    for g in cohort.read_gates(gates):
+        if not g["blocked"]:
+            continue
+        try:
+            run = variants.run_of(g["run"])
+        except KeyError:
+            continue
+        for v in variants.variants_of(run):
+            out[v] = (
+                f"the run {g['run']} was blocked by its {g['gate']} gate "
+                f"({g['status']}): no pair was registered"
+            )
     return out
 
 
@@ -312,13 +411,15 @@ def prep_evidence(pairs, res=()):
         if not mine:
             continue
         a = aggregate(mine)
+        if not a["n_pairs"]:  # nothing of this candidate ran at all
+            a["median_rtre_median"] = a["avg_robustness"] = math.nan
         rows.append(
             {
                 "candidate": c,
                 "result": name,
                 "n_pairs": a["n_pairs"],
                 "n_failed": a["n_failed"],
-                "never_run": sum(r["cause"] == "not_run" for r in mine),
+                "never_run": sum(bool(r.get("not_run")) for r in mine),
                 "median_of_median_rtre": a["median_rtre_median"],
                 "mean_robustness": a["avg_robustness"],
                 "avg_of_median_rtre": a["avg_rtre_median"],
@@ -362,7 +463,9 @@ def _table(rows, columns):
     return cohort.markdown(rows, columns)
 
 
-def markdown(dataset, cases, split, summary, evidence, fails, primary):
+def markdown(
+    dataset, cases, split, summary, evidence, fails, primary, frames=None, lost=()
+):
     n_tune = sum(c.extra.get("side") == "tune" for c in cases)
     want = split["pairs"]["tune"] + (
         split["pairs"]["report"] if dataset == ANHIR else 0
@@ -421,8 +524,18 @@ def markdown(dataset, cases, split, summary, evidence, fails, primary):
         "in `n_failed`; `median_rtre_median_registered` leaves those pairs out. "
         "`n_robust`: pairs with robustness above 0.5.\n"
     )
+    if lost:
+        parts.append("## Not run, for a reason that is not the method's\n")
+        parts.append(
+            "These pairs were never registered: the run was blocked by its gate, the "
+            "task never started, or the attempt was lost to the scheduler or to the "
+            "benchmark's own step. They are in NO median below (`n_not_run`); a row "
+            "with no other pair is in no table at all. A pair the METHOD failed on is "
+            "different: it counts at its unregistered landmarks (`n_failed`).\n"
+        )
+        parts += [_table(list(lost), list(lost[0])), ""]
     order = list(primary or [])
-    frames = {r["method"]: r["frames"] for r in summary}
+    frames = frames or {}
     for side in sides_of(dataset):
         block = [r for r in summary if r["side"] == side and r["tissue"] == "all"]
         block.sort(
@@ -433,7 +546,12 @@ def markdown(dataset, cases, split, summary, evidence, fails, primary):
         if not block:
             continue
         parts += [f"## {SIDE_TITLE[side]}\n", _table(block, list(SUMMARY_COLUMNS)), ""]
-    inverse = sorted(m for m, f in frames.items() if FRAME[MOV_TO_REF] not in f)
+    # every frame any pair of the row was measured in: one reference -> moving pair is
+    # enough for the row to be named here
+    reference = FRAME[MOV_TO_REF]
+    inverse = sorted(
+        m for m, f in frames.items() if m != "initial" and set(f) - {reference}
+    )
     if inverse:
         parts.append(
             "Measured in the SOURCE image's frame, not the challenge's own quantity "
@@ -477,6 +595,7 @@ def score(
     primary=None,
     dropped=(),
     write=True,
+    gates=None,
 ):
     """Score ``anhir`` or ``anhir_tune``; writes ``<out>/tables/<dataset>/`` and returns
     the rows. ``expected`` / ``primary`` are ``variants.expected_variants(dataset)`` and
@@ -498,6 +617,8 @@ def score(
         done = [_score_case(j) for j in jobs]
     pairs = [r for d in done for r in d[0]]
     res = [r for d in done for r in d[1]]
+    frames = settle_frames(pairs, blocked_rows(gates))
+    lost = not_run_rows(pairs)
     summary = summarise(pairs, dataset)
     sets = by_set(pairs, dataset)
     evidence = prep_evidence(pairs) if dataset == ANHIR_TUNE else []
@@ -517,6 +638,8 @@ def score(
         "summary_resources": res_summary,
         "excluded": excluded,
         "split": split,
+        "not_run": lost,
+        "frames": frames,
     }
     if not write:
         return result
@@ -533,7 +656,10 @@ def score(
     cohort.write_csv(tables / "anhir_excluded.csv", excluded)
     if evidence:
         cohort.write_csv(tables / "anhir_prep_evidence.csv", evidence)
-    text = markdown(dataset, cases, split, summary, evidence, fails, primary)
+    cohort.write_csv(tables / "anhir_not_run.csv", lost)
+    text = markdown(
+        dataset, cases, split, summary, evidence, fails, primary, frames, lost
+    )
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")

@@ -225,6 +225,28 @@ def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total(steps):
     assert plain["write_s"] == 10.0 and math.isnan(plain["benchmark_copy_s"])
 
 
+def test_the_preprocessing_of_stare_prep_is_its_own_column_and_in_its_total(steps):
+    """Review item 4: the preprocessing runs before the registration clock, so it is not
+    in `estimate_s`; it is in that row's totals, as the other methods' own preprocessing
+    is inside their clocks."""
+    plain = _row(cost.end_to_end([res("stare", "P1", "stare")], steps, "arm"), "stare")
+    row = res("stare_prep", "P1", "stare", prep_s=33.0, prep_peak_gb=2.5)
+    prep = _row(cost.end_to_end([row], steps, "arm"), "stare_prep")
+    assert plain["benchmark_prep_s"] == cost.NONE
+    assert prep["benchmark_prep_s"] == 33.0 and prep["benchmark_prep_peak_gb"] == 2.5
+    assert prep["estimate_s"] == plain["estimate_s"]  # STARE's clock is STARE's alone
+    assert prep["measured_here_s"] == plain["measured_here_s"] + 33.0
+    assert prep["total_s"] == plain["total_s"] + 33.0
+    assert "benchmark_prep" in prep["measured_here"]
+    assert "benchmark_prep" not in plain["measured_here"]
+    assert (
+        "benchmark_prep_s" in cost.COLUMNS
+        and "benchmark_prep_s" in cost.SUMMARY_COLUMNS
+    )
+    (line,) = cost.summarise(cost.end_to_end([row], steps, "arm"))
+    assert line["benchmark_prep_s"] == 33.0
+
+
 def test_a_merge_is_never_added_on_a_guess(steps):
     """A run that recorded no description of its file: the merge step is not added and
     there is no total, rather than a total that assumes one way or the other."""

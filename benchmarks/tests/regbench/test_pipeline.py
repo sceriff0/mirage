@@ -991,3 +991,60 @@ def test_label_renames_every_variant(toy):
     done = methods.run_case("initial", case, out, label="baseline")
     assert done == ["baseline"]
     assert (result_dir(out, "baseline", case) / "warped.npz").exists()
+
+
+# ── a case prepared again: its earlier results are stale, not failures ────────────────
+def test_a_result_for_an_earlier_version_of_the_case_is_not_reused_and_not_a_failure(
+    tmp_path,
+):
+    """Review item 9: after a forced re-prepare the polygons of a case change (other
+    vertices, another count). A result made for the old ones must not be reused as
+    `ok`, and the scorer must not call it a failure of the method (`exception`)."""
+    from benchmarks.regbench import cases as cases_mod
+    from benchmarks.regbench import score as scorer
+
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = toy_case(root, "P1_r1", "P1")
+    calls = []
+
+    def register(case, work, opts):
+        calls.append(case.case_id)
+        yield "m", true_map(), {}
+
+    method = fake("m", ["m"], register)
+    assert methods.run_case(method, case, out, resume=True) == ["m"]
+    made_for = run_json(out, "m", case)["points_sha256"]
+    assert made_for["outlines"] and made_for["nuclei"] == "" == made_for["truth"]
+    assert methods.run_case(method, case, out, resume=True) == ["m"]
+    assert calls == ["P1_r1"]  # the same case: reused, nothing run
+    assert scorer._load_run(out, "m", case)[3] == ""
+
+    # ADDING a group (bare nuclei) leaves the result of the outlines valid
+    write_case(
+        root,
+        case,
+        cells_mov=squares(GRID - SHIFT),
+        cells_ref=squares(GRID),
+        nuclei_mov=squares(GRID - SHIFT, 3.0),
+        nuclei_ref=squares(GRID, 3.0),
+    )
+    case = load_case(root / "multiplex" / "P1_r1")
+    assert cases_mod.stale_points(made_for, case) == []
+    assert scorer._load_run(out, "m", case)[3] == ""
+
+    # the outlines themselves change (one fewer, as a re-prepare with other settings)
+    write_case(
+        root, case, cells_mov=squares(GRID[:-1] - SHIFT), cells_ref=squares(GRID[:-1])
+    )
+    case = load_case(root / "multiplex" / "P1_r1")
+    assert cases_mod.stale_points(made_for, case) == ["outlines"]
+    run, warped, problem, cause = scorer._load_run(out, "m", case)
+    assert warped is None and cause == "not_run" and "prepared again" in problem
+    assert "outlines" in problem
+    res = score(root, out, ["multiplex"], with_tissue=False)
+    row = next(r for r in res["cells"] if r["method"] == "m")
+    assert row["cause"] == "not_run" != "exception"
+    # and the launcher's reuse does not take it: the unit runs again
+    assert methods.run_case(method, case, out, resume=True) == ["m"]
+    assert calls == ["P1_r1", "P1_r1"]
+    assert scorer._load_run(out, "m", case)[3] == ""
