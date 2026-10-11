@@ -10,8 +10,14 @@ folder, and writes nothing there:
     preprocessed_image, is_reference, channels, pixel_size``; RFC 4180 quoting; ``channels``
     is ``|``-separated). One row per NATIVE slide, the one every arm registers.
 ``<root>/<from_arm>/<patient>/qc/registration/geojson/<slide>.geojson``
-    the QC nuclei that arm published (``conf/modules.config``, ``SEG_QC_GEOJSON``): each
+    the QC outlines that arm published (``conf/modules.config``, ``SEG_QC_GEOJSON``): each
     native slide segmented BEFORE registration, in full-resolution pixels of that slide.
+    They are the CELL mask of the arm's segmenter (``subworkflows/local/seg_qc.nf:140``),
+    which for this arm (``arms.yaml``: ``seg_method: stardist``) is the StarDist nuclei of
+    channel 0, the nuclear marker, each grown by ``seg_expand_distance`` = 10 px
+    (``bin/segment.py:223-225``): nuclei-derived outlines, larger than a nucleus, and not
+    cells found on other channels. The benchmark calls them nuclei, as the pipeline's QC
+    does; README, "What the cohort's nuclei are".
     ``<slide>`` is the file name less ``.ome.tif`` / ``.ome.tiff``, then less ``.tif`` /
     ``.tiff`` (``subworkflows/local/seg_qc.nf``, ``slide_of``).
 

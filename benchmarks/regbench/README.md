@@ -24,7 +24,7 @@ This package is being ported in steps. What exists now:
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
 | datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient |
-| the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC nuclei of one arm. Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
+| the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC outlines of one arm (StarDist nuclei on the nuclear channel, grown by 10 px: see "What the cohort's nuclei are"). Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
 | known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
 | adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
@@ -89,7 +89,7 @@ python -m benchmarks.regbench.arms_manifest --root ROOT --out rounds.csv
 python -m benchmarks.regbench prepare multiplex --manifest rounds.csv --cases CASES
 ```
 
-The first command reads `ROOT/preprocess_shared/csv/preprocessed.csv` and the QC nuclei
+The first command reads `ROOT/preprocess_shared/csv/preprocessed.csv` and the QC outlines
 `ROOT/valis_high_micro2/<patient>/qc/registration/geojson/<slide>.geojson` (`--from-arm`
 names another arm), and writes one row per moving round: `case_id` = `<patient>_<slide>`,
 `group` = the patient. A patient without exactly one reference, a slide that is not on
@@ -263,8 +263,9 @@ method itself had the clock paused.
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same |
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary |
-| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default) |
+| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), so its `within_1um` can be low with a perfect registration; `deeperhistreg_hr_gpu`, the estimated-field row, shows the registration itself |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
+| `palom_affine`, `palom` (**primary**), `palom_b1024_affine`, `palom_b1024` | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) for `palom`, re-cut to 1024 px for `palom_b1024` | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame |
 | `initial` | none | | identity | |
 
 Honest limits of "natively": ASHLAR is run on tiles cut from stitched slides, not raw tiles;
@@ -301,7 +302,7 @@ registration accuracy enters neither.
 
 ```bash
 python -m benchmarks.regbench selfcheck --method M [--label L] [--opt k=v ...] --work W \
-    [--mask overlap] [--m0-from DIR] [--size HxW[:HxW] ...]
+    [--mask overlap|seams] [--m0-from DIR] [--size HxW[:HxW] ...]
 ```
 
 Exit 0 `ok`, 1 `inconsistent`, 2 `not_checked`, 3 `crashed`. **Anything but 0 blocks the
@@ -317,9 +318,30 @@ jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass
 reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
 Methods with a size-dependent code path are checked on more than one pair
 (`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction), both VALIS
-adapters also on a pair with a 30000 px side, every DeeperHistReg label on one pair of
+adapters also on a pair with a 30000 px side, every DeeperHistReg label on a pair of
 40000 x 50000 against 40000 x 48000 (the cohort's size class, with sizes that divide
 exactly; see "DeeperHistReg").
+
+Two pairs have a moving slide LARGER than its reference (added 2026-10-11; a cohort round
+that overhangs its reference was otherwise first met on the cluster):
+
+- DeeperHistReg: the same two canvases swapped (reference 40000 x 48000, moving 40000 x
+  50000), so the REFERENCE is the padded one and the writer's crop back to the reference
+  grid runs with a non-zero pad. Same memory as the first pair; it doubles that
+  selfcheck's time (unmeasured: DeeperHistReg has not run here).
+- both VALIS adapters: reference 2048 x 2560, moving 2305 x 2817. The overhang is odd
+  (257 px each way), so a centred placement is half a pixel off the grid; whether VALIS's
+  crop origin is then fractional is by reading only. Seconds to minutes, under the first
+  rung.
+
+Not added, and why: a **three-slide** pair for the per-patient methods (VALIS's serial
+chaining, a second ASHLAR cycle). The harness runs one reference and one moving slide per
+pair; a second round needs the pair, the proxy writer and the record keyed by case, which
+was not done in this task. It stays first exercised on the cohort, where the realcheck
+(VALIS) and the off-seam rows (ASHLAR) are the checks. A **2048 px block pair for
+`palom`**: a pair's TIFF tile is chosen per row (`SELFCHECK_PAIR_TILE`), not per pair, so
+it needs the same harness change; `palom`'s cohort blocks (2048 px) stay unexercised by
+the gate, as before.
 
 **The check.** The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (`find_dots`: a 15 px median background,
@@ -335,9 +357,66 @@ function of position (`SELFCHECK_OFFSET`); it is subtracted point by point, and 
 is part of the claim.
 
 **The gate (frozen).** 95th percentile of the residual at most 0.40 px, mean signed
-residual at most 0.15 px per axis, at least 99 % of the dots found: on the whole image AND
-in every 512 px block holding at least 8 dots. For `mov_to_ref`, at most 1 % of the
-detections may be dots the mapping puts nothing on.
+residual at most 0.15 px per axis, at least 99 % of the points found: on the whole image
+AND in every 512 px block holding at least 8 of them.
+
+**It is the same two checks in both directions, with the same thresholds** (since
+2026-10-11; before, a `ref_to_mov` method was only held to the first, so an image with
+almost half of it undrawn passed):
+
+| | (1) every point the comparison starts from lands on its partner (99 %, whole image and per block) | (2) nothing is left over on the other side |
+|---|---|---|
+| `mov_to_ref` | starts from the DRAWN dots the map puts inside the image (16 px from its edge) | at most 1 % of the detections may be dots the mapping puts nothing on (`n_unexplained`) |
+| `ref_to_mov` | starts from the DETECTIONS | at least 99 % of the drawn dots that belong in the image must have a detection coming back to them, whole image and per 512 px block (`n_expected`, `n_covered`; failures read "drawn dots the image does not show", "uncovered block (x, y)") |
+
+Which drawn dots "belong in the image" is the one asymmetry left, and its reason: a
+`mov_to_ref` map says itself where a dot lands; a `ref_to_mov` map cannot without being
+inverted, and the benchmark never inverts a method's map. So for `ref_to_mov` the
+GENERATOR's own moving -> reference map says it, and a dot is demanded when that puts it
+64 px inside the image (`COVER_MARGIN_PX`; and inside `valid_box` where the writer
+declares one). A registration wrong by more than 64 px at the border of the selfcheck
+pair would be reported as uncovered dots. A comparison given no such map (none of the
+adapters') records `coverage_checked: false`.
+
+**A mask** (`--mask overlap` for ASHLAR, `--mask seams` for PALOM) takes points out of
+check (1) only:
+
+- **It has a cap** (`selfcheck.MASK_MAX`, frozen): `overlap` 0.70, `seams` 0.10 of the
+  dots (0.10 is 3.2 times the share the seams of 1024 px blocks hold; PALOM's adapter
+  applies the same factor to the blocks a pair really has, `SELFCHECK_MASK_MAX`: 0.05 at
+  2048 px). Above it a comparison that found no failure is `not_checked`, which blocks;
+  a measured failure stays `inconsistent`. The numbers come from the
+  methods' geometry, measured with `tilemap` on uniform points at the 8 px dot margin:
+  ASHLAR's overlap bands at 1024 px tiles and a 922 px pitch hold 0.21 of an endless
+  mosaic (1 - (1 - 102/922)^2) but 0.43 of the 4096 x 5120 pair (30 tiles) and 0.62 of
+  the 2048 x 2560 pair (9 tiles: mostly border), so the cap sits just above the small
+  pair; PALOM's seams are 8 px either side of the edges between blocks with different
+  shifts, 0.03 of the image if every edge of 1024 px blocks is one. The cap is loose for
+  ASHLAR on purpose and says so: on the small pair only 38 % of the dots are judged.
+- **`masked_frac` is in the record** for every variant, so the share that was not looked
+  at is never implicit.
+- **Check (2) stays on outside the mask.** A detection is excused only when the mapped
+  dot nearest to it is itself masked (a masked dot may be drawn twice, or torn); a drawn
+  dot only when it, or the detection found where it belongs, is masked. Before, a mask
+  switched the leftover check off entirely.
+- What a mask hides stays unseen: a map wrong only under the mask passes. For ASHLAR that
+  is exactly the overlap bands; see "ASHLAR", "What the overlap bands cost".
+
+**The image's shape** is checked against what the method declares (`mosaic_shape`) and,
+when the image claims to be on the reference grid (no `origin_xy`, or a zero one), against
+the reference's own shape; a declared `valid_box` must lie inside the image. A mismatch is
+`inconsistent` ("image shape: ..."). The origin of an image that is NOT on the reference
+grid is checked only where a method redraws the reference (ASHLAR:
+`SELFCHECK_REFERENCE`, `expect_origin_xy`).
+
+**A stage that was never checked says so in every table.** `run.json:
+selfcheck_status` is the run's gate, which `stare_rigid` shares with `stare`. The scorer
+therefore reads each ROW's own status from the selfcheck records
+(`variants.row_checks`) into a column of its own, `selfcheck_row`, in `cells.csv`,
+`truth.csv`, `summary_cells.csv`, `truth_by_family.csv` and the off-seam tables, and
+`summary.md` prints it beside the row's name: `ok`, `no_stage_image` (shown as **NEVER
+CHECKED**), `via <run>: <status>` for a row whose run is gated by another run's selfcheck
+(`ashlar_clean`), or `no selfcheck record`.
 
 | status | meaning | blocks the method |
 |---|---|---|
@@ -349,8 +428,10 @@ detections may be dots the mapping puts nothing on.
 
 The overall status is the worst over the checked variants.
 
-**Measured on `stare` 1.2.1** (2026-10-09, macOS arm64, `--opt workers=4`; the only method
-whose selfcheck has really run):
+**Measured on `stare` 1.2.1** (2026-10-09, and again on 2026-10-11 after the gate changed:
+every number below came out the same, `n_unexplained` 0, `masked_frac` 0, image shape
+equal to the reference's; macOS arm64, `--opt workers=4`, 46 s for both pairs; the only
+method whose selfcheck has really run):
 
 | pair | dots found | residual p50 / p95 px | mean x / y px | worst block p95 | worst block mean |
 |---|---|---|---|---|---|
@@ -376,6 +457,22 @@ changed, on the 2048 x 2560 pair:
 | the identity | `inconsistent` | 0 / 543 | | | 20 / 20 |
 | the same function declared `ref_to_mov` | `inconsistent` | 2 / 537 | | | 20 / 20 |
 
+The rows of this second table were measured on 2026-10-09 and not re-run: every one is a
+`mov_to_ref` comparison without a mask, which the change of 2026-10-11 does not touch
+(the first table, re-run, is the evidence). What that change adds is not measurable on
+STARE, which is `mov_to_ref`; it is shown on drawn dots, where the image is known exactly
+(`test_selfcheck_gate.py`, a 1024 x 1536 image, the points right wherever something is
+drawn):
+
+| image | `mov_to_ref` | `ref_to_mov`, before | `ref_to_mov`, now |
+|---|---|---|---|
+| complete | `ok` | `ok` | `ok` |
+| 7 % of it undrawn | `inconsistent` | `ok` | `inconsistent` (drawn dots the image does not show; uncovered blocks) |
+| 20 % undrawn | `inconsistent` | `ok` | `inconsistent` |
+| 45 % undrawn | `inconsistent` | `ok` | `inconsistent` |
+| a mask hiding 93 % of the dots, nothing else wrong | `ok` before, `not_checked` now | `ok` | `not_checked` |
+| 12 stray detections outside a mask that hides a quarter | not looked at before, `inconsistent` now | | |
+
 So the smallest constant offset the gate objects to is 0.15 px per axis, the detector's
 own floor being 0.09 px at the 95th percentile. The row "1 px wrong on 4 % of dots" is
 caught by one block alone, with every whole-image number inside the gate.
@@ -389,7 +486,7 @@ realcheck are for.
 `write_native`, or an image handed over at a yield as `info["native"]` (with
 `opts["stage_images"]` set, also for its earlier stages); `write_stage`; `warp_extra` (its
 own writer applied to the one-channel dots image, when its output has one channel);
-`SELFCHECK_OFFSET(info)`; `SELFCHECK_MASK(info, mask)` (`--mask overlap`);
+`SELFCHECK_OFFSET(info)`; `SELFCHECK_MASK(info, mask)` (`--mask overlap`, `--mask seams`);
 `SELFCHECK_SUBPROCESS = True` (one process per pair). A native dict may carry
 `dots_file`, `dots_channel` and `origin_xy`.
 
@@ -412,8 +509,10 @@ true when a crop's mean offset exceeds 0.3 px on an axis or its matched fraction
 0.7 of the baseline's; `status` is `ok`, `flagged` or `not_checked` (no crop held 20
 nuclei). The median distance is shown and not used: it measures segmentation noise.
 `run.json: realcheck` repeats `status` and `flag`. For the VALIS primary rows the flag is
-a gate (it is the only check at cohort field scales); the launcher that applies it is not
-here yet. It has only run on synthetic slides.
+a gate (it is the only check at cohort field scales): `slurm/submit_cohort.sh` runs the
+first unit of such a run ahead with `--realcheck`, and a gate job (`regbench realgate`)
+blocks the rest when that realcheck is flagged ("Running the cohort on a cluster", step
+4). It has only run on synthetic slides, and the gate has never run on a scheduler.
 
 ## Scoring
 
@@ -514,6 +613,48 @@ ranking is derived; under six units the line "descriptive; no ranking is claimed
 It is self-consistency on the registration channel: there is no held-out structure and no
 landmarks on real slides.
 
+### What the cohort's nuclei are
+
+Read from the repository on 2026-10-11 (review section D; nothing was run, and the site
+overlay `conf/ieo.config` is not in the repository, so a setting it overrides would not
+show here):
+
+| step | what | where |
+|---|---|---|
+| the file | `<arm>/<patient>/qc/registration/geojson/<slide>.geojson`, arm `valis_high_micro2` | `arms_manifest.py:44, 185-186` |
+| the arm's QC | `reg_qc: 2`, `seg_method: stardist` (the site's StarDist model, not the pipeline's default InstanSeg) | `benchmarks/configs/arms.yaml:42-51`; the arm varies only the micro-registration |
+| what is segmented | each NATIVE slide, before registration, by the run's own segmenter | `subworkflows/local/seg_qc.nf:8-20, 136` (`SEG_QC_SEGMENT` is `SEGMENT` under an alias) |
+| on which channel | ONE channel, index 0, which must be the nuclear marker (the run refuses otherwise) | `lib/SegBackends.groovy:93-117` (`segment.py --dapi-channel 0`) |
+| which mask is traced | the **cell** mask, not the nuclei mask | `subworkflows/local/seg_qc.nf:140` (`SEG_QC_GEOJSON(SEG_QC_SEGMENT.out.cell_mask)`); `modules/local/segment.nf:51-52` emits both |
+| what the cell mask is | the StarDist nuclei labels grown by `seg_expand_distance` px, no label growing into another | `bin/segment.py:162, 223-225` (`expand_labels_tiled`); `conf/modules.config:1046`; default 10 px (`nextflow.config:275`), not set in `arms.yaml` or `benchmark.config` |
+
+So the outlines are **nuclei found on the nuclear channel alone, each grown by 10 px (3.25
+µm at 0.325 µm per pixel) until it meets a neighbour**. They are not whole cells found on
+membrane or marker channels: the review's worry that outlines differ between rounds
+because the markers differ does not apply to this arm (it would at the pipeline's default
+segmenter, InstanSeg on every channel). They are also not bare nuclei, and three things
+follow for every method alike:
+
+- the gate (1.5 x the median equivalent radius) and the null's shift (4 radii) are sized
+  from the GROWN outline, so both are larger than a nuclear radius would make them;
+- matched Dice is the overlap of grown outlines, whose shape in dense tissue is set by the
+  neighbours as much as by the nucleus; it has a ceiling below 1 that is not
+  registration;
+- centroids are those of the grown outline: close to the nuclear centroid for an
+  isolated nucleus, pulled away from it where neighbours block the growth on one side.
+  `within_1um` inherits that.
+
+A nuclear mask is NOT among the arm's published files: `SEG_QC_SEGMENT` publishes nothing
+(`conf/modules.config:1140-1149`), and only the GeoJSON of the cell mask is published. The
+segmentation arms publish `<patient>/segmentation/*_nuclei_mask.tif`, but that is one mask
+per patient on the REGISTERED, merged image, not one per native slide, so it cannot serve
+here. To score on bare nuclei, `prepare multiplex` would need per-slide nuclei in native
+pixels: either the arm re-run with the nuclei mask traced as well (a pipeline change), or
+the benchmark segmenting each native nuclear channel itself (`cells.load_cells` already
+does this for a manifest without outlines, with its own detector). Neither is done; the
+benchmark scores the outlines the arm published, and calls them nuclei as the pipeline's
+QC does.
+
 ## Known-truth error
 
 The one independent check: on synthetic and semi-synthetic cases the map that made the
@@ -537,12 +678,111 @@ the discontinuous `seams` family well defined.
 | family | amplitude | scale | note |
 |---|---|---|---|
 | `rigid` | none | | control: the pose alone |
-| `wave` | 10 px peak | 1500 px | the benchmark's choice |
-| `grid` | s.d. 5 px | 9 x 9 nodes | literature value as recorded in STARE's README, not re-read |
-| `multiscale` | RMS 2.0 µm | 333, 166, 83 µm, fixed in µm | amplitude as above; the spectrum is the benchmark's choice |
-| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 120 bumps per 8192 px window | the benchmark's choice; inside STARE's model; 24 % of the window moves by more than 1 µm |
-| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 4000 bumps per 8192 px window | **outside STARE's model** (finer than its 64 px lattice); 23 % of the window moves by more than 1 µm |
-| `seams` | s.d. 3 px | 1950 px blocks | **outside STARE's model** (discontinuous); no seam on any method's grid |
+| `grid` | s.d. 5 px (1.6 µm) | 9 x 9 nodes, 1024 px apart | nearly Casamitjana et al.'s generator, its pixel value carried over without rescaling ("Where the families come from") |
+| `multiscale` | RMS 2.0 µm | 333, 166, 83 µm, fixed in µm | the three-octave structure is SynthMorph's; the amplitude and the scales in µm are the benchmark's |
+| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 120 bumps per 8192 px window | **the benchmark's own** (no published generator); inside STARE's model; 24 % of the window moves by more than 1 µm |
+| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 4000 bumps per 8192 px window | **the benchmark's own**; **outside STARE's model** (finer than its 64 px lattice); 23 % of the window moves by more than 1 µm |
+| `seams` | s.d. 3 px (0.98 µm) per axis | 1950 px blocks, the cohort scanner's tile | **outside STARE's model** (discontinuous); no seam on any method's grid |
+
+Spec **version 4** (ruling R3.16, 2026-10-11): the family `wave` (a 10 px sinusoid of 1500
+px) is REMOVED, because nothing read uses a sinusoidal field and it was a third family
+inside a spline mesh's model. Nothing else changed: every remaining family has the
+parameters, the scene and the seeds it had in version 3 (each family carries its own
+`index` in the spec, which the seed rules read; `wave`'s, 1, is retired, so no remaining
+case moved to another seed). Six families: 6 synthetic scenes, 12 cases.
+
+### Where the families come from
+
+Every source below was read for the port's literature report of 2026-10-11, not again
+when this section was written; the tag after each is that report's record of how much of
+the source was read, carried over unchanged. Where a statement rests on a partial read,
+the sentence says so.
+
+**The principle: test deformations should include ones the method cannot represent.**
+Three sources state it, and it is why two of the six families (`bumps25`, `seams`) are
+outside a 64 px mesh:
+
+- Sorzano, Thévenaz, Unser, IEEE TBME 52:652, 2005 `[PARTIAL: read pp. 657 and 659
+  (§IV-A) as images plus one discussion paragraph; missing §II–III]`: "The true
+  deformations were picked from a deformation space that cannot be represented exactly by
+  B-splines. The goal is to test the algorithm performance in a challenging situation that
+  does not allow for an exact registration since this would bias our estimate of the
+  accuracy." (§IV-A.1, p. 657). Their methods sections were not read.
+- Casamitjana et al., arXiv:2104.14873 `[PARTIAL: read abstract, §3.1.1, §3.2–3.3; missing
+  §2 methods, results, supplement]`: "We explicitly avoid using velocity fields to prevent
+  imitating the deformation model used in the algorithm." (§3.3).
+- Borovec et al., ANHIR, IEEE TMI 2020, PMC7584382 `[PARTIAL: read abstract, parts of
+  intro, conclusion paragraph, reference list; keyword scan]`: "we would recommend that
+  manually obtained landmarks are combined with … synthetically generated (and therefore
+  known) deformations" (Conclusions). Only that paragraph and the abstract carry this
+  here; the body was keyword-scanned.
+
+**`grid`** nearly matches Casamitjana et al. (same tag): "normally distributed,
+low-resolution deformation fields of size 9×9×2 … Each element in the low-resolution
+field is an independent Gaussian variable with zero mean and a standard deviation which
+is constant for each slice, and which is sampled from a uniform distribution U[3, 7] (in
+pixels). Each deformation field is then resized to the original image size using B-Spline
+interpolation." (§3.3). Two differences, both stated: the paper DRAWS the s.d. per slice
+from U[3, 7] and the benchmark fixes 5, the midpoint, which is not itself a published
+value; and the pixel value is transferred WITHOUT rescaling, from brain MRI slices at 1 mm
+per pixel to 8192 px windows at 0.325 µm per pixel, so 5 px is 1.6 µm on nodes 1024 px
+apart here and 5 mm there. The paper's methods and results were not read.
+
+**`multiscale`**: three octave-spaced random fields summed is the structure of
+SynthMorph's generator, Hoffmann et al., IEEE TMI 41:543 (arXiv:2004.10282) `[PARTIAL:
+read §II-C, §II-D.1, Table I (page image), §III-G; missing the rest]`: "we sample several
+SVFs v_m ∼ N(0, σ_v²) at resolutions r_v ∈ {1:8, 1:16, 1:32}, drawing a different σ_v for
+each … The upsampled SVFs are then combined additively" (§II-C.3). Only the structure is
+taken: SynthMorph integrates velocity fields and draws σ at random, the benchmark sums
+displacements at a fixed RMS, and the 2 µm, the three scales in µm and their equal energy
+are the benchmark's.
+
+**The bump families are the benchmark's own.** No published generator was found for
+them; the count, the width and the "about a quarter of the window above 1 µm" target are
+the benchmark's. Their motivation is local damage as described, not measured, in:
+Muhlich et al. 2022, ASHLAR, Bioinformatics 38:4613, PMC9525007 `[PARTIAL: read the full
+main text; missing Supplementary Tables S1–S4 and Figs S1–S7, figures not viewed]`: "the
+few regions with high error … corresponded to parts of the tissue in which cells had
+become physically distorted or detached from the slide" (§3.4); and Krishna et al., MELBA
+2026, PMC13599393 `[PARTIAL: read abstract, parts of intro, the residual-mask method
+paragraph, one results sentence]`, where a mask of regions "exceeding 10 pixels" of
+residual "excluded 6.65 ± 4.46% of the WSI area" between the first and the last of 17 to
+19 rounds (from one results sentence of a partial read, measured by that method's own
+fields).
+
+**`seams`.** The 1950 px block is the tile size of the scanner the cohort was acquired on
+(the owner's statement, 2026-10-11; it is not derived from a file here). The shift, s.d.
+3 px = 0.98 µm per axis, sits at the low end of the stage repeatability the MIST paper
+gives, "stage repeatability, that amounts to 1 to 2 microns for good microscopes" (MIST,
+PMC5504007 `[PARTIAL: keyword scan only]`): that sentence was found by a keyword scan and
+its context was not read, so it supports the order of magnitude and no more. That seam
+error exists and changes at tile boundaries is from ASHLAR (tag above): "the field
+direction was often consistent across large regions but could change dramatically at
+tile boundaries" (§3.4). Independent shifts per block are the benchmark's simplification;
+by the same passage real seam error is correlated over large regions.
+
+**Amplitudes, against what has been measured.** Lotz, Weiss, van der Laak, Heldmann,
+arXiv:2106.13150v2 `[FULL]` (main text; the PDF has no supplement), Table 3: on re-stained
+sections "HyReCo restained (subset B) 1.60 µm [MTRE affine] 0.86 µm [MTRE deformable]",
+i.e. an affine fit leaves a median 1.60 µm, of which 0.86 µm is at the level of the
+landmarks' own noise. `grid` (1.6 µm s.d.), `multiscale` (2 µm RMS) and `seams` (0.98 µm
+per axis) are of that size. Two caveats travel with the comparison: Lotz et al. is
+BRIGHTFIELD (H&E re-stained to PHH3, coverslip removed), not cyclic immunofluorescence;
+and ASHLAR's own figure for cyclic IF after per-tile translation, "0.119 µm (∼0.2
+pixels)" median on 200 x 200 px blocks (§3.4, tag above; the authors add that it "only
+measures the consistency of a stitching/registration algorithm against itself"),
+suggests that rounds of cyclic IF move much less. So the known-truth test is probably
+HARDER than the cohort, and an error here is not a forecast of an error there.
+
+**What could not be grounded in anything read** (the report's list): the 2 degree
+rotation and the (30, -20) px shift of the poses; both bump generators (counts, widths,
+the quarter-of-the-window target); the three `multiscale` scales in µm and their equal
+energy; the scene (uniform random nucleus placement, one per 900 px², the tissue
+silhouette, amplitudes 0.5 to 1.5); any Jacobian threshold (Lotz et al. supports "no
+folds between re-stained sections", not a number such as the re-seed rule's 0.05); a
+per-round fraction of damaged area; and any synthetic-deformation protocol published by a
+microscopy registration paper (none was found). The 1950 px block is grounded in the
+owner's statement only.
 
 **Seams.** With 1950 px blocks the seams of an 8192 px window fall at 1950, 3900, 5850 and
 7800 px. None of these positions is a multiple of any grid a method works on
@@ -601,7 +841,7 @@ when the case is made:
   case kept above 0.05 at 4 px therefore has no fold between lattice points. Of the 240
   seeds 1 was at or below 0 at 4 px and 5 (2 %) were not above 0.05, so about one
   `bumps25` case in fifty is re-seeded.
-- **Which families.** Every continuous one: `rigid`, `wave`, `grid`, `multiscale`,
+- **Which families.** Every continuous one: `rigid`, `grid`, `multiscale`,
   `bumps100`, `bumps25`. Only `bumps25` has been seen to come near (the others' smallest
   determinant, on the frozen synthetic cases at 4 px: 0.90 to 1.0, and 0.46 and 0.48 for
   `bumps100`; 0.29 to 0.67 over 60 further `bumps100` seeds), so for them the rule is a
@@ -609,7 +849,7 @@ when the case is made:
   discontinuous on purpose, and a tile that shifts towards its neighbour overlaps it by
   design; a lattice across a seam reads that as a negative determinant on almost every
   seed (the two frozen cases: -0.85 and -1.0 at 4 px).
-- **None of the 14 frozen synthetic cases is re-seeded** (the 12 under the rule: 0.25 to
+- **None of the 12 frozen synthetic cases is re-seeded** (the 10 under the rule: 0.25 to
   1.0); the test `test_no_frozen_synthetic_case_folds` measures all of them at 8192 px
   and holds the list of skipped seeds (empty) written out.
 
@@ -629,13 +869,15 @@ beside its `shift` rows.
 (window, family): one reference, kept as one file, and two rounds. A per-pair method runs
 each round; a per-patient method gets the patient and so never sees two families at once.
 
-- `synthetic`: one Gaussian-blob scene per family (7 patients, 14 cases).
+- `synthetic`: one Gaussian-blob scene per family (6 scenes, 12 cases; a scene is the
+  independent unit, "Scoring").
 - `semisynth`: variant `same`, noise 1.0 x the background s.d., on the 2 windows with most
   tissue of each cohort patient's reference round. **The spec names no patient.** The
   patients are every patient of the manifest given to `prepare`, or a subset declared with
   `--patients` / `--patients-file`; an id that is not in the manifest is an error that
-  names it. Cost, stated up front: each patient gives 2 windows x 7 families x 2 poses =
-  28 cases of 8192 px (14 patients in the sense above), and every method runs each of them.
+  names it. Cost, stated up front: each patient gives 2 windows x 6 families x 2 poses =
+  24 cases of 8192 px (12 per-patient launches in the sense above; ONE independent unit),
+  and every method runs each of them.
 
 ```bash
 python -m benchmarks.regbench prepare synthetic --suite truth --cases CASES
@@ -656,7 +898,7 @@ as the reference and the one channel whose name holds `DAPI` or `CELLTOX`; it ha
 size, so the file's own header or `--pixel-size-um` gives it, and the raw files must be
 TIFFs this reader opens (the pipeline's preprocessed slides of `rounds.csv` always are).
 With `--index` (a SLURM array) only the patient that case belongs to is opened; the index
-runs over 28 x the number of patients, in the manifest's order.
+runs over 24 x the number of patients, in the manifest's order.
 
 **Which patients a result rests on.** `prepare` writes `CASES/semisynth/truth_patients.json`
 (the ids, the manifest's path and SHA-256, the spec's hash, each patient's image and
@@ -671,9 +913,15 @@ declares a list of that one patient.
 hash and writes the hash into every `case.json` it makes from it
 (`extra.truth_spec_sha256`); `score` refuses cases of two hashes. The hash covers the
 parameters, not the generator's code: the commit is what fixes that, and it is to be tagged
-`regbench-truth-frozen-<date>` before any method runs. The spec was re-hashed once on
-2026-10-10 (version 2: seam block, bump counts, no patient named), before any method was
-scored on it.
+`regbench-truth-frozen-<date>` before any method runs. The spec has been re-hashed three
+times, each before any method was scored on it: 2026-10-10 (version 2: seam block, bump
+counts, no patient named), 2026-10-11 (version 3: the re-seed rule) and 2026-10-11
+(version 4: `wave` removed, a fixed `index` per family, the sources recorded). Version 3
+was sha256 `6da2faa7525e2377744440e4579af08306178eb6b2c8510b2c7d1bd7502d1eb6`; version 4
+is `1f0754631862f03740ce35836d2d5eb6449c8332a7f5a0be24609f397edc8f61`
+(`test_version_four_removes_wave_and_moves_no_other_case` holds the hash and the seeds
+every remaining family had in version 3). Cases prepared from an older version are
+refused beside newer ones: prepare them again.
 
 **Numbers** (`truth.error_stats`), per case and variant, in micrometres: `tre_um_p50`,
 `tre_um_p90`, `tre_um_max`, `frac_under_1um`, `frac_under_2um`, `initial_tre_um_p50` (the
@@ -685,11 +933,11 @@ seam mask's owner on that case gets a second row `<variant>:non_<owner>` in
 the moving nuclei a moving-side mask leaves; for a reference-side mask, the probes the
 owner's run did not mark).
 
-**What these numbers are not.** The amplitudes are literature values as recorded in
-STARE's README (the papers were not re-read for this port), not STARE's output on the
-cohort. The bias is elsewhere: the families, their smoothness and the multiscale spectrum
-were chosen by STARE's authors after its design was fixed; `grid`, `multiscale` and `wave`
-are fields a B-spline mesh on a 64 px lattice can represent; the `same` variant reuses the
+**What these numbers are not.** The amplitudes are set against published measurements
+("Where the families come from"), not STARE's output on the cohort. The bias is
+elsewhere: the families, their smoothness and the multiscale spectrum were chosen by
+STARE's authors after its design was fixed; `grid`, `multiscale` and `bumps100` are
+fields a B-spline mesh on a 64 px lattice can represent; the `same` variant reuses the
 reference's pixels, so every error is a lower bound. Any amplitude later estimated from a
 method's fields is post hoc and names that method.
 
@@ -1018,7 +1266,10 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   ASHLAR also records `peak_rss_after_register_gb`, read before its writer starts.
   `cgroup_peak_gb` is the whole job's high-water mark, writers included, for every
   method: it cannot be paused.
-- **The ladder.** Every method runs at 4 CPUs. Memory starts at 16 GB and moves up one rung
+- **The ladder.** Every method runs at 4 CPUs; the two DeeperHistReg `_gpu` runs (one of
+  them a primary row) have one GPU as well, which no other method has (`device` and
+  `gpu_model` are columns of the cost tables, and their `_cpu` twins are shown beside
+  them). Memory starts at 16 GB and moves up one rung
   (64, 256, 512 GB) only when the run ran out of memory. `attempt`, `mem_requested_gb` and
   `cpus_requested` are recorded per run; earlier failed attempts are kept in
   `previous_attempts` and reported as `wasted_*`. `slurm/submit_cohort.sh` submits each
@@ -1476,7 +1727,7 @@ words, before it imports its package, so no method can run on a wrong channel by
 | run | on HyReCo | what it is given |
 |---|---|---|
 | `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
-| `valis120`, `valis120_hires` | yes, by construction; never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
+| `valis120`, `valis120_hires` | listed, but as built they FAIL on every pair (both slides of a pair have the same basename and the adapter refuses that: "Dormant datasets", item 1); never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
 | `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
 | `deeperhistreg_*` (8 runs) | no, not yet | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section), but this adapter hands it one fluorescence channel per slide: its conversion, its writer loop and its canvas arithmetic are per channel. The RGB input rule is not written; the `_fluo` rows would have no meaning here in any case |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
@@ -1587,9 +1838,11 @@ failed task with its reason. `list` prints 9 (54). The dry run prints `# hyreco_
 case(s), 54 patient(s), at most 1 round(s) per patient`, one `# hyreco_b: <run> is not
 run (<reason>)` line per excluded run (15), and 25 `sbatch` lines: per run three
 selfcheck attempts, one gate and the four rungs of the ladder (16 / 64 / 256 / 512 GB,
-4 CPUs, an array of 54), then `rb-score-hyreco_b`. The summary then has a row per run
-with `n_ok` equal to `n_pairs`, an `initial` row far above them, and for `hyreco_b` the
-"Like for like" table without the "NOT like for like" line.
+4 CPUs, an array of 54), then `rb-score-hyreco_b`. The summary then has a row per run,
+an `initial` row far above the runs that registered, and for `hyreco_b` the "Like for
+like" table. As built, only `stare` can have `n_ok` equal to `n_pairs`: both VALIS rows
+fail on every pair and are scored at the initial pose ("Dormant datasets", item 1), so
+the table is not a comparison until that is fixed.
 
 ### Storage and memory to expect (none of it measured)
 
@@ -1667,16 +1920,24 @@ a sentence elsewhere in this README disagrees with this section, this section is
    background; the generator adds noise only `if self.noise_sd`, so every case of such a
    patient is noise-free without a refusal or a note.
 
-Two further findings of the same review touch these datasets and are the scorer's to
-fix: `semisynth` groups are `<patient>_w<i>_<family>`, so one real patient counts as 14
-"patients" and the "under six patients, no ranking" line is never printed for it (item
-8); and no table carries an uncertainty estimate.
+Two further findings of the same review touched these datasets and are fixed in the
+scorer (2026-10-11): the unit of a `semisynth` case is now the real patient (it was the
+group `<patient>_w<i>_<family>`, so one patient counted as 14 and the "under six" line
+never printed), with cell summaries per family; and the paired differences carry a
+bootstrap interval over units ("Scoring").
 
 ## Caveats that travel with the results
 
 1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
-   authors on this cohort with this metric; the other methods run at package defaults. This
-   is the largest asymmetry in the comparison.
+   authors on this cohort with this metric. The other methods were NOT tuned on it, but
+   "package defaults" describes only some of them: three primary rows are not a default.
+   `valis120_hires` is upstream's high-resolution example, not its default
+   (`valis120` is, and is shown beside it). `deeperhistreg_hr_gpu_asdrawn` is a shipped
+   8192 px parameter set, not the 4096 px default, on a GPU. `ashlar` is ASHLAR's own
+   command at its defaults, but on tiles the benchmark cut from stitched slides, with
+   noise added to their empty background. `palom` is its documented recipe. None of these
+   choices was made by looking at a score; all were made by STARE's authors. This is the
+   largest asymmetry in the comparison.
 2. **Two frames**, with the differences quoted above.
 3. **Per-patient and pairwise methods** see different problems and fail in different units,
    which is why failures are counted both as launches and as rounds.
@@ -1685,10 +1946,28 @@ fix: `semisynth` groups are `<patient>_w<i>_<family>`, so one real patient count
    same memory request; the tables show each run's rung.
 6. **Known-truth cases** are a check chosen by STARE's authors; see "What these numbers
    are not" under "Known-truth error".
-7. **The tissue-level block is secondary**: ACCREDIT's score on same-modality
+7. **About a fifth to two fifths of ASHLAR's nuclei are scored through an interpolated
+   map** (the tile overlaps; see "ASHLAR", "What the overlap bands cost"). It has no bias
+   when a round needs only a translation, and it is optimistic for ASHLAR when a rotation
+   is left inside its tiles: at 0.5 degrees, 2.7 px of map error against 4.6 px for the
+   copies the image shows. The selfcheck masks exactly those points. The
+   `<variant>:non_ashlar` rows are the measure of how much it matters.
+8. **DeeperHistReg's primary row follows its writer, not its registration.** By the
+   adapter's reading the written image sits half a field pixel right and down of the
+   registration: 2.5 px (0.81 µm) per axis, 1.15 µm along the diagonal, at the primary
+   8192 px set; 4.9 px (1.59 µm) per axis at the 4096 px set. `within_1um` of
+   `deeperhistreg_hr_gpu_asdrawn` can therefore be low with a perfect registration. The
+   estimated-field row `deeperhistreg_hr_gpu` beside it shows the registration itself.
+9. **The cohort's "nuclei" are StarDist nuclei grown by 10 px** ("What the cohort's nuclei
+   are"): Dice and `within_1um` have a ceiling that is not registration, the same for
+   every method.
+10. **No ranking is statistically supported.** The paired differences carry a bootstrap
+   interval over patients, which is coarse with few of them; there is no test and no
+   p-value.
+11. **The tissue-level block is secondary**: ACCREDIT's score on same-modality
    fluorescence, outside what it was validated for, by its released code where that
    differs from the preprint's text. It ranks nothing.
-8. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
+12. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
    confines cores are unverified.
 
 ### STARE (`methods/stare.py`)
@@ -1958,6 +2237,38 @@ and one reference tile is drawn where it lands (`tilemap.on_seam`, with 1 px to 
 `<variant>:non_ashlar` are every method scored without them ("Off the seams"). They are
 the rows to lean on for ASHLAR; `info["band_fraction"]` says how many nuclei that is.
 
+**What the overlap bands cost (ruling R3.15: the primary row keeps scoring ALL nuclei).**
+Re-measured on 2026-10-11 with `tilemap.py` on uniform points (the review's item 5; its
+numbers hold):
+
+- **How many.** At 1024 px tiles and a 922 px pitch a point is in a moving-tile overlap
+  with probability 1 - (1 - 102/922)^2 = 0.21 on an endless mosaic, 0.24 on a 40000 x
+  50000 px slide (2420 tiles). `on_seam` also asks for one reference tile where the
+  point lands: when the moving tiles sit in the mosaic offset from the reference tiles
+  (a round placed a few hundred px from the reference's grid) that is 0.40. So between a
+  fifth and two fifths of the nuclei of ASHLAR's primary row are scored through a map
+  the image does not show exactly. These are exactly the dots the selfcheck masks, so
+  that part of the map is not checked against any image.
+- **No bias under pure translation.** When every tile needs the same shift, the two
+  drawn copies coincide and the map equals both: the error is zero (measured 0.00 px).
+- **With a residual rotation inside the tiles the map is OPTIMISTIC for ASHLAR.** ASHLAR
+  moves each tile rigidly, so a rotation of the round is left inside every tile: the
+  tile is right at its centre and wrong by (rotation) x (distance from the centre)
+  elsewhere. In a band the image is a cross-fade of two such copies, each wrong by about
+  half a pitch times the rotation in OPPOSITE directions along the line between the two
+  centres; the map is their depth-weighted mean, which lies between the copies and so
+  cancels that component. Measured, as error against the true rotation: at 0.5 degrees
+  the map is off by 2.7 px in the bands while the copies actually drawn are off by 4.6
+  px (off the bands both are 2.7 px); at 0.1 degrees 0.54 px against 0.91 px. So in the
+  bands the nuclei are scored as better registered than either copy the image shows,
+  by about 40 % of the copies' error.
+- **How much it matters is the `:non_ashlar` rows.** They score every method, ASHLAR
+  included, on the nuclei off the bands, where the map is exactly the image. If
+  `ashlar:non_ashlar` and `ashlar` agree, the bands did not flatter it; if `ashlar` is
+  the better of the two by more than the other methods' rows differ between the two
+  blocks, that difference is the optimism. `affine_ashlar` removes most of the rotation
+  before ASHLAR sees the tiles and is the row where the effect should be smallest.
+
 **Also reported per round:** `discard_infinite_error`, `discard_zero_offset`,
 `discard_over_budget` (why ASHLAR replaced a tile's position by its linear model, one
 cause per tile in that order of precedence, rebuilt from `reg.py:910-946`;
@@ -1978,15 +2289,22 @@ not call it.
 **Selfcheck: two comparisons against the file ASHLAR wrote, both from the image.**
 
 1. The moving dots through the scored map, against the moving cycle's planes of the
-   mosaic located by `origin_xy`. This proves the first step (`L`, `c_mov`, the tile
-   index). The per-tile departure of the reference from the median placement is declared
+   mosaic located by `origin_xy`. This is the comparison that tests the first step
+   (`L`, `c_mov`, the tile index). The per-tile departure of the reference from the median placement is declared
    (`declared_offset: true`), so `origin_xy` cancels out of this comparison.
 2. The REFERENCE slide of ASHLAR's selfcheck pair carries its own dots
    (`SELFCHECK_REF_DOTS`). Every dot found in the reference cycle's planes is sent back by
    the second step of the map and must land on a dot of the reference slide; and the
    reported `origin_xy` must equal the origin read off those matched dots
-   (`reference.image_origin_px_median_x/y`), within 0.15 px. This proves `E`, `c_ref`, the
-   lookup and the origin.
+   (`reference.image_origin_px_median_x/y`), within 0.15 px. This is the comparison that
+   tests `E`, `c_ref`, the lookup and the origin.
+
+Neither has proved anything about ASHLAR yet: both have only run against a stand-in
+written from the same reading of ASHLAR's source as the adapter (`fake_ashlar.py`), so
+they show that the adapter and the comparison agree with each other. Moreover the
+selfcheck tiles are cut on the exact grid, so on the real package the reference step
+`-(E - c_ref)` is the identity there and its sign and origin cannot fail: the cohort is
+its first test.
 
 The variant's status is the worse of the two. Dots within 8 px of a seam are left out
 (`--mask overlap`, `n_masked`); without the mask the check fails, as it should, because
@@ -2323,8 +2641,12 @@ detections within 8 px of such an edge; the affine stage has none. Pairs: 8192 x
 twice (8 x 10 blocks of 1024 px; the second with a smaller moving slide, so the two
 thumbnail down-factors differ). `palom` reads files with 1024 px tiles; `palom_b1024`
 reads files with 2048 px tiles, the cohort's layout, and cuts them to 1024. If under 10 %
-of the blocks have a non-zero shift the `palom` variant is `not_checked`: the block map
-then equals the affine map and a wrong sign or block order could not show.
+of the blocks have a shift of at least 0.5 px (`MIN_SHIFT_PX`; `run.json:
+info.shift_meaningful_fraction`) the `palom` variant is `not_checked`: the block map
+then equals the affine map to within the gate and a wrong sign or block order could not
+show. Until 2026-10-11 the guard counted every non-zero shift, which a block filled from
+PALOM's regression with a few hundredths of a pixel satisfies while testing nothing; at
+0.5 px a reversed sign moves a dot by 1 px, 2.5 times the gate.
 
 What the dots cannot see, and what covers it:
 
