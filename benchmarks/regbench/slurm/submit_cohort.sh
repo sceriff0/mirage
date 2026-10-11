@@ -81,6 +81,7 @@
 #                                     never above the site's longest job (7 days)
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N)
+#   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
@@ -158,6 +159,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_TIME:=24:00:00}"
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
+: "${REGBENCH_RUN_LANES:=0}"
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
 # multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
@@ -520,7 +522,7 @@ ladder() {
     LADDER_LAST="${earlier##*,}"
 }
 
-finals="" prev_ds=""
+finals="" prev_ds="" n_laned=0
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
     while IFS=$'\t' read -r name method label opts image gpu scope after _ _ _ _ _ _ realcheck; do
@@ -548,6 +550,18 @@ for ds in $sized; do
             last="LAST_${prev_ds}_$name"
             [ -n "${!last:-}" ] && base="$base,afterany:${!last}"
         fi
+        # at most REGBENCH_RUN_LANES runs at once: the selected runs are dealt onto that
+        # many lanes in the order of the run list, and a run starts only when the run
+        # before it on its lane has ended, whatever became of it (0: no such limit)
+        if [ "$REGBENCH_RUN_LANES" -gt 0 ]; then
+            lane="LANE_OF_$name"
+            if [ -z "${!lane:-}" ]; then
+                printf -v "$lane" '%s' $((n_laned % REGBENCH_RUN_LANES))
+                n_laned=$((n_laned + 1))
+            fi
+            lane="LANE_LAST_${!lane}"
+            [ -n "${!lane:-}" ] && base="$base,afterany:${!lane}"
+        fi
         start=0
         if [ "${realcheck:--}" != - ]; then
             real="REAL_$name"
@@ -571,6 +585,11 @@ for ds in $sized; do
         elif [ "$start" = 1 ]; then
             real="REAL_$name"
             printf -v "LAST_${ds}_$name" '%s' "${!real}"
+        fi
+        last="LAST_${ds}_$name"
+        if [ "$REGBENCH_RUN_LANES" -gt 0 ] && [ -n "${!last:-}" ]; then
+            lane="LANE_OF_$name"
+            printf -v "LANE_LAST_${!lane}" '%s' "${!last}"
         fi
     done < "$table"
     prev_ds="$ds"

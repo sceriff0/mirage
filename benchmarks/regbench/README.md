@@ -1871,6 +1871,7 @@ round).
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
+| `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
 | `REGBENCH_ALLOW_UNCHECKED` | run names that start whatever their gates say (the verdict is still recorded and shown) | none |

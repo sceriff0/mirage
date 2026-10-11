@@ -359,6 +359,38 @@ def test_arrays_are_throttled(site):
 
 
 # ── the selfcheck, and the gate ───────────────────────────────────────────────
+def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
+    """REGBENCH_RUN_LANES=N: the runs are dealt onto N lanes in the order of the list and
+    a run starts only after the run before it on its lane has ended, so at most N are in
+    flight. Without the variable no run waits for an unrelated one."""
+    lanes = 4
+
+    def waits(job):
+        return {name.strip("<>") for _, name in job.deps}
+
+    def head(jobs, run, dataset="multiplex"):
+        return jobs.get(f"rb-{run}-{dataset}-first-16g") or rungs(jobs, run, dataset)[0]
+
+    done, _, _ = launch(site, env={"REGBENCH_RUN_LANES": str(lanes)}, log="lanes")
+    jobs = jobs_of(done)
+    runs = [r for r in variants.RUNS if r.active]
+    names = [variants.run_name(r) for r in runs]
+    last = {n: chain(jobs, n)[-1].name for n in names}
+    for k, name in enumerate(names):
+        if k >= lanes:
+            assert last[names[k - lanes]] in waits(head(jobs, name)), name
+    # the next dataset goes on down the same lanes
+    on_first_lane = [n for k, n in enumerate(names) if k % lanes == 0]
+    assert last[on_first_lane[-1]] in waits(head(jobs, names[0], "synthetic"))
+    # off: a run that reads no other run's results waits for no other run's arrays
+    plain, _, _ = dry
+    arrays = {j.name for n in names for j in chain(plain, n)}
+    for r in runs:
+        if r.after is None:
+            own = {j.name for j in chain(plain, variants.run_name(r))}
+            assert not (waits(head(plain, variants.run_name(r))) & (arrays - own)), r
+
+
 def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
     jobs, _, _ = dry
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
