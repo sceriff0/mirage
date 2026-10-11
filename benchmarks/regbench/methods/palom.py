@@ -115,6 +115,7 @@ import numpy as np
 
 from ..cases import load_points, polys
 from ..mapping import REF_TO_MOV, PointMap
+from . import require_fluorescence
 
 SCOPE = "pair"
 VARIANTS = ("palom_affine", "palom")
@@ -564,6 +565,7 @@ def describe(geo, original_shifts):
 
 
 def register(case, work, opts):
+    require_fluorescence(case, "palom")  # before the package: refused wherever it runs
     import palom
     import psutil  # noqa: F401  (dask reads the affinity mask only through it)
 

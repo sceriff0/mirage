@@ -95,6 +95,7 @@ import numpy as np
 from .. import imageio, resources, tilemap
 from ..cases import load_points, polys
 from ..mapping import MOV_TO_REF, REF_TO_MOV, PointMap
+from . import require_fluorescence
 
 SCOPE = "group"
 VARIANTS = ("ashlar",)
@@ -491,6 +492,8 @@ def _edge_identity(cache_dir, tiles_name, base, edge):
 def register_group(cases, work, opts):
     work = Path(work)
     noise, affine = settings(opts)
+    for case in cases:
+        require_fluorescence(case, "ashlar")
     label = opts.get("label") or "ashlar"
     mon = opts.get("monitor") or _NullMonitor()
     selfcheck = _truthy(opts.get("stage_images", 0))

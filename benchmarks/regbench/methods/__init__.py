@@ -95,6 +95,36 @@ OOM_GRACE_S = 60.0  # how long an interrupted method has to unwind before a hard
 OOM_EXIT_CODE = 137
 _LAUNCHES = itertools.count(1)
 
+# Methods with NO input rule for a brightfield case (an RGB whole-slide pair: HyReCo), and
+# why. Their adapters refuse such a case with this text (`require_fluorescence`), and the
+# run list leaves their runs out of a brightfield dataset (`variants.runs_for`). A method
+# not named here has a rule: STARE reads the case's one-channel proxy (methods/stare.py),
+# VALIS 1.2.0 reads the original RGB slides and picks its own brightfield processing.
+NO_BRIGHTFIELD = {
+    "valis_mirage": "it is the pipeline's own VALIS call, and the pipeline registers "
+    "multichannel fluorescence rounds only: there is no shipped brightfield "
+    "configuration of it to run",
+    "deeperhistreg": "the package is built for brightfield RGB, but this adapter hands "
+    "it one fluorescence channel per slide (its conversion, its writer loop and its "
+    "canvas arithmetic are per channel); the RGB input rule is not written yet",
+    "ashlar": "ASHLAR stitches unstitched tiles by one translation per tile; a pair of "
+    "whole brightfield slides, re-mounted between the scans, is not its input (ruling "
+    "R3.8: ASHLAR is not run on HyReCo)",
+    "palom": "this adapter follows PALOM's README recipe on one channel by index; on an "
+    "RGB slide that would be the red channel, chosen by nobody. PALOM has colour "
+    "modes of its own for an RGB slide (palom/color.py HaxProcessor: grayscale, "
+    "hematoxylin, aec, dab); which one is the input rule is not decided",
+}
+
+
+def require_fluorescence(case, method):
+    """Refuse a case of another modality for a method without an input rule for it."""
+    if case.modality != "fluorescence":
+        raise ValueError(
+            f"{case.case_id}: {method} has no input rule for a {case.modality} case: "
+            f"{NO_BRIGHTFIELD[method]}"
+        )
+
 
 def load(method):
     """The method's module. A module-like object (tests) is returned as it is."""
@@ -568,6 +598,11 @@ def _run(
             if not (isinstance(native, dict) and native.get("files")):
                 continue
             d = result_dir(out, names[variant], by_id[case_id])
+            if by_id[case_id].modality != "fluorescence":
+                # the block compares NUCLEAR channels; a brightfield image has none
+                rec["tissue"] = {"skipped": tissue.NOT_BRIGHTFIELD}
+                write_json(d / "run.json", rec)
+                continue
             try:
                 rec["tissue"] = tissue.reduce_native(by_id[case_id], native, d)
             except (Exception, SystemExit) as exc:

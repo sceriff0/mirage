@@ -33,6 +33,19 @@
 #
 # Nothing waits on the login node: no `sbatch --wait`, no job that submits jobs.
 #
+# AN EXTERNAL LANDMARK SET (HyReCo) is submitted on its own, never with the cohort:
+#
+#   submit_cohort.sh --prepare --datasets hyreco_a      (then the same without --prepare)
+#   submit_cohort.sh --prepare --datasets hyreco_b      (then the same without --prepare)
+#
+# `hyreco_a` is the TUNING set and `hyreco_b` the REPORT set: subset B is prepared with
+# the settings of the prepared subset-A cases and with nothing else. Such a submission
+# reads its own run list (`runs --dataset <name>`: only the runs with an input rule for
+# brightfield), prepares one pair per array task, submits no tissue job, sends no first
+# unit ahead for a realcheck (both are defined on nuclei), and its scorer writes
+# $REGBENCH_OUT/tables/<name>/ and none of the cohort's tables. Use a REGBENCH_OUT of
+# its own.
+#
 # ENVIRONMENT (env.sh has the paths and the images)
 #   REGBENCH_CASES, REGBENCH_OUT      prepared cases; results
 #   REGBENCH_SIF_<image>              one per image of the run list (column `image`)
@@ -52,6 +65,18 @@
 #                                     cases, comma-separated (default: all)
 #   REGBENCH_PREPARE_ARGS             with --prepare: more `prepare multiplex` options
 #   REGBENCH_PREPARE_FORCE=1          with --prepare: redo cases that exist
+#   REGBENCH_HYRECO_A                 with --prepare --datasets hyreco_a: the unpacked
+#                                     HyReCo/ folder (it holds HE/ and PHH3/)
+#   REGBENCH_HYRECO_A_ARGS            more `prepare hyreco --subset a` options: the
+#                                     settings being tried (--proxy, --reduce)
+#   REGBENCH_HYRECO_B_HE, REGBENCH_HYRECO_B_PHH3
+#                                     with --prepare --datasets hyreco_b: the HE/ and
+#                                     PHH3/ folders of HyReCo-Additional (two archives)
+#   REGBENCH_HYRECO_TUNED             the cases folder holding the prepared hyreco_a
+#                                     cases subset B takes its settings from (default:
+#                                     REGBENCH_CASES)
+#   REGBENCH_HYRECO_B_ARGS            more `prepare hyreco --subset b` options (never a
+#                                     setting: --proxy and --reduce are refused there)
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
 # The rungs, 4 CPUs and the 7-day limit are frozen (benchmarks/regbench/ladder.py).
@@ -86,6 +111,16 @@ extra=("$@")
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+
+# An external landmark set is submitted alone: its own run list, its own tables.
+EXTERNAL="" n_named=0
+for ds in $datasets; do
+    n_named=$((n_named + 1))
+    case "$ds" in hyreco_a|hyreco_b) EXTERNAL="$ds" ;; esac
+done
+if [ -n "$EXTERNAL" ] && [ "$n_named" -ne 1 ]; then
+    die "--datasets '$datasets': an external landmark set (hyreco_a, hyreco_b) is submitted alone, with its own run list and its own tables. hyreco_a is the tuning set, hyreco_b the report set. Nothing was submitted."
+fi
 
 # seconds <[D-]HH:MM:SS> ; limit <seconds> -> D-HH:MM:SS, never above the site's maximum
 seconds() {
@@ -148,8 +183,16 @@ fi
 
 # ── the run list, from the harness alone ──────────────────────────────────────────────
 table="$scratch/runs.tsv"
-regbench_py "$REGBENCH_HEAD_IMAGE" runs > "$table"
+if [ -n "$EXTERNAL" ]; then
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" > "$table"
+else
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs > "$table"
+fi
 [ -s "$table" ] || die "the run list is empty (python -m benchmarks.regbench runs)"
+if [ -n "$EXTERNAL" ]; then
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" --excluded | \
+        while IFS=$'\t' read -r name why; do echo "# $EXTERNAL: $name is not run ($why)"; done
+fi
 REGBENCH_SCORER_IMAGE="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --scorer-image)"
 export REGBENCH_SCORER_IMAGE
 
@@ -163,7 +206,7 @@ for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENC
 
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
-    [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
+    [ -n "$EXTERNAL" ] || [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
     force=()
     [ "${REGBENCH_PREPARE_FORCE:-0}" = 1 ] && force=(--force)
     alloc=(--cpus-per-task="$CPUS" --mem="${REGBENCH_PREPARE_MEM:-64G}"
@@ -174,14 +217,33 @@ if [ "$prepare" = 1 ]; then
     # shellcheck disable=SC2206  # extra `prepare multiplex` options, several words
     more=(${REGBENCH_PREPARE_ARGS:-})
     for ds in $datasets; do
+        array=() log="$LOG_ONE"
         case "$ds" in
             multiplex) what=(multiplex --manifest "$REGBENCH_MANIFEST" ${more[@]+"${more[@]}"}) ;;
             semisynth) what=(semisynth --truth --manifest "$REGBENCH_MANIFEST" ${patients[@]+"${patients[@]}"}) ;;
             synthetic) what=(synthetic --suite truth) ;;
-            *) die "--datasets: '$ds' is not one of multiplex, semisynth, synthetic" ;;
+            hyreco_a)
+                [ -n "${REGBENCH_HYRECO_A:-}" ] || die "--prepare --datasets hyreco_a needs REGBENCH_HYRECO_A (the unpacked HyReCo/ folder, holding HE/ and PHH3/). Nothing was submitted."
+                # shellcheck disable=SC2206  # the settings being tried, several words
+                tried=(${REGBENCH_HYRECO_A_ARGS:-})
+                what=(hyreco --subset a --data-root "$REGBENCH_HYRECO_A" ${tried[@]+"${tried[@]}"}) ;;
+            hyreco_b)
+                [ -n "${REGBENCH_HYRECO_B_HE:-}" ] && [ -n "${REGBENCH_HYRECO_B_PHH3:-}" ] || die "--prepare --datasets hyreco_b needs REGBENCH_HYRECO_B_HE and REGBENCH_HYRECO_B_PHH3 (the HE/ and PHH3/ folders of HyReCo-Additional). Nothing was submitted."
+                # shellcheck disable=SC2206  # several words; a setting is refused by prepare itself
+                given=(${REGBENCH_HYRECO_B_ARGS:-})
+                what=(hyreco --subset b --ref-dir "$REGBENCH_HYRECO_B_HE" --mov-dir "$REGBENCH_HYRECO_B_PHH3"
+                      --settings-from "${REGBENCH_HYRECO_TUNED:-$REGBENCH_CASES}" ${given[@]+"${given[@]}"}) ;;
+            *) die "--datasets: '$ds' is not one of multiplex, semisynth, synthetic, hyreco_a, hyreco_b" ;;
         esac
-        submit "rb-prepare-$ds" "${COMMON[@]}" "$LOG_ONE" "${alloc[@]}" "$HERE/prepare.sbatch" \
-            "${what[@]}" ${force[@]+"${force[@]}"}
+        if [ -n "$EXTERNAL" ]; then
+            # one pair per task: a slide is about 21 gigapixels, and its proxy is written here
+            n_pairs="$(regbench_py "$REGBENCH_HEAD_IMAGE" prepare hyreco --cases "$REGBENCH_CASES" \
+                --subset "${ds#hyreco_}" --count)" || die "cannot size the $ds prepare array"
+            array=(--array="0-$((n_pairs - 1))%$REGBENCH_ARRAY_LIMIT")
+            log="$LOG_ARRAY"
+        fi
+        submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
+            "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
     done
     echo "prepare: $N_JOBS job(s). When they are done, run this script again without --prepare."
     exit 0
@@ -356,14 +418,25 @@ while IFS=$'\t' read -r name _; do
     gate="GATE_$name"
     dep="${dep:+$dep:}${!gate}"
 done < "$table"
-submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$dep" --cpus-per-task="$CPUS" \
-    --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
-submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID" --cpus-per-task="$CPUS" \
-    --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
+if [ -n "$EXTERNAL" ]; then
+    # no tissue job (it is defined on nuclear channels); the set's own scorer and tables
+    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$dep" --cpus-per-task="$CPUS" \
+        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
+else
+    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$dep" --cpus-per-task="$CPUS" \
+        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
+    submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID" --cpus-per-task="$CPUS" \
+        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
+fi
 
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted')"
 echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
-echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
+if [ -n "$EXTERNAL" ]; then
+    echo "# results     -> $REGBENCH_OUT/tables/$EXTERNAL/summary.md (this set's own tables; none of the cohort's)"
+    [ "$EXTERNAL" = hyreco_a ] && echo "# hyreco_a is the TUNING set: nothing in its tables is a result"
+else
+    echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
+fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
-[ -n "${REGBENCH_PIPELINE_TRACE:-}" ] || echo "# no REGBENCH_PIPELINE_TRACE: the pipeline's convert and merge steps will read 'not available'"
+[ -n "$EXTERNAL" ] || [ -n "${REGBENCH_PIPELINE_TRACE:-}" ] || echo "# no REGBENCH_PIPELINE_TRACE: the pipeline's convert and merge steps will read 'not available'"
 exit 0

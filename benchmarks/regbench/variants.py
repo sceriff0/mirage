@@ -49,6 +49,14 @@ only ever added at the end, so a position never changes.
                        ahead with ``run --realcheck`` and starts the rest only when
                        that row's ``realcheck.json`` is not flagged.
 
+**An external brightfield dataset** (HyReCo: ``hyreco_a``, ``hyreco_b``) has a shorter
+list: the active runs whose method has an input rule for a brightfield case
+(``runs_for(dataset)``; today ``stare``, ``valis120``, ``valis120_hires``). The others are
+left out with a reason each (``excluded_for``, from ``methods.NO_BRIGHTFIELD``), and their
+adapters refuse such a case in the same words. ``runs --dataset hyreco_b`` prints that
+list in the same columns; ``expected_variants(dataset)`` and ``primary_for(dataset)``
+are what its scorer (``regbench.landmarks``) is told.
+
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
 primary of both, by the user's ruling. ``PRIMARY_VALIS120`` and ``PRIMARY_DEEPERHISTREG``
@@ -67,7 +75,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import methods
+from . import EXTERNAL_DATASETS, methods
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
 # list starts no adapter; the tests hold the two equal.
@@ -329,13 +337,53 @@ def check():
             raise ValueError(
                 f"the active run {name!r} waits for {run.after!r}, which is paused"
             )
+    unknown = set(methods.NO_BRIGHTFIELD) - {r.method for r in RUNS}
+    if unknown:
+        raise ValueError(f"NO_BRIGHTFIELD names no method of the list: {unknown}")
+    for dataset in EXTERNAL_DATASETS:
+        kept = {run_name(r) for r in runs_for(dataset)}
+        for run in runs_for(dataset):
+            name = run_name(run)
+            for needs in (gated_by(name), run.after):
+                if needs is not None and needs not in kept:
+                    raise ValueError(
+                        f"on {dataset} the run {name!r} needs {needs!r}, which has "
+                        "no brightfield input rule"
+                    )
 
 
-def expected_variants():
+def runs_for(dataset=None):
+    """The active runs of a dataset: all of them for the cohort's datasets (and for
+    None); for an external brightfield set, those whose method has an input rule for a
+    brightfield case."""
+    if dataset not in EXTERNAL_DATASETS:
+        return active_runs()
+    return tuple(r for r in active_runs() if r.method not in methods.NO_BRIGHTFIELD)
+
+
+def excluded_for(dataset):
+    """``[(run name, reason)]`` of the active runs left out of ``dataset``."""
+    if dataset not in EXTERNAL_DATASETS:
+        return []
+    return [
+        (run_name(r), methods.NO_BRIGHTFIELD[r.method])
+        for r in active_runs()
+        if r.method in methods.NO_BRIGHTFIELD
+    ]
+
+
+def primary_for(dataset=None):
+    """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``."""
+    written = {v for run in runs_for(dataset) for v in variants_of(run)}
+    return [v for v in PRIMARY if v in written]
+
+
+def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs (35 with nothing paused)."""
+    the active runs (35 with nothing paused). For an external dataset, the names of
+    ``runs_for(dataset)``."""
     check()
-    return [v for run in active_runs() for v in variants_of(run)]
+    return [v for run in runs_for(dataset) for v in variants_of(run)]
 
 
 def scope(method):
@@ -474,12 +522,16 @@ def opt_args(run):
     return [f"{k}={v}" for k, v in run.opts.items()]
 
 
-def runs_table(paused=False):
+def runs_table(paused=False, dataset=None):
     """One row of strings per active run, in the columns of ``RUNS_COLUMNS``; with
-    ``paused``, the paused runs too, in their place in ``RUNS``."""
+    ``paused``, the paused runs too, in their place in ``RUNS``. With an external
+    ``dataset``, only the runs of ``runs_for(dataset)``."""
     check()
     table = []
-    for run in RUNS if paused else active_runs():
+    listed = RUNS if paused else active_runs()
+    if dataset in EXTERNAL_DATASETS:
+        listed = runs_for(dataset)
+    for run in listed:
         names = variants_of(run)
         primary = [v for v in names if v in PRIMARY]
         table.append(
@@ -498,7 +550,10 @@ def runs_table(paused=False):
                 ",".join(names),
                 "1" if run.active else "0",
                 ",".join(gate_variants(run_name(run))),
-                realcheck_gate(run_name(run)) or NONE,
+                # the realcheck is made on nuclei; an external landmark case has none
+                NONE
+                if dataset in EXTERNAL_DATASETS
+                else realcheck_gate(run_name(run)) or NONE,
             )
         )
     return table

@@ -84,6 +84,7 @@ from pathlib import Path
 
 from .. import resources
 from . import _valis_points as vp
+from . import require_fluorescence
 
 SCOPE = "group"
 VARIANTS = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
@@ -328,6 +329,8 @@ def register_group(cases, work, opts):
             f"crop_round={crop_round!r} (one of {vp.ROUNDINGS})"
         )
     mon = vp.monitor_of(opts)
+    for case in cases:
+        require_fluorescence(case, "valis_mirage")
     ref_path, moving = vp.patient_slides(cases)
 
     reg_module = pipeline()  # first: see pipeline()

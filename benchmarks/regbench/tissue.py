@@ -315,6 +315,14 @@ def native_channel(native, case, n_channels):
     return int(channel)
 
 
+# why a brightfield case (HyReCo) has no tissue-level row
+NOT_BRIGHTFIELD = (
+    "the tissue-level block compares the nuclear channel of a written image with the "
+    "reference's; a brightfield case has no nuclear channel, and what each method "
+    "writes for it differs in kind (RGB, or a one-channel proxy)"
+)
+
+
 def reduce_native(case, native, variant_dir, eval_px=None):
     """Reduce a method's written image right after its writer: ``<variant_dir>/tissue/
     moving_eval.tif`` and the record the driver stores as ``run.json: tissue``."""

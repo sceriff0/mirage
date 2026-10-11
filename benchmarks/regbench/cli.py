@@ -1,6 +1,8 @@
 """``python -m benchmarks.regbench``: prepare cases, run a method, score everything.
 
-``prepare <dataset>``  write the cases of ``synthetic`` / ``semisynth`` / ``multiplex`` (idempotent)
+``prepare <dataset>``  write the cases of ``synthetic`` / ``semisynth`` / ``multiplex`` (idempotent);
+                       ``prepare hyreco --subset a|b`` writes the external landmark set
+                       ``hyreco_a`` (tuning) or ``hyreco_b`` (report)
 ``list``               the number of prepared cases of a dataset (sizes a SLURM array), their
                        ids (``--ids``) or their patients (``--groups``)
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
@@ -12,7 +14,13 @@
                        what is there
 ``runs``               the run list, one tab-separated line per run, for the launcher
                        (columns: ``benchmarks/regbench/variants.py``); ``--all`` adds the
-                       paused runs
+                       paused runs; ``--dataset hyreco_b`` prints the runs of an
+                       external brightfield set
+
+An external landmark set (``hyreco_a``, ``hyreco_b``) is never scored with the cohort:
+``score`` without ``--dataset`` reads the cohort's datasets only, and ``score --dataset
+hyreco_b`` writes that set's own tables (``<out>/tables/hyreco_b/``,
+``benchmarks/regbench/landmarks.py``). The two kinds cannot be named in one call.
 ``gate``               from one run's ``selfcheck.json``: the status that decides whether
                        the run may start, and the rows to leave out of the results
                        (``score --drop``). Exit code as ``selfcheck``
@@ -34,7 +42,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import DATASETS, METHODS
+from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, METHODS
 from .resources import n_cpus
 
 
@@ -153,9 +161,71 @@ def build_parser():
         help="with --manifest: the same subset, one id per line (# starts a comment)",
     )
 
+    hy = prep.add_parser(
+        "hyreco",
+        help="HyReCo's re-stained H&E / PHH3 pairs (benchmarks/regbench/datasets/"
+        "hyreco.py): subset a is the tuning set, subset b the report set",
+    )
+    common(hy)
+    hy.add_argument(
+        "--subset",
+        required=True,
+        choices=("a", "b"),
+        help="a: the nine pairs settings are chosen on (hyreco_a). b: the 54 pairs "
+        "that are reported (hyreco_b); takes its settings from --settings-from",
+    )
+    hy.add_argument(
+        "--data-root", default=None, help="a folder holding HE/ and PHH3/ (subset A)"
+    )
+    hy.add_argument("--ref-dir", default=None, help="the subset's HE/ folder")
+    hy.add_argument("--mov-dir", default=None, help="the subset's PHH3/ folder")
+    hy.add_argument(
+        "--proxy",
+        default=None,
+        choices=("luminance", "haematoxylin"),
+        help="subset a only: the one-channel image a one-channel method is given "
+        "(default luminance, inverted)",
+    )
+    hy.add_argument(
+        "--reduce",
+        default=None,
+        type=int,
+        choices=(1, 2),
+        help="subset a only: block-average the proxy by this factor (default 1)",
+    )
+    hy.add_argument(
+        "--settings-from",
+        default=None,
+        help="subset b only, required: the cases folder holding the prepared hyreco_a "
+        "cases; their settings are the ones subset b is prepared with",
+    )
+    hy.add_argument(
+        "--pixel-size-um",
+        type=float,
+        default=None,
+        help="a measured pixel size, instead of the file's (must be within 2 %% of "
+        "the published 0.24)",
+    )
+    hy.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="prepare a subset of which some pairs are missing; every case is marked",
+    )
+    hy.add_argument(
+        "--count",
+        action="store_true",
+        help="print the number of pairs of the subset and exit (sizes a prepare array)",
+    )
+    hy.add_argument(
+        "--keep-shared-ids",
+        action="store_true",
+        help="subset b only: keep the four ids subset A also has (29, 108, 361, 464) "
+        "in the report set. Only when the files show they are different slides",
+    )
+
     lst = sub.add_parser("list")
     lst.add_argument("--cases", required=True)
-    lst.add_argument("--dataset", required=True, choices=DATASETS)
+    lst.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     what = lst.add_mutually_exclusive_group()
     what.add_argument("--ids", action="store_true", help="print the case ids")
     what.add_argument(
@@ -171,7 +241,7 @@ def build_parser():
     r = sub.add_parser("run")
     r.add_argument("--cases", required=True)
     r.add_argument("--out", required=True)
-    r.add_argument("--dataset", required=True, choices=DATASETS)
+    r.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     r.add_argument("--method", required=True, choices=METHODS)
     which = r.add_mutually_exclusive_group(required=True)
     which.add_argument("--case-id", default=None, help="one case (a pair method)")
@@ -265,7 +335,14 @@ def build_parser():
     sc = sub.add_parser("score")
     sc.add_argument("--cases", required=True)
     sc.add_argument("--out", required=True)
-    sc.add_argument("--dataset", nargs="*", default=None, choices=DATASETS)
+    sc.add_argument(
+        "--dataset",
+        nargs="*",
+        default=None,
+        choices=ALL_DATASETS,
+        help="default: the cohort's datasets. An external landmark set (hyreco_a, "
+        "hyreco_b) is scored only when named, alone, into tables of its own",
+    )
     sc.add_argument("--workers", type=int, default=n_cpus())
     sc.add_argument(
         "--dev",
@@ -337,7 +414,7 @@ def build_parser():
     )
     ts.add_argument("--cases", required=True)
     ts.add_argument("--out", required=True)
-    ts.add_argument("--dataset", nargs="*", default=None, choices=DATASETS)
+    ts.add_argument("--dataset", nargs="*", default=None, choices=ALL_DATASETS)
     ts.add_argument("--workers", type=int, default=n_cpus())
     ts.add_argument("--dev", action="store_true")
     ts.add_argument("--only-run", action="store_true")
@@ -374,7 +451,7 @@ def build_parser():
     )
     rg.add_argument("--cases", required=True)
     rg.add_argument("--out", required=True)
-    rg.add_argument("--dataset", required=True, choices=DATASETS)
+    rg.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     rg.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
     rg.add_argument("--method", required=True, choices=METHODS)
     rg.add_argument("--label", default=None)
@@ -398,6 +475,18 @@ def build_parser():
         "--all",
         action="store_true",
         help="also print the paused runs (0 in the `active` column)",
+    )
+    rn.add_argument(
+        "--dataset",
+        default=None,
+        choices=ALL_DATASETS,
+        help="the runs of this dataset: for an external brightfield set, only the "
+        "runs whose method has an input rule for it",
+    )
+    rn.add_argument(
+        "--excluded",
+        action="store_true",
+        help="with --dataset: print instead the runs left out, each with its reason",
     )
     return ap
 
@@ -555,11 +644,32 @@ def _runs(a):
     if a.scorer_image:
         print(variants.SCORER_IMAGE)
         return 0
+    if a.excluded:
+        for name, why in variants.excluded_for(a.dataset):
+            print(f"{name}\t{why}")
+        return 0
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))
-    for row in variants.runs_table(paused=a.all):
+    for row in variants.runs_table(paused=a.all, dataset=a.dataset):
         print("\t".join(row))
     return 0
+
+
+def split_datasets(names):
+    """``(cohort datasets | None, external dataset | None)`` of a ``--dataset`` list.
+    The two kinds are never scored together: an external landmark set has its own
+    tables, and the cohort's default never includes one."""
+    names = list(names or [])
+    external = [d for d in names if d in EXTERNAL_DATASETS]
+    if not external:
+        return (names or None), None
+    if len(names) != 1:
+        raise SystemExit(
+            f"--dataset {' '.join(names)}: an external landmark set "
+            f"({', '.join(EXTERNAL_DATASETS)}) is scored alone, into tables of its "
+            "own; name one of them and nothing else"
+        )
+    return None, external[0]
 
 
 def _write_gate(path, run, status, dropped, blocked, reference):
@@ -700,6 +810,10 @@ def _tissue(a):
     from . import score, tissue, variants
     from .cases import list_cases
 
+    if split_datasets(a.dataset)[1]:
+        raise SystemExit(
+            f"tissue: not computed for {a.dataset[0]}: {tissue.NOT_BRIGHTFIELD}"
+        )
     if not tissue.have_cv2():
         raise SystemExit(
             "tissue: OpenCV (cv2) is not importable in this environment; the pieces "
@@ -743,12 +857,26 @@ def main(argv=None):
         return _tissue(a)
     from . import score, variants
 
+    cohort, external = split_datasets(a.dataset)
+    if external:
+        from . import landmarks
+
+        landmarks.score(
+            a.cases,
+            a.out,
+            external,
+            a.workers,
+            expected=None if a.only_run else variants.expected_variants(external),
+            primary=variants.primary_for(external),
+            dropped=_dropped(a.drop),
+        )
+        return 0
     expected = None if a.only_run else variants.expected_variants()
     primary = None if a.only_run else list(variants.PRIMARY)
     score.score(
         a.cases,
         a.out,
-        a.dataset,
+        cohort,
         a.workers,
         dev=a.dev,
         expected=expected,

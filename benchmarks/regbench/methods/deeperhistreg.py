@@ -102,6 +102,7 @@ from pathlib import Path
 import numpy as np
 
 from ..mapping import REF_TO_MOV, PointMap
+from . import require_fluorescence
 
 SCOPE = "pair"
 VARIANTS = ("deeperhistreg", "deeperhistreg_asdrawn")
@@ -551,16 +552,12 @@ def run_package(package, source, target, out, params, token, tmp):
 
 
 def register(case, work, opts):
+    require_fluorescence(case, "deeperhistreg")  # before the package is imported
     import deeperhistreg
     import SimpleITK as sitk
     import torch
 
     config, device, fluo = settings(opts)
-    if case.modality != "fluorescence":
-        raise ValueError(
-            f"{case.case_id}: this adapter hands DeeperHistReg one fluorescence channel "
-            f"per slide; a {case.modality} case needs its own input rule"
-        )
     version = installed_version(deeperhistreg)
     if version != VERSION:
         raise RuntimeError(

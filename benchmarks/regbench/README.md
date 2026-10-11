@@ -38,6 +38,7 @@ This package is being ported in steps. What exists now:
 | the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, four chained job arrays per run and dataset, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the end-to-end cost view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. The pipeline's own steps are read from a Nextflow trace, tested with a trace written by hand; no real trace has been read |
+| HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
 
 Nothing here has run on the cluster.
 
@@ -51,8 +52,11 @@ arms_manifest.py  the arms cohort as a `prepare multiplex` manifest, one row per
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      synthetic, semisynth, multiplex: each writes cases
+datasets/      synthetic, semisynth, multiplex: each writes cases; hyreco writes the
+               external landmark set (hyreco_a, hyreco_b)
 score.py       reads files only; writes <out>/tables
+landmarks.py   the scorer of an external landmark set: <out>/tables/<dataset>/, never the
+               cohort's tables
 selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
@@ -1054,6 +1058,246 @@ and array sections). None of the following was observed:
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
   into the job, as the two older launchers already assume.
 
+## HyReCo: an external landmark set (its own tables)
+
+HyReCo is the one public dataset found in which the SAME section was imaged twice and
+annotated by hand: H&E, bleached, re-stained PHH3, scanned again, with landmarks placed
+on nuclei. It is brightfield RGB, human tongue, one lab, about 95,000 x 220,000 px per
+slide at 0.24 um. Dataset: van der Laak, Lotz, Weiss, Heldmann, IEEE DataPort 2021,
+doi:10.21227/pzj5-bs61 `[FULL: the dataset page's text, fetched 2026-10-10; no data file
+was ever opened]`. Paper: Lotz et al. 2023, J Med Imaging 10(6):067501,
+doi:10.1117/1.JMI.10.6.067501 `[PARTIAL: the Europe PMC text searched for the pixel size,
+the landmarks, the grey-scale conversion, MTRE and the observer errors, and those
+paragraphs read; figures and supplement not seen]`. Treated as CC BY-SA 4.0 (page and
+paper; the DataCite record of the same DOI says CC BY 4.0). ANHIR is not part of this
+harness: every ANHIR set is made of different sections.
+
+**It is never part of the cohort's results.** `score` without `--dataset` reads the
+cohort's datasets only; `score --dataset hyreco_b` writes `<out>/tables/hyreco_b/` and
+nothing else; the two kinds cannot be named in one call, in `score` or in the launcher.
+No HyReCo number is in the cohort's tables, in a paired comparison with them or in a
+ranking.
+
+### The rule: tuned on subset A, reported on subset B
+
+| dataset | what | role |
+|---|---|---|
+| `hyreco_a` | subset A's nine re-stained H&E / PHH3 pairs (ids 29, 108, 361, 464, 533, 611, 628, 644, 679) | the TUNING set: every setting is chosen here. Its tables say "nothing on this page is a result" |
+| `hyreco_b` | subset B ("HyReCo-Additional"): 54 re-stained pairs | the REPORT set: nothing is chosen on it |
+
+What can be chosen is what `prepare hyreco --subset a` takes: `--proxy` (the one-channel
+image STARE is given: `luminance`, the pre-declared default, or `haematoxylin`) and
+`--reduce` (1, or 2 for a 2 x 2 block average). A method's own options are fixed by the
+run list, as for the cohort. The split is enforced, not only stated:
+
+- A folder is accepted for a subset only when its case ids are that subset's (the two
+  lists of the dataset page, in `datasets/hyreco.py`). Subset B's folder cannot be
+  prepared as the tuning set, and subset A's cannot be reported.
+- `prepare hyreco --subset b` has no setting of its own: `--proxy` and `--reduce` are
+  refused there. It copies the settings of the prepared `hyreco_a` cases
+  (`--settings-from <cases folder>`), which must be all nine pairs under one setting.
+- Subset B cannot be prepared a second time under other settings (the cases folder is
+  refused until `hyreco_b` and its results are removed), and `score --dataset hyreco_b`
+  refuses cases of two settings, cases that name no tuning set, and a tuning set that
+  no longer carries the settings the report set was prepared with.
+- To try a second setting on subset A, prepare it into a cases folder of its own and
+  score it into an output folder of its own; then point subset B at the one chosen.
+
+**The four shared ids.** 29, 108, 361 and 464 are in both lists; no source read says
+whether they are the same slides. They are prepared in `hyreco_b`, left OUT of its
+report set (50 pairs), and kept in the pooled line over all 54 pairs, which is the
+published definition's set. `--keep-shared-ids` puts them back, for use only once the
+files have shown they are different slides.
+
+### The files, and what is assumed about them
+
+```
+HyReCo/{CD45,CD8,HE,KI67,PHH3}/<id>.tif|.csv    subset A   HyReCo.zip                    233 GB
+HyReCo-Additional/HE/<id>.tif|.csv              subset B   HyReCo-Additional-HE.zip      274 GB
+HyReCo-Additional/PHH3/<id>.tif|.csv            subset B   HyReCo-Additional-PHH3.zip    233 GB
+```
+
+Verified on the dataset page: the tree above, the two id lists, BigTIFF plus one CSV per
+image, and "Each line describes a point annotation in world coordinates (x,y,z). The
+unit is mm. The origin of the coordinate system is the upper left corner of the image."
+Verified in the paper: 0.24 um per pixel. Everything else is an assumption, listed in
+the module's docstring; each one is checked on the files and REFUSES the case when it
+does not hold:
+
+| assumed | what happens when it does not hold |
+|---|---|
+| the first TIFF series' first level is the full-resolution image, RGB, 8 bit | the case is refused |
+| landmarks are paired by line (the page implies it, does not say it) | the two files of a pair must have the same number of points, else the case is refused (never truncated). A line that is not `x,y[,z]` refuses the case wherever it is, except one header line; so does a blank line between points, and a file with more than three columns (it would have to be paired by an id) |
+| pixel = mm / pixel size, no half-pixel term | not checkable; the same convention on both slides moves both landmarks of a pair alike |
+| the pixel size is the FILE's (resolution tags in inch or cm, or `MPP = ` in the description) and agrees with the paper's 0.24 within 2 % | refused when it disagrees. A file that states none falls back to 0.24 exactly, and the summary says so in bold: 1 % of pixel size moves a landmark 50 mm from the origin by 2000 px. `--pixel-size-um` states a measured value, under the same check |
+| the two slides of a pair have one pixel size (within 0.1 %) | the case is refused |
+| every landmark lies inside its image | the case is refused: the pixel size or the origin is wrong |
+| only `HE/` (reference: scanned first) and `PHH3/` (moving) are a pair | any other folder name is refused; subset A's consecutive sections are not part of this module |
+
+A refused case is printed as `REFUSED` with the reason, the other cases are prepared,
+and `prepare` exits 1. **Look at the first prepared case before any array is
+submitted:**
+
+```bash
+python -m benchmarks.regbench.datasets.hyreco --cases $REGBENCH_CASES \
+    --dataset hyreco_a --case-id 29 --out look/
+```
+
+writes, for the first eight landmarks, the crop of each slide around its landmark, side
+by side (H&E left, PHH3 right) with a cross on it. The two crosses must sit on the same
+nucleus. If they do not, an assumption above is wrong and no number means anything.
+
+### Which methods run on it, and what each is given
+
+It is brightfield, and the rule of this benchmark holds: a method is fed as its package
+intends. `python -m benchmarks.regbench runs --dataset hyreco_b` prints the runs;
+`--excluded` prints the rest with their reasons (`methods.NO_BRIGHTFIELD`, also in
+`hyreco_excluded.csv`). An adapter without a rule REFUSES a brightfield case in the same
+words, before it imports its package, so no method can run on a wrong channel by hand.
+
+| run | on HyReCo | what it is given |
+|---|---|---|
+| `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
+| `valis120`, `valis120_hires` | yes, by construction; never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
+| `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
+| `deeperhistreg_*` (8 runs) | no, not yet | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section), but this adapter hands it one fluorescence channel per slide: its conversion, its writer loop and its canvas arithmetic are per channel. The RGB input rule is not written; the `_fluo` rows would have no meaning here in any case |
+| `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
+| `palom`, `palom_b1024` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
+
+So three runs, eight result rows: `stare_rigid`, `stare`, `valis120_rigid`, `valis120`,
+`valis120_micro`, `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires`.
+The selfcheck gate applies as for the cohort, but it is made on a synthetic
+FLUORESCENCE pair: it says nothing about reading RGB. The realcheck gate and the
+tissue-level block are not applied (both are defined on nuclear channels and nuclei,
+`run.json: tissue.skipped`), and there are no off-seam rows (no nuclei, and neither
+seam owner runs).
+
+### Scoring and tables (`<out>/tables/<dataset>/`)
+
+Target registration error in micrometres: a method's map moves the landmarks of the side
+it starts from (PHH3 for a moving -> reference map, H&E for a reference -> moving one)
+and each is compared with its partner, through the same code as the known-truth error
+(`truth.error_stats`). A point a method could not map has an infinite error; a run that
+failed or never ran is scored at the unregistered pose and counted (`n_ok`).
+
+| table | one row per | columns |
+|---|---|---|
+| `hyreco_pairs.csv` | pair and variant | `dataset, case_id, group, report_set, shared_id_with_subset_a, method, frame, n_probes, n_nonfinite, tre_um_p50, tre_um_p90, tre_um_max, frac_under_1um, frac_under_2um, initial_tre_um_p50, frac_improved, fold_pct, sd_log_jac, pixel_size_um, pixel_size_source, imputed_initial, problem, cause` |
+| `hyreco_points.csv` | landmark and variant | `..., landmark, tre_um, initial_tre_um, imputed_initial` |
+| `hyreco_summary.csv` | set and variant | `dataset, set, method, n_pairs, n_ok, n_landmarks, per_pair_median_tre_um_med / _min / _max, per_pair_p90_tre_um_med, pooled_median_tre_um, pooled_p90_tre_um, pooled_frac_under_1um, pooled_frac_improved, initial_pooled_median_tre_um, n_nonfinite, fold_pct_max` |
+| `hyreco_published.csv` | quoted number | `dataset, set, method, n_pairs, n_landmarks, pooled_median_tre_um, status, conditions, source` |
+| `hyreco_excluded.csv` | run that is not run | `dataset, run, reason` |
+| `hyreco_failures.csv`, `hyreco_resources.csv`, `hyreco_summary_resources.csv` | as the cohort's `failures`, `resources`, `summary_resources` | the same columns |
+| `summary.md` | | the block below |
+
+**Two aggregations, never mixed.** `per_pair_*` is each pair's median error, then the
+median, minimum and maximum over pairs. `pooled_*` is ONE median over all landmarks of
+all pairs of the set, which weights a pair by its landmark count. Sets (`set`):
+`tuning` for `hyreco_a`; for `hyreco_b`, `report` (50 pairs) and `all_pairs` (all 54).
+
+**The one published number, like for like.** Lotz et al. define "MTRE" as the median
+"over all N_images image pairs and over all available landmarks". Their own method,
+HistokatFusion (Fraunhofer MEVIS), reaches **0.9 um** deformable and 1.7 um affine on
+subset B (54 pairs, 2357 landmark pairs; best results at a pixel size <= 1.9 um;
+parameters set on ANHIR, not tuned on HyReCo), and 2.2 um on subset A's nine re-stained
+pairs at 1.0 um/px (`[PARTIAL]`, as above). The summary's "Like for like" table sets
+`pooled_median_tre_um` of every run made here on `all_pairs` beside those rows, which
+are marked **published, not reproduced here**: the software is licensed, has no public
+code, and was not run. When fewer than 54 pairs are scored the table says "NOT like for
+like". The landmark count found in the files is printed next to it (the page and the
+preprint say 2303, the paper 2357). CORE's 0.41 um is not in the table: its
+aggregation ("AMTRE") is not defined and its subset is not stated. Neither CORE nor
+HistokatFusion is run. RegWSI's 0.59 um and CORE's VALIS 2.50 um are not quoted either
+(subset or configuration unstated).
+
+**The annotation floor.** Two observers differ by 0.57 +- 0.36 um on the same section
+(intra-observer 0.53 +- 0.32 um; about 20 landmarks; Lotz et al. 2023 `[PARTIAL]`). It
+is printed above every table. A difference between two methods below about 0.5 um is
+annotation noise; no ranking is claimed.
+
+**What these numbers are not.** Not fluorescence accuracy (brightfield, and for STARE
+through a proxy); not a blind test (the landmarks are public: the frozen split is what
+makes it credible); not a reproduction of any published number (resolution, parameters
+and, for STARE, the input differ); nothing about low-contrast tissue (the authors note
+landmarks sit where contrast is high).
+
+### Running it, once the data is downloaded
+
+Download the three archives from the dataset page in a browser (it needs an IEEE
+login; nothing in this repository downloads them) and unpack them so the tree above
+exists. Subset B is two archives: its `HE/` and `PHH3/` folders are given separately.
+
+```bash
+S=benchmarks/regbench/slurm
+export REGBENCH_BIND=/data/hyreco                       # wherever the slides are
+export REGBENCH_CASES=/scratch/hyreco_cases
+export REGBENCH_SIF_STARE_REGBENCH=... REGBENCH_SIF_VALIS120=...
+
+# 1. the tuning set
+export REGBENCH_HYRECO_A=/data/hyreco/HyReCo            # holds HE/ and PHH3/
+export REGBENCH_OUT=/scratch/hyreco_out_a
+$S/submit_cohort.sh --prepare --datasets hyreco_a       # 1 job: an array of 9, one pair each
+python -m benchmarks.regbench list --cases $REGBENCH_CASES --dataset hyreco_a   # 9
+python -m benchmarks.regbench.datasets.hyreco --cases $REGBENCH_CASES \
+    --dataset hyreco_a --case-id 29 --out look/         # and LOOK at the crops
+$S/submit_cohort.sh --dry-run --datasets hyreco_a       # 25 jobs, nothing submitted
+$S/submit_cohort.sh --datasets hyreco_a
+#    -> $REGBENCH_OUT/tables/hyreco_a/summary.md
+#    another setting: a cases folder and an output folder of its own, e.g.
+#    REGBENCH_CASES=/scratch/hyreco_cases_r2 REGBENCH_OUT=/scratch/hyreco_out_a_r2 \
+#    REGBENCH_HYRECO_A_ARGS="--reduce 2" $S/submit_cohort.sh --prepare --datasets hyreco_a
+
+# 2. the report set, once, with the cases folder of the setting that was chosen
+export REGBENCH_CASES=/scratch/hyreco_cases             # the chosen tuning cases are here
+export REGBENCH_HYRECO_B_HE=/data/hyreco/HyReCo-Additional/HE
+export REGBENCH_HYRECO_B_PHH3=/data/hyreco/HyReCo-Additional/PHH3
+export REGBENCH_OUT=/scratch/hyreco_out_b
+$S/submit_cohort.sh --prepare --datasets hyreco_b       # 1 job: an array of 54
+$S/submit_cohort.sh --dry-run --datasets hyreco_b
+$S/submit_cohort.sh --datasets hyreco_b
+#    -> $REGBENCH_OUT/tables/hyreco_b/summary.md
+```
+
+`REGBENCH_HYRECO_TUNED` names the chosen tuning cases when they are not under
+`REGBENCH_CASES`. By hand, without a scheduler: `python -m benchmarks.regbench prepare
+hyreco --subset a --data-root ... --cases ...`, `run --dataset hyreco_a --method stare
+--index 0`, `score --dataset hyreco_a`.
+
+What `ok` looks like. Each prepare task prints `hyreco_a/<id> -> <folder>` and
+`hyreco_a (tuning set): 1/1 case(s) prepared ...`, and exits 0; a `REFUSED` line is a
+failed task with its reason. `list` prints 9 (54). The dry run prints `# hyreco_b: 54
+case(s), 54 patient(s), at most 1 round(s) per patient`, one `# hyreco_b: <run> is not
+run (<reason>)` line per excluded run (15), and 25 `sbatch` lines: per run three
+selfcheck attempts, one gate and the four rungs of the ladder (16 / 64 / 256 / 512 GB,
+4 CPUs, an array of 54), then `rb-score-hyreco_b`. The summary then has a row per run
+with `n_ok` equal to `n_pairs`, an `initial` row far above them, and for `hyreco_b` the
+"Like for like" table without the "NOT like for like" line.
+
+### Storage and memory to expect (none of it measured)
+
+- **Download**: 233 GB (subset A), 506 GB (subset B), no checksums published. Unpacked
+  size unknown; if the TIFFs are already compressed, about the same again. Budget
+  0.5 TB for A and 1.0 to 1.5 TB for B, or delete each archive once unpacked.
+- **Proxies** (`<cases>/_cache/hyreco_*/`): one 8-bit plane per slide, about 21 GB
+  uncompressed at 95,000 x 220,000 px, written tiled and zlib-compressed. 18 slides for
+  A, 108 for B: at most 0.4 TB and 2.3 TB uncompressed; how far compression takes that
+  down depends on how much of a slide is glass. A quarter of it with `--reduce 2`;
+  twice with `--proxy haematoxylin` (16 bit).
+- **Written images** are the larger risk. VALIS writes a registered full-resolution
+  slide per pair for `valis120`, `valis120_micro`, `valis120_hires_nonrigid` and
+  `valis120_hires` (about 63 GB each before compression); STARE one registered proxy
+  per pair. Size `REGBENCH_OUT` from the tuning set before submitting 54 pairs.
+- **Preparing**: one band of 1024 rows in memory (about 3 GB at 220,000 px wide); the
+  prepare job's 64 GB is ample. Time per slide unknown.
+- **Registering**: a slide is about 21 gigapixels, seven times a 55,000 px cohort
+  slide. STARE at stride 64 measures about 5 million windows per pair at full
+  resolution. Expect units to leave the 16 GB rung; the ladder takes each up one rung
+  per out-of-memory end, and each failed attempt costs its time. The dataset's authors
+  report more than 180 GB for their own method below about 1 um/px (`[PARTIAL]`), which
+  says nothing about these methods. `REGBENCH_TIME` (24 h per unit) may be too short.
+  Run two or three pairs of the tuning set by hand first (`run --index`), and decide
+  `--reduce` from them.
+
 ## Caveats that travel with the results
 
 1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
@@ -1741,5 +1985,12 @@ answers (identical, a known shift, a known rotation, concentric discs, a blank i
 image off the reference grid, a bright fill outside the valid box), the reduction against
 `cv2.INTER_AREA` and a brute-force integral, and the block's place in the scorer with fake
 methods that write images; it needs OpenCV and skips without it.
+`test_hyreco.py` writes stand-in files in the dataset page's layout (small RGB TIFFs,
+millimetre CSVs) and checks the module's rules on them: the subset split, pairing by
+line, the millimetre conversion, every refusal, the two aggregations, the tables'
+separation from the cohort's; it registers one stand-in pair with the installed STARE
+(at full resolution and on a 2 x reduced proxy) and runs the VALIS 1.2.0 adapter on a
+brightfield case against `fake_valis.py`. `test_submit_hyreco.py` reads the job graph
+of `submit_cohort.sh --datasets hyreco_b` off its dry run.
 `test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's whole selfcheck (both pairs) and two real registrations.

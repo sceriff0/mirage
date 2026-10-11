@@ -10,6 +10,23 @@ channel, read by STARE's own reader. ``--nuclear-index`` is ``case.extra["mov_ch
 (0 when the case names none). STARE takes ONE index for both slides, so a case whose
 reference has its nuclei at another index is refused.
 
+**A brightfield case** (HyReCo: ``case.modality == "brightfield"``). ``stare register``
+reads ONE channel per slide, so an RGB slide cannot be handed over as it is. The case
+carries a one-channel proxy of each slide, written by its dataset module
+(``case.ref_nuclear`` / ``case.mov_nuclear``; ``datasets/hyreco.py``: inverted luminance
+by default), and that is what STARE is given, at index 0. This is benchmark-side
+preprocessing and is recorded as such (``info["input"]``,
+``implementation.benchmark_side``). STARE's archived benchmark harness did the same
+(``benchmarks/regbench/datasets/hyreco.py`` at the tag ``archive/benchmarking-2026-10-08``
+of sceriff0/stare, read from a local copy ``[FULL: that file; its methods/stare.py only
+searched for the two slide arguments]``: an inverted-luminance OME-TIFF per slide, passed
+as ``--reference`` / ``--moving``). When the proxy is reduced
+(``case.extra["settings"]["reduce"]`` = f > 1, block-averaged), STARE works in the reduced
+frame: ``--pixel-size`` is f times the slide's, and each point map takes a full-resolution
+point to the reduced frame (``(x - (f - 1) / 2) / f``, the centre of an f x f block),
+through STARE's own warper, and back. The written image is then the registered PROXY at
+the reduced size (``native["reduced_by"]``), not an RGB slide.
+
 **Parameters.** ``TIER_HIGH_STRIDE64``: the ``high`` row of the STARE table in
 ``lib/RegPresets.groovy`` plus stride 64, i.e. the pipeline's ``tiled_high_s64`` arm. All
 five are passed explicitly. Every other TRANSFORM parameter of that arm is the command's
@@ -102,12 +119,38 @@ def nuclear_index(case):
     return mov
 
 
+def slides(case):
+    """``(reference, moving, nuclear index, reduction)`` STARE is given for a case: the
+    original slides, or for a brightfield case its one-channel proxies (module
+    docstring)."""
+    if case.modality == "brightfield":
+        f = int((case.extra.get("settings") or {}).get("reduce", 1))
+        if f < 1 or not (case.ref_nuclear and case.mov_nuclear):
+            raise ValueError(
+                f"{case.case_id}: a brightfield case needs a one-channel proxy of each "
+                "slide (ref_nuclear / mov_nuclear) and a reduction of at least 1"
+            )
+        return str(case.ref_nuclear), str(case.mov_nuclear), 0, f
+    return str(case.ref_image), str(case.mov_image), nuclear_index(case), 1
+
+
+def reduced_map(fn, f):
+    """``fn`` (a map between two frames reduced f-fold by block averaging) as a map
+    between the full-resolution frames: block ``i`` is centred on pixel ``i f + (f - 1) /
+    2``."""
+    if f == 1:
+        return fn
+    shift = (f - 1) / 2.0
+    return lambda xy: np.asarray(fn((np.asarray(xy, float) - shift) / f)) * f + shift
+
+
 def channel_names(case):
-    """The moving slide's channel names: the case's, else the ones in its own header."""
+    """The moving slide's channel names: the case's, else the ones in the header of the
+    file STARE is given."""
     names = case.extra.get("channel_names")
     if names is None:
         try:
-            names = imageio.channel_names(case.mov_image)
+            names = imageio.channel_names(slides(case)[1])
         except (
             Exception
         ):  # an unreadable header names nothing; STITCH reads the file itself
@@ -115,17 +158,27 @@ def channel_names(case):
     return [str(n) for n in names]
 
 
+def info_proxy(case):
+    """What a brightfield case's proxy is, in a few words."""
+    settings = case.extra.get("settings") or {}
+    f = int(settings.get("reduce", 1))
+    return f"{settings.get('proxy', 'proxy')}, " + (
+        f"reduced {f} x {f}" if f > 1 else "full resolution"
+    )
+
+
 def command(case, work, opts):
     """The ``stare`` command line of one case: ``stare.cli.main(command(...))`` is the run."""
     work = Path(work)
     values = {**TIER_HIGH_STRIDE64, "stride": stride_of(opts)}
     values.update({k: opts[k] for k in _FLAGS if k in opts and k != "stride"})
+    ref, mov, index, reduce = slides(case)
     argv = [
         "register",
         "--reference",
-        str(case.ref_image),
+        ref,
         "--moving",
-        str(case.mov_image),
+        mov,
         "--out",
         str(work / "registered.ome.tif"),
         "--manifest",
@@ -141,12 +194,12 @@ def command(case, work, opts):
         "--moving-name",
         MOV_NAME,
         "--nuclear-index",
-        str(nuclear_index(case)),
+        str(index),
     ]
     for key, value in values.items():
         argv += [_FLAGS[key], str(value)]
     if case.pixel_size_um:  # none in the case: the command's own default, `auto`
-        argv += ["--pixel-size", repr(float(case.pixel_size_um))]
+        argv += ["--pixel-size", repr(float(case.pixel_size_um) * reduce)]
     names = channel_names(case)
     if names:
         argv += ["--channel-names", *names]
@@ -194,12 +247,22 @@ def register(case, work, opts):
         for k in _FLAGS
         if k in opts and getattr(ns, k) != TIER_HIGH_STRIDE64.get(k)
     }
+    ref_in, mov_in, _, reduce = slides(case)
+    proxy = case.modality == "brightfield"
     info = {
         "version": stare.__version__,
         "source": str(Path(stare.__file__).parent),
         # the anchor, moving px -> reference px: the whole of `stare_rigid`, and the same
-        # matrix at every stride (module docstring)
+        # matrix at every stride (module docstring). In the frame STARE worked in: for
+        # a reduced proxy, the reduced one (`input.reduced_by`)
         "m0": entry["M0"],
+        "input": {
+            "reference": ref_in,
+            "moving": mov_in,
+            "kind": "one-channel proxy of an RGB slide" if proxy else "original slides",
+            "proxy": (case.extra.get("settings") or {}).get("proxy") if proxy else None,
+            "reduced_by": reduce,
+        },
         "workers": int(ns.workers),
         "cpu_count": os.cpu_count(),  # what COARSE's FFTs use, whatever --workers is
         "stride": int(ns.stride),
@@ -221,20 +284,36 @@ def register(case, work, opts):
                 "is called afterwards with the arguments `stare register` gave it",
                 "one process with --workers = the allocation, not the pipeline's four "
                 "cluster stages; COARSE's FFTs use every core of the node regardless",
+                *(
+                    [
+                        "brightfield: STARE is given the case's one-channel proxy of "
+                        f"each RGB slide ({info_proxy(case)}), written by the dataset "
+                        "module before the clock starts; the image it writes is the "
+                        "registered proxy"
+                    ]
+                    if proxy
+                    else []
+                ),
             ],
         },
     }
     m0 = work / "stages" / f"{MOV_NAME}_m0.json"
     if m0.exists():
         info["coarse_trusted"] = json.loads(m0.read_text()).get("coarse_trusted")
-    rigid = PointMap(lambda xy: warp(MOV_NAME, xy, "rigid"), MOV_TO_REF)
-    yield "stare_rigid", rigid, info
+    rigid = reduced_map(lambda xy: warp(MOV_NAME, xy, "rigid"), reduce)
+    yield "stare_rigid", PointMap(rigid, MOV_TO_REF), info
     if tre.exists():
         info = {**info, "solve": json.loads(tre.read_text()).get("solve", {})}
     if stitch_argv:
-        state = {"stitch_argv": stitch_argv[-1], "out_shape": entry["out_shape"]}
+        state = {
+            "stitch_argv": stitch_argv[-1],
+            "out_shape": entry["out_shape"],
+            "reduced_by": reduce,
+            "proxy": proxy,
+        }
         info = {**info, "_state": state}
-    yield "stare", PointMap(lambda xy: warp(MOV_NAME, xy, "refined"), MOV_TO_REF), info
+    refined = reduced_map(lambda xy: warp(MOV_NAME, xy, "refined"), reduce)
+    yield "stare", PointMap(refined, MOV_TO_REF), info
 
 
 def write_native(state, case_id, dest_dir):
@@ -258,10 +337,14 @@ def write_native(state, case_id, dest_dir):
         raise RuntimeError(
             f"stare stitch wrote {hw}, not the reference grid {state['out_shape']}"
         )
-    return {
+    native = {
         "files": [str(out)],
         "format": "ome-tiff",
         "channels": channels,
         "dtype": str(np.dtype(dtype)),
         "writer": "stare.stages.stitch.main",
     }
+    if state.get("proxy"):  # a brightfield case: not the slide, its registered proxy
+        native["content"] = "the one-channel proxy STARE was given, registered"
+        native["reduced_by"] = int(state.get("reduced_by", 1))
+    return native
