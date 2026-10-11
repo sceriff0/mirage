@@ -99,6 +99,50 @@ def build_parser():
         help="score a random sample of this many moving cells (0 = all); not for "
         "nuclei given as GeoJSON",
     )
+    m.add_argument(
+        "--nuclei-dir",
+        default=None,
+        help="where `regbench nuclei` left each slide's bare nuclei (an existing "
+        "label image that passed its checks, or a StarDist re-run)",
+    )
+    m.add_argument(
+        "--nuclei-fallback",
+        default="",
+        choices=("", "shrink"),
+        help="`shrink`: for a slide with no bare nuclei, use its outline with the "
+        "10 px rim taken off (labelled shrunk_outlines, exact: false; too small "
+        "where cells touch). Never used unless given",
+    )
+
+    nu = sub.add_parser(
+        "nuclei",
+        help="bare nuclei per native slide of a manifest: check the label images "
+        "that exist, re-run StarDist where there is none",
+    )
+    nu.add_argument("--manifest", required=True, help="the `prepare multiplex` CSV")
+    nu.add_argument("--out", required=True, help="one folder per slide is kept here")
+    nu.add_argument("--index", type=int, default=None, help="one slide (array task)")
+    nu.add_argument("--workers", type=int, default=1)
+    nu.add_argument("--diameter", type=float, default=20.0, help="sizes the tile halo")
+    nu.add_argument("--tile", type=int, default=2048)
+    nu.add_argument("--force", action="store_true", help="decide a slide again")
+    mode = nu.add_mutually_exclusive_group()
+    mode.add_argument("--count", action="store_true", help="print the number of slides")
+    mode.add_argument(
+        "--list",
+        action="store_true",
+        help="print one line per slide: usable nuclei and their source, or why not",
+    )
+    mode.add_argument(
+        "--command",
+        action="store_true",
+        help="print the segment.py call of each slide that still needs the re-run",
+    )
+    mode.add_argument(
+        "--segment",
+        action="store_true",
+        help="run that call here (an environment with StarDist), then check it",
+    )
 
     ss = prep.add_parser("semisynth")
     common(ss)
@@ -978,6 +1022,10 @@ def _tissue(a):
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
+    if a.cmd == "nuclei":
+        from . import nuclei
+
+        return nuclei.main(a)
     if a.cmd == "prepare":
         return _prepare(a)
     if a.cmd == "list":

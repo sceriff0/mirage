@@ -18,6 +18,8 @@
 #   REGBENCH_SIF_DEEPERHISTREG    containers/deeperhistreg
 #   REGBENCH_SIF_ASHLAR           labsyspharm/ashlar:1.20.0
 #   REGBENCH_SIF_PALOM            containers/palom
+#   REGBENCH_SIF_STARDIST         the pipeline's StarDist image (bolt3x/mirage-stardist:1.0.0):
+#                                 only for the re-run of the bare nuclei (nuclei.sbatch)
 #
 # In place of an image, REGBENCH_CONDA_X (a conda environment) or REGBENCH_VENV_X (a
 # virtualenv) is taken; with none of the three, the `python` on PATH.
@@ -63,9 +65,6 @@ _regbench_var() {  # _regbench_var SIF valis120 -> value of REGBENCH_SIF_VALIS12
     echo "${!name:-}"
 }
 
-# regbench_py <image> <regbench args...>: run `python -m benchmarks.regbench` in that
-# image, from the repository
-# root (in a subshell: the caller's directory and environment are left alone).
 # ── the task's log, and its last line ────────────────────────────────────────────────
 # REGBENCH_LOG is this task's scheduler log, as submit_cohort.sh names it (%x-%A_%a.log
 # for an array task, %x-%j.log otherwise). It goes into run.json, selfcheck.json and the
@@ -101,7 +100,9 @@ regbench_end() {
     fi
 }
 
-regbench_py() (
+# regbench_exec <image> <command...>: run any command in that image, from the repository
+# root (in a subshell: the caller's directory and environment are left alone).
+regbench_exec() (
     local method="$1"; shift
     local sif conda venv upper
     upper="$(echo "$method" | tr '[:lower:]' '[:upper:]')"
@@ -113,11 +114,15 @@ regbench_py() (
         local runtime bind v nv=() tmpfs=()
         runtime="$(command -v apptainer || command -v singularity)"
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
+        # the StarDist re-run of the bare nuclei reads the site's model and writes here
+        bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
         for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS \
                  REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
                  REGBENCH_LOG REGBENCH_END_FILE \
+                 REGBENCH_STARDIST_MODEL_DIR REGBENCH_STARDIST_MODEL \
+                 REGBENCH_STARDIST_PROB_THRESH REGBENCH_STARDIST_CPU \
                  CUDA_VISIBLE_DEVICES; do
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done
@@ -130,14 +135,20 @@ regbench_py() (
         fi
         case " $REGBENCH_WRITABLE_TMPFS_IMAGES " in *" $upper "*) tmpfs=(--writable-tmpfs) ;; esac
         "$runtime" exec --cleanenv ${nv[@]+"${nv[@]}"} ${tmpfs[@]+"${tmpfs[@]}"} --bind "$bind" \
-            "$sif" python -m "$REGBENCH_MODULE" "$@"
+            "$sif" "$@"
     elif [ -n "$conda" ]; then
         # shellcheck disable=SC1091
         source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$conda"
-        python -m "$REGBENCH_MODULE" "$@"
+        "$@"
     elif [ -n "$venv" ]; then
-        "$venv/bin/python" -m "$REGBENCH_MODULE" "$@"
+        PATH="$venv/bin:$PATH" "$@"
     else
-        python -m "$REGBENCH_MODULE" "$@"
+        "$@"
     fi
 )
+
+# regbench_py <image> <regbench args...>: run `python -m benchmarks.regbench` in that image.
+regbench_py() {
+    local method="$1"; shift
+    regbench_exec "$method" python -m "$REGBENCH_MODULE" "$@"
+}

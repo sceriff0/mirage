@@ -668,7 +668,12 @@ def test_unprepared_cases_are_refused(site, tmp_path):
 
 
 def test_prepare_is_a_step_of_its_own(site, tmp_path):
-    env = {"REGBENCH_MANIFEST": "/data/rounds.csv", "REGBENCH_TRUTH_PATIENTS": "P1,P2"}
+    env = {
+        "REGBENCH_MANIFEST": "/data/rounds.csv",
+        "REGBENCH_TRUTH_PATIENTS": "P1,P2",
+        # the bare-nuclei step has its own test below
+        "REGBENCH_NUCLEI_SKIP": "1",
+    }
     done, _, _ = launch(site, "--prepare", env=env, log="prepare")
     jobs = jobs_of(done)
     assert set(jobs) == {"rb-prepare-multiplex", "rb-prepare-synthetic"}
@@ -693,6 +698,95 @@ def test_prepare_is_a_step_of_its_own(site, tmp_path):
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
     assert none.returncode == 2 and "REGBENCH_MANIFEST" in none.stderr
     assert not _sbatch_lines(none.stdout)
+
+
+def _manifest(tmp_path):
+    path = tmp_path / "rounds.csv"
+    path.write_text(
+        "case_id,reference,moving,group\n"
+        "P1_b,/s/P1.a.ome.tif,/s/P1.b.ome.tif,P1\n"
+        "P1_c,/s/P1.a.ome.tif,/s/P1.c.ome.tif,P1\n"
+    )
+    return path
+
+
+def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
+    """Ruling R3.18: an array over the manifest's SLIDES (three here: one reference, two
+    rounds) checks what exists and re-runs StarDist where there is nothing, and `prepare
+    multiplex` waits for it and reads what it left."""
+    env = {
+        "REGBENCH_MANIFEST": str(_manifest(tmp_path)),
+        "REGBENCH_STARDIST_MODEL": "site_model",
+        "REGBENCH_STARDIST_MODEL_DIR": "/models",
+    }
+    done, log, _ = launch(
+        site, "--prepare", "--datasets", "multiplex", env=env, log="nuc"
+    )
+    jobs = jobs_of(done)
+    assert list(jobs) == ["rb-nuclei", "rb-prepare-multiplex"]  # in this order
+    nuc, prep = jobs["rb-nuclei"], jobs["rb-prepare-multiplex"]
+    assert nuc.script == "nuclei.sbatch" and nuc.args == []
+    assert nuc.opt("--array") == "0-2%20"
+    assert (nuc.opt("--cpus-per-task"), nuc.opt("--mem")) == ("8", "128G")
+    assert GPU in nuc.line  # StarDist asks for the GPU the arms had
+    assert prep.deps == {("afterany", "<rb-nuclei>")}
+    nuclei_dir = str(site[1] / "_nuclei")
+    assert prep.args == [
+        "multiplex", "--manifest", env["REGBENCH_MANIFEST"], "--nuclei-dir", nuclei_dir,
+    ]  # fmt: skip
+    assert "REGBENCH_SIF_STARDIST" in done.stdout  # named, since it is not set
+    assert not log.exists()
+    # on CPUs when asked; the shrunk outline only when asked
+    more = {**env, "REGBENCH_STARDIST_CPU": "1", "REGBENCH_NUCLEI_FALLBACK": "shrink"}
+    done, _, _ = launch(
+        site, "--prepare", "--datasets", "multiplex", env=more, log="nuc2"
+    )
+    jobs = jobs_of(done)
+    assert GPU not in jobs["rb-nuclei"].line
+    assert jobs["rb-prepare-multiplex"].args[-2:] == ["--nuclei-fallback", "shrink"]
+
+
+def test_the_nuclei_step_is_refused_without_its_model_or_its_gpu(site, tmp_path):
+    env = {"REGBENCH_MANIFEST": str(_manifest(tmp_path))}
+    none, _, _ = launch(site, "--prepare", "--datasets", "multiplex", env=env, log="n3")
+    assert none.returncode == 2 and "REGBENCH_STARDIST_MODEL" in none.stderr
+    assert "REGBENCH_NUCLEI_SKIP=1" in none.stderr and not _sbatch_lines(none.stdout)
+    env["REGBENCH_STARDIST_MODEL"] = "site_model"
+    no_gpu, _, _ = launch(
+        site,
+        "--prepare",
+        "--datasets",
+        "multiplex",
+        env={**env, "REGBENCH_SBATCH_GPU": None},
+        log="n4",
+    )
+    assert no_gpu.returncode == 2 and "REGBENCH_STARDIST_CPU=1" in no_gpu.stderr
+    assert not _sbatch_lines(no_gpu.stdout)
+    # a real submission also needs the image
+    real, log, _ = launch(
+        site, "--prepare", "--datasets", "multiplex", env=env, dry=False, log="n5"
+    )
+    assert real.returncode == 2 and "REGBENCH_SIF_STARDIST" in real.stderr
+    assert not log.exists()
+
+
+def test_the_nuclei_task_runs_stardist_only_for_a_slide_that_needs_it():
+    """A guard on nuclei.sbatch, comments stripped: it checks what exists first, asks
+    for the command, stops when there is none, and runs it in the StarDist image."""
+    lines = [
+        ln.split(" #")[0].strip()
+        for ln in (SLURM / "nuclei.sbatch").read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    ]
+    code = "\n".join(ln for ln in lines if ln)
+    first = code.index('regbench_py "$scorer" "${what[@]}"\n')
+    asked = code.index('line="$(regbench_py "$scorer" "${what[@]}" --command)"')
+    stop = code.index('if [ -z "$line" ]; then')
+    run = code.index('regbench_exec STARDIST bash "$script"')
+    check = code.rindex('regbench_py "$scorer" "${what[@]}"')
+    assert first < asked < stop < run < check
+    assert "exit 0" in code[stop:run]
+    assert '--index "$SLURM_ARRAY_TASK_ID"' in code
 
 
 def test_no_thread_counts_are_exported():

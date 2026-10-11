@@ -80,6 +80,22 @@
 #                                     cases, comma-separated (default: all)
 #   REGBENCH_PREPARE_ARGS             with --prepare: more `prepare multiplex` options
 #   REGBENCH_PREPARE_FORCE=1          with --prepare: redo cases that exist
+#   REGBENCH_NUCLEI                   with --prepare: where each slide's BARE nuclei are
+#                                     kept (default $REGBENCH_CASES/_nuclei). An array
+#                                     over the manifest's slides runs before `prepare
+#                                     multiplex`: an existing label image is checked,
+#                                     and only a slide without one is segmented again
+#   REGBENCH_STARDIST_MODEL, REGBENCH_STARDIST_MODEL_DIR
+#                                     REQUIRED for that step: the StarDist model the arms
+#                                     ran (the pipeline's segmentation_model and
+#                                     segmentation_model_dir), with REGBENCH_SIF_STARDIST
+#   REGBENCH_STARDIST_CPU=1           run that StarDist without a GPU (else it asks for
+#                                     REGBENCH_SBATCH_GPU, as the arms did)
+#   REGBENCH_NUCLEI_SKIP=1            prepare without that step: cases whose slides have
+#                                     no nuclei are scored on the outlines alone
+#   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline
+#                                     shrunk by 10 px (labelled, never exact). Off unless set
+#   REGBENCH_NUCLEI_CPUS (8), REGBENCH_NUCLEI_MEM (128G), REGBENCH_NUCLEI_TIME (08:00:00)
 #   REGBENCH_HYRECO_A                 with --prepare --datasets hyreco_a: the unpacked
 #                                     HyReCo/ folder (it holds HE/ and PHH3/)
 #   REGBENCH_HYRECO_A_ARGS            more `prepare hyreco --subset a` options: the
@@ -242,9 +258,42 @@ if [ "$prepare" = 1 ]; then
     # shellcheck disable=SC2206  # extra `prepare multiplex` options, several words
     more=(${REGBENCH_PREPARE_ARGS:-})
     for ds in $datasets; do
-        array=() log="$LOG_ONE"
+        array=() log="$LOG_ONE" after=()
         case "$ds" in
-            multiplex) what=(multiplex --manifest "$REGBENCH_MANIFEST" ${more[@]+"${more[@]}"}) ;;
+            multiplex)
+                what=(multiplex --manifest "$REGBENCH_MANIFEST" ${more[@]+"${more[@]}"})
+                # the bare nuclei of every native slide first: what exists is checked,
+                # StarDist runs again only for a slide that has none (nuclei.sbatch)
+                if [ "${REGBENCH_NUCLEI_SKIP:-0}" != 1 ]; then
+                    : "${REGBENCH_NUCLEI:=$REGBENCH_CASES/_nuclei}"
+                    export REGBENCH_NUCLEI REGBENCH_MANIFEST
+                    [ -n "${REGBENCH_STARDIST_MODEL:-}" ] || die "--prepare: the bare nuclei need REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR (the StarDist model the arms ran: the pipeline's segmentation_model and segmentation_model_dir). REGBENCH_NUCLEI_SKIP=1 prepares without them: nuclei numbers are then absent wherever no label image exists. Nothing was submitted."
+                    nuc_gpu=()
+                    if [ "${REGBENCH_STARDIST_CPU:-0}" = 0 ]; then
+                        [ -n "${REGBENCH_SBATCH_GPU:-}" ] || die "--prepare: the StarDist re-run of the bare nuclei asks for a GPU, as the arms did, and REGBENCH_SBATCH_GPU is not set. Export the site's request, or REGBENCH_STARDIST_CPU=1 to run it on CPUs. Nothing was submitted."
+                        nuc_gpu=("${GPU_ARGS[@]}")
+                    fi
+                    if [ -z "$(_regbench_var SIF STARDIST)$(_regbench_var CONDA STARDIST)$(_regbench_var VENV STARDIST)" ]; then
+                        if [ "$DRY" = 1 ] || [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" = 1 ]; then
+                            echo "# not set: REGBENCH_SIF_STARDIST (the StarDist re-run would use the python on PATH)"
+                        else
+                            die "not set: REGBENCH_SIF_STARDIST (the pipeline's StarDist image, bolt3x/mirage-stardist:1.0.0), needed to segment the slides that have no nuclear mask. Nothing was submitted."
+                        fi
+                    fi
+                    n_slides="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
+                        --out "$REGBENCH_NUCLEI" --count)" || die "cannot size the nuclei array from $REGBENCH_MANIFEST"
+                    submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
+                        --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
+                        --time="$(limit "$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")")" \
+                        ${nuc_gpu[@]+"${nuc_gpu[@]}"} \
+                        --array="0-$((n_slides - 1))%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
+                    # afterany: a slide whose re-run failed leaves its cases without
+                    # nuclei, with the reason; they are still prepared on the outlines
+                    after=(--dependency="afterany:$JOB_ID")
+                    what+=(--nuclei-dir "$REGBENCH_NUCLEI")
+                fi
+                [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
+                ;;
             semisynth) what=(semisynth --truth --manifest "$REGBENCH_MANIFEST" ${patients[@]+"${patients[@]}"}) ;;
             synthetic) what=(synthetic --suite truth) ;;
             hyreco_a)
@@ -268,7 +317,7 @@ if [ "$prepare" = 1 ]; then
             log="$LOG_ARRAY"
         fi
         submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
-            "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
+            ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
     done
     echo "prepare: $N_JOBS job(s). When they are done, run this script again without --prepare."
     exit 0
