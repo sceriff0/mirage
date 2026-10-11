@@ -804,14 +804,20 @@ def test_a_swallowed_failure_is_raised_with_what_the_package_printed(
         assert "wrote no displacement field" in run["error"] and text in run["error"]
 
 
-def test_a_failed_writer_keeps_both_rows(tmp_path, case, fake):
+def test_a_failed_writer_fails_the_row_of_the_image_it_did_not_write(
+    tmp_path, case, fake
+):
+    """The `_asdrawn` row IS the written image: without the image it is not a result
+    (the same rule for every method; it used to stay ok here). The estimated-field row
+    has no image of its own and stands."""
     fake.configure(
         writer_fails="vips: out of disc", initial_resolution=EXACT_RESOLUTION
     )
     done = methods.run_case("deeperhistreg", case, tmp_path)
-    assert done == ["deeperhistreg", "deeperhistreg_asdrawn"]
+    assert done == ["deeperhistreg"]
     run = run_json(tmp_path, "deeperhistreg_asdrawn", case)
-    assert run["ok"] is True and "out of disc" in run["native"]["error"]
+    assert run["ok"] is False and run["cause"] == "writer"
+    assert "out of disc" in run["error"]
 
 
 def test_another_version_is_refused(tmp_path, case, monkeypatch):

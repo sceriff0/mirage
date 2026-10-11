@@ -26,8 +26,10 @@ column              what it is, and where it was measured
                     every method reads. IMPORTED from a Nextflow trace of an earlier
                     pipeline run; nothing is run for it.
 ``pipeline_merge``  the PIPELINE's merge-and-pyramid step, IMPORTED the same way, and
-                    added only where the method's own written image is not already a
-                    pyramidal image that holds every channel (``not needed`` otherwise).
+                    added for every method whose writer does not leave ONE pyramidal
+                    file per PATIENT holding every round's channels (ruling R3.14;
+                    ``not needed`` for the one that does, ASHLAR's mosaic). Decided
+                    from the file each run wrote, never from the method's name.
 ==================  =================================================================
 
 Methods are NOT given a common reader or writer (ruling R3.13): each row is what that
@@ -320,14 +322,81 @@ def written_text(written):
 
 
 def complete_image(written):
-    """True / False: is the method's own written image a pyramidal image holding every
-    channel in one file (then no merge-and-pyramid step is added)? None when the run
-    recorded no description."""
+    """True / False: is the method's own written image what the pipeline's
+    merge-and-pyramid step produces, ONE pyramidal file for the PATIENT holding every
+    round's channels (then no merge step is added)? None when the run recorded no
+    description, or not enough of one to tell.
+
+    Decided from the file (ruling R3.14): it has a pyramid, it is one file, and it
+    holds at least as many channels as the patient's slides hold together
+    (``written.patient_channels``, which the driver records beside the description:
+    the reference's channels plus every moving round's of that launch). A pyramidal
+    file per ROUND, however complete for its round, still needs the merge."""
     if not isinstance(written, dict) or written.get("unread"):
         return None
     if "pyramid" not in written:
         return None
-    return bool(written["pyramid"]) and int(written.get("files") or 1) == 1
+    if not written["pyramid"] or int(written.get("files") or 1) != 1:
+        return False
+    needed, held = written.get("patient_channels"), written.get("channels")
+    if needed is None or held is None:
+        return None
+    return int(held) >= int(needed)
+
+
+# ── the lines above every cost table ──────────────────────────────────────────
+def header_lines(res_rows):
+    """What a reader of any cost table must know first, from what the runs recorded:
+    how many had no out-of-memory watcher, how many results were reused from an
+    earlier submission, and the time limit each kind of unit ran under."""
+    ran = [r for r in res_rows if r.get("cause") != "not_run"]
+    lines = []
+    told = [r for r in ran if r.get("oom_watch") in ("yes", "no")]
+    without = [r for r in told if r["oom_watch"] == "no"]
+    if not told:
+        lines.append(
+            "out-of-memory watcher: unknown (no run recorded whether its cgroup "
+            "counter was readable)"
+        )
+    else:
+        by = {}
+        for r in without:
+            by[r.get("adapter") or "?"] = by.get(r.get("adapter") or "?", 0) + 1
+        lines.append(
+            f"out-of-memory watcher: {len(without)} of {len(told)} results ran "
+            "WITHOUT one (the cgroup's oom_kill counter was not readable from inside "
+            "the job)"
+            + (
+                ": " + ", ".join(f"{k} {v}" for k, v in sorted(by.items())) + ". A "
+                "worker the kernel killed there could leave the run waiting until "
+                "its time limit, so a `timeout` of these runs may be a memory death."
+                if without
+                else "."
+            )
+        )
+    reused = sum(bool(r.get("reused")) for r in ran)
+    lines.append(
+        f"reused: {reused} of {len(ran)} results were already ok for the same "
+        "configuration and were not run again by this submission (their cost is the "
+        "earlier launch's)."
+    )
+    limits = {}
+    for r in ran:
+        if r.get("time_limit"):
+            limits.setdefault(r.get("unit") or "?", set()).add(str(r["time_limit"]))
+    if limits:
+        lines.append(
+            "time limit per task: "
+            + "; ".join(
+                f"{unit} {', '.join(sorted(v))}" for unit, v in sorted(limits.items())
+            )
+            + ". One rule for both kinds of unit, one REGBENCH_TIME per round: a "
+            "pair task gets it once, a patient task gets it times the rounds of the "
+            "LARGEST patient of its array (one array has one limit), never above 7 "
+            "days. So a patient with fewer rounds has more time per round than a "
+            "pair has, and above 7 rounds less; `timeout` is never retried."
+        )
+    return lines
 
 
 # ── cores ─────────────────────────────────────────────────────────────────────

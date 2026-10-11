@@ -27,8 +27,24 @@ if [ "$kind" = tissue ]; then
     exit 0
 fi
 
+# The scheduler's accounting of every job of this submission, BEFORE scoring: a result
+# that still says "killed" (the last rung has no later task to ask) gets the cause and
+# the elapsed time the scheduler names, so it is not scored as a method failure when the
+# node failed, and its cost is not zero.
+jobs="$REGBENCH_OUT/logs/jobs.tsv"
+if [ -s "$jobs" ] && command -v sacct >/dev/null; then
+    ids=$(cut -f3 "$jobs" | paste -sd, -)
+    acct="$REGBENCH_OUT/logs/accounting.psv"
+    if sacct -n -X -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
+        && [ -s "$acct" ]; then
+        regbench_py "$REGBENCH_SCORER_IMAGE" settle --out "$REGBENCH_OUT" --accounting "$acct"
+    fi
+fi
+
 gates="$REGBENCH_OUT/logs/gates"
 args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers")
+# only what THIS submission ran or reused: a blocked run's older folders are not scored
+[ -n "${REGBENCH_SUBMISSION:-}" ] && args+=(--submission "$REGBENCH_SUBMISSION")
 if [ -n "$external" ]; then
     args+=(--dataset "$external")
 else
@@ -50,7 +66,6 @@ regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
 code=$?
 
 # the scheduler's own accounting of every job, as a cross-check of the in-process numbers
-jobs="$REGBENCH_OUT/logs/jobs.tsv"
 if [ -s "$jobs" ] && command -v sacct >/dev/null; then
     ids=$(cut -f3 "$jobs" | paste -sd, -)
     sacct -j "$ids" --parsable2 --units=M \

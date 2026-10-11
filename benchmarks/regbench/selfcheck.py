@@ -1070,6 +1070,11 @@ def run(
         )
     except (OSError, ValueError, AttributeError):
         earlier = []
+    # An older launch's attempts are not this one's, and its record must not be what a
+    # gate finds if this attempt dies before it writes its own: removed first.
+    submission = host.get("submission") or ""
+    earlier = [e for e in earlier if (e.get("submission") or "") == submission]
+    (work / "selfcheck.json").unlink(missing_ok=True)
     results = []
     for ref_hw, mov_hw in sizes:
         sub = work / f"{ref_hw[0]}x{ref_hw[1]}" if len(sizes) > 1 or apart else work
@@ -1106,6 +1111,9 @@ def run(
             "edge_px": EDGE_PX,
         },
         "host": {k: host.get(k) for k in ("host", "launch_id")},
+        # the launch that wrote this record: a gate refuses one of another submission
+        "submission": submission,
+        "launch_id": host.get("launch_id"),
         "pairs": results,
     }
     # The selfcheck climbs in memory like a run (64 -> 256 -> 512 GB): the allocation
@@ -1117,6 +1125,7 @@ def run(
             "mem_requested_gb": host.get("mem_requested_gb"),
             "cpus_requested": host.get("cpus_requested"),
             "launch_id": host.get("launch_id"),
+            "submission": submission,
             "status": record["status"],
         },
     ]

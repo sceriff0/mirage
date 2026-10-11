@@ -36,6 +36,11 @@
 # method's own core-count option is set to the allocation by the driver, and what its
 # pools saw is recorded.
 #
+# REGBENCH_SUBMISSION is the id of one call of submit_cohort.sh. Every record a job
+# writes carries it (run.json: submissions; selfcheck.json: submission), and a gate, the
+# ladder and the scorer take no record of another submission as evidence. REGBENCH_FORCE=1
+# re-runs units whose results are all ok already (the default reuses them).
+#
 # REGBENCH_CPUS (4) and REGBENCH_MEM (16G) are the defaults of jobs outside the ladder
 # (prepare, gate, score).
 
@@ -76,6 +81,7 @@ regbench_py() (
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
         for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS \
+                 REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
                  CUDA_VISIBLE_DEVICES; do
             [ -n "${!v:-}" ] && export "SINGULARITYENV_$v=${!v}" "APPTAINERENV_$v=${!v}"
         done

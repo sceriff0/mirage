@@ -780,6 +780,10 @@ def _variant_plane(out, case, variant):
         run = json.loads((d / "run.json").read_text())
     except (OSError, ValueError):
         return None, "not run"
+    from . import score
+
+    if not score.of_this_submission(run):
+        return None, score.STALE
     if not run.get("ok"):
         return None, f"the run failed ({run.get('cause') or 'exception'}): no image"
     native = run.get("native")

@@ -19,12 +19,30 @@ registrar (``bin/utils/valis_config.py:273-286``), and
 longest side), reference_img_f=<reference>, align_to_reference=True, tile_wh=2048)``
 (``bin/register.py:785-799``).
 
+**Memory failures.** ``Valis.register()`` swallows its exception and the pipeline raises
+a fixed text; the wrapper around ``valtils.print_warning`` (``_valis_points.
+swallowed_errors``) puts what VALIS printed back into the error, so a Java
+``OutOfMemoryError`` or a NumPy memory error is ``cause: oom`` and the patient goes up a
+rung. The micro pass is different: ``bin/register.py:805-808`` catches ANY exception of
+``register_micro`` and carries on, writing the non-rigid result. When that exception is
+a memory error the ``valis_mirage`` row is FAILED with ``cause: oom`` instead of being
+kept with a ``problem``: the row's name is the full method, every other method's memory
+failure is retried with more memory, and keeping a cheaper stage under the full method's
+name would both flatter and misdescribe it. ``valis_mirage_nonrigid`` still holds that
+stage. A micro pass that fails for another reason (the pipeline's own expectation: no
+SimpleElastix) is kept as shipped, with ``problem``.
+
 ``n_cpus`` is the allocation (``opts["workers"]``); the pipeline's ``bound_cpu_count``
 rebinds ``multiprocessing.cpu_count`` to it, so VALIS 1.0.0's pools, each sized
 ``cpu_count() - 1`` (``serial_rigid.py:578, 643`` and four other places in the 1.0.0
 sdist), run on one thread fewer. ``jvm_heap_gb`` follows the module's own formula,
 ``min(32 + 16 * attempt, memory in GiB - 4)``, with the ladder's rung as the attempt;
-outside a scheduler it is left to the pipeline's estimate. ``stage_checkpoint_dir=None``
+outside a scheduler it is left to the pipeline's estimate. As read in the VALIS 1.0.0
+sdist, ``registration.init_jvm(jar=None, mem_gb=10)`` passes the literal 10 on
+(``registration.py:115-118`` `[PARTIAL: those lines and slide_io.py:183-211]`), so the
+value the pipeline hands it may never reach the JVM; ``info["jvm_max_heap_gb"]`` is the
+JVM's own ``Runtime.maxMemory()`` after ``register()``, which settles it on the first
+run. This adapter does not start the JVM itself: it runs the pipeline's call. ``stage_checkpoint_dir=None``
 differs from the arm, which writes checkpoints at ``reg_qc=2``: it only skips files.
 
 **Inputs.** The patient's ORIGINAL multichannel slides, hard-linked into ``preprocessed/``
@@ -140,13 +158,24 @@ def jvm_heap_gb(opts, host=None):
     """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
     12 GiB at 16 GB, 60 at 64 GB, 80 at 256 GB, 96 at 512 GB. None (the pipeline's own
     estimate from the input size) when the memory request is unknown."""
-    if opts.get("jvm_heap_gb"):
-        return int(opts["jvm_heap_gb"])
-    host = host or resources.host_info()
-    mem = host.get("mem_requested_gb")
-    if not mem:
-        return None
-    return max(1, int(min(32 + 16 * int(host.get("attempt") or 1), float(mem) - 4)))
+    return vp.jvm_heap_gb(opts, host)
+
+
+MICRO_OOM = (
+    "the micro pass ran out of memory and the pipeline carried on without it "
+    "(bin/register.py catches the error and writes the non-rigid result): this row "
+    "would be the non-rigid result under the full method's name, so it is failed and "
+    "the patient goes up a rung"
+)
+
+
+def micro_ran_out_of_memory(state, caught=()):
+    """Did ``register_micro`` end for memory? From the exception the pipeline caught
+    (``state["micro_error"]``) and from what VALIS printed while the micro pass ran."""
+    if state.get("micro_ran"):
+        return False
+    texts = [state.get("micro_error", ""), *caught]
+    return any(resources.classify_text(t) == "oom" for t in texts)
 
 
 def _error(exc):
@@ -174,10 +203,13 @@ def register_micro_wrapper(original, capture, state):
             state["capture_error"] = _error(exc)
             state["capture_traceback"] = traceback.format_exc()
         state["micro_called"] = True
+        seen = len(state.get("caught", ()))
         try:
             out = original(self, *args, **kwargs)
         except BaseException as exc:
             state["micro_error"] = _error(exc)
+            # what VALIS printed while the micro pass ran, and nothing from before it
+            state["micro_caught"] = list(state.get("caught", ()))[seen:]
             raise
         state["micro_ran"] = True
         return out
@@ -281,6 +313,9 @@ def register_wrapper(original, state, mon):
         try:
             state["registrar"] = self
             state["cost_after_register"] = mon.snapshot()
+            # the heap the JVM really has (the pipeline asks for jvm_heap_gb; whether
+            # VALIS passes it on is read here, not assumed)
+            state["jvm_max_heap_gb"] = vp.jvm_max_heap_gb()
             state["repair_expected"] = [
                 str(name)
                 for name, slide in self.slide_dict.items()
@@ -364,6 +399,8 @@ def register_group(cases, work, opts):
         "micro_called": False,
         "micro_ran": False,
     }
+    from valis import valtils
+
     slide_cls, valis_cls = registration.Slide, registration.Valis
     unwrapped_save = slide_cls.warp_and_save_slide
     capture = _capture_before_micro(state, mon, warp_tools, opts, unwrapped_save, work)
@@ -385,7 +422,17 @@ def register_group(cases, work, opts):
                 lambda f: save_wrapper(f, state, mon, warp_tools, opts),
             )
         )
-        rc = reg_module.valis_registration(**call)
+        # VALIS prints the exception it catches and returns; the pipeline then raises
+        # a fixed text. What VALIS printed is put back into the error, so that a memory
+        # failure is classified as one and the patient goes up the ladder.
+        state["caught"] = stack.enter_context(vp.swallowed_errors(valtils))
+        try:
+            rc = reg_module.valis_registration(**call)
+        except Exception as exc:
+            said = vp.reported(state["caught"])
+            if said and resources.classify_error(exc) == "exception":
+                raise RuntimeError(f"{_error(exc)} VALIS reported: {said}") from exc
+            raise
     # Everything below is the benchmark's own work (the point path, moving files): the
     # clock stays paused until every result is ready, so each carries the call's cost.
     mon.pause()
@@ -404,9 +451,12 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
     version = str(getattr(valis, "__version__", "?"))
     points = str(opts.get("points", "image"))
     if rc:
+        said = vp.reported(state.get("caught", ()))
         raise RuntimeError(
-            f"valis_registration returned {rc}: no slide was warped (its log is on stdout)"
+            f"valis_registration returned {rc}: no slide was warped (its log is on "
+            "stdout)" + (f". VALIS reported: {said}" if said else "")
         )
+    micro_oom = micro_ran_out_of_memory(state, state.get("micro_caught", ()))
 
     registrar = state.get("registrar")
     stages = state["stages"]
@@ -439,6 +489,8 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         "micro_called": bool(state["micro_called"]),
         "micro_ran": bool(state["micro_ran"]),
         "micro_error": state.get("micro_error", ""),
+        "jvm_max_heap_gb": state.get("jvm_max_heap_gb"),
+        "valis_reported": vp.reported(state.get("caught", ())),
         "register_micro": state.get("register_micro", {}),
         "repair_fired": bool(state.get("repair_expected")),
         "repair_slides": state.get("repair_expected", []),
@@ -500,6 +552,12 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                     else f"the final transform of {name} was not captured"
                 )
                 yield cid, variant, None, {**info, "error": f"{msg}. {why}".strip()}
+                continue
+            if variant == FINAL and micro_oom:
+                # not the full method: failed with a memory cause, so that it climbs
+                # like any other method's memory failure (module docstring)
+                why = f"{MICRO_OOM}. {state.get('micro_error', '')}".strip()
+                yield cid, variant, None, {**info, "error": why, "cause": "oom"}
                 continue
             # M is not touched after register() returns, and without a captured
             # pre-micro stage nothing ran after the first non-rigid pass

@@ -68,6 +68,7 @@ per Python process.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import sys
@@ -231,6 +232,18 @@ def register_group(cases, work, opts):
             f"this adapter is VALIS {VERSION} as shipped; the installed valis is {version}"
         )
     jvm_cache = _jvm_cache()
+    # The heap. VALIS starts its JVM with 10 GB whatever it is asked:
+    # registration.init_jvm(jar=None, mem_gb=10) calls slide_io.init_jvm(jar=None,
+    # mem_gb=10) with the literal (1.2.0 registration.py:132-135 `[PARTIAL: those
+    # lines and slide_io.py:231-260]`). A Java heap error would then repeat on every
+    # rung of the ladder. So the JVM is started here, through VALIS's own
+    # slide_io.init_jvm, with the heap the pipeline's module asks for at this rung;
+    # VALIS's later init_jvm calls find it started and do nothing.
+    heap = vp.jvm_heap_gb(opts)
+    if heap:
+        from valis import slide_io
+
+        slide_io.init_jvm(mem_gb=heap)
 
     ref_path, moving = vp.patient_slides(cases)
     placed, how = vp.place_slides([ref_path, *moving.values()], work / "slides")
@@ -251,7 +264,12 @@ def register_group(cases, work, opts):
         "constructor": {k: _jsonable(v) for k, v in kwargs.items()},
         "slides_placed": how,
         "jvm_cache": jvm_cache,
-        "jvm_heap": "VALIS's own (the harness starts no JVM and sets no heap)",
+        "jvm_heap_gb": heap,
+        "jvm_heap": f"-Xmx{heap}G, set by the benchmark through valis.slide_io."
+        "init_jvm before VALIS starts the JVM (min(32 + 16 x rung, GiB - 4), the "
+        "pipeline module's formula)"
+        if heap
+        else "VALIS's own 10 GB (no memory request is known: not on the ladder)",
         "implementation": {
             "package": "valis-wsi",
             "source": str(Path(valis.__file__).parent),
@@ -261,6 +279,15 @@ def register_group(cases, work, opts):
             + (", upstream's high-resolution example" if hires else ""),
             "changed_from_defaults": {
                 "reference_img_f": "the benchmark's reference slide",
+                **(
+                    {
+                        "JVM heap": f"-Xmx{heap}G instead of VALIS's fixed 10 GB "
+                        "(slide_io.init_jvm called first; not a registration "
+                        "parameter)"
+                    }
+                    if heap
+                    else {}
+                ),
                 **(
                     {
                         "micro_rigid_registrar_cls": "MicroRigidRegistrar",
@@ -293,13 +320,19 @@ def register_group(cases, work, opts):
     }
 
     reg = registration.Valis(str(work / "slides"), str(work / "valis"), **kwargs)
+    errors = contextlib.ExitStack()
+    caught = errors.enter_context(vp.swallowed_errors(valtils))
     try:
         _, _, error_df = reg.register()
         if error_df is None:
+            # the text VALIS printed is in the error, so that a memory failure is
+            # classified as one (resources.MEMORY_ERRORS) and goes up the ladder
             raise RuntimeError(
                 "Valis.register() returned None: it caught an exception, printed it "
-                "with its traceback to stdout, and killed the JVM"
+                "with its traceback to stdout, and killed the JVM. It reported: "
+                + (vp.reported(caught) or "nothing through valtils.print_warning")
             )
+        info["jvm_max_heap_gb"] = vp.jvm_max_heap_gb()
 
         def stage(non_rigid):
             ref = reg.get_ref_slide()
@@ -387,6 +420,7 @@ def register_group(cases, work, opts):
             mon.resume()
         yield from ready
     finally:
+        errors.close()
         try:  # a live BioFormats JVM keeps the interpreter from exiting
             registration.kill_jvm()
         except Exception:

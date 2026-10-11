@@ -564,7 +564,9 @@ def test_the_driver_reduces_each_written_image(scored):
     rigid = json.loads((result_dir(out, "drawn_rigid", case) / "run.json").read_text())
     assert "tissue" not in rigid and rigid["native"] is None
     broken = json.loads((result_dir(out, "broken", case) / "run.json").read_text())
-    assert "tissue" not in broken and "disk is full" in broken["native"]["error"]
+    # a writer that failed leaves a failed row (cause `writer`), not an ok one
+    assert "tissue" not in broken and broken["ok"] is False
+    assert broken["cause"] == "writer" and "disk is full" in broken["error"]
 
 
 def test_a_selfcheck_run_is_not_reduced(slide_case, tmp_path):
@@ -612,7 +614,7 @@ def test_variants_without_a_written_image_are_listed_with_the_reason(scored):
     why = {m["variant"]: m["reason"] for m in tables["tissue_missing"]}
     assert set(why) == {"drawn_rigid", "broken", "never_ran"}
     assert why["drawn_rigid"] == "the method writes no image for this variant"
-    assert why["broken"].startswith("the method's writer failed: RuntimeError")
+    assert why["broken"] == "the run failed (writer): no image"
     assert why["never_ran"] == "not run"
     assert len(_rows(out, "tissue_missing")) == 3
     assert not any(r["variant"] in why for r in tables["tissue"])

@@ -134,6 +134,18 @@ def test_the_realcheck_gate_reads_the_gating_rows_own_record(tmp_path):
         write_json(
             result_dir(out, "valis_mirage", case) / "realcheck.json", {"flag": False}
         )
+    # a realcheck beside no run, or beside a failed one, answers for nothing: it is
+    # what an earlier launch left behind (review item 13)
+    code, line = _realgate(root, out, tmp_path)
+    assert (code, line[:4]) == (0, ["valis_mirage", "realcheck_not_checked", "-", "0"])
+    for case in first:
+        write_json(result_dir(out, "valis_mirage", case) / "run.json", {"ok": False})
+    assert _realgate(root, out, tmp_path)[1][1] == "realcheck_not_checked"
+    for case in first:
+        write_json(
+            result_dir(out, "valis_mirage", case) / "run.json",
+            {"ok": True, "submissions": ["s1"]},
+        )
     # a flag on a row that does not gate, and on a patient that did not go ahead
     write_json(
         result_dir(out, "valis_mirage_rigid", first[0]) / "realcheck.json",
@@ -149,6 +161,47 @@ def test_the_realcheck_gate_reads_the_gating_rows_own_record(tmp_path):
     assert (code, line[:4]) == (1, ["valis_mirage", "realcheck_flagged", "-", "1"])
     code, line = _realgate(root, out, tmp_path, "--allow-unchecked")
     assert (code, line[:4]) == (0, ["valis_mirage", "realcheck_flagged", "-", "0"])
+
+
+def test_the_realcheck_gate_refuses_a_record_of_another_submission(
+    tmp_path, monkeypatch
+):
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = a_case(root, "P1_a", "P1")
+    d = result_dir(out, "valis_mirage", case)
+    write_json(d / "realcheck.json", {"flag": True})
+    write_json(d / "run.json", {"ok": True, "submissions": ["old"]})
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "new")
+    code, line = _realgate(root, out, tmp_path)
+    assert (code, line[1]) == (0, "realcheck_not_checked")
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "old")
+    assert _realgate(root, out, tmp_path)[1][1] == "realcheck_flagged"
+
+
+def test_the_selfcheck_gate_refuses_a_record_of_another_submission(
+    tmp_path, monkeypatch, capsys
+):
+    """Review item 13: REGBENCH_OUT is reused at the same commit; the new selfcheck
+    died before it wrote anything and the old `ok` is still there."""
+    path = _record(tmp_path, stare_rigid="ok", stare="ok")
+    rec = json.loads(path.read_text())
+    path.write_text(json.dumps({**rec, "submission": "old"}))
+    record = tmp_path / "gate.tsv"
+    argv = [
+        "gate",
+        "--name",
+        "stare",
+        "--selfcheck",
+        str(path),
+        "--record",
+        str(record),
+    ]
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "old")
+    assert cli.main(argv) == 0 and record.read_text().split("\t")[1] == "ok"
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "new")
+    assert cli.main(argv) != 0
+    assert record.read_text().split("\t")[1:4:2] == ["not_checked", "1"]
+    assert "of another submission" in capsys.readouterr().out
 
 
 # ── what the scorer makes of the gates ────────────────────────────────────────

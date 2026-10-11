@@ -78,6 +78,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 from pathlib import Path
 
 import numpy as np
@@ -111,7 +112,21 @@ PAIRED_AGAINST = "stare"
 MIN_PATIENTS_TO_RANK = 6
 DESCRIPTIVE = "descriptive; no ranking is claimed"
 COVERAGE_BIN_RADII = 16.0  # side of the occupancy bins, in median nuclear radii
-CAUSES = ("exception", "killed", "oom", "timeout", "gpu_oom", "not_run")
+# the method's own failures first, then what is NOT the method's (the scheduler lost the
+# attempt; the benchmark's own step ran out of memory), then a result nobody ran
+CAUSES = (
+    "exception",
+    "killed",
+    "oom",
+    "timeout",
+    "gpu_oom",
+    "writer",
+    "writer_oom",
+    "benchmark_oom",
+    "infrastructure",
+    "not_run",
+)
+NOT_THE_METHOD = ("benchmark_oom", "infrastructure")
 
 
 def tier_of(case):
@@ -200,7 +215,27 @@ def resource_row(run):
     parts = native.get("write_parts_s")
     parts = parts if isinstance(parts, dict) else {}
     previous = list(run.get("previous_attempts") or [])
-    wasted = [(_f(p.get("wall_s")), _f(p.get("cpu_s"))) for p in previous]
+    # An attempt the process could not bill (the scheduler killed it) is billed by the
+    # scheduler's own figures for the whole task where the launcher got them; where it
+    # did not, the attempt is counted as UNKNOWN, never as zero.
+    wasted, from_scheduler, unknown = [], 0, 0
+    for p in previous:
+        wall_p, cpu_p = p.get("wall_s"), p.get("cpu_s")
+        if wall_p is None and p.get("scheduler_elapsed_s") is not None:
+            wall_p, cpu_p = p["scheduler_elapsed_s"], p.get("scheduler_cpu_s")
+            from_scheduler += 1
+        elif wall_p is None:
+            unknown += 1
+        wasted.append((_f(wall_p), _f(cpu_p)))
+    sched = run.get("scheduler") or {}
+    if not ok and run.get("resources") is None and run.get("cause") != "not_run":
+        # this result's own last attempt, killed before it could bill itself
+        if sched.get("elapsed_s") is not None:
+            wall, cpu = _f(sched["elapsed_s"]), _f(sched.get("cpu_s"))
+            from_scheduler += 1
+        elif run.get("launch_id"):
+            unknown += 1
+    watch = run.get("oom_watch") if isinstance(run.get("oom_watch"), dict) else None
     return {
         "ok": ok,
         "cause": run.get("cause", ""),
@@ -227,6 +262,16 @@ def resource_row(run):
         "wasted_attempts": len(wasted),
         "wasted_cpu_h": float(np.nansum([c for _, c in wasted])) / 3600.0,
         "wasted_wall_s": float(np.nansum([w for w, _ in wasted])),
+        # attempts whose cost is the scheduler's elapsed time of the whole task (an
+        # upper bound: container start and the benchmark's own steps are in it), and
+        # attempts whose cost nobody recorded (in NO wasted total)
+        "wasted_from_scheduler": from_scheduler,
+        "wasted_unknown": unknown,
+        "retry": run.get("retry", 0),
+        "time_limit": run.get("time_limit", ""),
+        # "" when the run recorded nothing about its watcher (an older record)
+        "oom_watch": "" if watch is None else ("yes" if watch.get("started") else "no"),
+        "reused": bool(run.get("reused_by")),
         "rss_method": r.get("rss_method", ""),
         # for the end-to-end view (regbench.cost): the method's own conversion where it
         # is timed apart, the device, and what its writer left on disk
@@ -276,6 +321,22 @@ def find_variants(out, dataset, expected=None, dropped=()):
     return ["initial", *(v for v in [*found, *extra] if v not in set(dropped))]
 
 
+# `score --submission ID`: only what that submission ran or reused is scored. In the
+# environment because the scorer's pool workers are spawned and read it there.
+SUBMISSION_ENV = "REGBENCH_SCORE_SUBMISSION"
+STALE = (
+    "not run by this submission (the result on disk is another submission's and was "
+    "not reused: a blocked run, or a unit that never started)"
+)
+
+
+def of_this_submission(run):
+    """False for a record another submission left, when one is being scored alone."""
+    from . import ladder
+
+    return ladder.mine(run, os.environ.get(SUBMISSION_ENV) or "")
+
+
 def _load_run(out, variant, case):
     """``(run, warped, problem, cause)`` of one (variant, case); ``warped`` is None on failure."""
     d = result_dir(out, variant, case)
@@ -287,6 +348,8 @@ def _load_run(out, variant, case):
             return {}, None, "run.json is not readable", "exception"
     if not run:
         return {}, None, "not run", "not_run"
+    if not of_this_submission(run):
+        return {}, None, STALE, "not_run"
     if not run.get("ok") or not (d / "warped.npz").exists():
         return (
             run,
@@ -699,8 +762,18 @@ def failures(res_rows):
                 rec[f"launches_failed_{cause}"] = sum(
                     c == cause for c in failed.values()
                 )
+            # apart: what the method did, and what was done to it
+            rec["launches_failed_method"] = sum(
+                c not in NOT_THE_METHOD for c in failed.values()
+            )
+            rec["launches_lost_not_method"] = sum(
+                c in NOT_THE_METHOD for c in failed.values()
+            )
             rec["rounds_not_run"] = sum(r["cause"] == "not_run" for r in mine)
             rec["rounds_lost"] = sum(not r["ok"] for r in mine)
+            rec["rounds_lost_not_method"] = sum(
+                (not r["ok"]) and r["cause"] in NOT_THE_METHOD for r in mine
+            )
             out.append(rec)
     return out
 
@@ -750,6 +823,8 @@ def summarise_resources(res_rows):
         for key, extra in last.items():
             earlier = _stat(_values(mine, key), total)
             rec[key] = float(np.nansum([earlier, extra]))
+        for key in ("wasted_from_scheduler", "wasted_unknown"):
+            rec[key] = _stat(_values(mine, key), total)
         out.append(rec)
     return out
 
@@ -1021,6 +1096,7 @@ def summary_markdown(
     confined="",
     end_to_end=None,
     launch=None,
+    header=None,
 ):
     parts = ["# Registration benchmark\n"]
     parts.append(
@@ -1077,6 +1153,22 @@ def summary_markdown(
     parts += launch_markdown(launch or [])
     if fails:
         parts += ["## Failures (launches and rounds)\n"]
+        lost = sum(r["rounds_lost_not_method"] for r in fails)
+        parts.append(
+            "`launches_failed_method` counts what the method did (it raised, ran out "
+            "of memory, ran out of time, its writer failed, its process died). "
+            "`launches_lost_not_method` counts what was done to it: `infrastructure` "
+            "(the scheduler lost the attempt twice at one rung, or the task never "
+            "started) and `benchmark_oom` (the benchmark's own step ran out of memory "
+            "at the last rung). "
+            + (
+                f"**{lost} round(s) are lost for a reason that is not the method's "
+                "and are still scored at the unregistered pose above: submit them "
+                "again before reading those rows.**\n"
+                if lost
+                else "No round is lost for a reason that is not the method's.\n"
+            )
+        )
         parts += [markdown(fails, list(fails[0])), ""]
     if res_summary:
         cols = [
@@ -1096,13 +1188,20 @@ def summary_markdown(
             "write_s",
             "total_to_image_s",
             "wasted_attempts",
+            "wasted_from_scheduler",
+            "wasted_unknown",
         ]
         parts += [
             "## Resources (per patient; registration only)\n",
-            "`peak_rss_gb` is the process tree's peak while registering. "
+            "`peak_rss_gb` is the process tree's peak up to that result. Nothing a "
+            "paused stretch allocates and frees is in it, but what an earlier result's "
+            "writer left resident is (VALIS and ASHLAR write between results). "
             "`cgroup_peak_gb` is the whole job, writers included. No single column is "
-            "the cost.\n",
+            "the cost. `wasted_from_scheduler` attempts are billed by the scheduler's "
+            "elapsed time of the whole task (an upper bound); `wasted_unknown` "
+            "attempts are in no wasted total, because nobody recorded their cost.\n",
             *([confined + "\n"] if confined else []),
+            *[line + "\n" for line in (header or [])],
             markdown(res_summary, cols),
             "",
         ]
@@ -1234,6 +1333,7 @@ def score(
     res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
     res_summary = summarise_resources(res)
     confined = cost.cores_confined(res)
+    cost_header = cost.header_lines(res)
     steps, source = None, ""
     if pipeline_trace:
         convert, merge = pipeline_processes
@@ -1312,6 +1412,7 @@ def score(
         confined,
         (e2e, e2e_summary, source),
         launch,
+        cost_header,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -1334,6 +1435,7 @@ def score(
         "cost_end_to_end": e2e,
         "cost_end_to_end_summary": e2e_summary,
         "cores_confined": confined,
+        "cost_header": cost_header,
         "launch": launch,
         **tis,
     }

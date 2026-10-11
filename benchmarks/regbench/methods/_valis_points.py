@@ -66,6 +66,7 @@ call (``_warp_pt_vips``) and its NumPy branch is vectorised; the field is the sa
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 from pathlib import Path
@@ -95,6 +96,78 @@ class _NullMonitor:
 
 def monitor_of(opts):
     return opts.get("monitor") or _NullMonitor()
+
+
+@contextlib.contextmanager
+def swallowed_errors(valtils):
+    """What VALIS caught, printed and carried on from, for the duration: a list of texts.
+
+    ``Valis.register()`` wraps its whole body in ``except Exception``, hands the
+    exception to ``valtils.print_warning`` and returns ``(None, None, None)`` (1.0.0
+    ``registration.py:4149-4153``: ``print_warning(e)`` then ``print(traceback...)``;
+    1.2.0 ``:4773-4779``: ``print_warning(e, rgb=Fore.RED, traceback_msg=...)``; PyPI
+    sdists `[PARTIAL: those lines, and valtils.print_warning]`). So the real cause, a
+    Java ``OutOfMemoryError`` or a NumPy memory error included, never reaches the
+    caller. ``valtils.print_warning`` is replaced by a wrapper that notes every
+    exception (or message with a traceback) it is given and then calls the original
+    with the same arguments: nothing VALIS does changes."""
+    caught = []
+    original = valtils.print_warning
+
+    def print_warning(msg, *args, **kwargs):
+        try:
+            trace = kwargs.get("traceback_msg")
+            if isinstance(msg, BaseException):
+                caught.append(f"{type(msg).__name__}: {msg}")
+            elif trace:
+                caught.append(str(msg))
+            if trace:
+                caught.append(str(trace)[-2000:])
+        except Exception:  # noting it must never be the method's problem
+            pass
+        return original(msg, *args, **kwargs)
+
+    valtils.print_warning = print_warning
+    try:
+        yield caught
+    finally:
+        valtils.print_warning = original
+
+
+def reported(caught):
+    """The texts VALIS printed, short enough for ``run.json: error``."""
+    text = " | ".join(str(c).strip() for c in caught if str(c).strip())
+    return text[-3000:]
+
+
+def jvm_heap_gb(opts, host=None):
+    """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
+    ``min(32 + 16 * attempt, memory in GiB - 4)``: 12 GiB at 16 GB, 60 at 64 GB, 80 at
+    256 GB, 96 at 512 GB. None when the memory request is unknown (outside a
+    scheduler). ``--opt jvm_heap_gb=N`` overrides it."""
+    from .. import resources
+
+    if opts.get("jvm_heap_gb"):
+        return int(opts["jvm_heap_gb"])
+    host = host or resources.host_info()
+    mem = host.get("mem_requested_gb")
+    if not mem:
+        return None
+    return max(1, int(min(32 + 16 * int(host.get("attempt") or 1), float(mem) - 4)))
+
+
+def jvm_max_heap_gb():
+    """The live JVM's own ``Runtime.maxMemory()`` in GiB: the heap it REALLY has, which
+    is the only way to know that a requested ``-Xmx`` arrived. None without a JVM."""
+    try:
+        import jpype
+
+        if not jpype.isJVMStarted():
+            return None
+        runtime = jpype.JClass("java.lang.Runtime").getRuntime()
+        return float(runtime.maxMemory()) / 2**30
+    except Exception:
+        return None
 
 
 def truthy(v):

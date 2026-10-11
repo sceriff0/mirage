@@ -547,6 +547,15 @@ class Valis:
     def register(self, **kw):
         record("register", kwargs=_plain(kw))
         if CONFIG["fail_register"]:
+            # as VALIS does: the exception goes to valtils.print_warning (looked up on
+            # the module at call time) and (None, None, None) comes back
+            text = CONFIG["fail_register"]
+            exc = RuntimeError(text if isinstance(text, str) else "the fake fails")
+            valtils = sys.modules["valis.valtils"]
+            if CONFIG["version"] == "1.0.0":
+                valtils.print_warning(exc)
+            else:
+                valtils.print_warning(exc, rgb="red", traceback_msg="Traceback (fake)")
             return None, None, None
         for f in self.original_img_list:
             self.slide_dict[_name(f)] = Slide(f, self)
@@ -597,7 +606,10 @@ class Valis:
     def register_micro(self, **kw):
         record("register_micro", kwargs=_plain(kw), generation=self.generation)
         if CONFIG["micro_raises"]:
-            raise RuntimeError("the fake micro pass fails")
+            text = CONFIG["micro_raises"]
+            raise RuntimeError(
+                text if isinstance(text, str) else "the fake micro pass fails"
+            )
         size = kw.get("max_non_rigid_registration_dim_px")
         if CONFIG["version"] != "1.0.0":
             size = 4096 if size is None else size  # DEFAULT_MAX_MICRO_REG_SIZE
@@ -688,8 +700,16 @@ def modules(version):
         def match_images(self, *a, **k):
             return None
 
+    def slide_io_init_jvm(jar=None, mem_gb=10):
+        record("slide_io.init_jvm", mem_gb=mem_gb)
+
     def init_jvm(jar=None, mem_gb=10):
+        # both sdists pass the literal on: registration.init_jvm discards its argument
         record("init_jvm", mem_gb=mem_gb)
+        slide_io_init_jvm(jar=None, mem_gb=10)
+
+    def print_warning(msg, warning_type=None, rgb=None, traceback_msg=None):
+        record("print_warning", msg=str(msg))
 
     def kill_jvm():
         record("kill_jvm")
@@ -721,10 +741,14 @@ def modules(version):
             get_inverse_field=get_inverse_field,
         ),
         "valis.valtils": _module(
-            "valis.valtils", get_ncpus_available=get_ncpus_available
+            "valis.valtils",
+            get_ncpus_available=get_ncpus_available,
+            print_warning=print_warning,
         ),
         "valis.slide_io": _module(
-            "valis.slide_io", BioFormatsSlideReader=BioFormatsSlideReader
+            "valis.slide_io",
+            BioFormatsSlideReader=BioFormatsSlideReader,
+            init_jvm=slide_io_init_jvm,
         ),
         "valis.feature_detectors": fd,
         "valis.feature_matcher": _module(

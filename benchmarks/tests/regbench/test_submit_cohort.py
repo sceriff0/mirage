@@ -72,6 +72,8 @@ def site(tmp_path_factory):
     ):
         _case(cases, "multiplex", case_id, group)
     _case(cases, "synthetic", "blob_grid_p0", "blob_grid")
+    # prepared, and DORMANT: the default submission must leave it alone
+    _case(cases, "semisynth", "P1_w0_grid_p0", "P1_w0_grid")
     fake = tmp / "bin"
     fake.mkdir()
     sbatch = fake / "sbatch"
@@ -151,7 +153,18 @@ def dry(site):
 
 
 def rungs(jobs, run, dataset="multiplex", suffix=""):
+    """The attempt of each rung (the `-again` arrays are `agains`)."""
     return [jobs[f"rb-{run}-{dataset}{suffix}-{gb}g"] for gb in ladder.RUNGS_GB]
+
+
+def agains(jobs, run, dataset="multiplex", suffix=""):
+    return [jobs[f"rb-{run}-{dataset}{suffix}-{gb}g-again"] for gb in ladder.RUNGS_GB]
+
+
+def chain(jobs, run, dataset="multiplex", suffix=""):
+    """The ladder in the order it runs: attempt, again, attempt, again, ..."""
+    both = zip(rungs(jobs, run, dataset, suffix), agains(jobs, run, dataset, suffix))
+    return [j for pair in both for j in pair]
 
 
 # ── nothing is submitted by a dry run ─────────────────────────────────────────
@@ -232,18 +245,78 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
         assert [j.args[7:9] for j in got] == [
             ["1", "16"], ["2", "64"], ["3", "256"], ["4", "512"]
         ], run  # fmt: skip
-        for lower, upper in zip(got, got[1:]):
-            assert ("afterany", f"<{lower.name}>") in upper.deps
-            assert upper.args[10] == f"<{lower.name}>"  # whose state sacct is asked for
+        assert [j.args[11] for j in got] == ["first", "climb", "climb", "climb"], run
         assert got[0].args[10] == "-"
         assert all("--wait" not in j.words for j in got)
+
+
+def test_every_rung_is_tried_again_once_at_the_same_memory(dry):
+    """Infrastructure is not the method: a unit the scheduler lost gets the SAME rung
+    once more, in an array of its own right behind the attempt."""
+    jobs, _, _ = dry
+    assert ladder.RETRIES_PER_RUNG == 1
+    for run in RUNS:
+        first, again = rungs(jobs, run), agains(jobs, run)
+        for a, b in zip(first, again):
+            assert b.opt("--mem") == a.opt("--mem") and b.args[7:9] == a.args[7:9]
+            assert b.opt("--array") == a.opt("--array") and b.args[11] == "again"
+            assert b.opt("--time") == a.opt("--time") == a.args[12] == b.args[12]
+        seq = chain(jobs, run)
+        for i, (lower, upper) in enumerate(zip(seq, seq[1:]), 1):
+            assert ("afterany", f"<{lower.name}>") in upper.deps
+            # every earlier job of the ladder, in order: the task asks the scheduler
+            # what became of its unit in each
+            assert upper.args[10] == ",".join(f"<{j.name}>" for j in seq[:i])
 
 
 def test_the_rung_task_passes_the_rule_and_the_allocation_on():
     code = code_of(SLURM / "run_rung.sbatch")
     assert 'export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb"' in code
-    assert re.search(r'if \[ "\$attempt" -gt 1 \]; then\s+args\+=\(--retry-oom\)', code)
-    assert "--previous-state" in code and "sacct" in code
+    assert 'export REGBENCH_RETRY="$retry" REGBENCH_TIME_LIMIT="$limit"' in code
+    assert re.search(
+        r'if \[ "\$task" != first \]; then\s+args\+=\(--ladder "\$task"\)', code
+    )
+    assert "-o JobID,State,ElapsedRaw,TotalCPU" in code
+    assert 'args+=(--accounting "$acct")' in code
+    assert '[ "${REGBENCH_FORCE:-0}" = 1 ] && args+=(--force)' in code
+    env = code_of(SLURM / "env.sh")
+    for name in ("REGBENCH_RETRY", "REGBENCH_SUBMISSION", "REGBENCH_TIME_LIMIT"):
+        assert name in env, f"{name} must reach the inside of an image"
+
+
+def test_the_default_is_multiplex_first_then_synthetic_and_nothing_dormant(dry):
+    """Ruling R3.14. The site has semisynth cases prepared; they are not submitted."""
+    jobs, done, _ = dry
+    datasets = {j.args[6] for j in jobs.values() if j.script == "run_rung.sbatch"}
+    assert datasets == {"multiplex", "synthetic"}
+    assert not [n for n in jobs if "semisynth" in n or "hyreco" in n]
+    for run in RUNS:
+        last = agains(jobs, run)[-1].name
+        for job in chain(jobs, run, "synthetic"):
+            assert ("afterany", f"<{last}>") in job.deps, (run, job.name)
+        waits = {n for j in chain(jobs, run) for _, n in j.deps}
+        assert not [n for n in waits if "synthetic" in n], run
+    order = [Job(ln).args[6] for ln in _sbatch_lines(done.stdout) if "run_rung" in ln]
+    assert order.index("synthetic") > max(
+        i for i, d in enumerate(order) if d == "multiplex"
+    )
+
+
+def test_a_dormant_dataset_is_submitted_only_when_named(site):
+    done, _, _ = launch(site, "--datasets", "synthetic semisynth multiplex", log="dorm")
+    jobs = jobs_of(done)
+    assert "# semisynth is DORMANT: submitted because it was named." in done.stdout
+    order = []
+    for ln in _sbatch_lines(done.stdout):
+        job = Job(ln)
+        if job.script == "run_rung.sbatch" and job.args[6] not in order:
+            order.append(job.args[6])
+    assert order == ["multiplex", "synthetic", "semisynth"]  # the cohort first
+    first = rungs(jobs, "stare", "semisynth")[0]
+    assert ("afterany", "<rb-stare-synthetic-512g-again>") in first.deps
+    code = code_of(SCRIPT)
+    assert 'DEFAULT_DATASETS="multiplex synthetic"' in code
+    assert 'DORMANT_DATASETS="semisynth hyreco_a hyreco_b"' in code
 
 
 def test_no_job_asks_for_more_than_seven_days(site):
@@ -399,7 +472,7 @@ def test_both_anchored_rows_wait_for_the_run_they_read(dry):
         assert RUNS[run].after == "stare"
         for dataset in ("multiplex", "synthetic"):
             first = rungs(jobs, run, dataset)[0]
-            assert ("afterany", f"<rb-stare-{dataset}-512g>") in first.deps, run
+            assert ("afterany", f"<rb-stare-{dataset}-512g-again>") in first.deps, run
     assert not any("stare-" in n for _, n in rungs(jobs, "ashlar")[0].deps)
 
 
@@ -432,9 +505,15 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     for run in RUNS:
         assert f"rb-gate-{run}" in waited
         for dataset in ("multiplex", "synthetic"):
-            assert f"rb-{run}-{dataset}-512g" in waited, (run, dataset)
+            assert f"rb-{run}-{dataset}-512g-again" in waited, (run, dataset)
     code = code_of(SLURM / "score_cohort.sbatch")
-    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 2
+    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 3
+    # killed records are settled against the scheduler BEFORE the tables are made, and
+    # only what this submission ran or reused is scored
+    assert code.index("settle --out") < code.index(
+        'regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"'
+    )
+    assert 'args+=(--submission "$REGBENCH_SUBMISSION")' in code
     assert 'args+=(--drop "$v")' in code and '--gates "$gates"' in code
     assert '--pipeline-trace "$REGBENCH_PIPELINE_TRACE"' in code
 
@@ -453,7 +532,7 @@ def test_a_realcheck_gated_run_sends_one_unit_ahead(dry):
             "multiplex",
             variant,
         ]
-        assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-512g>")}
+        assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-512g-again>")}
         for dataset in ("multiplex", "synthetic"):
             for job in rungs(jobs, run, dataset):
                 assert ("afterok", f"<rb-realgate-{run}>") in job.deps
@@ -591,6 +670,10 @@ def test_unprepared_cases_are_refused(site, tmp_path):
 def test_prepare_is_a_step_of_its_own(site, tmp_path):
     env = {"REGBENCH_MANIFEST": "/data/rounds.csv", "REGBENCH_TRUTH_PATIENTS": "P1,P2"}
     done, _, _ = launch(site, "--prepare", env=env, log="prepare")
+    jobs = jobs_of(done)
+    assert set(jobs) == {"rb-prepare-multiplex", "rb-prepare-synthetic"}
+    named = "multiplex semisynth synthetic"
+    done, _, _ = launch(site, "--prepare", "--datasets", named, env=env, log="prep3")
     jobs = jobs_of(done)
     assert set(jobs) == {
         "rb-prepare-multiplex",

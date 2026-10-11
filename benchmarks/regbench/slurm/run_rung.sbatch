@@ -6,17 +6,28 @@
 # arguments (one line of `python -m benchmarks.regbench runs`, then the rung):
 #
 #   run_rung.sbatch <name> <method> <label|-> <opts|-> <image> <gpu 0|1> <dataset>
-#                   <attempt> <memory GB> <realcheck 0|1> <previous rung's job id|->
+#                   <attempt> <memory GB> <realcheck 0|1>
+#                   <this ladder's earlier job ids, comma-separated|->
+#                   <task: first|climb|again> <time limit of this task>
 #
-# A task of a rung above the first exits at once unless its unit's last attempt ran out
-# of memory (`run --retry-oom`; benchmarks/regbench/ladder.py has the rule). A failed
-# registration is recorded in run.json and scored at the unregistered pose, so the task
-# exits 0 either way.
+# Each rung is two arrays (benchmarks/regbench/ladder.py has the rules):
+#   first / climb   the attempt at this rung. `climb` (every rung above the first) exits
+#                   at once unless the unit's last attempt ended for memory.
+#   again           the SAME rung once more, and only when the attempt before was lost
+#                   to the scheduler (node failure, preemption, a cancelled job, a task
+#                   that never started). One retry per rung.
+# A unit whose results are all ok already is not run again (REGBENCH_FORCE=1 does). A
+# failed registration is recorded in run.json and scored at the unregistered pose, so
+# the task exits 0 either way.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" gpu="$6" dataset="$7"
-attempt="$8" mem_gb="$9" realcheck="${10}" previous="${11:--}"
+attempt="$8" mem_gb="$9" realcheck="${10}" previous="${11:--}" task="${12:-first}"
+limit="${13:-}"
+retry=0
+[ "$task" = again ] && retry=1
 export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU="$gpu"
+export REGBENCH_RETRY="$retry" REGBENCH_TIME_LIMIT="$limit"
 
 # The gate's verdict for this run, as the gate job left it. The dependency on that job
 # already keeps a blocked run from starting; this is the second lock, for a scheduler
@@ -42,16 +53,26 @@ if [ "$opts" != - ]; then
     for o in "${items[@]}"; do args+=(--opt "$o"); done
 fi
 [ "$realcheck" = 1 ] && args+=(--realcheck)
-if [ "$attempt" -gt 1 ]; then
-    args+=(--retry-oom)
-    # what the scheduler says ended this unit at the rung below (ladder.py: it decides
-    # only where the driver's own record still says "killed")
+[ "${REGBENCH_FORCE:-0}" = 1 ] && args+=(--force)
+if [ "$task" != first ]; then
+    args+=(--ladder "$task")
+    # What the scheduler says of this unit's earlier tasks: state, elapsed and CPU time,
+    # one line per task. ladder.py matches a record that still says "killed" to the task
+    # that wrote it (run.json: launch_id is <array job>_<index>), so it learns why the
+    # task ended and what it cost.
     if [ "$previous" != - ] && command -v sacct >/dev/null; then
-        state="$(sacct -n -X -P -j "${previous}_${index}" -o State 2>/dev/null | head -n 1)"
-        [ -n "$state" ] && args+=(--previous-state "$state")
+        ids=""
+        IFS=, read -ra earlier <<< "$previous"
+        for id in "${earlier[@]}"; do ids="${ids:+$ids,}${id}_${index}"; done
+        mkdir -p "$REGBENCH_OUT/logs/accounting"
+        acct="$REGBENCH_OUT/logs/accounting/$name-$dataset-$index-$attempt-$retry.psv"
+        if sacct -n -X -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
+            && [ -s "$acct" ]; then
+            args+=(--accounting "$acct")
+        fi
     fi
 fi
 regbench_py "$image" "${args[@]}"
-echo "$name $dataset unit $index rung $attempt (${mem_gb} GB): python exited $?"
+echo "$name $dataset unit $index rung $attempt $task (${mem_gb} GB): python exited $?"
 rm -rf "$work"
 exit 0

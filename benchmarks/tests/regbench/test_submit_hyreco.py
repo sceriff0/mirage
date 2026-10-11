@@ -48,7 +48,7 @@ def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     jobs, done, log, out = dry
     assert not log.exists()
     # per run: three selfcheck attempts, a gate, four rungs; then the set's scorer
-    assert len(jobs) == 3 * (3 + 1 + 4) + 1 == 25
+    assert len(jobs) == 3 * (3 + 1 + 8) + 1 == 37
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout
@@ -78,7 +78,7 @@ def test_each_run_has_the_existing_ladder_on_the_set(dry):
         assert all(j.args[6] == "hyreco_b" for j in rungs)
         assert ("afterok", f"<rb-gate-{run}>") in rungs[0].deps
         for below, above in zip(rungs, rungs[1:]):
-            assert ("afterany", f"<{below.name}>") in above.deps
+            assert ("afterany", f"<{below.name}-again>") in above.deps
     # no run of the set needs a GPU
     assert all(j.args[5] == "0" for j in jobs.values() if j.script == "run_rung.sbatch")
     assert not any(w.startswith("--gres") for j in jobs.values() for w in j.words)
@@ -98,7 +98,8 @@ def test_the_scorer_is_the_sets_own_and_waits_for_everything(dry):
     assert score.script == "score_cohort.sbatch" and score.args == ["score", "hyreco_b"]
     waited = {name for kind, name in score.deps if kind == "afterany"}
     for run in RUNS:
-        assert f"<rb-{run}-hyreco_b-512g>" in waited and f"<rb-gate-{run}>" in waited
+        assert f"<rb-{run}-hyreco_b-512g-again>" in waited
+        assert f"<rb-gate-{run}>" in waited
     code = code_of(SCRIPT.parent / "score_cohort.sbatch")
     assert 'args+=(--dataset "$external")' in code
 

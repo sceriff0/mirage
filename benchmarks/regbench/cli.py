@@ -282,10 +282,34 @@ def build_parser():
         "run.json says it ran out of memory; otherwise leave it alone and exit 0",
     )
     r.add_argument(
+        "--ladder",
+        default=None,
+        choices=("first", "climb", "again"),
+        help="which task of the memory ladder this is (ladder.py). first: run the "
+        "unit. climb (= --retry-oom): run only when its last attempt ended for "
+        "memory. again: the same rung once more, only when the attempt before was "
+        "lost to the scheduler (node failure, preemption, a cancelled job, a task "
+        "that never started). The rung is REGBENCH_ATTEMPT",
+    )
+    r.add_argument(
         "--previous-state",
         default="",
-        help="with --retry-oom: the scheduler's state of this unit's task at the rung "
-        "below (sacct). It decides only where run.json still says `killed`",
+        help="with --ladder: the scheduler's state of this unit's task just before "
+        "(sacct). It decides only where run.json still says `killed`",
+    )
+    r.add_argument(
+        "--accounting",
+        default=None,
+        metavar="FILE",
+        help="with --ladder: `sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU` of "
+        "this unit's earlier tasks. A record that still says `killed` is settled by "
+        "the state of the task that wrote it, and keeps that task's elapsed time",
+    )
+    r.add_argument(
+        "--force",
+        action="store_true",
+        help="run a unit whose results are all ok already (also REGBENCH_FORCE=1). "
+        "Without it such a unit is reused: nothing runs, nothing is overwritten",
     )
 
     chk = sub.add_parser("selfcheck")
@@ -330,6 +354,19 @@ def build_parser():
         "--previous-state",
         default="",
         help="with --retry-memory: the scheduler's state of the earlier attempt",
+    )
+
+    st = sub.add_parser(
+        "settle",
+        help="after everything: give every result that still says `killed` the cause "
+        "the scheduler's accounting names (out of memory, time limit, lost)",
+    )
+    st.add_argument("--out", required=True)
+    st.add_argument(
+        "--accounting",
+        required=True,
+        metavar="FILE",
+        help="`sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU` of the jobs",
     )
 
     sc = sub.add_parser("score")
@@ -393,6 +430,14 @@ def build_parser():
         metavar="NAME",
         help="the trace's merge-and-pyramid process (default MERGE_AND_PYRAMID); "
         "repeatable",
+    )
+    sc.add_argument(
+        "--submission",
+        default=None,
+        metavar="ID",
+        help="score only what this submission ran or reused (run.json: submissions; "
+        "the launcher's REGBENCH_SUBMISSION). A result another submission left, of a "
+        "run this one blocked for instance, is `not run`",
     )
     sc.add_argument(
         "--gates",
@@ -527,26 +572,38 @@ def _run(a):
             )
             return 0
         picked = units[a.index]
-    if a.retry_oom:
-        from . import ladder
+    task = a.ladder or ("climb" if a.retry_oom else None)
+    if task:
+        from . import ladder, resources
 
-        go, why = ladder.unit_retry(
-            ladder.unit_paths(a.out, a.method, a.label, picked), a.previous_state
+        host = resources.host_info()
+        heads = ladder.unit_heads(a.out, a.method, a.label, picked)
+        go, why, lost = ladder.unit_decision(
+            list(heads),
+            task,
+            host["attempt"],
+            a.previous_state,
+            ladder.read_accounting(a.accounting),
+            host["submission"],
         )
         ids = "+".join(c.case_id for c in picked)
         print(
-            f"{a.dataset}/{ids} [{a.label or a.method}]: {why}; "
-            + ("going up a rung" if go else "nothing to do")
+            f"{a.dataset}/{ids} [{a.label or a.method}] {task}, rung "
+            f"{host['attempt']}: {why}; " + ("running" if go else "nothing to do")
         )
+        if lost:
+            n = ladder.mark_lost(heads, host["attempt"] - 1, host["submission"])
+            print(f"{a.dataset}/{ids}: {n} result(s) recorded as infrastructure")
         if not go:
             return 0
     opts = parse_opts(a.opt)
     rest = (opts, a.label, a.work, a.keep_work)
+    more = {"realcheck": a.realcheck, "resume": not a.force}
     if per_patient or a.group is not None:
-        done = run_group(a.method, picked, a.out, *rest, realcheck=a.realcheck)
+        done = run_group(a.method, picked, a.out, *rest, **more)
     else:
         case = picked[0]
-        got = run_case(a.method, case, a.out, *rest, realcheck=a.realcheck)
+        got = run_case(a.method, case, a.out, *rest, **more)
         done = {case.case_id: got}
     for case_id, variants in done.items():
         print(
@@ -591,10 +648,11 @@ def _selfcheck(a):
         import json
         from pathlib import Path
 
-        from . import ladder
+        from . import ladder, resources
 
         path = Path(a.work) / "selfcheck.json"
-        go, why = ladder.selfcheck_retry(path, a.previous_state)
+        submission = resources.host_info()["submission"]
+        go, why = ladder.selfcheck_retry(path, a.previous_state, submission)
         print(f"selfcheck [{a.label or a.method}]: {why}")
         if not go:
             try:
@@ -728,10 +786,21 @@ def _gate(a):
         variants.run_of(run)
     except KeyError as exc:
         raise SystemExit(f"gate: {exc.args[0]}; see `runs --all`") from None
+    from . import ladder, resources
+
     try:
         record = json.loads(Path(a.selfcheck).read_text())
     except (OSError, ValueError) as exc:
         print(f"gate: no selfcheck record at {a.selfcheck} ({type(exc).__name__})")
+        record = {}
+    submission = resources.host_info()["submission"]
+    if record and not ladder.mine(record, submission):
+        # an older launch's verdict says nothing about this one's images and code
+        print(
+            f"gate: the selfcheck record at {a.selfcheck} is of another submission "
+            f"({record.get('submission') or 'none recorded'}), not of {submission}: "
+            "refused, the run is not checked"
+        )
         record = {}
     status = variants.gate_status(a.name, record)
     # rows are dropped from the run whose selfcheck this is, and from no other
@@ -767,14 +836,20 @@ def _realgate(a):
         if scope_of(a.method) == "group"
         else [[c] for c in cases]
     )
+    from . import ladder, resources
+
+    submission = resources.host_info()["submission"]
     picked = units[a.index] if a.index < len(units) else []
     found, flagged = 0, []
     for case in picked:
-        path = result_dir(a.out, a.variant, case) / "realcheck.json"
+        d = result_dir(a.out, a.variant, case)
         try:
-            check = json.loads(path.read_text())
+            run = json.loads((d / "run.json").read_text())
+            check = json.loads((d / "realcheck.json").read_text())
         except (OSError, ValueError):
             continue
+        if not run.get("ok") or not ladder.mine(run, submission):
+            continue  # a realcheck an earlier launch left answers for nothing here
         found += 1
         if check.get("flag"):
             flagged.append(case.case_id)
@@ -855,7 +930,26 @@ def main(argv=None):
         return _realgate(a)
     if a.cmd == "tissue":
         return _tissue(a)
+    if a.cmd == "settle":
+        from . import ladder, resources
+
+        changed = ladder.settle_all(
+            a.out,
+            ladder.read_accounting(a.accounting),
+            resources.host_info()["submission"],
+        )
+        print(
+            "settle: "
+            + (", ".join(f"{n} {c}" for c, n in sorted(changed.items())) or "nothing")
+            + " (results that said `killed`, by the scheduler's accounting)"
+        )
+        return 0
     from . import score, variants
+
+    if getattr(a, "submission", None):
+        import os
+
+        os.environ[score.SUBMISSION_ENV] = a.submission
 
     cohort, external = split_datasets(a.dataset)
     if external:

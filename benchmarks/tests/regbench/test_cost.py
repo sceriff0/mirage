@@ -307,7 +307,20 @@ def test_a_written_file_is_described_from_the_file_itself(tmp_path):
     got = imageio.describe_written(pyr)
     assert (got["channels"], got["levels"], got["pyramid"]) == (3, 2, True)
     assert got["compression"] == "ADOBE_DEFLATE"
-    assert cost.complete_image(got) is True
+    # Ruling R3.14: no merge only for ONE pyramidal file per PATIENT with every round's
+    # channels. The file says how many channels it holds; the driver records how many
+    # the patient's slides hold together.
+    assert cost.complete_image({**got, "patient_channels": 3}) is True
+    assert cost.complete_image({**got, "patient_channels": 2}) is True
+    # a pyramidal file per ROUND, every channel of that round: the merge is still needed
+    assert cost.complete_image({**got, "patient_channels": 6}) is False
+    # how many the patient has is not recorded: never decided on a guess
+    assert cost.complete_image(got) is None
+    assert cost.complete_image({**got, "patient_channels": None}) is None
+    # without a pyramid the merge is needed whatever it holds
+    flat_got = {**got, "pyramid": False, "levels": 1}
+    assert cost.complete_image({**flat_got, "patient_channels": 3}) is False
+    got = {**got, "patient_channels": 3}
     # one file per channel is not one image holding every channel
     assert cost.complete_image({**got, "files": 3, "channels": 1}) is False
     assert "3 files" in cost.written_text({**got, "files": 3, "channels": 1})
@@ -319,14 +332,14 @@ def test_a_written_file_is_described_from_the_file_itself(tmp_path):
 
 
 # ── through the driver and the scorer ─────────────────────────────────────────
-def _writer(name, pyramid):
+def _writer(name, pyramid, channels=2):
     """A method that writes an image of its own at the yield, as VALIS does."""
 
     def register(case, work, opts):
         dest = Path(opts["native_dir"](case.case_id, name))
         dest.mkdir(parents=True, exist_ok=True)
         out = dest / "registered.ome.tif"
-        plane = np.zeros((2, 440, 440), np.uint16)
+        plane = np.zeros((channels, 440, 440), np.uint16)
         with tifffile.TiffWriter(out, ome=True) as tw:
             tw.write(plane, subifds=1 if pyramid else 0, tile=(32, 32),
                      metadata={"axes": "CYX"})  # fmt: skip
@@ -344,12 +357,19 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
     root, out = tmp_path / "cases", tmp_path / "out"
     for group in ("P1", "P9"):
         case = toy_case(root, f"{group}_r1", group)
-        for name, pyramid in (("flat", False), ("deep", True)):
-            methods.run_case(_writer(name, pyramid), case, out)
+        # the patient's slides: two channels on the reference, three on the round
+        case.extra.update(channels_ref=["a", "b"], channels_mov=["c", "d", "e"])
+        for name, pyramid, channels in (
+            ("flat", False, 5),
+            ("deep", True, 5),  # one pyramid holding the whole patient (ASHLAR's)
+            ("round", True, 3),  # a pyramid of this round only (VALIS's, PALOM's)
+        ):
+            methods.run_case(_writer(name, pyramid, channels), case, out)
     native = json.loads((result_dir(out, "deep", case) / "run.json").read_text())[
         "native"
     ]
-    assert native["written"]["pyramid"] and native["written"]["channels"] == 2
+    assert native["written"]["pyramid"] and native["written"]["channels"] == 5
+    assert native["written"]["patient_channels"] == 5
 
     trace = write_trace(tmp_path / "trace.txt")
     got = score.score(
@@ -361,6 +381,10 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
     assert (
         flat["pipeline_merge_s"] == 3600.0 and deep["pipeline_merge_s"] == "not needed"
     )
+    # a pyramid per round is not the patient's merged image: the step is added
+    per_round = _row(rows, "round")
+    assert per_round["pipeline_merge_s"] == 3600.0
+    assert "pyramid (2 levels)" in per_round["written"]
     assert flat["write_s"] == deep["write_s"] == 2.0
     assert "no pyramid" in flat["written"] and "pyramid (2 levels)" in deep["written"]
     assert flat["written_from"] == "the file, read after the run"
@@ -370,7 +394,7 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
 
     with open(out / "tables" / "cost_end_to_end.csv", newline="") as fh:
         on_disk = list(csv.DictReader(fh))
-    assert len(on_disk) == 4 and list(on_disk[0]) == list(cost.COLUMNS)
+    assert len(on_disk) == 6 and list(on_disk[0]) == list(cost.COLUMNS)
     assert {r["pipeline_merge_s"] for r in on_disk} >= {"3600.0", "not needed"}
     assert (out / "tables" / "cost_end_to_end_summary.csv").is_file()
     text = (out / "tables" / "summary.md").read_text()

@@ -22,8 +22,12 @@ and, read once at the end, the scheduler's own number where there is one:
 **Pausing.** Between :meth:`Monitor.pause` and :meth:`Monitor.resume` nothing is billed: the
 wall and CPU time of that stretch are taken out and the memory peak is not updated. The
 driver pauses while it warps the benchmark's points and while a method's own writer runs,
-so ``peak_rss_mb`` is the registration's peak. Memory that a paused stretch still holds
-after ``resume`` is seen again from then on.
+so nothing a paused stretch allocates AND frees enters ``peak_rss_mb``. Memory that a
+paused stretch still holds after ``resume`` is seen again from then on: where a method's
+writer runs between two results (VALIS, ASHLAR), what that writer leaves resident is in
+the peak of every LATER result of the same launch. The first result written, and every
+method whose writer runs after the generator has ended (STARE, PALOM, DeeperHistReg),
+have a peak without any writer.
 
 RSS summed over processes counts pages shared between them once per process, so
 ``peak_rss_mb`` is an upper bound for a forked pool; STARE's pool is spawned, which shares
@@ -232,6 +236,10 @@ def host_info():
         f"{array_job}_{task}" if array_job and task else os.environ.get("SLURM_JOB_ID")
     )
     counts = cpu_counts()
+    try:
+        retry = int(os.environ.get("REGBENCH_RETRY") or 0)
+    except ValueError:
+        retry = 0
     return {
         "host": platform.node(),
         "cpu_model": cpu,
@@ -241,6 +249,11 @@ def host_info():
         "cpus_affinity": counts["cpus_affinity"],
         "cpus_node": counts["cpus_node"],
         "attempt": attempt,
+        # 1 for the second try of a rung whose first was lost to the scheduler
+        "retry": retry,
+        # the submission this launch belongs to (the cohort launcher's id); "" outside
+        "submission": os.environ.get("REGBENCH_SUBMISSION") or "",
+        "time_limit": os.environ.get("REGBENCH_TIME_LIMIT") or "",
         "mem_requested_gb": _mem_requested_gb(),
         # the scheduler's job id, or this process when there is no scheduler
         "launch_id": job or f"pid{os.getpid()}",
@@ -257,12 +270,64 @@ def host_info():
 # ``oom``. Frozen: changing the list after a cohort run is a post hoc change.
 #   "Java heap space"       java.lang.OutOfMemoryError from the JVM VALIS starts; it comes
 #                           back as a plain exit 1 (conf/modules.config:460-464, plan A8)
-#   "MemoryError"           Python's and NumPy's (numpy.core._exceptions._ArrayMemoryError)
+#   "MemoryError"           Python's and NumPy's (numpy.core._exceptions._ArrayMemoryError),
+#                           and every java.lang.OutOfMemoryError whatever its message
+#                           ("GC overhead limit exceeded"): the class name ends in it.
+#                           A CUDA one is looked for first.
+#   "Unable to allocate"    NumPy's message for the same, where only the text survives
+#                           (a package that prints its exception and returns) `[MEMORY]`
 #   "DefaultCPUAllocator"   PyTorch's CPU allocation failure (c10 alloc_cpu.cpp `[MEMORY]`:
 #                           the wording was not re-read from the torch source this session)
-MEMORY_ERRORS = ("Java heap space", "MemoryError", "DefaultCPUAllocator")
+#   "Cannot allocate memory"  strerror(ENOMEM): a failed fork or mmap (`errno(3)`
+#                           `[MEMORY]`)
+#   "std::bad_alloc"        a C++ allocation failure surfacing through a binding
+MEMORY_ERRORS = (
+    "Java heap space",
+    "MemoryError",
+    "Unable to allocate",
+    "DefaultCPUAllocator",
+    "Cannot allocate memory",
+    "std::bad_alloc",
+)
 GPU_MEMORY_ERRORS = ("CUDA out of memory",)
-CAUSES = ("exception", "killed", "not_run", "oom", "timeout", "gpu_oom")
+# Every cause a run.json can end with (the scorer adds ``not_run``):
+#   exception      the method raised, or reported a failed round
+#   oom            the method ran out of host memory while registering
+#   writer_oom     the method's own writer ran out of memory (no image: a failed row)
+#   writer         the method's own writer failed for another reason (no image)
+#   gpu_oom, timeout
+#   killed         the process died and nobody could say why (the placeholder)
+#   benchmark_oom  the BENCHMARK's own step ran out of memory with the clock stopped
+#                  (moving the nuclei through the map): not the method's failure
+#   infrastructure the scheduler lost the attempt (node failure, preemption, a cancelled
+#                  job, a task that never started): not the method's failure
+CAUSES = (
+    "exception",
+    "killed",
+    "not_run",
+    "oom",
+    "timeout",
+    "gpu_oom",
+    "writer",
+    "writer_oom",
+    "benchmark_oom",
+    "infrastructure",
+)
+# more memory is the remedy: the unit goes up a rung (regbench.ladder)
+MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
+# counted apart from a method's failures in every table that counts failures
+NOT_THE_METHOD = ("infrastructure", "benchmark_oom")
+
+
+def classify_text(text):
+    """The cause a captured error TEXT names: ``gpu_oom``, ``oom`` or ``exception``.
+    For a package that prints its exception and carries on (VALIS)."""
+    text = str(text or "")
+    if any(s in text for s in GPU_MEMORY_ERRORS):
+        return "gpu_oom"
+    if any(s in text for s in MEMORY_ERRORS):
+        return "oom"
+    return "exception"
 
 
 def classify_error(exc):

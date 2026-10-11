@@ -5,7 +5,13 @@
 #   benchmarks/regbench/slurm/submit_cohort.sh --prepare [-- extra sbatch args]
 #   (wait for the prepare jobs; look at their logs)
 #   benchmarks/regbench/slurm/submit_cohort.sh [--dry-run] [--runs "a b"] \
-#       [--datasets "multiplex semisynth synthetic"] [-- extra sbatch args]
+#       [--datasets "multiplex synthetic"] [-- extra sbatch args]
+#
+# THE DEFAULT is `multiplex`, then `synthetic`: every array of a run on `synthetic` waits
+# for that run's last array on `multiplex`, so the cohort is done first. `semisynth` and
+# the HyReCo sets are DORMANT: implemented and tested, never part of the default, and
+# submitted only when --datasets names them (the README lists what is known to be wrong
+# with each before any use).
 #
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
@@ -20,11 +26,16 @@
 #   2. per run: a gate job (`regbench gate`). It fails when the selfcheck that gates the
 #      run is anything but ok, and then THAT run alone never starts. The rows it says to
 #      drop are collected for the scorer.
-#   3. per run and dataset: four job arrays, 16 -> 64 -> 256 -> 512 GB at 4 CPUs, each
-#      waiting for the one before (`afterany`). A task of a later array exits at once
-#      unless its unit's last run.json says `oom`. One task is one case for a run that
-#      works per pair and one patient for a run that works per patient. A run that reads
-#      another's results waits for that run's last array on the same dataset.
+#   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 GB at 4 CPUs, as
+#      EIGHT job arrays, two per rung, each waiting for the one before (`afterany`): the
+#      attempt at that rung, then `-again`, the same rung once more, which runs a unit
+#      only when its attempt was lost to the scheduler (node failure, preemption, a
+#      cancelled job, a task that never started). A task of a rung above the first
+#      exits at once unless its unit's last run.json names a memory cause. One task is
+#      one case for a run that works per pair and one patient for a run that works per
+#      patient. A run that reads another's results waits for that run's last array on
+#      the same dataset. A unit whose results are all ok already (an earlier
+#      submission into the same REGBENCH_OUT) is reused, not run: REGBENCH_FORCE=1.
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
 #      realcheck.json; everything else of that run waits for it.
@@ -56,6 +67,10 @@
 #                                     never above the site's longest job (7 days)
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N)
+#   REGBENCH_FORCE=1                  run every unit again, also those already ok
+#   REGBENCH_SUBMISSION               this call's id (default: time and process id).
+#                                     Records of another submission are evidence of
+#                                     nothing: not for a gate, the ladder or the scorer
 #   REGBENCH_ALLOW_UNCHECKED          run names that start whatever their checks say
 #   REGBENCH_PIPELINE_TRACE           a Nextflow trace.txt of a pipeline run on this
 #   REGBENCH_PIPELINE_TRACE_LABEL     cohort, and what to call it: the scorer reads the
@@ -95,7 +110,10 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
-prepare=0 only_runs="" datasets="multiplex semisynth synthetic"
+# multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
+DEFAULT_DATASETS="multiplex synthetic"
+DORMANT_DATASETS="semisynth hyreco_a hyreco_b"
+prepare=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
@@ -111,6 +129,13 @@ extra=("$@")
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+
+# one id per call: every record of this submission carries it
+: "${REGBENCH_SUBMISSION:=$(date +%Y%m%dT%H%M%S)-$$}"
+export REGBENCH_SUBMISSION
+for ds in $datasets; do
+    has "$DORMANT_DATASETS" "$ds" && echo "# $ds is DORMANT: submitted because it was named. Read \"Dormant datasets: known defects before any use\" in benchmarks/regbench/README.md first."
+done
 
 # An external landmark set is submitted alone: its own run list, its own tables.
 EXTERNAL="" n_named=0
@@ -288,6 +313,11 @@ for ds in $datasets; do
     echo "# $ds: $n_cases case(s), $n_groups patient(s), at most $max_rounds round(s) per patient"
 done
 [ -n "$sized" ] || die "no prepared cases under $REGBENCH_CASES for any of: $datasets. Run with --prepare first. Nothing was submitted."
+# the cohort first, whatever the order they were named in
+ordered=""
+has "$sized" multiplex && ordered="multiplex"
+for ds in $sized; do [ "$ds" = multiplex ] || ordered="$ordered $ds"; done
+sized="$ordered"
 first_dataset="${sized# }"; first_dataset="${first_dataset%% *}"
 
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
@@ -335,6 +365,8 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
     has "$selected" "$name" || continue
     allowed=0
     has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
+    # an earlier submission's verdict must not be what a task of this one finds
+    [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
     last="SC_LAST_$gated_by"
     submit "rb-gate-$name" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:${!last}" "${small[@]}" \
         "$HERE/gate.sbatch" selfcheck "$name" "$gated_by" "$allowed"
@@ -342,26 +374,39 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
 done < "$table"
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
-# ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: four arrays,
-# each after the one before; sets LADDER_LAST. Reads the current row's variables.
+# ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: two arrays per
+# rung (the attempt, then the same rung again for a unit the scheduler lost), each after
+# the one before; sets LADDER_LAST. Reads the current row's variables. Every task is
+# given the ids of all the ladder's earlier jobs: it asks the scheduler what became of
+# its unit in each.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5"
-    local previous=- attempt=0 gb dep
+    local earlier="" attempt=0 gb dep task jobname
     for gb in $RUNGS_GB; do
         attempt=$((attempt + 1))
-        dep="$base"
-        [ "$previous" = - ] || dep="$dep,afterany:$previous"
-        submit "$prefix-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-            --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$CPUS" --mem="${gb}G" \
-            --time="$time" ${gres[@]+"${gres[@]}"} \
-            "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
-            "$ds" "$attempt" "$gb" "$real" "$previous"
-        previous="$JOB_ID"
+        for task in attempt again; do
+            jobname="$prefix-${gb}g"
+            if [ "$task" = again ]; then
+                jobname="$jobname-again"
+            elif [ "$attempt" = 1 ]; then
+                task=first
+            else
+                task=climb
+            fi
+            dep="$base"
+            [ -z "$earlier" ] || dep="$dep,afterany:${earlier##*,}"
+            submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+                --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$CPUS" --mem="${gb}G" \
+                --time="$time" ${gres[@]+"${gres[@]}"} \
+                "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
+                "$ds" "$attempt" "$gb" "$real" "${earlier:--}" "$task" "$time"
+            earlier="${earlier:+$earlier,}$JOB_ID"
+        done
     done
-    LADDER_LAST="$previous"
+    LADDER_LAST="${earlier##*,}"
 }
 
-finals=""
+finals="" prev_ds=""
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
     while IFS=$'\t' read -r name method label opts image gpu scope after _ _ _ _ _ _ realcheck; do
@@ -382,6 +427,12 @@ for ds in $sized; do
             else
                 echo "# $name reads the results of $after, which is not submitted here: they must already be under $REGBENCH_OUT"
             fi
+        fi
+        # one dataset after the other, per run: the cohort (multiplex) is done before
+        # the same run starts on the next dataset
+        if [ -n "$prev_ds" ]; then
+            last="LAST_${prev_ds}_$name"
+            [ -n "${!last:-}" ] && base="$base,afterany:${!last}"
         fi
         start=0
         if [ "${realcheck:--}" != - ]; then
@@ -408,6 +459,7 @@ for ds in $sized; do
             printf -v "LAST_${ds}_$name" '%s' "${!real}"
         fi
     done < "$table"
+    prev_ds="$ds"
 done
 
 # ── 5. tissue, then the scorer, in the scorer's image ─────────────────────────────────
@@ -430,6 +482,7 @@ else
 fi
 
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted')"
+echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "${REGBENCH_FORCE:-0}" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
 echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
 if [ -n "$EXTERNAL" ]; then
     echo "# results     -> $REGBENCH_OUT/tables/$EXTERNAL/summary.md (this set's own tables; none of the cohort's)"

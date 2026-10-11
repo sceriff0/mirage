@@ -674,7 +674,84 @@ def test_a_register_that_valis_swallowed_fails_the_patient(tmp_path, pair):
     assert done == {"P1_r1": [], "P1_r2": []}
     run = run_json(tmp_path / "o", "valis120", cases[1])
     assert run["cause"] == "exception" and "returned None" in run["error"]
+    assert "It reported: RuntimeError: the fake fails" in run["error"]
     assert fv.CALLS[-1]["call"] == "kill_jvm"
+
+
+JAVA_OOM = "java.lang.OutOfMemoryError: Java heap space"
+NUMPY_OOM = (
+    "numpy.core._exceptions._ArrayMemoryError: Unable to allocate 64.0 GiB for an "
+    "array with shape (92000, 93000) and data type float64"
+)
+
+
+@pytest.mark.parametrize(
+    "text,cause",
+    [
+        (JAVA_OOM, "oom"),
+        ("java.lang.OutOfMemoryError: GC overhead limit exceeded", "oom"),
+        (NUMPY_OOM, "oom"),
+        ("RuntimeError: DefaultCPUAllocator: not enough memory", "oom"),
+        ("need at least one array to concatenate", "exception"),
+    ],
+)
+def test_what_valis_swallowed_decides_the_cause(tmp_path, pair, text, cause):
+    """VALIS prints its exception and returns None. A memory failure must come out as
+    `oom` (the ladder climbs on nothing else), and any other as `exception`."""
+    fv.configure(fail_register=text)
+    cases = patient(tmp_path, pair)
+    methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
+    for variant in methods.variant_names("valis", "valis120"):
+        run = run_json(tmp_path / "o", variant, cases[1])
+        assert run["ok"] is False and run["cause"] == cause, variant
+        assert text in run["error"]
+    assert fv.calls("print_warning"), "the original print_warning must still run"
+
+
+def test_the_capture_leaves_valtils_as_it_was(tmp_path, pair):
+    fv.configure(fail_register=JAVA_OOM)
+    before = sys.modules["valis.valtils"].print_warning
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
+    assert sys.modules["valis.valtils"].print_warning is before
+
+
+def test_a_memory_error_in_the_micro_pass_of_valis_120_is_oom(tmp_path, pair):
+    fv.configure(micro_raises=JAVA_OOM)
+    cases = patient(tmp_path, pair, rounds=1)
+    done = methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
+    assert done == {"P1_r1": ["valis120_rigid", "valis120"]}
+    run = run_json(tmp_path / "o", "valis120_micro", cases[0])
+    assert run["ok"] is False and run["cause"] == "oom"
+
+
+def test_valis_120_gets_a_heap_that_follows_the_rung(tmp_path, pair, monkeypatch):
+    """VALIS 1.2.0 starts its JVM at 10 GB whatever it is asked; the adapter starts it
+    first, through VALIS's own slide_io.init_jvm, with the module's formula."""
+    want = {(16, 1): 12, (64, 2): 60, (256, 3): 80, (512, 4): 96}
+    for (mem, attempt), heap in want.items():
+        fv.configure()
+        monkeypatch.setenv("REGBENCH_MEM_GB", str(mem))
+        monkeypatch.setenv("REGBENCH_ATTEMPT", str(attempt))
+        (tmp_path / f"c{mem}").mkdir()
+        cases = patient(tmp_path / f"c{mem}", pair, rounds=1)
+        out = tmp_path / f"o{mem}"
+        methods.run_group("valis", cases, out, {}, label="valis120")
+        order = [c["call"] for c in fv.CALLS]
+        assert [c["mem_gb"] for c in fv.calls("slide_io.init_jvm")] == [heap], mem
+        assert order.index("slide_io.init_jvm") < order.index("Valis")
+        info = run_json(out, "valis120", cases[0])["info"]
+        assert info["jvm_heap_gb"] == heap and f"-Xmx{heap}G" in info["jvm_heap"]
+
+
+def test_off_the_ladder_valis_120_keeps_its_own_heap(tmp_path, pair, monkeypatch):
+    monkeypatch.delenv("REGBENCH_MEM_GB", raising=False)
+    monkeypatch.delenv("SLURM_MEM_PER_NODE", raising=False)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
+    assert not fv.calls("slide_io.init_jvm")
+    info = run_json(tmp_path / "o", "valis120", cases[0])["info"]
+    assert info["jvm_heap_gb"] is None and "10 GB" in info["jvm_heap"]
 
 
 def test_a_failed_micro_pass_leaves_the_default_row(tmp_path, pair):
@@ -1061,6 +1138,37 @@ def test_a_micro_pass_the_pipeline_swallowed_is_reported(tmp_path):
     assert "the micro pass did not run" in run["problem"]
     assert "fake micro pass fails" in run["problem"]
     assert mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["problem"] == ""
+
+
+def test_a_register_the_pipelines_valis_swallowed_keeps_its_cause(tmp_path):
+    """Valis.register() swallows, bin/register.py raises a fixed text: the memory cause
+    VALIS printed must still reach run.json, or the pipeline's VALIS never climbs."""
+    _, done = run_mirage(tmp_path / "w", fake={"fail_register": JAVA_OOM})
+    for variant in MIRAGE:
+        run = mirage_run_json(tmp_path / "w", variant)
+        assert run["ok"] is False and run["cause"] == "oom", done.stdout[-2000:]
+        assert JAVA_OOM in run["error"] and "swallowed" in run["error"]
+
+
+def test_another_swallowed_register_of_the_pipeline_stays_an_exception(tmp_path):
+    text = "need at least one array to concatenate"
+    run_mirage(tmp_path / "w", fake={"fail_register": text})
+    run = mirage_run_json(tmp_path / "w", "valis_mirage")
+    assert run["cause"] == "exception" and text in run["error"]
+
+
+def test_a_micro_pass_that_ran_out_of_memory_fails_the_full_row(tmp_path):
+    """bin/register.py catches a Java out-of-memory inside the micro pass and writes the
+    non-rigid result. That is not the full method: the row fails with `oom`, so the
+    patient goes up a rung, and the non-rigid row keeps its own result."""
+    run_mirage(tmp_path / "w", fake={"micro_raises": JAVA_OOM})
+    final = mirage_run_json(tmp_path / "w", "valis_mirage")
+    assert final["ok"] is False and final["cause"] == "oom"
+    assert (
+        "micro pass ran out of memory" in final["error"] and JAVA_OOM in final["error"]
+    )
+    assert mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["ok"] is True
+    assert mirage_run_json(tmp_path / "w", "valis_mirage_rigid")["ok"] is True
 
 
 def test_a_slide_the_pipeline_did_not_write_fails_its_round(tmp_path):

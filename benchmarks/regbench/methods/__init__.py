@@ -12,7 +12,8 @@ and one generator:
 ``register_group(cases, work, opts)``  (group) yields ``(case_id, variant, PointMap | None,
                                        info)``. ``cases`` is every case of one patient in
                                        ``list_cases`` order. A failed round is yielded as
-                                       ``(case_id, variant, None, {"error": msg})``; a
+                                       ``(case_id, variant, None, {"error": msg})``
+                                       (``"cause"`` may name why: ``oom`` climbs); a
                                        degraded one carries ``info["problem"]``.
 
 A ``PointMap`` (``regbench.mapping``) is the method's transform in its OWN direction, in
@@ -60,8 +61,30 @@ cost. Warping the benchmark's points and a method's writer are not billed.
 method starts, so a task the scheduler kills leaves a failed row, not a gap. A method that
 raises (``SystemExit`` included: STARE's argument errors raise it) is ``exception``, or
 ``oom`` / ``gpu_oom`` / ``timeout`` when the error says so (``resources.classify_error``).
-A watcher polls the task's cgroup out-of-memory counter and ends the run as ``oom`` when
-it rises, because the kernel may kill one worker and leave the parent waiting.
+A watcher polls the task's cgroup out-of-memory counter from before the method starts
+until its writer has finished, and ends the run when it rises, because the kernel may
+kill one worker and leave the parent waiting. ``run.json: oom_watch`` says whether the
+counter was readable and the watcher started.
+
+**Three stretches, three memory causes** (all three go up the ladder):
+
+``oom``            the method ran out of memory while registering
+``writer_oom``     its own writer did: ``write_native``, a writer that reported a memory
+                   error at a yield (``native: {"error": ...}``), or a kill the watcher
+                   saw while the method itself had the clock paused
+``benchmark_oom``  the benchmark's own step did, with the clock stopped (moving the
+                   nuclei through the map): not the method's failure
+
+**A row is ok only when its image exists.** A method's writer that fails, at a yield or
+in ``write_native``, fails the row it was writing for: ``writer_oom``, or ``writer`` for
+any other error. While ``write_native`` runs, that row's ``run.json`` says ``ok: false,
+cause: killed, phase: writer``, so a kill there leaves a failed row too. The rule is the
+same for every method.
+
+**A unit that is already done is not run again** (``resume=True``, what ``run`` passes):
+when every result of the unit is ``ok`` for the same method, label, options and cases,
+nothing runs and no placeholder is written; the records gain this submission's id
+(``submissions``, ``reused_by``). ``REGBENCH_FORCE=1`` (``run --force``) runs it anyway.
 """
 
 from __future__ import annotations
@@ -93,6 +116,38 @@ KILLED = (
 OOM_POLL_S = 1.0  # how often the cgroup out-of-memory counter is read
 OOM_GRACE_S = 60.0  # how long an interrupted method has to unwind before a hard exit
 OOM_EXIT_CODE = 137
+WRITER_KILLED = (
+    "killed while the method's own writer ran: the image was not finished (out of "
+    "memory or time limit? see the SLURM log)"
+)
+# the stretch a memory death happened in -> its cause (module docstring)
+MEMORY_CAUSE = {"method": "oom", "writer": "writer_oom", "benchmark": "benchmark_oom"}
+
+
+class _OutOfMemory(MemoryError):
+    """A memory death whose stretch is known."""
+
+    def __init__(self, phase, message):
+        super().__init__(message)
+        self.phase = phase
+
+
+def writer_cause(error):
+    """``writer_oom`` when a writer's error text names memory, else ``writer``."""
+    return "writer_oom" if resources.classify_text(error) == "oom" else "writer"
+
+
+def patient_channels(cases):
+    """How many channels the patient's slides hold together (the reference once, every
+    moving round of this launch), or None where a case does not list its channels. A
+    written file with fewer cannot be the patient's merged image."""
+    ref = len(cases[0].extra.get("channels_ref") or [])
+    mov = [len(c.extra.get("channels_mov") or []) for c in cases]
+    if not ref or not all(mov):
+        return None
+    return ref + sum(mov)
+
+
 _LAUNCHES = itertools.count(1)
 
 # Methods with NO input rule for a brightfield case (an RGB whole-slide pair: HyReCo), and
@@ -220,10 +275,13 @@ def _jsonable(obj):
 class _OomWatch:
     """Polls the cgroup ``oom_kill`` counter; on a rise, interrupts the main thread."""
 
-    def __init__(self, on_stuck):
+    def __init__(self, on_stuck, where=None):
         self.path = resources.oom_events_path()
         self.start_count = resources.read_oom_kills(self.path)
         self.fired = False
+        self.phase = None  # the stretch the run was in when the counter rose
+        self.started = False
+        self._where = where or (lambda: "method")
         self._acknowledged = threading.Event()
         self._stop = threading.Event()
         self._on_stuck = on_stuck
@@ -239,6 +297,7 @@ class _OomWatch:
         while not self._stop.wait(OOM_POLL_S):
             if not self.rose():
                 continue
+            self.phase = self._where()
             self.fired = True
             try:  # a real signal: it also wakes a main thread blocked in a system call
                 signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
@@ -255,7 +314,17 @@ class _OomWatch:
         if self.start_count is not None:
             self._thread = threading.Thread(target=self._loop, daemon=True)
             self._thread.start()
+            self.started = True
         return self
+
+    def record(self):
+        """``run.json: oom_watch``: without a readable counter nothing watches, and a
+        killed worker can leave the run waiting until the time limit."""
+        return {
+            "readable": self.start_count is not None,
+            "started": bool(self.started),
+            "path": str(self.path) if self.path else "",
+        }
 
     def acknowledge(self):
         self._acknowledged.set()
@@ -282,23 +351,50 @@ def _run(
     on_variant,
     launch_id,
     realcheck=False,
+    resume=False,
 ):
+    from ..ladder import mine
+
     mod, name = load(method), method_name(method)
     scope = scope_of(method)
     opts = dict(opts or {})
     opts.setdefault("workers", resources.n_cpus())
     names = dict(zip(mod.VARIANTS, variant_names(method, label)))
+    host = resources.host_info()
+    submission = host["submission"]
+    recorded = {
+        k: str(v)
+        for k, v in opts.items()
+        if k not in ("monitor", "native_dir", "label")
+    }
+    if resume and os.environ.get("REGBENCH_FORCE") != "1":
+        reused = _reuse(
+            out, cases, names, name, label, recorded, realcheck, host, launch_id
+        )
+        if reused is not None:
+            return reused
     by_id = {c.case_id: c for c in cases}
     points = {c.case_id: load_points(c) for c in cases}
     final = mod.VARIANTS[-1]
     work = Path(work) if work else result_dir(out, names[final], cases[0]) / "work"
     work.mkdir(parents=True, exist_ok=True)
 
-    host = resources.host_info()
+    phase = {"now": "method"}
+    mon = resources.Monitor()
+
+    def where():
+        if phase["now"] != "method":
+            return phase["now"]
+        # a pause the method took itself is its own writer
+        return "writer" if mon.paused else "method"
+
+    watch = _OomWatch(lambda: stuck(), where)
     base = {
         "method": name,
         "label": label or "",
-        "opts": {k: str(v) for k, v in opts.items()},
+        "opts": recorded,
+        "submissions": [submission] if submission else [],
+        "oom_watch": watch.record(),
         "workers": int(opts["workers"]),
         "unit": UNIT[scope],
         "group": cases[0].group,
@@ -326,9 +422,11 @@ def _run(
     def fail(case, variant, error, cause, cost=None, tb="", info=None):
         d = result_dir(out, names[variant], case)
         (d / "warped.npz").unlink(missing_ok=True)
+        # nothing an earlier attempt left may answer for this one (a gate reads it)
+        (d / "realcheck.json").unlink(missing_ok=True)
         rec = {**head(case, variant), "ok": False, "error": error, "cause": cause}
         if cost is not None:
-            rec.update(register_s=cost["wall_s"], resources=cost)
+            rec.update(register_s=cost.get("wall_s"), resources=cost)
         if tb:
             rec["traceback"] = tb
         if info:
@@ -346,8 +444,15 @@ def _run(
                 old = json.loads((d / "run.json").read_text())
             except (OSError, ValueError):
                 old = None
-            if old and not old.get("ok") and old.get("attempt", 1) < host["attempt"]:
+            before = (old or {}).get("attempt", 1), (old or {}).get("retry", 0)
+            if (
+                old
+                and not old.get("ok")
+                and mine(old, submission)
+                and before < (host["attempt"], host["retry"])
+            ):
                 res = old.get("resources") or {}
+                sched = old.get("scheduler") or {}
                 earlier[(case.case_id, variant)] = [
                     *old.get("previous_attempts", []),
                     {
@@ -355,13 +460,18 @@ def _run(
                         "cause": old.get("cause", ""),
                         "mem_requested_gb": old.get("mem_requested_gb"),
                         "launch_id": old.get("launch_id"),
+                        "retry": old.get("retry", 0),
                         "wall_s": res.get("wall_s"),
                         "cpu_s": res.get("cpu_s"),
+                        # the scheduler's figures for the whole task, where the
+                        # process could record none (ladder.settle)
+                        "scheduler_state": sched.get("state"),
+                        "scheduler_elapsed_s": sched.get("elapsed_s"),
+                        "scheduler_cpu_s": sched.get("cpu_s"),
                     },
                 ]
             fail(case, variant, KILLED, "killed")
 
-    mon = resources.Monitor()
     # for a method whose own writer runs at a yield: the clock to pause, and where the
     # image belongs (the work directory does not outlive the run)
     opts["monitor"] = mon
@@ -369,8 +479,6 @@ def _run(
         result_dir(out, names[variant], by_id[case_id]) / "native"
     )
     opts["label"] = label or ""
-    for key in ("monitor", "native_dir", "label"):
-        base["opts"].pop(key, None)
 
     def not_done(error, cause, cost, tb=""):
         with lock:
@@ -380,17 +488,34 @@ def _run(
                     if key not in done and key not in failed:
                         failed[key] = fail(case, variant, error, cause, cost, tb)
 
-    watch = _OomWatch(
-        lambda: not_done(
+    natives, write_s = {}, {}
+
+    def stuck():
+        """The counter rose and the main thread never came back: record, then leave."""
+        cause = MEMORY_CAUSE[watch.phase or "method"]
+        if phase["now"] == "writer":  # inside write_native
+            for case in cases:
+                key = (case.case_id, final)
+                if key in done and case.case_id not in natives:
+                    failed[key] = fail(
+                        case,
+                        final,
+                        "the cgroup out-of-memory counter rose and the method's "
+                        "writer did not return",
+                        cause,
+                        done.pop(key).get("resources"),
+                    )
+        not_done(
             "the cgroup out-of-memory counter rose and the method did not return",
-            "oom",
+            cause,
             None,
         )
-    )
+
     state = None
     error = cause = tb = ""
     mon.start()
     watch.start()
+    base["oom_watch"] = watch.record()
     try:
         gen = (
             mod.register(cases[0], work, opts)
@@ -399,6 +524,7 @@ def _run(
         )
         for item in gen:
             mon.pause()
+            phase["now"] = "benchmark"
             cost = mon.snapshot()
             if scope == "pair":
                 case_id = cases[0].case_id
@@ -415,15 +541,37 @@ def _run(
             native = info.pop("native", None)
             try:
                 if watch.rose():
-                    raise MemoryError(
-                        "the cgroup out-of-memory counter rose during this run"
+                    # it rose before this yield: in the method's stretch, or in a
+                    # writer the method ran with the clock paused
+                    raise _OutOfMemory(
+                        watch.phase or "method",
+                        "the cgroup out-of-memory counter rose during this run",
                     )
+                if (
+                    isinstance(native, dict)
+                    and native.get("error")
+                    and not native.get("files")
+                ):
+                    # the method's own writer failed at this yield: no image, so the
+                    # row is not ok, whichever method it is
+                    failed[key] = fail(
+                        case,
+                        variant,
+                        f"the method's own writer failed: {native['error']}",
+                        writer_cause(native["error"]),
+                        cost,
+                        info=info,
+                    )
+                    continue
                 if pmap is None:
                     failed[key] = fail(
                         case,
                         variant,
                         str(info.get("error") or "the method reported a failed round"),
-                        "exception",
+                        # a method may say why (a memory cause goes up the ladder)
+                        info.pop("cause", None)
+                        if info.get("cause") in resources.CAUSES
+                        else "exception",
                         cost,
                         info=info,
                     )
@@ -484,8 +632,16 @@ def _run(
                 done[key] = rec
                 final_maps[key] = pmap
                 infos[key] = info
-            except (MemoryError, KeyboardInterrupt):
+            except (_OutOfMemory, KeyboardInterrupt):
                 raise
+            except MemoryError as exc:
+                # the benchmark's own step, clock stopped: more memory is the remedy
+                # (the unit goes up), and it is not billed as the method's oom
+                raise _OutOfMemory(
+                    "benchmark",
+                    f"the benchmark's own step ran out of memory while it moved the "
+                    f"nuclei of {variant} through the map: {exc}",
+                ) from exc
             except Exception as exc:  # the benchmark's own step failed for this variant
                 failed[key] = fail(
                     case,
@@ -500,6 +656,7 @@ def _run(
                 if on_variant is not None:
                     on_variant(case, names[variant], pmap, info)
             finally:
+                phase["now"] = "method"
                 mon.resume()
     except KeyboardInterrupt:
         if not watch.fired:
@@ -508,20 +665,22 @@ def _run(
         error = (
             "the cgroup out-of-memory counter rose: a process of this run was killed"
         )
-        cause, tb = "oom", traceback.format_exc()
+        cause, tb = MEMORY_CAUSE[watch.phase or "method"], traceback.format_exc()
     except (
         Exception,
         SystemExit,
     ) as exc:  # a failed case is scored at the initial pose
         error = f"{type(exc).__name__}: {exc}"
         cause, tb = resources.classify_error(exc), traceback.format_exc()
-        if watch.rose():
-            cause = "oom"
+        if isinstance(exc, _OutOfMemory):
+            cause = MEMORY_CAUSE[exc.phase]
+        elif watch.rose():
+            cause = MEMORY_CAUSE[watch.phase or "method"]
     finally:
-        watch.stop()
+        phase["now"] = "method"
         mon.pause()
         cost = mon.snapshot()
-    if watch.fired and cause != "oom":
+    if watch.fired and cause not in resources.MEMORY_CAUSES:
         try:  # let a pending interrupt land here, not inside the writer below
             time.sleep(0.2)
         except KeyboardInterrupt:
@@ -530,22 +689,76 @@ def _run(
         ids = "+".join(c.case_id for c in cases)
         print(f"{cases[0].dataset}/{ids} [{name}]: {error}", file=sys.stderr)
 
-    # The method's own writer, clock and peak paused. Its failure does not undo the
-    # registration: the row stays ok and `native` says what went wrong.
+    # The method's own writer, clock and peak paused, the watcher still running. The row
+    # it writes for is ok only once the image exists: until then its run.json says
+    # killed, and a writer that fails (or is killed) leaves a failed row, for every
+    # method alike. A memory death there goes up the ladder as `writer_oom`.
     write_native = getattr(mod, "write_native", None)
-    natives, write_s = {}, {}
     if write_native is not None and state is not None:
+        phase["now"] = "writer"
+        dead = ""  # a memory death: the rounds not yet written share it
+
+        def lose(case, why, how, trace=""):
+            key = (case.case_id, final)
+            rec = done.pop(key)
+            final_maps.pop(key, None)
+            failed[key] = fail(
+                case, final, why, how, rec.get("resources"), trace, rec.get("info")
+            )
+
         for case in cases:
-            if (case.case_id, final) not in done:
+            key = (case.case_id, final)
+            if key not in done:
                 continue
-            dest = result_dir(out, names[final], case) / "native"
+            d = result_dir(out, names[final], case)
+            if dead:
+                lose(case, f"the method's own writer was not run: {dead}", "writer_oom")
+                continue
+            holding = {
+                **done[key],
+                "ok": False,
+                "error": WRITER_KILLED,
+                "cause": "killed",
+                "phase": "writer",
+            }
+            write_json(d / "run.json", holding)
             t0 = time.perf_counter()
             try:
-                dest.mkdir(parents=True, exist_ok=True)
-                natives[case.case_id] = write_native(state, case.case_id, dest)
+                (d / "native").mkdir(parents=True, exist_ok=True)
+                got = write_native(state, case.case_id, d / "native")
+                if watch.rose():
+                    raise _OutOfMemory(
+                        "writer",
+                        "the cgroup out-of-memory counter rose while the method's "
+                        "own writer ran",
+                    )
+                if isinstance(got, dict) and got.get("error") and not got.get("files"):
+                    raise RuntimeError(str(got["error"]))
+                natives[case.case_id] = got
+                write_s[case.case_id] = time.perf_counter() - t0
+            except KeyboardInterrupt:
+                if not watch.fired:
+                    raise
+                watch.acknowledge()
+                dead = "the cgroup out-of-memory counter rose while it ran"
+                lose(case, f"the method's own writer was killed: {dead}", "writer_oom")
             except (Exception, SystemExit) as exc:
-                natives[case.case_id] = {"error": f"{type(exc).__name__}: {exc}"}
-            write_s[case.case_id] = time.perf_counter() - t0
+                text = f"{type(exc).__name__}: {exc}"
+                how = (
+                    "writer_oom"
+                    if resources.classify_error(exc) == "oom" or watch.rose()
+                    else "writer"
+                )
+                if how == "writer_oom":
+                    dead = text
+                lose(
+                    case,
+                    f"the method's own writer failed: {text}",
+                    how,
+                    traceback.format_exc(),
+                )
+        phase["now"] = "method"
+    watch.stop()
     end = mon.stop()
     if not keep_work:
         shutil.rmtree(work, ignore_errors=True)
@@ -578,15 +791,18 @@ def _run(
     # in `native["written"]`, and that is kept.
     from .. import imageio
 
+    total = patient_channels(cases)
     for (case_id, variant), rec in done.items():
         native = rec.get("native")
         if not (isinstance(native, dict) and native.get("files")):
             continue
         if "written" not in native:
             native["written"] = imageio.describe_written(native["files"][0])
-            write_json(
-                result_dir(out, names[variant], by_id[case_id]) / "run.json", rec
-            )
+        if isinstance(native["written"], dict):
+            # what the patient's slides hold together: the end-to-end cost reads from
+            # it whether this file is already the patient's merged image (cost.py)
+            native["written"] = {**native["written"], "patient_channels": total}
+        write_json(result_dir(out, names[variant], by_id[case_id]) / "run.json", rec)
     if not opts.get("stage_images"):  # a selfcheck's pair carries dots, not tissue
         # Clock stopped, writers done: the nuclear channel of each written image, reduced
         # to the evaluation size of the tissue-level block (regbench.tissue). One channel
@@ -644,6 +860,59 @@ def _run(
     }
 
 
+def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id):
+    """``{case_id: [variants]}`` when every result of this unit is already ``ok`` for the
+    same configuration (method, label, options, cases), else None. Nothing is run and no
+    placeholder is written; each record gains this submission and a ``reused_by`` entry.
+    A unit asked for a realcheck is reused only when it has one."""
+    found = {}
+    ids = [c.case_id for c in cases]
+    for case in cases:
+        for variant in names.values():
+            path = result_dir(out, variant, case) / "run.json"
+            try:
+                rec = json.loads(path.read_text())
+            except (OSError, ValueError):
+                return None
+            same = (
+                rec.get("ok")
+                and rec.get("method") == name
+                and rec.get("label", "") == (label or "")
+                and rec.get("opts") == recorded
+                and rec.get("group_cases") == ids
+                and (result_dir(out, variant, case) / "warped.npz").exists()
+            )
+            if not same:
+                return None
+            found[path] = rec
+    with_image = [
+        r for r in found.values() if ((r.get("native") or {}).get("files") or [])
+    ]
+    if realcheck and with_image and not any(r.get("realcheck") for r in with_image):
+        return None
+    submission = host["submission"]
+    for path, rec in found.items():
+        known = list(rec.get("submissions") or [])
+        if submission and submission not in known:
+            known.append(submission)
+        rec["submissions"] = known
+        rec["reused_by"] = [
+            *(rec.get("reused_by") or []),
+            {
+                "submission": submission,
+                "launch_id": launch_id,
+                "attempt": host["attempt"],
+            },
+        ]
+        write_json(path, rec)
+    print(
+        f"{cases[0].dataset}/{'+'.join(ids)} [{label or name}]: every result is "
+        "already ok for this configuration: reused, nothing run (REGBENCH_FORCE=1 or "
+        "`run --force` runs it again)"
+    )
+    return {c.case_id: list(names.values()) for c in cases}
+
+
 def run_case(
     method,
     case,
@@ -654,6 +923,7 @@ def run_case(
     keep_work=False,
     on_variant=None,
     realcheck=False,
+    resume=False,
 ):
     """Register one case with a pair method; returns the variants that succeeded.
 
@@ -663,7 +933,7 @@ def run_case(
         raise SystemExit(
             f"{method_name(method)} runs per patient: use run_group (`run --group`)"
         )
-    args = (opts, label, work, keep_work, on_variant, _launch_id(), realcheck)
+    args = (opts, label, work, keep_work, on_variant, _launch_id(), realcheck, resume)
     done = _run(method, [case], out, *args)
     return done[case.case_id]
 
@@ -678,6 +948,7 @@ def run_group(
     keep_work=False,
     on_variant=None,
     realcheck=False,
+    resume=False,
 ):
     """Register one patient: ``{case_id: [variants that succeeded]}``.
 
@@ -691,11 +962,11 @@ def run_group(
         raise SystemExit("run_group takes the cases of ONE patient")
     launch = _launch_id()  # one launch, however many rounds it holds
     if scope_of(method) == "group":
-        args = (opts, label, work, keep_work, on_variant, launch, realcheck)
+        args = (opts, label, work, keep_work, on_variant, launch, realcheck, resume)
         return _run(method, cases, out, *args)
     done = {}
     for case in cases:
         sub = Path(work) / str(case.case_id) if work else None
-        args = (opts, label, sub, keep_work, on_variant, launch, realcheck)
+        args = (opts, label, sub, keep_work, on_variant, launch, realcheck, resume)
         done.update(_run(method, [case], out, *args))
     return done
