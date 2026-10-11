@@ -714,6 +714,14 @@ def test_reference_tiles_are_cut_once_per_noise_level(
     assert Path(plain["reference_tiles"]).parent == (
         out / "cache" / "ashlar_tiles" / "selfcheck__P1"
     )
+    # Review item 11: the cost of cutting the reference is the same number for both
+    # rows, whichever ran first; it used to be 0 for the one that found the cache.
+    assert plain["retile_reference_s"] == anchored["retile_reference_s"] > 0
+    for info in (plain, anchored):
+        assert info["retile_s"] == pytest.approx(
+            info["retile_moving_s"] + info["retile_reference_s"]
+        )
+    assert anchored["retile_s"] > anchored["retile_moving_s"]
     # the stitch is NOT shared: each command made its own, and they are compared
     assert plain["edge_positions_identical"] is None
     assert anchored["edge_positions_identical"] is True

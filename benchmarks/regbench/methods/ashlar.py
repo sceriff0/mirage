@@ -225,6 +225,10 @@ def reference_tiles(ref, slides, px, noise, cache, work):
     seed is ``[seed, cycle, 1, row, col]`` and the reference is cycle 0 in every row), so
     they are cut once into ``cache`` and found there by the second row. Two jobs cutting
     at once each write their own folder and one rename wins.
+
+    ``seconds`` is what cutting THESE tiles cost, whoever cut them: it is written beside
+    the tiles (``retile_seconds.json``) and read back on a cache hit, so a row's
+    ``retile_s`` does not depend on which row of the patient ran first.
     """
     from benchmarks.ashlar import retile
 
@@ -238,7 +242,7 @@ def reference_tiles(ref, slides, px, noise, cache, work):
     home = Path(cache) if cache is not None else Path(work) / "tiles"
     final = home / name
     if (final / "grid.json").exists():
-        return final, 0.0, True
+        return final, _cut_seconds(final), True
     home.mkdir(parents=True, exist_ok=True)
     tmp = home / f"tmp{os.getpid()}_{name}"
     shutil.rmtree(tmp, ignore_errors=True)
@@ -257,6 +261,9 @@ def reference_tiles(ref, slides, px, noise, cache, work):
             seed=SEED,
             exact_overlap=True,
         )
+        (tmp / RETILE_SECONDS).write_text(
+            json.dumps({"seconds": time.perf_counter() - t0})
+        )
         try:
             os.rename(tmp, final)
         except OSError:  # another job finished first: its tiles are the same tiles
@@ -264,7 +271,19 @@ def reference_tiles(ref, slides, px, noise, cache, work):
                 raise
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    return final, time.perf_counter() - t0, False
+    return final, _cut_seconds(final), False
+
+
+RETILE_SECONDS = "retile_seconds.json"
+
+
+def _cut_seconds(tiles):
+    """What cutting the tiles in this folder cost, as the job that cut them recorded it;
+    None for a folder without the record (cut before the record existed)."""
+    try:
+        return float(json.loads((Path(tiles) / RETILE_SECONDS).read_text())["seconds"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def nominal_origins(slides):
@@ -582,8 +601,8 @@ def register_group(cases, work, opts):
     # ── tiles: the clock is paused, this is the benchmark making ASHLAR's input ──
     mon.pause()
     try:
-        t0 = time.perf_counter()
         ref_dir, ref_s, reused = reference_tiles(ref, slides, px, noise, cache, work)
+        t0 = time.perf_counter()  # the moving cycles' tiles, cut by every row
         ref_grid = json.loads((ref_dir / "grid.json").read_text())
         nominal = nominal_origins(slides)
         included, anchors, dropped = [], {}, []
@@ -618,11 +637,15 @@ def register_group(cases, work, opts):
             )
             mov_dirs.append(d)
             mov_grids.append(json.loads((d / "grid.json").read_text()))
-        retile_s = time.perf_counter() - t0
+        moving_s = time.perf_counter() - t0
+        # the reference's share is what cutting it cost, cache hit or not: the row
+        # would have paid it had it run first (or alone)
+        retile_s = moving_s + ref_s if ref_s is not None else None
     finally:
         mon.resume()
     base.update(
         retile_s=retile_s,
+        retile_moving_s=moving_s,
         retile_reference_s=ref_s,
         reference_tiles_reused=reused,
         reference_tiles=str(ref_dir),
