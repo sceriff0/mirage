@@ -27,10 +27,13 @@
 # modules import, whether the method's package is the version its adapter enforces,
 # whether numpy resolves inside the image, and whether the results and work folders can
 # be written (`regbench preflight`, benchmarks/regbench/preflight.py). One line per
-# failure, and a failure stops the launch. For the images without a `stare` package
-# (REGBENCH_STARE_SRC_IMAGES) the pinned STARE source is fetched first, once, into
-# $REGBENCH_OUT/cache. REGBENCH_PREFLIGHT=0 skips it (a login node without the
-# container runtime) and says so.
+# failure, and a failure stops the launch. REGBENCH_PREFLIGHT=0 skips it (a login node
+# without the container runtime) and says so.
+#
+# THE PINNED STARE SOURCE, for the images without a `stare` package
+# (REGBENCH_STARE_SRC_IMAGES), is fetched once into $REGBENCH_OUT/cache before the
+# preflight and before the first sbatch of every real submission, WHETHER OR NOT the
+# preflight runs: the jobs of those images import it, and a job may have no network.
 #
 # THE RUN LIST is read from `python -m benchmarks.regbench runs` and from nowhere else:
 # this script names no method. What it submits, in order:
@@ -88,12 +91,23 @@
 #
 # A SECOND SUBMISSION into a REGBENCH_OUT whose earlier jobs are still pending or running
 # is REFUSED (its gate records would replace the ones those jobs read). Wait, cancel them
-# (the refusal prints the line), or use another REGBENCH_OUT. --prepare and --score-only
-# are not refused.
+# (the refusal prints the line), or use another REGBENCH_OUT. --score-only is refused
+# the same way (it would score, and settle, results whose tasks are still running):
+# REGBENCH_SCORE_WHILE_QUEUED=1 scores anyway. --prepare is not refused.
 #
-# AN sbatch THE SCHEDULER REFUSES stops this script at once: it says how many jobs of
-# this call are already queued, where their ids are, and the scancel line that removes
-# them. Nothing is left half-submitted without that being said.
+# A SUBMISSION ID IS USED ONCE per REGBENCH_OUT. A call that would run anything under an
+# id this folder already holds a submission of (logs/submitted/<id>.ids) is refused: the
+# tile submitters of the new call would take the old call's lists for their own and feed
+# nothing. Leave REGBENCH_SUBMISSION unset and every call gets its own; what is ok is
+# reused whatever the id.
+#
+# EVERYTHING THAT CAN STOP THE SCRIPT IS READ BEFORE THE FIRST sbatch: the run list, the
+# cases, the preflight, the pipeline's allocation per stage, and the tile layout of
+# every run whose registration is several jobs per round. After the first sbatch only
+# the scheduler can stop it, and whatever does (an sbatch it refuses, any error of this
+# script) ends the same way: how many jobs of this call are already queued, where their
+# ids are, and the scancel line that removes them. Nothing is left half-submitted
+# without that being said.
 #
 # AN EXTERNAL LANDMARK SET (HyReCo) is submitted on its own, never with the cohort:
 #
@@ -176,7 +190,12 @@
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
-#                                     nothing: not for a gate, the ladder or the scorer
+#                                     nothing: not for a gate, the ladder or the scorer.
+#                                     With --score-only: the submission to score. An id
+#                                     already used for a submission into REGBENCH_OUT
+#                                     is refused for another one
+#   REGBENCH_SCORE_WHILE_QUEUED=1     --score-only although jobs of an earlier call
+#                                     into REGBENCH_OUT are still pending or running
 #   REGBENCH_ALLOW_UNCHECKED          run names that start although their selfcheck ran
 #                                     and could not decide (`not_checked`). Nothing
 #                                     else is let through: not `inconsistent`, not
@@ -282,6 +301,24 @@ extra=("$@")
 [ "$DRY" = 0 ] || DRY=1
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
+# However this script ends once a job of this call is queued, short of its last line:
+# say what is queued and how to remove it (and, in a dry run, remove the scratch folder).
+N_QUEUED=0
+scratch_is_temporary=0
+# shellcheck disable=SC2329  # called by the EXIT trap below
+on_exit() {
+    local code=$?
+    [ "$scratch_is_temporary" = 1 ] && rm -rf "$scratch"
+    if [ "$code" != 0 ] && [ "$N_QUEUED" -gt 0 ]; then
+        {
+            echo "submit_cohort: stopped with exit $code after the first sbatch (the reason is above)."
+            echo "submit_cohort: $N_QUEUED job(s) of this call are already queued (submission $REGBENCH_SUBMISSION); the rest was NOT submitted, so the graph is incomplete."
+            echo "submit_cohort: their ids, one per line: $IDS_FILE (with names: $JOBS_FILE)"
+            echo "submit_cohort: cancel them:  scancel \$(cat \"$IDS_FILE\")"
+        } >&2
+    fi
+}
+trap on_exit EXIT
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 # whole numbers of at least <least>: a zero here is an array of no task, or a loop
 # that never ends
@@ -383,20 +420,20 @@ submit() {
     fi
     JOB_ID="${got%%;*}"
     case "$JOB_ID" in ''|*[!0-9_]*) refused "$name" "sbatch printed no job id: $got" ;; esac
+    # the id first: whatever fails after this line, the job is in the file the
+    # closing notice (on_exit) names
+    echo "$JOB_ID" >> "$IDS_FILE"
+    N_QUEUED=$((N_QUEUED + 1))
     printf '%s\t%s\n' "$name" "$JOB_ID"
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$name" "$JOB_ID" >> "$JOBS_FILE"
-    echo "$JOB_ID" >> "$IDS_FILE"
 }
 # refused <job name> <the scheduler's words>: an sbatch that did not go through. The
-# jobs before it ARE queued, and some of them wait for jobs that will never exist.
+# jobs before it ARE queued, and some of them wait for jobs that will never exist:
+# on_exit says how many, where their ids are and how to cancel them.
 refused() {
-    local queued=$((N_JOBS - 1))
     {
         echo "submit_cohort: sbatch REFUSED the job '$1': $2"
-        echo "submit_cohort: $queued job(s) of this call are already queued (submission $REGBENCH_SUBMISSION); the rest was NOT submitted, so the graph is incomplete."
-        echo "submit_cohort: their ids, one per line: $IDS_FILE (with names: $JOBS_FILE)"
-        echo "submit_cohort: cancel them:  scancel \$(cat \"$IDS_FILE\")"
-        echo "submit_cohort: then submit again, once the reason above is gone (a limit on queued jobs: see README, \"What the site must allow\")."
+        echo "submit_cohort: submit again once that reason is gone (a limit on queued jobs: see README, \"What the site must allow\"), after cancelling what is queued:"
     } >&2
     exit 2
 }
@@ -421,7 +458,7 @@ GPU_ARGS=(${REGBENCH_SBATCH_GPU:-})
 
 if [ "$DRY" = 1 ]; then
     scratch="$(mktemp -d)"
-    trap 'rm -rf "$scratch"' EXIT
+    scratch_is_temporary=1
 else
     mkdir -p "$REGBENCH_OUT/logs/gates" "$REGBENCH_OUT/logs/selfcheck"
     scratch="$REGBENCH_OUT/logs"
@@ -429,19 +466,28 @@ else
     mkdir -p "$REGBENCH_OUT/logs/submitted"
     # every job id of THIS call, one per line (the tile submitters add theirs)
     IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.ids"
+    # the jobs of --prepare are not a submission's: their ids have a file of their own
+    [ "$prepare" = 1 ] && IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.prepare.ids"
     export REGBENCH_IDS_FILE="$IDS_FILE"
     # A second submission while jobs of an earlier one are still in the queue: their
-    # tasks read the gate records and the stage files this call would replace.
-    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ "$preflight_only" != 1 ] && [ -s "$JOBS_FILE" ]; then
+    # tasks read the gate records and the stage files this call would replace. And a
+    # scoring: it would score, and settle, results whose tasks are still running.
+    if [ "$prepare" != 1 ] && [ "$preflight_only" != 1 ] && [ -s "$JOBS_FILE" ] \
+        && ! { [ "$score_only" = 1 ] && [ "${REGBENCH_SCORE_WHILE_QUEUED:-0}" = 1 ]; }; then
         in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
             || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
         still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' - || true)"
-        if [ -n "$still" ]; then
+        if [ -n "$still" ] && [ "$score_only" = 1 ]; then
+            die "--score-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). Scoring now would score what is there so far and settle the results of tasks that have not ended, so it is refused. Wait for them; or cancel them:  scancel $still ; or score what is there all the same with REGBENCH_SCORE_WHILE_QUEUED=1. Nothing was submitted."
+        elif [ -n "$still" ]; then
             die "$(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier submission into $REGBENCH_OUT are still pending or running ($still). A second submission would replace the gate records and stage files their tasks read, so it is refused. Wait for them; or cancel them:  scancel $still ; or submit into another REGBENCH_OUT. Nothing was submitted."
         fi
     fi
-    # the last submission that ran anything into this folder: what --score-only scores
-    [ "$prepare" = 1 ] || [ "$score_only" = 1 ] || [ "$preflight_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
+    # An id is one submission's: the stage files, the tile submitters' lists and the job
+    # ids of an earlier call under the same id would be taken for this call's.
+    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ "$preflight_only" != 1 ] && [ -e "$IDS_FILE" ]; then
+        die "the submission id '$REGBENCH_SUBMISSION' was already used for a submission into $REGBENCH_OUT ($IDS_FILE). A second one under the same id is refused: its tile submitters would find the first one's lists of what is due and what was fed ($REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/) and feed nothing. Unset REGBENCH_SUBMISSION (every call then gets an id of its own) or export a new one; every unit that is ok is reused whatever the id. Nothing was submitted."
+    fi
 fi
 
 # ── the run list, from the harness alone ──────────────────────────────────────────────
@@ -640,20 +686,27 @@ sized="$ordered"
 first_dataset="${sized# }"; first_dataset="${first_dataset%% *}"
 
 # ── the preflight: every image, started as a job starts it, before the first sbatch ───
+# The pinned STARE source, for the images of this call that have none inside (and are
+# images: an environment or the python on PATH has its own). Not part of the preflight:
+# the jobs import it whether or not the preflight runs.
+fetch_stare_source() {
+    local image src
+    for image in $images; do
+        has "$REGBENCH_STARE_SRC_IMAGES" "$image" || continue
+        [ -n "$(_regbench_var SIF "$image")" ] || continue
+        mkdir -p "$REGBENCH_OUT" || die "cannot create REGBENCH_OUT=$REGBENCH_OUT. Nothing was submitted."
+        src="$(regbench_fetch_stare)" || die "the image $image has no STARE package and the pinned STARE source could not be fetched (line above; REGBENCH_STARE_SRC names a copy that is already there). Its jobs would fail at their first import. Nothing was submitted."
+        echo "# STARE source for the images without one ($REGBENCH_STARE_SRC_IMAGES) -> $src"
+        break
+    done
+}
 preflight() {
-    local seen="" failed=0 name method image out code key src where=()
+    local seen="" failed=0 name method image out code key where=()
     if [ "${REGBENCH_PREFLIGHT:-1}" = 0 ]; then
         echo "# WARNING preflight SKIPPED (REGBENCH_PREFLIGHT=0): nothing checked that the images hold what their runs import"
         return 0
     fi
     mkdir -p "$REGBENCH_OUT" || die "cannot create REGBENCH_OUT=$REGBENCH_OUT. Nothing was submitted."
-    # the pinned STARE source, for the images that have none inside
-    for image in $images; do
-        has "$REGBENCH_STARE_SRC_IMAGES" "$image" || continue
-        src="$(regbench_fetch_stare)" || die "preflight: the image $image has no STARE package and the pinned STARE source could not be fetched (line above; REGBENCH_STARE_SRC names a copy that is already there). Nothing was submitted."
-        echo "# preflight: STARE source for the images without one ($REGBENCH_STARE_SRC_IMAGES) -> $src"
-        break
-    done
     where=(--writable "$REGBENCH_OUT")
     if [ -n "${REGBENCH_WORK:-}" ]; then
         where+=(--writable "$REGBENCH_WORK")
@@ -685,15 +738,83 @@ preflight() {
     echo "# preflight: ok"
 }
 if [ "$preflight_only" = 1 ]; then
+    fetch_stare_source
     preflight
     echo "# --preflight: nothing was submitted"
     exit 0
 fi
 if [ "$DRY" = 1 ]; then
     echo "# preflight: not run in a dry run (submit_cohort.sh --preflight runs it alone; a real submission runs it first)"
+    echo "# STARE source: not fetched in a dry run (a real submission fetches it before its first sbatch)"
 else
+    fetch_stare_source
     preflight
 fi
+
+# ── everything else that can stop this script, read before the first sbatch ───────────
+# the pipeline's allocation per stage and attempt, for the runs that are several jobs
+# per round: ALLOC_<stage>_<attempt>="<cpus> <GB> <time>"
+any_staged=0
+while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
+    has "$selected" "$name" || continue
+    [ "${stages:--}" = - ] && continue
+    any_staged=1
+    [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck gate: the launcher sends no first unit ahead for such a run. Nothing was submitted."
+    for stage in ${stages//,/ }; do
+        case "$stage" in prep|coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
+    done
+done < "$table"
+if [ "$any_staged" = 1 ]; then
+    alloc_rows="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --stage-allocation)" \
+        || die "cannot read the pipeline's allocation per stage (python -m benchmarks.regbench runs --stage-allocation). Nothing was submitted."
+    while IFS=$'\t' read -r stage attempt cpus gb time; do
+        [ -n "$stage" ] || continue
+        printf -v "ALLOC_${stage}_$attempt" '%s %s %s' "$cpus" "$gb" "$time"
+    done <<< "$alloc_rows"
+    for stage in coarse tile solve stitch; do
+        for attempt in 1 2 3 4; do
+            row="ALLOC_${stage}_$attempt"
+            [ -n "${!row:-}" ] || die "the pipeline's allocation has no line for $stage, attempt $attempt (python -m benchmarks.regbench runs --stage-allocation printed: $(tr '\n\t' '; ' <<< "$alloc_rows")). Nothing was submitted."
+        done
+    done
+fi
+# the tile layout of every such run on every dataset: one line per round, where its
+# tiles start in the arrays. Kept per submission: the tile tasks read it, and a later
+# submission must not move it under them. Sets LAYOUT_<ds>_<run>, ROUNDS_OF_<ds>_<run>,
+# TILES_OF_<ds>_<run>.
+for ds in $sized; do
+    while IFS=$'\t' read -r name method label opts image _ _ _ _ _ _ _ _ _ _ stages; do
+        has "$selected" "$name" || continue
+        [ "${stages:--}" = - ] && continue
+        layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
+        made="$layout"
+        if [ "$DRY" = 1 ]; then
+            made="$scratch/stages/$name-$ds.tsv"
+            layout="$REGBENCH_OUT/logs/stages/<submission>/$name-$ds.tsv"
+        fi
+        what=(stages --cases "$REGBENCH_CASES" --dataset "$ds" --method "$method" --layout "$made")
+        [ "$label" != - ] && what+=(--label "$label")
+        if [ "$opts" != - ]; then
+            IFS=, read -ra items <<< "$opts"
+            for o in "${items[@]}"; do what+=(--opt "$o"); done
+        fi
+        read -r n_rounds n_tiles < <(regbench_py "$image" "${what[@]}") \
+            || die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages). Nothing was submitted."
+        case "${n_rounds:-}:${n_tiles:-}" in *[!0-9:]*|:*|*:) die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages printed '${n_rounds:-} ${n_tiles:-}'). Nothing was submitted." ;; esac
+        [ "$n_tiles" -gt 0 ] && [ "$n_rounds" -gt 0 ] || die "$name on $ds: no tile to register (python -m benchmarks.regbench stages printed '$n_rounds $n_tiles'). Nothing was submitted."
+        if [ "$DRY" != 1 ]; then
+            # the caller's own sbatch arguments, for the jobs the submitter submits
+            : > "${made%.tsv}.sbatch_args"
+            [ ${#extra[@]} -gt 0 ] && printf '%s\n' "${extra[@]}" > "${made%.tsv}.sbatch_args"
+        fi
+        printf -v "LAYOUT_${ds}_$name" '%s' "$layout"
+        printf -v "ROUNDS_OF_${ds}_$name" '%s' "$n_rounds"
+        printf -v "TILES_OF_${ds}_$name" '%s' "$n_tiles"
+    done < "$table"
+done
+# the last submission that ran anything into this folder: what --score-only scores.
+# Written here: a call the preflight or a check above stopped is not a submission.
+[ "$DRY" = 1 ] || [ "$score_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
 
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
 needed=""
@@ -749,15 +870,6 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
 done < "$table"
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
-# the pipeline's allocation per stage and attempt, for the runs that are several jobs
-# per round: ALLOC_<stage>_<attempt>="<cpus> <GB> <time>"
-while IFS=$'\t' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
-    [ "${stages:--}" = - ] && continue
-    while IFS=$'\t' read -r stage attempt cpus gb time; do
-        printf -v "ALLOC_${stage}_$attempt" '%s %s %s' "$cpus" "$gb" "$time"
-    done < <(regbench_py "$REGBENCH_HEAD_IMAGE" runs --stage-allocation)
-    break
-done < "$table"
 # ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: two arrays per
 # rung (the attempt, then the same rung again for a unit the scheduler lost), each after
 # the one before; sets LADDER_LAST. Reads the current row's variables. Every task is
@@ -837,24 +949,11 @@ stage_chain() {
 }
 staged() {
     local base="$1" layout n_rounds n_tiles stage dep alloc cpus gb time
-    local attempt items o made what=() per_attempt link
-    # one line per round: where its tiles start in the arrays. Kept per submission: the
-    # tile tasks read it, and a later submission must not move it under them
-    layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
-    made="$layout"
-    if [ "$DRY" = 1 ]; then
-        made="$scratch/stages/$name-$ds.tsv"
-        layout="$REGBENCH_OUT/logs/stages/<submission>/$name-$ds.tsv"
-    fi
-    what=(stages --cases "$REGBENCH_CASES" --dataset "$ds" --method "$method" --layout "$made")
-    [ "$label" != - ] && what+=(--label "$label")
-    if [ "$opts" != - ]; then
-        IFS=, read -ra items <<< "$opts"
-        for o in "${items[@]}"; do what+=(--opt "$o"); done
-    fi
-    read -r n_rounds n_tiles < <(regbench_py "$image" "${what[@]}") \
-        || die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages). Jobs submitted before this stay submitted: cancel them."
-    [ "${n_tiles:-0}" -gt 0 ] || die "$name on $ds: no tile to register (python -m benchmarks.regbench stages printed '$n_rounds $n_tiles')."
+    local attempt per_attempt link var
+    # sized before the first sbatch (above): the layout file is written, the counts known
+    var="LAYOUT_${ds}_$name"; layout="${!var}"
+    var="ROUNDS_OF_${ds}_$name"; n_rounds="${!var}"
+    var="TILES_OF_${ds}_$name"; n_tiles="${!var}"
     dep="$base"
     for stage in ${stages//,/ }; do
         case "$stage" in
@@ -867,12 +966,6 @@ staged() {
                     alloc="ALLOC_tile_$attempt"; read -r cpus gb time <<< "${!alloc}"
                     per_attempt+=("$cpus:$gb:$time")
                 done
-                if [ "$DRY" != 1 ]; then
-                    # the caller's own sbatch arguments, for the jobs the submitter submits
-                    : > "${made%.tsv}.sbatch_args"
-                    [ ${#extra[@]} -gt 0 ] && printf '%s\n' "${extra[@]}" > "${made%.tsv}.sbatch_args"
-                    rm -f "${made%.tsv}.done" "${made%.tsv}.refused"
-                fi
                 for link in $(seq 1 "$REGBENCH_STAGE_FEEDERS"); do
                     submit "rb-$name-$ds-feed-$link" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
                         --cpus-per-task=1 --mem=1G --time="$feed_time" "$HERE/feed_tiles.sbatch" \
@@ -884,7 +977,6 @@ staged() {
                 has "$FED_RUNS" "$name" || FED_RUNS="$FED_RUNS $name" ;;
             stitch)
                 ladder "rb-$name-$ds-last" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
-            *) die "$name: no job is defined for the stage '$stage' (column stages of the run list)." ;;
         esac
     done
     echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) fed in later by its tile submitter, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX, at most $REGBENCH_STAGE_QUEUE_MAX in the queue"
@@ -933,7 +1025,6 @@ for ds in $sized; do
             [ -n "${!lane:-}" ] && base="$base,afterany:${!lane}"
         fi
         if [ "${stages:--}" != - ]; then
-            [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck gate: the launcher sends no first unit ahead for such a run."
             staged "$base"
             printf -v "LAST_${ds}_$name" '%s' "$LADDER_LAST"
             finals="$finals $LADDER_LAST"

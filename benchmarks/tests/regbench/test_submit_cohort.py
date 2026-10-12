@@ -100,9 +100,20 @@ def site(tmp_path_factory):
         '  echo "sbatch: error: QOSMaxSubmitJobPerUserLimit" >&2; exit 1\nfi\n'
         'echo "$n" > "$SBATCH_LOG.n"\n'
         'printf "%s\\t%s\\n" "$n" "$*" >> "$SBATCH_LOG"\n'
+        # SBATCH_BREAK_AT: from that id on the launcher's own job list cannot be
+        # written (something other than the scheduler stops the launch)
+        'if [ -n "${SBATCH_BREAK_AT:-}" ] && [ "$n" -ge "$SBATCH_BREAK_AT" ]; then\n'
+        '  chmod a-w "$SBATCH_BREAK_FILE"\nfi\n'
         'echo "$n;cluster"\n'
     )
     sbatch.chmod(0o755)
+    # no test reaches the network: a launch that fetches anything names its own curl
+    curl = fake / "curl"
+    curl.write_text(
+        '#!/bin/bash\necho "curl $*" >> "$SBATCH_LOG.curl"\n'
+        'echo "curl: the test site has no network" >&2\nexit 22\n'
+    )
+    curl.chmod(0o755)
     # the queue: the job ids in SQUEUE_FILE (none without it), as `-o "%F %A"` prints
     squeue = fake / "squeue"
     squeue.write_text(
@@ -1449,6 +1460,209 @@ def test_the_tile_submitter_reads_the_layout_the_submission_wrote(site, small):
     )
 
 
+# ── one id, one submission ────────────────────────────────────────────────────
+def test_a_submission_id_is_used_once_per_results_folder(site):
+    """The files of a tile submitter are kept under the id: a second submission under
+    the same id would take the first one's lists for its own and feed nothing."""
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1", "REGBENCH_SUBMISSION": "S-A"}
+    args = ("--runs", "stare", "--datasets", "multiplex")
+    first, log, out = launch(site, *args, env=env, dry=False, log="once")
+    assert first.returncode == 0, first.stderr
+    n = len(log.read_text().splitlines())
+    state = stages.feed_state(out, "S-A", "stare", "multiplex")
+    Path(f"{state}.fed.tsv").write_text("1\t0\t9\t0\t4242\n")
+    Path(f"{state}.due.a1").write_text("")
+    again, _, _ = launch(site, *args, env=env, dry=False, log="once")
+    assert again.returncode == 2 and len(log.read_text().splitlines()) == n
+    assert "the submission id 'S-A' was already used" in again.stderr
+    assert str(out / "logs" / "submitted" / "S-A.ids") in again.stderr
+    assert "Unset REGBENCH_SUBMISSION" in again.stderr
+    assert "Nothing was submitted." in again.stderr
+    assert Path(f"{state}.fed.tsv").exists()  # nothing of the first one was touched
+    # scoring that submission is what its id is for; a dry run submits nothing
+    scoring, _, _ = launch(site, "--score-only", env=env, dry=False, log="once")
+    assert scoring.returncode == 0, scoring.stderr
+    assert launch(site, *args, env=env, log="once")[0].returncode == 0
+    # another id: a submission of its own, with its own files
+    other, _, _ = launch(
+        site, *args, env={**env, "REGBENCH_SUBMISSION": "S-B"}, dry=False, log="once"
+    )
+    assert other.returncode == 0, other.stderr
+    assert (out / "logs" / "submission").read_text() == "S-B\n"
+    assert not Path(
+        f"{stages.feed_state(out, 'S-B', 'stare', 'multiplex')}.fed.tsv"
+    ).exists()
+
+
+# ── nothing that can stop the script is left for after the first sbatch ───────
+def _python_that_fails_on(tmp_path, word):
+    """A `python` that is this machine's, except that a regbench call with ``word``
+    among its arguments fails."""
+    wrap = tmp_path / "wrap"
+    wrap.mkdir()
+    python = wrap / "python"
+    python.write_text(
+        "#!/bin/bash\n"
+        f'for a in "$@"; do [ "$a" = {shlex.quote(word)} ] && '
+        '{ echo "boom" >&2; exit 1; }; done\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    python.chmod(0o755)
+    return wrap
+
+
+@pytest.mark.parametrize(
+    "word, said",
+    [
+        ("--stage-allocation", "cannot read the pipeline's allocation per stage"),
+        ("stages", "cannot size the tile arrays of stare on multiplex"),
+    ],
+)
+def test_a_read_that_fails_stops_the_launch_before_anything_is_queued(
+    site, tmp_path, word, said
+):
+    wrap = _python_that_fails_on(tmp_path, word)
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{wrap}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+    }
+    name = f"early-{word.strip('-')}"
+    done, log, out = launch(site, env=env, dry=False, log=name)
+    assert done.returncode == 2 and not log.exists()  # not one sbatch
+    assert said in done.stderr and "Nothing was submitted." in done.stderr
+    assert "already queued" not in done.stderr
+    assert not (out / "logs" / "submission").exists()
+    assert not (out / "logs" / "jobs.tsv").exists()
+
+
+def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
+    """In the script itself: after the selfchecks start, nothing asks the harness for
+    anything and nothing refuses."""
+    code = code_of(SCRIPT)
+    start = code.index("sc_time=")
+    tail = code[start:]
+    assert code.count("sc_time=") == 1
+    assert "regbench_py" not in tail
+    assert not re.search(r"(^|[;&|]\s*|\s)die\s", tail)
+    assert "fetch_stare_source\n    preflight\n" in code[:start]
+
+
+def test_whatever_stops_the_launch_after_the_first_sbatch_says_what_is_queued(site):
+    """Not the scheduler this time: the launcher's own list of jobs cannot be written
+    from the sixth job on. The script stops, and its last words are the same."""
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_SUBMISSION": "S-10",
+        "SBATCH_BREAK_AT": "1006",
+        "SBATCH_BREAK_FILE": str(site[0] / "out-broken" / "logs" / "jobs.tsv"),
+    }
+    done, log, out = launch(site, env=env, dry=False, log="broken")
+    try:
+        assert done.returncode not in (0, 2)
+        assert len(log.read_text().splitlines()) == 6
+        ids = out / "logs" / "submitted" / "S-10.ids"
+        # the sixth job is in the file the notice names, though its line in the job
+        # list could not be written
+        assert ids.read_text().split() == [str(i) for i in range(1001, 1007)]
+        said = done.stderr
+        assert "stopped with exit" in said and "after the first sbatch" in said
+        assert "6 job(s) of this call are already queued (submission S-10)" in said
+        assert "the rest was NOT submitted, so the graph is incomplete" in said
+        assert f'scancel $(cat "{ids}")' in said
+        assert "job(s) submitted" not in done.stdout
+    finally:
+        (out / "logs" / "jobs.tsv").chmod(0o644)
+
+
+# ── the pinned STARE source is fetched whether or not the preflight runs ──────
+def _stare_release(tmp_path):
+    """A stand-in `curl` that serves an archive laid out as the pinned release's."""
+    import tarfile
+
+    release = tmp_path / "stare-9.9.9" / "src" / "stare"
+    release.mkdir(parents=True)
+    (release / "slide_io.py").write_text("WHAT = 'the pinned source'\n")
+    archive = tmp_path / "release.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(tmp_path / "stare-9.9.9", arcname="stare-9.9.9")
+    fake = tmp_path / "net"
+    fake.mkdir()
+    curl = fake / "curl"
+    curl.write_text(
+        f'#!/bin/bash\necho "$*" >> "{tmp_path}/curl.log"\n'
+        f'[ -e "{tmp_path}/offline" ] && exit 22\ncat "{archive}"\n'
+    )
+    curl.chmod(0o755)
+    return fake
+
+
+@pytest.mark.parametrize("preflight", ["0", "1"])
+def test_the_stare_source_is_fetched_with_and_without_the_preflight(
+    site, tmp_path, preflight
+):
+    """ASHLAR's image has no `stare` package: its jobs import the pinned source from
+    the results folder, so it is there before the first sbatch, preflight or not."""
+    net = _stare_release(tmp_path)
+    runtime = _image_runtime(tmp_path, ())  # an image that does not start
+    env = {
+        "REGBENCH_PREFLIGHT": preflight,
+        "REGBENCH_SIF_ASHLAR": "/images/ashlar.sif",
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{net}:{runtime}:{site[2]}:{Path(sys.executable).parent}:"
+        f"{os.environ['PATH']}",
+    }
+    args = ("--runs", "ashlar", "--datasets", "multiplex")
+    done, log, out = launch(site, *args, env=env, dry=False, log=f"src-{preflight}")
+    asked = (tmp_path / "curl.log").read_text().splitlines()
+    assert len(asked) == 1 and "sceriff0/stare/archive/refs/tags/" in asked[0]
+    tag = asked[0].rsplit("/", 1)[1][: -len(".tar.gz")]  # the pinned release
+    src = out / "cache" / f"stare-{tag}" / "src"
+    assert (src / "stare" / "slide_io.py").read_text().startswith("WHAT")
+    line = f"# STARE source for the images without one (ASHLAR VALIS_MIRAGE) -> {src}"
+    assert line in done.stdout
+    if preflight == "0":
+        # skipped, said, and the launch goes on with the source in place
+        assert done.returncode == 0, done.stderr
+        assert "# WARNING preflight SKIPPED" in done.stdout
+        assert done.stdout.index(line) < done.stdout.index("rb-sc-")
+    else:
+        # the image does not start here: the preflight stops the launch, after the fetch
+        assert done.returncode == 2 and not log.exists()
+        assert "preflight FAIL [ASHLAR ashlar]" in done.stdout
+    # a second launch finds it and fetches nothing
+    launch(site, *args, env=env, dry=False, log=f"src-{preflight}")
+    assert len((tmp_path / "curl.log").read_text().splitlines()) == 1
+
+
+def test_a_source_that_cannot_be_fetched_stops_the_launch_without_the_preflight(
+    site, tmp_path
+):
+    net = _stare_release(tmp_path)
+    (tmp_path / "offline").write_text("")
+    env = {
+        "REGBENCH_PREFLIGHT": "0",
+        "REGBENCH_SIF_ASHLAR": "/images/ashlar.sif",
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{net}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+    }
+    done, log, out = launch(
+        site, "--runs", "ashlar", "--datasets", "multiplex", env=env, dry=False,
+        log="src-offline",
+    )  # fmt: skip
+    assert done.returncode == 2 and not log.exists()
+    assert "the pinned STARE source could not be fetched" in done.stderr
+    assert "Nothing was submitted." in done.stderr
+    assert not (out / "logs" / "submission").exists()
+    # an image that is not named as a file has its own STARE: nothing is fetched
+    env.pop("REGBENCH_SIF_ASHLAR")
+    done, log, _ = launch(
+        site, "--runs", "ashlar", "--datasets", "multiplex", env=env, dry=False,
+        log="src-none",
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert len((tmp_path / "curl.log").read_text().splitlines()) == 1
+
+
 # ── a launch that cannot leave a silent partial graph ─────────────────────────
 def test_a_refused_sbatch_stops_the_launch_and_says_how_to_undo_it(site):
     env = {
@@ -1510,8 +1724,33 @@ def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tm
         log="twice",
     )
     assert blind.returncode == 2 and "the queue cannot be read (squeue)" in blind.stderr
-    # --score-only and a dry run are not refused; and once the queue is empty, neither
-    # is a second submission
+    # --score-only is refused the same way, unless it is told to score all the same
+    queue.write_text(f"{one} {one}_4\n999999 999999\n")
+    env_q = {**env, "SQUEUE_FILE": str(queue)}
+    scoring, _, _ = launch(site, "--score-only", env=env_q, dry=False, log="twice")
+    assert scoring.returncode == 2 and len(log.read_text().splitlines()) == n
+    assert (
+        f"--score-only: 1 job(s) of an earlier call into {out} are still pending or "
+        f"running ({one})" in scoring.stderr
+    )
+    assert "REGBENCH_SCORE_WHILE_QUEUED=1" in scoring.stderr
+    assert "Nothing was submitted." in scoring.stderr
+    blind, _, _ = launch(
+        site, "--score-only", env={**env, "SQUEUE_FAILS": "1"}, dry=False, log="twice"
+    )
+    assert blind.returncode == 2 and "the queue cannot be read (squeue)" in blind.stderr
+    forced, _, _ = launch(
+        site,
+        "--score-only",
+        env={**env_q, "REGBENCH_SCORE_WHILE_QUEUED": "1", "SQUEUE_FAILS": "1"},
+        dry=False,
+        log="twice",
+    )
+    assert forced.returncode == 0, forced.stderr
+    n = len(log.read_text().splitlines())
+    assert "# 5 job(s) submitted" in forced.stdout
+    # a dry run is not refused; and once the queue is empty, neither is a scoring nor
+    # a second submission
     queue.write_text("999999 999999\n")
     for args, dry in (
         (["--score-only"], False),
@@ -1782,11 +2021,14 @@ def test_the_preflight_stops_the_launch_with_one_line_per_failure(site, tmp_path
         "the preflight failed" in bad.stderr and "Nothing was submitted." in bad.stderr
     )
     assert not (out / "logs" / "jobs.tsv").exists()
+    # a launch the preflight stopped is not "the last submission" of the folder
+    assert not (out / "logs" / "submission").exists()
     # the same run list without the image that fails: the launch goes on
     good, log, out = launch(
         site, "--runs", "stare", env=env, dry=False, log="preflight-ok"
     )
     assert good.returncode == 0, good.stderr
+    assert (out / "logs" / "submission").read_text().strip()
     assert "# preflight: ok" in good.stdout and log.exists()
     assert good.stdout.index("# preflight: ok") < good.stdout.index("rb-sc-stare-64g")
     assert (tmp_path / "work").is_dir()  # the work folder was written to

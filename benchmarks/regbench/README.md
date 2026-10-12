@@ -2384,7 +2384,8 @@ round).
 | `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
-| `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
+| `REGBENCH_SUBMISSION` | this submission's id. Set it only with `--score-only` (the submission to score) or to run a unit by hand under a submission's id: the launcher refuses an id the folder already holds a submission of | time and process id |
+| `REGBENCH_SCORE_WHILE_QUEUED` | `1`: `--score-only` although jobs of an earlier call into the folder are still pending or running | `0` (refused) |
 | `REGBENCH_ALLOW_UNCHECKED` | run names that start although their selfcheck RAN and could not decide (`not_checked`); the verdict is still recorded and shown. Nothing else is let through: `inconsistent`, `crashed`, a flagged realcheck and a selfcheck that left no record of this submission block the run all the same | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
 | `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
@@ -2402,8 +2403,8 @@ round).
 | `REGBENCH_HEAD_IMAGE` | the image the script itself reads the run list with, on the login node | `STARE_REGBENCH` |
 | `REGBENCH_WRITABLE_TMPFS_IMAGES` | images started with `--writable-tmpfs` | `VALIS120` |
 | `REGBENCH_STARE_SRC_IMAGES` | images that have no `stare` package inside: the pinned STARE source is put on their `PYTHONPATH` | `ASHLAR VALIS_MIRAGE` |
-| `REGBENCH_STARE_SRC` | where that source is; fetched once by the launcher on the login node when it is not there | `$REGBENCH_OUT/cache/stare-<tag>/src` |
-| `REGBENCH_PREFLIGHT` | `0`: submit without the preflight (a login node without the container runtime); said aloud | `1` |
+| `REGBENCH_STARE_SRC` | where that source is; fetched once by the launcher on the login node when it is not there, before the first `sbatch` of every real submission that uses such an image as a `.sif`, with or without the preflight | `$REGBENCH_OUT/cache/stare-<tag>/src` |
+| `REGBENCH_PREFLIGHT` | `0`: submit without the preflight (a login node without the container runtime); said aloud. The STARE source is fetched all the same | `1` |
 | `REGBENCH_PRIVATE`, `REGBENCH_PRIVATE_DIR` | the private plug-in's switch and folder (`plugins.py`); passed into every image, the folder bound | unset |
 
 Partition, account and node type go after `--` and reach every job, e.g.
@@ -2500,7 +2501,11 @@ the image and not under `~/.local`, and can `REGBENCH_OUT` and `REGBENCH_WORK` b
 written. It prints one `preflight FAIL [<image> <method>] ...` line per failure; an image
 that does not start or has neither `python` nor `python3` is one such line. A real
 submission runs the same preflight before its first `sbatch` and stops on a failure
-with nothing submitted; a dry run does not start an image and says so.
+with nothing submitted; a dry run does not start an image and says so. The pinned
+STARE source of the images without a `stare` package is not part of the preflight: it
+is fetched just before it, and also when `REGBENCH_PREFLIGHT=0` skips the checks,
+because the jobs of those images import it either way; a source that cannot be fetched
+stops the launch with nothing submitted.
 
 - **The version check is the adapter's, shown early.** The preflight reads the version
   the way the adapter reads it and compares it with the adapter's `VERSION`; the adapter
@@ -2551,13 +2556,30 @@ Besides that:
 - **`MaxArraySize`** is above `REGBENCH_STAGE_ARRAY_SPAN` (1000; SLURM's default
   `MaxArraySize` is 1001 `[MEMORY]`) and above the rounds of a dataset.
 
-**When the scheduler refuses an `sbatch` of the launcher** (a limit above, a wrong
-partition), the script stops at that call and says so on stderr: the job it could not
-submit and the scheduler's words, how many jobs of this call are already queued, the
-file holding their ids (`<out>/logs/submitted/<submission>.ids`, one per line; the tile
-submitters add theirs), and the line that removes them, `scancel $(cat <that file>)`.
-The jobs before the refusal ARE queued and wait for jobs that do not exist: cancel
-them, remove the reason, submit again.
+**Everything that can stop the launcher is read before its first `sbatch`**: the run
+list, the prepared cases, the STARE source, the preflight, the pipeline's allocation
+per stage (`runs --stage-allocation`) and the tile layout of every run whose
+registration is several jobs per round (`regbench stages`, which writes
+`<out>/logs/stages/<submission>/<run>-<dataset>.tsv`). A failure of any of them ends
+with "Nothing was submitted." and nothing queued; `logs/submission` is written only
+after all of them, so a call that was stopped is not "the last submission".
+
+**When the launcher stops after its first `sbatch`** (the scheduler refuses a job: a
+limit above, a wrong partition; or the script itself fails, e.g. on a results folder
+it can no longer write), it says so on stderr: the reason (for a refused `sbatch`, the
+job and the scheduler's words), how many jobs of this call are already queued, the
+file holding their ids (`<out>/logs/submitted/<submission>.ids`, one per line, written
+before anything else about a job; the tile submitters add theirs), and the line that
+removes them, `scancel $(cat <that file>)`. The jobs before the stop ARE queued and
+wait for jobs that do not exist: cancel them, remove the reason, submit again.
+
+**A submission id is used once per results folder.** A call that would run anything
+under an id the folder already holds a submission of (`logs/submitted/<id>.ids`) is
+refused: a tile submitter keeps what is due and what it fed under the id, and would
+take an earlier call's lists for its own and feed nothing. Leave `REGBENCH_SUBMISSION`
+unset; every unit that is ok is reused whatever the id. `--score-only` takes the id of
+the submission it scores, and `--prepare` keeps its job ids in
+`logs/submitted/<id>.prepare.ids`.
 
 **One submission at a time into a results folder.** A second `submit_cohort.sh` into a
 `REGBENCH_OUT` whose earlier jobs are still pending or running is REFUSED before
@@ -2565,7 +2587,11 @@ anything is touched: it would remove the gate records those jobs' tasks read. Th
 refusal names the jobs and the `scancel` line. So the cohort is not submitted patient
 by patient into one folder while the first patient runs: wait for it, or give each its
 own `REGBENCH_OUT`. A queue that cannot be read (`squeue` fails) refuses too.
-`--prepare`, `--score-only` and `--dry-run` are not refused.
+`--score-only` is refused in the same two cases: it would score, and settle against the
+accounting, results whose tasks have not ended, and two scorings at once would write the
+same tables. `REGBENCH_SCORE_WHILE_QUEUED=1` scores what is there all the same (the
+tables then say `not run` for what is still running). `--prepare` and `--dry-run` are
+not refused.
 
 ### Not verified: check these on the cluster before the real submission
 
