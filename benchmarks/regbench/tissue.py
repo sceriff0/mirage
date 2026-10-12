@@ -628,11 +628,52 @@ def cache_dir(out, case):
     return Path(out) / "cache" / "tissue" / case.dataset / str(case.case_id)
 
 
-def _cached_plane(path, make):
-    """The plane at ``path``, made and written first when it is not there."""
+def code_sha256():
+    """sha256 of this file: the code every plane and every tissue record is made by."""
+    import hashlib
+
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def plane_key(case, side, eval_px=None, **more):
+    """What a benchmark-side plane is made FROM and BY: the image file it reduces (its
+    ``cases.file_fingerprint``: size, time and sampled bytes), the channel, the
+    reference grid, the evaluation size, this file's bytes and ``DEFINITION``."""
+    from .cases import file_fingerprint
+
+    path, channel = _side_channel(case, side)
+    return {
+        "definition": DEFINITION,
+        "code_sha256": code_sha256(),
+        "image": file_fingerprint(path),
+        "channel": int(channel),
+        "ref_hw": [int(v) for v in case.ref_hw],
+        "eval_px": int(eval_px or EVAL_PX),
+        **more,
+    }
+
+
+def plane_record(path):
+    """Where a cached plane says what it was made from: ``<plane>.json``."""
     path = Path(path)
-    if not path.exists():
+    return path.with_name(path.name + ".json")
+
+
+def _cached_plane(path, make, key):
+    """The plane at ``path``. It is read only when the record beside it
+    (``plane_record``) holds exactly ``key`` (``plane_key``); a plane without a record,
+    or made from another image or by other code, is made again and replaced."""
+    path = Path(path)
+    record = plane_record(path)
+    try:
+        held = json.loads(record.read_text()) if path.exists() else None
+    except (OSError, ValueError):
+        held = None
+    wanted = json.loads(json.dumps(key))
+    if held != wanted:
+        record.unlink(missing_ok=True)  # never a record of a plane that is not there
         write_plane(path, make())
+        write_json(record, wanted)
     return read_plane(path)
 
 
@@ -641,6 +682,7 @@ def reference_plane(out, case, eval_px=None):
     return _cached_plane(
         cache_dir(out, case) / "reference_eval.tif",
         lambda: reduce(path, channel, case.ref_hw, eval_px=eval_px),
+        plane_key(case, "ref", eval_px),
     )
 
 
@@ -650,6 +692,7 @@ def initial_plane(out, case, eval_px=None):
     return _cached_plane(
         cache_dir(out, case) / "initial_eval.tif",
         lambda: reduce(path, channel, case.ref_hw, eval_px=eval_px),
+        plane_key(case, "mov", eval_px),
     )
 
 
@@ -710,7 +753,12 @@ def truth_plane(out, case, eval_px=None):
         )
         return np.clip(np.rint(drawn), 0, 65535).astype(np.uint16)
 
-    return _cached_plane(cache_dir(out, case) / "truth_eval.tif", make)
+    return _cached_plane(
+        cache_dir(out, case) / "truth_eval.tif",
+        make,
+        # the generating map and the lattice it is inverted on decide this plane too
+        plane_key(case, "mov", eval_px, spec=case.extra["spec"], truth_step=TRUTH_STEP),
+    )
 
 
 def shifted(plane, dx_px):
@@ -731,19 +779,25 @@ def shifted(plane, dx_px):
 
 # ── rows ──────────────────────────────────────────────────────────────────────
 def _cached(path, inputs, make, compute):
-    """``tissue.json`` when it is of this definition and not older than its planes; else
-    ``make()`` (stored) when ``compute``; else None."""
+    """``tissue.json`` when it is of this definition, was made by this file as it is
+    (``code_sha256``) and is not older than its planes; else ``make()`` (stored) when
+    ``compute``; else None."""
     path = Path(path)
+    code = code_sha256()
     try:
         rec = json.loads(path.read_text())
         fresh = all(path.stat().st_mtime >= Path(p).stat().st_mtime for p in inputs)
-        if rec.get("definition") == DEFINITION and fresh:
+        if (
+            rec.get("definition") == DEFINITION
+            and rec.get("code_sha256") == code
+            and fresh
+        ):
             return rec
     except (OSError, ValueError):
         pass
     if not compute:
         return None
-    rec = make()
+    rec = {**make(), "code_sha256": code}
     write_json(path, rec)
     return rec
 
@@ -758,7 +812,7 @@ def _row(case, variant, source, rec, **extra):
         "variant": variant,
         "source": source,
         **extra,
-        **{k: v for k, v in rec.items() if k != "crop_box"},
+        **{k: v for k, v in rec.items() if k not in ("crop_box", "code_sha256")},
         "crop_box": " ".join(str(v) for v in rec.get("crop_box") or []),
     }
 

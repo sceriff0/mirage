@@ -1770,8 +1770,13 @@ evaluation pixel, a 50000 px slide 4.06 µm.
    (`opencv`), and ORB and RANSAC are OpenCV's. That is why the pieces are computed in
    one image, whatever OpenCV a method's own image carries (upstream's VALIS 1.2.0 image
    has 4.9.0.80; the PALOM image and CI have the pinned 4.10.0.82).
-3. Delete `<out>/cache/tissue` after re-preparing cases: the reference's plane is made
-   once per case and kept.
+3. The benchmark's own planes under `<out>/cache/tissue` (the reference, `initial`,
+   `truth`) are kept, each with a record of what it was made from (`<plane>.json`: the
+   image file's size, time and sampled bytes, the channel, the reference grid, the
+   evaluation size, the sha256 of `tissue.py`). A plane is read again only while that
+   record is unchanged; after a case is prepared again with another image, or after
+   `tissue.py` changes, it is made again, and every `tissue.json` holds the same code
+   hash and is computed again with it. Nothing has to be deleted by hand.
 
 ### What to expect of the pieces (not measured on real slides)
 

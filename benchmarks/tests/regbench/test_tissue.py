@@ -702,6 +702,63 @@ def test_a_stale_result_is_computed_again(scored):
     assert _one(rows, "drawn")["qcs"] == 1.0
 
 
+def test_a_cached_plane_is_of_the_image_and_of_the_code_it_was_made_from(
+    slide_case, tmp_path, monkeypatch
+):
+    """The reference's reduced plane is kept under ``cache/tissue``. It is read again
+    only while the image it was reduced from and ``tissue.py`` are what they were: a
+    plane of another image, of other code, or one with no record of either, is made
+    again, and a result computed by other code is computed again."""
+    _, case, ref, _ = slide_case
+    out = tmp_path / "out"
+    plane = tissue.cache_dir(out, case) / "reference_eval.tif"
+    first = tissue.reference_plane(out, case)
+    record = json.loads(tissue.plane_record(plane).read_text())
+    assert record["code_sha256"] == tissue.code_sha256()
+    assert record["image"]["sample_sha256"] and record["channel"] == 0
+    made = []
+    real = tissue.reduce
+
+    def counted(*a, **k):
+        made.append(a[0])
+        return real(*a, **k)
+
+    monkeypatch.setattr(tissue, "reduce", counted)
+    assert np.array_equal(tissue.reference_plane(out, case), first) and not made
+    # the image changes under the same name: the plane is the new image's
+    image = tmp_path / "ref.ome.tif"
+    write_nuclear(image, ref, 0.5)
+    moved = types.SimpleNamespace(**{**vars(case), "ref_nuclear": str(image)})
+    assert np.array_equal(tissue.reference_plane(out, moved), first) and len(made) == 1
+    write_nuclear(image, ref // 2, 0.5)
+    halved = tissue.reference_plane(out, moved)
+    assert len(made) == 2 and not np.array_equal(halved, first)
+    assert np.array_equal(tissue.reference_plane(out, moved), halved) and len(made) == 2
+    # the code changes: every plane is made again
+    monkeypatch.setattr(tissue, "code_sha256", lambda: "other code")
+    tissue.reference_plane(out, moved)
+    assert len(made) == 3
+    # a plane with no record of what it was made from is not trusted
+    tissue.plane_record(plane).unlink()
+    tissue.reference_plane(out, moved)
+    assert len(made) == 4
+
+
+def test_a_result_computed_by_other_code_is_computed_again(scored, monkeypatch):
+    _, case, out, _ = scored
+    path = result_dir(out, "drawn", case) / "tissue" / tissue.RESULT
+    tissue.score_case((str(out), case, ["drawn"], True))
+    rec = json.loads(path.read_text())
+    assert rec["code_sha256"] == tissue.code_sha256()
+    path.write_text(json.dumps({**rec, "qcs": 0.123}))
+    rows, _, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    assert _one(rows, "drawn")["qcs"] == 0.123  # same code, same planes: it is read
+    assert "code_sha256" not in _one(rows, "drawn")
+    path.write_text(json.dumps({**rec, "qcs": 0.123, "code_sha256": "other code"}))
+    rows, _, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    assert _one(rows, "drawn")["qcs"] == 1.0
+
+
 def test_a_plane_the_driver_did_not_reduce_is_filled_in_from_the_written_image(scored):
     _, case, out, _ = scored
     d = result_dir(out, "drawn", case) / "tissue"
