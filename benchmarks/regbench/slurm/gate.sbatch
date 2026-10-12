@@ -13,7 +13,9 @@
 #
 # It exits non-zero when the run is blocked, and the run's arrays wait for it with
 # `afterok`: a blocked run never starts, and only that run. <allowed> is 1 for a run
-# named in REGBENCH_ALLOW_UNCHECKED: its verdict is recorded and it starts all the same.
+# named in REGBENCH_ALLOW_UNCHECKED: it starts when its selfcheck ran and could not
+# decide (not_checked). Inconsistent, crashed, a flagged realcheck and a selfcheck that
+# left no record of this submission block it all the same.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 kind="$1"; shift

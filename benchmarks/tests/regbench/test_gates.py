@@ -60,9 +60,147 @@ def test_a_selfcheck_that_left_no_record_blocks_the_run(tmp_path, capsys):
     assert out.read_text().split("\t")[:4] == ["palom", "not_checked", "-", "1"]
 
 
-def test_an_allowed_run_starts_and_its_verdict_is_still_recorded(tmp_path):
-    code, line = _gate(tmp_path, "palom", "--allow-unchecked", palom_affine="crashed")
-    assert code == 0 and line == ["palom", "crashed", "-", "0", "-", "-"]
+def test_an_allowed_run_starts_only_when_its_selfcheck_could_not_decide(
+    tmp_path, capsys
+):
+    """REGBENCH_ALLOW_UNCHECKED lets `not_checked` through, with the verdict recorded,
+    and nothing else."""
+    code, line = _gate(
+        tmp_path, "palom", "--allow-unchecked", palom_affine="ok", palom="not_checked"
+    )
+    assert code == 0 and line == ["palom", "not_checked", "-", "0", "-", "-"]
+    assert "allowed to start unchecked (not_checked)" in capsys.readouterr().out
+    for verdict in ("inconsistent", "crashed"):
+        code, line = _gate(
+            tmp_path, "palom", "--allow-unchecked", palom_affine="ok", palom=verdict
+        )
+        assert code == selfcheck.EXIT_CODE[verdict]
+        assert line == ["palom", verdict, "-", "1", "-", "-"]
+        assert "and nothing else" in capsys.readouterr().out
+    # a selfcheck that left no record is not "could not decide": it never ran
+    out = tmp_path / "g.tsv"
+    argv = ["gate", "--name", "palom", "--selfcheck", str(tmp_path / "none.json")]
+    code = cli.main([*argv, "--record", str(out), "--allow-unchecked"])
+    assert code == selfcheck.EXIT_CODE["not_checked"]
+    assert out.read_text().split("\t")[:4] == ["palom", "not_checked", "-", "1"]
+    assert "there is no record of this submission; blocked" in capsys.readouterr().out
+
+
+def test_a_record_of_another_submission_is_not_let_through_either(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "selfcheck.json"
+    path.write_text(
+        json.dumps(
+            {"variants": {"palom_affine": "ok", "palom": "ok"}, "submission": "A"}
+        )
+    )
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "B")
+    out = tmp_path / "g.tsv"
+    argv = ["gate", "--name", "palom", "--selfcheck", str(path), "--record", str(out)]
+    assert cli.main([*argv, "--allow-unchecked"]) == selfcheck.EXIT_CODE["not_checked"]
+    assert out.read_text().split("\t")[:4] == ["palom", "not_checked", "-", "1"]
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "A")
+    assert cli.main(argv) == 0
+
+
+# ── a case of the selfcheck that died ─────────────────────────────────────────
+def _row(status):
+    return {"status": status}
+
+
+@pytest.mark.parametrize("run", ["valis_mirage", "valis120_hires", "stare", "ashlar"])
+@pytest.mark.parametrize("died", ["not_checked", "crashed"])
+def test_the_gate_is_never_better_than_a_case_that_died(tmp_path, run, died):
+    """One case ok on every row, another whose process died without a row: the record's
+    summary of the rows says ok everywhere, and the gate must not."""
+    names = variants.gate_variants(run)
+    record = {
+        "status": died,
+        "variants": dict.fromkeys(names, "ok"),
+        "pairs": [
+            {"status": "ok", "variants": {v: _row("ok") for v in names}},
+            {
+                "status": died,
+                "cause": "the selfcheck process exited -9",
+                "variants": {},
+            },
+        ],
+    }
+    assert variants.gate_status(run, record) == died
+    path = tmp_path / "selfcheck.json"
+    path.write_text(json.dumps(record))
+    out = tmp_path / "g.tsv"
+    argv = ["gate", "--name", run, "--selfcheck", str(path), "--record", str(out)]
+    assert cli.main(argv) == selfcheck.EXIT_CODE[died]
+    assert out.read_text().split("\t")[:4] == [run, died, "-", "1"]
+    # a case that carries a row of another status than its own: the row decides
+    record["pairs"][1] = {
+        "status": "ok",
+        "variants": {**{v: _row("ok") for v in names}, names[-1]: _row("inconsistent")},
+    }
+    assert variants.gate_status(run, record) == "inconsistent"
+    # and a case that lacks one gating row while it says ok: that row was not checked
+    record["pairs"][1] = {"status": "ok", "variants": {names[0]: _row("ok")}}
+    want = "ok" if len(names) == 1 else "not_checked"
+    assert variants.gate_status(run, record) == want
+    record["pairs"][1] = {"status": "ok", "variants": {v: _row("ok") for v in names}}
+    assert variants.gate_status(run, record) == "ok"
+
+
+@pytest.mark.parametrize(
+    "method, label", [("valis_mirage", None), ("valis", "valis120_hires")]
+)
+@pytest.mark.parametrize(
+    "code, died", [(-9, "not_checked"), (137, "not_checked"), (1, "crashed")]
+)
+def test_the_record_of_a_selfcheck_whose_case_died_blocks_the_run(
+    tmp_path, monkeypatch, method, label, code, died
+):
+    """The record `selfcheck.run` itself assembles when the process of one case dies:
+    every case carries every expected row, and the gate reads it as not ok."""
+    import subprocess
+    import types
+
+    from benchmarks.regbench import methods
+
+    expected = methods.variant_names(method, label)
+    sizes = selfcheck.sizes_for(label or method)
+    assert len(sizes) >= 2
+    seen = []
+
+    real = subprocess.run
+
+    def fake(argv, **kw):
+        if "--work" not in argv:  # another caller of the module (platform, uname)
+            return real(argv, **kw)
+        sub = argv[argv.index("--work") + 1]
+        seen.append(sub)
+        if len(seen) > 1:  # every case after the first: its process dies
+            return types.SimpleNamespace(returncode=code)
+        pairs = [{"status": "ok", "variants": {v: _row("ok") for v in expected}}]
+        (tmp_path / "w").joinpath(sub).mkdir(parents=True, exist_ok=True)
+        with open(f"{sub}/selfcheck.json", "w") as fh:
+            json.dump({"pairs": pairs}, fh)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    record = selfcheck.run(method, tmp_path / "w", label=label)
+    assert len(seen) == len(sizes) and record["status"] == died
+    for pair in record["pairs"]:
+        assert set(pair["variants"]) >= set(expected)
+    lost = [p for p in record["pairs"] if p["status"] != "ok"]
+    assert lost and all(
+        v["status"] == died and v["filled"]
+        for p in lost
+        for v in p["variants"].values()
+    )
+    assert set(record["variants"].values()) == {died}
+    name = label or method
+    assert variants.gate_status(name, record) == died
+    # the summary rows alone (the shape a gate read before): still not ok
+    assert variants.gate_status(name, {**record, "pairs": []}) == died
+    assert record["blocks_the_method"] is True
 
 
 def test_a_run_behind_another_runs_selfcheck_is_recorded_under_its_own_name(tmp_path):
@@ -161,8 +299,9 @@ def test_the_realcheck_gate_reads_the_gating_rows_own_record(tmp_path):
     )
     code, line = _realgate(root, out, tmp_path)
     assert (code, line[:4]) == (1, ["valis_mirage", "realcheck_flagged", "-", "1"])
+    # a measured disagreement: REGBENCH_ALLOW_UNCHECKED does not let it through
     code, line = _realgate(root, out, tmp_path, "--allow-unchecked")
-    assert (code, line[:4]) == (0, ["valis_mirage", "realcheck_flagged", "-", "0"])
+    assert (code, line[:4]) == (1, ["valis_mirage", "realcheck_flagged", "-", "1"])
 
 
 def test_the_realcheck_gate_refuses_a_record_of_another_submission(

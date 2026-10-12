@@ -775,17 +775,31 @@ def test_a_method_that_asks_for_it_gets_one_process_per_pair(tmp_path, monkeypat
 
     calls = []
 
-    def run(argv, cwd, check):
+    real = sc.subprocess.run
+
+    def run(argv, **kw):
+        if "--work" not in argv:  # another caller of the module (platform, uname)
+            return real(argv, **kw)
         calls.append(argv)
         work = argv[argv.index("--work") + 1]
         write_json(
             f"{work}/selfcheck.json",
-            {"pairs": [{"status": sc.OK, "variants": {"stare": {"status": sc.OK}}}]},
+            {"pairs": [{"status": sc.OK, "variants": dict(rows)}]},
         )
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(stare, "SELFCHECK_SUBPROCESS", True, raising=False)
     monkeypatch.setattr(sc.subprocess, "run", run)
+    # a case that lacks one of the run's rows was not checked on it
+    rows = {"stare": {"status": sc.OK}}
+    rec = sc.run("stare", tmp_path, {"tile": 1024}, sizes=sc.sizes_for("stare"))
+    assert rec["status"] == sc.NOT_CHECKED and rec["variants"] == {
+        "stare": sc.OK,
+        "stare_rigid": sc.NOT_CHECKED,
+    }
+    assert all(p["variants"]["stare_rigid"]["filled"] for p in rec["pairs"])
+    calls.clear()
+    rows["stare_rigid"] = {"status": sc.OK}
     rec = sc.run("stare", tmp_path, {"tile": 1024}, sizes=sc.sizes_for("stare"))
     # its two pairs, then ASHLAR's two cases (the anchored rows read their matrices)
     assert rec["status"] == sc.OK and len(calls) == 4

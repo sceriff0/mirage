@@ -158,7 +158,11 @@
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
 #                                     nothing: not for a gate, the ladder or the scorer
-#   REGBENCH_ALLOW_UNCHECKED          run names that start whatever their checks say
+#   REGBENCH_ALLOW_UNCHECKED          run names that start although their selfcheck ran
+#                                     and could not decide (`not_checked`). Nothing
+#                                     else is let through: not `inconsistent`, not
+#                                     `crashed`, not a flagged realcheck, not a
+#                                     selfcheck that left no record
 #   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv
 #   REGBENCH_TRUTH_PATIENTS           with --prepare: the patients of the known-truth
 #                                     cases, comma-separated (default: all)

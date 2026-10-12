@@ -725,10 +725,25 @@ def _statuses(name, record, names):
 
 def gate_status(name, record):
     """The status that decides whether the run ``name`` may start, from the record a
-    selfcheck wrote (``selfcheck.json``): the worst over ``gate_variants(name)``, a name
-    the record lacks counting as ``not_checked``. It is the record's own ``status``
-    except where a method's gate reads only some of its rows."""
-    statuses, selfcheck = _statuses(name, record, gate_variants(name))
+    selfcheck wrote (``selfcheck.json``): the worst over ``gate_variants(name)``, read
+    TWICE: from the record's summary (``variants``) and from every round of every case
+    (``pairs[].variants``), a name missing anywhere counting as ``not_checked`` (as that
+    round's own status when it blocks). So the verdict is never better than what any
+    case of the record says of a gating row. It is the record's own ``status`` except
+    where a method's gate reads only some of its rows."""
+    names = gate_variants(name)
+    statuses, selfcheck = _statuses(name, record, names)
+    for pair in record.get("pairs") or []:
+        rows = pair.get("variants") if isinstance(pair, dict) else None
+        rows = rows if isinstance(rows, dict) else {}
+        own = pair.get("status") if isinstance(pair, dict) else None
+        missing = own if own in selfcheck.BLOCKING else selfcheck.NOT_CHECKED
+        for v in names:
+            entry = rows.get(v)
+            if isinstance(entry, dict):
+                statuses.append(entry.get("status", selfcheck.NOT_CHECKED))
+            else:
+                statuses.append(entry or missing)
     return selfcheck.worst(statuses)
 
 

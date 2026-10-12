@@ -365,6 +365,17 @@ and number of rounds) and `pairs`, every variant's numbers per ROUND and per 512
 (one entry for a pair, one per moving round for a patient, each with `case_id`, `group`,
 `round`, `rounds`).
 
+**Every round carries every row of the run** (`selfcheck.every_row`). A round whose
+process died, or that has no entry for a row, gets that row with the round's own status
+when it blocks and `not_checked` otherwise (`"filled": true`), and a round's status is
+never better than its rows'. The gate (`regbench gate`, `variants.gate_status`) reads
+its gating rows twice, from the record's summary and from every round of every case, a
+missing row counting as `not_checked`: its verdict is never better than what any case
+says. A case that died can therefore not pass as checked through the rows of another
+case. `REGBENCH_ALLOW_UNCHECKED` lets a run start on `not_checked` from a selfcheck that
+ran, and on nothing else: `inconsistent`, `crashed`, a flagged realcheck and a missing
+record (or another submission's) block it all the same.
+
 **The pair** (`selfcheck.make_pair`): two-channel 16-bit OME-TIFFs at 0.325 µm per pixel,
 channel 0 nuclei (`DAPI`), channel 1 `dots`, on a canvas that is not square (2048 x 2560 by
 default) with tissue that does not start at the origin. The moving slide is the reference
@@ -2240,7 +2251,7 @@ round).
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
-| `REGBENCH_ALLOW_UNCHECKED` | run names that start whatever their gates say (the verdict is still recorded and shown) | none |
+| `REGBENCH_ALLOW_UNCHECKED` | run names that start although their selfcheck RAN and could not decide (`not_checked`); the verdict is still recorded and shown. Nothing else is let through: `inconsistent`, `crashed`, a flagged realcheck and a selfcheck that left no record of this submission block the run all the same | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
 | `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |

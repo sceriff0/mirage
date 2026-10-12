@@ -628,7 +628,8 @@ def build_parser():
     gt.add_argument(
         "--allow-unchecked",
         action="store_true",
-        help="record the verdict and exit 0 whatever it is (REGBENCH_ALLOW_UNCHECKED)",
+        help="let the run start when its selfcheck ran and could not decide "
+        "(not_checked); every other verdict still blocks (REGBENCH_ALLOW_UNCHECKED)",
     )
 
     rg = sub.add_parser(
@@ -1175,7 +1176,12 @@ def _gate(a):
     none). The exit code is that status's, as ``selfcheck`` returns it: 0 only for ok.
 
     A selfcheck that left no record (its job was cancelled, or killed before it could
-    write) is ``not_checked``: the run is blocked, and the record says why."""
+    write) is ``not_checked``: the run is blocked, and the record says why.
+
+    ``--allow-unchecked`` (a run named in ``REGBENCH_ALLOW_UNCHECKED``) lets a run start
+    whose selfcheck RAN and could not decide (``not_checked``), and nothing else: not a
+    measured disagreement (``inconsistent``), not a crash, and not a record that is
+    missing, unreadable or another submission's."""
     import json
     from pathlib import Path
 
@@ -1207,7 +1213,8 @@ def _gate(a):
     # rows are dropped from the run whose selfcheck this is, and from no other
     dropped = variants.dropped_variants(a.name, record) if run == a.name else []
     reference = _reference_status(record, variants.gate_variants(a.name))
-    blocked = status in selfcheck.BLOCKING and not a.allow_unchecked
+    allowed = a.allow_unchecked and status == selfcheck.NOT_CHECKED and bool(record)
+    blocked = status in selfcheck.BLOCKING and not allowed
     print(f"{status}\t{','.join(dropped) or variants.NONE}")
     _write_gate(a.record, run, status, dropped, blocked, reference)
     from . import failure_log
@@ -1221,9 +1228,16 @@ def _gate(a):
         verdict=status,
         dropped=",".join(dropped) or "-",
     )
-    if status in selfcheck.BLOCKING and a.allow_unchecked:
+    if allowed:
         print(f"gate: {run} is allowed to start unchecked ({status})")
         return 0
+    if blocked and a.allow_unchecked:
+        print(
+            f"gate: {run} is named in REGBENCH_ALLOW_UNCHECKED, which lets through a "
+            f"selfcheck that ran and could not decide (not_checked) and nothing else: "
+            + ("there is no record of this submission" if not record else status)
+            + "; blocked"
+        )
     return selfcheck.EXIT_CODE[status]
 
 
@@ -1235,7 +1249,8 @@ def _realgate(a):
 
     Reads ``realcheck.json`` of the gating row for every case of that unit. ``flagged``
     (exit 1) when one is flagged; ``not_checked`` when there is none (the unit failed,
-    or wrote no image), which does NOT block: only a measured disagreement does."""
+    or wrote no image), which does NOT block: only a measured disagreement does, and
+    ``--allow-unchecked`` does not let that one through."""
     import json
 
     from .cases import groups, list_cases, result_dir
@@ -1266,7 +1281,7 @@ def _realgate(a):
         if check.get("flag"):
             flagged.append(case.case_id)
     status = REAL_FLAGGED if flagged else REAL_OK if found else REAL_NOT_CHECKED
-    blocked = bool(flagged) and not a.allow_unchecked
+    blocked = bool(flagged)
     print(
         f"{status}\t{a.variant}\t{found} of {len(picked)} realcheck(s)"
         + (f"\tflagged: {','.join(flagged)}" if flagged else "")

@@ -1651,10 +1651,34 @@ def _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed):
                 "status": NOT_CHECKED if killed else CRASHED,
                 "cause": f"the selfcheck process exited {done.returncode}"
                 + (" (killed: out of memory?)" if killed else ""),
+                # no row was checked: `every_row` gives each expected one this status
                 "variants": {},
             }
             for i, mov in enumerate(movs)
         ]
+
+
+def every_row(records, expected):
+    """Every round's record with EVERY expected row: a row the round has no entry for
+    (its process died, the method never yielded it) gets the round's own status when
+    that blocks, else ``not_checked``, and the round's status is never better than its
+    rows'. So a case that was not checked can never read as checked through the rows
+    of another case (``variants.gate_status``)."""
+    for rec in records:
+        rows = rec.setdefault("variants", {})
+        own = rec.get("status")
+        for name in expected:
+            if name not in rows:
+                rows[name] = {
+                    "status": own if own in BLOCKING else NOT_CHECKED,
+                    "cause": rec.get("cause")
+                    or "this round has no result for this row",
+                    "filled": True,
+                }
+        rec["status"] = worst(
+            [own or NOT_CHECKED, *(v.get("status") for v in rows.values())]
+        )
+    return records
 
 
 def run(
@@ -1714,6 +1738,7 @@ def run(
             res = run_case(
                 method, sub, size, opts, label, mask, m0_from, seed, keep_work
             )
+        res = every_row(res, methods.variant_names(method, label))
         listed.append(
             {
                 "folder": folder if sub != work else "",
