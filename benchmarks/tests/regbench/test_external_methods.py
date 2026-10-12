@@ -286,8 +286,6 @@ def test_palom_block_grid_is_the_reference_tile_grid(tmp_path, tile, grid):
     ref = reader.read_level_channels(0, 0)
     assert ref.numblocks == grid
     assert ref.chunks[0][0] == min(tile, 2048) and ref.chunks[1][0] == tile
-    # the benchmark's rechunk (palom_b1024) on the array the reader returned
-    assert ref.rechunk((1024, 1024)).numblocks == (2, 3)
 
 
 def test_palom_writer_follows_the_point_map_pixel_for_pixel():
@@ -311,21 +309,17 @@ def test_palom_writer_follows_the_point_map_pixel_for_pixel():
         assert ramp_errors(package.align, geo, make(geo))[0] >= 0.5 - RAMP_TOL, name
 
 
-@pytest.mark.parametrize(
-    "label, opts", [(None, None), ("palom_b1024", {"block": "1024"})]
-)
-def test_palom_points_follow_its_written_image(tmp_path, label, opts):
-    """The selfcheck on both of its pairs (8 x 10 blocks: of 2048 px for `palom`, the
-    cohort's block size; of 1024 px for the rechunked row), seams left out."""
+def test_palom_points_follow_its_written_image(tmp_path):
+    """The selfcheck on both of its pairs (8 x 10 blocks of 2048 px, the cohort's block
+    size), seams left out."""
     need_palom()
-    rec = selfcheck.run("palom", tmp_path, opts, label=label, mask="seams")
-    name = label or "palom"
-    assert rec["variants"] == {f"{name}_affine": selfcheck.OK, name: selfcheck.OK}, rec
+    rec = selfcheck.run("palom", tmp_path, mask="seams")
+    assert rec["variants"] == {"palom_affine": selfcheck.OK, "palom": selfcheck.OK}, rec
     for pair in rec["pairs"]:
-        assert pair["tile"] == 2048  # the cohort's layout, for both rows
-        seams = pair["variants"][name]
+        assert pair["tile"] == 2048  # the cohort's layout
+        seams = pair["variants"]["palom"]
         # the seam mask did something, and stayed under the cap of this block size
-        assert 0 < seams["masked_frac"] <= (0.10 if label else 0.05)
+        assert 0 < seams["masked_frac"] <= 0.05
 
 
 def test_palom_on_equal_shifts_everywhere():

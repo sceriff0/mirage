@@ -243,27 +243,21 @@ SIZES = {
     # anchored rows read round by round (`--m0-from`).
     "ashlar": [(ASHLAR_HW, None), ASHLAR_PATIENT],
     "affine_ashlar": [(ASHLAR_HW, None), ASHLAR_PATIENT],
-    # PALOM: 8 x 10 blocks for either row. Its filter thresholds the distribution of
+    # PALOM: 8 x 10 blocks. Its filter thresholds the distribution of
     # the block shifts and fits a regression on them (labsyspharm/palom v2026.4.1
     # `align.py:54-80` [FULL]), which the default pair's 2 x 3 blocks cannot feed; the
     # maintainer says small tiles break it too (issue #12 [PARTIAL: the maintainer's
     # comments]). The second pair gives the two slides different sizes, hence different
     # thumbnail down-factors (`reader.py:70-79`): on the one-level files written here
-    # PALOM builds its own levels by 2 x 2 means with the excess trimmed, so 7782 rows
-    # give 1945 at level 2 and a factor of 4.0005 (15566 rows: 3891, the same factor).
-    # Both rows read files with 2048 px tiles, the cohort's layout
+    # PALOM builds its own levels by 2 x 2 means with the excess trimmed, so 15566
+    # rows give 3891 at level 2 and a factor of 4.0005.
+    # The pairs are files with 2048 px tiles, the cohort's layout
     # (`methods/palom.py::SELFCHECK_PAIR_TILE`), and PALOM's blocks are the reference
-    # file's tiles:
-    #   palom        2048 px blocks, the block size its cohort row has (R3.19,
-    #                2026-10-11; before, this row was checked on 1024 px tiles and its
-    #                cohort blocks were first met on the cluster). 16384 x 20480 is the
-    #                smallest canvas with 8 x 10 of them: 7 x 9 interior block corners,
-    #                142 interior edges, so the seam mask and its cap (`MASK_MAX`,
-    #                0.05 at this block size) are exercised.
-    #   palom_b1024  the same tiles rechunked to 1024 px blocks, on the canvas that has
-    #                8 x 10 of those.
+    # file's tiles: 2048 px blocks, the block size the cohort row has (R3.19).
+    # 16384 x 20480 is the smallest canvas with 8 x 10 of them: 7 x 9 interior block
+    # corners, 142 interior edges, so the seam mask and its cap (`MASK_MAX`, 0.05 at
+    # this block size) are exercised.
     "palom": [((16384, 20480), None), ((16384, 20480), (15566, 19456))],
-    "palom_b1024": [((8192, 10240), None), ((8192, 10240), (7782, 9728))],
 }
 # A moving round after the first: (rotation in degrees, shift (x, y) px). The first round
 # is the pair's own (1.5 degrees, (18, -12)); every round also has its own smooth field.
@@ -341,10 +335,10 @@ COVER_NEAR_PX = 16.0
 #            the worst case within ASHLAR's own limit: it is a flag, never a gate
 #            (R3.22), and at least half of the dots are always judged.
 #   seams    PALOM: 8 px either side of the edges between blocks with different shifts.
-#            All edges of 1024 px blocks: 1 - (1 - 16/1024)^2 = 0.03; 2048 px: 0.016.
-#            The cap is 3.2 x that share at 1024 px blocks; PALOM's adapter applies the
-#            same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`): 0.05
-#            at the 2048 px blocks of the `palom` row's pairs.
+#            With every edge a seam the share is 1 - (1 - 16/B)^2 on blocks of side
+#            B: 0.016 at 2048 px. PALOM's adapter sets the cap from the blocks a pair
+#            really has (`SELFCHECK_MASK_MAX`, 3.2 x that share): 0.05 on the 2048 px
+#            blocks of its pairs. 0.10 is the cap of a result that records no blocks.
 MASK_MAX = {"overlap": 0.50, "seams": 0.10}
 # The caps a verdict is reported under, per mask (None = no cap): would the row pass
 # the accuracy gate on its unmasked dots if the mask could hide at most this share.

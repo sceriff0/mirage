@@ -130,7 +130,7 @@ NON = ":non_"
 # Methods whose primary row carries a seam mask (``warped.npz``: ``band`` on the moving
 # nuclei, ``band_ref`` on the reference nuclei, ``band_truth`` on the known-truth probes
 # of a reference-side owner). The owner's name is its primary variant.
-SEAM_OWNERS = ("ashlar", "palom", "palom_b1024") + tuple(
+SEAM_OWNERS = ("ashlar", "palom") + tuple(
     plugins.get("SEAM_OWNERS", ())  # of a private method plug-in, when one is enabled
 )
 # Every overlap number is computed on two polygon sets (``cases.SETS``). The OUTLINES are

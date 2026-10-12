@@ -48,10 +48,10 @@ This package is being ported in steps. What exists now:
 | adapter `deeperhistreg` (DeeperHistReg 1.0.1, the software that ships RegWSI: eight labels, each with an estimated-field row and an `_asdrawn` row) | here, as in "DeeperHistReg" below. **Written against DeeperHistReg's and libvips' source and never run with either** (DeeperHistReg, SimpleITK and pyvips are not installed where this was written): tested with a recording stand-in that draws the warped image the way the package's writer is written to. Its first real runs are the settling measurement and the selfcheck inside the DeeperHistReg image |
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
-| adapter `palom` (PALOM 2026.4.1 by its README recipe: `palom`, and `palom_b1024` with the reference rechunked to 1024 px blocks) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
+| adapter `palom` (PALOM 2026.4.1 by its README recipe, one run: `palom`) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 19 runs, 37 result names, six primary rows, a flag that pauses a run (nothing is paused) |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost), `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
@@ -140,7 +140,7 @@ runs per patient). `--label NAME` renames a method's variants
 `python -m benchmarks.regbench runs [--header] [--all]` prints what the cohort is
 registered with: one tab-separated line per run, in a documented column order that only
 ever grows at the end (the module's docstring; `-` for "none", never an empty field).
-19 runs, 37 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
+18 runs, 35 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
 names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
@@ -349,7 +349,7 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary |
 | the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), so its `within_1um` can be low with a perfect registration; `deeperhistreg_hr_gpu`, the estimated-field row, shows the registration itself |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
-| `palom_affine`, `palom` (**primary**), `palom_b1024_affine`, `palom_b1024` | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) for `palom`, re-cut to 1024 px for `palom_b1024` | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame |
+| `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame |
 | `initial` | none | | identity | |
 
 Honest limits of "natively": ASHLAR is run on tiles cut from stitched slides, not raw tiles;
@@ -492,13 +492,11 @@ round 1 of the patient are the same two slides under two case ids (the anchored 
 their matrices up by case), so one of the three registrations repeats another.
 
 **`palom` is checked on the block size its cohort row has.** PALOM's blocks are the
-reference file's TIFF tiles, 2048 px on the cohort. Both rows now read files with 2048
-px tiles (`methods/palom.py::SELFCHECK_PAIR_TILE`): `palom` on 16384 x 20480 (and
-against a 15566 x 19456 moving slide), the smallest canvas with 8 x 10 blocks of 2048
-px, so the tiling has 7 x 9 interior block corners and the seam rule is exercised at
-that block size (cap 0.05 there, below); `palom_b1024` on 8192 x 10240 as before, the
-same tiles cut to 1024 px blocks. Before, `palom` was checked on 1024 px tiles and its
-cohort blocks were first met on the cluster.
+reference file's TIFF tiles, 2048 px on the cohort. Its selfcheck pairs are files with
+2048 px tiles (`methods/palom.py::SELFCHECK_PAIR_TILE`): 16384 x 20480 (and against a
+15566 x 19456 moving slide), the smallest canvas with 8 x 10 blocks of 2048 px, so the
+tiling has 7 x 9 interior block corners and the seam rule is exercised at that block
+size (cap 0.05 there, below).
 
 **The check.** The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (`find_dots`: a 15 px median background,
@@ -609,10 +607,10 @@ check (1) only:
     this canvas is not known until it runs: a share above 0.50 is flagged on every row
     of the run, with the share, and the numbers on all dots and on the masked dots
     alone are in the record either way.
-  - **`seams` 0.10** is 3.2 times the share the seams of 1024 px blocks hold when every
-    block edge is one (8 px either side: 1 - (1 - 16/1024)^2 = 0.03). PALOM's adapter
-    applies the same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`):
-    0.10 for `palom_b1024`, 0.05 for `palom` on its 2048 px blocks.
+  - **`seams`**: PALOM's adapter sets the cap from the blocks a pair really has
+    (`SELFCHECK_MASK_MAX`): 3.2 times the share the seams hold when every block edge is
+    one (8 px either side: 1 - (1 - 16/2048)^2 = 0.016 on 2048 px blocks), so 0.05 for
+    `palom` on its 2048 px blocks. 0.10 is the cap of a result that records no blocks.
 - **`masked_frac` is in the record** for every variant, so the share that was not looked
   at is never implicit.
 - **Check (2) stays on outside the mask.** A detection is excused only when the mapped
@@ -1543,8 +1541,8 @@ touched; it is linear in the number of pairs (19.1 s at 4,738 cells, 146.7 s at
 and at this density, an outline record is about 1,000 s and a nuclei record about
 200 s on this laptop's cores. The first cohort patient ran two runs (4 sources, one
 seam owner: 16 pair records, about 2.7 h of work), so about 25 to 30 minutes per case
-on 8 cores; the whole run list (about 40 sources and 3 seam owners: about 320 pair
-records, about 53 h of work) is about 7 h per case on 8 cores. Real tissue is denser
+on 8 cores; the whole run list (about 36 sources and 2 seam owners: about 216 pair
+records, about 36 h of work) is about 4.5 h per case on 8 cores. Real tissue is denser
 than this case (more pairs under the null), and the cluster's cores are not this
 laptop's: read the first case's `seconds` in `case.json` before sizing the rest. Each
 worker holds the case's polygons (hundreds of megabytes at that size) and the result
@@ -1586,7 +1584,7 @@ it is scoring.
 
 A method that builds its image from tiles or blocks draws some nuclei across a join, and
 its point map is not exactly its image there. Such a method (`score.SEAM_OWNERS`: `ashlar`,
-`palom`, `palom_b1024`) writes a **seam mask** with its primary row:
+`palom`) writes a **seam mask** with its primary row:
 one bool per nucleus, from where it put its tiles or blocks and from no score (ASHLAR: the
 tile grid and the positions it accepted; PALOM: its block grid and the shifts it accepted).
 The mask is therefore NOT fixed before the run: it depends on the owner's own outcome on
@@ -2261,7 +2259,7 @@ its jobs apply (`test_ladder.py`, `test_failures.py`, `test_gates.py`).
 The run list comes from `python -m benchmarks.regbench runs` and from nowhere else; the
 script names no method.
 
-1. **Selfchecks**, one per run that gates a run (17), in that run's image with that run's
+1. **Selfchecks**, one per run that gates a run (16), in that run's image with that run's
    options and mask (`overlap` for ASHLAR, `seams` for PALOM), at 64 GB and 4 CPUs. Two
    more attempts wait behind it at 256 and 512 GB; each runs only when the one before
    ended for memory or left no record of this submission (it was lost to the scheduler,
@@ -2272,7 +2270,7 @@ script names no method.
    One job per run covers all of its cases, the patient included, so the number of jobs
    and the rungs (64 / 256 / 512 GB) are unchanged. Records:
    `<out>/logs/selfcheck/<run>/selfcheck.json`.
-2. **A gate per run** (19; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
+2. **A gate per run** (18; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
    that gates the run is anything but `ok`, a selfcheck that left no record included.
    Then that run, and only that run, never starts: every one of its arrays waits for its
    gate with `afterok`, and every job carries `--kill-on-invalid-dep=yes` so that it is
@@ -2835,7 +2833,7 @@ The dry run prints three numbers for a submission; each has a limit on the site.
 
 | what the dry run prints | what it is | the site's limit, and how to read it |
 |---|---|---|
-| `N sbatch call(s) would be made now` and `M task(s) in them` | everything the launcher submits at once: 445 calls for the default submission on two datasets, and one task per unit and rung for each run, per case for the scoring arrays | array tasks count against the per-user and per-association `MaxSubmitJobs` and the cluster's `MaxJobCount`: `sacctmgr show assoc user=$USER format=Account,MaxSubmitJobs,MaxJobs`, `sacctmgr show qos format=Name,MaxSubmitPU,MaxWall`, `scontrol show config \| grep -E "MaxArraySize\|MaxJobCount"` |
+| `N sbatch call(s) would be made now` and `M task(s) in them` | everything the launcher submits at once: 425 calls for the default submission on two datasets, and one task per unit and rung for each run, per case for the scoring arrays | array tasks count against the per-user and per-association `MaxSubmitJobs` and the cluster's `MaxJobCount`: `sacctmgr show assoc user=$USER format=Account,MaxSubmitJobs,MaxJobs`, `sacctmgr show qos format=Name,MaxSubmitPU,MaxWall`, `scontrol show config \| grep -E "MaxArraySize\|MaxJobCount"` |
 | `T tile task(s)` fed in later | one per tile, never in the queue together | none: they pass through the ceiling |
 | `the most in the queue at once` | M plus `REGBENCH_STAGE_QUEUE_MAX` for each run with a tile submitter | the same `MaxSubmitJobs`. Lower it with `REGBENCH_STAGE_QUEUE_MAX`, `--runs` or `--datasets` |
 
@@ -3079,7 +3077,7 @@ words, before it imports its package, so no method can run on a wrong channel by
 | `stare_prep` | no | the preprocessing row is defined for ANHIR, the cohort and the synthetic suite (R3.21); HyReCo is dormant and keeps its own proxy settings (`variants.NOT_ON`) |
 | `deeperhistreg_*` (8 runs) | no | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section). The adapter's RGB input rule was written for ANHIR's JPEG / PNG images (R3.20) and has not been extended to these BigTIFF slides: the adapter refuses a brightfield TIFF, and the runs are left out here by name (`variants.NOT_ON`) |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
-| `palom`, `palom_b1024` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
+| `palom` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
 
 So three runs, eight result rows: `stare_rigid`, `stare`, `valis120_rigid`, `valis120`,
 `valis120_micro`, `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires`.
@@ -3320,7 +3318,7 @@ with reasons (also in `anhir_excluded.csv`). Eight runs, 18 result names.
 | `deeperhistreg_*_fluo_*` (4 runs) | no | `fluo=1` is the benchmark's configuration for a fluorescence channel (a black pad, no intensity flip); on RGB the shipped parameters are the ones to run |
 | `valis_mirage` | no | the pipeline's own VALIS call registers multichannel fluorescence rounds only |
 | `ashlar` (4 runs) | no | ASHLAR stitches unstitched tiles by one translation each; two whole images of two sections are not its input |
-| `palom`, `palom_b1024` | no | the adapter follows PALOM's README recipe on one channel by index (on RGB: the red channel, chosen by nobody); which of PALOM's own colour modes would be the input rule is undecided, and its README describes it as made for re-imaged slides of the same section |
+| `palom` | no | the adapter follows PALOM's README recipe on one channel by index (on RGB: the red channel, chosen by nobody); which of PALOM's own colour modes would be the input rule is undecided, and its README describes it as made for re-imaged slides of the same section |
 
 **DeeperHistReg's brightfield input rule**, from its own repository (MWod/DeeperHistReg
 main @ `42e7c9d` `[PARTIAL: README.md:1-128, registration_params.py:484-520 and 652-690,
@@ -4299,9 +4297,8 @@ publication; the README is the method's description. Nothing here was run with P
 | run | what it is | set by the benchmark |
 |---|---|---|
 | `--method palom` | the README's scripting recipe (`README.md:220-284`): `OmePyramidReader(path)`, `Aligner` with its six keywords, `coarse_register_affine(n_keypoints=4000)`, `compute_shifts()`, `constrain_shifts()`. PALOM's primary row | the nuclear channel by index; `LEVEL = 0`; the thumbnail level from `get_thumbnail_level_of_size(2000)` (the README's suggestion) |
-| `--method palom --label palom_b1024 --opt block=1024` | the same recipe with the reference array PALOM's reader returned rechunked to 1024 px blocks (`ref_img.rechunk((1024, 1024))`) before `Aligner`. **Configured by the benchmark**, never primary | the above and the block size. The label and the option must come together or the run is refused |
 
-Each run yields `palom_affine` (the coarse affine alone) and `palom` (the affine and one
+The run yields `palom_affine` (the coarse affine alone) and `palom` (the affine and one
 shift per block), both `ref_to_mov`. Pair scope, no GPU, no JVM.
 
 **What PALOM does.** A full six-parameter affine from ORB keypoints on thumbnails, then
@@ -4310,9 +4307,8 @@ filter that replaces the shifts that disagree with a linear trend over the block
 (and those of blank blocks) by the trend's value. **A block is one dask chunk of the
 reference array, which is the reference file's TIFF tile**: 2048 px (666 µm) on the
 cohort's preprocessed slides, 1024 px on the generated cases. PALOM has no block-size
-parameter; the block of the `palom` row is therefore an accident of each file's layout,
-and `palom_b1024` is the row with a stated block. Inside a block everything moves
-together; neighbouring blocks may jump.
+parameter and the benchmark sets none: the block of the `palom` row is that of each
+file's layout. Inside a block everything moves together; neighbouring blocks may jump.
 
 **The point map** is exact and closed-form, reference -> moving:
 `written(P) = bilinear(moving, A^-1 (P - s_b(P)))`, with `A` = `aligner.affine_matrix`
@@ -4323,15 +4319,15 @@ the 3 x 3 affine's, which PALOM's writer takes itself. The other direction is no
 function: where two neighbouring shifts differ, some moving points are drawn twice and
 some never. For a point between pixel centres a block edge sits half a pixel before the
 edge pixel. Before writing, the adapter checks that the aligner's affine, shifts and
-chunks are still the ones the map was made from, and hands the writer `aligner.ref_img`
-(the rechunked array for `palom_b1024`), so the image is drawn on the blocks of the map.
+chunks are still the ones the map was made from, and hands the writer `aligner.ref_img`,
+so the image is drawn on the blocks of the map.
 
 **Seams.** The map jumps at an edge between two blocks whose shifts differ, and the image
 is torn there. `band_ref` marks the reference nuclei whose outline's bounding box, grown
 by 1 px, touches blocks that do not all carry the same shift; `band_truth` the known-truth
 probes by the same rule on their own nucleus ("Off the seams"). An edge between two
-blocks with the same shift is not a seam. Every method gets `<variant>:non_palom` and
-`<variant>:non_palom_b1024` rows on identical nuclei.
+blocks with the same shift is not a seam. Every method gets `<variant>:non_palom` rows on
+identical nuclei.
 
 **The written image** is PALOM's: `block_affine_transformed_moving_img` then
 `write_pyramid(mosaics=[it], output_path, pixel_size)` with the writer's defaults
@@ -4342,8 +4338,8 @@ slide on the reference grid, 0 where nothing lands. `native` has `valid_box` and
 
 **What a run records** (`run.json: info`): `version`, `RECIPE`, `affine`,
 `coarse_identity_placeholder`, `thumbnail_level`, `thumb_um_per_px`, `ref_down_factor`,
-`mov_down_factor`, `n_levels`, `file_levels`, `auto_pyramid`, `block_px`, `file_block_px`,
-`block_option`, `grid_shape`, `n_blocks`, `n_blocks_blank`, `n_blocks_replaced`,
+`mov_down_factor`, `n_levels`, `file_levels`, `auto_pyramid`, `block_px`,
+`grid_shape`, `n_blocks`, `n_blocks_blank`, `n_blocks_replaced`,
 `integer_shifts`, `shift_nonzero_fraction`, `shift_px_p50/p95/max`, `n_block_edges`,
 `n_seams`, `seam_jump_px_p50/p95`, `band_fraction`, `pixel_size_detected`, `workers_seen`
 and `concurrency` (what dask, OpenCV and `os.cpu_count()` saw; `psutil` is required and
@@ -4386,11 +4382,10 @@ clock paused.
 **Selfcheck.** Always with `--mask seams`: a dot drawn across two blocks with different
 shifts is torn in the image, and its centroid follows neither half (without the mask the
 stand-in's `palom` row is `inconsistent` for that reason alone). The mask leaves out
-detections within 8 px of such an edge; the affine stage has none. Pairs: two per row,
+detections within 8 px of such an edge; the affine stage has none. Pairs: two,
 8 x 10 blocks each (the second with a smaller moving slide, so the two thumbnail
-down-factors differ). Both rows read files with 2048 px tiles, the cohort's layout:
-`palom` on 16384 x 20480, so its blocks are the 2048 px ones of its cohort row (since
-2026-10-11); `palom_b1024` on 8192 x 10240, cut to 1024 px blocks. If under 10 %
+down-factors differ), in files with 2048 px tiles, the cohort's layout: 16384 x 20480,
+so the blocks are the 2048 px ones of the cohort row. If under 10 %
 of the blocks have a shift of at least 0.5 px (`MIN_SHIFT_PX`; `run.json:
 info.shift_meaningful_fraction`) the `palom` variant is `not_checked`: the block map
 then equals the affine map to within the gate and a wrong sign or block order could not
@@ -4420,20 +4415,18 @@ python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
 # 2. PALOM's own writer against the point map, pixel for pixel (seconds)
 python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs -W always \
     -k "pixel_for_pixel or equal_shifts" --basetemp=/tmp/rb_palom2
-# 3. the selfcheck of each row
+# 3. the selfcheck
 python -m benchmarks.regbench selfcheck --method palom --mask seams --work W/palom
-python -m benchmarks.regbench selfcheck --method palom --label palom_b1024 \
-    --opt block=1024 --mask seams --work W/palom_b1024
 ```
 
 `ok` for 1 and 2 is every test passed and none skipped; step 2 prints, as a warning, what
 PALOM's filter does on equal shifts. If step 1 fails with `seek of closed file`, the
 workaround is needed: step 3 still runs (the adapter applies it) and `closed_file.applied`
-is true in each `run.json`. `ok` for 3 is exit 0 and, in `W/<row>/selfcheck.json`,
-`"status": "ok"` with `variants.<row>_affine` and `variants.<row>` both `ok` on both
-pairs, `n_masked` a few percent of `n_detected` for `<row>` (under 5 % for `palom`,
-under 10 % for `palom_b1024`: the caps) and 0 for `<row>_affine`.
-`inconsistent` on `<row>` with step 2 green means torn dots outside the mask or a shift
+is true in each `run.json`. `ok` for 3 is exit 0 and, in `W/palom/selfcheck.json`,
+`"status": "ok"` with `variants.palom_affine` and `variants.palom` both `ok` on both
+pairs, `n_masked` a few percent of `n_detected` for `palom` (under 5 %: the cap) and 0
+for `palom_affine`.
+`inconsistent` on `palom` with step 2 green means torn dots outside the mask or a shift
 the image does not show: report the numbers and stop.
 
 ## Tests

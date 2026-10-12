@@ -2,16 +2,8 @@
 scripting recipe: one affine from thumbnails, then one whole-pixel shift per block of the
 reference, pairwise.
 
-Rows (``--label`` with the options that go with it; a label and its options must agree):
-
-==================  ==========================================================
-``palom``           no option: the README's recipe (PALOM's primary row)
-``palom_b1024``     ``--opt block=1024``: the same recipe with the REFERENCE array
-                    rechunked to 1024 px blocks before ``Aligner`` sees it.
-                    Configured by the benchmark, never a primary row
-==================  ==========================================================
-
-Each run yields two results, both reference -> moving (``REF_TO_MOV``):
+One run, ``palom``: the README's recipe on PALOM's own blocks (the primary row). It
+yields two results, both reference -> moving (``REF_TO_MOV``):
 
 ``palom_affine``  the coarse affine alone (``aligner.affine_matrix``)
 ``palom``         the affine and each block's shift: the image PALOM writes
@@ -26,10 +18,9 @@ or thread setting is touched. The clock stops after ``constrain_shifts()``.
 **A block is one dask chunk of the reference array** (``align.py:20-28, 43-51, 213-215``),
 which for an OME-TIFF is the file's TIFF tile (``reader.py:111-136``: ``tifffile``'s zarr
 view through ``da.from_zarr``): 2048 px on the cohort's preprocessed slides, 1024 px on
-this benchmark's generated cases. There is no block-size parameter. ``block=N`` therefore
-changes the one thing PALOM reads the block from: ``ref_img.rechunk((N, N))`` on the array
-its reader returned, before ``Aligner``; the same array is handed to the writer, so the
-image is drawn on the same blocks as the shifts were measured on.
+this benchmark's generated cases. There is no block-size parameter, and the benchmark
+sets none: the array PALOM's reader returned goes to ``Aligner`` and to the writer as it
+is, so the image is drawn on the same blocks as the shifts were measured on.
 
 **The exact point map** (``Geometry``, ``block_map``). Read from the source:
 
@@ -107,7 +98,6 @@ where this was written.
 from __future__ import annotations
 
 import os
-import re
 import time
 from pathlib import Path
 
@@ -145,8 +135,6 @@ RECIPE = {
         "constrain_shifts()",
     ],
 }
-# label -> the block size the benchmark sets (None: PALOM's own, the reference's chunks)
-LABELS = {"palom": None, "palom_b1024": 1024}
 WRITER = (
     "palom.align.block_affine_transformed_moving_img, then palom.pyramid.write_pyramid "
     "with the pixel size and its defaults (README.md:263-284)"
@@ -161,7 +149,7 @@ MIN_SHIFTED_BLOCKS = 0.10  # below it the selfcheck cannot see a wrong sign or o
 # shift under 0.1 px (PALOM fills rejected blocks from a regression, which rarely gives
 # exactly zero) would pass with its sign reversed.
 MIN_SHIFT_PX = 0.5
-MASK_FACTOR = 3.2  # the selfcheck's seams cap over the geometric share (1024 px blocks)
+MASK_FACTOR = 3.2  # the seams cap over the share the seams of this run's blocks hold
 MASKS = ("seams",)
 COHORT_TILE = 2048  # px: the TIFF tile of the cohort's slides, hence `palom`'s blocks
 PREREAD = ("auto", "0", "1")
@@ -178,50 +166,12 @@ class _NullMonitor:
 
 
 # ── settings ──────────────────────────────────────────────────────────────────
-def block_option(opts):
-    """``block`` as a number of pixels, or None when the option is not given."""
-    raw = (opts or {}).get("block")
-    if raw in (None, ""):
-        return None
-    try:
-        block = int(str(raw))
-    except ValueError:
-        raise ValueError(f"block={raw!r}: expected a number of pixels") from None
-    if block < 16:
-        raise ValueError(f"block={block}: expected at least 16 px")
-    return block
-
-
 def settings(opts):
-    """``(block, preread)`` of this run, checked against its label.
-
-    ``block`` is None (PALOM's own blocks) or the size the reference is rechunked to. A
-    run with ``block=N`` must be labelled ``palom_b<N>`` and the other way round, so a row
-    cannot carry another row's name. ``preread`` is ``auto``, ``0`` or ``1``
-    (``first_block_persist``).
-    """
-    block = block_option(opts)
-    label = str(opts.get("label") or "") or "palom"
-    named = re.fullmatch(r"palom_b(\d+)", label)
-    if label == "palom" or named:
-        want = int(named.group(1)) if named else None
-        if want != block:
-
-            def say(b):
-                return "no block option" if b is None else f"block={b}"
-
-            raise ValueError(
-                f"the label {label!r} names a run with {say(want)}; this one has "
-                f"{say(block)}. A label and its options come together"
-            )
-    elif block is not None:
-        raise ValueError(
-            f"block={block} belongs to the label palom_b{block}, not to {label!r}"
-        )
+    """``preread`` of this run: ``auto``, ``0`` or ``1`` (``first_block_persist``)."""
     preread = str(opts.get("preread", "auto")).strip().lower()
     if preread not in PREREAD:
         raise ValueError(f"preread={preread!r}: expected one of {PREREAD}")
-    return block, preread
+    return preread
 
 
 def _nuclear(case, side):
@@ -579,7 +529,7 @@ def register(case, work, opts):
     import palom
     import psutil  # noqa: F401  (dask reads the affinity mask only through it)
 
-    block, preread = settings(opts)
+    preread = settings(opts)
     version = installed_version(palom)
     if version != VERSION:
         raise RuntimeError(f"palom {VERSION} is the pinned release; found {version}")
@@ -600,9 +550,6 @@ def register(case, work, opts):
             "level for both"
         )
     ref_img = ref_reader.read_level_channels(LEVEL, ref_channel)
-    own_chunks = _chunk_summary(ref_img.chunks)
-    if block is not None:
-        ref_img = ref_img.rechunk((block, block))
     ref_factor = (
         ref_reader.level_downsamples[thumbnail_level]
         / ref_reader.level_downsamples[LEVEL]
@@ -661,13 +608,6 @@ def register(case, work, opts):
         "the matplotlib figure the documented call opens is saved to the work folder "
         "and closed, clock paused",
     ]
-    if block is not None:
-        benchmark_side.append(
-            f"block={block}: the reference array PALOM's reader returned is rechunked "
-            f"to ({block}, {block}) before Aligner (ref_img.rechunk); PALOM has no "
-            "block-size parameter, a block is one chunk of the reference. Configured "
-            "by the benchmark"
-        )
     info = {
         "version": version,
         "source": SOURCE,
@@ -693,8 +633,6 @@ def register(case, work, opts):
             for side, reader in (("reference", ref_reader), ("moving", mov_reader))
         },
         "block_px": _chunk_summary(chunks),
-        "file_block_px": own_chunks,
-        "block_option": block,
         "grid_shape": [rows, cols],
         "n_blocks": rows * cols,
         "pixel_size_detected": pixel_size,
@@ -875,11 +813,10 @@ def SELFCHECK_MASK(info, mask):
 def SELFCHECK_MASK_MAX(info, mask, frozen):
     """The largest share of the dots ``--mask seams`` may hide on this run.
 
-    The selfcheck's frozen cap (0.10) is 3.2 x the share the seams of 1024 px blocks hold
-    when EVERY block edge is one (1 - (1 - 16/1024)^2 = 0.031: a band ``DOT_MARGIN_PX``
-    either side). The band is 16 px whatever the block, so the same factor is applied to
-    the blocks this run really has: 0.05 at the cohort's 2048 px, more on the small
-    blocks a test uses. Never above 0.70."""
+    ``MASK_FACTOR`` x the share the seams hold when EVERY block edge is one: a band
+    ``DOT_MARGIN_PX`` either side of each edge, 16 px whatever the block, so on blocks of
+    side ``B`` the share is ``1 - (1 - 16/B)^2``. At the cohort's 2048 px that is 0.016
+    and the cap 0.05; on the small blocks a test uses it is more. Never above 0.70."""
     blocks = (info or {}).get("blocks")
     if not blocks:
         return frozen
@@ -911,15 +848,8 @@ def SELFCHECK_NOT_CHECKED(info, variant):
 
 
 def SELFCHECK_PAIR_TILE(opts):
-    """The TIFF tile of the selfcheck pair: 2048 px, the cohort's layout, for both rows.
+    """The TIFF tile of the selfcheck pair: 2048 px, the cohort's layout.
 
     ``palom`` takes its blocks from the reference file's tiles, so its selfcheck runs
-    on the 2048 px blocks its cohort row has (since 2026-10-11; before, it read the
-    generator's 1024 px tiles and the cohort's block size was not checked). The
-    rechunked row reads the same layout so that the rechunk does something: 1024 px
-    blocks cut from 2048 px tiles (twice the block, whatever block a test names)."""
-    try:
-        block = block_option(opts)
-    except ValueError:
-        return None
-    return COHORT_TILE if block is None else 2 * block
+    on the 2048 px blocks its cohort row has."""
+    return COHORT_TILE

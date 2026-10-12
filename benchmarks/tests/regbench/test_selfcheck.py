@@ -134,7 +134,7 @@ def test_sizes_are_the_ones_each_method_needs():
         assert sc.sizes_for(name) == [(sc.ASHLAR_HW, None), sc.ASHLAR_PATIENT], name
         assert set(sc.sizes_for(name)) <= set(sc.sizes_for("stare"))  # the anchor
     assert sc.rounds_of(sc.ASHLAR_PATIENT) == (sc.ASHLAR_HW, [None, None])
-    for name in ("deeperhistreg_hr_gpu", "palom", "palom_b1024", "initial"):
+    for name in ("deeperhistreg_hr_gpu", "palom", "initial"):
         assert not any(sc.is_patient(s) for s in sc.sizes_for(name)), name
     # one pair for every DeeperHistReg label, the high-resolution ones included
     assert sc.sizes_for("deeperhistreg_gpu") == sc.SIZES["deeperhistreg"]

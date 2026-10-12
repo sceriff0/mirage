@@ -35,7 +35,7 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
-N_JOBS = 445  # sbatch calls of the default submission on the fixture
+N_JOBS = 425  # sbatch calls of the default submission on the fixture
 # the last job of a staged round has the benchmark's ladder (its own work is in it)
 STITCH_GB = ladder.RUNGS_GB
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
@@ -287,7 +287,7 @@ def test_the_script_names_no_method():
 def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     jobs, _, _ = dry
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert laddered == set(RUNS) and len(RUNS) == 19
+    assert laddered == set(RUNS) and len(RUNS) == 18
     gated = {j.args[1] for j in jobs.values() if j.args[:1] == ["selfcheck"]}
     assert gated == set(RUNS)
 
@@ -295,7 +295,7 @@ def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
 def test_a_paused_run_is_not_submitted(site, monkeypatch, tmp_path):
     """The script submits what `runs` prints, and `runs` leaves a paused run out."""
     table = variants.runs_table()
-    kept = [row for row in table if row[0] != "palom_b1024"]
+    kept = [row for row in table if row[0] != "deeperhistreg_cpu"]
     stub = tmp_path / "benchmarks" / "regbench"
     stub.mkdir(parents=True)
     (tmp_path / "benchmarks" / "__init__.py").write_text("")
@@ -330,7 +330,7 @@ def test_a_paused_run_is_not_submitted(site, monkeypatch, tmp_path):
     )
     done, _, _ = launch(site, env={"REGBENCH_REPO": str(tmp_path)}, log="paused")
     ran = {j.args[0] for j in jobs_of(done).values() if j.script == "run_rung.sbatch"}
-    assert "palom_b1024" not in ran and ran == set(RUNS) - {"palom_b1024"}
+    assert "deeperhistreg_cpu" not in ran and ran == set(RUNS) - {"deeperhistreg_cpu"}
 
 
 # ── the ladder ────────────────────────────────────────────────────────────────
@@ -510,7 +510,7 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
 def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
     jobs, _, _ = dry
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
-    assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 17
+    assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 16
     for run in GATING:
         got = [jobs[f"rb-sc-{run}-{gb}g"] for gb in ladder.SELFCHECK_RUNGS_GB]
         assert [j.opt("--mem") for j in got] == ["64G", "256G", "512G"], run
@@ -535,11 +535,7 @@ def test_each_selfcheck_is_given_its_runs_own_options_and_mask(dry):
         assert mask == (variants.selfcheck_mask(spec.method) or "-")
         assert anchor == (spec.after or "-")
     assert jobs["rb-sc-ashlar-64g"].args[6] == "overlap"
-    assert (
-        jobs["rb-sc-palom-64g"].args[6]
-        == jobs["rb-sc-palom_b1024-64g"].args[6]
-        == "seams"
-    )
+    assert jobs["rb-sc-palom-64g"].args[6] == "seams"
 
 
 def test_an_anchored_selfcheck_waits_for_the_anchors_and_reads_its_work(dry):
@@ -777,7 +773,7 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     assert more == 10 + 14 and len(STAGED) == 2
     assert (
         len(jobs)
-        == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 + 2 * more
+        == 18 + 48 + 18 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 + 2 * more
         == N_JOBS
     )
 
@@ -1068,7 +1064,7 @@ USER_ORDER = "ashlar palom deeperhistreg valis120 stare valis_mirage"
 ORDERS = (
     USER_ORDER,
     "affine_ashlar ashlar stare",  # an anchored family named BEFORE its anchor
-    "affine_ashlar_clean palom_b1024",  # run names; one anchored row alone
+    "affine_ashlar_clean deeperhistreg_cpu",  # run names; one anchored row alone
 )
 
 
@@ -1166,7 +1162,7 @@ def test_an_anchored_run_named_first_is_moved_and_that_is_said(site):
     plain, _, _ = launch(site, env={"REGBENCH_RUN_ORDER": USER_ORDER}, log="order-user")
     assert "reads the results of" not in plain.stdout
     assert _ladder_order(jobs_of(plain))[:4] == [
-        "ashlar", "ashlar_clean", "palom", "palom_b1024",
+        "ashlar", "ashlar_clean", "palom", "deeperhistreg_gpu",
     ]  # fmt: skip
 
 

@@ -11,7 +11,7 @@ pin:
   emulated writer -- dot by dot through the selfcheck, and pixel by pixel on a ramp; that
   a reversed direction, swapped ``(dy, dx)``, negated shifts, a transposed grid, a block
   edge one pixel off and a half-pixel offset are each caught;
-* the rechunked row draws its image on the blocks its map uses;
+* the blocks are the reference file's tiles, and the image is drawn on them;
 * the seam mask: which reference nuclei and which known-truth probes it marks, that it is
   a function of the block grid and the shifts alone, and what the scorer does with it;
 * what a run records, and how its failures surface.
@@ -85,13 +85,8 @@ def test_registered_and_named():
     assert pa.VARIANTS == ("palom_affine", "palom") and pa.DIRECTION == REF_TO_MOV
     assert methods.scope_of("palom") == "pair"
     assert methods.variant_names("palom") == ["palom_affine", "palom"]
-    assert methods.variant_names("palom", "palom_b1024") == [
-        "palom_b1024_affine",
-        "palom_b1024",
-    ]
-    # each row's final variant owns a seam mask (R3.4)
-    assert {"palom", "palom_b1024"} <= set(score.SEAM_OWNERS)
-    assert pa.LABELS == {"palom": None, "palom_b1024": 1024}
+    # the final variant owns a seam mask (R3.4)
+    assert "palom" in score.SEAM_OWNERS
 
 
 def test_module_imports_without_palom_cv2_or_dask():
@@ -108,32 +103,19 @@ def test_module_imports_without_palom_cv2_or_dask():
 @pytest.mark.parametrize(
     "opts, want",
     [
-        ({}, None),
-        ({"label": "palom"}, None),
-        ({"label": "palom_b1024", "block": "1024"}, 1024),
-        ({"label": "palom_b256", "block": 256}, 256),
+        ({}, "auto"),
+        ({"label": "palom"}, "auto"),
+        ({"preread": "0"}, "0"),
+        ({"label": "palom", "preread": " 1 "}, "1"),
     ],
 )
-def test_every_row_is_accepted(opts, want):
-    assert pa.settings(opts) == (want, "auto")
+def test_the_settings_are_the_preread_mode(opts, want):
+    assert pa.settings(opts) == want
 
 
-@pytest.mark.parametrize(
-    "opts",
-    [
-        {"block": "1024"},  # the primary's name on the rechunked run
-        {"label": "palom", "block": "1024"},
-        {"label": "palom_b1024"},  # the rechunked row's name on the README's run
-        {"label": "palom_b1024", "block": "2048"},
-        {"label": "something", "block": "1024"},
-        {"label": "palom_b8", "block": "8"},
-        {"label": "palom_b1024", "block": "big"},
-        {"preread": "maybe"},
-    ],
-)
-def test_a_label_and_its_options_come_together(opts):
-    with pytest.raises(ValueError):
-        pa.settings(opts)
+def test_another_preread_mode_is_refused():
+    with pytest.raises(ValueError, match="preread"):
+        pa.settings({"preread": "maybe"})
 
 
 # ── the call ──────────────────────────────────────────────────────────────────
@@ -180,7 +162,7 @@ def test_the_recipe_is_the_readmes(tmp_path, case, fake):
     assert reads == [(0, 0), (0, 0), (0, 0), (0, 0)]  # thumbnail level 0 on this pair
     info = run_json(tmp_path / "out", "palom", case)["info"]
     assert info["RECIPE"] == json.loads(json.dumps(pa.RECIPE))
-    assert info["version"] == "2026.4.1" and info["block_option"] is None
+    assert info["version"] == "2026.4.1"
 
 
 def test_the_thumbnail_level_is_the_references_and_each_slide_has_its_factor(
@@ -591,51 +573,35 @@ def test_the_not_checked_hook_never_softens_a_failure(tmp_path, monkeypatch):
     assert variants["palom_affine"]["status"] == sc.NOT_CHECKED
 
 
-def test_the_command_line_takes_paloms_mask_and_rows():
+def test_the_command_line_takes_paloms_mask():
     from benchmarks.regbench import cli
 
-    argv = ["selfcheck", "--method", "palom", "--label", "palom_b1024"]
-    argv += ["--opt", "block=1024", "--mask", "seams", "--work", "W"]
+    argv = ["selfcheck", "--method", "palom", "--mask", "seams", "--work", "W"]
     a = cli.build_parser().parse_args(argv)
-    assert (a.method, a.label, a.mask, a.opt) == (
-        "palom",
-        "palom_b1024",
-        "seams",
-        ["block=1024"],
-    )
-    assert pa.settings({**methods.parse_opts(a.opt), "label": a.label}) == (
-        1024,
-        "auto",
-    )
+    assert (a.method, a.label, a.mask) == ("palom", None, "seams")
+    assert pa.settings({**methods.parse_opts(a.opt), "label": a.label}) == "auto"
     with pytest.raises(SystemExit):  # ASHLAR's mask is not PALOM's
         pa.SELFCHECK_MASK({}, "overlap")
 
 
-def test_the_selfcheck_pairs_are_enough_blocks_for_both_labels():
-    """8 x 10 blocks for either row, of the size the row has on the cohort."""
+def test_the_selfcheck_pairs_are_enough_blocks():
+    """8 x 10 blocks of the size the row has on the cohort."""
     assert sc.sizes_for("palom") == [
         ((16384, 20480), None),
         ((16384, 20480), (15566, 19456)),
     ]
-    assert sc.sizes_for("palom_b1024") == [
-        ((8192, 10240), None),
-        ((8192, 10240), (7782, 9728)),
-    ]
-    # both rows read 2048 px tiles, the cohort's layout: `palom`'s blocks ARE those
-    # tiles, the rechunked row cuts them to 1024 px
+    # the pairs have 2048 px tiles, the cohort's layout: `palom`'s blocks ARE those tiles
     assert pa.COHORT_TILE == 2048
     assert PAIR_TILE({}) == PAIR_TILE({"label": "palom"}) == 2048
-    assert PAIR_TILE({"label": "palom_b1024", "block": "1024"}) == 2048
-    for label, block in (("palom", 2048), ("palom_b1024", 1024)):
-        for ref_hw, mov_hw in sc.sizes_for(label):
-            assert (ref_hw[0] // block, ref_hw[1] // block) == (8, 10), label
-            assert ref_hw[0] % block == 0 and ref_hw[1] % block == 0
-    # the second pair of each row: slides of different sizes whose thumbnail factors
-    # differ (an odd row count at the second 2 x 2 mean is trimmed)
-    for ref_hw, mov_hw in (sc.sizes_for("palom")[1], sc.sizes_for("palom_b1024")[1]):
-        assert (mov_hw[0] // 2) % 2 == 1 and mov_hw[0] / (mov_hw[0] // 4) > 4.0004
-    # the cap the seam mask is held to at each row's block size
-    for block, cap in ((2048, 0.05), (1024, 0.10)):
+    for ref_hw, mov_hw in sc.sizes_for("palom"):
+        assert (ref_hw[0] // 2048, ref_hw[1] // 2048) == (8, 10)
+        assert ref_hw[0] % 2048 == 0 and ref_hw[1] % 2048 == 0
+    # the second pair: slides of different sizes whose thumbnail factors differ (an odd
+    # row count at the second 2 x 2 mean is trimmed)
+    _, mov_hw = sc.sizes_for("palom")[1]
+    assert (mov_hw[0] // 2) % 2 == 1 and mov_hw[0] / (mov_hw[0] // 4) > 4.0004
+    # the cap the seam mask is held to follows the block size: 0.05 on the cohort's
+    for block, cap in ((2048, 0.05), (1024, 0.10), (512, 0.197)):
         blocks = {
             "edges_y": list(range(0, 8 * block + 1, block)),
             "edges_x": list(range(0, 10 * block + 1, block)),
@@ -647,55 +613,41 @@ def test_the_selfcheck_pairs_are_enough_blocks_for_both_labels():
         )
         got = pa.SELFCHECK_MASK_MAX({"blocks": blocks}, "seams", sc.MASK_MAX["seams"])
         assert got == pytest.approx(cap, abs=0.002), (block, got)
+    # a result that records no blocks (the affine stage) keeps the selfcheck's own cap
+    assert pa.SELFCHECK_MASK_MAX({}, "seams", 0.10) == 0.10
 
 
-# ── the rechunked row ─────────────────────────────────────────────────────────
-def test_the_rechunked_row_draws_on_the_blocks_of_its_map(tmp_path, monkeypatch, fake):
+# ── the blocks ────────────────────────────────────────────────────────────────
+def test_the_blocks_are_the_reference_files_tiles(tmp_path, monkeypatch, fake):
+    """Another tile in the files, another block grid: in the record, in the matrices and
+    in the chunks the image is drawn on."""
     monkeypatch.setattr(pa, "SELFCHECK_PAIR_TILE", lambda opts: 512)
-    rec, variants = _selfcheck(tmp_path, label="palom_b256", block="256")
-    assert rec["variants"] == {"palom_b256_affine": sc.OK, "palom_b256": sc.OK}, rec
+    rec, variants = _selfcheck(tmp_path)
+    assert rec["variants"] == {"palom_affine": sc.OK, "palom": sc.OK}, rec
     assert rec["pairs"][0]["tile"] == 512
-    want = ((256,) * 4 + (176,), (256,) * 5 + (220,))
+    want = ((512, 512, 176), (512, 512, 476))
     drawn = fake.calls("block_affine_transformed_moving_img")
     assert drawn and all(d["ref_chunks"] == want for d in drawn)
-    # the block matrices: one 3 x 3 chunk per block of the REchunked grid
-    assert drawn[0]["mxs_shape"] == (15, 18) and drawn[0]["mxs_is_dask"]
-    out = tmp_path / "out"
-    case = load_case(tmp_path / "cases" / "selfcheck" / "pair_1200x1500")
-    info = run_json(out, "palom_b256", case)["info"]
-    assert info["block_px"] == {"y": [256, 176], "x": [256, 220]}
-    assert info["file_block_px"] == {"y": [512, 176], "x": [512, 476]}
-    assert info["block_option"] == 256 and info["grid_shape"] == [5, 6]
-    side = info["implementation"]["benchmark_side"]
-    assert any("rechunk" in s and "Configured by the benchmark" in s for s in side)
-    plain = pa.RECIPE["calls"]
-    assert info["RECIPE"]["calls"] == plain  # the same recipe otherwise
-
-
-def test_without_the_rechunk_the_same_files_give_their_own_tiles(tmp_path, monkeypatch):
-    monkeypatch.setattr(pa, "SELFCHECK_PAIR_TILE", lambda opts: 512)
-    rec, _ = _selfcheck(tmp_path)
+    # the block matrices: one 3 x 3 chunk per block of that grid
+    (final,) = [d for d in drawn if d["mxs_is_dask"]]
+    assert final["mxs_shape"] == (9, 9)
     case = load_case(tmp_path / "cases" / "selfcheck" / "pair_1200x1500")
     info = run_json(tmp_path / "out", "palom", case)["info"]
-    assert (
-        info["block_px"]
-        == info["file_block_px"]
-        == {
-            "y": [512, 176],
-            "x": [512, 476],
-        }
-    )
-    assert not any("rechunk" in s for s in info["implementation"]["benchmark_side"])
+    assert info["block_px"] == {"y": [512, 176], "x": [512, 476]}
+    assert info["grid_shape"] == [3, 3] and info["n_blocks"] == 9
+    assert info["RECIPE"]["calls"] == pa.RECIPE["calls"]
 
 
-def test_the_declared_row_palom_b1024(tmp_path, monkeypatch, fake):
+def test_the_selfcheck_pair_is_written_with_the_cohorts_tiles(
+    tmp_path, monkeypatch, fake
+):
+    """With the adapter's own hook the pair's files have 2048 px tiles, and those are
+    the blocks."""
     monkeypatch.setattr(pa, "SELFCHECK_PAIR_TILE", PAIR_TILE)
-    sizes = [((2304, 2816), None)]
-    rec, variants = _selfcheck(tmp_path, label="palom_b1024", sizes=sizes, block="1024")
-    assert rec["variants"] == {"palom_b1024_affine": sc.OK, "palom_b1024": sc.OK}, rec
+    rec, variants = _selfcheck(tmp_path, sizes=[((2304, 2816), None)])
     assert rec["pairs"][0]["tile"] == 2048
     (first, *_) = fake.calls("block_affine_transformed_moving_img")
-    assert first["ref_chunks"] == ((1024, 1024, 256), (1024, 1024, 768))
+    assert first["ref_chunks"] == ((2048, 256), (2048, 768))
 
 
 def test_the_writer_refuses_an_aligner_that_changed_after_the_yield():
@@ -1046,14 +998,33 @@ def test_the_dots_mask_is_rebuilt_from_the_run_record():
         pa.SELFCHECK_MASK(info, "overlap")
 
 
+def retile(path, tile):
+    """Write a one-channel slide again with ``tile`` px TIFF tiles, pixels unchanged."""
+    import tifffile
+
+    from benchmarks.regbench.imageio import write_nuclear_tiles
+
+    plane = np.squeeze(tifffile.imread(path))
+    h, w = plane.shape
+    tiles = (
+        plane[y : y + tile, x : x + tile]
+        for y in range(0, h, tile)
+        for x in range(0, w, tile)
+    )
+    write_nuclear_tiles(path, (h, w), plane.dtype, tiles, tile)
+
+
 @pytest.fixture(scope="module")
 def truth_case(tmp_path_factory):
-    """One known-truth case at 1024 px (not a frozen one: no hash)."""
+    """One known-truth case at 1024 px (not a frozen one: no hash), its reference file
+    in 256 px tiles: 4 x 4 blocks for PALOM, whose blocks are that file's tiles."""
     root = tmp_path_factory.mktemp("palom_truth")
     suite = synthetic.truth_suite(n=1024, families=("bumps25",))
     name = sorted(suite)[0]
     synthetic.prepare_one(root, name, suite[name])
-    return root, load_case(root / "synthetic" / name)
+    case = load_case(root / "synthetic" / name)
+    retile(case.ref_image, TILE)
+    return root, case
 
 
 def _exact():
@@ -1068,57 +1039,50 @@ def _exact():
     )
 
 
-def _run_b256(case, out):
-    return methods.run_case(
-        "palom", case, out, {"block": "256"}, label="palom_b256", keep_work=False
-    )
-
-
 @pytest.mark.slow
 def test_every_variant_gets_rows_off_paloms_seams_on_identical_nuclei(
     truth_case, tmp_path
 ):
     root, case = truth_case
     out = tmp_path / "out"
-    assert _run_b256(case, out) == ["palom_b256_affine", "palom_b256"]
+    assert methods.run_case("palom", case, out) == ["palom_affine", "palom"]
     methods.run_case(_exact(), case, out)
     points = load_points(case)
     n_ref, n_probes = polys(points, "ref").n_features, len(points["truth_ref"])
-    with np.load(result_dir(out, "palom_b256", case) / "warped.npz") as z:
+    with np.load(result_dir(out, "palom", case) / "warped.npz") as z:
         band_ref, band_truth = z["band_ref"], z["band_truth"]
         assert "band" not in z.files
     assert band_ref.shape == (n_ref,) and band_truth.shape == (n_probes,)
     assert 0 < band_ref.sum() < n_ref and 0 < band_truth.sum() < n_probes
     # only the block grid and the accepted shifts enter: rebuilt from the run's record
     # of them, the mask is the same
-    info = run_json(out, "palom_b256", case)["info"]
+    info = run_json(out, "palom", case)["info"]
+    assert info["grid_shape"] == [4, 4] and info["block_px"] == {"y": [256], "x": [256]}
     geo = pa.Geometry.from_info(info["blocks"])
     assert np.array_equal(pa.nucleus_band(geo, points), band_ref)
     assert np.array_equal(pa.probe_band(geo, points), band_truth)
     assert info["band_fraction"] == pytest.approx(band_ref.mean())
     # the affine row carries no mask: the owner is the row's final variant
-    with np.load(result_dir(out, "palom_b256_affine", case) / "warped.npz") as z:
+    with np.load(result_dir(out, "palom_affine", case) / "warped.npz") as z:
         assert "band_ref" not in z.files and "band_truth" not in z.files
 
-    res = score.score(root, out, ["synthetic"], seam_owners=("palom_b256",))
+    res = score.score(root, out, ["synthetic"], seam_owners=("palom",))
     rows = [r for r in res["nonband_cells"] if r["case_id"] == case.case_id]
     names = {r["method"] for r in rows}
     assert names == {
-        v + ":non_palom_b256"
-        for v in ("initial", "palom_b256_affine", "palom_b256", "exact", "truth")
+        v + ":non_palom" for v in ("initial", "palom_affine", "palom", "exact", "truth")
     }
     kept = int((~band_ref).sum())
     assert {(r["n_ref_kept"], r["n_ref_all"]) for r in rows} == {(kept, n_ref)}
     assert {r["n_mov_kept"] == r["n_mov_all"] for r in rows} == {True}
     probes = [r for r in res["nonband_truth"] if r["case_id"] == case.case_id]
     assert {r["method"] for r in probes} == {
-        v + ":non_palom_b256"
-        for v in ("initial", "palom_b256_affine", "palom_b256", "exact")
+        v + ":non_palom" for v in ("initial", "palom_affine", "palom", "exact")
     }
     left = int((~band_truth).sum())
     assert {(r["n_probes"], r["n_probes_all"]) for r in probes} == {(left, n_probes)}
     # the exact map is still exact on the probes that are left
-    (exact,) = [r for r in probes if r["method"] == "exact:non_palom_b256"]
+    (exact,) = [r for r in probes if r["method"] == "exact:non_palom"]
     assert exact["tre_um_max"] < 1e-6
     assert not [r for r in res["truth"] if ":non_" in r["method"]]
     assert not [r for r in res["cells"] if ":non_" in r["method"]]
@@ -1130,12 +1094,12 @@ def test_a_failed_palom_run_gives_no_off_seam_row_to_anyone(
     root, case = truth_case
     out = tmp_path / "out"
     fp.install(monkeypatch.setitem, constrain_raises="the filter failed here")
-    assert _run_b256(case, out) == ["palom_b256_affine"]
+    assert methods.run_case("palom", case, out) == ["palom_affine"]
     methods.run_case(_exact(), case, out)
-    res = score.score(root, out, ["synthetic"], seam_owners=("palom_b256",))
+    res = score.score(root, out, ["synthetic"], seam_owners=("palom",))
     assert res["nonband_cells"] == [] and res["nonband_truth"] == []
     (lost,) = res["nonband_missing"]
-    assert lost["owner"] == "palom_b256" and lost["n_cases_without_mask"] == 1
+    assert lost["owner"] == "palom" and lost["n_cases_without_mask"] == 1
     # the failed row itself is in the primary table, at the unregistered pose
-    (row,) = [r for r in res["cells"] if r["method"] == "palom_b256"]
+    (row,) = [r for r in res["cells"] if r["method"] == "palom"]
     assert row["imputed_initial"] and "the filter failed here" in row["problem"]

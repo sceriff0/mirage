@@ -49,8 +49,6 @@ EXPECTED = [
     "affine_ashlar_clean",
     "palom_affine",
     "palom",
-    "palom_b1024_affine",
-    "palom_b1024",
 ]
 PER_PATIENT = {
     "valis_mirage",
@@ -74,7 +72,7 @@ def by_name():
 
 
 def test_runs_produce_exactly_the_designs_variants():
-    assert len(EXPECTED) == 37 and len(set(EXPECTED)) == 37
+    assert len(EXPECTED) == 35 and len(set(EXPECTED)) == 35
     assert variants.expected_variants() == EXPECTED
 
 
@@ -83,8 +81,7 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
     literal list above), not be papered over by names restated in variants.py."""
     monkeypatch.setattr(palom, "VARIANTS", ("palom_renamed", "palom"))
     got = variants.expected_variants()
-    assert "palom_renamed" in got and "palom_b1024_renamed" in got
-    assert "palom_affine" not in got and "palom_b1024_affine" not in got
+    assert "palom_renamed" in got and "palom_affine" not in got
     # and a renamed PRIMARY row is refused outright: no run writes it any more
     monkeypatch.setattr(palom, "VARIANTS", ("palom_affine", "palom_renamed"))
     with pytest.raises(ValueError, match="written by no run"):
@@ -92,7 +89,7 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 
 
 def test_counts():
-    assert variants.counts() == (19, 4, 7)
+    assert variants.counts() == (18, 4, 7)
     assert {variants.run_name(r) for r in variants.RUNS if r.gpu} == GPU
     per_patient = {
         variants.run_name(r)
@@ -104,7 +101,7 @@ def test_counts():
 
 def test_run_names_are_unique_and_no_stride_run_is_listed():
     names = [variants.run_name(r) for r in variants.RUNS]
-    assert len(names) == len(set(names)) == 19
+    assert len(names) == len(set(names)) == 18
     assert not [n for n in names if n.startswith("stare_s")]
     # STARE itself has ONE configuration; the second row only changes its input
     assert [r.opts for r in variants.RUNS if r.method == "stare"] == [
@@ -157,13 +154,12 @@ def test_every_label_agrees_with_its_options_as_the_adapter_checks_them():
         elif run.method == "ashlar":
             assert ashlar.settings(opts) == ashlar.LABELS[name]
         elif run.method == "palom":
-            block, _ = palom.settings(opts)
-            assert block == palom.LABELS[name]
+            assert run.opts == {} and palom.settings(opts) == "auto"
         elif run.method == "valis":
             hires = str(run.opts.get("hires", "0")) == "1"
             assert hires == (name == valis.HIRES_LABEL)
     assert {n for n, r in runs.items() if r.method == "ashlar"} == set(ashlar.LABELS)
-    assert {n for n, r in runs.items() if r.method == "palom"} == set(palom.LABELS)
+    assert [n for n, r in runs.items() if r.method == "palom"] == ["palom"]
     assert variants.HR_CONFIG == dhr.HR_CONFIG
 
 
@@ -172,7 +168,7 @@ def test_a_wrong_option_is_caught_by_the_adapter_check():
     with pytest.raises(ValueError):
         dhr.settings({"label": "deeperhistreg_gpu", "config": variants.HR_CONFIG})
     with pytest.raises(ValueError):
-        palom.settings({"label": "palom", "block": "1024"})
+        palom.settings({"label": "palom", "preread": "maybe"})
 
 
 def test_primary_rows_are_expected_variants():
@@ -239,18 +235,12 @@ def test_every_variant_has_a_family_and_the_longest_prefix_wins():
     assert variants.family("valis_mirage_rigid") == "valis_mirage"
     assert variants.family("deeperhistreg_hr_fluo_cpu_asdrawn") == "deeperhistreg"
     assert variants.family("stare_rigid") == "stare"
-    assert variants.family("palom_b1024_affine") == "palom"
+    assert variants.family("palom_affine") == "palom"
     assert variants.family("ashlar_clean") == "ashlar"
     # a prefix only counts at a name boundary, and an off-seam row is its variant's
     assert variants.family("stare:non_palom") == "stare"
     assert variants.family("palomino") is None
     assert variants.family("initial") is None
-
-
-def test_palom_b1024_is_in_paloms_family_and_not_primary():
-    assert variants.family("palom_b1024") == "palom"
-    assert "palom_b1024" not in variants.PRIMARY
-    assert "palom" in variants.PRIMARY
 
 
 def test_both_anchored_rows_share_a_family_that_is_not_ashlars():
@@ -271,10 +261,9 @@ def test_clean_rows_are_gated_by_their_noisy_rows():
     assert set(variants.GATED_BY) <= names and set(variants.GATED_BY.values()) <= names
     assert variants.gated_by("ashlar_clean") == "ashlar"
     assert variants.gated_by("affine_ashlar_clean") == "affine_ashlar"
-    # every other run stands behind its own selfcheck, palom_b1024 included
+    # every other run stands behind its own selfcheck
     for name in names - set(variants.GATED_BY):
         assert variants.gated_by(name) == name
-    assert variants.gated_by("palom_b1024") == "palom_b1024"
 
 
 def test_selfcheck_masks_come_from_the_adapters():
@@ -396,7 +385,7 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert COLUMNS[:12] == FIRST_TWELVE == variants.RUNS_COLUMNS[:12]
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
-    assert len(got) == 19
+    assert len(got) == 18
     assert all(len(r) == len(COLUMNS) == 16 for r in got)
     # the two runs whose registration is several scheduler jobs per round
     staged = {r[0]: r[15] for r in got if r[15] != "-"}
@@ -450,9 +439,9 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
     hr = got["deeperhistreg_hr_fluo_gpu"]
     assert hr["opts"] == f"device=cuda:0,config={variants.HR_CONFIG},fluo=1"
     assert hr["gpu"] == "1" and hr["scope"] == "pair" and hr["primary"] == "-"
-    assert got["palom_b1024"]["opts"] == "block=1024"
-    assert got["palom_b1024"]["selfcheck_mask"] == "seams"
-    assert got["palom_b1024"]["gated_by"] == "palom_b1024"
+    assert got["palom"]["opts"] == "-"
+    assert got["palom"]["selfcheck_mask"] == "seams"
+    assert got["palom"]["gated_by"] == "palom"
     assert got["valis120"]["primary"] == "-"
     assert got["valis120_hires"]["primary"] == "valis120_hires"
     assert got["valis120_hires"]["opts"] == "hires=1"
@@ -486,7 +475,7 @@ def test_a_runs_line_round_trips_into_a_run_command(capsys):
 
 def test_runs_header_names_the_columns(capsys):
     got = rows(capsys, "--header")
-    assert tuple(got[0]) == COLUMNS and len(got) == 20
+    assert tuple(got[0]) == COLUMNS and len(got) == 19
 
 
 # ── `score` on the command line expects the whole list ────────────────────────
@@ -541,7 +530,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
         "deeperhistreg_fluo_gpu_asdrawn",
     }
     assert variants.expected_variants() == [v for v in EXPECTED if v not in gone]
-    assert variants.counts() == (17, 3, 6)
+    assert variants.counts() == (16, 3, 6)
     # the family keeps its primary, and its members are the runs that run
     assert variants.members("valis120") == ["valis120_hires"]
     assert variants.members("valis120", paused=True) == ["valis120", "valis120_hires"]
@@ -552,14 +541,14 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert variants.family("valis120_micro") == "valis120"
 
     got = rows(capsys)
-    assert len(got) == 17
+    assert len(got) == 16
     assert "valis120" not in [r[0] for r in got]
     assert {r[12] for r in got} == {"1"}
     everything = rows(capsys, "--all")
     assert [r[0] for r in everything] == [variants.run_name(r) for r in variants.RUNS]
     flags = {r[0]: r[12] for r in everything}
     assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
-    assert sum(v == "1" for v in flags.values()) == 17
+    assert sum(v == "1" for v in flags.values()) == 16
     # the same line, flag apart, as when it ran
     (line,) = [r for r in everything if r[0] == "valis120"]
     assert line[:12] == [
@@ -582,13 +571,13 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
 def test_score_does_not_expect_a_paused_run(monkeypatch):
     from benchmarks.regbench import score as score_module
 
-    pause(monkeypatch, "palom_b1024")
+    pause(monkeypatch, "deeperhistreg_cpu")
     seen = {}
     monkeypatch.setattr(
         score_module, "score", lambda cases, out, *a, **kw: seen.update(kw) or {}
     )
     assert cli.main(["score", "--cases", "c", "--out", "o"]) == 0
-    assert "palom_b1024" not in seen["expected"] and "palom" in seen["expected"]
+    assert "deeperhistreg_cpu" not in seen["expected"] and "palom" in seen["expected"]
     assert len(seen["expected"]) == len(EXPECTED) - 2
 
 
@@ -599,7 +588,7 @@ def test_reactivating_is_one_field(monkeypatch):
         variants, "RUNS", tuple(r._replace(active=True) for r in variants.RUNS)
     )
     assert variants.expected_variants() == EXPECTED
-    assert variants.counts() == (19, 4, 7)
+    assert variants.counts() == (18, 4, 7)
 
 
 @pytest.mark.parametrize(
@@ -636,7 +625,7 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     # pausing the runs that wait as well is a consistent list
     pause(monkeypatch, "affine_ashlar", "affine_ashlar_clean")
     variants.check()
-    assert variants.counts() == (16, 4, 5)
+    assert variants.counts() == (15, 4, 5)
 
 
 def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):

@@ -412,7 +412,6 @@ def test_the_run_list_of_anhir_and_the_reasons_of_the_rest():
         "ashlar",
         "affine_ashlar_clean",
         "palom",
-        "palom_b1024",
         "valis_mirage",
     ):
         assert len(left[name]) > 40

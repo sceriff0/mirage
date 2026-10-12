@@ -730,7 +730,7 @@ def test_the_tables_are_the_sets_own(tmp_path):
     assert "0.57 +- 0.36 um" in text and "no ranking is claimed" in text
     assert "tissue-level block" in text and "off-seam rows" in text
     left = text.split("that are not run here")[1].split("## Not computed")[0]
-    for name in ("valis_mirage", "deeperhistreg_hr_gpu", "ashlar", "palom_b1024"):
+    for name in ("valis_mirage", "deeperhistreg_hr_gpu", "ashlar", "palom"):
         assert f"`{name}`" in left
     # one line per reason: a method without a rule, or a run HyReCo does not take
     assert left.count("\n- ") == len(methods.NO_BRIGHTFIELD) + len(
@@ -890,7 +890,7 @@ def test_the_run_list_of_an_external_set():
             *methods.variant_names("valis", "valis120_hires"),
         ]
         left = dict(variants.excluded_for(ds))
-        assert len(left) == 16 and not set(left) & set(names)
+        assert len(left) == 15 and not set(left) & set(names)
         assert all(len(why) > 40 for why in left.values())
         table = variants.runs_table(dataset=ds)
         assert [r[0] for r in table] == names
@@ -898,7 +898,7 @@ def test_the_run_list_of_an_external_set():
     # the cohort's list is untouched
     assert variants.runs_for("multiplex") == variants.active_runs()
     assert variants.excluded_for("multiplex") == []
-    assert len(variants.runs_table()) == 19 and len(variants.expected_variants()) == 37
+    assert len(variants.runs_table()) == 18 and len(variants.expected_variants()) == 35
     assert variants.primary_for() == list(variants.PRIMARY)
 
 
@@ -923,9 +923,9 @@ def test_runs_prints_an_external_sets_list(capsys):
     ]
     assert cli.main(["runs", "--dataset", "hyreco_b", "--excluded"]) == 0
     left = capsys.readouterr().out.splitlines()
-    assert len(left) == 16 and left[0].startswith("stare_prep\t")
+    assert len(left) == 15 and left[0].startswith("stare_prep\t")
     assert cli.main(["runs"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 19
+    assert len(capsys.readouterr().out.splitlines()) == 18
 
 
 def brightfield(tmp_path, **kw):

@@ -14,9 +14,9 @@ reference_img_f=<the reference>)``. ``align_to_reference`` stays at its default 
 (``:1776``); the reference slide is the one argument the benchmark sets. With a reference
 given the crop defaults to ``"reference"`` (``:2142-2146``).
 
-**``hires=1``, label ``valis120_hires``** (non-primary): upstream's high-resolution
-example, MathOnco/valis v1.2.0 ``docs/examples.rst:122-149`` ``[PARTIAL: lines 100-175
-read]``: ``micro_rigid_registrar_cls=MicroRigidRegistrar`` in the constructor, then
+**``hires=1``, label ``valis120_hires``** (the primary row of the family ``valis120``,
+``variants.PRIMARY_VALIS120``): upstream's high-resolution example, MathOnco/valis
+v1.2.0 ``docs/examples.rst:122-149`` ``[PARTIAL: lines 100-175 read]``: ``micro_rigid_registrar_cls=MicroRigidRegistrar`` in the constructor, then
 ``register_micro(max_non_rigid_registration_dim_px=micro_reg_size)`` with
 ``micro_reg_size = np.floor(min over slides of the longest side * 0.25).astype(int)``
 computed as lines 141-146 do. Its three results are named ``valis120_hires_rigid``,

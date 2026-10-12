@@ -7,7 +7,7 @@ list (``python -m benchmarks.regbench runs``); the scorer is told which result n
 expect (``expected_variants()``) and which are the primary rows (``PRIMARY``).
 
 Totals (``counts()``, ``expected_variants()``; nothing here is a second copy to keep in
-step): 19 runs, 37 result names, 4 runs on a GPU, 7 runs per patient (the rest per pair).
+step): 18 runs, 35 result names, 4 runs on a GPU, 7 runs per patient (the rest per pair).
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
@@ -218,7 +218,6 @@ RUNS = (
         "stare",
     ),
     Run("palom", None, {}, "PALOM", False, None),
-    Run("palom", "palom_b1024", {"block": "1024"}, "PALOM", False, None),
 )
 
 # Runs of a private method plug-in (regbench.plugins): none unless one is enabled.
@@ -249,10 +248,9 @@ PRIMARY = (
 
 # Result-name prefix -> the method a row is shown under. A family's name is a label for
 # the method, NOT the name of its primary row: `valis120` and `valis120_hires` share the
-# family `valis120`, whose primary is `valis120_hires` (`primary_of`). `palom_b1024` is in
-# palom's family (non-primary). `ashlar_clean` stays in ASHLAR's family; the two anchored
-# rows share a family of their own, which has no primary row and is never offered as
-# ASHLAR's best.
+# family `valis120`, whose primary is `valis120_hires` (`primary_of`).
+# `ashlar_clean` stays in ASHLAR's family; the two anchored rows share a family of their
+# own, which has no primary row and is never offered as ASHLAR's best.
 FAMILY = {
     "stare": "stare",
     "valis_mirage": "valis_mirage",
@@ -265,8 +263,7 @@ FAMILY = {
 
 FAMILY.update(plugins.get("FAMILY", {}) or {})
 
-# Which run's selfcheck gates a run, when it is not its own. `palom_b1024` is not here:
-# its block grid differs from `palom`'s, so it stands behind its own selfcheck.
+# Which run's selfcheck gates a run, when it is not its own.
 GATED_BY = {"ashlar_clean": "ashlar", "affine_ashlar_clean": "affine_ashlar"}
 
 GATED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
@@ -613,7 +610,7 @@ def primary_for(dataset=None):
 
 def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs (37 with nothing paused). For an external dataset, the names of
+    the active runs (35 with nothing paused). For an external dataset, the names of
     ``runs_for(dataset)``."""
     check()
     return [v for run in runs_for(dataset) for v in variants_of(run)]
