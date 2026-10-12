@@ -2928,7 +2928,7 @@ missing the rest of the list]`). None of the following was observed:
   that has not ended (`PENDING`, `RUNNING`, `RESIZING`, `SUSPENDED`) are names of the
   `sacct` manual's JOB STATE CODES (tag above); the manual says a state too long for its
   column is followed by `+`, and a state matches by prefix here (`CANCELLED by
-  <uid>`). Check on the site: what `sacct -n -X -P -j <array job>_<task> -o
+  <uid>`). Check on the site: what `sacct -n -P -j <array job>_<task> -o
   JobID,State,ElapsedRaw,TotalCPU` prints for an array task (the first field must be
   `<array job>_<task>`, which is what a record's `launch_id` is built from:
   `SLURM_ARRAY_JOB_ID` and `SLURM_ARRAY_TASK_ID`), for a task killed for memory, and for

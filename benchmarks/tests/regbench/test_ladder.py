@@ -525,12 +525,12 @@ fi
 """
 
 
-def _rung(tmp_path, sacct=True, task="climb", out="out", **more):
+def _rung(tmp_path, sacct=True, task="climb", out="out", sacct_text=SACCT, **more):
     """run_rung.sbatch as the scheduler runs task 3 of array job 902, with a stand-in
     python (and sacct) on PATH."""
     fake, out = tmp_path / "bin", tmp_path / out
     fake.mkdir(exist_ok=True)
-    for name, text in (("python", PYTHON), ("sacct", SACCT)):
+    for name, text in (("python", PYTHON), ("sacct", sacct_text)):
         if name == "sacct" and not sacct:
             continue
         (fake / name).write_text(text)
@@ -727,9 +727,11 @@ def test_allocations_alone_name_the_end_state_and_no_cpu_time():
     assert [v["cpu_s"] for v in got.values()] == [None, None, None]
 
 
-def test_the_cohort_accounting_is_asked_with_the_steps():
-    """The settle query feeds `cpu_h_scheduler`: with -X it could only ever be zero."""
-    text = (Path(ladder.__file__).parent / "slurm" / "score_cohort.sbatch").read_text()
+@pytest.mark.parametrize("script", ["score_cohort.sbatch", "run_rung.sbatch"])
+def test_the_accounting_is_asked_with_the_steps(script):
+    """Both queries feed a CPU figure (`cpu_h_scheduler`, and a lost attempt's
+    `scheduler_cpu_s`): with -X it could only ever be zero."""
+    text = (Path(ladder.__file__).parent / "slurm" / script).read_text()
     calls = [
         line.split("#")[0]
         for line in text.splitlines()
@@ -737,6 +739,37 @@ def test_the_cohort_accounting_is_asked_with_the_steps():
     ]
     assert len(calls) == 1
     assert " -X" not in calls[0] and "--allocations" not in calls[0], calls[0]
+
+
+SACCT_STEPS = r"""#!/bin/bash
+# sacct as the manual describes it: with -X the allocation alone and no CPU time; else
+# the job's line, with no CPU time of its own here, and one line per step
+echo "$*" >> "$FAKE/sacct.log"
+case " $* " in
+    *" -X "*) echo "901_3|NODE_FAIL|120|00:00:00" ;;
+    *)
+        echo "901_3|NODE_FAIL|120|00:00:00"
+        echo "901_3.batch|CANCELLED|120|00:07:30"
+        echo "901_3.extern|COMPLETED|121|00:00:01"
+        ;;
+esac
+"""
+
+
+def test_the_rung_task_keeps_the_cpu_time_of_a_task_the_scheduler_ended(tmp_path):
+    """The end state is the job's own line's, whatever its steps ended as, and the CPU
+    time is its steps': 7 min 30 s + 1 s."""
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    done, calls, fake, out = _rung(tmp_path, sacct_text=SACCT_STEPS)
+    assert done.returncode == 0, done.stdout + done.stderr
+    acct = out / "logs" / "accounting" / "initial-multiplex-3-2-0.psv"
+    # the step lines are no task Python asked about: the wait ends on the job's line
+    assert len(calls) == 2 and len((fake / "sacct.log").read_text().splitlines()) == 1
+    assert "accounting: an end state for 901_3 after 0s" in done.stdout
+    assert ladder.read_accounting(acct) == {
+        "901_3": {"state": "NODE_FAIL", "elapsed_s": 120.0, "cpu_s": 451.0}
+    }
 
 
 def test_a_record_of_another_submission_is_evidence_of_nothing(tmp_path):

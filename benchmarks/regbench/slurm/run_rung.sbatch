@@ -78,9 +78,11 @@ case "$REGBENCH_ACCT_POLL_S" in ''|*[!0-9]*|0) REGBENCH_ACCT_POLL_S=30 ;; esac
 acct_dir="$REGBENCH_OUT/logs/accounting"
 acct="$acct_dir/$name-$dataset-$index-$attempt-$retry.psv"
 wanted="$acct.wanted"
-# look <job ids, comma-separated>: what the accounting says of them now, into $acct
+# look <job ids, comma-separated>: what the accounting says of them now, into $acct:
+# each task's own line (its state and elapsed time) and its steps' lines, which carry
+# the CPU time (asked for the allocations alone, sacct reports that as zero)
 look() {
-    sacct -n -X -P -j "$1" -o JobID,State,ElapsedRaw,TotalCPU > "$acct.new" 2>/dev/null \
+    sacct -n -P -j "$1" -o JobID,State,ElapsedRaw,TotalCPU > "$acct.new" 2>/dev/null \
         && [ -s "$acct.new" ] && mv "$acct.new" "$acct"
 }
 # all_ended: has every task named in $wanted a line in $acct whose state is an end state

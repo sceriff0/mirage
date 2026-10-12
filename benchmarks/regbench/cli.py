@@ -428,7 +428,7 @@ def build_parser():
         "--accounting",
         default=None,
         metavar="FILE",
-        help="with --ladder: `sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU` of "
+        help="with --ladder: `sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU` of "
         "this unit's earlier tasks. A record that still says `killed` is settled by "
         "the state of the task that wrote it, and keeps that task's elapsed time",
     )
@@ -510,7 +510,7 @@ def build_parser():
         "--accounting",
         required=True,
         metavar="FILE",
-        help="`sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU` of the jobs",
+        help="`sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU` of the jobs",
     )
 
     sb = sub.add_parser(
