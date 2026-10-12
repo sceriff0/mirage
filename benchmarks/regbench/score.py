@@ -2917,6 +2917,7 @@ def score(
     ]
     variants_of = {}
     jobs, hashes, lists, prepared, folded, reseeded = [], {}, {}, set(), [], []
+    current, other_spec = truth.load_spec()[truth.HASH_KEY], []
     for ds in datasets or DATASETS:
         made = case_jobs(
             cases_root, out, ds, dev, expected, dropped, owners, row_checks
@@ -2927,6 +2928,8 @@ def score(
             for c in (j[1] for j in made):
                 if c.extra.get("truth_spec_sha256"):
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
+                    if ds == "synthetic" and c.extra["truth_spec_sha256"] != current:
+                        other_spec.append(c)
                 if (c.extra.get("field") or {}).get("fold_pct", 0) > 0:
                     folded.append(f"{ds}/{c.case_id}")
                 skipped = (c.extra.get("reseed") or {}).get("skipped") or []
@@ -2944,6 +2947,16 @@ def score(
             "the known-truth cases were made from more than one truth_spec.json: "
             + "; ".join(f"{h[:12]} (e.g. {c})" for h, c in hashes.items())
             + ". Score them separately; a changed spec is a post hoc change."
+        )
+    if other_spec:
+        c = other_spec[0]
+        raise SystemExit(
+            f"{len(other_spec)} synthetic known-truth case(s) under "
+            f"{Path(cases_root) / 'synthetic'} were not prepared from the current "
+            f"truth_spec.json ({current[:12]}): e.g. {c.case_id} "
+            f"({c.extra['truth_spec_sha256'][:12]}). They are not scored: their maps, "
+            "probes and seeds are another spec's. Prepare the synthetic cases into a "
+            "new, empty cases folder (REGBENCH_CASES) and register them again."
         )
     if len(lists) > 1:
         raise SystemExit(

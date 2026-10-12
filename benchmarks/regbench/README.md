@@ -1334,7 +1334,12 @@ declares a list of that one patient.
 
 **The freeze.** `prepare` refuses a `truth_spec.json` whose content does not match its
 hash and writes the hash into every `case.json` it makes from it
-(`extra.truth_spec_sha256`); `score` refuses cases of two hashes. The hash covers the
+(`extra.truth_spec_sha256`); `score` refuses cases of two hashes, and refuses a
+`synthetic` case whose hash is not the current `truth_spec.json`'s. `prepare synthetic`
+refuses a cases folder that already holds a case of another spec, with or without
+`--force`: such a case is neither kept as done nor written over (the results registered
+on it would rest on images that are gone), and the message names the folder and says to
+prepare into a new, empty one. The hash covers the
 parameters, not the generator's code: the commit is what fixes that, and it is to be tagged
 `regbench-truth-frozen-<date>` before any method runs. The spec has been re-hashed four
 times, each before any method was scored on it: 2026-10-10 (version 2: seam block, bump

@@ -863,14 +863,14 @@ def test_a_semisynthetic_case_is_reseeded_too(monkeypatch, real_like, tmp_path):
 def test_reseeded_cases_are_named_in_the_summary(reduced, tmp_path):
     src = [c for c in reduced[1] if c.family == "bumps25"][0]
     root, out = tmp_path / "cases", tmp_path / "out"
-    _hashed_copy(src, root, "asked", "a" * 64)
+    _hashed_copy(src, root, "asked", SPEC["sha256"])
     score(root, out, ["synthetic"])
     assert "re-seeded" not in (out / "tables" / "summary.md").read_text()
     dst = root / "synthetic" / "moved"
     shutil.copytree(src.dir, dst)
     rec = json.loads((dst / "case.json").read_text())
     rec["case_id"] = "moved"
-    rec["extra"]["truth_spec_sha256"] = "a" * 64
+    rec["extra"]["truth_spec_sha256"] = SPEC["sha256"]
     rec["extra"]["reseed"]["skipped"] = [{"seed": 1, "min_jacobian": -0.1}]
     (dst / "case.json").write_text(json.dumps(rec))
     score(root, out, ["synthetic"])
@@ -920,12 +920,12 @@ def test_spec_hash_is_enforced(reduced, tmp_path):
     # score refuses cases of two hashes, and takes cases of one
     src = reduced[1][0]
     root = tmp_path / "cases"
-    _hashed_copy(src, root, "a", "a" * 64)
-    b = _hashed_copy(src, root, "b", "a" * 64)
+    _hashed_copy(src, root, "a", SPEC["sha256"])
+    b = _hashed_copy(src, root, "b", SPEC["sha256"])
     out = tmp_path / "out"
     methods.run_case(exact(), b, out)
     res = score(root, out, ["synthetic"])
-    assert {r["truth_spec"] for r in res["truth"]} == {"a" * 64}
+    assert {r["truth_spec"] for r in res["truth"]} == {SPEC["sha256"]}
     # frozen known-truth cases are left out of the cost tables, not out of the failures
     assert res["resources"] == [] and res["summary_resources"] == []
     assert not (out / "tables" / "resources.csv").exists()
@@ -934,21 +934,31 @@ def test_spec_hash_is_enforced(reduced, tmp_path):
     _hashed_copy(src, root, "c", "b" * 64)
     with pytest.raises(SystemExit, match="more than one truth_spec.json"):
         score(root, out, ["synthetic"])
+    # and cases of ONE hash that is not the current spec's are not scored either
+    old = tmp_path / "old_cases"
+    _hashed_copy(src, old, "a", "b" * 64)
+    with pytest.raises(SystemExit) as refused:
+        score(old, tmp_path / "old_out", ["synthetic"])
+    said = str(refused.value)
+    assert "were not prepared from the current truth_spec.json" in said
+    assert SPEC["sha256"][:12] in said and "bbbbbbbbbbbb" in said
+    assert str(old / "synthetic") in said and "new, empty cases folder" in said
+    assert not (tmp_path / "old_out" / "tables").exists()
 
 
 @pytest.mark.slow
 def test_a_case_whose_true_map_folds_is_named_in_the_summary(reduced, tmp_path):
     src = reduced[1][0]
     root, out = tmp_path / "cases", tmp_path / "out"
-    _hashed_copy(src, root, "fine", "a" * 64)
+    _hashed_copy(src, root, "fine", SPEC["sha256"])
     score(root, out, ["synthetic"])
     text = (out / "tables" / "summary.md").read_text()
-    assert "sha256 `" + "a" * 64 in text and "folds somewhere" not in text
+    assert "sha256 `" + SPEC["sha256"] in text and "folds somewhere" not in text
     dst = root / "synthetic" / "bent"
     shutil.copytree(src.dir, dst)
     rec = json.loads((dst / "case.json").read_text())
     rec["case_id"] = "bent"
-    rec["extra"]["truth_spec_sha256"] = "a" * 64
+    rec["extra"]["truth_spec_sha256"] = SPEC["sha256"]
     rec["extra"]["field"]["fold_pct"] = 0.001
     (dst / "case.json").write_text(json.dumps(rec))
     score(root, out, ["synthetic"])

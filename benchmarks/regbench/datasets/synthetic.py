@@ -41,6 +41,7 @@ rounds each (``regbench.truth``). The ``seed`` of such a plan is the seed ASKED 
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from pathlib import Path
@@ -818,7 +819,31 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     )
 
 
+def refuse_other_spec(cases_root):
+    """Stop when a synthetic case that is already prepared carries the hash of a
+    ``truth_spec.json`` other than the current one. Such a case is neither kept (its
+    maps, probes and seeds are another spec's) nor rewritten in place (the results
+    registered on it would then rest on images that are gone)."""
+    current = truth.load_spec()[truth.HASH_KEY]
+    for path in sorted((Path(cases_root) / "synthetic").glob("*/case.json")):
+        try:
+            extra = json.loads(path.read_text()).get("extra") or {}
+        except (OSError, ValueError):
+            continue
+        have = str(extra.get("truth_spec_sha256") or "")
+        if have and have != current:
+            raise SystemExit(
+                f"{path.parent}: this case was prepared from truth_spec.json "
+                f"{have[:12]}, and the current one is {current[:12]}. Cases of two "
+                "specs are never in one folder, and an existing case is not replaced. "
+                "Prepare into a new, empty cases folder: export REGBENCH_CASES=<a "
+                "folder that does not exist yet> (or --cases) and prepare again. "
+                "Nothing was prepared."
+            )
+
+
 def prepare(a):
+    refuse_other_spec(a.cases)
     suite = suite_specs(a.suite)
     names = sorted(suite)
     if a.index is not None:
