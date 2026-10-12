@@ -109,9 +109,33 @@ def test_a_folder_that_cannot_be_written_is_a_failure(tmp_path):
     assert f"writable: {tmp_path / 'fine'}" in notes
 
 
-def test_the_scorers_image_is_checked_for_what_the_scorer_imports(capsys):
+def test_the_scorers_image_is_checked_for_what_the_scorer_imports(monkeypatch, capsys):
+    """`--scorer` asks for the scorer's list and for nothing of a method: a module of
+    that list that does not import is one FAIL line naming it and exit 1; a list that
+    imports whole is `ok` and exit 0."""
+    # what the scorer's image must hold (prepare, gate, tissue with OpenCV, score)
+    assert set(preflight.SCORER) == {
+        "numpy", "scipy", "skimage", "tifffile", "zarr", "stare.slide_io", "cv2"
+    }  # fmt: skip
+    argv = ["preflight", "--scorer", "--image", "STARE_REGBENCH"]
+    missing = "regbench_no_such_module"
+    monkeypatch.setattr(preflight, "SCORER", ("numpy", missing, "tifffile"))
     notes, failures = preflight.check(scorer=True)
-    assert all(f.startswith("cannot import ") for f in failures)
-    code = cli.main(["preflight", "--scorer", "--image", "STARE_REGBENCH"])
-    assert code == (1 if failures else 0)
-    assert "[STARE_REGBENCH the scorer]" in capsys.readouterr().out
+    assert len(failures) == 1
+    assert failures[0].startswith(f"cannot import {missing}: ModuleNotFoundError")
+    assert cli.main(argv) == 1
+    said = capsys.readouterr()
+    assert said.err.splitlines() == [
+        f"preflight FAIL [STARE_REGBENCH the scorer] {failures[0]}"
+    ]
+    assert said.out.splitlines()[-1] == (
+        "preflight [STARE_REGBENCH the scorer] 1 failure(s)"
+    )
+    # nothing of a method is asked of the scorer's image: no package, no version
+    monkeypatch.setattr(preflight, "SCORER", ("numpy", "tifffile"))
+    notes, failures = preflight.check("ashlar", scorer=True)
+    assert failures == [] and not [n for n in notes if "ashlar" in n]
+    assert cli.main(argv) == 0
+    said = capsys.readouterr()
+    assert said.err == ""
+    assert said.out.splitlines()[-1] == "preflight [STARE_REGBENCH the scorer] ok"
