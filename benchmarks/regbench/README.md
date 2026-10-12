@@ -3646,16 +3646,35 @@ table and `test_stages.py` works each number out again from the text of
   manifest) stay beside them: tens of kilobytes per tile (a control file holds the
   tile's whole lattice of window vectors; a job's record with its command and the tail
   of what it printed is a few more).
-- **The same transform as one `stare register`.** `test_stages.py` registers the 2048 x
-  2560 pair stage by stage and with one `stare register`, and finds the anchor, the tile
-  plan, every tile's control points and the manifest equal byte for byte, SOLVE's report
-  equal value for value except its own clock (`solve.solve_seconds`), and the written
-  image equal pixel for pixel. Each stage's argument list is compared whole with the
-  one `stare.cli.register` hands that stage.
-- **Outside the cohort's launcher** (the selfcheck, a laptop, `run` by hand) the same
-  four commands run inside one job, each a process of its own, the tiles `workers` at a
-  time (`info.jobs.execution: local`): the selfcheck gates the commands the cohort's
-  jobs run.
+- **One path to the transform, and a stated launcher.** COARSE, every tile and SOLVE
+  always run as processes of their own through one function (`run_stage`), and the
+  round's transform is always obtained by reading the records they left (`_collect`).
+  The benchmark never runs `stare register`. What differs between two runs is who
+  starts the stage processes, and the run says so in `REGBENCH_STAGES`; there is no
+  default:
+
+  | `REGBENCH_STAGES` | who starts the stages | stated by | cost of the round |
+  |---|---|---|---|
+  | `jobs` | the scheduler: one job per stage, the pipeline's allocation and retries | `slurm/run_rung.sbatch`, from the launcher's `stages` column | what the stage jobs recorded |
+  | `local` | the run itself: the same `run_stage` calls, the tiles `workers` at a time, retried by the same rule, no memory or time limit per stage | `regbench selfcheck` for its own run; `regbench run --stages local` for a run by hand; a test | the run's own process tree, as for any method |
+
+  A run of STARE that states neither is refused before a stage process is started:
+  `regbench run` touches no record and ends with `REGBENCH_END ... status=lost
+  cause=not_submitted whose=launcher`, and nothing is registered in the stage jobs'
+  place. `run.json: info.jobs.execution` names the launcher that ran. The selfcheck
+  therefore gates the path the cohort's results are made by: the same commands, the
+  same records, the same collector.
+- **Both launchers give one transform.** `test_stages.py` registers the 2048 x 2560
+  pair through `regbench stage`, one call per stage as `slurm/stage.sbatch` makes it,
+  and through the local launcher: the anchor and the tile plan are equal byte for byte
+  and the transform within 0.001 px (the manifest's numbers and the mapped points of a
+  64 px lattice). It is not equal to the byte because one `stare reg-tile` command on
+  identical inputs is not: between two fresh processes its control values, rounded to 4
+  decimals, differ by one unit of the fourth in places (measured; more often on a busy
+  machine), and the transform then differed by at most 0.00008 px in ten runs of
+  the test on a machine under heavy load. Each stage's argument list is compared whole with the one in the source of
+  `stare.cli.register` (stare-registration 1.2.1, installed package `[FULL: cli.py]`),
+  which is read and not run.
 
 - **Parameters.** `TIER_HIGH_STRIDE64` = the `high` row of the STARE table in
   `lib/RegPresets.groovy` (`tile` 2048, `halo` 256, `out_tile` 1024, `max_dim` 1024) plus
@@ -4471,4 +4490,4 @@ identity candidate, CLAHE). `test_submit_anhir.py` reads the job graphs of
 `test_selfcheck.py` runs STARE once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's selfcheck on its own two pairs and two real
 registrations; `test_stages.py` registers the 2048 x 2560 pair stage by stage, as the
-cohort's jobs do, and once with a single `stare register`, and compares the two.
+cohort's jobs do, and once more with the local launcher, and compares the two.
