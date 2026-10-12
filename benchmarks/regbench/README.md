@@ -2381,7 +2381,7 @@ round).
 | `REGBENCH_OUT` | results, logs, gates | `$HOME/regbench_results/mirage-<commit>` |
 | `REGBENCH_BIND` | paths to bind into every image, comma-separated: where the cohort's slides and nuclei live | none |
 | `REGBENCH_WORK` | scratch for a method's intermediates | `$TMPDIR` |
-| `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS_MIRAGE`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the six images; the script refuses to submit when one a selected run needs is missing | none |
+| `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS_MIRAGE`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the six images of the run list (a seventh, `REGBENCH_SIF_STARDIST`, is for `--prepare` only); the script refuses to submit when one a selected run needs is missing. Local `.sif` paths: "Before the first real submission" | none |
 | `REGBENCH_SBATCH_GPU` | the site's GPU request, e.g. `--gres=gpu:nvidia_h200:1`; required for the four GPU runs | none, on purpose |
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
@@ -2427,6 +2427,95 @@ Partition, account and node type go after `--` and reach every job, e.g.
 `-- --partition=cpu --constraint=<one node type>`. Pin one node type, or the timings
 compare CPUs and not methods. The rungs, the 4 CPUs and the 7-day limit are not
 variables: they are frozen (`ladder.py`).
+
+### Before the first real submission
+
+None of this is checked by the script; each is a way a launch goes wrong that no job
+reports.
+
+- **A checkout of its own, left alone until the tables exist.** Every job imports the
+  harness from the checkout at the moment it starts (`REGBENCH_REPO` is bound into the
+  image and put on `PYTHONPATH`), not from a copy made at submission. A `git pull`, a
+  branch switch or an edit while jobs are queued changes what the later jobs run, and
+  the code fingerprint in each result's `reuse_key` then differs between units of one
+  submission. Clone the branch into a folder nothing else uses, submit from there, and
+  touch it again only after `tables/summary.md` is written.
+- **`REGBENCH_CASES`, `REGBENCH_OUT` and `REGBENCH_WORK`, exported and created, on
+  scratch.** The defaults are under `$HOME` (`REGBENCH_OUT` with the commit in its name,
+  so it moves with the checkout) and, for `REGBENCH_WORK`, each job's `TMPDIR`, which
+  the preflight cannot check. A cohort does not fit a home quota:
+
+  ```bash
+  export REGBENCH_CASES=<scratch>/regbench/cases
+  export REGBENCH_OUT=<scratch>/regbench/out
+  export REGBENCH_WORK=<scratch>/regbench/work
+  mkdir -p "$REGBENCH_CASES" "$REGBENCH_OUT" "$REGBENCH_WORK"
+  ```
+
+- **The images as local `.sif` files, pulled ONE AT A TIME** on a node with network,
+  before anything is submitted (never by a job, and never two pulls at once into one
+  cache). The names are the ones this repository builds or pins: the four it builds
+  (`containers/README.md`), the pipeline's StarDist image, ASHLAR's upstream tag, and
+  the pipeline's VALIS 1.0.0 by the digest of `modules/local/register.nf`:
+
+  ```bash
+  mkdir -p <scratch>/regbench/sif && cd <scratch>/regbench/sif
+  apptainer pull stare-regbench.sif docker://bolt3x/mirage-stare-regbench:1.0.0
+  apptainer pull valis120.sif       docker://bolt3x/mirage-valis120:1.0.0
+  apptainer pull deeperhistreg.sif  docker://bolt3x/mirage-deeperhistreg:1.0.0
+  apptainer pull palom.sif          docker://bolt3x/mirage-palom:1.0.0
+  apptainer pull ashlar.sif         docker://labsyspharm/ashlar:1.20.0
+  apptainer pull valis-mirage.sif   docker://cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+  apptainer pull stardist.sif       docker://bolt3x/mirage-stardist:1.0.0
+  export REGBENCH_SIF_STARE_REGBENCH=$PWD/stare-regbench.sif
+  export REGBENCH_SIF_VALIS120=$PWD/valis120.sif
+  export REGBENCH_SIF_DEEPERHISTREG=$PWD/deeperhistreg.sif
+  export REGBENCH_SIF_PALOM=$PWD/palom.sif
+  export REGBENCH_SIF_ASHLAR=$PWD/ashlar.sif
+  export REGBENCH_SIF_VALIS_MIRAGE=$PWD/valis-mirage.sif
+  export REGBENCH_SIF_STARDIST=$PWD/stardist.sif      # --prepare only
+  ```
+
+  (`apptainer pull <file> docker://<reference>`: the form of Apptainer's user guide
+  `[MEMORY]`, not retrieved while this was written; `singularity pull` takes the same
+  arguments. None of the seven pulls was run from here.) `submit_cohort.sh --preflight`
+  then starts each of them as a job would.
+- **Never an `--export=` after `--`.** Every job is submitted with `--export=ALL`, which
+  is how `REGBENCH_*` reaches it, and the caller's own options come after it on the
+  `sbatch` line: an `--export=NONE` or `--export=VAR=...` there replaces it, and the
+  jobs start without their paths and images.
+- **Inside `tmux` (or `screen`).** A real submission starts every image once (the
+  preflight) and then makes several hundred `sbatch` calls, one after the other; it
+  takes minutes. A login session that drops in the middle ends the script with part of
+  the graph queued. The ids of what was queued are then in
+  `$REGBENCH_OUT/logs/submitted/<id>.ids`, the newest file of that folder (each id is
+  written there as soon as its `sbatch` returns): `scancel $(cat <that file>)`, and
+  submit again.
+- **`REGBENCH_STAGE_QUEUE_MAX` is per run, not for the submission.** Each run whose
+  registration is several jobs per round (`stare`, `stare_prep`) has, on each dataset,
+  a tile submitter of its own with a ceiling of its own; a run's datasets follow one
+  another, so the most tile tasks in the queue at once is the ceiling times the number
+  of such runs (two: 200 at the default 100), on top of everything the launcher itself
+  queued. The dry run's last lines give the sum to hold against the site's limit.
+- **A subset submitted into a results folder makes every other run `not run` there.**
+  The scorer takes what the LAST submission into `REGBENCH_OUT` ran or reused and
+  nothing else (`--submission`). `--runs "stare ashlar"` into a folder that holds a
+  full cohort leaves, in the new tables, every other run as `not run`; the earlier
+  results stay on disk, and the earlier tables are replaced. Give a subset its own
+  `REGBENCH_OUT`, or submit the full run list again (every unit that is ok is reused,
+  not run).
+- **The scheduler's state says nothing about the outcome.** The registration tasks
+  (`run_rung.sbatch`, `stage.sbatch`) exit 0 whether the method succeeded, failed or
+  was skipped, so `sacct` shows them `COMPLETED` in all three cases; a state other
+  than that (`OUT_OF_MEMORY`, `TIMEOUT`, `NODE_FAIL`, `CANCELLED`) is the scheduler's
+  own verdict. What became of a unit is in its `run.json` (`ok`, `cause`) and in the
+  last line of its log: `grep -h REGBENCH_END "$REGBENCH_OUT"/logs/*.log`.
+- **Inodes.** A tile task leaves four small files: its log
+  (`logs/rb-<run>-<ds>-tile-...log`), its end line (`logs/end/`), its job record
+  (`stages/jobs/tile_<row>.json`) and the tile's control file. With T tile tasks
+  (the dry run prints T) that is about 4 x T files under `REGBENCH_OUT`, for each of
+  the two staged runs: check the scratch file system's inode quota against it, not
+  only its bytes.
 
 ### In order, the first time
 
