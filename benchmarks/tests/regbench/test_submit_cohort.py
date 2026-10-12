@@ -697,7 +697,11 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
 def test_the_settle_step_of_the_batch_script():
     code = code_of(SLURM / "score_cohort.sbatch")
     # ONE place asks the scheduler and settles; the settle job and the scorer call it
-    assert code.count("settle --out") == 1 and code.count("sacct -n -X -P") == 1
+    assert (
+        code.count("settle --out") == 1
+        and code.count("sacct -n -P -j") == 1
+        and "sacct -n -X" not in code
+    )
     assert code.count("settle_killed") == 3  # defined, the settle job, the scorer
     job = code[
         code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
