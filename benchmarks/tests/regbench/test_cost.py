@@ -503,7 +503,7 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
     text = (out / "tables" / "summary.md").read_text()
     assert "## Cost by step, as measured here (secondary)" in text
     assert "cores confined:" in text
-    # the headline cost table is still the estimate alone, and the headline block
+    # the headline cost table is still the registration alone, and the headline block
     # beside it has the time to the written image and both memory peaks per method
     assert "## Resources (per patient; registration only)" in text
     head = text[text.index("### Cost per method") : text.index("## Cost by step")]
@@ -511,6 +511,20 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
         assert f"| {column}: complete / common |" in head, column
     # ... with VALUES for a method that completed every patient, not only the cells
     names = [c.strip() for c in head.splitlines()[4].strip("|").split("|")]
+    # CPU-hours come first, the device beside the GPU-hours, the times after them
+    assert names[:9] == [
+        "dataset",
+        "method",
+        "patients complete / all",
+        "common",
+        "cpu_h_used: complete / common",
+        "cpu_h_reserved: complete / common",
+        "cpu_efficiency: complete / common",
+        "gpu_h: complete / common",
+        "device",
+    ]
+    assert names.index("register_s: complete / common") > names.index("device")
+    assert "Valid between rows: CPU-hours" in head and "NOT valid:" in head
     for method in ("flat", "deep", "round"):
         (line,) = [ln for ln in head.splitlines() if f"| {method} |" in ln]
         cells = dict(zip(names, (c.strip() for c in line.strip("|").split("|"))))

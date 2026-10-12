@@ -1538,9 +1538,9 @@ it is scoring.
 | `attrition.csv` | dataset x registration row | where the rounds go: `manifest_rounds` (the rounds of the cohort's manifest; blank unless the scorer is given it, `score --manifest`, which the launcher's score job does when `REGBENCH_MANIFEST` is set), `prepared`, `with_outlines`, `with_nuclei`, then per row `run` (a record that is not `not run`), `registered` (`ok`), `scored` and `scored_nuclei` (the row is its own result: not the unregistered pose, not left out). Also a table of `summary.md` |
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
 | `failure_log.csv` | failed or lost EVENT | always written (a header alone when nothing failed). See "The failure log" |
-| `resources.csv` | case x variant | the cost recorded at that variant's yield |
+| `resources.csv` | case x variant | the cost recorded at that variant's yield, with the billing columns of "CPU-hours: one definition for every method" |
 | `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
-| `cost_summary.csv` | dataset x variant | the median over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`) and over the patients every compared row completed (`*_common_med`, `n_patients_common`) |
+| `cost_summary.csv` | dataset x variant | the median and the mean over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`; `*_med`, `*_mean`) and over the patients every compared row completed (`*_common_med`, `*_common_mean`, `n_patients_common`); CPU-hours first, `device`, `gpu_model`; for a row in several jobs `time_unlimited_parallel_tiles_s_*`, `to_image_unlimited_parallel_tiles_s_*` and `peak_cpus_at_once` in place of `register_s_*` and `total_to_image_s_*` |
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
 | `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv`, `tissue_dose.csv`, `tissue_dose_summary.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
@@ -1834,9 +1834,101 @@ evaluation pixel, a 50000 px slide 4.06 µm.
 
 ## Cost
 
-Per round and per patient: registration wall time, CPU-hours of the whole process tree,
-peak memory, GPU-hours with the device named, and total time to the registered image
-(`register_s + write_s`). No single column is "the" cost.
+Per round and per patient, in this order: CPU-hours used and reserved by the
+registration, their ratio, GPU-hours with the device, memory-hours, then the times
+(registration, writer, to the registered image) and the peak memory. No single column
+is "the" cost.
+
+### CPU-hours: one definition for every method (`billing.py`)
+
+The scope is the REGISTRATION for every method: what the registration clock covers
+("What each method's clock includes"). The method's own writer has a pair of its own.
+The benchmark's own work (moving the nuclei through the map, the tissue reduction,
+scoring) is in neither.
+
+An **attempt** is one try at a registration or at a part of one, with the CPUs and the
+memory it was given, its duration and the CPU time its processes used. For a method
+that registers in one process an attempt is the job of one rung of the memory ladder;
+for a registration in several scheduler jobs (STARE) it is one attempt of one stage
+job. An attempt is *good* when its result is part of the registration the row reports,
+and *wasted* otherwise: a rung that ran out of memory, a retried tile, the last attempt
+of a registration that failed. A writer that fails after a good registration does not
+make the registration a wasted attempt.
+
+| column | definition | in |
+|---|---|---|
+| `cpu_h_used` | user + system CPU time of the good attempts' processes, summed over every job of the row. The first cost column of `summary.md` | all three tables |
+| `cpu_h_reserved` | allocated CPUs x duration, summed over the good attempts. One process: the job's CPUs x `register_s`. Several jobs: each stage attempt's CPUs x its own duration | all three |
+| `cpu_efficiency` | `cpu_h_used / cpu_h_reserved` (per patient: of the patient's sums) | all three |
+| `gb_h_reserved` | requested memory (GB) x duration over the same attempts. One process: the rung's memory x `register_s`. Several jobs: each stage attempt's own memory x its duration, read from the stage jobs' records when the tables are written (blank in a row whose records are gone or are another attempt's: `billing_note`) | all three |
+| `wasted_cpu_h_used`, `wasted_cpu_h_reserved`, `wasted_gb_h_reserved` | the same three over the wasted attempts. An attempt the scheduler killed before it could bill itself is billed by the scheduler's elapsed and CPU time of the whole task (`wasted_from_scheduler`, an upper bound); one nobody recorded is in no sum (`wasted_unknown`) | `resources.csv`, `summary_resources.csv` |
+| `total_cpu_h_used`, `total_cpu_h_reserved`, `total_gb_h_reserved` | good + wasted | all three |
+| `write_cpu_h_reserved`, `write_cpu_h_used` | the method's own writer, the attempt that wrote the image: the CPUs of the job it ran in x `write_s` (STARE: STITCH's own 4 CPUs x its duration), and its measured CPU time where the writer is a process of its own (STARE's STITCH; blank elsewhere, where a writer's CPU time is not measured apart) | `resources.csv`, `summary_resources.csv` |
+| `write_wasted_cpu_h_reserved` | writer attempts that failed, where they are recorded (STITCH's retries; blank elsewhere: there a failed writer fails the row) | the same two |
+| `gpu_h`, `device`, `device_name`, `gpu_model` | GPU-hours are a column of their own (registration time x GPUs). `device` is `gpu` for a row whose registration had a GPU and `cpu` otherwise (`device_name` is what the run recorded, `cuda:0`). The `device` column stands beside the CPU columns in `summary.md`: a `gpu` row's CPU-hours are never read without it | all three |
+| `moving_gpx`, `cpu_h_used_per_gpx` | gigapixels of the round's moving image (one plane: height x width), and CPU-hours used per gigapixel. Per round for a method that runs per pair; a per-patient launch has one clock for all its rounds, so there it is per patient only: the launch's CPU-hours over the moving images of the rounds that registered | all three |
+| `cpu_h_scheduler`, `scheduler_jobs`, `cpu_h_used_vs_scheduler` | the scheduler's own CPU time (`TotalCPU`) of the jobs that ran the good attempts, how many jobs that is, and `cpu_h_used` over it. A cross-check, below | all three |
+
+`cpu_h`, `cpu_h_allocated` (STARE rows), `write_cpu_h_allocated` and `wasted_cpu_h` are
+columns of `resources.csv` and `summary_resources.csv` too: `cpu_h` is the measured
+CPU time of the row's own last attempt whatever became of it (`cpu_h_used` when it
+registered), `cpu_h_allocated` and `write_cpu_h_allocated` are `cpu_h_reserved` and
+`write_cpu_h_reserved` of a registration in several jobs, and `wasted_cpu_h` is
+`wasted_cpu_h_used` of a row that registered. `wasted_wall_s` of a STARE row also
+holds STITCH's failed attempts; the `wasted_*_reserved` columns do not, because STITCH
+is the writer (`write_wasted_cpu_h_reserved`).
+
+**Aggregation.** Per patient: the sum over its rounds for a method that runs per pair,
+the launch's own figure for a per-patient method. A patient's wasted attempts are every
+failed attempt of it; a failed round inside a per-patient launch that otherwise
+finished shares that launch's clock and is no attempt of its own. Per method: the
+median over patients, given twice (`cost_summary.csv`): over the patients that method
+completed, and over the patients EVERY compared row completed (`*_common_med`, with
+`n_patients_common`), each with its mean. Only the second may be placed beside another
+method's, and `summary.md` prints the two counts on the same line.
+
+**Which ratios are valid.** CPU-hours (used, reserved, total) between rows, on the
+common patients, with `device` stated. Not valid: STARE's time with unlimited parallel
+tiles against a single process's time; a `gpu` row against a `cpu` row as if they had
+the same resources; totals that end at different deliverables (`merged_image`, "Cost
+by step").
+
+**The two instruments, and the undercount of one.** A registration in one process is
+measured by `resources.Monitor`: a thread reads the CPU time of the process and of
+every descendant five times a second and keeps each process's last reading. CPU a
+child spends between its last reading and its exit is not seen, and a child that
+starts and ends between two readings is not seen at all. Measured on one laptop with
+that reader: 40 children of 0.05 s CPU each, one after another, were billed 33 % of
+their CPU time; children of 0.15 s 51 %; children of 0.5 s 80 %; four workers of 3 s
+99 %. So `cpu_h_used` of such a row is a LOWER BOUND, close for a method whose work is
+in long-lived processes and threads. A registration in several jobs is measured by
+`os.wait4` of each stage command (its own process and the children it waited for),
+which has no such gap. The reader is in `resources.py`, whose bytes are part of what
+a finished unit is reused by (`reuse_key`), so it is not changed under a running
+cohort.
+
+**The scheduler's figure is the detector, not the number** (`cpu_h_scheduler`). The
+launcher's settle step asks `sacct` for every job of the submission
+(`logs/accounting.psv`), and the scorer reads each row's jobs from it: the row's own
+launch for a method in one process, the jobs of the good stage attempts for STARE. It
+is not the main number because, for a row that is one job, that job also holds the
+benchmark's own work (moving the nuclei, the tissue reduction), the method's writer
+and every other result of the same launch (a per-patient launch: every round and
+every stage), so it exceeds the registration by an amount that differs between
+methods. What it shows is a `cpu_h_used_vs_scheduler` far below the other rows',
+which is what an undercount by the reader looks like. It is blank when the accounting
+has no CPU time for one of the row's jobs; a zero is read as nothing. Slurm's own
+limits: `TotalCPU` is "the sum of the SystemCPU and UserCPU time used by the job or
+job step"; for a step ended by a signal it "may not include CPU time of child
+processes"; and with `-X`, which the launcher uses, "utilization statistics for job
+allocation(s) will be reported as zero" (sacct manual, slurm.schedmd.com/sacct.html
+`[PARTIAL: the definitions of TotalCPU, UserCPU, SystemCPU, CPUTime, ElapsedRaw,
+AllocCPUS and of -X, read through a summarising fetch that quoted them; the rest of
+the page not read]`). Whether this site's `sacct -X` prints a `TotalCPU` for an
+allocation at all is not known: if the column is blank for every row after the first
+patient, the settle step's `sacct` call needs the steps (without `-X`).
+
+### The other columns
 
 - **A patient's writer time and time-to-image are the patient's totals, for both kinds of
   unit.** A per-patient method records each round's SHARE of one writer call (ASHLAR:
@@ -1920,7 +2012,7 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   only) leaves it valid.
 - **Threads.** No thread variable is exported. Where a method has its own core-count option
   it is set to `resources.n_cpus()` = `min(SLURM_CPUS_PER_TASK, affinity)`; both numbers
-  are recorded. `cpu_efficiency` (CPU time over wall x CPUs) is reported because a method
+  are recorded. `cpu_efficiency` (`cpu_h_used / cpu_h_reserved`) is reported because a method
   that starts one thread per node core can exceed its allocation where cores are not
   confined.
 - **Threads the method's own image sets (ASHLAR: one OpenMP thread on its 4 CPUs).** The
@@ -2019,18 +2111,22 @@ The columns, in `resources.csv` per round and summed per patient in
 |---|---|
 | `elapsed_with_queue_s` | from the start of the first COARSE attempt to the end of SOLVE, on the wall clock: the queue waits between the jobs and the tile submitter's ceiling are in it. Blank when COARSE and SOLVE are of two submissions (a reused stage is not a queue wait) |
 | `wall_unlimited_parallel_s` | COARSE + the LONGEST tile + SOLVE, each the attempt its job ended ok with: the wall time with every tile running at once and no queue |
-| `cpu_h_allocated` | sum over those attempts of allocated CPUs x duration |
-| `cpu_h` | sum over the same attempts of their measured CPU time |
+| `cpu_h_reserved` (also as `cpu_h_allocated`) | sum over those attempts of allocated CPUs x duration |
+| `cpu_h_used` (also as `cpu_h`) | sum over the same attempts of their measured CPU time |
+| `gb_h_reserved` | sum over the same attempts of each one's memory x duration (attempt 2 of a stage job has twice the memory of attempt 1), from the stage jobs' records |
 | `unmeasured_attempts` | stage attempts that ended without a recorded duration (a job the scheduler ended at its time limit): in no sum, so where it is not 0 every time and CPU figure of the row is a LOWER BOUND |
 | `largest_job`, `peak_rss_gb` | the stage of the single attempt with the highest peak memory, failed ones included, and that peak |
 | `n_jobs`, `n_tiles`, `n_job_retries` | attempts run, tiles, attempts beyond the first of each job |
 | `peak_cpus_at_once` | the most allocated CPUs in jobs of the round that overlapped in time (per patient: the largest round's) |
-| `write_cpu_h_allocated`, `write_peak_gb` | STITCH's own process, the attempt that wrote the image: the pipeline's 4 CPUs x its duration, and its peak |
+| `write_cpu_h_reserved` (also as `write_cpu_h_allocated`), `write_cpu_h_used`, `write_peak_gb` | STITCH's own process, the attempt that wrote the image: the pipeline's 4 CPUs x its duration, its measured CPU time, and its peak |
 
-For these rows the headline columns are defined as follows. `register_s` is
+For these rows the time columns are defined as follows. `register_s` is
 `wall_unlimited_parallel_s`: the queue-free figure, because the waits belong to the
 cluster's load and not to the method. `total_to_image_s` is `register_s` plus
-`write_s`, STITCH's wall time in the round's last job. `peak_rss_gb` is the largest
+`write_s`, STITCH's wall time in the round's last job. Neither is a single process's
+time, so in `summary.md` and `cost_summary.csv` they are not under those names: they
+are `time_unlimited_parallel_tiles_s` and `to_image_unlimited_parallel_tiles_s`, with
+`peak_cpus_at_once` beside them, and the plain columns are blank for such a row. `peak_rss_gb` is the largest
 single job's peak (no job of the round holds more), and `cgroup_peak_gb` is the last
 job's, which holds STITCH and the benchmark's own steps. `cpu_efficiency` is measured
 over allocated CPU time. A duration is the stage command's own process (Python start
@@ -2065,8 +2161,9 @@ For both VALIS adapters the benchmark's placing of the slides in the folder VALI
 (a hard link, or a full copy of every slide across file systems) runs with the clock
 paused and is recorded as `info.place_s`, in no cost.
 
-The headline cost is the time to ESTIMATE the transform (`register_s`), and stays so;
-the headline tables also carry the time to the written image and the memory peaks
+The headline cost is that of ESTIMATING the transform, in CPU-hours first
+("CPU-hours: one definition for every method");
+the headline tables also carry the times, the time to the written image and the memory peaks
 (`summary_resources.csv`, `cost_summary.csv` and the block "Cost per method" of
 `summary.md`: `total_to_image_s`, `peak_rss_gb`, `cgroup_peak_gb`). A second table puts
 every step in its own column, per patient and per result that wrote an image:

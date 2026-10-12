@@ -94,7 +94,17 @@ from pathlib import Path
 
 import numpy as np
 
-from . import DATASETS, cost, failure_log, pairs, plugins, prep, tissue, truth
+from . import (
+    DATASETS,
+    billing,
+    cost,
+    failure_log,
+    pairs,
+    plugins,
+    prep,
+    tissue,
+    truth,
+)
 from .cases import (
     NUCLEI,
     OUTLINES,
@@ -325,8 +335,16 @@ def _f(value):
     return math.nan if value is None or value == "" else float(value)
 
 
-def resource_row(run):
-    """One run's cost, as recorded at ITS variant's yield."""
+def resource_row(run, moving_px=None, stage=None, accounting=None):
+    """One run's cost, as recorded at ITS variant's yield.
+
+    The CPU-hours and memory-hours are ``regbench.billing``'s, one rule for every
+    method. ``moving_px`` is the pixel count of the round's moving image
+    (``cpu_h_used_per_gpx``). ``stage`` is ``billing.stage_attempts`` of the round's
+    stage records, for a registration that ran as several scheduler jobs: without it
+    such a row has its CPU-hours from what its run recorded and no ``gb_h_reserved``.
+    ``accounting`` is the scheduler's (``ladder.read_accounting``), for
+    ``cpu_h_scheduler``; without it that column is blank."""
     r = run.get("resources") or {}
     info = run.get("info") or {}
     ok = bool(run.get("ok"))
@@ -379,6 +397,23 @@ def resource_row(run):
         elif run.get("launch_id"):
             unknown += 1
     watch = run.get("oom_watch") if isinstance(run.get("oom_watch"), dict) else None
+    # ── the attempts of this row's registration (regbench.billing) ──
+    registered = ok or bool(run.get("registered"))
+    mem = _f(run.get("mem_requested_gb"))
+    # the rungs of the ladder before this one: the job's CPUs are the same at every
+    # rung (ladder.CPUS), its memory is the rung's
+    attempts = [
+        billing.attempt(
+            billing.WASTED,
+            cpus,
+            p.get("mem_requested_gb"),
+            wall_p,
+            cpu_p,
+            p.get("launch_id"),
+        )
+        for p, (wall_p, cpu_p) in zip(previous, wasted)
+    ]
+    notes, good_jobs = [], []
     # A registration that ran as several scheduler jobs per round (regbench.stages):
     # its cost is summed over those jobs, and the CPUs behind its wall time are the
     # jobs', not this record's own allocation (the round's last job, the writer).
@@ -411,6 +446,105 @@ def resource_row(run):
             cpu = good + float(np.nansum([c for _, c in spent]))
         else:
             wasted += spent
+    if staged:
+        recs = None
+        if stage is not None:
+            recs = list(stage[0])
+            mine = math.fsum(a["reserved_h"] for a in recs if a["kind"] == billing.GOOD)
+            if not math.isclose(mine, allocated_h, rel_tol=1e-6, abs_tol=1e-9):
+                recs = None  # the records are of another attempt at this round
+                notes.append(billing.RECORDS_CHANGED)
+        else:
+            notes.append(billing.NOT_IN_RECORDS)
+        if recs is not None and registered:
+            attempts += recs
+            good_jobs = [a["job"] for a in recs if a["kind"] == billing.GOOD]
+        elif recs is not None:
+            # a round that failed: every attempt of its stage jobs is wasted
+            attempts += [{**a, "kind": billing.WASTED} for a in recs]
+        else:
+            good_h = (_f(jobs.get("cpu_h_measured")), allocated_h)
+            lost_h = (
+                (
+                    _f(jobs.get("wasted_cpu_h_measured")),
+                    _f(jobs.get("wasted_cpu_h_allocated")),
+                )
+                if jobs.get("wasted_attempts")
+                else (0.0, 0.0)
+            )
+            if registered:
+                attempts.append(billing.hours(billing.GOOD, *good_h))
+                if jobs.get("wasted_attempts"):
+                    attempts.append(billing.hours(billing.WASTED, *lost_h))
+            else:
+                attempts.append(
+                    billing.hours(
+                        billing.WASTED,
+                        float(np.nansum([good_h[0], lost_h[0]])),
+                        float(np.nansum([good_h[1], lost_h[1]])),
+                    )
+                )
+    elif registered:
+        attempts.append(
+            billing.attempt(billing.GOOD, cpus, mem, wall, cpu, run.get("launch_id"))
+        )
+        good_jobs = [run.get("launch_id") or ""]
+    elif run.get("cause") != "not_run" and wall == wall:
+        # this row's own last attempt, which registered nothing
+        attempts.append(
+            billing.attempt(billing.WASTED, cpus, mem, wall, cpu, run.get("launch_id"))
+        )
+    bill = billing.sums(attempts)
+    patient_unit = run.get("unit") == "patient"
+    gpx = _f(moving_px) / 1e9 if moving_px else math.nan
+    sched_h, sched_n = (
+        billing.scheduler_hours(good_jobs, accounting)
+        if accounting is not None and registered
+        else (math.nan, 0)
+    )
+    if staged and stitch:
+        write_bill = {
+            "write_cpu_h_used": _f(stitch.get("cpu_s")) / 3600.0,
+            "write_cpu_h_reserved": _f(stitch.get("cpus"))
+            * _f(stitch.get("wall_s"))
+            / 3600.0,
+            "write_wasted_cpu_h_reserved": float(
+                np.nansum(
+                    [
+                        _f(a.get("cpus")) * _f(a.get("wall_s")) / 3600.0
+                        for a in stitch.get("failed_attempts") or []
+                    ]
+                )
+            ),
+        }
+    else:
+        # a writer inside the row's own job: its CPUs are the job's; the CPU time it
+        # used is not measured apart, and a failed one is the row's own failure
+        write_bill = {
+            "write_cpu_h_used": "",
+            "write_cpu_h_reserved": cpus * write_s / 3600.0
+            if ok and write_s > 0 and not staged
+            else "",
+            "write_wasted_cpu_h_reserved": "",
+        }
+    billed = {
+        "device": (billing.GPU if on_gpu else billing.CPU) if adapter else "",
+        "device_name": str(info.get("device") or "cpu") if adapter else "",
+        **bill,
+        **write_bill,
+        "moving_gpx": gpx,
+        # per round only where the row's CPU time is the round's own: a per-patient
+        # launch has one clock for all its rounds (per patient in the summary)
+        "cpu_h_used_per_gpx": billing.ratio(bill["cpu_h_used"], gpx)
+        if not patient_unit
+        else math.nan,
+        "cpu_h_scheduler": sched_h if sched_h == sched_h else "",
+        "scheduler_jobs": sched_n if sched_h == sched_h else "",
+        "cpu_h_used_vs_scheduler": billing.ratio(bill["cpu_h_used"], sched_h)
+        if sched_h == sched_h
+        else "",
+        "billing_note": "; ".join(notes),
+    }
     return {
         "ok": ok,
         "cause": run.get("cause", ""),
@@ -422,9 +556,11 @@ def resource_row(run):
         "cpus_requested": cpus,
         "register_s": wall,
         "register_s_per_round": _f(per_round),
+        # the measured CPU time of THIS attempt, whatever became of it: `cpu_h_used`
+        # for a row that registered, wasted for one that did not (`wasted_cpu_h_used`)
         "cpu_h": cpu / 3600.0,
-        # CPU time over wall x CPUs: above 1 where a method's threads are not confined
-        # (for a registration in several jobs: measured CPU time over allocated CPU time)
+        # `cpu_h_used / cpu_h_reserved`: above 1 where a method's threads are not
+        # confined to its CPUs
         "cpu_efficiency": (
             cpu / 3600.0 / allocated_h
             if staged and allocated_h
@@ -490,7 +626,7 @@ def resource_row(run):
         "adapter": adapter,
         # what the scheduler was asked for, with no fallback (NaN outside a scheduler)
         "cpus_asked": _f(run.get("cpus_requested")),
-        "device": str(info.get("device") or "cpu") if run.get("method") else "",
+        **billed,
         # extra cost columns a private method plug-in declares (none without one)
         **{
             column: info.get(key, "")
@@ -527,6 +663,53 @@ def resource_row(run):
         if isinstance(run.get("threads_env"), dict)
         else "",
     }
+
+
+def moving_pixels(case):
+    """Pixels of a case's moving image (one plane), None when the case has no size."""
+    hw = getattr(case, "mov_hw", None)
+    return int(hw[0]) * int(hw[1]) if hw and len(hw) == 2 else None
+
+
+def bill_from_disk(res_rows, out, cases, accounting=None):
+    """Complete the billing columns of the resource rows with what is not in a
+    ``run.json``, in place:
+
+    * a registration in several scheduler jobs gets its attempts from its stage jobs'
+      records (``billing.stage_attempts``): each attempt's own memory and job, hence
+      ``gb_h_reserved`` and the jobs the scheduler is asked about;
+    * every row that registered gets ``cpu_h_scheduler`` from ``accounting``
+      (``ladder.read_accounting`` of ``<out>/logs/accounting.psv``), when there is one.
+
+    Done at table time and kept in no record: the stage records and the accounting
+    are not in a case's key, so nothing read from them may be stored under it."""
+    by_id = {(c.dataset, str(c.case_id)): c for c in cases}
+    for row in res_rows:
+        case = by_id.get((row["dataset"], str(row["case_id"])))
+        if case is None:
+            continue
+        if row.get("n_jobs") in ("", None):  # one job: its own launch
+            if accounting is not None and (row["ok"] or row.get("registered")):
+                h, n = billing.scheduler_hours([row.get("launch_id")], accounting)
+                if h == h:
+                    row["cpu_h_scheduler"], row["scheduler_jobs"] = h, n
+                    row["cpu_h_used_vs_scheduler"] = billing.ratio(row["cpu_h_used"], h)
+            continue
+        folder = billing.find_stage_dir(
+            out, row["dataset"], row["case_id"], row["method"], row.get("launch_id")
+        )
+        stage = billing.stage_attempts(folder) if folder is not None else None
+        if stage is None:
+            continue
+        try:
+            run = json.loads(
+                (result_dir(out, row["method"], case) / "run.json").read_text()
+            )
+        except (OSError, ValueError):
+            continue
+        again = resource_row(run, moving_pixels(case), stage, accounting)
+        row.update({k: again[k] for k in billing.COLUMNS})
+    return res_rows
 
 
 DROPPED_REASON = "its selfcheck failed and it does not gate its method"
@@ -1386,7 +1569,9 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                         {
                             **base,
                             "method": v,
-                            **resource_row(run or {"cause": "not_run"}),
+                            **resource_row(
+                                run or {"cause": "not_run"}, moving_pixels(case)
+                            ),
                         }
                     )
             failed = v != "initial" and warped is None
@@ -2094,6 +2279,41 @@ def summarise_resources(res_rows):
         }
         for key in ("register_s", "cpu_h", "gpu_h"):
             rec[key] = _stat(_values(ok, key), total)
+        # regbench.billing, per patient. Good: over the rounds that registered. Wasted:
+        # every failed attempt of the patient; a failed round inside a per-patient
+        # launch that otherwise finished shares that launch's clock and is no attempt
+        # of its own, so there the wasted attempts are the finished rounds' earlier
+        # ones. Total: good + wasted.
+        rec["device"] = (
+            (
+                billing.GPU
+                if any(r.get("device") == billing.GPU for r in ok)
+                else billing.CPU
+            )
+            if ok
+            else ""
+        )
+        spent = ok if patient and ok else mine
+        for stem, _ in billing.SUMS:
+            good = _stat(_values(ok, stem), total)
+            lost = _stat(_values(spent, f"wasted_{stem}"), total)
+            rec[stem] = good
+            rec[f"wasted_{stem}"] = lost
+            both = [v for v in (good, lost) if v == v]
+            rec[f"total_{stem}"] = float(sum(both)) if both else math.nan
+        rec["cpu_h_scheduler"] = _stat(_values(ok, "cpu_h_scheduler"), total)
+        rec["cpu_h_used_vs_scheduler"] = billing.ratio(
+            rec["cpu_h_used"], rec["cpu_h_scheduler"]
+        )
+        # the moving images of the rounds that registered, together
+        rec["moving_gpx"] = _stat(_values(ok, "moving_gpx"), np.sum)
+        rec["cpu_h_used_per_gpx"] = billing.ratio(rec["cpu_h_used"], rec["moving_gpx"])
+        for key in (
+            "write_cpu_h_used",
+            "write_cpu_h_reserved",
+            "write_wasted_cpu_h_reserved",
+        ):
+            rec[key] = _stat(_values(ok, key), np.sum)
         # a registration in several scheduler jobs per round: the patient's sums over
         # its rounds, and the most CPUs one round had at once (blank elsewhere)
         split = [r for r in ok if r.get("n_jobs") not in ("", None)]
@@ -2119,7 +2339,11 @@ def summarise_resources(res_rows):
         rec["total_to_image_s"] = (
             float(np.nansum([rec["register_s"], rec["write_s"]])) if ok else math.nan
         )
-        rec["cpu_efficiency"] = _stat(_values(ok, "cpu_efficiency"), np.median)
+        # used over reserved of the patient; the median of the rounds' own where a
+        # row carries no billing (rows made by hand)
+        rec["cpu_efficiency"] = billing.ratio(rec["cpu_h_used"], rec["cpu_h_reserved"])
+        if rec["cpu_efficiency"] != rec["cpu_efficiency"]:
+            rec["cpu_efficiency"] = _stat(_values(ok, "cpu_efficiency"), np.median)
         for key in ("peak_rss_gb", "peak_rss_after_register_gb", "cgroup_peak_gb"):
             rec[key] = _stat(_values(ok, key), np.max)
         rec["gpu_model"] = "; ".join(sorted({r["gpu_model"] for r in ok} - {""}))
@@ -2146,14 +2370,39 @@ def summarise_resources(res_rows):
     return out
 
 
+# CPU-hours first (regbench.billing): the cost that can be set beside another row's
 COST_KEYS = (
-    "register_s",
-    "cpu_h",
+    "cpu_h_used",
+    "cpu_h_reserved",
+    "cpu_efficiency",
+    "gb_h_reserved",
+    "total_cpu_h_used",
+    "total_cpu_h_reserved",
+    "total_gb_h_reserved",
+    "cpu_h_used_per_gpx",
     "gpu_h",
+    "cpu_h_scheduler",
+    "cpu_h_used_vs_scheduler",
+    "register_s",
     "write_s",
     "total_to_image_s",
     "peak_rss_gb",
     "cgroup_peak_gb",
+)
+# The two times of a row whose registration ran as several scheduler jobs per round
+# are not a single process's and are not called like one: each has a name of its own
+# in `cost_summary.csv` and in `summary.md`, and the plain column is blank there.
+PARALLEL_TIMES = {
+    "register_s": "time_unlimited_parallel_tiles_s",
+    "total_to_image_s": "to_image_unlimited_parallel_tiles_s",
+}
+VALID_RATIOS = (
+    "Valid between rows: CPU-hours (`cpu_h_used`, `cpu_h_reserved`, `total_*`), read "
+    "on the common patients, with `device` beside them. NOT valid: the time with "
+    "unlimited parallel tiles of a row in several jobs against the time of a single "
+    "process; a `gpu` row's CPU-hours or time against a `cpu` row's as if they had "
+    "the same resources; and totals that end at different deliverables "
+    "(`merged_image` in the cost-by-step block).\n"
 )
 
 
@@ -2200,11 +2449,21 @@ def summarise_cost(res_summary, primary=None):
             "n_patients_common": len(shared),
             "common_among": ", ".join(common[ds][1]),
         }
+        # in several scheduler jobs per round: its times are another quantity
+        split = any(r.get("n_jobs") not in ("", None) for r in done)
+        rec["device"] = "; ".join(sorted({r.get("device") or "" for r in done} - {""}))
+        rec["gpu_model"] = "; ".join(
+            sorted({r.get("gpu_model") or "" for r in done} - {""})
+        )
+        rec["peak_cpus_at_once"] = (
+            _stat(_values(done, "peak_cpus_at_once"), np.max) if split else ""
+        )
         for key in COST_KEYS:
-            rec[f"{key}_med"] = _stat(_values(done, key), np.median)
-            rec[f"{key}_mean"] = _stat(_values(done, key), np.mean)
-            rec[f"{key}_common_med"] = _stat(_values(shared, key), np.median)
-            rec[f"{key}_common_mean"] = _stat(_values(shared, key), np.mean)
+            name = PARALLEL_TIMES[key] if split and key in PARALLEL_TIMES else key
+            rec[f"{name}_med"] = _stat(_values(done, key), np.median)
+            rec[f"{name}_mean"] = _stat(_values(done, key), np.mean)
+            rec[f"{name}_common_med"] = _stat(_values(shared, key), np.median)
+            rec[f"{name}_common_mean"] = _stat(_values(shared, key), np.mean)
         out.append(rec)
     return out
 
@@ -3133,30 +3392,72 @@ def summary_markdown(
         )
         parts += [markdown(fails, list(fails[0])), ""]
     if res_summary:
-        cols = [
-            "dataset",
-            "group",
-            "method",
-            "unit",
-            "n_ok",
-            "attempt",
-            "mem_requested_gb",
-            "register_s",
-            "cpu_h",
-            "cpu_efficiency",
-            "peak_rss_gb",
-            "cgroup_peak_gb",
-            "gpu_h",
-            "write_s",
-            "total_to_image_s",
-            "wasted_attempts",
-            "wasted_from_scheduler",
-            "wasted_unknown",
-            "unmeasured_attempts",
-        ]
+        table = []
+        for r in res_summary:
+            split = r.get("n_jobs") not in ("", None)
+            line = {
+                "dataset": r["dataset"],
+                "group": r["group"],
+                "method": r["method"],
+                "unit": r["unit"],
+                "n_ok": r["n_ok"],
+                "cpu_h_used": r.get("cpu_h_used", math.nan),
+                "cpu_h_reserved": r.get("cpu_h_reserved", math.nan),
+                "cpu_efficiency": r["cpu_efficiency"],
+                "gpu_h": r["gpu_h"],
+                "device": r.get("device", ""),
+                "gb_h_reserved": r.get("gb_h_reserved", math.nan),
+                "wasted_cpu_h_reserved": r.get("wasted_cpu_h_reserved", math.nan),
+                "total_cpu_h_reserved": r.get("total_cpu_h_reserved", math.nan),
+                "cpu_h_scheduler": r.get("cpu_h_scheduler", math.nan),
+                "cpu_h_used_vs_scheduler": r.get("cpu_h_used_vs_scheduler", math.nan),
+                "cpu_h_used_per_gpx": r.get("cpu_h_used_per_gpx", math.nan),
+                "register_s": "" if split else r["register_s"],
+                PARALLEL_TIMES["register_s"]: r["register_s"] if split else "",
+                "peak_cpus_at_once": r.get("peak_cpus_at_once", "") if split else "",
+                "write_s": r["write_s"],
+                "total_to_image_s": "" if split else r["total_to_image_s"],
+                PARALLEL_TIMES["total_to_image_s"]: r["total_to_image_s"]
+                if split
+                else "",
+                "peak_rss_gb": r["peak_rss_gb"],
+                "cgroup_peak_gb": r["cgroup_peak_gb"],
+                "attempt": r["attempt"],
+                "mem_requested_gb": r["mem_requested_gb"],
+            }
+            for key in (
+                "wasted_attempts",
+                "wasted_from_scheduler",
+                "wasted_unknown",
+                "unmeasured_attempts",
+            ):
+                line[key] = r.get(key, "")
+            table.append(line)
         parts += [
             "## Resources (per patient; registration only)\n",
-            "`peak_rss_gb` is the process tree's peak up to that result. Nothing a "
+            "CPU-hours first, by one rule for every row (`regbench.billing`): "
+            "`cpu_h_used` is the user + system CPU time of the registration's own "
+            "processes, `cpu_h_reserved` the allocated CPUs x duration and "
+            "`gb_h_reserved` the requested memory x duration, each summed over the "
+            "attempts that succeeded, every job of the row; `cpu_efficiency` is used "
+            "over reserved; `wasted_*` are the same over the attempts that failed (a "
+            "rung of the memory ladder, a retried stage job) and `total_*` is both. "
+            "The method's writer and the benchmark's own work (moving the nuclei, "
+            "scoring) are in none of them. `cpu_h_used` of a row that registers in one "
+            "process is read by polling its process tree and is a lower bound (CPU of "
+            "a child that exits between two readings is missed); "
+            "`cpu_h_scheduler` is the scheduler's own CPU time of the row's jobs, "
+            "which for such a row also hold the benchmark's work and the writer: a "
+            "cross-check, blank when the scheduler gave nothing, and a "
+            "`cpu_h_used_vs_scheduler` far below the other rows' is what an "
+            "undercount looks like. `gpu_h` is its own column and `device` says which "
+            "rows had a GPU: a `gpu` row's CPU-hours are never read without it. "
+            f"`{PARALLEL_TIMES['register_s']}` is the time of a registration in "
+            "several scheduler jobs with every tile running at once and no queue "
+            "(`peak_cpus_at_once` is how many CPUs that took); it is not a "
+            "`register_s`, which is one process on its allocation. "
+            + VALID_RATIOS.strip()
+            + " `peak_rss_gb` is the process tree's peak up to that result. Nothing a "
             "paused stretch allocates and frees is in it, but what an earlier result's "
             "writer left resident is (VALIS and ASHLAR write between results). "
             "`cgroup_peak_gb` is the whole job, writers included. For a result whose "
@@ -3174,10 +3475,36 @@ def summary_markdown(
             "attempts are in no wasted total, because nobody recorded their cost.\n",
             *([confined + "\n"] if confined else []),
             *[line + "\n" for line in (header or [])],
-            markdown(res_summary, cols),
+            markdown(table, list(table[0])),
             "",
         ]
     if cost_summary:
+        shown = (
+            "cpu_h_used",
+            "cpu_h_reserved",
+            "cpu_efficiency",
+            "gpu_h",
+            "total_cpu_h_reserved",
+            "gb_h_reserved",
+            "cpu_h_used_per_gpx",
+            "cpu_h_used_vs_scheduler",
+            "register_s",
+            PARALLEL_TIMES["register_s"],
+            "write_s",
+            "total_to_image_s",
+            PARALLEL_TIMES["total_to_image_s"],
+            "peak_rss_gb",
+            "cgroup_peak_gb",
+        )
+
+        def cell(r, key):
+            if f"{key}_med" not in r:
+                return "-"
+            return (
+                f"{_fmt(r[f'{key}_med']) or '-'} / "
+                f"{_fmt(r[f'{key}_common_med']) or '-'}"
+            )
+
         table = []
         for r in cost_summary:
             line = {
@@ -3187,24 +3514,36 @@ def summary_markdown(
                 f"{r['n_patients']}",
                 "common": r["n_patients_common"],
             }
-            for key in COST_KEYS:
-                line[f"{key}: complete / common"] = (
-                    f"{_fmt(r[f'{key}_med']) or '-'} / "
-                    f"{_fmt(r[f'{key}_common_med']) or '-'}"
-                )
+            for key in shown:
+                line[f"{key}: complete / common"] = cell(r, key)
+                if key == "gpu_h":
+                    line["device"] = r.get("device", "") or "-"
+                if key == PARALLEL_TIMES["register_s"]:
+                    line["peak_cpus_at_once"] = _fmt(r.get("peak_cpus_at_once", ""))
             table.append(line)
         parts += [
             "### Cost per method (median over patients), on two sets of patients\n",
             "A patient is `complete` for a method when every round of it registered; "
             "a cost is read on complete patients only (the cost of some of a "
             "patient's rounds is not the patient's). Each cell is `over the patients "
-            "this method completed / over the patients EVERY compared row completed`. "
+            "this method completed / over the patients EVERY compared row completed`, "
+            "with the two counts in `patients complete / all` and `common`. "
             "The first is over survivors: a method that fails on the largest patients "
             "looks cheaper there. Only the second is on the same patients for every "
             "method (compared rows: "
             + (cost_summary[0]["common_among"] or "none ran")
-            + "). `write_s` and `total_to_image_s` are the patient's totals for both "
-            "kinds of unit.\n",
+            + "). The columns are CPU-hours used, reserved and their ratio, GPU-hours "
+            "with the device, then the totals with failed attempts, memory-hours, "
+            "CPU-hours per gigapixel of moving image and the scheduler cross-check, "
+            "and only then times. "
+            + VALID_RATIOS.strip()
+            + f" A row in several jobs has `-` under `register_s` and "
+            "`total_to_image_s` and its own columns instead "
+            f"(`{PARALLEL_TIMES['register_s']}`, "
+            f"`{PARALLEL_TIMES['total_to_image_s']}`, with `peak_cpus_at_once` beside "
+            "them). `write_s` and the time to the image are the patient's totals for "
+            "both kinds of unit. The means of the same patients are in "
+            "`cost_summary.csv` (`*_mean`, `*_common_mean`).\n",
             markdown(table, list(table[0])),
             "",
         ]
@@ -3231,8 +3570,14 @@ def score(
     selfcheck_masks=None,
     fresh=False,
     manifest=None,
+    accounting=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``accounting`` is the scheduler's accounting of the jobs (the file ``sacct -n -X
+    -P -o JobID,State,ElapsedRaw,TotalCPU`` wrote; default ``<out>/logs/
+    accounting.psv``, which the launcher's settle step leaves): the cross-check column
+    ``cpu_h_scheduler``. Without one that column is blank.
 
     ``manifest`` is the ``prepare multiplex`` CSV the cohort's cases were made from:
     its number of rounds is the first column of ``attrition.csv``. Without it that
@@ -3382,6 +3727,15 @@ def score(
     # cost is read on the cohort: the frozen known-truth cases are left out of it
     frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
     res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
+    from . import ladder
+
+    booked = Path(accounting or Path(out) / "logs" / "accounting.psv")
+    bill_from_disk(
+        res,
+        out,
+        [job[1] for job in jobs],
+        ladder.read_accounting(booked) if booked.is_file() else None,
+    )
     res_summary = summarise_resources(res)
     cost_summary = summarise_cost(res_summary, primary)
     confined = cost.cores_confined(res)

@@ -1,8 +1,9 @@
 """Cost by step, from the cohort's files to the image each method writes (secondary).
 
-The headline cost of a method is the time it takes to ESTIMATE its transform, with the
-time to its written image and the memory peaks beside it (``resources.csv``,
-``summary_resources.csv``, ``cost_summary.csv``). This module adds a second view,
+The headline cost of a method is the CPU-hours of ESTIMATING its transform
+(``regbench.billing``), with the times and the memory peaks beside them
+(``resources.csv``, ``summary_resources.csv``, ``cost_summary.csv``). This module adds a
+second view,
 ``cost_end_to_end.csv``: one row per patient and result that wrote an image, with the
 steps apart. Every number in it was measured by this benchmark, in the method's own job.
 
@@ -274,7 +275,7 @@ def header_lines(res_rows):
             f"{alloc['coarse']['cpus']} CPUs, every tile {alloc['tile']['cpus']} CPUs, "
             f"SOLVE {alloc['solve']['cpus']} CPU), so its wall time used more than 4 "
             f"CPUs at once, up to {most} for one round; its wall time is NOT comparable "
-            "with the 4-CPU methods', its CPU-hours (`cpu_h`, `cpu_h_allocated`) are. "
+            "with the 4-CPU methods', its CPU-hours (`cpu_h_used`, `cpu_h_reserved`) are. "
             "For these rows `register_s` is `wall_unlimited_parallel_s` (COARSE + the "
             "longest tile + SOLVE, each the attempt that succeeded, no queue; "
             "`elapsed_with_queue_s` has the waits), `total_to_image_s` adds STITCH's "
@@ -580,8 +581,9 @@ def markdown(rows, summary, table):
         return []
     return [
         "## Cost by step, as measured here (secondary)\n",
-        "The headline cost above is the time to ESTIMATE the transform. This block "
-        "puts the other steps beside it, each in its own column, per result that wrote "
+        "The headline cost above is that of ESTIMATING the transform, in CPU-hours "
+        "first. This block is in seconds and "
+        "puts the other steps beside the estimate, each in its own column, per result that wrote "
         "an image (median over patients; seconds). Every number was measured in this "
         "benchmark, in the method's own job at 4 CPUs (DeeperHistReg's GPU rows also "
         "had one GPU: column `device`), EXCEPT a result whose registration ran as "
