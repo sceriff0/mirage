@@ -954,6 +954,22 @@ exists, segment only what has none):
    <slide>` line names what changed, the old masks are set aside under `rerun_stale/`,
    and the slide needs its re-run again.
 
+   **A record is of one image.** A slide's record holds the fingerprint of the slide
+   file its nuclei were computed from (`image_fingerprint`: size, modification time
+   and sampled bytes, `cases.file_fingerprint`) and, when they were traced from a
+   label image, that file's (`label_image_fingerprint`). When the file under that name
+   is another one now, or the record names none, the record is not used: a `STALE
+   <slide>` line says so, what is kept is set aside (`rerun_stale/`) and the slide is
+   decided again (a label image is traced and checked again; a re-run is run again).
+   `prepare multiplex` reads the same fingerprints and does not take the nuclei of
+   another file: the case then has no nuclei, with that reason.
+
+   **`--force` decides every slide again** (`REGBENCH_NUCLEI_FORCE=1` through the
+   launcher), whatever its record says, usable ones included: a `FORCED <slide>` line,
+   the kept re-run set aside, a label image of the manifest traced and checked again,
+   and StarDist run again for every slide that has no usable label image. The polygons
+   and the record are then those of the new run.
+
    **The model and the settings come from the site config** when the two variables are
    not exported (`benchmarks/regbench/site_config.py`). The site overlay holds, in its
    params block, `segmentation_model = '<name>'` and `segmentation_model_dir =

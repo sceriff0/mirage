@@ -11,6 +11,15 @@ one record per slide that ``prepare multiplex --nuclei-dir`` reads::
     <out>/<group>/<slide>/nuclei.npz    the nuclei as polygons (when usable)
     <out>/<group>/<slide>/rerun/        the masks of a StarDist re-run of that slide
 
+**A record is of one image.** It holds the fingerprint of the slide it was computed from
+(``image_fingerprint``: size, modification time and sampled bytes,
+``cases.file_fingerprint``) and, for a label image, that file's too
+(``label_image_fingerprint``). A record whose fingerprint is not the file's now, or
+that has none, is not used: the slide is decided again, and a re-run kept for it is set
+aside (``rerun_stale/``) and run again. ``--force`` (``REGBENCH_NUCLEI_FORCE=1``) decides
+EVERY slide again the same way, whatever its record says: a label image is traced and
+checked again, a kept re-run is set aside and StarDist runs again.
+
 Sources, tried in this order for each slide:
 
 1. **an existing label image** named by the manifest (``ref_nuclei`` / ``mov_nuclei``;
@@ -64,6 +73,7 @@ site's model is not in the repository, and no arm's files were read.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shlex
@@ -74,7 +84,7 @@ from pathlib import Path
 import numpy as np
 
 from . import arms_manifest, cells, pairs, site_config
-from .cases import polys, polyset_arrays, write_json, write_npz
+from .cases import file_fingerprint, polys, polyset_arrays, write_json, write_npz
 
 REPO = Path(__file__).resolve().parents[2]
 SEGMENT_PY = REPO / "bin" / "segment.py"
@@ -412,7 +422,9 @@ def check_label_image(slide, path, store, a, outlines=None, origin=""):
     be used and why not. ``origin`` is how the manifest came by it."""
     rec = {
         **{k: slide[k] for k in ("key", "group", "slide", "image", "channel")},
+        "image_fingerprint": file_fingerprint(slide["image"]),
         "label_image": str(path),
+        "label_image_fingerprint": file_fingerprint(path),
         "origin": origin,
         "usable": False,
         "exact": False,
@@ -472,6 +484,7 @@ def check_rerun(slide, store, a):
     nuc_mask, cell_mask = expected_masks(slide, dest)
     rec = {
         **{k: slide[k] for k in ("key", "group", "slide", "image", "channel")},
+        "image_fingerprint": file_fingerprint(slide["image"]),
         "label_image": str(nuc_mask),
         "origin": "stardist_rerun",
         "usable": False,
@@ -639,9 +652,36 @@ def _keep(store, rec, nuclei):
     rec["n_nuclei"] = int(pairs.n_cells(nuclei))
 
 
+def other_image(rec, slide):
+    """Why a record is not of the files that are there now, or ``""``: the slide (or
+    the label image the nuclei were traced from) has another size, time or sampled
+    bytes than when the record was made, or the record does not say what it was made
+    from. Such a record is never used."""
+    if not rec:
+        return ""
+    have = rec.get("image_fingerprint")
+    if not have:
+        return "its record does not say which image it was computed from"
+    if have != file_fingerprint(slide["image"]):
+        return (
+            f"the slide {slide['image']} is not the file its nuclei were computed from"
+        )
+    if str(rec.get("source") or "").startswith("label_image:"):
+        path = rec.get("label_image") or ""
+        if rec.get("label_image_fingerprint") != file_fingerprint(path):
+            return f"the label image {path} is not the file its nuclei were traced from"
+    return ""
+
+
 def resolve(slide, out, a):
     """Decide one slide and write its record: a usable existing label image, else a
-    finished re-run, else ``needs_rerun``."""
+    finished re-run, else ``needs_rerun``.
+
+    What is kept is used only when it is of the files that are there now
+    (:func:`other_image`) and its re-run was made with the settings that resolve now.
+    ``a.force`` decides the slide again whatever is kept. In all three cases nothing
+    kept answers: a re-run is set aside (``rerun_stale/``), so the slide needs its
+    re-run again unless a label image of the manifest is usable."""
     store = store_of(out, slide)
     old = load(store)
     force = getattr(a, "force", False)
@@ -649,6 +689,7 @@ def resolve(slide, out, a):
     # ITS day. When they resolve to something else now, it is not the re-run to keep:
     # said aloud, set aside, and the slide needs its re-run again.
     changed = [] if force else settings_changed(old)
+    moved = "" if force else other_image(old, slide)
     if changed:
         print(
             f"STALE {slide['key']}: its StarDist re-run was made with other settings "
@@ -656,9 +697,22 @@ def resolve(slide, out, a):
             "segmented again.",
             flush=True,
         )
+    elif moved:
+        print(
+            f"STALE {slide['key']}: {moved}. What is kept for it is set aside "
+            "(rerun_stale/) and the slide is decided again.",
+            flush=True,
+        )
+    elif force and old:
+        print(
+            f"FORCED {slide['key']}: what is kept for it is set aside (rerun_stale/) "
+            "and the slide is decided again.",
+            flush=True,
+        )
+    if changed or moved or force:
         set_aside(store)
         old = None
-    if old and old.get("usable") and not force:
+    if old and old.get("usable"):
         return old
     rec = None
     if slide["candidate"]:
@@ -678,6 +732,9 @@ def resolve(slide, out, a):
             "the re-run kept for this slide was made with other settings "
             f"({'; '.join(changed)}); it is set aside and must be run again"
         )
+    elif moved and rec.get("needs_rerun"):
+        rec["stale_image"] = moved
+        rec["reason"] = f"{moved}: what was kept for it is set aside; {rec['reason']}"
     write_json(store / "nuclei.json", rec)
     return rec
 
@@ -790,8 +847,10 @@ def main(a):
         for slide in chosen:
             rec = load(store_of(a.out, slide))
             # nothing either for a slide whose re-run was refused: running the same
-            # command again gives the same nuclei (--force runs it again)
-            if rec and (rec.get("usable") or rec.get("refused")) and not a.force:
+            # command again gives the same nuclei. A slide decided with --force has
+            # had its re-run set aside (resolve), so it is not usable here and gets
+            # its line; a label image that is usable needs no StarDist, forced or not
+            if rec and (rec.get("usable") or rec.get("refused")):
                 continue
             dest = store_of(a.out, slide) / "rerun"
             dest.mkdir(parents=True, exist_ok=True)
@@ -804,13 +863,16 @@ def main(a):
             print(line)
         return 0
     bad = 0
+    # the masks a re-run has just written are read as they are: only the FIRST look at
+    # a slide is forced
+    after = argparse.Namespace(**{**vars(a), "force": False})
     for slide in chosen:
         rec = resolve(slide, a.out, a)
-        if not rec["usable"] and a.segment and (rec.get("needs_rerun") or a.force):
+        if not rec["usable"] and a.segment and rec.get("needs_rerun"):
             code = segment(slide, a.out)
             if code:
                 print(f"nuclei/{slide['key']}: segment.py exited {code}")
-            rec = resolve(slide, a.out, a)
+            rec = resolve(slide, a.out, after)
         state = rec["source"] if rec["usable"] else f"NONE ({rec.get('reason', '')})"
         print(f"nuclei/{slide['key']}: {state} exact={rec['exact']}", flush=True)
         bad += not rec["usable"] and not rec.get("needs_rerun")

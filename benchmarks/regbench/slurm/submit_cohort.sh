@@ -226,11 +226,13 @@
 #                                     re-run:` lines), in a dry run too
 #   REGBENCH_STARDIST_CPU=1           run that StarDist without a GPU (else it asks for
 #                                     REGBENCH_SBATCH_GPU, as the arms did)
-#   REGBENCH_NUCLEI_FORCE=1           check and segment every slide again, whatever is
-#                                     kept: for a slide whose re-run was REFUSED, after
-#                                     the model or a setting was corrected. (A kept
-#                                     re-run whose settings no longer resolve to the
-#                                     same values is set aside and redone without it.)
+#   REGBENCH_NUCLEI_FORCE=1           decide EVERY slide again, whatever is kept, usable
+#                                     nuclei included: a kept re-run is set aside and
+#                                     StarDist runs again, a label image is checked
+#                                     again. (Without it a kept re-run is set aside and
+#                                     redone by itself when its settings no longer
+#                                     resolve to the same values, or when its slide is
+#                                     no longer the file it was computed from.)
 #   REGBENCH_NUCLEI_SKIP=1            prepare without that step: cases whose slides have
 #                                     no nuclei are scored on the outlines alone
 #   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline

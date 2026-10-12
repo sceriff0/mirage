@@ -32,8 +32,9 @@ what=(nuclei --manifest "$REGBENCH_MANIFEST" --out "$REGBENCH_NUCLEI"
       --index "$SLURM_ARRAY_TASK_ID" --workers "${SLURM_CPUS_PER_TASK:-1}")
 mkdir -p "$REGBENCH_NUCLEI"
 
-# REGBENCH_NUCLEI_FORCE=1: check and segment again whatever is kept (a refused re-run,
-# after the model or a setting was corrected)
+# REGBENCH_NUCLEI_FORCE=1: decide the slide again whatever is kept. The first look
+# below sets a kept re-run aside (usable or refused), so the command is printed for it
+# and the last look reads the masks StarDist has just written
 force=()
 [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && force=(--force)
 # what is there first. It exits 1 for a slide whose kept re-run was REFUSED: that is

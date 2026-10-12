@@ -494,13 +494,17 @@ def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     assert line[5] == f"{frac:.4f}" and "REFUSED" in line[7]
     assert "1 whose re-run was REFUSED" in listed.err
     # it is not segmented again unasked, and no command is printed for it
-    calls = []
-    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or 0)
+    calls, real = [], nuclei.segment
+    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or real(*a))
     assert nuclei.main(args(**base, segment=True, index=0)) == 1 and not calls
     capsys.readouterr()
     assert nuclei.main(args(**base, command=True, index=0)) == 0
     assert capsys.readouterr().out == ""
-    assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 1 and calls
+    # forced: the refused re-run is set aside and StarDist runs again (the same model
+    # here, so the same verdict)
+    assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 1
+    assert len(calls) == 1 and (store / "rerun_stale").is_dir()
+    assert nuclei.load(store)["refused"]
     # the case is prepared on its outlines, without nuclei, with that reason
     cases_root = tmp / "cases"
     a = mx_args(cases_root, manifest, nuclei_dir=str(tmp / "nuc"))
@@ -557,6 +561,132 @@ def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
     assert new["usable"] and new["exact"]
     assert new["settings"]["values"]["segmentation_model"]["value"] == "corrected_model"
     assert nuclei.settings_changed(new) == []
+
+
+def _one_slide(cohort, monkeypatch, labels):
+    """The first slide of the cohort, segmented by the stand-in with ``labels``."""
+    tmp, _, row = cohort
+    fake_segment(tmp, labels, monkeypatch)
+    manifest = manifest_of(tmp, row)
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    return base, ref, nuclei.store_of(tmp / "nuc", ref)
+
+
+def test_force_replaces_the_nuclei_of_a_slide_that_looks_usable(
+    cohort, monkeypatch, capsys
+):
+    """A re-run that is kept and usable (five nuclei short) is not what --force leaves
+    in place: it is set aside, StarDist runs again, and the record and the polygons
+    are the new run's."""
+    tmp, lab, _ = cohort
+    base, ref, store = _one_slide(cohort, monkeypatch, labels_of(drop=5))
+    first = nuclei.load(store)
+    n_all = int(lab.max())
+    assert first["usable"] and not first["exact"] and first["n_nuclei"] == n_all - 5
+    fake_segment(tmp, lab, monkeypatch)  # what StarDist gives now: every nucleus
+    calls, real = [], nuclei.segment
+    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or real(*a))
+    # unforced: what is kept answers, nothing runs
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0 and not calls
+    assert nuclei.load(store) == first
+    capsys.readouterr()
+    assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 0
+    assert len(calls) == 1 and "FORCED P1/P1.r1" in capsys.readouterr().out
+    new = nuclei.load(store)
+    assert new["usable"] and new["exact"] and new["n_nuclei"] == n_all
+    assert pairs.n_cells(nuclei.read_polys(store)) == n_all
+    assert (store / "rerun_stale").is_dir()  # the run it replaces, kept aside
+    # the array task's own order: the forced look, then the line, then an unforced look
+    assert nuclei.main(args(**base, index=0, force=True)) == 0
+    forced = nuclei.load(store)
+    assert not forced["usable"] and forced["needs_rerun"]
+    assert not (store / "nuclei.npz").exists() and not (store / "rerun").exists()
+    capsys.readouterr()
+    assert nuclei.main(args(**base, command=True, index=0, force=True)) == 0
+    assert str(nuclei.SEGMENT_PY) in capsys.readouterr().out  # the line to run
+
+
+def test_force_checks_a_usable_label_image_again_and_runs_no_stardist(cohort, capsys):
+    tmp, lab, row = cohort
+    mask = mask_file(tmp / "masks" / "r1.tif", lab)
+    manifest = manifest_of(tmp, row, ref_nuclei=str(mask), ref_nuclei_from="glob")
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.main(args(**base, index=0)) == 0
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    store = nuclei.store_of(tmp / "nuc", ref)
+    first = nuclei.load(store)
+    assert first["usable"] and first["source"] == f"label_image:{mask}"
+    (store / "nuclei.npz").write_bytes(b"not what the label image holds")
+    assert nuclei.main(args(**base, index=0, force=True)) == 0
+    assert nuclei.load(store) == first  # the same files give the same record
+    assert pairs.n_cells(nuclei.read_polys(store)) == int(lab.max())  # written again
+    capsys.readouterr()
+    assert nuclei.main(args(**base, command=True, index=0, force=True)) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_a_record_is_of_the_image_it_was_computed_from(cohort, monkeypatch, capsys):
+    """The slide is replaced by another file under the same name: its kept re-run is
+    not this file's nuclei. Said aloud, set aside, segmented again."""
+    tmp, lab, row = cohort
+    base, ref, store = _one_slide(cohort, monkeypatch, lab)
+    rec = nuclei.load(store)
+    assert rec["image_fingerprint"] == cases_mod.file_fingerprint(ref["image"])
+    assert set(rec["image_fingerprint"]) == {"size", "mtime_ns", "sample_sha256"}
+    capsys.readouterr()
+    assert nuclei.resolve(ref, tmp / "nuc", args()) == rec
+    assert "STALE" not in capsys.readouterr().out
+    write_nuclear(Path(ref["image"]), (labels_of(drop=7) > 0).astype(np.uint16), 0.325)
+    assert cases_mod.file_fingerprint(ref["image"]) != rec["image_fingerprint"]
+    # prepare does not take the nuclei of the file that was there before
+    cases_root = tmp / "cases"
+    a = mx_args(cases_root, base["manifest"], nuclei_dir=str(tmp / "nuc"))
+    assert multiplex.prepare(a) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    assert polys(load_points(case), "ref", "nuclei") is None
+    why = cases_mod.set_info(case, "ref", "nuclei")["reason"]
+    assert "is not the file its nuclei were computed from" in why
+    assert "Run the nuclei step again" in why
+    # the nuclei step: stale, set aside, and the slide needs its re-run again
+    again = nuclei.resolve(ref, tmp / "nuc", args())
+    said = capsys.readouterr().out
+    assert "STALE P1/P1.r1" in said and "not the file its nuclei were computed" in said
+    assert not again["usable"] and again["needs_rerun"]
+    assert again["stale_image"] and "set aside" in again["reason"]
+    assert "the StarDist re-run has not run" in again["reason"]
+    assert (store / "rerun_stale").is_dir() and not (store / "nuclei.npz").exists()
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    new = nuclei.load(store)
+    assert new["usable"]
+    assert new["image_fingerprint"] == cases_mod.file_fingerprint(ref["image"])
+
+
+def test_a_record_that_names_no_image_is_not_used(cohort, monkeypatch, capsys):
+    tmp, lab, _ = cohort
+    base, ref, store = _one_slide(cohort, monkeypatch, lab)
+    rec = nuclei.load(store)
+    rec.pop("image_fingerprint")
+    (store / "nuclei.json").write_text(json.dumps(rec))
+    again = nuclei.resolve(ref, tmp / "nuc", args())
+    assert "does not say which image it was computed from" in capsys.readouterr().out
+    assert not again["usable"] and again["needs_rerun"]
+
+
+def test_a_label_image_that_was_replaced_is_checked_again(cohort, capsys):
+    tmp, lab, row = cohort
+    mask = mask_file(tmp / "masks" / "r1.tif", lab)
+    manifest = manifest_of(tmp, row, ref_nuclei=str(mask), ref_nuclei_from="glob")
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    first = nuclei.resolve(ref, tmp / "nuc", args())
+    assert first["usable"] and first["label_image_fingerprint"] == (
+        cases_mod.file_fingerprint(mask)
+    )
+    mask_file(mask, labels_of(shift=(20, 20)))  # another mask under the same name
+    again = nuclei.resolve(ref, tmp / "nuc", args())
+    assert "is not the file its nuclei were traced from" in capsys.readouterr().out
+    assert not again["usable"] and "published outlines" in again["reason"]
 
 
 def test_the_array_task_handles_a_refused_slide_and_can_be_forced(

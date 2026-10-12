@@ -202,6 +202,14 @@ def _nuclei(cache, row, side, image, channel, outlines, a):
     if getattr(a, "nuclei_dir", None):
         store = nuclei.store_of(a.nuclei_dir, slide)
         rec = nuclei.load(store)
+        other = nuclei.other_image(rec, slide)
+        if other:
+            # a record of another file is nobody's nuclei: not used, and said
+            rec = {
+                "usable": False,
+                "reason": f"the nuclei kept under {store} are not used: {other}. "
+                "Run the nuclei step again (python -m benchmarks.regbench nuclei)",
+            }
     if (rec is None or not rec.get("usable")) and slide["candidate"]:
         # a label image named by the manifest, checked here as the nuclei step would
         st = Path(slide["candidate"])
@@ -209,7 +217,7 @@ def _nuclei(cache, row, side, image, channel, outlines, a):
         tag = hashlib.sha1(raw.encode()).hexdigest()[:8]
         local = cache / f"{_key(image, channel)}.nuclei.{tag}"
         got = nuclei.load(local) if not a.force else None
-        if got is None:
+        if got is None or nuclei.other_image(got, slide):
             got = nuclei.check_label_image(
                 slide,
                 slide["candidate"],

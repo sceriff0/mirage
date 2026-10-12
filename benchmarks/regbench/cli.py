@@ -139,7 +139,12 @@ def build_parser():
     nu.add_argument("--workers", type=int, default=1)
     nu.add_argument("--diameter", type=float, default=20.0, help="sizes the tile halo")
     nu.add_argument("--tile", type=int, default=2048)
-    nu.add_argument("--force", action="store_true", help="decide a slide again")
+    nu.add_argument(
+        "--force",
+        action="store_true",
+        help="decide every chosen slide again, whatever is kept for it: a label "
+        "image is checked again, a kept StarDist re-run is set aside and run again",
+    )
     mode = nu.add_mutually_exclusive_group()
     mode.add_argument("--count", action="store_true", help="print the number of slides")
     mode.add_argument(
