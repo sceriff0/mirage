@@ -323,8 +323,10 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | `initial` | none | | identity | |
 
 Honest limits of "natively": ASHLAR is run on tiles cut from stitched slides, not raw tiles;
-DeeperHistReg is run on fluorescence with brightfield defaults; STARE is run as one process,
-not as the pipeline's cluster jobs; `valis120` at upstream defaults is upstream's
+DeeperHistReg is run on fluorescence with brightfield defaults; STARE is run as the
+pipeline's four stages in scheduler jobs of their own, with a throttled tile submitter
+in place of Nextflow's queue, a retried tile grouped with its round's other retries, and
+STITCH as a process inside the round's last job; `valis120` at upstream defaults is upstream's
 low-resolution pipeline (which is why its high-resolution example is the primary row).
 
 VALIS registers a patient's rounds together: its rigid step chains through
@@ -1857,9 +1859,16 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   So inside its job ASHLAR finds `OMP_NUM_THREADS=1` and whatever of it is threaded
   through OpenMP runs on one thread, while its allocation, like every method's, is 4
   CPUs. ASHLAR has no core-count option, and the four files of its source read for the
-  adapter start no thread or process pool of their own; its FFTs go through `pyfftw`
-  (`utils.py:117-139`) with no thread count passed. How far `pyfftw`, NumPy's BLAS and
-  scikit-image there obey that variable was not read from their sources `[MEMORY]`. The
+  adapter start no thread or process pool of their own. Its correlations are
+  `scipy.fft.fft2` / `ifft2` calls with no `workers` argument (`reg.py:802-803`,
+  `:991-992`), so they are serial as written. `pyfftw` plays no part: the one function
+  that names it, `utils.fourier_shift` (`utils.py:113-139`), has no caller in those
+  four files, and `utils.py` does not import `pyfftw` (ASHLAR 1.20.0, the files
+  `reg.py`, `utils.py`, `scripts/ashlar.py` and `thumbnail.py` of the official source
+  `[PARTIAL: searched for pyfftw, fourier_shift, fft and for thread or process pools;
+  not read line by line; scikit-image's phase_cross_correlation, which thumbnail.py
+  calls, and scipy.fft's default of one worker were not read]`). How far NumPy's BLAS
+  and scikit-image there obey that variable was not read from their sources `[MEMORY]`. The
   consequence for the cost tables: ASHLAR's wall time is that of a (nearly)
   single-threaded program, and its CPU-hours as billed (4 CPUs x wall) are about four
   times what it used; `cpu_efficiency` near 0.25 is what that looks like. This is
@@ -2029,7 +2038,7 @@ its jobs apply (`test_ladder.py`, `test_failures.py`, `test_gates.py`).
 The run list comes from `python -m benchmarks.regbench runs` and from nowhere else; the
 script names no method.
 
-1. **Selfchecks**, one per run that gates a run (16), in that run's image with that run's
+1. **Selfchecks**, one per run that gates a run (17), in that run's image with that run's
    options and mask (`overlap` for ASHLAR, `seams` for PALOM), at 64 GB and 4 CPUs. Two
    more attempts wait behind it at 256 and 512 GB; each runs only when the one before
    ended for memory or left no record of this submission (it was lost to the scheduler,
@@ -2040,7 +2049,7 @@ script names no method.
    One job per run covers all of its cases, the patient included, so the number of jobs
    and the rungs (64 / 256 / 512 GB) are unchanged. Records:
    `<out>/logs/selfcheck/<run>/selfcheck.json`.
-2. **A gate per run** (18; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
+2. **A gate per run** (19; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
    that gates the run is anything but `ok`, a selfcheck that left no record included.
    Then that run, and only that run, never starts: every one of its arrays waits for its
    gate with `afterok`, and every job carries `--kill-on-invalid-dep=yes` so that it is
@@ -2277,7 +2286,7 @@ round).
 |---|---|---|
 | `REGBENCH_CASES` | prepared cases | `$HOME/regbench_cases` |
 | `REGBENCH_OUT` | results, logs, gates | `$HOME/regbench_results/mirage-<commit>` |
-| `REGBENCH_BIND` | paths to bind into every image, comma-separated: where the cohort's slides, nuclei and the pipeline trace live | none |
+| `REGBENCH_BIND` | paths to bind into every image, comma-separated: where the cohort's slides and nuclei live | none |
 | `REGBENCH_WORK` | scratch for a method's intermediates | `$TMPDIR` |
 | `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS_MIRAGE`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the six images; the script refuses to submit when one a selected run needs is missing | none |
 | `REGBENCH_SBATCH_GPU` | the site's GPU request, e.g. `--gres=gpu:nvidia_h200:1`; required for the four GPU runs | none, on purpose |
@@ -3199,15 +3208,21 @@ table and `test_stages.py` works each number out again from the text of
   `run.json` has the stage, the last exit status and memory in `error`, the cause
   (`oom` for exit 137 or a memory error, `timeout` for 140 and 143, `exception`
   otherwise, `infrastructure` when no attempt left a record) and `no_rerun: true`, and
-  the round is imputed as every failed round is. STITCH is the round's last job and
-  runs on the ladder's rules with its own four allocations (4, 8, 12, 16 GB): it is
-  run again for a memory death (`writer_oom`, `benchmark_oom`) and once per rung when
-  the scheduler lost it, not for another signal.
+  the round is imputed as every failed round is. A tile that never reached the queue
+  is `not_submitted` (the launcher's). STITCH runs as a process of its own inside the
+  round's last job, which has the benchmark's allocation and ladder ("Running the
+  cohort on a cluster", "The round's last job, in three sentences"): STITCH is retried
+  there on the same list of statuses with the pipeline's time limit per attempt, a
+  STITCH that still fails is the writer's and is run at no further rung, and the job
+  itself goes up a rung for `benchmark_oom` and is tried again once per rung when the
+  scheduler lost it.
 - **One record per job**: `<out>/<row>/<dataset>/<case>/stages/jobs/<stage>[_<tile
   row>].json`, with the command, its exit status, wall time, CPU time and peak memory
   (`os.wait4`: the stage command's own process), the allocation, the job id and every
   earlier attempt. The stage files (anchor, tile plan, one control file per tile,
-  manifest) stay beside them: a few kilobytes per tile.
+  manifest) stay beside them: tens of kilobytes per tile (a control file holds the
+  tile's whole lattice of window vectors; a job's record with its command and the tail
+  of what it printed is a few more).
 - **The same transform as one `stare register`.** `test_stages.py` registers the 2048 x
   2560 pair stage by stage and with one `stare register`, and finds the anchor, the tile
   plan, every tile's control points and the manifest equal byte for byte, SOLVE's report
@@ -3750,8 +3765,10 @@ on its grid, because the writer crops the padded canvas back by the reference's 
 (`pair_full_saver.py:76-80`, `dhr_utils/utils.py:299-311`): `origin_xy` is `(0, 0)` and
 the pads enter the map, not the origin. Pixels from outside the moving slide are the pad
 value (255 counts, or 0 for `_fluo`) inside the padded canvas and 0 beyond it;
-`valid_box` bounds the pixels that come from the moving slide. A failed writer leaves
-both rows `ok` with `native.error`.
+`valid_box` bounds the pixels that come from the moving slide. A failed writer fails
+the row it was writing for, `<label>_asdrawn` (`writer`, or `writer_oom` for a memory
+error), as for every method (a row is ok only when its image exists); the other row,
+which has no image of its own, stays `ok`.
 
 **Cost.** The clock runs over `run_registration` only, including the package's own
 loading, its diagnostic JPEGs and intermediate fields; its own per-stage seconds are in

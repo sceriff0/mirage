@@ -1,8 +1,9 @@
 """The memory ladder's decisions: does a unit go up a rung, is a lost attempt tried again,
 and how long may a job run.
 
-The cohort launcher (``slurm/submit_cohort.sh``) submits every job of a run up front,
-each waiting for the one before it (``afterany``). Nothing waits on a login node. So a
+The cohort launcher (``slurm/submit_cohort.sh``) submits the jobs of a run up front,
+each waiting for the one before it (``afterany``); only the tile jobs of a staged run
+come later, from its tile submitter. Nothing waits on a login node. So a
 task must decide FOR ITSELF, when it starts, whether its unit has anything to do. That
 decision is here, in Python, so that it can be tested without a scheduler.
 

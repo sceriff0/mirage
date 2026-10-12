@@ -315,9 +315,22 @@ def _parse(argv):
         raise SystemExit(lines[-1] if lines else f"stare: exit {exc.code}") from None
 
 
+# `stare coarse` takes this model and no other (stare/stages/coarse.py:200:
+# `choices=["euclidean"]`), while `stare register` lists three (stare/cli.py:228);
+# stare-registration 1.2.1, installed package `[PARTIAL: those two lines]`
+COARSE_MODELS = ("euclidean",)
+
+
 def namespace(case, stage_dir, opts, inputs=None):
-    """The parameters of one round, as ``stare register``'s parser types them."""
-    return _parse(command(case, stage_dir, opts, inputs))
+    """The parameters of one round, as ``stare register``'s parser types them. A
+    ``model`` the first stage would refuse is refused here, before any job runs."""
+    ns = _parse(command(case, stage_dir, opts, inputs))
+    if ns.model not in COARSE_MODELS:
+        raise SystemExit(
+            f"model={ns.model}: `stare coarse` accepts {', '.join(COARSE_MODELS)} and "
+            "nothing else, so every round of this run would fail in its first job"
+        )
+    return ns
 
 
 def stage_commands(ns):

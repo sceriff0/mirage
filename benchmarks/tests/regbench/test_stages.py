@@ -641,6 +641,29 @@ def test_each_stage_command_is_what_stare_register_hands_that_stage(
     )
 
 
+def test_a_model_the_first_stage_refuses_is_refused_before_any_job(staged, tmp_path):
+    """`stare register` lists three models and `stare coarse` takes one: an option the
+    first job would die on is refused where the round's parameters are read."""
+    from stare.stages import coarse
+
+    case = staged["case"]
+    source = Path(coarse.__file__).read_text()
+    assert 'ap.add_argument("--model", default="euclidean", choices=["euclidean"])' in (
+        source
+    )
+    assert adapter.COARSE_MODELS == ("euclidean",)
+    assert (
+        adapter.namespace(case, tmp_path, {"model": "euclidean"}).model == "euclidean"
+    )
+    for model in ("similarity", "affine"):
+        with pytest.raises(SystemExit, match=f"model={model}: `stare coarse` accepts"):
+            adapter.namespace(case, tmp_path, {"model": model})
+        with pytest.raises(SystemExit, match="accepts euclidean"):
+            adapter.run_stage(case, tmp_path / "s", {"model": model}, "coarse")
+    with pytest.raises(SystemExit):  # a value no stage knows: the parser's own error
+        adapter.namespace(case, tmp_path, {"model": "projective"})
+
+
 def test_the_tile_plan_is_known_before_coarse(staged):
     """What lets the launcher submit every tile job up front: the plan COARSE writes is
     the grid of the reference's size, and the adapter counts the same grid."""
@@ -1071,6 +1094,18 @@ def test_the_stage_command_of_the_cli_runs_a_round(
         cli.main([*run, "--stage", "tile", "--flat", "99", "--layout", str(layout)])
         == 0
     )
+    # COARSE planned another number of tiles than the arrays were sized for: the task
+    # says so on its end line, as the launcher's failure, and exits through it
+    wrong = [(c, n + 1 if c == "crop" else n) for c, n in rows]
+    stages.write_layout(layout, wrong)
+    capsys.readouterr()
+    again = [*run, "--stage", "tile", "--flat", str(flat), "--layout", str(layout)]
+    assert cli.main(again) == 1
+    said = capsys.readouterr().out.strip().splitlines()
+    assert "COARSE planned 1 tiles, the arrays were sized for 2" in said[-2]
+    assert said[-1].startswith("REGBENCH_END kind=stage ")
+    assert "status=failed cause=not_submitted whose=launcher" in said[-1]
+    assert "planned=1 sized_for=2" in said[-1]
     # arrays sized for another set of cases are refused
     stages.write_layout(layout, rows[:-1])
     with pytest.raises(SystemExit, match="does not list"):

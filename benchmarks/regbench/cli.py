@@ -941,10 +941,25 @@ def _stage(a):
     if a.flat is not None and done and done[0][4] is not None:
         planned = len(mod.Round(case, stage_dir, opts).plan())
         if planned != layout[index][1]:
-            raise SystemExit(
+            # the launcher's layout and COARSE's plan disagree: said on the task's
+            # end line like every other end, as the launcher's failure
+            print(
                 f"{a.dataset}/{case.case_id}: COARSE planned {planned} tiles, the "
                 f"arrays were sized for {layout[index][1]}"
             )
+            failure_log.emit_end(
+                "stage",
+                "failed",
+                stages.NOT_SUBMITTED,
+                run=a.label or a.method,
+                dataset=a.dataset,
+                unit=case.case_id,
+                stage=a.stage,
+                attempt=a.attempt,
+                planned=planned,
+                sized_for=layout[index][1],
+            )
+            return 1
     state, reason = "ok", ""
     for stage, r, ran, why, rec in done:
         at = f" row {r}" if r is not None else ""
