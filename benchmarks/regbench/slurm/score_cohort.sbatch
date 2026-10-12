@@ -77,7 +77,9 @@ settle_killed() {
         return 1
     fi
     ids=$(cut -f3 "$jobs" | paste -sd, -)
-    if ! sacct -n -X -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
+    # with the jobs' steps (no -X): a job's line alone reports no CPU time, its steps
+    # do (`regbench ... settle` adds them up: ladder.parse_accounting)
+    if ! sacct -n -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
         || [ ! -s "$acct" ]; then
         echo "settle: sacct gave no accounting of the jobs in $jobs"
         return 1

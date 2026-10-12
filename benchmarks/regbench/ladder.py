@@ -188,19 +188,38 @@ def _seconds(text):
 
 def parse_accounting(text):
     """``{job id: {"state", "elapsed_s", "cpu_s"}}`` from
-    ``sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU``: one ``|``-separated line per
-    job or array task (``<array job>_<task>``, which is also a record's ``launch_id``).
-    Lines that do not parse are skipped."""
-    out = {}
+    ``sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU``, asked with or without ``-X``:
+    ``|``-separated lines, one per job or array task (``<array job>_<task>``, which is
+    also a record's ``launch_id``) and, without ``-X``, one per step of it
+    (``<job>.batch``, ``<job>.extern``, ``<job>.<n>``).
+
+    State and elapsed time are the job's own line's. ``cpu_s`` is the job's total CPU
+    time: the larger of its own line's ``TotalCPU`` and the sum of its steps', because
+    the job's line alone carries none when the steps were left out ("Without including
+    steps, utilization statistics for job allocation(s) will be reported as zero",
+    sacct manual, ``regbench.billing`` cites it) and carries the steps' total when it
+    was asked with them (`[MEMORY]`: that sacct adds the steps up into the job's line
+    is not in the passages read; taking the larger is right either way). A total of
+    zero is None: nothing was reported, which is not "no CPU was used". Steps of a job
+    with no line of its own, and lines that do not parse, are skipped."""
+    out, steps = {}, {}
     for line in str(text or "").splitlines():
         fields = [f.strip() for f in line.split("|")]
         if len(fields) < 2 or not fields[0] or not fields[1]:
             continue
-        out[fields[0]] = {
+        cpu = _seconds(fields[3]) if len(fields) > 3 else None
+        job, _, step = fields[0].partition(".")
+        if step:
+            steps[job] = steps.get(job, 0.0) + (cpu or 0.0)
+            continue
+        out[job] = {
             "state": _state(fields[1]),
             "elapsed_s": _seconds(fields[2]) if len(fields) > 2 else None,
-            "cpu_s": _seconds(fields[3]) if len(fields) > 3 else None,
+            "cpu_s": cpu,
         }
+    for job, rec in out.items():
+        total = max(rec["cpu_s"] or 0.0, steps.get(job, 0.0))
+        rec["cpu_s"] = total if total > 0 else None
     return out
 
 

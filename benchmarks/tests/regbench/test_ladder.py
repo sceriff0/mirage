@@ -672,6 +672,73 @@ def test_the_accounting_is_parsed_by_field_and_tolerates_junk():
     assert ladder.read_accounting(None) == {} and ladder.read_accounting("/nope") == {}
 
 
+# sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU for two array tasks and a plain job,
+# in the two shapes the manual describes: with each job's steps, and with -X (the
+# allocation alone, whose utilisation is reported as zero)
+WITH_STEPS = """\
+900_3|COMPLETED|4711|03:25:10
+900_3.batch|COMPLETED|4711|03:25:09.500
+900_3.extern|COMPLETED|4712|00:00:00.500
+900_4|OUT_OF_MEMORY|120|00:00:00
+900_4.batch|OUT_OF_MEMORY|120|00:07:30
+900_4.extern|COMPLETED|121|00:00:00
+900_4.0|CANCELLED|60|1-00:00:01
+901|TIMEOUT|600|00:00:00
+901.batch|CANCELLED|601|00:00:00
+902.batch|COMPLETED|5|00:00:04
+"""
+ALLOCATIONS_ONLY = """\
+900_3|COMPLETED|4711|00:00:00
+900_4|OUT_OF_MEMORY|120|00:00:00
+901|TIMEOUT|600|00:00:00
+"""
+
+
+def test_a_jobs_cpu_time_is_the_sum_of_its_steps():
+    got = ladder.parse_accounting(WITH_STEPS)
+    # one entry per job or array task: a step is never a job of its own, and steps of
+    # a job that has no line are no job either
+    assert set(got) == {"900_3", "900_4", "901"}
+    # the job's own line already carries the total: it is not added to its steps'
+    assert got["900_3"] == {
+        "state": "COMPLETED",
+        "elapsed_s": 4711.0,
+        "cpu_s": 3 * 3600 + 25 * 60 + 10.0,
+    }
+    # a job's line with no CPU time: its steps have it. State and elapsed time stay
+    # the job's own, whatever its steps ended as
+    assert got["900_4"] == {
+        "state": "OUT_OF_MEMORY",
+        "elapsed_s": 120.0,
+        "cpu_s": 7 * 60 + 30 + 86401.0,
+    }
+    # zero everywhere is "nothing was reported", never a figure
+    assert got["901"] == {"state": "TIMEOUT", "elapsed_s": 600.0, "cpu_s": None}
+
+
+def test_allocations_alone_name_the_end_state_and_no_cpu_time():
+    got = ladder.parse_accounting(ALLOCATIONS_ONLY)
+    assert {k: v["state"] for k, v in got.items()} == {
+        "900_3": "COMPLETED",
+        "900_4": "OUT_OF_MEMORY",
+        "901": "TIMEOUT",
+    }
+    assert [v["elapsed_s"] for v in got.values()] == [4711.0, 120.0, 600.0]
+    assert [v["cpu_s"] for v in got.values()] == [None, None, None]
+
+
+def test_the_cohort_accounting_is_asked_with_the_steps():
+    """The settle query feeds `cpu_h_scheduler`: with -X it could only ever be zero."""
+    text = (Path(ladder.__file__).parent / "slurm" / "score_cohort.sbatch").read_text()
+    calls = [
+        line.split("#")[0]
+        for line in text.splitlines()
+        if "sacct " in line.split("#")[0] and "ElapsedRaw,TotalCPU" in line
+    ]
+    assert len(calls) == 1
+    assert " -X" not in calls[0] and "--allocations" not in calls[0], calls[0]
+
+
 def test_a_record_of_another_submission_is_evidence_of_nothing(tmp_path):
     """Review item 13: an old `oom` must not send a unit of a new submission up a rung
     it never tried, and an old `ok` must not pass for this submission's."""
