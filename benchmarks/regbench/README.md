@@ -1439,13 +1439,18 @@ Scoring a slide is slow (measured below), so the scorer keeps what it computes, 
   key is compared whole, never guessed from a file being there.
   A pair record's key: the bytes of the case's `points.npz`, the set, the pixel size,
   the bytes of the `warped.npz` that moved the polygons, the owner's mask itself, the
-  pipeline's `cell_pairs.py`, `pairs.py`, `cases.py` and the lines of `score.py` that
-  put the inputs together, the versions of Python, NumPy, SciPy and scikit-image, the
-  scoring constants, and `score.RECORD_VERSION`.
+  pipeline's `cell_pairs.py`; `pairs.py`, `cases.py` and `mapping.py` with every module
+  of the package they import (`score.code_files` follows the relative imports); of
+  `score.py` the source of the helpers that read a result and put a record's inputs
+  together (`score.PAIR_CODE_MEMBERS`: `_load_run` and the seam masks among them) and
+  the values of the names its arrays are read under (`score.PAIR_CODE_CONSTANTS`); the
+  versions of Python, NumPy, SciPy and scikit-image, the scoring constants (the exact
+  assignment's bound among them), and `score.RECORD_VERSION`.
   A case record's key: all of that for every result the case reads (`run.json` AND
   `warped.npz`, by content), plus `case.json`, the list of variants in order, the seam
   owners, each row's selfcheck, the dropped rows, the submission being scored
-  (`--submission`), and every file of the package. So a re-run of a method, a changed
+  (`--submission`), every file of the package's top level and every module `score.py`
+  imports inside the package, followed through. So a re-run of a method, a changed
   run list, another `--drop` or another submission makes the case's ROWS again, in
   seconds to minutes, and computes only the pair records whose inputs changed: a
   `run.json` that says something else changes rows and no pair record.

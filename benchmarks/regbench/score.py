@@ -707,9 +707,10 @@ NEVER_CHECKED = "no_stage_image"
 
 # ── one case: what is read, what is computed, what is kept ───────────────────────────
 # Bump when anything a case's rows or a pair record depend on changes in a way the
-# hashes below cannot see. They see the code (every file of this package, the pipeline's
-# cell_pairs.py, truth_spec.json), the libraries' versions and the constants in
-# `_settings`; this number is for the rest (a changed meaning with unchanged code).
+# hashes below cannot see. They see the code (`case_code`, `pair_code`: the files of
+# this package and the modules they import, the pipeline's cell_pairs.py,
+# truth_spec.json), the libraries' versions and the constants in `_settings`; this
+# number is for the rest (a changed meaning with unchanged code).
 RECORD_VERSION = 1
 # where the records are kept, under the results folder (`cache` is RESERVED)
 RECORDS = ("cache", "scores")
@@ -779,31 +780,143 @@ def _settings():
     }
 
 
+_CODE_FILES = {}
+
+
+def _states(paths):
+    """Size and modification time of each file: what `code_files` keeps its answer by."""
+    out = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            out.append((str(path), st.st_size, st.st_mtime_ns))
+        except OSError:
+            out.append((str(path), None, None))
+    return out
+
+
+def code_files(starts, package=None):
+    """``{name: path}`` of ``starts`` (files of ``package``, default this one) and of
+    every module of the package they import, followed through: ``from . import x``,
+    ``from .x import y``, ``from .. import z``, at module level or inside a function.
+    ``name`` is the path inside the package. An import that leaves the package (NumPy,
+    the pipeline's ``cell_pairs.py``, which is loaded by path) is not followed."""
+    import ast
+
+    package = Path(__file__).resolve().parent if package is None else Path(package)
+    package = package.resolve()
+    found, todo = {}, [Path(f).resolve() for f in starts]
+    asked = (str(package), tuple(sorted(map(str, todo))))
+    held = _CODE_FILES.get(asked)
+    if held is not None and held[0] == _states(held[1].values()):
+        return dict(held[1])  # no file it was found through has changed since
+    while todo:
+        path = todo.pop()
+        try:
+            name = path.relative_to(package).as_posix()
+        except ValueError:
+            continue
+        if name in found or not path.is_file():
+            continue
+        found[name] = path
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.ImportFrom) or not node.level:
+                continue
+            base = path.parent
+            for _ in range(node.level - 1):
+                base = base.parent
+            names = [node.module] if node.module else [a.name for a in node.names]
+            if node.module:  # `from .x import y`: y may be a module of the package x
+                names += [f"{node.module}.{a.name}" for a in node.names]
+            for dotted in names:
+                target = base.joinpath(*dotted.split("."))
+                # by its exact name: a file system that ignores case would take the
+                # constant `DATASETS` for the package `datasets`
+                if target.parent.is_dir() and any(
+                    target.name == Path(f).stem for f in os.listdir(target.parent)
+                ):
+                    todo += [target.with_suffix(".py"), target / "__init__.py"]
+    found = dict(sorted(found.items()))
+    _CODE_FILES[asked] = (_states(found.values()), found)
+    return dict(found)
+
+
+# What of THIS file decides a pair record: how a result is read and judged usable, how
+# the polygon sets of a record are put together, the seam masks, and the names the
+# arrays are read under. The rest of this file (summaries, tables) decides no pair
+# record, so a change there keeps them: they are the expensive part of a scoring.
+PAIR_CODE_MEMBERS = (
+    "_Case",
+    "_keep_features",
+    "_load_run",
+    "of_this_submission",
+    "_seam_masks",
+    "_truth_keep",
+)
+PAIR_CODE_CONSTANTS = (
+    "WARPED_KEYS",
+    "TRUTH_XY",
+    "INITIAL",
+    "TRUE_MAP",
+    "VARIANT",
+    "OUTLINES",
+    "NUCLEI",
+    "MOV_TO_REF",
+    "REF_TO_MOV",
+    "SUBMISSION_ENV",
+)
+# the modules a pair record is computed by, each followed through its imports
+PAIR_CODE_STARTS = ("pairs.py", "cases.py", "mapping.py")
+
+
+_OWN_SOURCE = {}
+
+
 def pair_code():
-    """What turns two polygon sets into a pair record: the pipeline's ``cell_pairs.py``,
-    ``pairs.py``, ``cases.py`` (how a set is read) and the few lines of this file that
-    put a record's inputs together."""
+    """What turns two polygon sets into a pair record: the pipeline's ``cell_pairs.py``;
+    ``pairs.py``, ``cases.py`` (how a set is read) and ``mapping.py`` with every module
+    of this package they import (``code_files``); and, of this file, the source of
+    ``PAIR_CODE_MEMBERS`` and the values of ``PAIR_CODE_CONSTANTS``, as they are in the
+    running process."""
     import inspect
 
     here = Path(__file__).resolve().parent
-    own = "".join(inspect.getsource(f) for f in (_Case, _keep_features))
+    module = sys.modules[__name__]
+    members = [getattr(module, n) for n in PAIR_CODE_MEMBERS]
+    # the source of the objects that are there NOW, read once per object and file state
+    state = (*_states([__file__])[0], *map(id, members))
+    if _OWN_SOURCE.get("state") != state:
+        _OWN_SOURCE.update(
+            state=state,
+            members=members,  # kept alive: an id is theirs only while they live
+            source="".join(inspect.getsource(m) for m in members),
+        )
+    own = _OWN_SOURCE["source"]
+    own += repr([(n, getattr(module, n)) for n in PAIR_CODE_CONSTANTS])
     return {
         "cell_pairs.py": file_sha256(pairs.CELL_PAIRS_PATH),
-        "pairs.py": file_sha256(here / "pairs.py"),
-        "cases.py": file_sha256(here / "cases.py"),
-        "score.py:_Case,_keep_features": hashlib.sha256(own.encode()).hexdigest(),
+        **{
+            name: file_sha256(path)
+            for name, path in code_files(here / f for f in PAIR_CODE_STARTS).items()
+        },
+        "score.py:" + ",".join(PAIR_CODE_MEMBERS): hashlib.sha256(
+            own.encode()
+        ).hexdigest(),
     }
 
 
 def case_code():
-    """Everything a case's rows could depend on: every file of this package, the
-    pipeline's ``cell_pairs.py`` and the truth spec. Deliberately wide: a case record
-    that is not reused costs minutes (its pair records are), a wrong one costs a table."""
+    """Everything a case's rows could depend on: every file of this package's top
+    level, every module this file imports inside the package, followed through
+    (``code_files``: a module in a sub-package too), the pipeline's ``cell_pairs.py``
+    and the truth spec. Deliberately wide: a case record that is not reused costs
+    minutes (its pair records are), a wrong one costs a table."""
     here = Path(__file__).resolve().parent
-    files = [*sorted(here.glob("*.py")), here / "truth_spec.json"]
+    files = {f.name: f for f in [*sorted(here.glob("*.py")), here / "truth_spec.json"]}
+    files.update(code_files([Path(__file__)]))
     return {
         "cell_pairs.py": file_sha256(pairs.CELL_PAIRS_PATH),
-        **{f.name: file_sha256(f) for f in files},
+        **{name: file_sha256(path) for name, path in sorted(files.items())},
     }
 
 

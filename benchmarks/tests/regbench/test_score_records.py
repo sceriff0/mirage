@@ -479,6 +479,65 @@ def test_a_changed_constant_or_code_is_another_scorer(small, monkeypatch):
     assert {"score.py", "truth.py", "truth_spec.json"} <= set(score_mod.case_code())
 
 
+def test_the_keys_cover_every_module_that_decides_a_number(tmp_path, monkeypatch):
+    """A record's key holds the bytes of every module its numbers are computed by,
+    found by following the imports inside the package; and, of ``score.py``, the
+    helpers and names a pair record is read and assembled with."""
+    pkg = tmp_path / "pkg"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "sub" / "__init__.py").write_text("from .. import far\n")
+    (pkg / "top.py").write_text(
+        "import numpy\nfrom . import helper\nfrom .sub import deep\n"
+        "def f():\n    from .lazy import g\n    return g\n"
+    )
+    for name in ("helper", "lazy", "far", "unused"):
+        (pkg / f"{name}.py").write_text(f"X = '{name}'\n")
+    (pkg / "sub" / "deep.py").write_text("from ..helper import X\n")
+    got = score_mod.code_files([pkg / "top.py"], pkg)
+    assert list(got) == [
+        "far.py",
+        "helper.py",
+        "lazy.py",
+        "sub/__init__.py",
+        "sub/deep.py",
+        "top.py",
+    ]
+
+    def digest():
+        files = score_mod.code_files([pkg / "top.py"], pkg).values()
+        return [score_mod.file_sha256(f) for f in files]
+
+    before = digest()
+    (pkg / "unused.py").write_text("X = 'edited, and imported by nothing'\n")
+    assert digest() == before
+    (pkg / "sub" / "deep.py").write_text("from ..helper import X\nY = 2  # edited\n")
+    assert digest() != before
+    # the scorer's own keys
+    pair, case = score_mod.pair_code(), score_mod.case_code()
+    assert {"pairs.py", "cases.py", "mapping.py", "cell_pairs.py"} <= set(pair)
+    assert {"mapping.py", "ladder.py", "stages.py", "methods/__init__.py"} <= set(case)
+    for name in ("pairs.py", "mapping.py"):
+        assert (
+            pair[name]
+            == case[name]
+            == score_mod.file_sha256(REPO / "benchmarks" / "regbench" / name)
+        )
+    # a helper of score.py that reads a result: another helper is another pair key
+    real = score_mod._load_run
+
+    def other(out, variant, case):  # the same result, read by other code
+        return real(out, variant, case)
+
+    monkeypatch.setattr(score_mod, "_load_run", other)
+    assert score_mod.pair_code() != pair
+    monkeypatch.undo()
+    assert score_mod.pair_code() == pair
+    # and a name its arrays are read under
+    monkeypatch.setitem(score_mod.WARPED_KEYS, "outlines", ("xy", "band", "band_ref"))
+    assert score_mod.pair_code() != pair
+
+
 def test_a_record_that_cannot_be_read_is_computed_again(small, capsys):
     root, out, spy, n = small
     folder = out / "cache" / "scores" / "multiplex" / "P1_r1"
