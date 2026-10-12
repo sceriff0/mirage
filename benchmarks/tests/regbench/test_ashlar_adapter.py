@@ -133,11 +133,13 @@ def test_registered_and_named():
     assert methods.variant_names("ashlar") == ["ashlar"]
     assert not hasattr(am, "register")
     # frozen values of the plan
-    assert (am.TILE, am.OVERLAP, am.MAX_SHIFT_UM) == (1024, 0.1, 15.0)
+    # the cohort scanner's tile and the owner's 10 % overlap (R3.25, 2026-10-12)
+    assert (am.TILE, am.OVERLAP, am.MAX_SHIFT_UM) == (1950, 0.1, 15.0)
     assert (am.NOISE_FRAC, am.NOISE_MIN_COUNTS) == (0.002, 3.0)
     assert sc.sizes_for("ashlar_clean") == sc.sizes_for("affine_ashlar_clean")
-    # the large canvas only (5 x 6 tiles), as a pair and as a patient of three slides
-    assert sc.sizes_for("ashlar") == [((4096, 5120), None), ((4096, 5120), None, None)]
+    # one canvas (5 x 6 tiles of 1950 px), as a pair and as a patient of three slides
+    hw = (8192, 10240)
+    assert sc.sizes_for("ashlar") == [(hw, None), (hw, None, None)]
     assert sc.sizes_for("ashlar") == sc.sizes_for("affine_ashlar_clean")
 
 
@@ -306,8 +308,11 @@ def _selfcheck(tmp_path, sizes, **kw):
 
 
 def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
-    """The frozen geometry (1024 px tiles), a reference stitched off its slide's grid."""
-    rec, v = _selfcheck(tmp_path, [(sc.DEFAULT_HW, None)])
+    """The frozen geometry (1950 px tiles, 1755 px pitch), a reference stitched off its
+    slide's grid: 3 x 3 tiles on 4096 x 5120. (Smaller canvases, whose last tiles are
+    slivers: `test_sliver_tiles_on_both_axes`.)"""
+    assert (am.TILE, retile._stride(am.TILE, am.OVERLAP)) == (1950, 1755)
+    rec, v = _selfcheck(tmp_path, [(sc.LARGE_HW, None)])
     assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
     assert v["direction"] == MOV_TO_REF and v["n_masked"] > 0
     assert v["n_found"] == v["n_dots"] > 300 and v["err_px_p95"] < 0.2
@@ -320,7 +325,7 @@ def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
     assert native["origin_xy"] == [-7.0, -4.0] == ref["origin_xy_reported"]
     assert ref["image_origin_px_median_x"] == pytest.approx(-7.0, abs=0.1)
     assert ref["image_origin_px_median_y"] == pytest.approx(-4.0, abs=0.1)
-    assert native["valid_box"] == [7, 4, 2567, 2052]
+    assert native["valid_box"] == [7, 4, 5127, 4100]
     assert ref["status"] == sc.OK and ref["n_found"] == ref["n_dots"] > 300
     assert v["declared_offset"] and abs(v["declared_px_mean_x"]) > 0.5
     # the copy holds the mosaic's planes, pixel for pixel
@@ -328,6 +333,134 @@ def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
         planes = tf.series[0].asarray()
     np.testing.assert_array_equal(tifffile.imread(native["files"][0]), planes[2:4])
     np.testing.assert_array_equal(tifffile.imread(native["reference_file"]), planes[:2])
+
+
+# Canvases whose last row and column of 1950 px tiles are slivers, as on every cohort
+# slide (about 60000 x 80000 px, never a multiple of the 1755 px pitch). Per canvas: the
+# grid, how much slide the last row and the last column hold, and the mosaic's origin
+# with the stand-in's stitch (`off_grid`: the first tile 4 px up and 7 px left of all
+# the others).
+SLIVERS = {
+    # the last tiles hold 293 and 805 px; 98 and 610 px of them are in no other tile.
+    # The first tile holds 61 % of the slide, so the origin is ITS offset
+    (2048, 2560): ((2, 2), (293, 805), [0.0, 0.0]),
+    # thin on both axes: 245 and 305 px, 50 and 110 px of them in no other tile
+    (2000, 2060): ((2, 2), (245, 305), [0.0, 0.0]),
+    # the last row and column hold 150 and 135 px, ALL of them also in the tile before
+    (1905, 5400): ((2, 4), (150, 135), [-7.0, -4.0]),
+}
+
+
+def _cover(origins_yx, tile, xy, grow):
+    """How many tile squares, each grown by ``grow`` px, hold each point: plain
+    rectangle tests, no nearest-neighbour search."""
+    o = np.asarray(origins_yx, dtype=float)
+    x, y = xy[:, 0][:, None], xy[:, 1][:, None]
+    inside = (
+        (x > o[None, :, 1] - grow)
+        & (x < o[None, :, 1] + tile + grow)
+        & (y > o[None, :, 0] - grow)
+        & (y < o[None, :, 0] + tile + grow)
+    )
+    return inside.sum(axis=1)
+
+
+def _one(origins_yx, tile, xy, margin):
+    """Inside one tile by more than ``margin`` and outside every other by as much."""
+    deep = _cover(origins_yx, tile, xy, -margin) >= 1
+    return deep & (_cover(origins_yx, tile, xy, margin) == 1)
+
+
+@pytest.mark.parametrize("hw", sorted(SLIVERS), ids=lambda hw: f"{hw[0]}x{hw[1]}")
+def test_sliver_tiles_on_both_axes(tmp_path, hw):
+    """The map, the seam mask, the origin and the valid box on a canvas whose last row
+    and column of tiles are mostly padding, at the frozen tile size."""
+    (n_rows, n_cols), (last_h, last_w), origin = SLIVERS[hw]
+    h, w = hw
+    pitch = retile._stride(am.TILE, am.OVERLAP)
+    assert (am.TILE, pitch) == (1950, 1755)
+    grid = retile.tile_grid(w, h, am.TILE, am.OVERLAP)
+    assert retile.grid_shape(w, h, am.TILE, am.OVERLAP) == (n_rows, n_cols)
+    assert (grid[-1].h, grid[-1].w) == (last_h, last_w)
+    assert last_h < am.TILE // 4 and last_w < am.TILE // 2  # slivers
+
+    rec, v = _selfcheck(tmp_path, [(hw, None)], keep_work=True)
+    assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
+    assert v["n_found"] == v["n_dots"] > 50 and v["err_px_p95"] < 0.2
+    native, ref = v["native"], v["reference"]
+    assert ref["status"] == sc.OK and ref["n_found"] == ref["n_dots"] > 50
+    # the origin: the offset of the tiles that hold most of the slide, as the image
+    # itself shows it, and the slide's extent in the mosaic from it
+    assert native["origin_xy"] == origin == ref["origin_xy_reported"]
+    assert ref["image_origin_px_median_x"] == pytest.approx(origin[0], abs=0.1)
+    assert ref["image_origin_px_median_y"] == pytest.approx(origin[1], abs=0.1)
+    ox, oy = (int(-v) for v in origin)
+    assert native["valid_box"] == [ox, oy, ox + w, oy + h]
+    # (the stand-in's one tile another 0.3 px down is in the last row: 4.3, rounded up)
+    assert native["mosaic_shape"] == [
+        (n_rows - 1) * pitch + am.TILE + 5,
+        (n_cols - 1) * pitch + am.TILE + 7,
+    ]
+
+    # the seam mask, against plain rectangle tests on the placement the run recorded
+    (path,) = (tmp_path / "out").rglob("run.json")
+    p = json.loads(path.read_text())["info"]["placement"]
+    assert len(p["mov_pos_yx"]) == n_rows * n_cols and p["tile"] == am.TILE
+    dots = sc.lattice_dots(hw, 0)
+    # the tile nearest to each dot: the one that holds it, when only one does
+    tile_of = tilemap._signed_depths(p["mov_true_yx"], am.TILE, dots, 1)[1][:, 0]
+    d_mov = np.array(p["mov_pos_yx"]) - np.array(p["mov_true_yx"])
+    m = dots + d_mov[tile_of, ::-1]
+    margin = am.DOT_MARGIN_PX
+    clean = (
+        _one(p["mov_true_yx"], am.TILE, dots, margin)
+        & _one(p["mov_pos_yx"], am.TILE, m, margin)
+        & _one(p["ref_pos_yx"], am.TILE, m, margin)
+    )
+    seam = tilemap.on_seam(p, dots, margin)
+    np.testing.assert_array_equal(seam, ~clean)
+    assert v["n_masked"] == int(seam.sum()) and 0 < v["n_masked"] < len(dots)
+    # every dot a second tile also holds is masked, the slivers' included
+    twice = _cover(p["mov_true_yx"], am.TILE, dots, 0.0) > 1
+    assert twice.any() and seam[twice].all()
+    # and dots only a sliver tile holds are JUDGED where it has pixels of its own
+    judged = {int(t) for t in tile_of[~seam]}
+    own_w, own_h = last_w - (am.TILE - pitch), last_h - (am.TILE - pitch)
+    if own_w > 2 * sc.LATTICE:
+        assert n_cols - 1 in judged  # the first row's last tile
+    if own_w <= 0 and own_h <= 0:  # nothing of their own: all of it is band
+        assert judged == set(range(n_cols - 1))
+        assert seam[(dots[:, 1] > pitch) | (dots[:, 0] > (n_cols - 1) * pitch)].all()
+    # the map itself, at dots only one tile holds: that tile's two translations
+    fn = am.point_map(p)
+    lone = np.flatnonzero(~seam)
+    in_mosaic = m[lone]
+    ref_tile = tilemap._signed_depths(p["ref_pos_yx"], am.TILE, in_mosaic, 1)[1][:, 0]
+    d_ref = (np.array(p["ref_true_yx"]) - np.array(p["ref_pos_yx"]))[ref_tile]
+    np.testing.assert_allclose(fn(dots[lone]), in_mosaic + d_ref[:, ::-1], atol=1e-9)
+
+
+def test_the_origin_is_weighted_by_the_slide_each_tile_holds():
+    """Three sliver tiles agreeing with each other do not outvote the one tile that
+    holds most of the slide; without the extents every tile counts the same."""
+    c = np.array([[0.0, 0.0], [0.0, 230.0], [230.0, 0.0], [230.0, 230.0]])
+    off = np.array([[0.0, 0.0], [4.0, 7.0], [4.0, 7.0], [4.3, 6.8]])
+    p = {
+        "tile": 256,
+        "ref_true_yx": c.tolist(),
+        "ref_pos_yx": (c + off).tolist(),
+        "mosaic_shape": [500, 500],
+    }
+    # the plain median: the mean of two tiles' offsets on x, no tile's own
+    assert am.mosaic_origin_xy(p) == pytest.approx([-6.9, -4.0])
+    p["ref_valid_wh"] = [[256, 256], [30, 256], [256, 30], [30, 30]]
+    assert am.mosaic_origin_xy(p) == [0.0, 0.0]
+    p["ref_valid_wh"] = [[30, 30], [256, 256], [256, 256], [30, 30]]
+    assert am.mosaic_origin_xy(p) == [-7.0, -4.0]
+    # equal extents: the median of an odd number of tiles, as before
+    q = {**p, "ref_true_yx": c[:3].tolist(), "ref_pos_yx": (c + off)[:3].tolist()}
+    q["ref_valid_wh"] = [[256, 256]] * 3
+    assert am.mosaic_origin_xy(q) == [-7.0, -4.0]
 
 
 def test_the_command_is_ashlars_own_and_nothing_else(tmp_path, small):

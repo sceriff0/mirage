@@ -224,12 +224,29 @@ def test_the_flag_and_the_rows_of_the_mask_table_come_out_of_the_record():
     assert sc.over_cap({"pairs": [{"variants": {"stare": {"status": "ok"}}}]}) == {}
 
 
-def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0):
+def rigid_part(g, hw):
+    """The rotation and shift nearest to the map ``g`` over the canvas (3 x 3, moving px
+    -> reference px): what an anchor such as STARE's rigid matrix is of it."""
+    h, w = hw
+    xs, ys = np.meshgrid(np.linspace(0, w - 1, 25), np.linspace(0, h - 1, 25))
+    p = np.stack([xs.ravel(), ys.ravel()], axis=1)
+    q = g(p)
+    pc, qc = p.mean(axis=0), q.mean(axis=0)
+    u, _, vt = np.linalg.svd((p - pc).T @ (q - qc))
+    r = (u @ vt).T
+    m = np.eye(3)
+    m[:2, :2], m[:2, 2] = r, qc - r @ pc
+    return m
+
+
+def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0, anchored=False):
     """The share of the selfcheck's own dots that ASHLAR's overlap mask hides, from the
     adapter's geometry alone: its tile grid (``retile.tile_grid`` at the adapter's tile
     and overlap, padded, not clamped to the canvas) and ``tilemap.on_seam`` at its dot
     margin. ``follow``: every moving tile drawn where the round's true map puts its
-    centre, plus ``offset`` px; otherwise where it was cut."""
+    centre, plus ``offset`` px; otherwise on the grid ASHLAR is told. ``anchored``: the
+    moving tiles cut where an anchor (the rigid part of the round's map) puts them, as
+    the anchored rows cut them by STARE's matrix; otherwise cut on the grid."""
     from benchmarks.ashlar import retile
     from benchmarks.regbench import tilemap as tm
     from benchmarks.regbench.datasets import synthetic
@@ -238,15 +255,19 @@ def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0):
     h, w = hw
     grid = retile.tile_grid(w, h, am.TILE, am.OVERLAP)
     origins = np.array([[t.y, t.x] for t in grid], dtype=float)
-    shift = np.zeros_like(origins)
+    g = synthetic.forward_map(sc.round_spec(hw, None, seed, rnd))
+    cut = origins
+    if anchored:
+        cut = tm.anchor_tile_origins(rigid_part(g, hw), origins, am.TILE).astype(float)
+    drawn = origins
     if follow:
-        g = synthetic.forward_map(sc.round_spec(hw, None, seed, rnd))
-        centres = origins[:, ::-1] + am.TILE / 2.0
-        shift = (g(centres) - centres + np.asarray(offset, dtype=float))[:, ::-1]
+        centres = cut[:, ::-1] + am.TILE / 2.0
+        at = g(centres) - am.TILE / 2.0 + np.asarray(offset, dtype=float)
+        drawn = at[:, ::-1]
     placement = dict(
         tile=am.TILE,
-        mov_true_yx=origins,
-        mov_pos_yx=origins + shift,
+        mov_true_yx=cut,
+        mov_pos_yx=drawn,
         ref_true_yx=origins,
         ref_pos_yx=origins,
     )
@@ -255,42 +276,64 @@ def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0):
 
 
 def test_the_overlap_cap_stands_above_the_measured_share():
-    """The measurement the frozen cap is derived from (2026-10-11), repeated: ASHLAR's
-    only selfcheck canvas, both rounds of its patient."""
+    """The measurement beside the frozen cap (2026-10-12, at the 1950 px tiles of
+    ruling R3.25), repeated: ASHLAR's only selfcheck canvas, both rounds of its patient."""
+    from benchmarks.ashlar import retile
     from benchmarks.regbench.methods import ashlar as am
 
     assert sc.MASK_MAX == {"overlap": 0.50, "seams": 0.10}
-    assert (am.TILE, am.OVERLAP, am.DOT_MARGIN_PX) == (1024, 0.1, 8.0)
+    assert (am.TILE, am.OVERLAP, am.DOT_MARGIN_PX) == (1950, 0.1, 8.0)
+    assert retile._stride(am.TILE, am.OVERLAP) == 1755
+    assert sc.ASHLAR_HW == (8192, 10240)
     reach = am.MAX_SHIFT_UM / sc.PIXEL_SIZE_UM  # 46 px: ASHLAR's whole maximum shift
     assert 46.0 < reach < 46.5
     on_grid, followed, pushed = [], [], []
     for rnd in (1, 2):
-        share, n_tiles = overlap_share(sc.LARGE_HW, rnd, follow=False)
+        share, n_tiles = overlap_share(sc.ASHLAR_HW, rnd, follow=False)
         assert n_tiles == 30  # 5 x 6
         on_grid.append(share)
-        followed.append(overlap_share(sc.LARGE_HW, rnd)[0])
+        followed.append(overlap_share(sc.ASHLAR_HW, rnd)[0])
         for sx in (-reach, reach):
             for sy in (-reach, reach):
-                pushed.append(overlap_share(sc.LARGE_HW, rnd, (sx, sy))[0])
-    assert 0.21 < min(on_grid) <= max(on_grid) < 0.23, on_grid
-    assert 0.27 < min(followed) <= max(followed) < 0.31, followed
+                pushed.append(overlap_share(sc.ASHLAR_HW, rnd, (sx, sy))[0])
+    assert 0.19 < min(on_grid) <= max(on_grid) < 0.20, on_grid
+    assert 0.24 < min(followed) <= max(followed) < 0.27, followed
     worst = max(pushed)
-    assert 0.34 < worst < 0.37, pushed
-    # the cap: the worst measured case plus a margin, and never half of the dots
-    assert worst + 0.10 < sc.MASK_MAX["overlap"] <= worst + 0.16
+    assert 0.26 < worst < 0.29, pushed
+    # the anchored rows: tiles cut by the anchor, drawn on the grid ASHLAR is told or
+    # where the true map puts them (its residual to the anchor is under 10 px here)
+    anchored = [
+        overlap_share(sc.ASHLAR_HW, rnd, follow=follow, anchored=True)[0]
+        for rnd in (1, 2)
+        for follow in (False, True)
+    ]
+    assert 0.19 < min(anchored) <= max(anchored) < 0.22, anchored
+    pushed_anchored = max(
+        overlap_share(sc.ASHLAR_HW, rnd, (sx, sy), anchored=True)[0]
+        for rnd in (1, 2)
+        for sx in (-reach, reach)
+        for sy in (-reach, reach)
+    )
+    assert 0.23 < pushed_anchored < worst, pushed_anchored
+    # the cap was set at 1024 px tiles (worst case 0.36, plus 0.14) and is kept: it
+    # stands well above this geometry's worst case, and never hides half of the dots
+    assert worst + 0.20 < sc.MASK_MAX["overlap"] <= 0.50
     # twice ASHLAR's limit is still under it; an endless mosaic holds 0.21
-    assert overlap_share(sc.LARGE_HW, 1, (2 * reach, 2 * reach))[0] < 0.40
-    assert abs(1 - (1 - 102 / 922) ** 2 - 0.209) < 1e-3
+    assert overlap_share(sc.ASHLAR_HW, 1, (2 * reach, 2 * reach))[0] < 0.32
+    assert abs(1 - (1 - 195 / 1755) ** 2 - 0.210) < 1e-3
     # PALOM: 8 px either side of every edge of 1024 px blocks
     assert 1 - (1 - 16 / 1024) ** 2 < sc.MASK_MAX["seams"] / 3
 
 
 def test_the_small_canvas_is_no_longer_one_of_ashlars():
-    """Dropped on 2026-10-11: 3 x 3 tiles, eight of them on the border."""
+    """A canvas of 3 x 3 tiles (eight of them on the border) is not one of ASHLAR's:
+    2048 x 2560 was dropped for that on 2026-10-11, and at the 1950 px tiles of
+    2026-10-12 the 4096 x 5120 canvas would be that grid."""
     for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
         canvases = {sc.rounds_of(s)[0] for s in sc.sizes_for(name)}
-        assert canvases == {sc.LARGE_HW}, name
-    assert overlap_share(sc.DEFAULT_HW, 1, follow=False)[1] == 9
+        assert canvases == {sc.ASHLAR_HW}, name
+    assert overlap_share(sc.LARGE_HW, 1, follow=False)[1] == 9
+    assert overlap_share(sc.DEFAULT_HW, 1, follow=False)[1] == 4
 
 
 def test_a_detection_nothing_explains_fails_outside_the_mask_and_is_excused_inside(

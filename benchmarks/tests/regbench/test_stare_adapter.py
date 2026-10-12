@@ -270,20 +270,30 @@ def test_selfcheck_is_ok(tmp_path):
     rec = sc.run("stare", tmp_path)
     assert rec["status"] == "ok"
     assert rec["variants"] == {"stare_rigid": sc.NO_STAGE_IMAGE, "stare": sc.OK}
-    # its two pairs, then ASHLAR's patient round by round (the anchored rows' anchor)
+    # its two pairs, then ASHLAR's pair and ASHLAR's patient round by round (the
+    # anchored rows' anchors), on ASHLAR's canvas
     assert [p["case_id"] for p in rec["pairs"]] == [
         "pair_2048x2560",
         "pair_4096x5120",
-        "patient_4096x5120_round1",
-        "patient_4096x5120_round2",
+        "pair_8192x10240",
+        "patient_8192x10240_round1",
+        "patient_8192x10240_round2",
     ]
     m0 = []
     for i in (1, 2):
-        case = f"patient_4096x5120_round{i}"
-        path = tmp_path / "patient_4096x5120" / "out" / "stare" / "selfcheck" / case
+        case = f"patient_8192x10240_round{i}"
+        path = tmp_path / "patient_8192x10240" / "out" / "stare" / "selfcheck" / case
         m0.append(np.array(json.loads((path / "run.json").read_text())["info"]["m0"]))
     assert m0[0].shape == (3, 3) and np.abs(m0[0] - m0[1]).max() > 5.0  # own poses
+    narrow = {}
     for pair in rec["pairs"]:
         final = pair["variants"]["stare"]
-        assert final["err_px_p95"] < 0.25
+        assert final["err_px_p95"] < 0.25 and final["n_found"] == final["n_dots"]
         assert final["native"]["channels"] == 2  # the slide's own dots channel, warped
+        narrow[pair["case_id"]] = final["n_narrow"]
+    # The dot that made this check `inconsistent` while a dot had to be at least 1.2 px
+    # wide (2026-10-12): on the 8192 x 10240 canvas, outside the tissue, STARE's mesh
+    # shrinks the image to 0.64 x 0.89 and one dot of 8891 is drawn that much narrower,
+    # 0.09 px from where STARE's own map puts it. It is found, and counted as narrow.
+    assert narrow["pair_2048x2560"] == narrow["pair_4096x5120"] == 0
+    assert 1 <= narrow["pair_8192x10240"] == narrow["patient_8192x10240_round1"] <= 3

@@ -131,9 +131,9 @@ def test_sizes_are_the_ones_each_method_needs():
     for name in ("valis_mirage", "valis120", "valis120_hires"):
         assert [s for s in sc.sizes_for(name) if sc.is_patient(s)] == [sc.VALIS_PATIENT]
     for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
-        assert sc.sizes_for(name) == [(sc.LARGE_HW, None), sc.ASHLAR_PATIENT], name
+        assert sc.sizes_for(name) == [(sc.ASHLAR_HW, None), sc.ASHLAR_PATIENT], name
         assert set(sc.sizes_for(name)) <= set(sc.sizes_for("stare"))  # the anchor
-    assert sc.rounds_of(sc.ASHLAR_PATIENT) == (sc.LARGE_HW, [None, None])
+    assert sc.rounds_of(sc.ASHLAR_PATIENT) == (sc.ASHLAR_HW, [None, None])
     for name in ("deeperhistreg_hr_gpu", "palom", "palom_b1024", "initial"):
         assert not any(sc.is_patient(s) for s in sc.sizes_for(name)), name
     # one pair for every DeeperHistReg label, the high-resolution ones included
@@ -169,6 +169,89 @@ def test_a_lazy_channel_is_read_by_region(pair):
     finally:
         close()
     assert len(found) == len(pair.dots)
+
+
+# ── a dot is a dot at the size the writer drew it ─────────────────────────────
+SQUEEZE_X0, SQUEEZE = 800.0, 0.5
+
+
+def _squeeze(q):
+    """reference -> reference: everything right of ``SQUEEZE_X0`` drawn at half width."""
+    q = np.asarray(q, dtype=float).copy()
+    right = q[:, 0] > SQUEEZE_X0
+    q[right, 0] = SQUEEZE_X0 + SQUEEZE * (q[right, 0] - SQUEEZE_X0)
+    return q
+
+
+def _unsqueeze(q):
+    q = np.asarray(q, dtype=float).copy()
+    right = q[:, 0] > SQUEEZE_X0
+    q[right, 0] = SQUEEZE_X0 + (q[right, 0] - SQUEEZE_X0) / SQUEEZE
+    return q
+
+
+def squeezed(pair):
+    """A writer whose transform shrinks one strip of the image to half its width, and
+    the two point mappings that follow it exactly."""
+    h, w = pair.d["ref_hw"]
+    p = pair.inverse(_unsqueeze(pair.grid))
+    image = map_coordinates(
+        pair.mov[1].astype(float), [p[:, 1].reshape(h, w), p[:, 0].reshape(h, w)]
+    )
+    forward = PointMap(lambda xy: _squeeze(pair.truth(xy)), MOV_TO_REF)
+    back = PointMap(lambda xy: pair.inverse(_unsqueeze(xy)), REF_TO_MOV)
+    return image, {MOV_TO_REF: forward, REF_TO_MOV: back}
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_dot_the_writer_shrank_is_still_a_dot(pair, direction):
+    """The case STARE's selfcheck met at 8192 x 10240 (2026-10-12): the writer's own
+    transform shrinks the image somewhere, the points follow it exactly, and the dots
+    there are narrower than a dot as drawn. They are found and measured like the rest."""
+    image, maps = squeezed(pair)
+    forward = maps[MOV_TO_REF].fn
+    res = sc.compare(maps[direction], pair.dots, image, expect=forward)
+    assert res["status"] == sc.OK, res["failed"]
+    assert res["n_found"] == res["n_dots"] and res["err_px_p95"] < 0.25
+    # the strip's dots are in the count, and said to be narrow
+    at = forward(pair.dots)
+    strip = (at[:, 0] > SQUEEZE_X0 + 8) & sc._inside(at, HW, sc.EDGE_PX)
+    assert strip.sum() > 30 and 0.8 * strip.sum() < res["n_narrow"] <= strip.sum() + 12
+    found, width = sc.find_dots(image, widths=True)
+    narrow = width < sc.NARROW_PX
+    assert narrow.sum() == res["n_narrow"] and (found[narrow, 0] > SQUEEZE_X0).all()
+    assert sc.WIDTH_PX[0] < width.min() < sc.NARROW_PX < np.median(width) < 1.5
+    if direction == REF_TO_MOV:  # and every drawn dot is shown
+        assert res["coverage_checked"] and res["n_covered"] == res["n_expected"] > 100
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_a_shrunk_dot_in_the_wrong_place_is_still_inconsistent(pair, direction):
+    """Counting narrow dots as dots loosens nothing: points that do not follow the
+    shrunk strip are reported, by the strip's own blocks."""
+    image, maps = squeezed(pair)
+    res = sc.compare(pair.maps()[direction], pair.dots, image)  # the map without it
+    assert res["status"] == sc.INCONSISTENT and res["n_found"] < res["n_dots"]
+    assert any(f.startswith("block (") for f in res["failed"])
+    off = sc.compare(plus(maps[direction], (0.3, 0.0)), pair.dots, image)
+    assert off["status"] == sc.INCONSISTENT and "whole image" in off["failed"]
+    assert off["n_found"] == off["n_dots"]
+
+
+def test_what_is_narrower_than_half_a_dot_is_not_a_dot(pair):
+    """The lower bound still has something to refuse: single hot pixels and pairs of
+    them, as bright as a dot, are not detections; a nucleus is still too wide."""
+    assert sc.WIDTH_PX == (0.7, 1.8) and sc.NARROW_PX == 1.2
+    plane = pair.mov[1].astype(float)
+    n = len(sc.find_dots(plane))
+    rng = np.random.default_rng(3)
+    free = np.argwhere(plane[8:-8, 8:-8] == 0) + 8
+    for y, x in free[rng.choice(len(free), 40, replace=False)]:
+        plane[y, x] = sc.DOT_PEAK
+        if x % 2:
+            plane[y, x + 1] = sc.DOT_PEAK
+    assert len(sc.find_dots(plane)) == n == len(pair.dots)
+    assert len(sc.find_dots(pair.mov[0])) == 0
 
 
 # ── a consistent mapping is ok, whatever the writer does to the pixels ────────
@@ -704,14 +787,16 @@ def test_a_method_that_asks_for_it_gets_one_process_per_pair(tmp_path, monkeypat
     monkeypatch.setattr(stare, "SELFCHECK_SUBPROCESS", True, raising=False)
     monkeypatch.setattr(sc.subprocess, "run", run)
     rec = sc.run("stare", tmp_path, {"tile": 1024}, sizes=sc.sizes_for("stare"))
-    assert rec["status"] == sc.OK and len(calls) == 3
+    # its two pairs, then ASHLAR's two cases (the anchored rows read their matrices)
+    assert rec["status"] == sc.OK and len(calls) == 4
     assert calls[1][calls[1].index("--size") + 1] == "4096x5120"
+    assert calls[2][calls[2].index("--size") + 1] == "8192x10240"  # ASHLAR's pair
     # a patient is ONE process: every round's canvas is named
-    patient = "4096x5120:4096x5120:4096x5120"
-    assert calls[2][calls[2].index("--size") + 1] == patient
-    assert Path(calls[2][calls[2].index("--work") + 1]).name == "patient_4096x5120"
-    assert cli.build_parser().parse_args(calls[2][3:]).size == [patient]
-    assert sc.parse_size(patient) == ((4096, 5120),) * 3
+    patient = "8192x10240:8192x10240:8192x10240"
+    assert calls[3][calls[3].index("--size") + 1] == patient
+    assert Path(calls[3][calls[3].index("--work") + 1]).name == "patient_8192x10240"
+    assert cli.build_parser().parse_args(calls[3][3:]).size == [patient]
+    assert sc.parse_size(patient) == ((8192, 10240),) * 3
     assert "--in-process" in calls[0] and "tile=1024" in calls[0]
     assert cli.build_parser().parse_args(calls[0][3:]).in_process is True
 

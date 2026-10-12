@@ -542,6 +542,48 @@ def test_no_seam_falls_on_a_method_grid():
     assert (6144, "palom_block", 1024) in hits
 
 
+# OPEN DECISION (the owner's, 2026-10-12). Ruling R3.25 made ASHLAR's tiles 1950 px at a
+# 1755 px pitch; `truth_spec.json` is frozen and hashed and still lists 922. The two tests
+# below state what a revised spec would have to make true. They are strict: when the spec
+# is revised they fail as "unexpectedly passing" and the marks must be removed.
+SPEC_PENDING = (
+    "truth_spec.json (version 4, frozen) predates ruling R3.25 of 2026-10-12: it lists "
+    "ASHLAR's pitch as 922 px, the adapter cuts 1950 px tiles at a 1755 px pitch. A "
+    "revised spec changes the hash and every known-truth case must be prepared again: "
+    "the owner's decision"
+)
+
+
+@pytest.mark.xfail(strict=True, reason=SPEC_PENDING)
+def test_the_specs_ashlar_pitch_is_the_adapters():
+    from benchmarks.ashlar import retile
+    from benchmarks.regbench.methods import ashlar as am
+
+    pitch = retile._stride(am.TILE, am.OVERLAP)
+    assert (am.TILE, pitch) == (1950, 1755)
+    assert SPEC["method_grids_px"]["ashlar_pitch"] == pitch
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=SPEC_PENDING + ". The seam at 1950 px is the END of ASHLAR's first tile row "
+    "and column (1755 k + 1950), and the seam block is ASHLAR's tile size",
+)
+def test_no_seam_falls_on_an_ashlar_tile_edge():
+    """A seam on the edge of a tile ASHLAR places rigidly is a jump it can absorb: its
+    first tile is then exactly one seam block. `seams_on_a_grid` knows multiples of a
+    size only, so it cannot see a tile END."""
+    from benchmarks.ashlar import retile
+    from benchmarks.regbench.methods import ashlar as am
+
+    n = SPEC["n_px"]
+    tiles = retile.tile_grid(n, n, am.TILE, am.OVERLAP)
+    starts = sorted({t.x for t in tiles})
+    edges = set(starts) | {x + am.TILE for x in starts}
+    assert starts == [0, 1755, 3510, 5265, 7020]
+    assert not edges & set(truth.seam_positions(SPEC)), sorted(edges)
+
+
 def test_multiscale_scales_do_not_depend_on_window_size():
     want = tuple(s / PX for s in (333.0, 166.0, 83.0))
     assert truth.family_kwargs(SPEC, "multiscale", PX)["scales"] == pytest.approx(want)

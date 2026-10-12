@@ -112,7 +112,7 @@ def test_ashlar_points_follow_its_mosaic(tmp_path):
     mosaic ASHLAR wrote, and the reference dots against its re-stitched reference."""
     need_ashlar()
     rec = selfcheck.run(
-        "ashlar", tmp_path, mask="overlap", sizes=[(selfcheck.LARGE_HW, None)]
+        "ashlar", tmp_path, mask="overlap", sizes=[(selfcheck.ASHLAR_HW, None)]
     )
     assert rec["variants"] == {"ashlar": selfcheck.OK}, rec
     check = rec["pairs"][0]["variants"]["ashlar"]

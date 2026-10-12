@@ -373,8 +373,9 @@ holds Gaussian dots (sigma 1.5 px, 20000 counts, zero background) on a 96 px lat
 jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass. The
 reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
 Methods with a size-dependent code path are checked on more than one case
-(`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction), both VALIS
-adapters also on a pair with a 30000 px side, every DeeperHistReg label on a pair of
+(`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction) and on ASHLAR's
+two cases at 8192 x 10240 (below), both VALIS adapters also on a pair with a 30000 px
+side, every DeeperHistReg label on a pair of
 40000 x 50000 against 40000 x 48000 (the cohort's size class, with sizes that divide
 exactly; see "DeeperHistReg").
 
@@ -403,18 +404,46 @@ moving round is checked against the gate on its own**: its points against its im
 | rows | the patient | what it adds to the pairs |
 |---|---|---|
 | `valis_mirage`, `valis120`, `valis120_hires` | 2048 x 2560, three slides (`patient_2048x2560`), before the large pair | VALIS orders the slides and, at upstream's defaults (`valis120*`), registers each to its neighbour in that order, so a round may reach the reference through the other round; the pipeline's settings register each to the reference. One `Valis` object, one `register`, a written image per round |
-| the four ASHLAR rows | 4096 x 5120, three slides (`patient_4096x5120`) | two moving cycles in one command and one mosaic: each cycle's planes, the shared `origin_xy`, the shared reference tiles. The anchored rows read STARE's matrix of the same round |
-| `stare` | ASHLAR's patient, run round by round | nothing for STARE itself (it is a pair method): it is what the anchored ASHLAR rows read (`--m0-from`), at the cost of two more registrations of the large canvas |
+| the four ASHLAR rows | 8192 x 10240, three slides (`patient_8192x10240`) | two moving cycles in one command and one mosaic: each cycle's planes, the shared `origin_xy`, the shared reference tiles. The anchored rows read STARE's matrix of the same round |
+| `stare` | ASHLAR's pair and ASHLAR's patient, the patient run round by round | nothing for STARE itself (it is a pair method): it is what the anchored ASHLAR rows read (`--m0-from`), at the cost of three more registrations of ASHLAR's canvas |
 
 Pair methods keep their pair cases. A case's folder under `--work` is `<H>x<W>` for a pair
-and the group's name for a patient (`patient_4096x5120`); case ids are `pair_<H>x<W>` and
-`patient_<H>x<W>_round<i>`. `--size 4096x5120:4096x5120:4096x5120` runs one patient by
+and the group's name for a patient (`patient_8192x10240`); case ids are `pair_<H>x<W>` and
+`patient_<H>x<W>_round<i>`. `--size 8192x10240:8192x10240:8192x10240` runs one patient by
 hand. A method that runs each case in its own process (`SELFCHECK_SUBPROCESS`: VALIS)
 runs a patient in ONE process.
 
-**ASHLAR is checked on the 4096 x 5120 canvas only** (the same ruling): the 2048 x 2560
-pair is dropped. It has 3 x 3 tiles, eight of them on the border, and it was the reason
-for a mask cap of 0.70 (below).
+**ASHLAR is checked on one canvas, 8192 x 10240** (`selfcheck.ASHLAR_HW`): 5 x 6 of the
+1950 px tiles it cuts on the cohort (pitch 1755 px, ruling R3.25 of 2026-10-12), with
+twelve interior tiles and four-tile corners; the selfcheck and the cohort read the same
+`TILE`. Until that ruling the tiles were 1024 px and the canvas 4096 x 5120, the same 5 x
+6 grid; at 1950 px that canvas would be 3 x 3 tiles with one interior tile. A canvas of
+3 x 3 tiles is not one of ASHLAR's cases: the 2048 x 2560 pair was dropped for that on
+2026-10-11 (R3.19), and it was the reason for a mask cap of 0.70 (below). The last row and
+column of that grid are sliver tiles (1172 and 1465 px of slide in a 1950 px tile), as on
+every cohort slide; smaller canvases with thinner slivers are covered by tests against
+the stand-in ("ASHLAR", "Sliver tiles").
+
+**What ASHLAR's canvas costs STARE's selfcheck** (measured once, 2026-10-12, this laptop:
+macOS arm64, 12 cores, `workers` 12, stare-registration 1.2.1). The whole `selfcheck
+--method stare` (five registrations, their images, the comparisons) took 338 s and its
+largest registration held 6.4 GB (process tree, `run.json: resources.peak_rss_mb`):
+
+| case | registration s | STITCH s | peak GB |
+|---|---|---|---|
+| `pair_2048x2560` | 6.5 | 0.9 | 1.9 |
+| `pair_4096x5120` | 21.4 | 3.3 | 4.9 |
+| `pair_8192x10240` | 71.2 | 13.4 | 5.7 |
+| `patient_8192x10240_round1` | 70.4 | 13.4 | 6.4 |
+| `patient_8192x10240_round2` | 68.4 | 13.4 | 6.4 |
+
+Before the change the last three cases were one fewer and on 4096 x 5120 (about 21 s
+each), so the larger canvas adds about 4 minutes here: 210 s of registration in place of
+43 s, and 40 s of STITCH in place of 7 s. On the cluster the job has 4 CPUs, not 12, and
+was NOT timed: it will be slower than this by an unmeasured factor, and stays far inside
+the selfcheck's first rung (64 GB) and its time limit (24 h). `pair_8192x10240` and
+round 1 of the patient are the same two slides under two case ids (the anchored rows look
+their matrices up by case), so one of the three registrations repeats another.
 
 **`palom` is checked on the block size its cohort row has.** PALOM's blocks are the
 reference file's TIFF tiles, 2048 px on the cohort. Both rows now read files with 2048
@@ -427,7 +456,7 @@ cohort blocks were first met on the cluster.
 
 **The check.** The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (`find_dots`: a 15 px median background,
-peaks above 8 robust s.d. and a quarter of the brightest, a second-moment width of 1.2 to
+peaks above 8 robust s.d. and a quarter of the brightest, a second-moment width of 0.7 to
 1.8 px in a 7 px window, an intensity-weighted centroid) and compared with the mapping:
 
 - `mov_to_ref`: `fn(dot)` against the nearest detection within 3 px;
@@ -437,6 +466,41 @@ The residual is **the point mapping minus the image**, in the frame the mapping 
 A method whose writer is known to depart from its mapping declares that departure as a
 function of position (`SELFCHECK_OFFSET`); it is subtracted point by point, and its sign
 is part of the claim.
+
+**A dot is a dot at the size the writer drew it** (`selfcheck.WIDTH_PX`, changed on
+2026-10-12; the gate below was not). A dot as drawn measures 1.39 to 1.50 px in that
+window, a nucleus 1.92, one hot pixel 0, two adjacent ones 0.35. The lower bound was 1.2
+px, which a dot shrunk below about 0.8 of its size fails, while the upper bound lets a
+dot stretched 1.5 times through. It met its first such dot when STARE's selfcheck gained
+the 8192 x 10240 canvas, and STARE read `inconsistent`:
+
+- ONE dot of 8891, at (10130, 2143) in the image, 110 px from its right edge and outside
+  the tissue (the tissue box ends at 0.97 of the width). STARE's mesh has nothing to hold
+  on to there: its map puts the dot 29 px from where the generator's does, and its local
+  scale is 0.64 x 0.89 (the generator's: 0.99 x 1.01).
+- STARE drew the dot 0.09 px from where its OWN map says, so the points do follow the
+  image, which is all this check asks. But the dot measured 1.189 px wide, was not counted
+  as a dot, and its 512 px block read 28 of 29 found (96.6 %, under the 99 % a block
+  needs). Every whole-image number was inside the gate (8890 of 8891 found, 95th
+  percentile 0.091 px, mean 0.001 px).
+- It was a defect of the detector, not a disagreement between STARE's points and its
+  image, and not a property the smaller canvases lack by design: the check's own rule is
+  that registration accuracy does not enter it, and a width band that only takes a dot
+  near its drawn size makes the verdict depend on the local scale of the registration.
+
+The lower bound is now 0.7 px: a dot at half size (measured widths, dots resampled
+through a linear map, bilinear and cubic: 0.60 at scale 0.4, 0.75 at 0.5, 0.90 at 0.6,
+1.12 at 0.75, 1.40 at 1, 1.57 at 1.2, 1.71 at 1.5; the centroid stays within 0.1 px of
+the mapped centre down to 0.4). Why this loosens nothing: no threshold of the gate, no
+canvas and no case changed; a narrow peak is counted only where one is, so a dot that is
+missing or drawn elsewhere is as unfound as before; and every extra detection is also
+held to check (2), so a writer that leaves narrow fragments now fails where it passed.
+Hot pixels and nuclei are still refused. Narrow detections are counted in the record
+(`n_narrow`: detections under 1.2 px), so a writer that shrinks dots is visible. Tests:
+`test_selfcheck.py::test_a_dot_the_writer_shrank_is_still_a_dot`,
+`::test_a_shrunk_dot_in_the_wrong_place_is_still_inconsistent`,
+`::test_what_is_narrower_than_half_a_dot_is_not_a_dot`, and the real STARE run in
+`test_stare_adapter.py::test_selfcheck_is_ok`.
 
 **The gate (frozen).** 95th percentile of the residual at most 0.40 px, mean signed
 residual at most 0.15 px per axis, at least 99 % of the points found: on the whole image
@@ -485,30 +549,40 @@ check (1) only:
   `passes_cap_<cap>` in the table): would the row pass the accuracy gate on its
   unmasked dots if the mask could hide at most that share. `passes_cap_none` is the
   verdict in force.
-  - **`overlap` 0.50, measured on 2026-10-11** on ASHLAR's only selfcheck canvas (4096
-    x 5120: 5 x 6 tiles of 1024 px at a 922 px pitch) with the adapter's own geometry:
-    its tile grid, `tilemap.on_seam` at its 8 px dot margin, on the selfcheck's own
-    dots, both rounds of the patient. No image enters, so ASHLAR is not needed
+  - **`overlap` 0.50, measured on 2026-10-12** on ASHLAR's only selfcheck canvas (8192
+    x 10240: 5 x 6 tiles of 1950 px at a 1755 px pitch) with the adapter's own
+    geometry: its tile grid, `tilemap.on_seam` at its 8 px dot margin, on the
+    selfcheck's own dots, both rounds of the patient. No image enters, so ASHLAR is not
+    needed
     (`test_selfcheck_gate.py::test_the_overlap_cap_stands_above_the_measured_share`
-    repeats it).
+    repeats it). The second column is the same measurement at the 1024 px tiles and the
+    4096 x 5120 canvas in force until R3.25 (2026-10-11, repeated 2026-10-12).
 
-    | where ASHLAR draws the moving tiles | share of the dots masked |
-    |---|---|
-    | where they were cut (and the anchored rows, cut by STARE's matrix: 0.22 to 0.24) | 0.22 |
-    | each tile following the pair's true map | 0.27 to 0.30 |
-    | the same, tiles beyond ASHLAR's maximum shift reset to the cycle's offset | 0.27 to 0.28 |
-    | the true map plus 46 px on both axes on every tile (15 µm, ASHLAR's whole maximum shift), worst of four signs | 0.36 |
-    | the same with 92 px | 0.39 |
+    | where ASHLAR draws the moving tiles | share masked, 1950 px tiles | at 1024 px tiles |
+    |---|---|---|
+    | where they were cut | 0.19 to 0.20 | 0.22 to 0.23 |
+    | each tile following the pair's true map | 0.24 to 0.26 | 0.27 to 0.30 |
+    | the true map plus 46 px on both axes on every tile (15 µm, ASHLAR's whole maximum shift), worst of four signs | 0.28 | 0.36 |
+    | the same with 92 px | 0.31 | 0.42 |
+    | the anchored rows: tiles cut by the anchor, drawn on the grid or following the true map | 0.20 to 0.21 | 0.22 to 0.25 |
+    | the anchored rows, the true map plus 46 px, worst of four signs | 0.25 | not measured |
 
-    The share grows with the shifts because a moving tile drawn away from where it was
-    cut lies over other reference tiles. The cap is the worst case within ASHLAR's own
-    limit, 0.36, plus a margin of 0.14, so at least half of the dots are always judged.
-    Until this date it was 0.70, set for the 2048 x 2560 pair from shares (0.43 and
-    0.62) computed on a tile grid clamped to the canvas; the adapter's grid is padded
-    (rows at 0, 922, ..., 3688), and on it that pair holds 0.21 to 0.31 as well. What
-    ASHLAR really does on this canvas is not known until it runs: a share above 0.50
-    is flagged on every row of the run, with the share, and the numbers on all dots
-    and on the masked dots alone are in the record either way.
+    The anchor of that measurement is the rigid part of the round's map; with the
+    matrices STARE itself found on these cases (its selfcheck of 2026-10-12) the shares
+    are the same, 0.20 to 0.21. (The row "tiles beyond ASHLAR's maximum shift reset to
+    the cycle's offset", 0.27 to 0.28 at 1024 px, was not measured again.) The share
+    grows with the shifts because a moving tile drawn away from where it was cut lies
+    over other reference tiles; the overlap is the same tenth of the pitch at both tile
+    sizes, and the fixed 46 px and the 8 px margin are a smaller part of a larger tile.
+    The cap was set at 1024 px tiles: that geometry's worst case within ASHLAR's own
+    limit, 0.36, plus a margin of 0.14. It is KEPT at 0.50 for 1950 px tiles, where it
+    stands 0.22 above the worst measured case; it is a flag, never a gate, and at least
+    half of the dots are always judged. Until 2026-10-11 it was 0.70, set for the 2048
+    x 2560 pair from shares computed on a tile grid clamped to the canvas (the
+    adapter's grid is padded, not clamped). What ASHLAR really does on this canvas is
+    not known until it runs: a share above 0.50 is flagged on every row of the run,
+    with the share, and the numbers on all dots and on the masked dots alone are in the
+    record either way.
   - **`seams` 0.10** is 3.2 times the share the seams of 1024 px blocks hold when every
     block edge is one (8 px either side: 1 - (1 - 16/1024)^2 = 0.03). PALOM's adapter
     applies the same factor to the blocks a pair really has (`SELFCHECK_MASK_MAX`):
@@ -549,14 +623,21 @@ CHECKED**), `via <run>: <status>` for a row whose run is gated by another run's 
 The overall status is the worst over the checked variants.
 
 **Measured on `stare` 1.2.1** (2026-10-09, and again on 2026-10-11 after the gate changed:
-every number below came out the same, `n_unexplained` 0, `masked_frac` 0, image shape
-equal to the reference's; macOS arm64, `--opt workers=4`, 46 s for both pairs; the only
-method whose selfcheck has really run):
+every number of the first two rows came out the same, `n_unexplained` 0, `masked_frac` 0,
+image shape equal to the reference's; macOS arm64, `--opt workers=4`, 46 s for both
+pairs; the only method whose selfcheck has really run). The 8192 x 10240 rows are of
+2026-10-12 (`workers` 12), read from the kept images with the detector as it is now:
 
-| pair | dots found | residual p50 / p95 px | mean x / y px | worst block p95 | worst block mean |
+| case | dots found | residual p50 / p95 px | mean x / y px | worst block p95 | worst block mean |
 |---|---|---|---|---|---|
 | 2048 x 2560 | 537 / 537 | 0.055 / 0.090 | +0.003 / +0.002 | 0.104 (20 blocks) | 0.020 |
 | 4096 x 5120 | 2202 / 2202 | 0.057 / 0.091 | 0.000 / 0.000 | 0.108 (80 blocks) | 0.025 |
+| 8192 x 10240, the pair and round 1 of the patient | 8891 / 8891 (one narrow) | 0.057 / 0.091 | +0.001 / 0.000 | 0.119 (320 blocks) | 0.033 |
+| 8192 x 10240, round 2 of the patient | 8911 / 8911 | 0.057 / 0.091 | 0.000 / 0.000 | 0.117 (320 blocks) | 0.026 |
+
+With the lower width bound at 1.2 px, as it was until that day, the third row read 8890
+/ 8891 and `inconsistent` (block (19, 4): 28 of 29 found): "A dot is a dot at the size
+the writer drew it", above.
 
 `stare_rigid` is `no_stage_image`. The same image, with STARE's own mapping deliberately
 changed, on the 2048 x 2560 pair:
@@ -1121,14 +1202,36 @@ microscopy registration paper (none was found). The 1950 px block is grounded in
 owner's statement only.
 
 **Seams.** With 1950 px blocks the seams of an 8192 px window fall at 1950, 3900, 5850 and
-7800 px. None of these positions is a multiple of any grid a method works on
-(`method_grids_px` in the spec): STARE's 64 px vector lattice and 2048 px tile, ASHLAR's
-922 px tile pitch, PALOM's 1024 and 2048 px blocks. The test
+7800 px. None of these positions is a multiple of any grid the spec lists for a method
+(`method_grids_px`): STARE's 64 px vector lattice and 2048 px tile, a 922 px tile pitch
+for ASHLAR, PALOM's 1024 and 2048 px blocks. The test
 `test_no_seam_falls_on_a_method_grid` checks every seam position against every listed
 grid (`truth.seams_on_a_grid`), not the block size alone. "Grid" here means multiples of
-the listed size from the window's origin; ASHLAR's tile ENDS (922 k + 1024) are not in the
-list. A window smaller than 1950 px has no seam at all: a reduced copy of this family is
-a constant shift.
+the listed size from the window's origin; tile ENDS are not in the list. A window smaller
+than 1950 px has no seam at all: a reduced copy of this family is a constant shift.
+
+**The spec's ASHLAR grid is stale, and one seam now sits on an ASHLAR tile edge (open
+decision, 2026-10-12).** The spec is frozen and hashed and was NOT changed when ASHLAR's
+tiles went from 1024 to 1950 px (R3.25):
+
+- `method_grids_px.ashlar_pitch` still says 922; the adapter's pitch is 1755. Nothing
+  that prepares, runs or scores a case reads that entry: only `truth.method_grids`,
+  `truth.seams_on_a_grid` and the test above do. So no number is wrong because of it; the
+  guard checks a pitch ASHLAR no longer has. At 1755 it would still find nothing (the
+  seams are 195, 390, 585 and 780 px past a tile START).
+- ASHLAR's tiles END at 1950, 3705, 5460, 7215 px (1755 k + 1950). The first seam, at
+  1950 px, is exactly the end of the first tile row and column, and the seam block is
+  ASHLAR's tile size. So ASHLAR's first tile is exactly one seam block (one constant
+  shift, which a tile placed rigidly reproduces), and the jump at 1950 px falls on the
+  edge of an overlap band, where the selfcheck masks and the `:non_ashlar` rows leave
+  out. The other three seams lie 390, 585 and 780 px inside a tile. On the `seams`
+  cases one seam in four per axis is therefore one ASHLAR can absorb, which the family
+  was built to avoid for every method. The guard does not see it: it knows multiples of
+  a size, not tile ends.
+- Two tests state both points and are expected to fail until the spec is revised
+  (`test_truth.py::test_the_specs_ashlar_pitch_is_the_adapters`,
+  `::test_no_seam_falls_on_an_ashlar_tile_edge`: strict, so a revised spec makes them
+  fail loudly and the marks must then be removed).
 
 **Bumps.** The counts are for the 8192 px window and were set so that about a quarter of
 it moves by more than 1 µm, measured on the generated field (the pose not counted;
@@ -2734,7 +2837,9 @@ bootstrap interval over units ("Scoring").
    map** (the tile overlaps; see "ASHLAR", "What the overlap bands cost"). It has no bias
    when a round needs only a translation, and it is optimistic for ASHLAR when a rotation
    is left inside its tiles: at 0.5 degrees, 2.7 px of map error against 4.6 px for the
-   copies the image shows. The selfcheck masks exactly those points. The
+   copies the image shows (measured at 1024 px tiles; at the 1950 px tiles ASHLAR now
+   cuts both should be about 1.9 times larger, not measured). The selfcheck masks exactly
+   those points. The
    `<variant>:non_ashlar` rows are the measure of how much it matters.
 8. **DeeperHistReg's primary row follows its writer, not its registration.** By the
    adapter's reading the written image sits half a field pixel right and down of the
@@ -2975,7 +3080,25 @@ A label and its options come together; a mismatch is refused.
 **The tiles are the benchmark's** (ASHLAR "requires unstitched individual tile images as
 input", README at v1.20.0 `[PARTIAL: lines 1-60]`; the slides exist only stitched).
 `benchmarks.ashlar.retile.write_tiles` cuts every slide of the patient on one regular
-grid: 1024 px tiles at a 922 px pitch, all channels, whole pixels, no stage error.
+grid: 1950 px tiles at a 1755 px pitch (10 % overlap), all channels, whole pixels, no
+stage error. 1950 px is the tile of the scanner the cohort was acquired on at 0.325 µm
+per pixel, and the overlap is the owner's ruling (R3.25, 2026-10-12; `ashlar.TILE`,
+`ashlar.OVERLAP`). Until then the tiles were 1024 px at a 922 px pitch; no ASHLAR result
+existed yet (its selfcheck had never run), so nothing was re-run.
+
+- *Sliver tiles.* The grid has ceil(size / 1755) tiles per axis and every tile is a full
+  1950 px square (ASHLAR reads one tile size for the whole grid), so the last row and the
+  last column are padded with zeros wherever the slide ends: on a 60000 x 80000 px slide
+  35 x 46 tiles, 80 of them partly padding, the last row holding 330 px of slide and the
+  last column 1025 px. When the slide ends within 195 px of a tile start, the last tile
+  holds nothing the tile before it does not. On the reference cycle the padding carries
+  the per-tile noise too. Tested against the stand-in on three such canvases, at the
+  frozen tile size (`test_ashlar_adapter.py::test_sliver_tiles_on_both_axes`: 2048 x
+  2560, 2000 x 2060 and 1905 x 5400, the last with a last row and column that hold
+  nothing of their own): the map, the seam mask against plain rectangle tests, the
+  origin and `valid_box`. What ASHLAR itself does with a tile that is mostly padding
+  (whether it registers its edges or places it by its linear model) has not been
+  observed: the stand-in registers nothing.
 
 - *Slight noise* is per-tile Gaussian noise on the REFERENCE cycle's tiles only, s.d. =
   max(0.2 % of the channel's 1st to 99th percentile range, 3 counts; the floor assumes
@@ -3015,11 +3138,24 @@ four arrays: it is the whole transform.
 **The mosaic is not on the reference slide's grid.** ASHLAR re-stitches the reference and
 moves its origin to zero (`reg.py:713-716`). The native record says where the image is:
 `origin_xy` = where the mosaic's first pixel sits in the reference slide's frame (minus
-the median over tiles of `E - c_ref`), `valid_box` = the reference slide's extent inside
-the mosaic (outside it the image is the tiles' zero padding), `reference_file` = the
-reference cycle as ASHLAR redrew it. How far single tiles depart from that one origin is
-`info["reference_stitch_error"]`; the scored map uses each tile's own placement, not the
-median.
+the median over tiles of `E - c_ref`, each tile weighted by the slide area it holds),
+`valid_box` = the reference slide's extent inside the mosaic (outside it the image is the
+tiles' zero padding), `reference_file` = the reference cycle as ASHLAR redrew it. How far
+single tiles depart from the plain median is `info["reference_stitch_error"]`; the scored
+map uses each tile's own placement, not the median.
+
+The weight is new (2026-10-12) and is what the report "the stand-in's reference
+comparison is `inconsistent` (`origin_xy`) on 2048 x 2560 at 1950 px tiles" came down to.
+That canvas is 2 x 2 tiles: one full tile holding 61 % of the slide and three slivers. The
+stand-in stitches its first tile 4 px and 7 px away from all the others, so three sliver
+tiles agreed on one offset and the full tile had another; the plain median over four
+tiles gave (-6.9, -4), which is no tile's offset on x, while the image, read off the
+matched dots, said (0, 0). The check was right to object: the reported origin described
+a minority of the pixels. Neither the map (it never uses the origin) nor the stand-in was
+wrong; the summary was fragile wherever sliver tiles are a majority, which is any canvas
+of up to 3 x 3 tiles. On a cohort slide (35 x 46 tiles, 80 slivers of 1610) the two
+medians agree unless ASHLAR placed its tiles very unevenly, so this changes a cohort
+number only for a slide of a few tiles. `info.placement.ref_valid_wh` holds the weights.
 
 **Where the map is not exact: seams.** Where two tiles of a cycle cover one mosaic pixel
 ASHLAR cross-fades them (`pastefunc_blend`, `utils.py:197-216`), and where two tiles hold
@@ -3036,14 +3172,18 @@ the rows to lean on for ASHLAR; `info["band_fraction"]` says how many nuclei tha
 Re-measured on 2026-10-11 with `tilemap.py` on uniform points (the review's item 5; its
 numbers hold):
 
-- **How many.** At 1024 px tiles and a 922 px pitch a point is in a moving-tile overlap
-  with probability 1 - (1 - 102/922)^2 = 0.21 on an endless mosaic, 0.24 on a 40000 x
-  50000 px slide (2420 tiles). `on_seam` also asks for one reference tile where the
+- **How many.** At 1950 px tiles and a 1755 px pitch a point is in a moving-tile overlap
+  with probability 1 - (1 - 195/1755)^2 = 0.21 on an endless mosaic, and 0.21 on a 40000
+  x 50000 px slide (667 tiles) and on a 60000 x 80000 px one (1610 tiles; uniform
+  points, measured 2026-10-12). `on_seam` also asks for one reference tile where the
   point lands: when the moving tiles sit in the mosaic offset from the reference tiles
-  (a round placed a few hundred px from the reference's grid) that is 0.40. So between a
-  fifth and two fifths of the nuclei of ASHLAR's primary row are scored through a map
-  the image does not show exactly. These are exactly the dots the selfcheck masks, so
-  that part of the map is not checked against any image.
+  that grows, to 0.30 at 100 px and 0.39 to 0.40 from 300 px on. So between a fifth and
+  two fifths of the nuclei of ASHLAR's primary row are scored through a map the image
+  does not show exactly. These are exactly the dots the selfcheck masks, so that part of
+  the map is not checked against any image. (At the 1024 px tiles in force until R3.25
+  the same measurement gives 0.21 and, from 100 px on, 0.39 to 0.40: the share is set by
+  the overlap fraction, which did not change; the larger tile only needs a larger offset
+  to reach the upper figure.)
 - **No bias under pure translation.** When every tile needs the same shift, the two
   drawn copies coincide and the map equals both: the error is zero (measured 0.00 px).
 - **With a residual rotation inside the tiles the map is OPTIMISTIC for ASHLAR.** ASHLAR
@@ -3052,11 +3192,14 @@ numbers hold):
   elsewhere. In a band the image is a cross-fade of two such copies, each wrong by about
   half a pitch times the rotation in OPPOSITE directions along the line between the two
   centres; the map is their depth-weighted mean, which lies between the copies and so
-  cancels that component. Measured, as error against the true rotation: at 0.5 degrees
-  the map is off by 2.7 px in the bands while the copies actually drawn are off by 4.6
-  px (off the bands both are 2.7 px); at 0.1 degrees 0.54 px against 0.91 px. So in the
-  bands the nuclei are scored as better registered than either copy the image shows,
-  by about 40 % of the copies' error.
+  cancels that component. Measured, as error against the true rotation, AT 1024 px TILES
+  (2026-10-11) and not measured again at 1950 px: at 0.5 degrees the map is off by 2.7
+  px in the bands while the copies actually drawn are off by 4.6 px (off the bands both
+  are 2.7 px); at 0.1 degrees 0.54 px against 0.91 px. So in the bands the nuclei are
+  scored as better registered than either copy the image shows, by about 40 % of the
+  copies' error. Both errors are a rotation times a distance inside the tile, so at
+  1950 px tiles they should be about 1.9 times larger in pixels with the same ratio
+  between them: an inference from the geometry, not a measurement.
 - **How much it matters is the `:non_ashlar` rows.** They score every method, ASHLAR
   included, on the nuclei off the bands, where the map is exactly the image. If
   `ashlar:non_ashlar` and `ashlar` agree, the bands did not flatter it; if `ashlar` is
@@ -3131,10 +3274,11 @@ python -m benchmarks.regbench selfcheck --method ashlar --label affine_ashlar_cl
 ```
 
 `ok` is exit 0 and `"status": "ok"` in `W/<row>/selfcheck.json`, for all three entries of
-`pairs`: the 4096 x 5120 pair (5 x 6 tiles with four-tile corners) and both rounds of
-the patient of three slides on the same canvas (two moving cycles in one mosaic); in
-each entry, `variants.<row>.reference.status` is `ok` too and `masked_frac` is at most
-0.50 (expected 0.22 to 0.36: see "selfcheck"). A clean row may end `crashed` with
+`pairs`: the 8192 x 10240 pair (5 x 6 tiles of 1950 px with four-tile corners) and both
+rounds of the patient of three slides on the same canvas (two moving cycles in one
+mosaic); in each entry, `variants.<row>.reference.status` is `ok` too and `masked_frac`
+is at most 0.50 (expected 0.19 to 0.28, anchored rows 0.20 to 0.25: see "selfcheck"). A
+clean row may end `crashed` with
 ASHLAR's `correlation > total_amplitude`: that is the known numerical failure, it is
 published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
 `affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).

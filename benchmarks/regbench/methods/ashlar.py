@@ -19,8 +19,9 @@ documented flags above is set.
 **What is not ASHLAR's, and cannot be: the tiles.** The slides exist only stitched, and
 ASHLAR "requires unstitched individual tile images as input" (README at v1.20.0
 ``[PARTIAL: lines 1-60]``). ``benchmarks.ashlar.retile.write_tiles`` cuts every slide of the
-patient on one regular grid (1024 px tiles, 922 px pitch, all channels, whole pixels, no
-stage error). ``noise=ref`` adds per-tile Gaussian noise to the REFERENCE cycle's tiles
+patient on one regular grid (1950 px tiles, 1755 px pitch, all channels, whole pixels, no
+stage error; 1950 px is the tile of the scanner the cohort was acquired on, and the 10 %
+overlap is the owner's ruling: ``TILE``, ``OVERLAP`` below). ``noise=ref`` adds per-tile Gaussian noise to the REFERENCE cycle's tiles
 only, s.d. = max(0.2 % of the channel's 1st-99th percentile range, 3 counts): on
 pixel-identical overlaps ASHLAR's error metric can raise (``utils.py:74-86``), which its
 command does not catch (``scripts/ashlar.py:231`` catches ``ProcessingError`` only), and
@@ -45,8 +46,9 @@ the mosaic (``regbench.tilemap``). Both steps are one translation per tile: noth
 inverted numerically, resampled or fitted. The mosaic is NOT on the reference slide's grid
 (ASHLAR re-stitches the reference and moves its origin to zero, ``reg.py:713-716``): the
 native record carries ``origin_xy``, where the mosaic's first pixel sits in the reference
-slide's frame (minus the median of ``E - c_ref`` over tiles), and ``info`` the spread of
-``E - c_ref`` around it (``reference_stitch_error``).
+slide's frame (minus the median of ``E - c_ref`` over tiles, each weighted by the slide
+area it holds: ``mosaic_origin_xy``), and ``info`` the spread of ``E - c_ref`` around the
+plain median (``reference_stitch_error``).
 
 **Where that is not exact: seams.** Where two tiles of a cycle are drawn over the same
 mosaic pixel ASHLAR cross-fades them (``utils.py:197-216``) and a point may be drawn twice;
@@ -103,7 +105,14 @@ VERSION = "1.20.0"
 SELFCHECK_REF_DOTS = True
 
 # Frozen: changing one after a cohort run is a post hoc change.
-TILE = 1024
+# TILE was 1024 until 2026-10-12. Ruling R3.25 (the owner, 2026-10-12) made it 1950 px,
+# the tile of the scanner the cohort was acquired on (pixel size 0.325 um), and confirmed
+# the 10 % overlap: a pitch of round(1950 x 0.9) = 1755 px (`retile._stride`). This was
+# changed BEFORE any ASHLAR result existed: no cohort run of it had been made, and its
+# selfcheck had never run (its image has no `python`). Nothing else here names a tile
+# size: the cut, the anchored cut, the point map, the seam mask and the key of the
+# shared reference tiles (`reference_tiles`) all read these two.
+TILE = 1950
 OVERLAP = 0.1
 MAX_SHIFT_UM = 15.0  # ASHLAR's own default (scripts/ashlar.py:63)
 NOISE_FRAC = 0.002
@@ -327,9 +336,10 @@ def placement_of(edge, layer, ref_grid, mov_grid):
     order, as plain lists (it is stored in ``run.json``: it IS the transform)."""
     ref_true = np.asarray(ref_grid["true_positions_yx"], dtype=float)
     mov_true = np.asarray(mov_grid["true_positions_yx"], dtype=float)
-    ref_true = ref_true[tile_order(edge["metadata_positions_yx"], ref_grid)]
+    ref_order = tile_order(edge["metadata_positions_yx"], ref_grid)
+    ref_true = ref_true[ref_order]
     mov_true = mov_true[tile_order(layer["metadata_positions_yx"], mov_grid)]
-    return {
+    out = {
         "tile": int(mov_grid["tile_size"]),
         "mov_true_yx": mov_true.tolist(),
         "mov_pos_yx": np.asarray(layer["positions_yx"], dtype=float).tolist(),
@@ -337,13 +347,43 @@ def placement_of(edge, layer, ref_grid, mov_grid):
         "ref_pos_yx": np.asarray(edge["positions_yx"], dtype=float).tolist(),
         "mosaic_shape": [int(v) for v in edge["mosaic_shape"]],
     }
+    extent = ref_grid.get("valid_extent")  # [row, col, w, h] per tile, row-major
+    if extent is not None and len(extent) == len(ref_true):
+        wh = np.asarray(extent, dtype=float)[:, 2:4]
+        # how much of each reference tile is slide, not padding (`mosaic_origin_xy`)
+        out["ref_valid_wh"] = wh[ref_order].tolist()
+    return out
 
 
 def mosaic_origin_xy(placement):
     """Where the mosaic's first pixel sits in the reference slide's frame, ``(x, y)``:
-    minus the median over reference tiles of (drawn at - cut from)."""
-    off = np.asarray(placement["ref_pos_yx"]) - np.asarray(placement["ref_true_yx"])
-    return (-np.median(off, axis=0)[::-1]).tolist()
+    minus the median over reference tiles of (drawn at - cut from), each tile weighted by
+    the slide area it holds (``ref_valid_wh``).
+
+    The weight is what makes ONE origin describe the image on a canvas with sliver
+    tiles. The last row and the last column of the grid are mostly padding on any slide
+    that is not a multiple of the pitch, which is every cohort slide; counted one tile
+    one vote, they are a majority on a canvas of up to 3 x 3 tiles, and the origin would
+    then be that of a few hundred pixels at the slide's edge. On a cohort slide (about
+    35 x 46 tiles) the two medians agree unless ASHLAR placed its tiles very unevenly.
+    The value is always one tile's own offset (the lower weighted median), never a mean
+    of two. A placement without extents (recorded before 2026-10-12) gets the plain
+    median. The scored map does not use this number: each point takes its own tile's
+    placement (``point_map``).
+    """
+    off = np.asarray(placement["ref_pos_yx"], dtype=float) - np.asarray(
+        placement["ref_true_yx"], dtype=float
+    )
+    wh = placement.get("ref_valid_wh")
+    weight = np.prod(np.asarray(wh, dtype=float), axis=1) if wh is not None else None
+    if weight is None or len(weight) != len(off) or not weight.sum() > 0:
+        return (-np.median(off, axis=0)[::-1] + 0.0).tolist()
+    origin = []
+    for axis in (1, 0):  # x, then y
+        order = np.argsort(off[:, axis], kind="stable")
+        reached = np.cumsum(weight[order]) >= 0.5 * weight.sum()
+        origin.append(-float(off[order[np.argmax(reached)], axis]) + 0.0)
+    return origin
 
 
 def point_map(placement):

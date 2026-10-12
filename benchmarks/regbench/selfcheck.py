@@ -137,16 +137,21 @@ LARGE_HW = (4096, 5120)
 # One patient of three slides (user ruling R3.19, 2026-10-11): the reference and two
 # moving rounds on the same canvas, each round with its own map (`ROUND_POSES`).
 VALIS_PATIENT = (DEFAULT_HW, None, None)
-ASHLAR_PATIENT = (LARGE_HW, None, None)
+# ASHLAR's canvas: 5 x 6 of its 1950 px tiles at a 1755 px pitch (the same grid the
+# 4096 x 5120 canvas gave at 1024 px tiles, before ruling R3.25 of 2026-10-12; that
+# canvas would now be 3 x 3 tiles with one interior tile).
+ASHLAR_HW = (8192, 10240)
+ASHLAR_PATIENT = (ASHLAR_HW, None, None)
 # A case, by method or label: a PAIR `(reference (H, W), moving (H, W) or None for the
 # same canvas)`, or a PATIENT `(reference, moving, moving, ...)` (three or more entries).
 # The longest key that the label (else the method) equals or starts with applies.
 SIZES = {
-    # two REG_TILE tiles and one seam, then a pair with a four-tile junction. The third
-    # case is ASHLAR's patient, run round by round (STARE is a pair method): it is there
-    # for the anchored ASHLAR rows, which read STARE's rigid matrix of the SAME round
-    # (`--m0-from`), and it costs STARE two more registrations of the large canvas.
-    "stare": [(DEFAULT_HW, None), (LARGE_HW, None), ASHLAR_PATIENT],
+    # two REG_TILE tiles and one seam, then a pair with a four-tile junction. The last
+    # two cases are ASHLAR's pair and its patient, the patient run round by round (STARE
+    # is a pair method): they are there for the anchored ASHLAR rows, which read STARE's
+    # rigid matrix of the SAME case and round (`--m0-from`), and they cost STARE three
+    # more registrations, of ASHLAR's canvas (8192 x 10240 since 2026-10-12).
+    "stare": [(DEFAULT_HW, None), (LARGE_HW, None), (ASHLAR_HW, None), ASHLAR_PATIENT],
     # The preprocessing row and its tuning runs (`stare_prep`, `stare_prep_<candidate>`):
     # STARE's two pairs, without ASHLAR's patient (no row reads their rigid matrix).
     # What is checked is the same as for `stare`, the points against the image STARE's
@@ -228,17 +233,19 @@ SIZES = {
         ((40000, 50000), (40000, 48000)),
         ((40000, 48000), (40000, 50000)),
     ],
-    # ASHLAR at 1024 px tiles and a 922 px pitch, on the large canvas only: 5 x 6 tiles
-    # with interior tiles and four-tile corners. The 2048 x 2560 pair (3 x 3 tiles, all
-    # but one on the border) was dropped on 2026-10-11 (R3.19): the mask hid most of it,
-    # so it forced a cap under which little is checked (see `MASK_MAX`). The second case
+    # ASHLAR at the cohort's own geometry, 1950 px tiles and a 1755 px pitch (R3.25,
+    # 2026-10-12; the selfcheck and the cohort read the same `TILE`), on one canvas:
+    # 8192 x 10240, 5 x 6 tiles with twelve interior tiles and four-tile corners. A
+    # canvas of 3 x 3 tiles (all but one on the border) is not checked: the 2048 x 2560
+    # pair was dropped for that on 2026-10-11 (R3.19) at 1024 px tiles, and 4096 x 5120
+    # would be the same grid at 1950 px (see `MASK_MAX`). The second case
     # is one patient of three slides: ASHLAR takes every cycle in one command and aligns
     # each later cycle to the reference stitch, so two moving cycles in one mosaic (its
     # planes, its `origin_xy`, its shared reference tiles) are checked together, each
     # round against the gate. Both cases are among `stare`'s, whose rigid matrix the
     # anchored rows read round by round (`--m0-from`).
-    "ashlar": [(LARGE_HW, None), ASHLAR_PATIENT],
-    "affine_ashlar": [(LARGE_HW, None), ASHLAR_PATIENT],
+    "ashlar": [(ASHLAR_HW, None), ASHLAR_PATIENT],
+    "affine_ashlar": [(ASHLAR_HW, None), ASHLAR_PATIENT],
     # PALOM: 8 x 10 blocks for either row. Its filter thresholds the distribution of
     # the block shifts and fits a regression on them (labsyspharm/palom v2026.4.1
     # `align.py:54-80` [FULL]), which the default pair's 2 x 3 blocks cannot feed; the
@@ -271,7 +278,24 @@ ROUND_DOT_SEED = 10  # the same for its dots lattice (the reference's own is see
 MEDIAN_PX = 15  # background: a median of this side ...
 MEDIAN_STEP = 4  # ... evaluated on a lattice of this step and interpolated
 WINDOW = 7  # px: second-moment width and centroid
-WIDTH_PX = (1.2, 1.8)  # a dot; a sigma 5 px nucleus is wider
+# What counts as a dot: the second-moment width of a peak in the 7 px window. A dot as
+# drawn (sigma 1.5 px) measures 1.39 to 1.50; a sigma 5 px nucleus 1.92; one hot pixel 0,
+# two adjacent ones 0.35. The band must take a dot at whatever size the method's writer
+# drew it, because the check asks WHERE a dot is and registration accuracy is not its
+# business. Measured on dots resampled through a linear map (bilinear and cubic):
+#   scale    0.4    0.5    0.6    0.75   1      1.2    1.5
+#   width    0.60   0.75   0.90   1.12   1.40   1.57   1.71
+# with the centroid within 0.1 px of the mapped centre down to 0.4. The lower bound was
+# 1.2 until 2026-10-12, which a dot shrunk below about 0.8 fails while one stretched 1.5
+# times passes. It met its first such dot when STARE's selfcheck gained the 8192 x 10240
+# canvas: ONE dot of 8891, 110 px from the right edge and outside the tissue, where
+# STARE's mesh has nothing to hold on to and shrinks the image to 0.64 x 0.89. It was
+# drawn 0.09 px from where STARE's own map puts it, measured 1.19, and was not counted
+# as a dot, so its 512 px block read 28 of 29 found and the run `inconsistent`. 0.7 is
+# half size, as far below a dot as the upper bound is above it. Narrow detections are
+# counted (`n_narrow`): nothing about them is hidden.
+WIDTH_PX = (0.7, 1.8)
+NARROW_PX = 1.2  # below it the writer shrank the dot to under about 0.8 of its size
 NOISE_FACTOR = 8.0  # x 1.4826 x MAD of the block
 MAX_FRACTION = 0.25  # x the brightest peak of the whole image
 DETECT_BLOCK = 2048
@@ -298,27 +322,34 @@ COVER_NEAR_PX = 16.0
 # (`mask_over_cap`, `selfcheck_mask_over_cap`). Nothing is hidden behind it: the
 # numbers on all dots, on the unmasked dots and on the masked dots alone are recorded
 # for every case (`sets`), with the verdict under each cap of `MASK_CAPS`.
-#   overlap  ASHLAR, 1024 px tiles at a 922 px pitch, on the 4096 x 5120 canvas (5 x 6
-#            tiles; the only canvas its selfcheck has since 2026-10-11). MEASURED on
-#            that canvas on 2026-10-11 with the adapter's own geometry (its tile grid,
-#            `tilemap.on_seam` at the adapter's 8 px dot margin, on the selfcheck's own
-#            dots, both rounds of the patient, seeds 0 to 2; no image is involved, so
-#            this needs no ASHLAR; `test_selfcheck_gate.py::
+#   overlap  ASHLAR, 1950 px tiles at a 1755 px pitch, on the 8192 x 10240 canvas (5 x
+#            6 tiles; its only selfcheck canvas). MEASURED on that canvas on 2026-10-12
+#            with the adapter's own geometry (its tile grid, `tilemap.on_seam` at the
+#            adapter's 8 px dot margin, on the selfcheck's own dots, both rounds of the
+#            patient, seeds 0 to 2; no image is involved, so this needs no ASHLAR;
+#            `test_selfcheck_gate.py::
 #            test_the_overlap_cap_stands_above_the_measured_share` repeats it):
-#              tiles drawn where they were cut                      0.22
-#              anchored rows (tiles cut by STARE's matrix)          0.22 to 0.24
-#              each tile following the pair's true map              0.27 to 0.30
-#              the same, tiles beyond ASHLAR's maximum shift reset  0.27 to 0.28
+#              tiles drawn where they were cut                      0.19 to 0.20
+#              each tile following the pair's true map              0.24 to 0.26
 #              the true map plus 46 px (the whole maximum shift)
-#              on both axes on every tile, the worst of four signs  0.36
-#              the same with 92 px                                  0.39
-#            The share grows with the shifts because a moving tile drawn away from
-#            where it was cut overlaps other reference tiles. The cap is the worst
-#            measured case within ASHLAR's own limit, 0.36, plus a margin of 0.14: at
-#            least half of the dots are always judged. It was 0.70 while the 2048 x
-#            2560 pair was checked, from shares (0.43 and 0.62) computed on a tile grid
-#            clamped to the canvas; the adapter's grid is padded (`retile.tile_grid`:
-#            rows at 0, 922, ..., 3688), and on it that pair holds 0.21 to 0.31 too.
+#              on both axes on every tile, the worst of four signs  0.28
+#              the same with 92 px                                  0.31
+#              anchored rows: tiles cut by the anchor (the rigid
+#              part of the round's map, which STARE's own matrix of
+#              these cases gives the same shares as), drawn on the
+#              grid or following the true map                       0.20 to 0.21
+#              anchored, the true map plus 46 px, worst of four     0.25
+#            (At 1024 px tiles on 4096 x 5120, measured 2026-10-11 and again
+#            2026-10-12: 0.22 to 0.23, 0.27 to 0.30, 0.36, 0.42; anchored 0.22 to
+#            0.25. The overlap is the same tenth of the pitch; the fixed 46 px and the
+#            8 px margin are a smaller part of a larger tile.) The share grows with the
+#            shifts because a moving tile drawn away from where it was cut overlaps
+#            other reference tiles; an anchored tile is cut where it belongs, so it is
+#            drawn within the map's non-rigid residual (under 10 px on these cases) of
+#            the grid. The cap was set at 1024 px tiles as that geometry's worst case
+#            within ASHLAR's own limit, 0.36, plus 0.14; it is KEPT at 0.50 for 1950 px
+#            tiles, where it stands 0.22 above the worst measured case: it is a flag,
+#            never a gate (R3.22), and at least half of the dots are always judged.
 #   seams    PALOM: 8 px either side of the edges between blocks with different shifts.
 #            All edges of 1024 px blocks: 1 - (1 - 16/1024)^2 = 0.03; 2048 px: 0.016.
 #            The cap is 3.2 x that share at 1024 px blocks; PALOM's adapter applies the
@@ -698,13 +729,14 @@ def _candidates(a, x0, y0, core):
     return xy, sub[ys, xs].astype(float), width
 
 
-def find_dots(image):
+def find_dots(image, widths=False):
     """Dot centres ``(K, 2)`` in X, Y, found blind in one plane.
 
     Per ``DETECT_BLOCK`` px block: subtract the background (a 15 px median); take the 3 x 3
     local maxima above ``8 x 1.4826 x MAD`` of the block. Over the whole image: keep those
-    above ``0.25 x`` the brightest peak, whose second-moment width in a 7 px window is 1.2
-    to 1.8 px, and place each at the intensity-weighted centroid of that window.
+    above ``0.25 x`` the brightest peak, whose second-moment width in a 7 px window is
+    inside ``WIDTH_PX`` (0.7 to 1.8 px), and place each at the intensity-weighted centroid
+    of that window. ``widths``: return ``(xy, width (K,))``.
     """
     plane = _as_plane(image)
     h, w = plane.shape
@@ -718,25 +750,25 @@ def find_dots(image):
             parts.append(_candidates(plane.read(y0, y1, x0, x1), x0, y0, core))
     xy = np.concatenate([p[0] for p in parts]) if parts else np.empty((0, 2))
     if not len(xy):
-        return np.empty((0, 2))
+        return (np.empty((0, 2)), np.empty(0)) if widths else np.empty((0, 2))
     peak = np.concatenate([p[1] for p in parts])
     width = np.concatenate([p[2] for p in parts])
     keep = (peak > MAX_FRACTION * float(peak.max())) & (width >= WIDTH_PX[0])
     keep &= width <= WIDTH_PX[1]
-    xy, peak = xy[keep], peak[keep]
+    xy, peak, width = xy[keep], peak[keep], width[keep]
     if (
         len(xy) > 1
     ):  # a flat-topped dot (an 8-bit output) has two equal maxima: keep one
         from scipy.spatial import cKDTree
 
         order = np.argsort(-peak, kind="stable")
-        xy = xy[order]
+        xy, width = xy[order], width[order]
         drop = np.zeros(len(xy), bool)
         for i, j in sorted(cKDTree(xy).query_pairs(2.0)):
             if not drop[i]:
                 drop[j] = True
-        xy = xy[~drop]
-    return xy
+        xy, width = xy[~drop], width[~drop]
+    return (xy, width) if widths else xy
 
 
 # ── comparison ────────────────────────────────────────────────────────────────
@@ -872,7 +904,8 @@ def compare(
     its verdict; and ``caps`` says, for each cap of ``MASK_CAPS[mask]``, whether the row
     passes with that cap in force.
 
-    Returns the whole-image numbers (``n_drawn``, ``n_detected``, ``n_dots``, ``n_found``,
+    Returns the whole-image numbers (``n_drawn``, ``n_detected``, ``n_narrow`` (detections
+    narrower than ``NARROW_PX``: dots the writer shrank), ``n_dots``, ``n_found``,
     ``err_px_p50``, ``err_px_p95``, ``offset_px_mean_x``, ``offset_px_mean_y``: the residual
     after the declared offset), ``n_unexplained`` (``mov_to_ref``: detections the mapping
     puts no dot on), ``n_masked``, ``declared_px_mean_x/y``, ``blocks`` (the same numbers
@@ -883,7 +916,7 @@ def compare(
     hw = plane.shape
     origin = np.asarray(origin_xy, dtype=float).reshape(2)
     dots = np.asarray(dots_mov_xy, dtype=float).reshape(-1, 2)
-    det_px = find_dots(plane)  # the output's own pixels
+    det_px, det_width = find_dots(plane, widths=True)  # the output's own pixels
     det = det_px + origin  # the reference frame
     declared = _offset_fn(expected_offset)
     forward = point_map.direction == MOV_TO_REF
@@ -891,6 +924,9 @@ def compare(
         "direction": point_map.direction,
         "n_drawn": int(len(dots)),
         "n_detected": int(len(det)),
+        # detections the writer drew at under about 0.8 of a dot's size (`NARROW_PX`):
+        # counted as dots like the others, and said
+        "n_narrow": int((det_width < NARROW_PX).sum()),
         "n_masked": 0,
         "masked_frac": 0.0,
         "n_unexplained": 0,
