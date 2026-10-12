@@ -844,18 +844,18 @@ def test_summary_counts_failures_and_has_a_common_block(tmp_path):
     assert summary[("flaky", "common")]["n_cases"] == 4
 
 
-def test_summary_says_descriptive_under_six_patients(tmp_path):
+def test_summary_says_descriptive_at_every_number_of_patients(tmp_path):
     root, out = tmp_path / "cases", tmp_path / "out"
-    for k in range(6):
+    for k in range(7):
         methods.run_case(good(), toy_case(root, f"P{k}_r1", f"P{k}"), out)
-    score(root, out, ["multiplex"])
-    assert DESCRIPTIVE not in (out / "tables" / "summary.md").read_text()
-    shutil.rmtree(root / "multiplex" / "P5_r1")
-    score(root, out, ["multiplex"])
-    text = (out / "tables" / "summary.md").read_text()
-    assert (
-        f"The independent unit is the patient. At most 5 unit(s): {DESCRIPTIVE}" in text
-    )
+    for left in (7, 6, 5):
+        score(root, out, ["multiplex"])
+        text = (out / "tables" / "summary.md").read_text()
+        assert (
+            f"The independent unit is the patient. At most {left} unit(s): "
+            f"{DESCRIPTIVE}." in text
+        )
+        shutil.rmtree(root / "multiplex" / f"P{left - 1}_r1")
 
 
 # ── cost, per variant ────────────────────────────────────────────────────────

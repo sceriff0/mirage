@@ -787,8 +787,9 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   map on a lattice, no inverse) are columns of every row.
 - **Pairing-free curve (`within_<x>um`):** share of nuclei with a partner centroid within
   x µm, from each side (`_ref`, `_mov`), reported as the smaller, with `count_ratio`.
-  **`within_1um` and matched Dice are the fine-ranking numbers.** `within_3um` is not, and
-  `count_ratio` is not a ceiling.
+  `within_1um` and matched Dice are the two numbers that resolve a sub-nuclear error;
+  `within_3um` does not, and `count_ratio` is not a ceiling. None of them ranks: the
+  summary claims no ranking at any number of units.
 - **Reading rule, fixed before any cohort run:** displacement is censored at the gate and
   conditional on being paired, so it is not used to rank methods. It is published for every
   case with the `displacement_readable` flag (pair fraction exceeds the null's maximum by at
@@ -818,7 +819,8 @@ block for any method (it is unregistered), it is named at the top of `summary.md
 This is the coordinator's decision pending the owner's; `score.NOT_THE_METHOD_ROUNDS`
 (`"exclude"` | `"impute"`) is the one switch.
 
-**The unit.** `n_patients`, the "under six" line and every across-unit statistic count the
+**The unit.** `n_patients`, the line "descriptive; no ranking is claimed" (printed for
+every dataset, whatever its number of units) and every across-unit statistic count the
 independent unit (`score.UNIT_IS`, column `unit` of `cells.csv`), not the case's group:
 
 | dataset | one unit is | so |
@@ -829,9 +831,7 @@ independent unit (`score.UNIT_IS`, column `unit` of `cells.csv`), not the case's
 
 On the two known-truth datasets the cell summaries are **per deformation family** and never
 pooled over families, as the known-truth table already was: a family outside a method's
-model (and ASHLAR's `rot` rows) shows in its own row. Before 2026-10-11 a synthetic family
-counted as a patient (seven "patients", so the "under six" line never printed) and one
-real patient's 28 semi-synthetic cases counted as 14.
+model (and ASHLAR's `rot` rows) shows in its own row.
 
 **The common block** (`subset=common`, `common_block.csv`) is the cases every COMPARED row
 registered. A row is compared when it is a primary row (any registration row when no
@@ -845,9 +845,19 @@ for everyone, which it did before. The block is always printed, even when it is 
 each row, the median over units of its paired difference against the `stare` row (each
 unit's rounds reduced to their median on the cases both rows have), with a 95 % percentile
 bootstrap interval over UNITS (2000 resamples, seed 20261011; a unit's rounds are never
-split). With a handful of units this interval is coarse and too narrow, and under two
-units there is none. It describes the spread between units. No p-value is computed and no
-ranking is derived; under six units the line "descriptive; no ranking is claimed" stays.
+split), and the mean beside the median (`d_<headline>_mean`). The interval is over units
+and is narrower than the truth: a resample of a handful of units takes few values, and
+the measured units stand in for all units; under two units there is none. It describes
+the spread between units. No p-value is computed and no ranking is derived; the line
+"descriptive; no ranking is claimed" is printed with it at every number of units.
+
+**Beside every median: the mean, and `ok/cases` on the same line.** A median over
+patients does not move when a method fails on a minority of them. Each headline of
+`summary.md` is therefore printed as `median (mean over the same units) [minimum over
+cases]` on the line that carries `ok/cases` (`<headline>_mean` in `summary_cells.csv`),
+the known-truth table has `tre_um_p50_mean` beside `tre_um_p50_med` with `n_ok` and
+`n_cases`, and the cost medians have their means (`*_mean`, `*_common_mean`) and the
+patients completed.
 
 It is self-consistency on the registration channel: there is no held-out structure and no
 landmarks on real slides.
@@ -1522,7 +1532,7 @@ it is scoring.
 | `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`; `n_fallback_cases`, `fallback_frac_max` and the exact assignment's `pair_fraction_exact_med`, `dice_matched_exact_med`, `n_exact` (extra numbers, never ranked); `n_inexact_cases`, `n_shrunk_cases` (cases scored on objects marked `set_inexact` / `set_shrunk`). `subset=common` repeats it on the cases every compared row registered |
 | `common_block.csv` | dataset x primary row | `in_common_block`, `why_not`, `n_cases_common`, `n_cases` |
 | `paired_vs_primary.csv` | unit x variant (x family) | the difference of each headline against the `stare` row, on the cases both have |
-| `paired_summary.csv` | dataset x family x variant | the median over units of each difference with its bootstrap interval (`d_<headline>_med, _lo, _hi`), `n_patients` |
+| `paired_summary.csv` | dataset x family x variant | the median and the mean over units of each difference with its bootstrap interval over units (`d_<headline>_med, _mean, _lo, _hi`), `n_patients` |
 | `excluded_rounds.csv` | lost round | written only when a round was lost for a cause that is not the method's: `dataset, method, case_id, group, cause` |
 | `selfcheck_masks.csv` | selfcheck run x case (round) x variant x dot set | the selfcheck's numbers on `all` dots, the `unmasked` dots and the `masked` dots alone (`n_dots, found_frac, err_px_p95, err_px_mean, worst_block_err_px_p95, worst_block_found_frac, passes_accuracy`), `masked_frac, mask_cap, mask_over_cap`, the comparison's `n_detected` and `n_narrow` (what the detector took for a dot in the written image, and how many of those were narrower than 1.2 px), and one `passes_cap_<cap>` column per cap of `selfcheck.MASK_CAPS`. Written when the scorer is given the selfchecks (the launcher's `score`). Every table with a `method` column also carries `selfcheck_mask_over_cap` then |
 | `attrition.csv` | dataset x registration row | where the rounds go: `manifest_rounds` (the rounds of the cohort's manifest; blank unless the scorer is given it, `score --manifest`, which the launcher's score job does when `REGBENCH_MANIFEST` is set), `prepared`, `with_outlines`, `with_nuclei`, then per row `run` (a record that is not `not run`), `registered` (`ok`), `scored` and `scored_nuclei` (the row is its own result: not the unregistered pose, not left out). Also a table of `summary.md` |
@@ -1537,7 +1547,7 @@ it is scoring.
 | `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `benchmark_prep_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
 | `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step and of `measured_here_s`, the largest peaks (`estimate_peak_gb_max`, `job_peak_gb_max`), `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
 | `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
-| `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" under six units, the compared rows and who is not among them, the paired differences with their interval, the known-truth table, the failure log's section, cost on survivors and on the common patients |
+| `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the known-truth table, the failure log's section, cost on survivors and on the common patients |
 
 ### Off the seams
 
@@ -3386,11 +3396,9 @@ a sentence elsewhere in this README disagrees with this section, this section is
    background; the generator adds noise only `if self.noise_sd`, so every case of such a
    patient is noise-free without a refusal or a note.
 
-Two further findings of the same review touched these datasets and are fixed in the
-scorer (2026-10-11): the unit of a `semisynth` case is now the real patient (it was the
-group `<patient>_w<i>_<family>`, so one patient counted as 14 and the "under six" line
-never printed), with cell summaries per family; and the paired differences carry a
-bootstrap interval over units ("Scoring").
+In the scorer, the unit of a `semisynth` case is the real patient (not the group
+`<patient>_w<i>_<family>`), with cell summaries per family, and the paired differences
+carry a bootstrap interval over units ("Scoring").
 
 ## Caveats that travel with the results
 

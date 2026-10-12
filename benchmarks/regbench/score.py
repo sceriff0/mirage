@@ -36,12 +36,12 @@ filled. ``expected`` names variants that must appear even with no directory.
 conditional on being paired, so it is not used to rank; it is summarised over the cases
 flagged ``displacement_readable`` only, with their count. Matched Dice is summarised over
 all cases and, as ``dice_matched_ranked``, over the cases where pair fraction clears the
-null's maximum; only the second may enter a ranking. With fewer than six patients the
-summary says so and claims no ranking.
+null's maximum; only the second may be set beside another row's. The summary claims no
+ranking at any number of patients, and says so for every dataset.
 
 **Summaries.** Per patient the median over its rounds, then the median, minimum and maximum
-over patients; beside them ``n_ok / n_cases`` and the minimum over CASES, because with a few
-patients a median hides failures. The ``common`` block repeats the summary on the cases
+over patients; beside every median its mean over the same patients, ``n_ok / n_cases``
+and the minimum over CASES, because a median hides a method that fails on some patients. The ``common`` block repeats the summary on the cases
 every primary variant registered.
 
 **Cost.** ``resources.csv`` has one row per round, ``summary_resources.csv`` one per
@@ -167,7 +167,7 @@ HAS_NULL = ("pair_fraction", "dice_matched", "within_1um", "within_3um")
 # no ranking, no shared subset and no paired difference.
 EXACT_HEADLINES = ("pair_fraction", "dice_matched")
 PAIRED_AGAINST = "stare"
-MIN_PATIENTS_TO_RANK = 6
+# said of every dataset, at every number of units: nothing here is a test
 DESCRIPTIVE = "descriptive; no ranking is claimed"
 COVERAGE_BIN_RADII = 16.0  # side of the occupancy bins, in median nuclear radii
 # the method's own failures first, then what is NOT the method's (the scheduler lost the
@@ -1862,6 +1862,9 @@ def summarise_cells(rows, primary=None, blocked=None):
                     for h in HEADLINES:
                         per = list(_per_patient(mine, h).values())
                         rec[f"{h}_med"] = _stat(per, np.median)
+                        # over the same units: where it leaves the median, some
+                        # units are far from the others (a method failing on a few)
+                        rec[f"{h}_mean"] = _stat(per, np.mean)
                         rec[f"{h}_min"] = _stat(per, np.min)
                         rec[f"{h}_max"] = _stat(per, np.max)
                         rec[f"{h}_min_case"] = _stat(_values(mine, h), np.min)
@@ -2002,6 +2005,7 @@ def summarise_paired(paired):
             d = _values(mine, f"d_{h}")
             low, high = bootstrap_interval(d)
             rec[f"d_{h}_med"] = _stat(d, np.median)
+            rec[f"d_{h}_mean"] = _stat(d, np.mean)
             rec[f"d_{h}_lo"] = low
             rec[f"d_{h}_hi"] = high
             rec[f"d_{h}_n_nan"] = int(np.isnan(d).sum())
@@ -2198,7 +2202,9 @@ def summarise_cost(res_summary, primary=None):
         }
         for key in COST_KEYS:
             rec[f"{key}_med"] = _stat(_values(done, key), np.median)
+            rec[f"{key}_mean"] = _stat(_values(done, key), np.mean)
             rec[f"{key}_common_med"] = _stat(_values(shared, key), np.median)
+            rec[f"{key}_common_mean"] = _stat(_values(shared, key), np.mean)
         out.append(rec)
     return out
 
@@ -2236,7 +2242,8 @@ def _check_text(value):
 
 
 def _summary_table(rows, primary):
-    """Markdown rows: each headline as ``median [minimum over cases]``, its null beside it."""
+    """Markdown rows: each headline as ``median (mean) [minimum over cases]`` with
+    ``ok/cases`` on the same line, its null beside it."""
     order = [p.split(NON)[0] for p in primary or []]
     families = list(dict.fromkeys(r.get("family", "") for r in rows))
     rows = sorted(
@@ -2261,7 +2268,10 @@ def _summary_table(rows, primary):
             }
         )
         for h in HEADLINES:
-            line[h] = f"{_fmt(r[f'{h}_med'])} [{_fmt(r[f'{h}_min_case'])}]"
+            line[h] = (
+                f"{_fmt(r[f'{h}_med'])} ({_fmt(r.get(f'{h}_mean', math.nan))}) "
+                f"[{_fmt(r[f'{h}_min_case'])}]"
+            )
             if h in HAS_NULL:
                 line[f"{h}_null"] = r[f"{h}_null_med"]
         line["dice_shared (n)"] = (
@@ -2467,19 +2477,22 @@ def _paired_markdown(summary, ds):
                 if math.isnan(r[f"d_{h}_lo"])
                 else f"{_fmt(r[f'd_{h}_lo'])}, {_fmt(r[f'd_{h}_hi'])}"
             )
-            line[f"d_{h}"] = f"{_fmt(r[f'd_{h}_med'])} [{interval}]"
+            line[f"d_{h}"] = (
+                f"{_fmt(r[f'd_{h}_med'])} ({_fmt(r.get(f'd_{h}_mean', math.nan))}) "
+                f"[{interval}]"
+            )
         table.append(line)
-    few = max(r["n_patients"] for r in mine) < MIN_PATIENTS_TO_RANK
     return [
         f"### Differences against `{mine[0]['against']}` (paired within unit)\n",
-        "Each cell is the median over units of (this row minus "
+        "Each cell is `median (mean) [interval]` over units of (this row minus "
         f"`{mine[0]['against']}`), each unit's rounds first reduced to their median on "
-        "the cases both rows have, with a "
-        f"{BOOTSTRAP_LEVEL:.0%} percentile bootstrap interval over units "
+        "the cases both rows have; `units` is how many have both. The interval is a "
+        f"{BOOTSTRAP_LEVEL:.0%} percentile bootstrap OVER UNITS "
         f"({BOOTSTRAP_N} resamples of the units, seed {BOOTSTRAP_SEED}; a unit's "
-        "rounds stay together). With few units the interval is coarse and too narrow; "
-        "it describes the spread between units and is not a test"
-        + (f". {DESCRIPTIVE.capitalize()}.\n" if few else ".\n"),
+        "rounds stay together), of the median. It is narrower than the truth: a "
+        "resample of a handful of units can only take a few values, and the units "
+        "that were measured stand in for all units. It describes the spread between "
+        f"the units and is not a test. {DESCRIPTIVE.capitalize()}.\n",
         markdown(table, list(table[0])),
         "",
     ]
@@ -2495,6 +2508,7 @@ TRUTH_COLUMNS = (
     "n_cases",
     "initial_tre_um_p50_med",
     "tre_um_p50_med",
+    "tre_um_p50_mean",
     "tre_um_p50_max",
     "tre_um_p90_med",
     "tre_um_max_max",
@@ -2565,6 +2579,10 @@ def truth_by_family(rows):
     for r in out:
         r["n_excluded_not_method"] = gone.get(key(r), 0)
         r["selfcheck_row"] = checks.get(key(r), "")
+        # beside the median of the cases' p50: their mean (infinite when a case has
+        # a point the method could not map)
+        mine = [_f(k.get("tre_um_p50")) for k in kept if key(k) == key(r)]
+        r["tre_um_p50_mean"] = float(np.mean(mine)) if mine else math.nan
     for k, n in gone.items():
         if k not in have:
             sample = next(r for r in rows if key(r) == k)
@@ -2987,8 +3005,11 @@ def summary_markdown(
     parts.append(
         "Nuclear overlap after registration, on nuclei segmented on the native slides. "
         "It is self-consistency on the registration channel, not accuracy. Each cell is "
-        "`median over units [minimum over cases]`; `ok/cases` counts the runs that "
-        "registered, and a run that did not is scored at the unregistered pose.\n"
+        "`median over units (mean over the same units) [minimum over cases]`; "
+        "`ok/cases` on the same line counts the runs that registered, and a run that "
+        "did not is scored at the unregistered pose and is in the median, the mean and "
+        "the minimum. A mean far from its median means some units are far from the "
+        "others.\n"
     )
     parts.append(SUBSET_RULE)
     parts.append(PAIRING_RULE)
@@ -3033,7 +3054,7 @@ def summary_markdown(
         per = " per family" if ds in PER_FAMILY else ""
         parts.append(
             f"The independent unit is the {what}. At most {n_units} unit(s){per}"
-            + (f": {DESCRIPTIVE}.\n" if n_units < MIN_PATIENTS_TO_RANK else ".\n")
+            + f": {DESCRIPTIVE}.\n"
         )
         if ds in PER_FAMILY:
             parts.append(

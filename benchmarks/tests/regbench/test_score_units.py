@@ -472,10 +472,47 @@ def test_paired_differences_keep_a_units_rounds_together():
     assert math.isnan(one["d_within_1um_lo"]) and one[
         "d_within_1um_med"
     ] == pytest.approx(paired[0]["d_within_1um"])
+    assert rec["d_within_1um_mean"] == pytest.approx(0.2)
     text = "\n".join(score._paired_markdown([rec], "multiplex"))
-    assert "bootstrap interval over units" in text
+    # the caption says what the interval is over, and that it is too narrow
+    assert "percentile bootstrap OVER UNITS" in text
+    assert "It is narrower than the truth" in text
     assert score.DESCRIPTIVE.capitalize() in text
     assert "p-value" not in text and "significant" not in text
+    # and it says "no ranking" with many units as with few
+    many = "\n".join(score._paired_markdown([{**rec, "n_patients": 40}], "multiplex"))
+    assert score.DESCRIPTIVE.capitalize() in many
+
+
+def test_a_method_that_fails_on_some_patients_shows_on_the_line_of_its_median():
+    """Five patients, two of them failed (scored at the unregistered pose): the median
+    over patients does not move, so the mean and ok/cases stand beside it."""
+    rows = [cell("a", f"P{k}_r1", f"P{k}", within_1um=0.7) for k in range(3)]
+    rows += [
+        cell(
+            "a", f"P{k}_r1", f"P{k}", within_1um=0.0, imputed_initial=True, cause="oom"
+        )
+        for k in (3, 4)
+    ]
+    whole = [cell("b", f"P{k}_r1", f"P{k}", within_1um=0.7) for k in range(5)]
+    summary = score.summarise_cells(rows + whole, ["a", "b"])
+    a, b = (by(summary, method=m, subset="all") for m in "ab")
+    assert a["within_1um_med"] == b["within_1um_med"] == 0.7
+    assert a["within_1um_mean"] == pytest.approx(0.42) and b["within_1um_mean"] == 0.7
+    assert (a["n_ok"], a["n_cases"]) == (3, 5)
+    table = score._summary_table([a, b], ["a", "b"]).splitlines()
+    (line_a,) = [ln for ln in table if ln.startswith("| a |")]
+    (line_b,) = [ln for ln in table if ln.startswith("| b |")]
+    assert "| 3/5 |" in line_a and "| 0.7 (0.42) [0] |" in line_a
+    assert "| 5/5 |" in line_b and "| 0.7 (0.7) [0.7] |" in line_b
+    text = score.summary_markdown(summary, [], [], ["a", "b"])
+    assert "`median over units (mean over the same units) [minimum over cases]`" in text
+    assert f"At most 5 unit(s): {score.DESCRIPTIVE}." in text
+    # with eight patients the line is still there: no size of cohort ranks anything
+    more = [cell("a", f"P{k}_r1", f"P{k}") for k in range(8)]
+    text = score.summary_markdown(score.summarise_cells(more, ["a"]), [], [], ["a"])
+    assert f"At most 8 unit(s): {score.DESCRIPTIVE}." in text
+    assert not hasattr(score, "MIN_PATIENTS_TO_RANK")
 
 
 def test_the_interval_is_the_units_spread_not_the_rounds():
@@ -563,6 +600,9 @@ def test_known_truth_rows_leave_the_lost_round_out_too():
     (rec,) = score.truth_by_family([base, lost])
     assert (rec["n_cases"], rec["n_excluded_not_method"]) == (1, 1)
     assert rec["tre_um_p50_med"] == 1.0
+    (rec,) = score.truth_by_family([base, {**base, "tre_um_p50": 4.0}, base])
+    assert (rec["tre_um_p50_med"], rec["tre_um_p50_mean"]) == (1.0, 2.0)
+    assert "tre_um_p50_mean" in score.TRUTH_COLUMNS
     (rec,) = score.truth_by_family([lost])
     assert (rec["n_cases"], rec["n_excluded_not_method"]) == (0, 1)
 
