@@ -6,7 +6,7 @@
 #   REGBENCH_OUT     results: one folder per result name, plus tables/, logs/ and cache/
 #   REGBENCH_WORK    scratch for a method's intermediates (default: $TMPDIR, node-local)
 #   REGBENCH_BIND    more paths to bind into the images, comma-separated: wherever the
-#                    cohort's slides and nuclei live, and the pipeline trace if one is read
+#                    cohort's slides and nuclei live
 #
 # THE IMAGES. Each run names the image it runs in (`python -m benchmarks.regbench runs`,
 # column `image`); the path of image X is REGBENCH_SIF_X:

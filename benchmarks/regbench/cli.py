@@ -30,6 +30,7 @@ The two kinds cannot be named in one call.
                        side (``anhir_tune``): the evidence table and the candidate the
                        ``stare_prep`` row is to run with; ``--freeze`` writes it into the
                        tracked ``prep_frozen.json``
+``submissions``        the submission ids the selfcheck records of a results folder carry
 ``gate``               from one run's ``selfcheck.json``: the status that decides whether
                        the run may start, and the rows to leave out of the results
                        (``score --drop``). Exit code as ``selfcheck``
@@ -475,6 +476,14 @@ def build_parser():
         help="`sacct -n -X -P -o JobID,State,ElapsedRaw,TotalCPU` of the jobs",
     )
 
+    sb = sub.add_parser(
+        "submissions",
+        help="the submission ids the selfcheck records under <out>/logs/selfcheck "
+        "carry, one per line with the runs that carry it (`submit_cohort.sh "
+        "--score-only` asks this when the folder has no logs/submission)",
+    )
+    sb.add_argument("--out", required=True)
+
     sc = sub.add_parser("score")
     sc.add_argument("--cases", required=True)
     sc.add_argument("--out", required=True)
@@ -508,35 +517,6 @@ def build_parser():
         help="leave this result row out of every table and name it in dropped.csv: a "
         "row whose own selfcheck failed without blocking its method (`gate` prints "
         "them). Repeatable",
-    )
-    sc.add_argument(
-        "--pipeline-trace",
-        default=None,
-        metavar="TRACE.TXT",
-        help="a Nextflow trace of an earlier pipeline run on this cohort: the "
-        "end-to-end cost view (cost_end_to_end.csv) reads the pipeline's own convert "
-        "and merge-and-pyramid steps from it, per patient (the task's tag). Nothing "
-        "is run. Without it those columns say `not available`",
-    )
-    sc.add_argument(
-        "--pipeline-trace-label",
-        default=None,
-        help="what to call the run the trace is of (default: the file's folder)",
-    )
-    sc.add_argument(
-        "--pipeline-convert-process",
-        action="append",
-        default=None,
-        metavar="NAME",
-        help="the trace's conversion process (default CONVERT_IMAGE); repeatable",
-    )
-    sc.add_argument(
-        "--pipeline-merge-process",
-        action="append",
-        default=None,
-        metavar="NAME",
-        help="the trace's merge-and-pyramid process (default MERGE_AND_PYRAMID); "
-        "repeatable",
     )
     sc.add_argument(
         "--submission",
@@ -1239,6 +1219,18 @@ def main(argv=None):
         return _tissue(a)
     if a.cmd == "score-case":
         return _score_one(a)
+    if a.cmd == "submissions":
+        import sys
+
+        from . import ladder
+
+        found, unreadable = ladder.selfcheck_submissions(a.out)
+        for path in unreadable:
+            print(f"submissions: not a readable record: {path}", file=sys.stderr)
+        for sub, runs in found.items():
+            if sub:  # a record that names none is evidence of no submission
+                print(f"{sub}\t{','.join(runs)}")
+        return 0
     if a.cmd == "settle":
         from . import ladder, resources
 
@@ -1287,9 +1279,6 @@ def main(argv=None):
         primary=primary,
         with_tissue=not a.no_tissue,
         dropped=_dropped(a.drop),
-        pipeline_trace=a.pipeline_trace,
-        pipeline_trace_label=a.pipeline_trace_label,
-        pipeline_processes=(a.pipeline_convert_process, a.pipeline_merge_process),
         gates=a.gates,
         run_variants=variants.run_variants(),
         row_checks=variants.row_checks(

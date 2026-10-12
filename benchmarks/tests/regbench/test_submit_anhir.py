@@ -43,7 +43,8 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     assert not log.exists()
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
     assert laddered == set(RUNS) and len(RUNS) == 8
-    assert len(jobs) == len(RUNS) * PER_RUN + 1  # ... and the set's own scorer
+    # ... the settle job and the set's own scorer
+    assert len(jobs) == len(RUNS) * PER_RUN + 2
     assert "# anhir: 4 case(s), 4 patient(s), at most 1 round(s)" in done.stdout
     for run in RUNS:
         first = jobs[f"rb-{run}-anhir-16g"]
@@ -91,7 +92,7 @@ def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
     assert laddered == set(CANDIDATES) and len(CANDIDATES) == len(prep.CANDIDATES)
     checked = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
     assert checked == set(CANDIDATES)  # each candidate behind its own selfcheck
-    assert len(jobs) == len(CANDIDATES) * PER_RUN + 1
+    assert len(jobs) == len(CANDIDATES) * PER_RUN + 2
     for name, c in zip(CANDIDATES, prep.CANDIDATES):
         first = jobs[f"rb-{name}-anhir_tune-16g"]
         assert first.args[1:4] == ["stare", name, f"prep={c}"]

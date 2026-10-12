@@ -322,7 +322,8 @@ def test_the_cost_header_counts_the_runs_without_a_watcher():
         {"cause": "", "oom_watch": "no", "adapter": "valis", "unit": "patient"},
         {"cause": "not_run", "oom_watch": "", "adapter": "", "unit": ""},
     ]
-    (watch, reused) = cost.header_lines(rows)
+    (watch, threads, reused) = cost.header_lines(rows)
+    assert threads.startswith("thread variables: the benchmark sets none.")
     assert "2 of 3 results ran WITHOUT one" in watch
     assert "stare 1, valis 1" in watch and "may be a memory death" in watch
     assert reused.startswith("reused: 0 of 3 results")
@@ -330,9 +331,9 @@ def test_the_cost_header_counts_the_runs_without_a_watcher():
     rows[0].update(time_limit="1-00:00:00", reused=True)
     rows[2].update(time_limit="3-00:00:00")
     lines = cost.header_lines(rows)
-    assert lines[1].startswith("reused: 1 of 3 results")
-    assert "pair 1-00:00:00; patient 3-00:00:00" in lines[2]
-    assert "more time per round" in lines[2]
+    assert lines[2].startswith("reused: 1 of 3 results")
+    assert "pair 1-00:00:00; patient 3-00:00:00" in lines[3]
+    assert "more time per round" in lines[3]
 
 
 # ── stale records (review item 13) ────────────────────────────────────────────

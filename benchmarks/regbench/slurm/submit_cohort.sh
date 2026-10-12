@@ -44,13 +44,16 @@
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
 #      realcheck.json; everything else of that run waits for it.
-#   5. after everything, in the scorer's image: per dataset ONE ARRAY with a task per
-#      case (the tissue-level pieces of the case, then `score-case`: the case's rows,
-#      kept as its record under $REGBENCH_OUT/cache/scores), then the tissue job (the
-#      pieces of any case whose task did not make them), then the scorer
-#      (`score --drop ...`), which reads the records, computes whatever case has none
-#      that is still valid, and writes the tables. The tables are the same whether the
-#      array ran, half of it did, or none of it.
+#   5. after everything, in the scorer's image: FIRST the settle job (`rb-settle`: every
+#      result that still says "killed" gets the cause the scheduler's accounting names;
+#      it rewrites those results' run.json, which is why every scoring job waits for
+#      it); then per dataset ONE ARRAY with a task per case (the tissue-level pieces of
+#      the case, then `score-case`: the case's rows, kept as its record under
+#      $REGBENCH_OUT/cache/scores), then the tissue job (the pieces of any case whose
+#      task did not make them), then the scorer (`score --drop ...`), which reads the
+#      records, computes whatever case has none that is still valid, and writes the
+#      tables. The tables are the same whether the array ran, half of it did, or none
+#      of it.
 #
 # --score-only submits step 5 and nothing before it: no selfcheck, no gate, no
 # registration. It scores what the LAST submission into REGBENCH_OUT ran or reused
@@ -118,9 +121,6 @@
 #                                     Records of another submission are evidence of
 #                                     nothing: not for a gate, the ladder or the scorer
 #   REGBENCH_ALLOW_UNCHECKED          run names that start whatever their checks say
-#   REGBENCH_PIPELINE_TRACE           a Nextflow trace.txt of a pipeline run on this
-#   REGBENCH_PIPELINE_TRACE_LABEL     cohort, and what to call it: the scorer reads the
-#                                     pipeline's convert and merge steps from it
 #   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv
 #   REGBENCH_TRUTH_PATIENTS           with --prepare: the patients of the known-truth
 #                                     cases, comma-separated (default: all)
@@ -219,18 +219,26 @@ has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 # one id per call: every record of this submission carries it. --score-only makes no
 # record of its own: it scores an EARLIER submission, the last one into REGBENCH_OUT
 # unless REGBENCH_SUBMISSION names another.
-if [ "$score_only" = 1 ] && [ -z "${REGBENCH_SUBMISSION:-}" ]; then
-    if [ -s "$REGBENCH_OUT/logs/submission" ]; then
-        REGBENCH_SUBMISSION="$(head -n 1 "$REGBENCH_OUT/logs/submission")"
-    else
-        # a folder filled before that file was written: the id is in its selfcheck records
-        found="$(cat "$REGBENCH_OUT"/logs/selfcheck/*/selfcheck.json 2>/dev/null \
-            | grep -o '"submission": *"[^"]*"' | sort -u | sed 's/.*: *"\(.*\)"/\1/' | grep -v '^$' || true)"
-        [ -n "$found" ] || die "--score-only: no submission to score under $REGBENCH_OUT (no logs/submission, and no selfcheck record names one). Export REGBENCH_SUBMISSION=<the id an earlier submit_cohort.sh printed as '# submission  -> ID'; it is also in every run.json, key 'submissions'>. Nothing was submitted."
-        [ "$(wc -l <<< "$found")" -eq 1 ] || die "--score-only: $REGBENCH_OUT holds records of more than one submission ($(paste -sd' ' - <<< "$found")) and no logs/submission says which was last. Export REGBENCH_SUBMISSION=<one of them>. Nothing was submitted."
-        REGBENCH_SUBMISSION="$found"
+if [ "$score_only" = 1 ]; then
+    # The ids the folder's selfcheck records carry, each record PARSED by the reader the
+    # gates use (`regbench submissions`, benchmarks/regbench/ladder.py): one id per line.
+    found="$(regbench_py "$REGBENCH_HEAD_IMAGE" submissions --out "$REGBENCH_OUT" | cut -f1)" \
+        || die "--score-only: cannot read the selfcheck records under $REGBENCH_OUT/logs/selfcheck (python -m benchmarks.regbench submissions). Nothing was submitted."
+    if [ -z "${REGBENCH_SUBMISSION:-}" ]; then
+        if [ -s "$REGBENCH_OUT/logs/submission" ]; then
+            REGBENCH_SUBMISSION="$(head -n 1 "$REGBENCH_OUT/logs/submission")"
+        else
+            # a folder filled before that file was written: the id is in its selfcheck records
+            [ -n "$found" ] || die "--score-only: no submission to score under $REGBENCH_OUT (no logs/submission, and no selfcheck record names one). Export REGBENCH_SUBMISSION=<the id an earlier submit_cohort.sh printed as '# submission  -> ID'; it is also in every run.json, key 'submissions'>. Nothing was submitted."
+            [ "$(wc -l <<< "$found")" -eq 1 ] || die "--score-only: $REGBENCH_OUT holds records of more than one submission ($(paste -sd' ' - <<< "$found")) and no logs/submission says which was last. Export REGBENCH_SUBMISSION=<one of them>. Nothing was submitted."
+            REGBENCH_SUBMISSION="$found"
+        fi
+        echo "# --score-only: scoring submission $REGBENCH_SUBMISSION"
     fi
-    echo "# --score-only: scoring submission $REGBENCH_SUBMISSION"
+    # the id is the user's, or the file's: said aloud when no selfcheck record is of it
+    if [ -n "$found" ] && ! grep -qxF -- "$REGBENCH_SUBMISSION" <<< "$found"; then
+        echo "# WARNING --score-only: no selfcheck record under $REGBENCH_OUT is of submission $REGBENCH_SUBMISSION (the records there are of: $(paste -sd' ' - <<< "$found")). The scorer takes only what $REGBENCH_SUBMISSION ran or reused, so every row may read 'not run': check the id."
+    fi
 fi
 : "${REGBENCH_SUBMISSION:=$(date +%Y%m%dT%H%M%S)-$$}"
 export REGBENCH_SUBMISSION
@@ -674,10 +682,18 @@ done < "$table"
 # after everything this call submitted (--score-only submitted nothing before this)
 after_all=()
 [ -n "$dep" ] && after_all=(--dependency="afterany:$dep")
+# The killed results are settled against the scheduler's accounting FIRST, in a job of
+# its own that every scoring job waits for: it rewrites those results' run.json, and a
+# case scored before that would leave a record of the result as it was (which the scorer
+# does not read, so the case would be scored twice). afterany: whatever became of the
+# registrations, and whatever becomes of this job, the scoring goes on.
+submit "rb-settle" "${COMMON[@]}" "$LOG_ONE" ${after_all[@]+"${after_all[@]}"} "${small[@]}" \
+    "$HERE/score_cohort.sbatch" settle
+settle_job="$JOB_ID"
 if [ -n "$EXTERNAL" ]; then
     # no tissue job (it is defined on nuclear channels) and no per-case array (a landmark
     # set has no pair records: its scorer reads landmarks); the set's own scorer and tables
-    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" ${after_all[@]+"${after_all[@]}"} --cpus-per-task="$CPUS" \
+    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$settle_job" --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
 else
     # one task per case: its rows, kept as a record the scorer reads. afterany: a task
@@ -686,7 +702,7 @@ else
     scored=""
     for ds in $sized; do
         n_cases="CASES_$ds"
-        submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" ${after_all[@]+"${after_all[@]}"} \
+        submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
             --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="${REGBENCH_SCORE_CPUS:-8}" \
             --mem="${REGBENCH_SCORE_MEM:-64G}" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
         scored="$scored:$JOB_ID"
@@ -694,7 +710,7 @@ else
     # each case task also made the tissue pieces of its case: this job makes those of a
     # case whose task did not, after them (never beside them: two jobs would be writing
     # the same pieces)
-    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}${dep:+:$dep}" --cpus-per-task="$CPUS" \
+    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
     submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
@@ -717,5 +733,4 @@ else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
-[ -n "$EXTERNAL" ] || [ -n "${REGBENCH_PIPELINE_TRACE:-}" ] || echo "# no REGBENCH_PIPELINE_TRACE: the pipeline's convert and merge steps will read 'not available'"
 exit 0

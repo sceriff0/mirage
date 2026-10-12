@@ -159,18 +159,43 @@ def _read(path):
         return None
 
 
+def submissions_of(rec):
+    """The submission ids a record (``run.json``, ``selfcheck.json``) carries, in the
+    order it lists them: ``submissions`` (every submission that ran or reused the
+    result), then ``submission`` (the one that wrote it). ``[]`` for anything else."""
+    if not isinstance(rec, dict):
+        return []
+    known = [str(v) for v in rec.get("submissions") or [] if v]
+    if rec.get("submission"):
+        known.append(str(rec["submission"]))
+    return list(dict.fromkeys(known))
+
+
 def mine(rec, submission):
     """Does a record belong to this submission? Always, when there is no submission id
     (a run outside the cohort launcher). The driver adds the id of a submission that
     reuses an ``ok`` result to ``submissions``."""
     if not submission:
         return True
-    if not isinstance(rec, dict):
-        return False
-    known = list(rec.get("submissions") or [])
-    if rec.get("submission"):
-        known.append(rec["submission"])
-    return submission in known
+    return submission in submissions_of(rec)
+
+
+def selfcheck_submissions(out):
+    """``({submission id: [runs]}, [unreadable files])`` of the selfcheck records under
+    ``<out>/logs/selfcheck/<run>/selfcheck.json``, each PARSED and read with the reader
+    the gates use (``submissions_of``; a gate takes a record only when ``mine`` says
+    so). A record that names no submission (a selfcheck run by hand, outside the
+    launcher) is under ``""``. This is what ``submit_cohort.sh --score-only`` asks when
+    the folder has no ``logs/submission``."""
+    found, unreadable = {}, []
+    for path in sorted(Path(out).glob("logs/selfcheck/*/selfcheck.json")):
+        rec = _read(path)
+        if not isinstance(rec, dict):
+            unreadable.append(str(path))
+            continue
+        for sub in submissions_of(rec) or [""]:
+            found.setdefault(sub, []).append(path.parent.name)
+    return found, unreadable
 
 
 def settle(path, previous_state="", accounting=None, submission=None):

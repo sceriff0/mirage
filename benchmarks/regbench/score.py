@@ -66,9 +66,8 @@ in ``tissue_missing.csv``.
 
 ``cost_end_to_end.csv`` and ``cost_end_to_end_summary.csv`` are a second, secondary view
 of cost (``regbench.cost``): the method's own conversion, the estimate and the write in
-separate columns, and the pipeline's convert and merge-and-pyramid steps read from a
-Nextflow trace when one is given (``pipeline_trace``). ``launch.csv`` lists what the
-launcher's gates decided (``gates``).
+separate columns and their sum, all measured here; nothing is read from another run.
+``launch.csv`` lists what the launcher's gates decided (``gates``).
 
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
 
@@ -414,6 +413,16 @@ def resource_row(run):
         "host": run.get("host", ""),
         "cpu_model": run.get("cpu_model", ""),
         "blas": run.get("blas", ""),
+        # the thread variables the run found SET in its own process (run.json:
+        # threads_env), as text: the benchmark exports none, so one that is here came
+        # with the method's image (ASHLAR's sets OMP_NUM_THREADS=1)
+        "threads_env": "; ".join(
+            f"{k}={v}"
+            for k, v in sorted((run.get("threads_env") or {}).items())
+            if v not in (None, "")
+        )
+        if isinstance(run.get("threads_env"), dict)
+        else "",
     }
 
 
@@ -2748,9 +2757,6 @@ def score(
     seam_owners=None,
     with_tissue=True,
     dropped=None,
-    pipeline_trace=None,
-    pipeline_trace_label=None,
-    pipeline_processes=(None, None),
     gates=None,
     run_variants=None,
     row_checks=None,
@@ -2774,11 +2780,7 @@ def score(
     (``variants.run_variants()``): with the gate records it says which rows belong to a
     run a gate blocked. Without it a gate record names its run only.
 
-    ``pipeline_trace`` is a Nextflow ``trace.txt`` of an earlier pipeline run on the
-    cohort: the end-to-end cost view reads the pipeline's convert and merge-and-pyramid
-    steps from it (``regbench.cost``; nothing is run). ``pipeline_trace_label`` names
-    that run in every imported number; ``pipeline_processes`` overrides the two process
-    names. ``gates`` is the launcher's directory of gate records; what they decided is
+    ``gates`` is the launcher's directory of gate records; what they decided is
     written to ``launch.csv`` and named in the summary.
 
     ``dropped`` names variants that are left out of every table although they may have
@@ -2896,18 +2898,7 @@ def score(
     cost_summary = summarise_cost(res_summary, primary)
     confined = cost.cores_confined(res)
     cost_header = cost.header_lines(res)
-    steps, source = None, ""
-    if pipeline_trace:
-        convert, merge = pipeline_processes
-        steps = cost.pipeline_steps(
-            cost.read_trace(pipeline_trace),
-            tuple(convert or cost.PIPELINE_CONVERT),
-            tuple(merge or cost.PIPELINE_MERGE),
-        )
-        trace_path = Path(pipeline_trace)
-        label = pipeline_trace_label or trace_path.resolve().parent.name
-        source = f"{label} ({trace_path})"
-    e2e = cost.end_to_end(res, steps, source)
+    e2e = cost.end_to_end(res)
     e2e_summary = cost.summarise(
         e2e,
         {ds: got[0] for ds, got in common_patients(res_summary, primary).items()},
@@ -3022,7 +3013,7 @@ def score(
         tis,
         dropped_rows,
         confined,
-        (e2e, e2e_summary, source),
+        (e2e, e2e_summary),
         launch,
         cost_header,
         common,

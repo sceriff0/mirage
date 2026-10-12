@@ -10,6 +10,7 @@ The fixture is two patients: P1 with three rounds, P2 with one (four cases).
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import re
 import shlex
@@ -520,12 +521,75 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
     )
     assert last_selfcheck < first_gate <= last_gate < first_array
     assert order[-2:] == ["rb-tissue", "rb-score"]
+    # settle, then the case arrays, then tissue, then the tables
+    assert order[-5:-2] == [
+        "rb-settle",
+        "rb-score-case-multiplex",
+        "rb-score-case-synthetic",
+    ]
     # a job never waits for one printed after it
     seen = set()
     for line in _sbatch_lines(done.stdout):
         job = Job(line)
         assert {n.strip("<>") for _, n in job.deps} <= seen, job.name
         seen.add(job.name)
+
+
+def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
+    """`regbench settle` rewrites the run.json of a result the scheduler ended. It is a
+    job of its own that waits for every registration and every gate, and every scoring
+    job waits for it: no case is scored from a result that is about to change."""
+    jobs, _, _ = dry
+    settle = jobs["rb-settle"]
+    assert settle.script == "score_cohort.sbatch" and settle.args == ["settle"]
+    assert (settle.opt("--cpus-per-task"), settle.opt("--mem")) == ("1", "4G")
+    assert {k for k, _ in settle.deps} == {"afterany"}  # whatever became of them
+    waited = {n.strip("<>") for _, n in settle.deps}
+    for run in RUNS:
+        assert f"rb-gate-{run}" in waited
+        for dataset in ("multiplex", "synthetic"):
+            assert f"rb-{run}-{dataset}-512g-again" in waited, (run, dataset)
+    # every array of the per-case scoring waits for it, and for nothing else directly
+    arrays = [j for n, j in jobs.items() if n.startswith("rb-score-case-")]
+    assert len(arrays) == 2
+    for job in arrays:
+        assert job.deps == {("afterany", "<rb-settle>")}, job.name
+    # ... so the tissue job and the scorer come after it too, through the arrays
+    after = {"rb-settle"} | {j.name for j in arrays}
+    for name in ("rb-tissue", "rb-score"):
+        assert {n.strip("<>") for _, n in jobs[name].deps} <= after | {"rb-tissue"}
+        assert {n.strip("<>") for _, n in jobs[name].deps} >= {j.name for j in arrays}
+    # no job that registers, checks or gates anything waits for the settle job
+    for name, job in jobs.items():
+        if name not in ("rb-tissue", "rb-score") and job not in arrays:
+            assert ("afterany", "<rb-settle>") not in job.deps, name
+
+
+def test_the_settle_step_of_the_batch_script():
+    code = code_of(SLURM / "score_cohort.sbatch")
+    # ONE place asks the scheduler and settles; the settle job and the scorer call it
+    assert code.count("settle --out") == 1 and code.count("sacct -n -X -P") == 1
+    assert code.count("settle_killed") == 3  # defined, the settle job, the scorer
+    job = code[
+        code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
+    ]
+    assert "settle_killed" in job and "exit 0" in job  # never blocks the scoring
+    assert "cause=settle_unfinished whose=benchmark" in job
+    # it says for which submission it was done, and only after it was
+    done = code[code.index("settle_killed() {") : code.index("already_settled() {")]
+    assert done.index("settle --out") < done.index('> "$settled"')
+    assert 'echo "${REGBENCH_SUBMISSION:-}" > "$settled"' in done
+    # the scorer settles ONLY when the job left no word of it, and before the tables
+    scorer = code[code.index("if already_settled; then") :]
+    assert scorer.index("settle_killed") < scorer.index(
+        'regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"'
+    )
+    assert scorer.index("else") < scorer.index("settle_killed")
+    # a case task never settles: it reads what the settle job left
+    case = code[
+        code.index('if [ "$kind" = case ]') : code.index('if [ "$kind" = tissue ]')
+    ]
+    assert "settle" not in case
 
 
 def test_tissue_then_score_run_last_in_the_scorers_image(dry):
@@ -537,28 +601,22 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
         ("afterany", "<rb-score-case-multiplex>"),
         ("afterany", "<rb-score-case-synthetic>"),
     }
-    waited = {n.strip("<>") for k, n in tissue.deps if k == "afterany"}
-    assert {k for k, _ in tissue.deps} == {"afterany"}
-    for run in RUNS:
-        assert f"rb-gate-{run}" in waited
-        for dataset in ("multiplex", "synthetic"):
-            assert f"rb-{run}-{dataset}-512g-again" in waited, (run, dataset)
+    assert tissue.deps == {
+        ("afterany", "<rb-score-case-multiplex>"),
+        ("afterany", "<rb-score-case-synthetic>"),
+    }
     code = code_of(SLURM / "score_cohort.sbatch")
     assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 5
-    # killed records are settled against the scheduler BEFORE the tables are made, and
     # only what this submission ran or reused is scored
-    assert code.index("settle --out") < code.index(
-        'regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"'
-    )
     assert 'shared+=(--submission "$REGBENCH_SUBMISSION")' in code
     assert 'shared+=(--drop "$v")' in code and '--gates "$gates"' in code
-    assert '--pipeline-trace "$REGBENCH_PIPELINE_TRACE"' in code
+    assert "pipeline" not in code.lower()  # no cost is read from another run
 
 
 # ── one scoring task per case, then the tables ────────────────────────────────
 def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
-    """One array per dataset, a task per case; it waits for everything the scorer used
-    to wait for, and the scorer waits for it whatever becomes of it."""
+    """One array per dataset, a task per case; it waits for the settle job (and so for
+    everything before it), and the scorer waits for it whatever becomes of it."""
     jobs, _, _ = dry
     tissue, scorer = jobs["rb-tissue"], jobs["rb-score"]
     sizes = {"multiplex": 4, "synthetic": 1}
@@ -570,16 +628,16 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
         assert job.opt("--array") == f"0-{n - 1}%20"
         assert (job.opt("--cpus-per-task"), job.opt("--mem")) == ("8", "64G")
         assert job.opt("--time") == "1-00:00:00"
-        assert {k for k, _ in job.deps} == {"afterany"}
+        assert job.deps == {("afterany", "<rb-settle>")}
         # the tissue job comes after the arrays (each task makes its case's pieces; two
-        # jobs never write the same ones) and waits for nothing else they do not
-        assert tissue.deps == job.deps | {("afterany", f"<{n}>") for n in arrays}
+        # jobs never write the same ones)
+        assert tissue.deps == {("afterany", f"<{n}>") for n in arrays}
         assert "%A_%a.log" in job.opt("--output")
         assert ("afterany", f"<{job.name}>") in scorer.deps
     # the tables keep their allocation: the cases were scored before them
     assert (scorer.opt("--cpus-per-task"), scorer.opt("--time")) == ("4", "1-00:00:00")
-    # the default submission: two more jobs than before the arrays, and nothing else
-    assert len(jobs) == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 2 + len(sizes) == 396
+    # the default submission: the settle job, an array per dataset, tissue, the scorer
+    assert len(jobs) == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 == 397
 
 
 def test_the_case_arrays_have_their_own_allocation_and_are_throttled(site):
@@ -605,7 +663,9 @@ def test_the_case_task_and_the_scorer_are_told_the_same_things():
     dropped rows: both read them from ONE place in the batch script."""
     code = code_of(SLURM / "score_cohort.sbatch")
     assert code.count("shared_args\n") == 2  # the case task, and the scorer
-    case = code[code.index('if [ "$kind" = case ]') : code.index("jobs=")]
+    case = code[
+        code.index('if [ "$kind" = case ]') : code.index('if [ "$kind" = tissue ]')
+    ]
     assert "score-case" in case and '--index "$SLURM_ARRAY_TASK_ID"' in case
     assert '--dataset "$external"' in case and '--workers "$workers"' in case
     assert '${shared[@]+"${shared[@]}"}' in case
@@ -634,19 +694,23 @@ def _records_site(site, tmp_path, name, ids=("20261011T220000-77",), last=None):
 
 
 def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
-    """For a folder whose registrations are done: the case arrays, tissue, the scorer.
-    No selfcheck, no gate, no ladder, and nothing waits for a job that is not there."""
-    _records_site(site, tmp_path, "so", last="20261012T010203-9")
+    """For a folder whose registrations are done: the settle job, the case arrays,
+    tissue, the scorer. No selfcheck, no gate, no ladder, and nothing waits for a job
+    that is not there."""
+    _records_site(site, tmp_path, "so", ids=("20261012T010203-9",))
+    (site[0] / "out-so" / "logs" / "submission").write_text("20261012T010203-9\n")
     done, log, out = launch(site, "--score-only", log="so")
     jobs = jobs_of(done)
     assert list(jobs) == [
+        "rb-settle",
         "rb-score-case-multiplex",
         "rb-score-case-synthetic",
         "rb-tissue",
         "rb-score",
     ]
-    for name in list(jobs)[:2]:
-        assert jobs[name].deps == set(), name
+    assert jobs["rb-settle"].deps == set()  # nothing was submitted before it
+    for name in list(jobs)[1:3]:
+        assert jobs[name].deps == {("afterany", "<rb-settle>")}, name
     assert jobs["rb-tissue"].deps == {
         ("afterany", "<rb-score-case-multiplex>"),
         ("afterany", "<rb-score-case-synthetic>"),
@@ -656,7 +720,8 @@ def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
         ("afterany", "<rb-score-case-multiplex>"),
         ("afterany", "<rb-score-case-synthetic>"),
     }
-    assert "# 4 job(s) would be submitted; nothing was" in done.stdout
+    assert "# 5 job(s) would be submitted; nothing was" in done.stdout
+    assert "WARNING" not in done.stdout
     # it scores the LAST submission into the folder, and says which
     assert "# --score-only: scoring submission 20261012T010203-9" in done.stdout
     assert "nothing is run again" in done.stdout
@@ -666,10 +731,15 @@ def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
     no_gpu, _, _ = launch(
         site, "--score-only", env={"REGBENCH_SBATCH_GPU": None}, log="so"
     )
-    assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 4
+    assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 5
     # one dataset, when named
     one = jobs_of(launch(site, "--score-only", "--datasets", "multiplex", log="so")[0])
-    assert list(one) == ["rb-score-case-multiplex", "rb-tissue", "rb-score"]
+    assert list(one) == [
+        "rb-settle",
+        "rb-score-case-multiplex",
+        "rb-tissue",
+        "rb-score",
+    ]
     # --runs changes nothing (the scorer scores every run), and that is said
     runs, _, _ = launch(site, "--score-only", "--runs", "stare", log="so")
     assert list(jobs_of(runs)) == list(jobs) and "--runs is not used" in runs.stdout
@@ -700,6 +770,124 @@ def test_score_only_finds_the_submission_or_refuses(site, tmp_path):
     assert not _sbatch_lines(none.stdout)
 
 
+def _real_record(out, run, submission, monkeypatch):
+    """A selfcheck.json as the selfcheck itself writes it (`selfcheck.run`, on the
+    identity method and a small pair), where the launcher's selfcheck job puts it."""
+    from benchmarks.regbench import selfcheck as sc
+
+    if submission is None:
+        monkeypatch.delenv("REGBENCH_SUBMISSION", raising=False)
+    else:
+        monkeypatch.setenv("REGBENCH_SUBMISSION", submission)
+    work = out / "logs" / "selfcheck" / run
+    rec = sc.run("initial", work, sizes=[((256, 320), None)])
+    monkeypatch.delenv("REGBENCH_SUBMISSION", raising=False)
+    assert rec["submission"] == (submission or "")
+    return work / "selfcheck.json"
+
+
+def test_score_only_reads_the_id_from_records_the_selfcheck_itself_wrote(
+    site, monkeypatch
+):
+    """The id is PARSED out of each record by the reader the gates use
+    (`ladder.submissions_of` through `regbench submissions`), not searched for as text."""
+    out = site[0] / "out-real"
+    path = _real_record(out, "stare", "20261012T090909-41", monkeypatch)
+    rec = json.loads(path.read_text())
+    # the real record names its submission more than once, and holds other text
+    assert path.read_text().count('"submission"') >= 2
+    assert rec["attempts"][-1]["submission"] == rec["submission"]
+    assert ladder.selfcheck_submissions(out) == ({"20261012T090909-41": ["stare"]}, [])
+    done, _, _ = launch(site, "--score-only", log="real")
+    assert done.returncode == 0, done.stderr
+    assert "# --score-only: scoring submission 20261012T090909-41" in done.stdout
+    assert "WARNING" not in done.stdout
+    # a second run of the SAME submission: still one id
+    _real_record(out, "palom", "20261012T090909-41", monkeypatch)
+    done, _, _ = launch(site, "--score-only", log="real")
+    assert "# --score-only: scoring submission 20261012T090909-41" in done.stdout
+    # text inside a record that only LOOKS like an id is not one: a message quoting
+    # another submission, and a key of that name deeper in the record
+    rec["pairs"][0]["error"] = 'the gate said "submission": "20260101T000000-1"'
+    rec["pairs"][0]["note"] = {"submission": "20260202T000000-2"}
+    write_json(path, rec)
+    assert '"submission": "20260202T000000-2"' in path.read_text()
+    done, _, _ = launch(site, "--score-only", log="real")
+    assert done.returncode == 0, done.stderr
+    assert "# --score-only: scoring submission 20261012T090909-41" in done.stdout
+    # a record cut short is no evidence, and is named
+    (out / "logs" / "selfcheck" / "ashlar").mkdir()
+    cut = out / "logs" / "selfcheck" / "ashlar" / "selfcheck.json"
+    whole = path.read_text().replace("090909-41", "777777-7")
+    cut.write_text(whole[: whole.index("777777-7") + 12])  # just past its own id
+    assert "777777-7" in cut.read_text()
+    found, unreadable = ladder.selfcheck_submissions(out)
+    assert list(found) == ["20261012T090909-41"] and unreadable == [str(cut)]
+    done, _, _ = launch(site, "--score-only", log="real")
+    assert "# --score-only: scoring submission 20261012T090909-41" in done.stdout
+    assert f"not a readable record: {cut}" in done.stderr
+
+
+def test_score_only_with_real_records_of_no_one_or_several_submissions(
+    site, monkeypatch
+):
+    # no selfcheck file at all: refused
+    none, _, _ = launch(site, "--score-only", log="real0")
+    assert none.returncode == 2 and "no submission to score" in none.stderr
+    assert not _sbatch_lines(none.stdout)
+    # a selfcheck run by hand, outside the launcher, names no submission: refused too
+    out = site[0] / "out-real0"
+    _real_record(out, "stare", None, monkeypatch)
+    assert ladder.selfcheck_submissions(out) == ({"": ["stare"]}, [])
+    by_hand, _, _ = launch(site, "--score-only", log="real0")
+    assert by_hand.returncode == 2 and "no submission to score" in by_hand.stderr
+    # several runs with different submission ids and nothing that says which was last
+    out = site[0] / "out-real2"
+    _real_record(out, "stare", "A-1", monkeypatch)
+    _real_record(out, "palom", "B-2", monkeypatch)
+    _real_record(out, "ashlar", "A-1", monkeypatch)
+    assert ladder.selfcheck_submissions(out) == (
+        {"A-1": ["ashlar", "stare"], "B-2": ["palom"]},
+        [],
+    )
+    two, log, _ = launch(site, "--score-only", log="real2")
+    assert two.returncode == 2 and "more than one submission (A-1 B-2)" in two.stderr
+    assert not log.exists() and not _sbatch_lines(two.stdout)
+    # ... logs/submission says which was last, and that one is scored without a warning
+    (out / "logs" / "submission").write_text("B-2\n")
+    last, _, _ = launch(site, "--score-only", log="real2")
+    assert last.returncode == 0, last.stderr
+    assert "# --score-only: scoring submission B-2" in last.stdout
+    assert "WARNING" not in last.stdout
+
+
+def test_score_only_says_when_every_record_is_another_submissions(site, monkeypatch):
+    """A file from another submission is never taken for the one being scored: the id
+    asked for is kept, and the launcher says that no record is of it."""
+    out = site[0] / "out-real3"
+    _real_record(out, "stare", "theirs-1", monkeypatch)
+    named, _, _ = launch(
+        site, "--score-only", env={"REGBENCH_SUBMISSION": "mine-2"}, log="real3"
+    )
+    assert named.returncode == 0, named.stderr
+    assert "# submission  -> mine-2 (scored as it is" in named.stdout
+    (warning,) = [ln for ln in named.stdout.splitlines() if "WARNING" in ln]
+    assert "no selfcheck record" in warning and "is of submission mine-2" in warning
+    assert "the records there are of: theirs-1" in warning
+    # the same when it is logs/submission that names a submission with no record
+    (out / "logs" / "submission").write_text("gone-3\n")
+    stale, _, _ = launch(site, "--score-only", log="real3")
+    assert "# --score-only: scoring submission gone-3" in stale.stdout
+    assert "is of submission gone-3 (the records there are of: theirs-1)" in (
+        stale.stdout
+    )
+    # and none when the id asked for is one the records carry
+    mine, _, _ = launch(
+        site, "--score-only", env={"REGBENCH_SUBMISSION": "theirs-1"}, log="real3"
+    )
+    assert mine.returncode == 0 and "WARNING" not in mine.stdout
+
+
 def test_a_submission_leaves_its_id_for_score_only_which_never_replaces_it(site):
     env = {"REGBENCH_ALLOW_PATH_PYTHON": "1", "REGBENCH_SUBMISSION": "first-1"}
     done, _, out = launch(
@@ -707,19 +895,24 @@ def test_a_submission_leaves_its_id_for_score_only_which_never_replaces_it(site)
     )
     assert done.returncode == 0, done.stderr
     assert (out / "logs" / "submission").read_text() == "first-1\n"
-    # score-only reads it, passes it to its jobs' environment, and submits three jobs
+    # score-only reads it, passes it to its jobs' environment, and submits four jobs
     env = {"REGBENCH_ALLOW_PATH_PYTHON": "1"}
     again, log, _ = launch(
         site, "--score-only", "--datasets", "multiplex", env=env, dry=False, log="id"
     )
     assert again.returncode == 0, again.stderr
     assert "# --score-only: scoring submission first-1" in again.stdout
-    assert "# 3 job(s) submitted" in again.stdout
+    assert "# 4 job(s) submitted" in again.stdout
     names = [
         Job("sbatch " + ln.split("\t", 1)[1]).name
         for ln in log.read_text().splitlines()
     ]
-    assert names[-3:] == ["rb-score-case-multiplex", "rb-tissue", "rb-score"]
+    assert names[-4:] == [
+        "rb-settle",
+        "rb-score-case-multiplex",
+        "rb-tissue",
+        "rb-score",
+    ]
     # ... and another id given by hand does not become "the last submission"
     env["REGBENCH_SUBMISSION"] = "other-2"
     launch(
@@ -878,7 +1071,7 @@ def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
         names[job_id] = job.name
         deps[job_id] = {n for _, n in job.deps}
     order = _sorted_topologically(deps)
-    assert len(order) == len(deps) == 396
+    assert len(order) == len(deps) == 397
     # a cycle would be found: the check is not vacuous
     a, b = list(deps)[:2]
     with pytest.raises(AssertionError, match="a cycle"):

@@ -47,12 +47,12 @@ def dry(site):
 def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     jobs, done, log, out = dry
     assert not log.exists()
-    # per run: three selfcheck attempts, a gate, four rungs; then the set's scorer
-    assert len(jobs) == 3 * (3 + 1 + 8) + 1 == 37
+    # per run: three selfcheck attempts, a gate, four rungs; then the settle job and
+    # the set's scorer
+    assert len(jobs) == 3 * (3 + 1 + 8) + 2 == 38
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout
-    assert "REGBENCH_PIPELINE_TRACE" not in done.stdout
 
 
 def test_only_the_runs_with_a_brightfield_rule_are_submitted(dry):
@@ -96,7 +96,11 @@ def test_the_scorer_is_the_sets_own_and_waits_for_everything(dry):
     jobs, _, _, _ = dry
     score = jobs["rb-score-hyreco_b"]
     assert score.script == "score_cohort.sbatch" and score.args == ["score", "hyreco_b"]
-    waited = {name for kind, name in score.deps if kind == "afterany"}
+    # through the settle job, which waits for every ladder and gate
+    assert score.deps == {("afterany", "<rb-settle>")}
+    settle = jobs["rb-settle"]
+    assert settle.args == ["settle"]
+    waited = {name for kind, name in settle.deps if kind == "afterany"}
     for run in RUNS:
         assert f"<rb-{run}-hyreco_b-512g-again>" in waited
         assert f"<rb-gate-{run}>" in waited

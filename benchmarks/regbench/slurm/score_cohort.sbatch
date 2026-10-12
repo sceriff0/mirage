@@ -1,7 +1,14 @@
 #!/bin/bash
 #SBATCH --job-name=regbench-score
-# The end of a cohort submission, in the scorer's image. Three forms:
+# The end of a cohort submission, in the scorer's image. Four forms:
 #
+#   score_cohort.sbatch settle   FIRST, before any case is scored: every result that still
+#                                says "killed" is given the cause and the elapsed time the
+#                                scheduler's accounting names (`regbench settle`: the last
+#                                rung has no later task to ask). It rewrites those
+#                                results' run.json, so it runs before the case tasks read
+#                                them; it leaves $REGBENCH_OUT/logs/settled naming the
+#                                submission when it has done so
 #   score_cohort.sbatch tissue   the tissue-level pieces of every written image (OpenCV)
 #   score_cohort.sbatch case <dataset>
 #                                ONE case of a cohort dataset, the SLURM_ARRAY_TASK_ID-th
@@ -11,12 +18,16 @@
 #                                $REGBENCH_OUT/cache/scores. No table is written. A task
 #                                that is killed keeps the pair records it finished
 #   score_cohort.sbatch score    the tables: every row the gates dropped is left out
-#                                (`score --drop`), every blocked run and dropped row is
-#                                named in the summary (`score --gates`), and the
-#                                pipeline's own steps are read from a trace when
-#                                REGBENCH_PIPELINE_TRACE names one. A case whose record
-#                                is still valid is read; every other case is computed
-#                                here, so the tables never depend on the array above
+#                                (`score --drop`) and every blocked run and dropped row
+#                                is named in the summary (`score --gates`). A case whose
+#                                record is still valid is read; every other case is
+#                                computed here, so the tables never depend on the array
+#                                above. Every cost in them was measured by this
+#                                benchmark: nothing is read from another run. It settles
+#                                the killed results itself ONLY when the settle job left
+#                                no word of having done it (a node without `sacct`, a
+#                                job that was lost): the cases that changes are computed
+#                                again here, never read from a record made before it
 #
 #   score_cohort.sbatch score <external dataset>
 #                                an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir), alone:
@@ -49,6 +60,46 @@ shared_args() {
     return 0
 }
 
+# The scheduler's accounting of every job of this submission, and the results that
+# still say "killed" settled against it: such a result gets the cause and the elapsed
+# time the scheduler names, so it is not scored as a method failure when the node failed,
+# and its cost is not zero. Returns 0 when the accounting was read and applied; then
+# logs/settled names the submission it was done for.
+settled="$REGBENCH_OUT/logs/settled"
+settle_killed() {
+    local jobs="$REGBENCH_OUT/logs/jobs.tsv" acct="$REGBENCH_OUT/logs/accounting.psv" ids
+    if [ ! -s "$jobs" ]; then
+        echo "settle: no $jobs (nothing was submitted into this folder by the launcher)"
+        return 1
+    fi
+    if ! command -v sacct >/dev/null; then
+        echo "settle: no sacct on this node"
+        return 1
+    fi
+    ids=$(cut -f3 "$jobs" | paste -sd, -)
+    if ! sacct -n -X -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
+        || [ ! -s "$acct" ]; then
+        echo "settle: sacct gave no accounting of the jobs in $jobs"
+        return 1
+    fi
+    regbench_py "$REGBENCH_SCORER_IMAGE" settle --out "$REGBENCH_OUT" --accounting "$acct" \
+        || return 1
+    echo "${REGBENCH_SUBMISSION:-}" > "$settled"
+}
+already_settled() {
+    [ -f "$settled" ] && [ "$(head -n 1 "$settled")" = "${REGBENCH_SUBMISSION:-}" ]
+}
+
+if [ "$kind" = settle ]; then
+    rm -f "$settled"
+    if settle_killed; then
+        echo "REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
+    else
+        # the scorer tries again; if it cannot either, such results stay "killed"
+        echo "REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark exit=1 log=${REGBENCH_LOG:--}"
+    fi
+    exit 0
+fi
 if [ "$kind" = case ]; then
     : "${SLURM_ARRAY_TASK_ID:?this task is one case of an array: submit with --array}"
     shared_args
@@ -80,18 +131,17 @@ if [ "$kind" = tissue ]; then
     exit 0
 fi
 
-# The scheduler's accounting of every job of this submission, BEFORE scoring: a result
-# that still says "killed" (the last rung has no later task to ask) gets the cause and
-# the elapsed time the scheduler names, so it is not scored as a method failure when the
-# node failed, and its cost is not zero.
+# The killed results were settled by the settle job, before the case tasks read them.
+# Only when that job left no word of it for this submission is it done here, BEFORE
+# scoring: a case whose result this changes has a record made for the result as it was,
+# which the scorer does not read (its key holds every run.json's bytes), so its rows are
+# made again below.
 jobs="$REGBENCH_OUT/logs/jobs.tsv"
-if [ -s "$jobs" ] && command -v sacct >/dev/null; then
-    ids=$(cut -f3 "$jobs" | paste -sd, -)
-    acct="$REGBENCH_OUT/logs/accounting.psv"
-    if sacct -n -X -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
-        && [ -s "$acct" ]; then
-        regbench_py "$REGBENCH_SCORER_IMAGE" settle --out "$REGBENCH_OUT" --accounting "$acct"
-    fi
+if already_settled; then
+    echo "settle: done by the settle job, before the cases were scored"
+else
+    echo "settle: the settle job left no record for this submission; settling here (a case whose result changes is scored again in this job)"
+    settle_killed || echo "settle: not done: a result the scheduler ended stays 'killed' in the tables"
 fi
 
 shared_args
@@ -101,11 +151,6 @@ args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers"
 # blocked is not a method failure (ANHIR's scorer lists it apart; HyReCo's ignores it)
 args+=(--gates "$gates")
 [ -n "$external" ] && args+=(--dataset "$external")
-if [ -z "$external" ] && [ -n "${REGBENCH_PIPELINE_TRACE:-}" ]; then
-    args+=(--pipeline-trace "$REGBENCH_PIPELINE_TRACE")
-    [ -n "${REGBENCH_PIPELINE_TRACE_LABEL:-}" ] && \
-        args+=(--pipeline-trace-label "$REGBENCH_PIPELINE_TRACE_LABEL")
-fi
 regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
 code=$?
 

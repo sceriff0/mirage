@@ -37,7 +37,7 @@ This package is being ported in steps. What exists now:
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
 | the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 19 runs, 37 result names, six primary rows, a flag that pauses a run (nothing is paused) |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost), `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
-| the end-to-end cost view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. The pipeline's own steps are read from a Nextflow trace, tested with a trace written by hand; no real trace has been read |
+| the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
 
 Nothing here has run on the cluster.
@@ -66,7 +66,7 @@ challenge.py   the scorer of ANHIR's training pairs (rTRE, robustness, micrometr
 selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
-cost.py        cost from the cohort's files to a merged image, step by step (secondary)
+cost.py        cost by step, from the cohort's files to each method's own image (secondary)
 slurm/         the cohort launcher (submit_cohort.sh) and what its jobs run
 ```
 
@@ -169,7 +169,7 @@ names and opens its summary on the six primary rows:
   `python` (its Dockerfile at tag v1.20.0, `[FULL]`), and its first selfcheck on the
   cluster ended with `"python": executable file not found in $PATH`. That Dockerfile
   also sets `ENV OMP_NUM_THREADS 1`: the harness sets no thread variable, but this one
-  comes with the image (see "Not verified").
+  comes with the image ("Cost", "Threads the method's own image sets").
 - **Which rows gate a run** (`gate_variants`, the last column). A failed selfcheck blocks
   the method. For every method but one that means any of the run's rows. DeeperHistReg's
   gate reads its `_asdrawn` row alone, the row of the image its writer puts on disk: when
@@ -1492,8 +1492,8 @@ it is scoring.
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
 | `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv`, `tissue_dose.csv`, `tissue_dose_summary.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
-| `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart: `method_convert_s`, `estimate_s`, `write_s`, `benchmark_copy_s`, `pipeline_convert_s`, `pipeline_merge_s`, `total_s`, the peaks, `device`, `gpu_model`, `written`, and where each imported number came from. Secondary; see "Cost" |
-| `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step, how many patients have a total, `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
+| `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `benchmark_prep_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
+| `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step and of `measured_here_s`, the largest peaks (`estimate_peak_gb_max`, `job_peak_gb_max`), `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
 | `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
 | `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" under six units, the compared rows and who is not among them, the paired differences with their interval, the known-truth table, the failure log's section, cost on survivors and on the common patients |
 
@@ -1793,7 +1793,7 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   completed (every round registered; `n_patients_complete` of `n_patients`), and over
   the patients EVERY compared row completed (`n_patients_common`). Only the second is on
   the same patients for every method; in the first a method that fails on the largest
-  patients looks cheaper. The end-to-end table has the same pair (`*_common`).
+  patients looks cheaper. The cost-by-step table has the same pair (`*_common`).
 
 - **The clock and the peak are per variant.** Each `run.json` holds the cumulative time and
   the process-tree RSS peak up to its own yield. Warping the benchmark's points and a
@@ -1866,6 +1866,40 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   are recorded. `cpu_efficiency` (CPU time over wall x CPUs) is reported because a method
   that starts one thread per node core can exceed its allocation where cores are not
   confined.
+- **Threads the method's own image sets (ASHLAR: one OpenMP thread on its 4 CPUs).** The
+  ruling stands that each method runs as its official distribution configures it and
+  the harness sets and overrides nothing. For ASHLAR that configuration includes a
+  thread limit:
+  - its official Dockerfile ends with `ENV OMP_NUM_THREADS 1` (labsyspharm/ashlar at the
+    tag v1.20.0, `Dockerfile` line 21 `[FULL: all 27 lines, fetched 2026-10-12]`; that
+    `labsyspharm/ashlar:1.20.0` on Docker Hub was built from this file is assumed, not
+    checked);
+  - the launcher starts every image with `--cleanenv`, which keeps host variables out
+    but not the image's own: "The environment variables from the base image or
+    definition file used to build a container always apply", and the list of steps in
+    which the environment is built clears the host's first and restores it last only
+    without `--cleanenv` (Apptainer user guide, "Environment and Metadata" `[PARTIAL:
+    the sections "Environment Overview" and "Environment Variable Precedence", read
+    through a summarising fetch that quoted them; the page itself was not read line by
+    line, and the site's runtime may be Singularity 3.x, whose guide was not read]`).
+
+  So inside its job ASHLAR finds `OMP_NUM_THREADS=1` and whatever of it is threaded
+  through OpenMP runs on one thread, while its allocation, like every method's, is 4
+  CPUs. ASHLAR has no core-count option, and the four files of its source read for the
+  adapter start no thread or process pool of their own; its FFTs go through `pyfftw`
+  (`utils.py:117-139`) with no thread count passed. How far `pyfftw`, NumPy's BLAS and
+  scikit-image there obey that variable was not read from their sources `[MEMORY]`. The
+  consequence for the cost tables: ASHLAR's wall time is that of a (nearly)
+  single-threaded program, and its CPU-hours as billed (4 CPUs x wall) are about four
+  times what it used; `cpu_efficiency` near 0.25 is what that looks like. This is
+  ASHLAR as published, not a handicap the benchmark adds, and it is not corrected.
+  What makes it visible: `run.json: threads_env` holds the three thread variables AS
+  THE RUN FOUND THEM in its own process, inside the image (`null` when unset); the
+  scorer carries the ones that are set into `resources.csv` (`threads_env`), and the
+  cost tables of `summary.md` open with a line naming every method whose job had one
+  ("thread variables: the benchmark sets none. Found set inside the job, so by the
+  method's own image: ashlar OMP_NUM_THREADS=1"). Never observed on the cluster: ASHLAR
+  has not run.
 - **Cores confined.** The cost tables in `summary.md` open with one line, `cores
   confined: yes | no | partly | unknown`, computed from what every run recorded
   (`cpus_requested`, what the scheduler was asked for, against `cpus_affinity`, the cores
@@ -1895,8 +1929,8 @@ registration clock starts. Its `register_s` (the headline cost) is therefore STA
 alone and does not hold that step, while DeeperHistReg's and VALIS's own preprocessing
 are inside their clocks. So the step is recorded apart (`run.json: info.prep.prep_s`,
 `peak_rss_mb`), shown as `benchmark_prep_s` / `benchmark_prep_peak_gb` in
-`cost_end_to_end.csv`, and added to that row's `measured_here_s` and `total_s`: read the
-end-to-end total, not `register_s`, to compare `stare_prep`'s cost with another method's.
+`cost_end_to_end.csv`, and added to that row's `measured_here_s`: read that total, not
+`register_s`, to compare `stare_prep`'s cost with another method's.
 
 What a writer leaves is described twice: here from each package's source (the tags are
 in `cost.py`), and per run from the file itself (`run.json: native.written`: channels,
@@ -1908,61 +1942,49 @@ file before it copies it, and `native.write_parts_s` holds the three parts of th
 step apart: `writer` (the package's), `convert` (a conversion that writer needed) and
 `benchmark` (the benchmark's own copying).
 
-### From the cohort's files to a merged image (`cost_end_to_end.csv`, secondary)
+### Cost by step, as measured here (`cost_end_to_end.csv`, secondary)
 
-The headline cost is the time to ESTIMATE the transform (`register_s`), and stays so. A
-second table puts the other steps beside it, each in its own column, per patient and per
-result that wrote an image:
+The headline cost is the time to ESTIMATE the transform (`register_s`), and stays so;
+the headline tables also carry the time to the written image and the memory peaks
+(`summary_resources.csv`, `cost_summary.csv` and the block "Cost per method" of
+`summary.md`: `total_to_image_s`, `peak_rss_gb`, `cgroup_peak_gb`). A second table puts
+every step in its own column, per patient and per result that wrote an image:
 
 | column | what | measured |
 |---|---|---|
 | `method_convert_s` | a conversion the method needs before it can read the slides: DeeperHistReg's single-page TIFFs (`convert_s`, plus the further channels its writer needs), ASHLAR's tiles (`retile_s`, once per patient). `none` when it reads the cohort's files as they are; `not separable` for VALIS | here, 4 CPUs, clock paused |
-| `benchmark_prep_s` | the `stare_prep` row only (`none` elsewhere): the benchmark's preprocessing of both images before STARE starts (`run.json: info.prep.prep_s`), with the process's peak at its end in `benchmark_prep_peak_gb`. It is outside the registration clock and INSIDE this row's `measured_here_s` and `total_s`: the other methods' own preprocessing is inside their clocks | here, 4 CPUs |
+| `benchmark_prep_s` | the `stare_prep` row only (`none` elsewhere): the benchmark's preprocessing of both images before STARE starts (`run.json: info.prep.prep_s`), with the process's peak at its end in `benchmark_prep_peak_gb`. It is outside the registration clock and INSIDE this row's `measured_here_s`: the other methods' own preprocessing is inside their clocks | here, 4 CPUs |
 | `estimate_s` | the registration clock | here, 4 CPUs |
 | `write_s` | the package's own writer | here, 4 CPUs, clock paused |
+| `measured_here_s` | `method_convert_s + benchmark_prep_s + estimate_s + write_s`: the total measured time of that result, from the cohort's files to the image it wrote | here |
 | `benchmark_copy_s` | the benchmark's own copying of a package's output (ASHLAR, DeeperHistReg). In NO total | here |
-| `pipeline_convert_s` | the pipeline's `CONVERT_IMAGE` on that patient's slides: the files every method reads | IMPORTED from a trace |
-| `pipeline_merge_s` | the pipeline's `MERGE_AND_PYRAMID` on that patient, added for every method whose writer does not leave ONE pyramidal file per PATIENT holding every round's channels; `not needed` for the one that does | IMPORTED from a trace |
-| `measured_here_s` | `method_convert_s + benchmark_prep_s + estimate_s + write_s` | |
-| `total_s` | the sum of all of the above that apply; empty for a patient the trace does not have | |
+| `estimate_peak_gb`, `job_peak_gb` | the process tree's peak while registering; the whole job's peak, writer included (the cgroup's) | here |
 | `written` | what the method's writer left: channels, pyramid or not, compression, size | the file |
+| `merged_image` | is that image already ONE pyramidal file for the patient with every round's channels: `yes`, `no`, or `not recorded` | the file |
 | `device`, `gpu_model` | DeeperHistReg's CPU and GPU rows are in this one table, told apart here | |
 
-```bash
-python -m benchmarks.regbench score --cases CASES --out OUT \
-    --pipeline-trace /path/to/arm/trace/trace.txt --pipeline-trace-label "arms: compute_all"
-```
-
-- **Nothing is run for the pipeline's steps.** They are read from the `trace.txt` of an
-  earlier pipeline run on the same cohort (the arms benchmark's compute arm), by header
-  name, never by column position. A patient is matched by the task's `tag`, which is the
-  patient in both processes (`modules/local/convert_image.nf`, `merge_and_pyramid.nf`).
-  Only `COMPLETED` and `CACHED` tasks are used; a cached task repeats the figures of the
-  run that produced it, and the row says how many were cached.
-- **Every imported number names its source and its allocation** (`pipeline_source`,
-  `pipeline_convert_alloc`, `pipeline_merge_alloc`: the CPUs and memory that task was
-  GIVEN), because those tasks did not run at this benchmark's 4 CPUs. A total therefore
-  adds seconds measured under two allocations, and says so.
-- **Without a trace** the two pipeline columns read `not available`, there is no total,
-  and everything measured here is unchanged.
-- **The rule (ruling R3.14).** The pipeline's product is one pyramidal file per PATIENT
-  with every round's channels. The merge-and-pyramid step is therefore added for every
-  method whose writer does not leave exactly that, and it is decided from the file each
-  run wrote, never from the method's name (`cost.complete_image`): the file has a
-  pyramid, it is one file, and it holds at least as many channels as the patient's
-  slides hold together (`native.written.patient_channels`, which the driver records
-  beside the file's own description: the reference's channels plus those of every
-  moving round of that launch). With the adapters as built that means: STARE (one flat
-  file per round), both VALIS adapters and PALOM (one pyramid per ROUND), and
-  DeeperHistReg (one file per channel) get the step; ASHLAR's mosaic (one pyramid, every
-  cycle of the patient) does not. An anchored ASHLAR row that dropped a round has a
-  mosaic without that round's channels and gets the step too.
-- **A merge is never added on a guess.** A run that recorded no description, or a case
-  that does not list its channels (so the patient's total is unknown), gets `not
-  available` there and no total, not an assumption either way.
-- Other process names: `--pipeline-convert-process`, `--pipeline-merge-process`
-  (repeatable; the last part of the trace's `process` column). The pipeline's
-  `SPLIT_CHANNELS`, which feeds its merge step, is not counted by default.
+- **Every number is this benchmark's own.** Nothing is read from a pipeline run. Until
+  2026-10-12 `score --pipeline-trace` (and `REGBENCH_PIPELINE_TRACE`) imported the
+  pipeline's `CONVERT_IMAGE` and `MERGE_AND_PYRAMID` times from a Nextflow trace into
+  `pipeline_convert_s`, `pipeline_merge_s` and a `total_s`; the owner ruled that out, and
+  the option, the variable, the reader and those columns are removed. A total that
+  added seconds measured under another run's allocation no longer exists.
+- **Where the total stops, and what that leaves out.** `measured_here_s` ends at the
+  image each method writes itself, and those images are not the same deliverable. A
+  pipeline's product is one pyramidal file per PATIENT with every round's channels;
+  `merged_image` says, from the file each run wrote and never from the method's name
+  (`cost.complete_image`, ruling R3.14), whether a result's own image is that: the file
+  has a pyramid, it is one file, and it holds at least as many channels as the patient's
+  slides hold together (`native.written.patient_channels`). With the adapters as built:
+  ASHLAR's mosaic is (`yes`; an anchored row that dropped a round is not); STARE (one
+  flat file per round), both VALIS adapters and PALOM (one pyramid per ROUND) and
+  DeeperHistReg (one file per channel) are not (`no`), and would still need a
+  merge-and-pyramid step that this benchmark neither runs nor times. So ASHLAR's total
+  covers one step more than the others': read `merged_image` beside every total. The
+  conversion that made the cohort's files (the same for every method) is not in any
+  number either.
+- **Nothing is decided on a guess.** A run that recorded no description of its file, or
+  a case that does not list its channels, reads `not recorded` in `merged_image`.
 
 ## Running the cohort on a cluster
 
@@ -2028,8 +2050,15 @@ script names no method.
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
    it.
-5. **Per-case scoring and `tissue`, then `score`**, in the scorer's image
-   (`variants.SCORER_IMAGE`), after everything, whatever failed. Per dataset ONE ARRAY
+5. **`settle`, per-case scoring and `tissue`, then `score`**, in the scorer's image
+   (`variants.SCORER_IMAGE`), after everything, whatever failed. FIRST one small job,
+   `rb-settle` (`score_cohort.sbatch settle`, 1 CPU, 4 GB, one hour), which waits for
+   every ladder and every gate with `afterany`: it asks the scheduler's accounting what
+   became of every job of the submission and gives each result that still says `killed`
+   the cause and the elapsed time the scheduler names (`regbench settle`: the last rung
+   has no later task to ask). That rewrites those results' `run.json`, so every scoring
+   job waits for it, and it leaves `logs/settled` naming the submission once it has
+   done so. Then per dataset ONE ARRAY
    (`rb-score-case-<dataset>`, `score_cohort.sbatch case`), a task per case, runs
    `score-case`: the case's rows, kept as its record ("Records: a case is scored
    once"), its pair records computed side by side on the task's CPUs
@@ -2041,13 +2070,19 @@ script names no method.
    valid, computes every case that has none (a task that failed, was killed or ran out
    of time left its finished pair records), and writes the tables. The tables do not
    depend on the array: they are the same bytes with it, with half of it, or without.
-   One thing costs a little: `score` settles every result that still says `killed`
-   against the scheduler's accounting first (`regbench settle`), which rewrites that
-   result's `run.json`, so the rows of a case with such a result are made again in the
-   score job (its pair records are not). `score` is given
-   `--submission` (below), `--drop` for every row a gate said to drop, `--gates` (the
+   Until 2026-10-12 the settling was done inside `rb-score`, AFTER the case tasks had
+   scored those results: no table was ever built from a stale record (a case's record
+   is read only when the bytes of every `run.json` it rests on are unchanged, so a
+   settled result's case was scored again in the score job, from its kept pair
+   records), but every such case was scored twice. Now `rb-score` settles only when
+   `logs/settled` does not name its submission (the settle job was lost, or its node
+   has no `sacct`), says so in its log, and scores again whatever case that changes
+   (`test_score_records.py::test_a_record_made_before_a_result_was_settled_is_never_reused`,
+   `test_submit_cohort.py::test_the_killed_results_are_settled_before_any_case_is_scored`).
+   `score` is given
+   `--submission` (below), `--drop` for every row a gate said to drop and `--gates` (the
    summary's block "What the gates decided" names every blocked run and every dropped
-   row) and, when `REGBENCH_PIPELINE_TRACE` is set, `--pipeline-trace`.
+   row).
 
 **What is submitted by default: `multiplex`, then `synthetic`.** `semisynth` and the two
 HyReCo sets are DORMANT (ruling R3.14): implemented and tested, never part of the default,
@@ -2099,7 +2134,6 @@ round).
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
 | `REGBENCH_ALLOW_UNCHECKED` | run names that start whatever their gates say (the verdict is still recorded and shown) | none |
-| `REGBENCH_PIPELINE_TRACE`, `REGBENCH_PIPELINE_TRACE_LABEL` | a `trace.txt` of a pipeline run on this cohort, and what to call it ("Cost") | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
 | `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |
@@ -2170,9 +2204,17 @@ benchmarks/regbench/slurm/submit_cohort.sh -- <site options>
 id is kept in `$REGBENCH_OUT/logs/submission`. For a folder filled before that file was
 written, the script takes the id its selfcheck records carry when they all carry the
 same one, and otherwise asks for `REGBENCH_SUBMISSION=<id>` (the id is printed by every
-submission as `# submission  -> ...` and is in every `run.json`, key `submissions`). It
-reads the gate records that submission left, and it needs `REGBENCH_SIF_STARE_REGBENCH`
-and nothing else.
+submission as `# submission  -> ...` and is in every `run.json`, key `submissions`). The
+records are parsed, each `logs/selfcheck/<run>/selfcheck.json` by the reader the gates
+use (`python -m benchmarks.regbench submissions --out OUT`, `ladder.submissions_of`);
+until 2026-10-12 the id was searched for as text. A record that cannot be read, or that
+names no submission (a selfcheck run by hand), is evidence of none. When the id being
+scored, exported or read from `logs/submission`, is one no selfcheck record carries
+while records of other submissions are there, the script says so in a `# WARNING` line
+and goes on with the id it was given: a file of another submission is never taken for
+it. It submits `rb-settle`, the case arrays, `rb-tissue` and `rb-score`; it reads the
+gate records that submission left, and it needs `REGBENCH_SIF_STARE_REGBENCH` and
+nothing else.
 
 `rounds.csv`'s fourth column is the patient (`group`); the `awk` line keeps the first
 patient's rounds. `--runs` takes any subset of run names; the selfchecks a subset stands
@@ -2228,19 +2270,22 @@ and array sections). None of the following was observed:
   it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
   rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
   of this benchmark, and it is the owner's to rule on.
-- **`MaxSubmit`.** The default submission is 19 gates, 51 selfcheck attempts, the tissue
-  and score jobs, one per-case scoring array per dataset, and eight arrays per run and
-  dataset: with the two default datasets 396 jobs (the two runs with a realcheck gate
-  have a second, one-task ladder and a gate more; 394 before the scoring arrays), and
+- **`MaxSubmit`.** The default submission is 19 gates, 51 selfcheck attempts, the
+  settle, tissue and score jobs, one per-case scoring array per dataset, and eight
+  arrays per run and dataset: with the two default datasets 397 jobs (the two runs with
+  a realcheck gate have a second, one-task ladder and a gate more; 394 before the
+  scoring arrays and the settle job), and
   array TASKS count toward a per-user limit on many sites: the scoring arrays add one
   task per case. Submit by `--datasets` or `--runs` if the limit is lower.
 - **The per-case scoring array** (`score_cohort.sbatch case`), `--score-only`, and the
   `python3` fallback inside ASHLAR's image: tested through stand-ins and through the
   real CLI on a laptop, never on a scheduler or inside that image.
-- **ASHLAR's image sets `OMP_NUM_THREADS=1`** (its Dockerfile at tag v1.20.0 `[FULL]`).
-  The harness exports no thread variable, but `--cleanenv` does not remove what an
-  image defines: read `run.json: threads_env` of the first ASHLAR patient, and decide
-  whether a 4-CPU allocation with one OpenMP thread is the comparison that is meant.
+- **ASHLAR's image sets `OMP_NUM_THREADS=1`** ("Cost", "Threads the method's own image
+  sets"). Read from the Dockerfile and from Apptainer's documentation, never observed:
+  `run.json: threads_env` of the first ASHLAR patient must read `"OMP_NUM_THREADS":
+  "1"`, the header of the cost tables must name it, and its `cpu_efficiency` says how
+  much of the 4 CPUs it used. The `rb-settle` job needs `sacct` on the node it runs on;
+  where it has none the scorer says "settling here" in its log.
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
   into the job.
 
@@ -3220,9 +3265,11 @@ command up to there; `info["register_s_round"]` = that round's `layer_s` + `edge
 rounds (an anchored row that dropped a round divides by fewer); `info
 ["peak_rss_after_register_mb"]` is the peak read at that moment. Tile cutting is not
 billed (`retile_s`). `write_s` is ASHLAR's writer plus the copy, divided by the rounds.
-ASHLAR has no core-count option and none is set. It starts a JVM on import with
-`-Xms10m -XX:+UseSerialGC` and no heap limit (`reg.py:29-38`); the reader used here does
-not call it.
+ASHLAR has no core-count option and none is set; its official image sets
+`OMP_NUM_THREADS=1`, which reaches the job and is left as it is, so ASHLAR runs on one
+OpenMP thread of its 4 CPUs ("Cost", "Threads the method's own image sets"). It starts
+a JVM on import with `-Xms10m -XX:+UseSerialGC` and no heap limit (`reg.py:29-38`); the
+reader used here does not call it.
 
 **Selfcheck: two comparisons against the file ASHLAR wrote, both from the image.**
 

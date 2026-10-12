@@ -625,8 +625,8 @@ def _batch(kind, *args, root, out, **env):
         SLURM_CPUS_PER_TASK="2",
         SLURM_JOB_ID="77",  # the task's log and end line are named after these
         SLURM_JOB_NAME=f"rb-{kind}",
-        **env,
     )
+    base.update(env)
     return subprocess.run(
         ["bash", str(SLURM / "score_cohort.sbatch"), kind, *args],
         env=base, capture_output=True, text=True, cwd=REPO,
@@ -700,3 +700,165 @@ def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path)
     whole = _batch("score", root=root, out=out, **env)
     assert whole.returncode == 0 and whole.stderr.count(": started (no record)") == 5
     same(merged, tables(out))
+
+
+# ── a result the scheduler ended: settled BEFORE the cases are scored ─────────
+def _killed(out, case, variant, launch_id):
+    """That result as the driver leaves it when its process is killed outright."""
+    path = result_dir(out, variant, case) / "run.json"
+    run = json.loads(path.read_text())
+    killed = {**run, "ok": False, "cause": "killed", "launch_id": launch_id}
+    write_json(path, {**killed, "error": "the process was killed"})
+    return path
+
+
+def _failure_causes(out, case_id, variant):
+    with open(out / "tables" / "failure_log.csv", newline="") as fh:
+        rows = [r for r in csv.DictReader(fh)]
+    return sorted(
+        r["cause"] for r in rows if (r["case_id"], r["variant"]) == (case_id, variant)
+    )
+
+
+def test_a_record_made_before_a_result_was_settled_is_never_reused(cohort, tmp_path):
+    """`regbench settle` rewrites the run.json of a result the scheduler ended. In the
+    launcher's order (settle job, case tasks, scorer) no record is made before it. If a
+    case IS scored before its result is settled (the order until 2026-10-12, and what
+    happens when the settle job could not run), the record made then is not read: the
+    case is scored again from the result as settled, and the tables are those of a
+    scoring from nothing."""
+    root, out = copy_of(cohort, tmp_path)
+    sub = "20261012T111111-6"
+    for path in out.glob("*/*/*/run.json"):
+        run = json.loads(path.read_text())
+        write_json(path, {**run, "submissions": [sub]})
+    one = load_case(root / "multiplex" / "P1_r1")
+    two = load_case(root / "multiplex" / "P2_r1")
+    first = _killed(out, one, "stare", "500_0")
+    (out / "logs").mkdir(parents=True)
+    (out / "logs" / "jobs.tsv").write_text("t\trb-stare-multiplex-512g\t500\n")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "sacct").write_text(
+        "#!/bin/bash\n"
+        'echo "$*" >> "$SACCT_LOG"\n'
+        'printf "500_0|NODE_FAIL|30|00:00:20\\n500_1|TIMEOUT|86400|4-00:00:00\\n"\n'
+    )
+    (fake / "sacct").chmod(0o755)
+    env = {
+        "REGBENCH_SUBMISSION": sub,
+        "PATH": f"{fake}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "SACCT_LOG": str(tmp_path / "sacct.log"),
+    }
+
+    def case_tasks():
+        for i in range(4):
+            done = _batch(
+                "case",
+                "multiplex",
+                root=root,
+                out=out,
+                SLURM_ARRAY_TASK_ID=str(i),
+                **env,
+            )
+            assert done.returncode == 0, done.stderr
+            assert "settle" not in done.stdout  # a case task never settles
+
+    # 1. every case is scored BEFORE the settle: the wrong order
+    case_tasks()
+    key = json.loads((out / "cache/scores/multiplex/P1_r1/case.json").read_text())[
+        "key"
+    ]
+    before = key["results"]["stare"]["run.json"]
+    assert before == score_mod.file_sha256(first)
+    # 2. the settle job: the scheduler says the node failed
+    done = _batch("settle", root=root, out=out, **env)
+    assert done.returncode == 0, done.stderr
+    assert "settle: 1 infrastructure" in done.stdout
+    assert (
+        done.stdout.strip()
+        .splitlines()[-1]
+        .startswith("REGBENCH_END kind=settle status=ok cause=- whose=-")
+    )
+    assert json.loads(first.read_text())["cause"] == "infrastructure"
+    assert (out / "logs" / "settled").read_text() == sub + "\n"
+    assert score_mod.file_sha256(first) != before
+    # 3. the scorer does not settle again, and does not read the record of P1_r1: it
+    # says why, scores that case again, and reads the three whose results did not change
+    done = _batch("score", root=root, out=out, **env)
+    assert done.returncode == 0, done.stderr
+    assert "settle: done by the settle job" in done.stdout
+    assert len((tmp_path / "sacct.log").read_text().splitlines()) == 2  # + the last one
+    started = [ln for ln in done.stderr.splitlines() if ": started (" in ln]
+    again = [ln for ln in started if "multiplex/" in ln]
+    assert (
+        len(again) == 1
+        and "multiplex/P1_r1: started (made for other inputs" in again[0]
+    )
+    assert "results.stare.run.json" in again[0]
+    read = [ln for ln in done.stderr.splitlines() if "rows read from its record" in ln]
+    assert len(read) == 3 and not any("P1_r1" in ln for ln in read)
+    assert _failure_causes(out, "P1_r1", "stare") == ["infrastructure"]
+    with open(out / "tables" / "failure_log.csv", newline="") as fh:
+        assert "killed" not in {r["cause"] for r in csv.DictReader(fh)}
+    # ... the pair records made before the settle are all still good (a failed result
+    # is scored at the unregistered pose, which the case has a record of)
+    (kept,) = [ln for ln in done.stderr.splitlines() if "P1_r1" in ln and "kept" in ln]
+    assert kept.endswith(", 0 to compute")
+
+    # 4. the fallback: the settle job left no word (it was lost), a second result was
+    # killed, and its case was scored before anyone settled it
+    (out / "logs" / "settled").unlink()
+    second = _killed(out, two, "stare", "500_1")
+    case_tasks()
+    done = _batch("score", root=root, out=out, **env)
+    assert done.returncode == 0, done.stderr
+    assert "the settle job left no record for this submission; settling here" in (
+        done.stdout
+    )
+    assert "settle: 1 timeout" in done.stdout
+    assert json.loads(second.read_text())["cause"] == "timeout"
+    started = [ln for ln in done.stderr.splitlines() if ": started (" in ln]
+    again = [ln for ln in started if "multiplex/" in ln]
+    assert (
+        len(again) == 1
+        and "multiplex/P2_r1: started (made for other inputs" in again[0]
+    )
+    assert _failure_causes(out, "P2_r1", "stare") == ["timeout"]
+    assert _failure_causes(out, "P1_r1", "stare") == ["infrastructure"]
+    assert (out / "logs" / "settled").read_text() == sub + "\n"
+    # either way the tables are those of one scoring from nothing
+    merged = tables(out)
+    shutil.rmtree(out / "cache" / "scores")
+    whole = _batch("score", root=root, out=out, **env)
+    assert whole.returncode == 0 and "settle: done by the settle job" in whole.stdout
+    same(merged, tables(out))
+
+
+def test_a_settle_job_that_cannot_ask_the_scheduler_says_so_and_blocks_nothing(
+    cohort, tmp_path
+):
+    root, out = copy_of(cohort, tmp_path, cases=SMALL)
+    (out / "logs").mkdir(parents=True)
+    (out / "logs" / "settled").write_text("an-earlier-scoring\n")
+    # no jobs.tsv: nothing was submitted into this folder by the launcher
+    done = _batch("settle", root=root, out=out, REGBENCH_SUBMISSION="S-9")
+    assert done.returncode == 0 and "settle: no " in done.stdout
+    assert (
+        done.stdout.strip()
+        .splitlines()[-1]
+        .startswith(
+            "REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark"
+        )
+    )
+    assert not (out / "logs" / "settled").exists()  # an older word is not left standing
+    # a scheduler that answers nothing
+    (out / "logs" / "jobs.tsv").write_text("t\trb-x\t9\n")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "sacct").write_text("#!/bin/bash\nexit 1\n")
+    (fake / "sacct").chmod(0o755)
+    path = f"{fake}:{Path(sys.executable).parent}:{os.environ['PATH']}"
+    done = _batch("settle", root=root, out=out, REGBENCH_SUBMISSION="S-9", PATH=path)
+    assert done.returncode == 0 and "sacct gave no accounting" in done.stdout
+    assert not (out / "logs" / "settled").exists()

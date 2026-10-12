@@ -81,6 +81,8 @@ WHOSE = {
     # a per-case scoring task that did not finish (time, memory, an error): what it
     # had saved is kept, and the final scorer computes the rest
     "score_case_unfinished": BENCHMARK,
+    # the settle job could not read the scheduler's accounting; the scorer tries again
+    "settle_unfinished": BENCHMARK,
 }
 STAGES = (
     "selfcheck",

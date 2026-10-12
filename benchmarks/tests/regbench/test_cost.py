@@ -1,7 +1,7 @@
-"""The end-to-end cost view: every step in its own column, imported numbers labelled.
+"""The cost-by-step view: every step in its own column, every number measured here.
 
-The pipeline's own steps (convert, merge and pyramid) are never run here: they are read
-from a Nextflow trace of an earlier run. These tests use a small trace written by hand.
+Nothing is read from a pipeline run: the import of a Nextflow trace (and the totals that
+needed it) was removed on 2026-10-12, and one test below holds that it stays removed.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import types
 from pathlib import Path
 
@@ -23,37 +24,7 @@ from benchmarks.regbench.mapping import MOV_TO_REF, PointMap
 from .test_pipeline import toy_case
 
 README = Path(cost.__file__).with_name("README.md")
-HEADER = (
-    "task_id process tag name status exit submit start complete duration realtime "
-    "%cpu cpus memory peak_rss peak_vmem rchar wchar"
-).split()
-TASKS = [
-    # two slides of P1 converted, one merge; P2 converted only; a failed first try
-    dict(process="MIRAGE:PREPROCESS:CONVERT_IMAGE", tag="P1", status="COMPLETED",
-         realtime="1m 40s", cpus="8", memory="32 GB", peak_rss="6 GB"),
-    dict(process="MIRAGE:PREPROCESS:CONVERT_IMAGE", tag="P1", status="COMPLETED",
-         realtime="20s", cpus="8", memory="32 GB", peak_rss="9 GB"),
-    dict(process="MIRAGE:POSTPROCESS:ASSEMBLE_EXPORT:MERGE_AND_PYRAMID", tag="P1",
-         status="FAILED", realtime="5h", cpus="16", memory="100 GB", peak_rss="99 GB"),
-    dict(process="MIRAGE:POSTPROCESS:ASSEMBLE_EXPORT:MERGE_AND_PYRAMID", tag="P1",
-         status="COMPLETED", realtime="1h 0m 0s", cpus="16", memory="200 GB",
-         peak_rss="150 GB"),
-    dict(process="MIRAGE:PREPROCESS:CONVERT_IMAGE", tag="P2", status="CACHED",
-         realtime="30s", cpus="8", memory="32 GB", peak_rss="512 MB"),
-    dict(process="MIRAGE:SEGMENT", tag="P1", status="COMPLETED", realtime="9h",
-         cpus="2", memory="64 GB", peak_rss="20 GB"),
-]  # fmt: skip
-
-
-def write_trace(path, columns=HEADER, tasks=TASKS):
-    with open(path, "w", newline="") as fh:
-        w = csv.writer(fh, delimiter="\t")
-        w.writerow(columns)
-        for i, t in enumerate(tasks, 1):
-            row = {c: "-" for c in columns}
-            row.update({k: v for k, v in t.items() if k in columns}, task_id=str(i))
-            w.writerow([row[c] for c in columns])
-    return path
+SLURM = Path(cost.__file__).with_name("slurm")
 
 
 def res(method, group, adapter, **more):
@@ -71,141 +42,126 @@ def res(method, group, adapter, **more):
     return {**base, **more}
 
 
-# ── the trace ─────────────────────────────────────────────────────────────────
-def test_the_trace_is_read_by_header_name_not_by_position(tmp_path):
-    """CLAUDE.md's gotcha: the column order of trace.txt is not fixed."""
-    straight = cost.read_trace(write_trace(tmp_path / "a.txt"))
-    shuffled = cost.read_trace(write_trace(tmp_path / "b.txt", HEADER[::-1]))
-    assert straight == shuffled
-    first = straight[0]
-    assert first["process"] == "CONVERT_IMAGE" and first["tag"] == "P1"
-    assert first["realtime_s"] == 100.0 and first["peak_rss_gb"] == 6.0
-    assert first["cpus"] == 8 and first["memory_gb"] == 32.0
+# ── nothing is imported ───────────────────────────────────────────────────────
+def test_no_pipeline_trace_is_read_and_no_column_depends_on_one(capsys):
+    """The owner's ruling of 2026-10-12: no import of the pipeline's Nextflow trace, and
+    no total that depends on it. Not as an option, a variable, a reader or a column."""
+    for name in ("read_trace", "pipeline_steps", "parse_seconds", "parse_gb"):
+        assert not hasattr(cost, name), name
+    gone = ("pipeline", "total_s", "imported", "alloc")
+    for column in (*cost.COLUMNS, *cost.SUMMARY_COLUMNS):
+        assert not any(word in column for word in gone), column
+    # what this benchmark measures itself is all still there
+    for column in (
+        "method_convert_s",
+        "benchmark_prep_s",
+        "estimate_s",
+        "write_s",
+        "benchmark_copy_s",
+        "measured_here_s",
+        "estimate_peak_gb",
+        "job_peak_gb",
+        "written",
+        "device",
+        "gpu_model",
+    ):
+        assert column in cost.COLUMNS, column
+    assert {"measured_here_s", "estimate_peak_gb_max", "job_peak_gb_max"} <= set(
+        cost.SUMMARY_COLUMNS
+    )
+    # the command refuses the old option, the launcher has no such variable
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            ["score", "--cases", "c", "--out", "o", "--pipeline-trace", "t.txt"]
+        )
+    assert "--pipeline-trace" in capsys.readouterr().err
+    import inspect
 
-
-def test_a_trace_without_the_columns_it_needs_is_refused(tmp_path):
-    cut = [c for c in HEADER if c != "peak_rss"]
-    with pytest.raises(SystemExit, match="no column peak_rss"):
-        cost.read_trace(write_trace(tmp_path / "t.txt", cut))
-    with pytest.raises(SystemExit, match="no such file"):
-        cost.read_trace(tmp_path / "missing.txt")
-
-
-def test_durations_and_sizes_in_every_form_nextflow_writes():
-    assert cost.parse_seconds("1h 2m 3s") == 3723.0
-    assert cost.parse_seconds("250ms") == 0.25
-    assert cost.parse_seconds("1.5s") == 1.5
-    assert cost.parse_seconds("1d 1h") == 90000.0
-    assert cost.parse_seconds("90000") == 90.0  # the raw format is milliseconds
-    assert math.isnan(cost.parse_seconds("-"))
-    assert cost.parse_gb("512 MB") == 0.5 and cost.parse_gb("1073741824") == 1.0
-    assert math.isnan(cost.parse_gb("-"))
-
-
-def test_a_patients_step_is_the_sum_of_its_completed_tasks(tmp_path):
-    steps = cost.pipeline_steps(cost.read_trace(write_trace(tmp_path / "t.txt")))
-    assert set(steps) == {"P1", "P2"}
-    conv, merge = steps["P1"]["convert"], steps["P1"]["merge"]
-    assert conv["s"] == 120.0 and conv["tasks"] == 2 and conv["peak_gb"] == 9.0
-    # the failed 5 h attempt is not a cost of the step that completed
-    assert merge["s"] == 3600.0 and merge["tasks"] == 1 and merge["memory_gb"] == 200.0
-    assert steps["P2"]["merge"] is None and steps["P2"]["convert"]["cached"] == 1
+    assert "pipeline" not in " ".join(inspect.signature(score.score).parameters)
+    for script in sorted(SLURM.iterdir()):
+        text = script.read_text()
+        assert "PIPELINE_TRACE" not in text and "pipeline-trace" not in text, script
+    # the README says it once, as history, and promises nothing
+    readme = README.read_text()
+    assert readme.count("REGBENCH_PIPELINE_TRACE") == 1
+    assert "imported the" in readme and "are removed" in readme
 
 
 # ── the table ─────────────────────────────────────────────────────────────────
-@pytest.fixture
-def steps(tmp_path):
-    return cost.pipeline_steps(cost.read_trace(write_trace(tmp_path / "t.txt")))
-
-
 def _row(rows, method, group="P1"):
     (r,) = [r for r in rows if r["method"] == method and r["group"] == group]
     return r
 
 
-def test_every_step_has_its_own_column_and_imported_ones_name_their_source(steps):
-    rows = cost.end_to_end([res("stare", "P1", "stare")], steps, "the compute arm")
-    r = _row(rows, "stare")
+def test_every_step_has_its_own_column_and_the_total_is_their_sum():
+    r = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
+    assert list(r) == list(cost.COLUMNS)
     assert r["method_convert_s"] == cost.NONE  # STARE reads the files as they are
     assert (r["estimate_s"], r["write_s"]) == (100.0, 10.0)
-    assert (r["pipeline_convert_s"], r["pipeline_merge_s"]) == (120.0, 3600.0)
-    assert r["measured_here_s"] == 110.0 and r["total_s"] == 110.0 + 120.0 + 3600.0
-    assert r["pipeline_source"] == "the compute arm"
-    # those tasks did not run at this benchmark's 4 CPUs, and the row says so
-    assert r["pipeline_convert_alloc"].startswith("8 CPUs, 32 GB; 2 task(s)")
-    assert r["pipeline_merge_alloc"].startswith("16 CPUs, 200 GB; 1 task(s)")
-    assert r["imported"] == "pipeline_convert, pipeline_merge"
+    assert r["measured_here_s"] == 110.0
+    assert (r["estimate_peak_gb"], r["job_peak_gb"]) == (3.0, 5.0)
     assert r["measured_here"] == "estimate, write"
-    assert r["pipeline_merge_peak_gb"] == 150.0
 
 
-def test_no_merge_is_added_where_the_method_already_wrote_a_complete_pyramid(steps):
-    done = res("palom", "P1", "palom", written_complete=True, written="pyramid")
-    r = _row(cost.end_to_end([done], steps, "arm"), "palom")
-    assert r["pipeline_merge_s"] == cost.NOT_NEEDED
-    assert r["total_s"] == 110.0 + 120.0  # the hour of merging is not added
-    assert r["pipeline_merge_alloc"] == "" and r["imported"] == "pipeline_convert"
-    assert math.isnan(r["pipeline_merge_peak_gb"])
-
-
-def test_a_patient_the_trace_does_not_have_gets_no_total(steps):
-    rows = cost.end_to_end(
-        [res("stare", "P1", "stare"), res("stare", "P9", "stare")], steps, "arm"
+def test_the_row_says_whether_the_written_image_is_the_patients_merged_pyramid():
+    """Methods keep their own writers, so the totals stop at unlike images; the table
+    says which is already one pyramidal file for the patient, from the file alone."""
+    done = res("ashlar", "P1", "ashlar", written_complete=True, written="pyramid")
+    r = _row(cost.end_to_end([done]), "ashlar")
+    assert (r["merged_image"], r["written_from"]) == (
+        "yes",
+        "the file, read after the run",
     )
-    absent = _row(rows, "stare", "P9")
-    assert absent["pipeline_convert_s"] == absent["pipeline_merge_s"] == "not available"
-    assert math.isnan(absent["total_s"]) and absent["measured_here_s"] == 110.0
-    assert absent["pipeline_source"] == "patient P9 is not in the trace"
-    # P2 was converted but never merged: no total either, and no guessed merge
-    half = _row(
-        cost.end_to_end([res("stare", "P2", "stare")], steps, "arm"), "stare", "P2"
+    per_round = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
+    assert per_round["merged_image"] == "no"
+    assert per_round["measured_here_s"] == 110.0  # nothing is added for a merge
+    mixed = [
+        res("v", "P1", "valis", case_id="a", written_complete=True),
+        res("v", "P1", "valis", case_id="b", written_complete=False),
+    ]
+    r = _row(cost.end_to_end(mixed), "v")
+    assert (r["merged_image"], r["written_from"]) == (
+        "no",
+        "the files differ between rounds",
     )
-    assert (
-        half["pipeline_convert_s"] == 30.0
-        and half["pipeline_merge_s"] == "not available"
-    )
-    assert math.isnan(half["total_s"])
-    assert "1 cached" in half["pipeline_convert_alloc"]
 
 
-def test_without_a_trace_the_pipeline_columns_say_not_available():
-    r = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
-    assert r["pipeline_convert_s"] == r["pipeline_merge_s"] == "not available"
-    assert math.isnan(r["total_s"]) and r["measured_here_s"] == 110.0
-    assert r["pipeline_source"] == "no pipeline trace was given"
-    assert r["imported"] == cost.NONE
-    text = "\n".join(cost.markdown([r], cost.summarise([r]), "", score.markdown))
-    assert "No pipeline trace was given" in text and "not available" in text
+def test_what_a_run_did_not_record_is_not_decided_on_a_guess():
+    blind = res("stare", "P1", "stare", written="", written_complete="")
+    r = _row(cost.end_to_end([blind]), "stare")
+    assert r["merged_image"] == cost.NOT_RECORDED == "not recorded"
+    assert r["written_from"] == "not recorded by this run"
+    assert r["written"] == "not available" and r["measured_here_s"] == 110.0
 
 
-def test_a_step_the_package_does_inside_its_call_is_not_separable_not_guessed(steps):
+def test_a_step_the_package_does_inside_its_call_is_not_separable_not_guessed():
     for adapter in ("valis", "valis_mirage"):
-        r = _row(cost.end_to_end([res("v", "P1", adapter)], steps, "arm"), "v")
+        r = _row(cost.end_to_end([res("v", "P1", adapter)]), "v")
         assert r["method_convert_s"] == cost.NOT_SEPARABLE
         assert "conversion" in r["estimate_includes"]
         assert r["measured_here_s"] == 110.0  # nothing is added for it
 
 
-def test_a_methods_own_conversion_is_a_column_of_its_own(steps):
+def test_a_methods_own_conversion_is_a_column_of_its_own():
     # DeeperHistReg converts per round; ASHLAR cuts the patient's tiles once
     dhr = [
         res("d", "P1", "deeperhistreg", case_id="a", method_convert_s=7.0),
         res("d", "P1", "deeperhistreg", case_id="b", method_convert_s=5.0),
     ]
-    r = _row(cost.end_to_end(dhr, steps, "arm"), "d")
+    r = _row(cost.end_to_end(dhr), "d")
     assert r["method_convert_s"] == 12.0 and r["measured_here_s"] == 12.0 + 200 + 20
     assert r["measured_here"] == "method_convert, estimate, write"
     ash = [
         res("a", "P1", "ashlar", case_id=c, unit="patient", method_convert_s=40.0)
         for c in ("a", "b")
     ]
-    r = _row(cost.end_to_end(ash, steps, "arm"), "a")
+    r = _row(cost.end_to_end(ash), "a")
     # one launch per patient: its tile cutting and its clock are counted once
     assert r["method_convert_s"] == 40.0 and r["estimate_s"] == 100.0
-    assert r["write_s"] == 20.0
+    assert r["write_s"] == 20.0 and r["measured_here_s"] == 160.0
 
 
-def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total(steps):
+def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total():
     """Where an adapter times its write step in parts, the writer column is the package's
     writer alone; a conversion that writer needed is conversion; the benchmark's own
     copy (ASHLAR's split, DeeperHistReg's stacking) is beside them and never summed."""
@@ -213,59 +169,46 @@ def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total(steps):
         "d", "P1", "deeperhistreg", method_convert_s=7.0, write_s=60.0,
         write_writer_s=40.0, write_convert_s=5.0, write_benchmark_s=15.0,
     )  # fmt: skip
-    r = _row(cost.end_to_end([row], steps, "arm"), "d")
+    r = _row(cost.end_to_end([row]), "d")
     assert (r["method_convert_s"], r["write_s"], r["benchmark_copy_s"]) == (
         12.0,
         40.0,
         15.0,
     )
     assert r["measured_here_s"] == 12.0 + 100.0 + 40.0
-    assert r["total_s"] == r["measured_here_s"] + 120.0 + 3600.0
-    plain = _row(cost.end_to_end([res("stare", "P1", "stare")], steps, "arm"), "stare")
+    plain = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
     assert plain["write_s"] == 10.0 and math.isnan(plain["benchmark_copy_s"])
 
 
-def test_the_preprocessing_of_stare_prep_is_its_own_column_and_in_its_total(steps):
+def test_the_preprocessing_of_stare_prep_is_its_own_column_and_in_its_total():
     """Review item 4: the preprocessing runs before the registration clock, so it is not
-    in `estimate_s`; it is in that row's totals, as the other methods' own preprocessing
+    in `estimate_s`; it is in that row's total, as the other methods' own preprocessing
     is inside their clocks."""
-    plain = _row(cost.end_to_end([res("stare", "P1", "stare")], steps, "arm"), "stare")
+    plain = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
     row = res("stare_prep", "P1", "stare", prep_s=33.0, prep_peak_gb=2.5)
-    prep = _row(cost.end_to_end([row], steps, "arm"), "stare_prep")
+    prep = _row(cost.end_to_end([row]), "stare_prep")
     assert plain["benchmark_prep_s"] == cost.NONE
     assert prep["benchmark_prep_s"] == 33.0 and prep["benchmark_prep_peak_gb"] == 2.5
     assert prep["estimate_s"] == plain["estimate_s"]  # STARE's clock is STARE's alone
     assert prep["measured_here_s"] == plain["measured_here_s"] + 33.0
-    assert prep["total_s"] == plain["total_s"] + 33.0
     assert "benchmark_prep" in prep["measured_here"]
     assert "benchmark_prep" not in plain["measured_here"]
     assert (
         "benchmark_prep_s" in cost.COLUMNS
         and "benchmark_prep_s" in cost.SUMMARY_COLUMNS
     )
-    (line,) = cost.summarise(cost.end_to_end([row], steps, "arm"))
+    (line,) = cost.summarise(cost.end_to_end([row]))
     assert line["benchmark_prep_s"] == 33.0
 
 
-def test_a_merge_is_never_added_on_a_guess(steps):
-    """A run that recorded no description of its file: the merge step is not added and
-    there is no total, rather than a total that assumes one way or the other."""
-    blind = res("stare", "P1", "stare", written="", written_complete="")
-    r = _row(cost.end_to_end([blind], steps, "arm"), "stare")
-    assert r["pipeline_merge_s"] == "not available" and math.isnan(r["total_s"])
-    assert r["written"] == "not available"
-
-
-def test_cpu_and_gpu_rows_share_one_table_with_the_device_in_its_own_column(steps):
+def test_cpu_and_gpu_rows_share_one_table_with_the_device_in_its_own_column():
     rows = cost.end_to_end(
         [
             res("deeperhistreg_hr_gpu_asdrawn", "P1", "deeperhistreg",
                 device="cuda:0", gpu_model="NVIDIA H200", method_convert_s=1.0),
             res("deeperhistreg_hr_cpu_asdrawn", "P1", "deeperhistreg",
                 method_convert_s=1.0),
-        ],
-        steps,
-        "arm",
+        ]
     )  # fmt: skip
     assert [(r["method"], r["device"], r["gpu_model"]) for r in rows] == [
         ("deeperhistreg_hr_gpu_asdrawn", "cuda:0", "NVIDIA H200"),
@@ -276,20 +219,47 @@ def test_cpu_and_gpu_rows_share_one_table_with_the_device_in_its_own_column(step
     assert [s["device"] for s in summary] == ["cuda:0", "cpu"]
 
 
-def test_a_result_that_wrote_no_image_has_no_row(steps):
+def test_a_result_that_wrote_no_image_has_no_row():
     rigid = res("stare_rigid", "P1", "stare", written_file="", written="")
     failed = res("stare", "P1", "stare", ok=False)
-    assert cost.end_to_end([rigid, failed], steps, "arm") == []
+    assert cost.end_to_end([rigid, failed]) == []
 
 
-def test_the_summary_block_says_what_was_not_measured_here(steps):
-    rows = cost.end_to_end([res("stare", "P1", "stare")], steps, "the compute arm")
-    text = "\n".join(
-        cost.markdown(rows, cost.summarise(rows), "the compute arm", score.markdown)
+def test_the_summary_has_the_total_measured_time_and_the_peak_memory_per_method():
+    """Median over the patients of every step and of their sum, the largest peaks, and
+    the same medians on the patients every compared row completed."""
+    rows = cost.end_to_end(
+        [
+            res("stare", "P1", "stare"),
+            res("stare", "P2", "stare", register_s=300.0, write_s=30.0,
+                peak_rss_gb=7.0, cgroup_peak_gb=9.0),
+            res("stare", "P3", "stare", register_s=500.0, write_s=50.0,
+                peak_rss_gb=4.0, cgroup_peak_gb=6.0),
+        ]
+    )  # fmt: skip
+    (line,) = cost.summarise(rows, {"multiplex": ["P1", "P2"]}, {})
+    assert set(line) == set(cost.SUMMARY_COLUMNS)
+    assert (line["estimate_s"], line["write_s"], line["measured_here_s"]) == (
+        300.0,
+        30.0,
+        330.0,
     )
-    assert "NOT measured here" in text and "the compute arm" in text
-    assert "8 CPUs, 32 GB" in text and "16 CPUs, 200 GB" in text
-    assert "(secondary)" in text
+    assert (line["estimate_peak_gb_max"], line["job_peak_gb_max"]) == (7.0, 9.0)
+    assert (line["n_patients"], line["n_patients_common"]) == (3, 2)
+    assert line["measured_here_s_common"] == (110.0 + 330.0) / 2
+    assert line["merged_image"] == "no"
+
+
+def test_the_summary_block_promises_only_what_was_measured_here():
+    rows = cost.end_to_end([res("stare", "P1", "stare")])
+    text = "\n".join(cost.markdown(rows, cost.summarise(rows), score.markdown))
+    assert "## Cost by step, as measured here (secondary)" in text
+    assert "nothing is taken from another run" in text
+    assert "`measured_here_s` is the sum" in text and "merged_image" in text
+    assert "are not measured here and are in no number" in text
+    for word in ("trace", "imported", "IMPORTED", "total_s", "not available"):
+        assert word not in text, word
+    assert cost.markdown([], [], score.markdown) == []
 
 
 # ── cores ─────────────────────────────────────────────────────────────────────
@@ -305,6 +275,60 @@ def test_the_cost_header_says_whether_the_cores_were_confined():
     ghost = [res("a", "P1", "stare", cause="not_run", cpus_affinity=64)]
     assert cost.cores_confined(held + ghost).startswith("cores confined: yes (1 of 1")
     assert "Workers each method's own pool had: stare 4." in cost.cores_confined(held)
+
+
+# ── threads ───────────────────────────────────────────────────────────────────
+def test_a_thread_variable_an_image_sets_is_recorded_and_said(tmp_path, monkeypatch):
+    """The harness sets no thread variable (ruling). ASHLAR's official image sets
+    OMP_NUM_THREADS=1 and `--cleanenv` keeps what an image defines, so the run finds it
+    set in its own process: run.json records it as seen there, and every cost table's
+    header names it."""
+    from benchmarks.regbench import resources
+
+    names = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    assert resources.host_info()["threads_env"] == dict.fromkeys(names)
+    case = toy_case(tmp_path / "cases", "P1_r1", "P1")
+    out = tmp_path / "out"
+    methods.run_case(_writer("free", False), case, out)
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")  # as inside ASHLAR's image
+    methods.run_case(_writer("held", False), case, out)
+    # running a method changed nothing in the environment: recorded, never set
+    assert {n: os.environ.get(n) for n in names} == {
+        **dict.fromkeys(names),
+        names[0]: "1",
+    }
+    seen = {
+        v: json.loads((result_dir(out, v, case) / "run.json").read_text())[
+            "threads_env"
+        ]
+        for v in ("free", "held")
+    }
+    assert seen["free"] == dict.fromkeys(names)
+    assert seen["held"] == {**dict.fromkeys(names), "OMP_NUM_THREADS": "1"}
+    rows = {v: score.resource_row({"threads_env": seen[v]}) for v in seen}
+    assert rows["free"]["threads_env"] == ""
+    assert rows["held"]["threads_env"] == "OMP_NUM_THREADS=1"
+    assert score.resource_row({})["threads_env"] == ""  # an older record
+    held = res("ashlar", "P1", "ashlar", threads_env="OMP_NUM_THREADS=1")
+    free = res("stare", "P1", "stare", threads_env="")
+    (line,) = [
+        ln for ln in cost.header_lines([held, free]) if ln.startswith("thread var")
+    ]
+    assert "the benchmark sets none" in line
+    assert "by the method's own image: ashlar OMP_NUM_THREADS=1." in line
+    assert "stare" not in line and "fewer threads than the 4 CPUs" in line
+    (none,) = [ln for ln in cost.header_lines([free]) if ln.startswith("thread var")]
+    assert none.endswith("No run found one set in its own process.")
+    monkeypatch.delenv("OMP_NUM_THREADS")
+    got = score.score(tmp_path / "cases", out, ["multiplex"], with_tissue=False)
+    assert {r["method"]: r["threads_env"] for r in got["resources"]} == {
+        "free": "",
+        "held": "OMP_NUM_THREADS=1",
+    }
+    text = (out / "tables" / "summary.md").read_text()
+    assert "by the method's own image: held OMP_NUM_THREADS=1." in text
 
 
 # ── what was written ──────────────────────────────────────────────────────────
@@ -393,39 +417,41 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
     assert native["written"]["pyramid"] and native["written"]["channels"] == 5
     assert native["written"]["patient_channels"] == 5
 
-    trace = write_trace(tmp_path / "trace.txt")
-    got = score.score(
-        root, out, ["multiplex"], with_tissue=False,
-        pipeline_trace=trace, pipeline_trace_label="the compute arm",
-    )  # fmt: skip
+    got = score.score(root, out, ["multiplex"], with_tissue=False)
     rows = got["cost_end_to_end"]
     flat, deep = _row(rows, "flat"), _row(rows, "deep")
-    assert (
-        flat["pipeline_merge_s"] == 3600.0 and deep["pipeline_merge_s"] == "not needed"
-    )
-    # a pyramid per round is not the patient's merged image: the step is added
+    # one pyramid holding the whole patient is the merged image; a flat file is not
+    assert (flat["merged_image"], deep["merged_image"]) == ("no", "yes")
+    # a pyramid per round is not the patient's merged image either
     per_round = _row(rows, "round")
-    assert per_round["pipeline_merge_s"] == 3600.0
+    assert per_round["merged_image"] == "no"
     assert "pyramid (2 levels)" in per_round["written"]
     assert flat["write_s"] == deep["write_s"] == 2.0
     assert "no pyramid" in flat["written"] and "pyramid (2 levels)" in deep["written"]
     assert flat["written_from"] == "the file, read after the run"
-    assert math.isnan(_row(rows, "flat", "P9")["total_s"])
-    assert flat["pipeline_source"].startswith("the compute arm (")
-    assert str(trace) in flat["pipeline_source"]
+    for r in rows:  # the total is what was measured here, and nothing else
+        assert r["measured_here_s"] == pytest.approx(r["estimate_s"] + r["write_s"])
 
     with open(out / "tables" / "cost_end_to_end.csv", newline="") as fh:
         on_disk = list(csv.DictReader(fh))
     assert len(on_disk) == 6 and list(on_disk[0]) == list(cost.COLUMNS)
-    assert {r["pipeline_merge_s"] for r in on_disk} >= {"3600.0", "not needed"}
-    assert (out / "tables" / "cost_end_to_end_summary.csv").is_file()
+    with open(out / "tables" / "cost_end_to_end_summary.csv", newline="") as fh:
+        summary = list(csv.DictReader(fh))
+    assert len(summary) == 3 and set(cost.SUMMARY_COLUMNS) <= set(summary[0])
+    assert {r["merged_image"] for r in summary} == {"no", "yes"}
     text = (out / "tables" / "summary.md").read_text()
-    assert "## Cost from the cohort's files to a merged image (secondary)" in text
+    assert "## Cost by step, as measured here (secondary)" in text
     assert "cores confined:" in text
-    # the headline cost table is still the estimate alone
+    # the headline cost table is still the estimate alone, and the headline block
+    # beside it has the time to the written image and both memory peaks per method
     assert "## Resources (per patient; registration only)" in text
+    head = text[text.index("### Cost per method") : text.index("## Cost by step")]
+    for column in ("register_s", "total_to_image_s", "peak_rss_gb", "cgroup_peak_gb"):
+        assert f"| {column}: complete / common |" in head, column
+    for word in ("pipeline_", "trace", "total_s", "not available"):
+        assert word not in text[text.index("## Resources") :], word
 
-    # the same through the command line; without a trace nothing else changes
+    # the same through the command line
     capsys.readouterr()
     argv = [
         "score",
@@ -436,13 +462,10 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
         "--only-run",
         "--no-tissue",
     ]
-    cli.main([*argv, "--pipeline-trace", str(trace), "--pipeline-trace-label", "arm X"])
-    assert "arm X" in (out / "tables" / "summary.md").read_text()
     cli.main(argv)
     with open(out / "tables" / "cost_end_to_end.csv", newline="") as fh:
-        bare = list(csv.DictReader(fh))
-    assert {r["pipeline_convert_s"] for r in bare} == {"not available"}
-    assert [r["estimate_s"] for r in bare] == [r["estimate_s"] for r in on_disk]
+        again = list(csv.DictReader(fh))
+    assert again == on_disk
 
 
 # ── the table of what each clock includes ─────────────────────────────────────

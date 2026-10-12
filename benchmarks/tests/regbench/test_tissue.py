@@ -656,7 +656,15 @@ def test_tissue_never_enters_the_primary_tables(scored, tmp_path):
     plain = score(
         root, out, datasets=["multiplex"], expected=["never_ran"], with_tissue=False
     )
-    assert plain["cells"] == tables["cells"]
+    # (value by value: the rows come back from the case's record, where a NaN is no
+    # longer the same object, and two lists holding different NaNs are not equal)
+    diff = [
+        (i, k, a[k], b[k])
+        for i, (a, b) in enumerate(zip(plain["cells"], tables["cells"]))
+        for k in a
+        if not (a[k] == b[k] or (a[k] != a[k] and b[k] != b[k]))
+    ]
+    assert not diff and len(plain["cells"]) == len(tables["cells"]), diff[:5]
     assert plain["summary_cells"] == tables["summary_cells"]
     assert "tissue" not in plain and not _rows(out, "tissue")
     assert "Tissue-level" not in (out / "tables" / "summary.md").read_text()
