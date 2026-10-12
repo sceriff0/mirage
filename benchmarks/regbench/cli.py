@@ -560,6 +560,14 @@ def build_parser():
         help="leave out the tissue-level block of the written images (tissue*.csv)",
     )
     sc.add_argument(
+        "--manifest",
+        default=os.environ.get("REGBENCH_MANIFEST") or None,
+        metavar="CSV",
+        help="the `prepare multiplex` manifest the cohort's cases were made from "
+        "(default: REGBENCH_MANIFEST): its number of rounds is the first column of "
+        "attrition.csv. Nothing else reads it",
+    )
+    sc.add_argument(
         "--fresh",
         action="store_true",
         help="read no kept record (<out>/cache/scores): compute every case and every "
@@ -1569,6 +1577,7 @@ def main(argv=None):
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
         ),
         fresh=a.fresh,
+        manifest=a.manifest,
     )
     from . import failure_log
 

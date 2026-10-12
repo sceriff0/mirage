@@ -223,6 +223,158 @@ def test_a_submission_of_some_runs_scores_without_only_run(tmp_path):
     common = by(res["summary_cells"], method="stare", subset="common")
     assert common["n_cases"] == 2 and common["n_dice_shared"] == 2
     assert res["launch"][0]["log_path"] == "/logs/rb-gate-stare-7.log"
+    # where the rounds went, as a table: three of the manifest's rounds were prepared
+    # into two cases, both with outlines and neither with bare nuclei
+    manifest = tmp_path / "rounds.csv"
+    manifest.write_text("case_id,reference\nP0_r1,a\nP1_r1,b\nP2_r1,c\n,\n")
+    assert score.manifest_rounds(manifest) == 3
+    assert score.manifest_rounds(tmp_path / "absent.csv") is None
+    assert [r["method"] for r in res["attrition"]] == [
+        "ashlar",
+        "stare",
+        "valis120",
+        "palom",
+    ]
+    for r in res["attrition"]:
+        assert (r["manifest_rounds"], r["prepared"], r["with_outlines"]) == ("", 2, 2)
+        assert r["with_nuclei"] == 0 and r["scored_nuclei"] == 0
+        ran = 2 if r["method"] in ("stare", "ashlar") else 0
+        assert (r["run"], r["registered"], r["scored"]) == (ran, ran, ran)
+    table = (out / "tables" / "attrition.csv").read_text().splitlines()
+    assert table[0] == ",".join(score.ATTRITION_COLUMNS) and len(table) == 5
+    assert (
+        "## From the manifest to a scored round"
+        in (out / "tables" / "summary.md").read_text()
+    )
+    jobs = [("", c) for c in cases]
+    got = score.attrition(jobs, res["cells"], [], [], res["resources"], 3)
+    assert {r["manifest_rounds"] for r in got} == {3}
+    # a toy case records nothing about its polygon sets: nothing is marked
+    assert {(r["set_inexact"], r["set_shrunk"]) for r in res["cells"]} == {
+        (False, False)
+    }
+
+
+def test_inexact_and_shrunk_nuclei_are_marked_on_every_row_and_counted():
+    """A case whose bare nuclei are the outlines with the rim taken off, or are
+    declared inexact, says so on every cell row computed on them; a summary counts
+    those cases beside its numbers."""
+    import types
+
+    case = types.SimpleNamespace(
+        extra={
+            "cell_sets": {
+                "ref": {
+                    "outlines": {"source": "arm_geojson", "exact": True},
+                    "nuclei": {"source": "label_image:/x/ref.tif", "exact": True},
+                },
+                "mov": {
+                    "outlines": {"source": "arm_geojson", "exact": True},
+                    "nuclei": {
+                        "source": "shrunk_outlines",
+                        "exact": False,
+                        "shrunk_by_px": 10,
+                    },
+                },
+            }
+        }
+    )
+    assert score.set_marks(case, "outlines") == {
+        "set_source_ref": "arm_geojson",
+        "set_source_mov": "arm_geojson",
+        "set_inexact": False,
+        "set_shrunk": False,
+    }
+    marks = score.set_marks(case, "nuclei")
+    assert marks["set_source_mov"] == "shrunk_outlines"
+    assert marks["set_inexact"] is True and marks["set_shrunk"] is True
+    case.extra["cell_sets"]["mov"]["nuclei"] = {
+        "source": "stardist_rerun",
+        "exact": False,
+    }
+    marks = score.set_marks(case, "nuclei")
+    assert marks["set_inexact"] is True and marks["set_shrunk"] is False
+    assert score.set_marks(types.SimpleNamespace(extra={}), "nuclei") == {
+        "set_source_ref": "",
+        "set_source_mov": "",
+        "set_inexact": False,
+        "set_shrunk": False,
+    }
+    rows = [
+        cell("a", "P1_r1", "P1", set_inexact=True, set_shrunk=True),
+        cell("a", "P1_r2", "P1", set_inexact=True, set_shrunk=False),
+        cell("a", "P2_r1", "P2", set_inexact=False, set_shrunk=False),
+    ]
+    got = by(score.summarise_cells(rows, ["a"]), method="a", subset="all")
+    assert (got["n_inexact_cases"], got["n_shrunk_cases"]) == (2, 1)
+    assert "| 2 (1) |" in score._summary_table([got], ["a"])
+
+
+def test_the_gate_block_counts_the_narrow_dots_of_each_selfcheck():
+    def row(run, variant, case_id, dots, detected, narrow):
+        return {
+            "run": run,
+            "variant": variant,
+            "case_id": case_id,
+            "set": dots,
+            "n_detected": detected,
+            "n_narrow": narrow,
+        }
+
+    rows = [
+        # one comparison has a row per dot set: it is counted once
+        row("stare", "stare", "pair", "all", 8891, 1),
+        row("stare", "stare", "pair", "unmasked", 8891, 1),
+        row("stare", "stare", "patient_round1", "all", 100, 2),
+        row("ashlar", "ashlar", "pair", "all", 500, 0),
+        row("valis120_hires", "valis120_hires_rigid", "pair", "all", 70, 4),
+        {"run": "old", "variant": "old", "case_id": "pair", "set": "all"},
+    ]
+    assert score.narrow_dots(rows) == [
+        {"run": "stare", "variant": "stare", "n_detected": 8991, "n_narrow": 3},
+        {"run": "ashlar", "variant": "ashlar", "n_detected": 500, "n_narrow": 0},
+        {
+            "run": "valis120_hires",
+            "variant": "valis120_hires_rigid",
+            "n_detected": 70,
+            "n_narrow": 4,
+        },
+    ]
+    # and the rows are the selfcheck records' own: the count of each comparison
+    from benchmarks.regbench import selfcheck
+
+    record = {
+        "pairs": [
+            {
+                "case_id": "pair",
+                "variants": {
+                    "stare": {"n_detected": 8891, "n_narrow": 1, "sets": {}},
+                    "stare_rigid": {"status": "no_stage_image"},
+                },
+            }
+        ]
+    }
+    made = selfcheck.mask_rows(record, "stare")
+    assert {(r["variant"], r["n_detected"], r["n_narrow"]) for r in made} == {
+        ("stare", 8891, 1)
+    }
+    assert score.narrow_dots(made) == [
+        {"run": "stare", "variant": "stare", "n_detected": 8891, "n_narrow": 1}
+    ]
+    (line,) = score.narrow_lines(rows)
+    assert "`stare` 3 of 8991 detected;" in line
+    assert "`valis120_hires_rigid` 4 of 70 detected (run `valis120_hires`)" in line
+    assert "None in the other 1 checked result(s)." in line
+    assert score.narrow_lines(rows[3:4])[0].endswith(
+        "None in the 1 checked result(s).\n"
+    )
+    assert score.narrow_lines([]) == [] and score.narrow_lines(rows[-1:]) == []
+    # in the block of the gates, with or without a gate record
+    gate = {"run": "stare", "gate": "selfcheck", "status": "ok", "blocked": False}
+    block = score.launch_markdown([{**gate, "dropped": ""}], rows)
+    assert block[0] == "## What the gates decided\n" and block[-1] == line
+    assert score.launch_markdown([], rows) == ["## What the gates decided\n", line]
+    assert score.launch_markdown([], []) == []
 
 
 # ── item 8: the unit ─────────────────────────────────────────────────────────────────

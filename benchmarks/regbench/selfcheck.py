@@ -1171,6 +1171,11 @@ def mask_rows(record, run=""):
                         "mask": v.get("mask", ""),
                         "set": name,
                         "n_dots": st.get("n_dots", 0),
+                        # of the whole comparison, whatever the dot set: what the
+                        # detector took for a dot in the written image, and how many
+                        # of those were narrower than `NARROW_PX`
+                        "n_detected": v.get("n_detected", ""),
+                        "n_narrow": v.get("n_narrow", ""),
                         "found_frac": st.get("found_frac", math.nan),
                         "err_px_p95": st.get("err_px_p95", math.nan),
                         "err_px_mean": st.get("err_px_mean", math.nan),

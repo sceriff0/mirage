@@ -103,6 +103,7 @@ from .cases import (
     nuclei_reason,
     polys,
     result_dir,
+    set_info,
     stale_points,
     write_json,
 )
@@ -297,6 +298,25 @@ def _keep_features(ps, keep):
         ring_hole=ps.ring_hole[ring_keep],
         n_features=int(keep.sum()),
     )
+
+
+SHRUNK_SOURCE = "shrunk_outlines"
+
+
+def set_marks(case, which):
+    """What a case's ``case.json`` says of one polygon set, as columns of every cell
+    row computed on it: where each side's objects come from, whether either side is
+    declared inexact (``set_inexact``: the objects are not the segmentation they stand
+    for, object for object) and whether either side is the outlines with their rim
+    taken off (``set_shrunk``: the fallback for a slide without bare nuclei). Empty
+    sources and ``False`` for a case that records nothing about its sets."""
+    info = {side: set_info(case, side, which) for side in ("ref", "mov")}
+    return {
+        "set_source_ref": str(info["ref"].get("source") or ""),
+        "set_source_mov": str(info["mov"].get("source") or ""),
+        "set_inexact": any(i.get("exact") is False for i in info.values()),
+        "set_shrunk": any(i.get("source") == SHRUNK_SOURCE for i in info.values()),
+    }
 
 
 def _f(value):
@@ -1297,6 +1317,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
         dens = density(ref, px, ctx.geometry(which)) if scorable else {}
         cell_rows, non_cells, absent = [], [], []
         masks, missing = ctx.masks(which) if scorable else ({}, [])
+        marks = set_marks(case, which)
 
         def row(method, frame, status, spec, jac, imputed, problem, cause):
             wanted.setdefault(spec)
@@ -1306,6 +1327,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                 return {
                     **base,
                     "set": which,
+                    **marks,
                     "method": method,
                     "frame": frame,
                     "selfcheck_status": status,
@@ -1830,6 +1852,12 @@ def summarise_cells(rows, primary=None, blocked=None):
                         "n_ok": n_ok,
                         "n_excluded_not_method": len(every) - len(mine),
                         "selfcheck_row": every[0].get("selfcheck_row", ""),
+                        # cases scored on objects declared inexact, and those of
+                        # them that are outlines with the rim taken off
+                        "n_inexact_cases": sum(
+                            bool(r.get("set_inexact")) for r in mine
+                        ),
+                        "n_shrunk_cases": sum(bool(r.get("set_shrunk")) for r in mine),
                     }
                     for h in HEADLINES:
                         per = list(_per_patient(mine, h).values())
@@ -2257,6 +2285,9 @@ def _summary_table(rows, primary):
         for h in EXACT_HEADLINES:
             line[f"{h}_exact"] = r.get(f"{h}_exact_med", math.nan)
         line["cases with exact numbers"] = f"{r.get('n_exact', 0)}/{r['n_cases']}"
+        line["cases on inexact objects (shrunk outlines)"] = (
+            f"{r.get('n_inexact_cases', 0)} ({r.get('n_shrunk_cases', 0)})"
+        )
         table.append(line)
     return markdown(table, list(table[0])) if table else ""
 
@@ -2640,6 +2671,108 @@ def _nonband_markdown(summary, missing):
     return parts
 
 
+ATTRITION_COLUMNS = (
+    "dataset",
+    "method",
+    "manifest_rounds",
+    "prepared",
+    "with_outlines",
+    "with_nuclei",
+    "run",
+    "registered",
+    "scored",
+    "scored_nuclei",
+)
+
+
+def manifest_rounds(path):
+    """How many rounds a ``prepare multiplex`` manifest lists (rows with a
+    ``case_id``); None without a manifest or when it cannot be read."""
+    if not path:
+        return None
+    try:
+        with open(path, newline="") as fh:
+            return sum(
+                bool((r.get("case_id") or "").strip()) for r in csv.DictReader(fh)
+            )
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return None
+
+
+def attrition(jobs, cells, nuclei_cells, nuclei_missing, res_rows, manifest=None):
+    """Where the rounds go, per dataset and registration row (``attrition.csv``):
+
+    ``manifest_rounds``  rounds the cohort's manifest lists (``multiplex`` only, and
+                         only when the manifest was given to the scorer; blank else)
+    ``prepared``         cases prepared from them, as scored here
+    ``with_outlines``    of those, cases with outlines on both sides (a cell row exists)
+    ``with_nuclei``      of those, cases with bare nuclei on both sides
+    ``run``              cases this row has a record for (anything but ``not run``)
+    ``registered``       cases it registered (``ok``)
+    ``scored``           cases whose outline row is its own result: not scored at the
+                         unregistered pose and not left out of its summaries
+    ``scored_nuclei``    the same on the bare nuclei
+
+    One line per dataset without any registration row, so a dataset is never absent."""
+    out = []
+    for ds in dict.fromkeys(job[1].dataset for job in jobs):
+        ids = {str(job[1].case_id) for job in jobs if job[1].dataset == ds}
+
+        def of(rows):
+            return [r for r in rows if r["dataset"] == ds]
+
+        outlined = {str(r["case_id"]) for r in of(cells)}
+        without = {str(r["case_id"]) for r in of(nuclei_missing) if not r["method"]}
+        head = {
+            "dataset": ds,
+            "manifest_rounds": manifest
+            if ds == "multiplex" and manifest is not None
+            else "",
+            "prepared": len(ids),
+            "with_outlines": len(outlined),
+            "with_nuclei": len(outlined - without),
+        }
+        names = [m for m in _methods(of(res_rows)) if _is_run(m)]
+        for m in names:
+            mine = [r for r in of(res_rows) if r["method"] == m]
+
+            def own(rows, m=m):
+                return sum(
+                    r["method"] == m and not r["imputed_initial"] and not _excluded(r)
+                    for r in of(rows)
+                )
+
+            out.append(
+                {
+                    **head,
+                    "method": m,
+                    "run": sum(r["cause"] != "not_run" for r in mine),
+                    "registered": sum(bool(r["ok"]) for r in mine),
+                    "scored": own(cells),
+                    "scored_nuclei": own(nuclei_cells),
+                }
+            )
+        if not names:
+            out.append({**head, "method": ""})
+    return out
+
+
+def attrition_markdown(rows):
+    if not rows:
+        return []
+    return [
+        "## From the manifest to a scored round\n",
+        "Rounds at each step, per dataset and registration row (`attrition.csv`). "
+        "`manifest_rounds` is blank when the scorer was not given the manifest "
+        "(`score --manifest`) and for datasets that have none. `scored` counts the "
+        "rounds whose row is the method's own result: a round it did not register is "
+        "scored at the unregistered pose and is not counted, and a round lost for a "
+        "cause that is not the method's is in no summary.\n",
+        markdown(rows, list(ATTRITION_COLUMNS)),
+        "",
+    ]
+
+
 def read_gates(directory):
     """What the launcher's gate jobs decided (``<out>/logs/gates/*.tsv``): one dict per
     record with ``run``, ``gate`` (``selfcheck`` | ``realcheck``), ``status``,
@@ -2671,10 +2804,61 @@ def read_gates(directory):
     return out
 
 
-def launch_markdown(launch):
-    """The block that names every run a gate blocked and every row a gate dropped."""
-    if not launch:
+def narrow_dots(selfcheck_rows):
+    """Per (run, result name) of the selfcheck records: the dots its detector found in
+    the images that result wrote, and how many of them were narrow (``n_narrow``:
+    under ``selfcheck.NARROW_PX``, a dot the writer shrank to under about 0.8 of its
+    size). Each comparison is counted once, whatever its dot sets."""
+    seen, out = set(), {}
+    for r in selfcheck_rows or []:
+        key = (r.get("run", ""), r.get("variant", ""), r.get("case_id", ""))
+        if key in seen or r.get("n_narrow") in ("", None):
+            continue
+        seen.add(key)
+        rec = out.setdefault(
+            key[:2],
+            {"run": key[0], "variant": key[1], "n_detected": 0, "n_narrow": 0},
+        )
+        rec["n_detected"] += int(r.get("n_detected") or 0)
+        rec["n_narrow"] += int(r["n_narrow"])
+    return list(out.values())
+
+
+def narrow_lines(selfcheck_rows):
+    """What the gate block says of the narrow dots: every result that has some, by
+    name and count, and how many results have none."""
+    counted = narrow_dots(selfcheck_rows)
+    if not counted:
         return []
+    some = [r for r in counted if r["n_narrow"]]
+    text = (
+        "Narrow dots (`n_narrow` in `selfcheck_masks.csv`): the selfcheck's detector "
+        "takes a dot from about half its drawn size to about twice, so that its "
+        "verdict is about WHERE a dot is and not about the registration's local "
+        "scale; a dot the writer drew at under about 0.8 of its size is counted as a "
+        "dot and counted here. "
+    )
+    if some:
+        text += (
+            "Results with some: "
+            + "; ".join(
+                f"`{r['variant']}` {r['n_narrow']} of {r['n_detected']} detected"
+                + (f" (run `{r['run']}`)" if r["run"] != r["variant"] else "")
+                for r in some
+            )
+            + f". None in the other {len(counted) - len(some)} checked result(s).\n"
+        )
+    else:
+        text += f"None in the {len(counted)} checked result(s).\n"
+    return [text]
+
+
+def launch_markdown(launch, selfcheck_rows=None):
+    """The block that names every run a gate blocked and every row a gate dropped,
+    and the narrow dots of the selfchecks behind the gates."""
+    narrow = narrow_lines(selfcheck_rows)
+    if not launch:
+        return ["## What the gates decided\n", *narrow] if narrow else []
     blocked = [g for g in launch if g["blocked"]]
     unchecked = [
         g
@@ -2704,7 +2888,7 @@ def launch_markdown(launch):
             + "; ".join(f"`{g['dropped']}` (of `{g['run']}`)" for g in dropped)
             + ".\n"
         )
-    return parts
+    return [*parts, *narrow]
 
 
 def blocked_rows(launch, run_variants=None):
@@ -2795,6 +2979,7 @@ def summary_markdown(
     cost_summary=None,
     nuclei=None,
     masks=None,
+    attrition_rows=None,
 ):
     nuc, nuclei_missing, n_cases = nuclei or ({}, [], 0)
     nuc_summary = nuc.get("summary_cells") or []
@@ -2824,6 +3009,7 @@ def summary_markdown(
             "cohort.\n"
         )
     parts += mask_section(*(masks or ({}, [])))
+    parts += attrition_markdown(attrition_rows or [])
     excluded = excluded or []
     if excluded:
         parts.append(
@@ -2899,7 +3085,7 @@ def summary_markdown(
             )
             + ".\n",
         ]
-    parts += launch_markdown(launch or [])
+    parts += launch_markdown(launch or [], (masks or ({}, []))[1])
     if events is not None:
         parts += failure_log.markdown(events, markdown)
     if fails:
@@ -3023,8 +3209,13 @@ def score(
     mask_flags=None,
     selfcheck_masks=None,
     fresh=False,
+    manifest=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``manifest`` is the ``prepare multiplex`` CSV the cohort's cases were made from:
+    its number of rounds is the first column of ``attrition.csv``. Without it that
+    column is blank; nothing else reads it.
 
     A case whose record is valid is read, not computed (``score_jobs``, ``case_key``;
     ``score_case`` makes one case's record on its own, which is how the cohort launcher
@@ -3164,6 +3355,9 @@ def score(
         summarise_nonband(nuc["nonband_cells"], primary, blocked), NUCLEI
     )
     fails = failures(res)  # every run, the frozen known-truth cases included
+    lost_rounds = attrition(
+        jobs, cells, nuc["cells"], nuclei_missing, res, manifest_rounds(manifest)
+    )
     # cost is read on the cohort: the frozen known-truth cases are left out of it
     frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
     res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
@@ -3203,6 +3397,7 @@ def score(
         "cost_summary",
         "failure_log",
         "nuclei_missing",
+        "attrition",
         *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
         *tissue.TABLES,
     ):
@@ -3230,6 +3425,7 @@ def score(
     for name in NUCLEI_TABLES:
         write_csv(tables / f"{name}{NUCLEI_SUFFIX}.csv", nuc[name])
     write_csv(tables / "nuclei_missing.csv", nuclei_missing)
+    write_csv(tables / "attrition.csv", lost_rounds, list(ATTRITION_COLUMNS))
     write_csv(tables / "cells.csv", cells)
     write_csv(tables / "summary_cells.csv", summary)
     write_csv(tables / "paired_vs_primary.csv", paired)
@@ -3296,6 +3492,7 @@ def score(
         cost_summary,
         (nuc, nuclei_missing, len(jobs)),
         (mask_flags, selfcheck_masks),
+        lost_rounds,
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -3327,5 +3524,6 @@ def score(
         "launch": launch,
         **{f"{name}{NUCLEI_SUFFIX}": rows for name, rows in nuc.items()},
         "nuclei_missing": nuclei_missing,
+        "attrition": lost_rounds,
         **tis,
     }
