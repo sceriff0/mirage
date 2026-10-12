@@ -732,7 +732,33 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
 - **Gate:** `1.5 x median_equivalent_radius` of the two native sets, once per case, the same
   for every method. Each polygon set has its OWN gate, from its own areas: the nuclei's
   is 1.5 x the median equivalent radius of the nuclei.
-- **Pairing:** linear sum assignment; mutual nearest neighbour beside it (`_mnn`).
+- **Pairing:** the pipeline's (`cell_pairs.match_lsa`), with mutual nearest neighbour
+  beside it (`_mnn`). The pipeline solves a linear sum assignment per connected
+  component of the candidate pairs (most pairs first, then least total distance) and,
+  in a component of more than 5,000 cells, pairs by mutual nearest neighbour instead.
+  Every row says how much of its pairing was that fallback: `n_fallback_cells`,
+  `n_fallback_components`, `largest_component_cells`, `n_components`, `fallback_frac`
+  (cells in such a component over all cells of both sides; `fallback_frac_null` for
+  the null's placements), and the summary counts the cases (`n_fallback_cases`,
+  `fallback_frac_max`). On a jittered lattice of nuclei 26 px apart under a 30 px gate
+  the whole tissue is one component, so there the headline is mutual nearest neighbour.
+- **The exact assignment, as extra columns (`*_exact`, `exact_status`).** The same gate
+  and the same objective with no fallback: `n_pairs_exact`, `pair_fraction_exact`,
+  `dice_matched_exact`, `iou_p50_exact`, `frac_iou_ge_0.5_exact` and the four
+  `displacement_*_exact`, for the registered placement (the null has none). They are
+  never used to rank, to choose a shared subset or in a difference; the headline stays
+  the pipeline's pairing. Where no component fell back the two are one pairing and the
+  columns repeat the headline. A component the pipeline left to its fallback is solved
+  as a sparse minimum-weight full matching with the pipeline's own `big_m`
+  (`pairs.solve_component`); the result is checked against the largest number of pairs
+  the candidates allow, and against the pipeline's dense solver in the tests. Its time
+  grows with (cells of the smaller side) x (cells of both sides): measured on one
+  laptop core 2 s at 19,000 cells a side, 44 s at 85,000 (0.2 GB), 225 s at 190,000.
+  A component above `pairs.EXACT_MAX_WORK` (1.5e10: about 85,000 cells a side) is not
+  solved: that row's `*_exact` cells are blank and `exact_status` says why; nothing is
+  approximated. With more pairs the exact assignment also has LONGER pairs than mutual
+  nearest neighbour (in that lattice 5 % more pairs at more than twice the mean
+  distance): most-pairs-first chains cells past a missing one.
 - **Per case and variant:** pair fraction, matched Dice, IoU p50, share of pairs with
   IoU >= 0.5, centroid displacement in µm (p50, p90).
 - **Pair fraction is pairs over the smaller NATIVE count, in both directions.** A cell the

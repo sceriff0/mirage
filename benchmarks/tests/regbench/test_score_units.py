@@ -103,6 +103,54 @@ def test_a_case_without_a_value_is_counted_not_dropped_in_silence():
 
 
 # ── item 7: the common block is among the primary rows that ran ──────────────────────
+def test_the_fallback_and_the_exact_assignment_are_beside_the_headline():
+    """A summary says in how many cases the pipeline's pairing fell back and on how
+    large a share of the cells, and gives the exact assignment's numbers as extra
+    columns: the headline, the shared subset and the differences do not read them."""
+    rows = [
+        cell("a", "P1_r1", "P1"),
+        cell(
+            "a",
+            "P1_r2",
+            "P1",
+            fallback_frac=0.6,
+            pair_fraction_exact=0.95,
+            dice_matched_exact=0.7,
+        ),
+        cell(
+            "a",
+            "P2_r1",
+            "P2",
+            fallback_frac=0.25,
+            pair_fraction_exact=0.99,
+            dice_matched_exact=0.5,
+        ),
+        cell("a", "P2_r2", "P2", fallback_frac=0.0, pair_fraction_exact=0.9),
+    ]
+    plain = [
+        {k: v for k, v in r.items() if "exact" not in k and k != "fallback_frac"}
+        for r in rows
+    ]
+    got = by(score.summarise_cells(rows, ["a"]), method="a", subset="all")
+    assert (got["n_fallback_cases"], got["fallback_frac_max"]) == (2, 0.6)
+    assert got["n_exact"] == 3 and got["n_cases"] == 4
+    # per unit the median over its rounds (P1: 0.95; P2: 0.945), then over units
+    assert got["pair_fraction_exact_med"] == pytest.approx((0.95 + 0.945) / 2)
+    assert got["dice_matched_exact_med"] == pytest.approx(0.6)
+    without = by(score.summarise_cells(plain, ["a"]), method="a", subset="all")
+    assert without["n_fallback_cases"] == 0 and without["n_exact"] == 0
+    assert math.isnan(without["pair_fraction_exact_med"])
+    for key, value in without.items():
+        if "exact" not in key and "fallback" not in key:
+            same = value == got[key] or (value != value and got[key] != got[key])
+            assert same, key
+    assert score.paired_vs_primary(rows) == score.paired_vs_primary(plain)
+    text = score._summary_table([got], ["a"])
+    assert "| 2 (0.6) |" in text and "| 3/4 |" in text
+    assert "extra numbers, in no ranking" in score.PAIRING_RULE
+    assert "exact_max_work" in score._settings()
+
+
 def test_the_common_block_is_among_the_primary_rows_that_ran():
     rows = []
     for k in range(3):

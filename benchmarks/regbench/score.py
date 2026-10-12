@@ -161,6 +161,10 @@ HEADLINES = (
     "within_3um",
 )
 HAS_NULL = ("pair_fraction", "dice_matched", "within_1um", "within_3um")
+# the headlines that depend on which cells are paired: the ones the exact assignment
+# (``pairs.exact_pairs``) has a value of its own for. Shown beside the headline, in
+# no ranking, no shared subset and no paired difference.
+EXACT_HEADLINES = ("pair_fraction", "dice_matched")
 PAIRED_AGAINST = "stare"
 MIN_PATIENTS_TO_RANK = 6
 DESCRIPTIVE = "descriptive; no ranking is claimed"
@@ -766,6 +770,7 @@ def _settings():
         "iou_thresh": pairs.IOU_THRESH,
         "readable_margin": pairs.READABLE_MARGIN,
         "max_component_cells": pairs.cp.DEFAULT_MAX_COMPONENT_CELLS,
+        "exact_max_work": pairs.EXACT_MAX_WORK,
         "max_pair_window_px": pairs.cp.DEFAULT_MAX_PAIR_WINDOW_PX,
         "coverage_bin_radii": COVERAGE_BIN_RADII,
         "not_the_method": list(NOT_THE_METHOD),
@@ -1748,6 +1753,17 @@ def summarise_cells(rows, primary=None, blocked=None):
                     )
                     rec["fold_pct_max"] = _stat(_values(mine, "fold_pct"), np.max)
                     rec["coverage_med"] = _stat(_values(mine, "coverage"), np.median)
+                    # how much of the pipeline's pairing was its fallback, and the
+                    # exact assignment's numbers beside the headline (never ranked)
+                    share = _values(mine, "fallback_frac")
+                    rec["n_fallback_cases"] = int((share > 0).sum())
+                    rec["fallback_frac_max"] = _stat(share, np.max)
+                    for h in EXACT_HEADLINES:
+                        per = list(_per_patient(mine, f"{h}_exact").values())
+                        rec[f"{h}_exact_med"] = _stat(per, np.median)
+                    rec["n_exact"] = int(
+                        np.isfinite(_values(mine, "pair_fraction_exact")).sum()
+                    )
                     out.append(rec)
     return out
 
@@ -2122,6 +2138,12 @@ def _summary_table(rows, primary):
         )
         line["unmapped_frac_max"] = r["unmapped_frac_max"]
         line["fold_pct_max"] = r["fold_pct_max"]
+        line["fallback cases (largest share of cells)"] = (
+            f"{r.get('n_fallback_cases', 0)} ({_fmt(r.get('fallback_frac_max', 0.0))})"
+        )
+        for h in EXACT_HEADLINES:
+            line[f"{h}_exact"] = r.get(f"{h}_exact_med", math.nan)
+        line["cases with exact numbers"] = f"{r.get('n_exact', 0)}/{r['n_cases']}"
         table.append(line)
     return markdown(table, list(table[0])) if table else ""
 
@@ -2134,6 +2156,21 @@ SUBSET_RULE = (
     "cases where that row alone qualifies: a row that fails its hard cases is read on "
     "its easy ones there. `dice NaN cases` are cases with no pair at all: they have no "
     "Dice and are in no median.\n"
+)
+
+
+PAIRING_RULE = (
+    "Every number above is the pipeline's pairing (`bin/utils/cell_pairs.py`): an "
+    "assignment per connected component of the candidate pairs, and mutual nearest "
+    "neighbour in a component of more than "
+    f"{pairs.cp.DEFAULT_MAX_COMPONENT_CELLS} cells. `fallback cases` counts the cases "
+    "where some component was paired that way, with the largest share of a case's "
+    "cells that sat in such a component. The `*_exact` columns are the same numbers "
+    "from the assignment solved exactly in every component (most pairs first, then "
+    "least total distance): extra numbers, in no ranking, no shared subset and no "
+    "difference. `cases with exact numbers` are those where it was solved; a case "
+    "with a component above the solver's bound has none (`exact_status` in "
+    "`cells.csv` says why).\n"
 )
 
 
@@ -2656,6 +2693,7 @@ def summary_markdown(
         "registered, and a run that did not is scored at the unregistered pose.\n"
     )
     parts.append(SUBSET_RULE)
+    parts.append(PAIRING_RULE)
     parts.append(SETS_RULE)
     parts += _nuclei_missing_lines(nuclei_missing, n_cases, bool(nuc_summary))
     parts.append(
