@@ -177,6 +177,10 @@ HAS_NULL = ("pair_fraction", "dice_matched", "within_1um", "within_3um")
 # no ranking, no shared subset and no paired difference.
 EXACT_HEADLINES = ("pair_fraction", "dice_matched")
 PAIRED_AGAINST = "stare"
+# The rows whose settings their authors chose on the cohort, with this metric: STARE's
+# tier and the pipeline's VALIS settings. Said in the caption of the cohort's tables.
+IN_SAMPLE = ("stare", "valis_mirage")
+IN_SAMPLE_DATASET = "multiplex"
 # said of every dataset, at every number of units: nothing here is a test
 DESCRIPTIVE = "descriptive; no ranking is claimed"
 COVERAGE_BIN_RADII = 16.0  # side of the occupancy bins, in median nuclear radii
@@ -333,6 +337,43 @@ def _f(value):
     """A cell as a number: NaN for a missing one and for a blank one (a column that
     does not apply to that row, as the writer's job for a row without an image)."""
     return math.nan if value is None or value == "" else float(value)
+
+
+def _blank(value):
+    """A recorded number, or ``""`` where the run recorded none."""
+    v = _f(value) if value not in (None, "") else math.nan
+    return v if v == v else ""
+
+
+def jvm_heap_lines(res_rows):
+    """One line for the cost tables: the JVM heap each row of a JVM method really had,
+    as its runs recorded it, beside what its adapter asked for. Nothing without one."""
+    seen = {}
+    for r in res_rows:
+        if r.get("jvm_max_heap_gb") in ("", None):
+            continue
+        asked = r.get("jvm_heap_asked_gb")
+        seen.setdefault(r["method"], set()).add(
+            (round(float(r["jvm_max_heap_gb"]), 1), "" if asked == "" else float(asked))
+        )
+    if not seen:
+        return []
+    parts = []
+    for method, values in seen.items():
+        parts.append(
+            f"`{method}` "
+            + ", ".join(
+                f"{got:g} GiB" + (f" (asked {asked:g})" if asked != "" else "")
+                for got, asked in sorted(values, key=str)
+            )
+        )
+    return [
+        "JVM heap, as the JVM reported it in each run (`jvm_max_heap_gb`, with what "
+        "the adapter asked for; a memory rung changes what is asked): "
+        + "; ".join(parts)
+        + ". Where the two differ the request did not reach the JVM, and the reported "
+        "value is the one the run had."
+    ]
 
 
 def resource_row(run, moving_px=None, stage=None, accounting=None):
@@ -627,6 +668,11 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # what the scheduler was asked for, with no fallback (NaN outside a scheduler)
         "cpus_asked": _f(run.get("cpus_requested")),
         **billed,
+        # a method that starts a JVM (VALIS): the heap its adapter asked for, and the
+        # heap the JVM itself reports (`Runtime.maxMemory()`), as recorded. Blank for
+        # a method without one
+        "jvm_heap_asked_gb": _blank(info.get("jvm_heap_gb")),
+        "jvm_max_heap_gb": _blank(info.get("jvm_max_heap_gb")),
         # extra cost columns a private method plug-in declares (none without one)
         **{
             column: info.get(key, "")
@@ -2346,6 +2392,8 @@ def summarise_resources(res_rows):
             rec["cpu_efficiency"] = _stat(_values(ok, "cpu_efficiency"), np.median)
         for key in ("peak_rss_gb", "peak_rss_after_register_gb", "cgroup_peak_gb"):
             rec[key] = _stat(_values(ok, key), np.max)
+        for key in ("jvm_heap_asked_gb", "jvm_max_heap_gb"):  # blank without a JVM
+            rec[key] = _blank(_stat(_values(ok, key), np.max))
         rec["gpu_model"] = "; ".join(sorted({r["gpu_model"] for r in ok} - {""}))
         # A failed round inside a per-patient launch that otherwise finished is not a
         # wasted attempt; a launch that produced nothing is.
@@ -3234,6 +3282,22 @@ def mask_section(flags, rows):
     return parts
 
 
+def in_sample_lines(dataset, methods):
+    """The caption line of the cohort's tables for the rows tuned on the cohort."""
+    mine = [m for m in IN_SAMPLE if m in methods]
+    if dataset != IN_SAMPLE_DATASET or not mine:
+        return []
+    names = " and ".join(f"`{m}`" for m in mine)
+    return [
+        f"**In-sample: {names}.** The settings of "
+        + ("these rows" if len(mine) > 1 else "this row")
+        + " (STARE's tier, the pipeline's VALIS settings) were chosen by their authors "
+        "on this cohort with this metric, and the other results of the same runs "
+        "share them. No other row was tuned on these slides. Their numbers below are "
+        "those of a method scored on the data it was tuned on.\n"
+    ]
+
+
 def summary_markdown(
     summary,
     fails,
@@ -3320,6 +3384,7 @@ def summary_markdown(
                 "One row per deformation family: families are never pooled, so a "
                 "family outside a method's model shows in its own row.\n"
             )
+        parts += in_sample_lines(ds, [r["method"] for r in of_ds])
         block = [r for r in of_ds if r["subset"] == "all"]
         if block:
             parts += ["### All cases\n", _summary_table(block, primary), ""]
@@ -3475,6 +3540,7 @@ def summary_markdown(
             "attempts are in no wasted total, because nobody recorded their cost.\n",
             *([confined + "\n"] if confined else []),
             *[line + "\n" for line in (header or [])],
+            *[line + "\n" for line in jvm_heap_lines(res_summary)],
             markdown(table, list(table[0])),
             "",
         ]

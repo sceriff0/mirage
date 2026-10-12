@@ -418,3 +418,29 @@ def test_the_tables_read_the_stage_records_and_name_the_parallel_time(tmp_path):
     block = text[text.index("## Resources (per patient") : text.index("### Cost per")]
     assert "| time_unlimited_parallel_tiles_s | peak_cpus_at_once |" in block
     assert score.VALID_RATIOS.strip() in block
+
+
+def test_the_jvm_heap_is_in_the_tables_as_the_run_recorded_it():
+    """What the JVM itself reported, beside what the adapter asked for: recorded, and
+    set by nothing here."""
+    base = {"dataset": "multiplex", "group": "P1", "case_id": "P1_r1"}
+    asked = single(method="valis", info={"jvm_heap_gb": 60, "jvm_max_heap_gb": 60.0})
+    kept = single(
+        method="valis_mirage", info={"jvm_heap_gb": 60, "jvm_max_heap_gb": 10.0}
+    )
+    rows = [
+        {**score.resource_row(asked), **base, "method": "valis120_hires"},
+        {**score.resource_row(kept), **base, "method": "valis_mirage"},
+        {**score.resource_row(single()), **base, "method": "palom"},
+    ]
+    assert (rows[0]["jvm_heap_asked_gb"], rows[0]["jvm_max_heap_gb"]) == (60.0, 60.0)
+    assert (rows[1]["jvm_heap_asked_gb"], rows[1]["jvm_max_heap_gb"]) == (60.0, 10.0)
+    assert rows[2]["jvm_heap_asked_gb"] == "" and rows[2]["jvm_max_heap_gb"] == ""
+    per = {r["method"]: r for r in score.summarise_resources(rows)}
+    assert per["valis_mirage"]["jvm_max_heap_gb"] == 10.0
+    assert per["palom"]["jvm_max_heap_gb"] == ""
+    (line,) = score.jvm_heap_lines(list(per.values()))
+    assert "`valis120_hires` 60 GiB (asked 60)" in line
+    assert "`valis_mirage` 10 GiB (asked 60)" in line and "palom" not in line
+    assert score.jvm_heap_lines([per["palom"]]) == []
+    assert line in score.summary_markdown([], [], list(per.values()))

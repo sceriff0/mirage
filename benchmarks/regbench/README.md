@@ -6,14 +6,30 @@ commit `f5ce62e`, archived there as the tag `archive/benchmarking-2026-10-08`).
 
 ## The rule
 
-**Each method is run through its own entry point, with its own defaults, reader and writer,
-and is judged with the transform it estimated, moved by its own code in its own exact
-direction.** The benchmark does not re-implement, resample, invert or approximate that
-transform. Where a method's writer departs from its own transform, both are scored and the
-difference is reported.
+**Each method is run through its own entry point, with one of its own shipped parameter
+sets, its own reader and its own writer, and is judged with the transform it estimated,
+moved by its own code in its own direction. Every departure from that is listed per run
+in `run.json: info.implementation.benchmark_side`.** Where a method's writer departs
+from its own transform, both are scored and the difference is reported.
 
-What the benchmark does around a method is listed per run in
-`run.json: info.implementation.benchmark_side`.
+The departures are listed, none is hidden; "Caveats that travel with the results" and
+each method's section give them in full. In short:
+
+- **Parameter sets.** Not every primary row is its package's default: `valis120_hires`
+  is upstream's high-resolution example, `deeperhistreg_hr_gpu_asdrawn` a shipped 8192
+  px set on a GPU, and `stare` and `valis_mirage` run the pipeline's settings, which
+  their authors chose on this cohort with this metric.
+- **ASHLAR.** Its nuclei are moved by a map the benchmark builds from ASHLAR's tile
+  shifts; in a tile overlap that map is a weighted mean of two tiles' shifts while the
+  image is a cross-fade of two copies. Its tiles are cut from stitched slides, and the
+  reference cycle's tiles get noise.
+- **VALIS.** Its nuclei go through VALIS's own point function with the slide's
+  matrices and field copied at the yield, not through the image writer; the VALIS 1.2.0
+  rows start the JVM with a heap the benchmark sets.
+- **DeeperHistReg.** Its nuclei go through a full-resolution coordinate chain of the
+  benchmark around the package's `warp_landmarks`, on the field the package estimated;
+  the `_asdrawn` rows re-state the writer's arithmetic, so that the image on disk is
+  what is scored.
 
 ## State of this port
 
@@ -66,6 +82,7 @@ challenge.py   the scorer of ANHIR's training pairs (rTRE, robustness, micrometr
 selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
+billing.py     CPU-hours and memory-hours: one definition of an attempt for every method
 cost.py        cost by step, from the cohort's files to each method's own image (secondary)
 slurm/         the cohort launcher (submit_cohort.sh) and what its jobs run
 ```
@@ -1132,8 +1149,10 @@ tile by tile).
 
 ## Known-truth error
 
-The one independent check: on synthetic and semi-synthetic cases the map that made the
-moving slide is known, so a method's error can be measured against it. Everything here is
+The one check that does not rest on the nuclei metric: on synthetic and semi-synthetic
+cases the map that made the moving slide is known, so a method's error can be measured
+against it. It is independent of that metric, not of the authors: the families, their
+amplitudes and scales were chosen by STARE's authors ("What these numbers are not"). Everything here is
 fixed by `truth_spec.json`, which carries the SHA-256 of its own content, except which
 cohort patients the semi-synthetic cases are cut from: that is the cohort's own list, or
 a subset declared before any run ("Cases" below).
@@ -1159,12 +1178,26 @@ the discontinuous `seams` family well defined.
 | `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 4000 bumps per 8192 px window | **the benchmark's own**; **outside STARE's model** (finer than its 64 px lattice); 23 % of the window moves by more than 1 µm |
 | `seams` | s.d. 3 px (0.98 µm) per axis | 1950 px blocks, the cohort scanner's tile | **outside STARE's model** (discontinuous); no seam on any method's grid line |
 
-Spec **version 4** (ruling R3.16, 2026-10-11): the family `wave` (a 10 px sinusoid of 1500
-px) is REMOVED, because nothing read uses a sinusoidal field and it was a third family
-inside a spline mesh's model. Nothing else changed: every remaining family has the
-parameters, the scene and the seeds it had in version 3 (each family carries its own
-`index` in the spec, which the seed rules read; `wave`'s, 1, is retired, so no remaining
-case moved to another seed). Six families: 6 synthetic scenes, 12 cases.
+Spec **version 5**: six families, each with its own `index` in the spec, which the seed
+rules read (index 1 is retired); 6 synthetic scenes, 12 cases. How to read them:
+
+- **One scene per family.** On `synthetic` each family is ONE generated scene, and its
+  two poses are that same scene. A family's row is one draw of its field, with no
+  spread between scenes behind it: descriptive, never ranked.
+- **Never averaged over families.** Every table has one row per family (and pose); no
+  number pools them, because a family outside a method's model must show in its own row.
+- **`grid` is inside STARE's model by its scale.** Its 9 x 9 nodes are 1024 px apart,
+  16 times STARE's 64 px lattice, so every node lies on that lattice and a spline mesh
+  on it can represent the field (`in_stare_model`). The same holds for `multiscale`
+  and `bumps100`; `bumps25` and `seams` are the two families that are not.
+- **`rot` is outside ASHLAR's model.** ASHLAR estimates one shift per tile and no
+  rotation; a pose of 2 degrees moves the two ends of a 1950 px tile 68 px apart, so
+  its `rot` rows measure that limit, not its accuracy on what it is built for.
+- **`bumps100`**, as `truth_spec.json` has it: 120 Gaussian bumps of sigma 100 px per
+  8192 px window, each peaking at 0.2 to 0.6 sigma; 24 % of the window moves by more
+  than 1 µm (21.8 to 25.0 % over 82 seeds), and no seed folds.
+- **The nuclei of the generated cases are the built-in segmenter's** (`cells.py`), on
+  the generated images: not StarDist's, and not the cohort's QC outlines.
 
 ### Where the families come from
 
@@ -1539,7 +1572,7 @@ it is scoring.
 | `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
 | `failure_log.csv` | failed or lost EVENT | always written (a header alone when nothing failed). See "The failure log" |
 | `resources.csv` | case x variant | the cost recorded at that variant's yield, with the billing columns of "CPU-hours: one definition for every method" |
-| `summary_resources.csv` | patient x variant | sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
+| `summary_resources.csv` | patient x variant | the billing columns per patient ("CPU-hours: one definition for every method"), `jvm_heap_asked_gb` and `jvm_max_heap_gb` for a method that starts a JVM; sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
 | `cost_summary.csv` | dataset x variant | the median and the mean over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`; `*_med`, `*_mean`) and over the patients every compared row completed (`*_common_med`, `*_common_mean`, `n_patients_common`); CPU-hours first, `device`, `gpu_model`; for a row in several jobs `time_unlimited_parallel_tiles_s_*`, `to_image_unlimited_parallel_tiles_s_*` and `peak_cpus_at_once` in place of `register_s_*` and `total_to_image_s_*` |
 | `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
 | `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
@@ -2081,7 +2114,7 @@ call; it is then part of the estimate and no number is guessed for it.
 
 **The `stare_prep` row** runs the `stare` adapter, so its line is `stare`'s, with one
 step before it: both images are preprocessed by the benchmark (`prep.py`) BEFORE the
-registration clock starts. Its `register_s` (the headline cost) is therefore STARE's
+registration clock starts. Its registration cost (CPU-hours and time) is therefore STARE's
 alone and does not hold that step, while DeeperHistReg's and VALIS's own preprocessing
 are inside their clocks. So the step is recorded apart (`run.json: info.prep.prep_s`,
 `peak_rss_mb`), shown as `benchmark_prep_s` / `benchmark_prep_peak_gb` in
@@ -3500,7 +3533,9 @@ carry a bootstrap interval over units ("Scoring").
 ## Caveats that travel with the results
 
 1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
-   authors on this cohort with this metric. The other methods were NOT tuned on it, but
+   authors on this cohort with this metric: `stare` and `valis_mirage` are in-sample, and
+   the caption of the cohort's tables in `summary.md` says so above the numbers
+   (`score.IN_SAMPLE`). The other methods were NOT tuned on it, but
    "package defaults" describes only some of them: three primary rows are not a default.
    `valis120_hires` is upstream's high-resolution example, not its default
    (`valis120` is, and is shown beside it). `deeperhistreg_hr_gpu_asdrawn` is a shipped
@@ -3685,10 +3720,15 @@ memory failure is `oom` and climbs.
   module's formula), because VALIS's `registration.init_jvm` passes the literal 10 on
   whatever it is given. This is the ONE thing besides the reference slide that the
   benchmark sets for those rows, and it is not a registration parameter. Off the ladder
-  (no memory request known) nothing is started and VALIS's 10 GB stands.
+  (no memory request known) nothing is started and VALIS's 10 GB stands. What each run
+  really had is in the tables as the JVM reported it: `jvm_max_heap_gb` beside
+  `jvm_heap_asked_gb` in `resources.csv` and `summary_resources.csv`, and one line above
+  the resources table of `summary.md` per row of a JVM method.
 - `valis_mirage`: the pipeline's call is run as it is, with `jvm_heap_gb` from the same
   formula. Whether that value reaches the JVM is recorded, not assumed
-  (`info.jvm_max_heap_gb`; "Not verified").
+  (`info.jvm_max_heap_gb`, column `jvm_max_heap_gb`; "Not verified"): where the column
+  reads 10 while `jvm_heap_asked_gb` reads more, the request did not arrive, and the
+  row ran with VALIS's own 10 GB.
 - `valis_mirage`'s micro pass: `bin/register.py` catches ANY exception of
   `register_micro` and writes the non-rigid result. When that exception is a memory
   error the `valis_mirage` row is FAILED with `cause: oom` and the patient goes up a
