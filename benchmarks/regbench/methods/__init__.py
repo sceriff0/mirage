@@ -81,8 +81,16 @@ counter was readable and the watcher started.
 ``writer_oom``     its own writer did: ``write_native``, a writer that reported a memory
                    error at a yield (``native: {"error": ...}``), or a kill the watcher
                    saw while the method itself had the clock paused
-``benchmark_oom``  the benchmark's own step did, with the clock stopped (moving the
-                   nuclei through the map): not the method's failure
+``benchmark_oom``  the benchmark's own step did, with the clock stopped (its own lines
+                   around the map: the lattice, the arrays, the files): not the
+                   method's failure. A kill the watcher saw while the method's own
+                   point mapping was running is ``oom``
+
+**Whose a failure at a yield is.** The method's point mapping is the method's code: an
+error it raises, a memory error inside it, or a result that is not one X, Y pair per
+point fails the row under the method's own cause (``MappingFailed``: ``exception``,
+``oom``, ``gpu_oom``, ``timeout``). Only an error of the benchmark's own lines around
+that call is ``benchmark`` / ``benchmark_oom``.
 
 **A row is ok only when its image exists.** A method's writer that fails, at a yield or
 in ``write_native``, fails the row it was writing for: ``writer_oom``, or ``writer`` for
@@ -146,7 +154,13 @@ WRITER_KILLED = (
     "memory or time limit? see the SLURM log)"
 )
 # the stretch a memory death happened in -> its cause (module docstring)
-MEMORY_CAUSE = {"method": "oom", "writer": "writer_oom", "benchmark": "benchmark_oom"}
+# ("mapping": the clock is stopped and the method's own point mapping is running)
+MEMORY_CAUSE = {
+    "method": "oom",
+    "mapping": "oom",
+    "writer": "writer_oom",
+    "benchmark": "benchmark_oom",
+}
 
 
 class _OutOfMemory(MemoryError):
@@ -355,18 +369,57 @@ def selfcheck_status():
     return os.environ.get("REGBENCH_SELFCHECK_STATUS") or "not_checked"
 
 
-def _warp_chunked(fn, xy, chunk=2_000_000):
+class MappingFailed(RuntimeError):
+    """The method's own point mapping failed: it raised, or it returned something that
+    is not one X, Y pair per point. The method's failure, with the cause its error
+    names (``resources.classify_error``: ``exception``, ``oom``, ``gpu_oom``,
+    ``timeout``)."""
+
+    def __init__(self, message, cause="exception"):
+        super().__init__(message)
+        self.cause = cause
+
+
+def _warp_chunked(fn, xy, chunk=2_000_000, inside=None):
+    """``fn`` over ``xy`` in chunks. Whatever goes wrong INSIDE ``fn``, or with what it
+    returns, is raised as :class:`MappingFailed`; an error of this function's own lines
+    is raised as it is (the benchmark's). ``inside(True)`` / ``inside(False)`` is
+    called around each call of ``fn``: the driver's note of whose code is running."""
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     if not len(xy):
         return xy
-    out = [
-        np.asarray(fn(xy[i : i + chunk]), dtype=float).reshape(-1, 2)
-        for i in range(0, len(xy), chunk)
-    ]
-    out = np.concatenate(out)
-    if out.shape != xy.shape:
-        raise RuntimeError(f"point map returned {out.shape} for {xy.shape} points")
-    return out
+    out = []
+    for i in range(0, len(xy), chunk):
+        part = xy[i : i + chunk]
+        try:
+            if inside is not None:
+                inside(True)
+            try:
+                got = fn(part)
+            finally:
+                if inside is not None:
+                    inside(False)
+        except KeyboardInterrupt:
+            raise
+        except (Exception, SystemExit) as exc:
+            raise MappingFailed(
+                f"the method's point mapping raised {type(exc).__name__}: {exc}",
+                resources.classify_error(exc),
+            ) from exc
+        try:
+            got = np.asarray(got, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise MappingFailed(
+                f"the method's point mapping returned something that is not numbers "
+                f"for {len(part)} points: {type(exc).__name__}: {exc}"
+            ) from exc
+        if got.size != part.size:
+            raise MappingFailed(
+                f"the method's point mapping returned an array of shape {got.shape} "
+                f"for {len(part)} points (one X, Y pair per point is {part.shape})"
+            )
+        out.append(got.reshape(-1, 2))
+    return np.concatenate(out)
 
 
 def _nuclei_band(points, side, outline_band, own):
@@ -539,6 +592,10 @@ def _run(
         # a pause the method took itself is its own writer
         return "writer" if mon.paused else "method"
 
+    def mapping(now):
+        # the method's own point mapping, inside the benchmark's stretch
+        phase["now"] = "mapping" if now else "benchmark"
+
     watch = _OomWatch(lambda: stuck(), where)
     base = {
         "method": name,
@@ -557,8 +614,6 @@ def _run(
         **host,
         "launch_id": launch_id,
     }
-    # the last job of a round whose registration ran in scheduler jobs of its own
-    collector = os.environ.get("REGBENCH_STAGES") == "jobs"
     lock = threading.Lock()
     done, failed, final_maps = {}, {}, {}  # keyed by (case_id, variant)
     infos = {}  # the live info of each yield, for a declared offset (realcheck)
@@ -635,11 +690,7 @@ def _run(
                         "log_path": old.get("log_path") or "",
                     },
                 ]
-            placeholder = fail(case, variant, KILLED, "killed")
-            if collector:
-                # no registration runs in this job: whatever ends it is not the method
-                placeholder["collector"] = True
-                write_json(d / "run.json", placeholder)
+            fail(case, variant, KILLED, "killed")
 
     # for a method whose own writer runs at a yield: the clock to pause, and where the
     # image belongs (the work directory does not outlive the run)
@@ -777,14 +828,20 @@ def _run(
                 arrays = {
                     "direction": np.array(pmap.direction),
                     "cells_xy": _warp_chunked(
-                        pmap.fn, pts.get(f"cells_{side}_xy", np.empty((0, 2)))
+                        pmap.fn,
+                        pts.get(f"cells_{side}_xy", np.empty((0, 2))),
+                        inside=mapping,
                     ).astype(np.float32),
                     # the known-truth probes of the side the map starts from, at full
                     # precision: fn(truth_mov) or fn(truth_ref), never the other way
                     "truth_xy": _warp_chunked(
-                        pmap.fn, pts.get(f"truth_{side}", np.empty((0, 2)))
+                        pmap.fn,
+                        pts.get(f"truth_{side}", np.empty((0, 2))),
+                        inside=mapping,
                     ),
-                    "grid": _warp_chunked(pmap.fn, grid).astype(np.float32),
+                    "grid": _warp_chunked(pmap.fn, grid, inside=mapping).astype(
+                        np.float32
+                    ),
                     "grid_shape": np.array(grid_shape),
                     "grid_step": np.array(grid_step),
                 }
@@ -802,7 +859,7 @@ def _run(
                 nuclei_band = {}
                 if f"nuclei_{side}_xy" in pts:
                     arrays["nuclei_xy"] = _warp_chunked(
-                        pmap.fn, pts[f"nuclei_{side}_xy"]
+                        pmap.fn, pts[f"nuclei_{side}_xy"], inside=mapping
                     ).astype(np.float32)
                 for name_nuc, where, flags, own in (
                     ("band_nuc", "mov", band, band_nuc_own),
@@ -836,6 +893,23 @@ def _run(
                 infos[key] = info
             except (_OutOfMemory, KeyboardInterrupt):
                 raise
+            except MappingFailed as exc:
+                # the method's own mapping function: its failure, under its own cause.
+                # A memory cause ends the run as the method's `oom` (the unit goes up);
+                # any other fails this variant and the run goes on
+                if exc.cause in resources.MEMORY_CAUSES:
+                    raise _OutOfMemory(
+                        "method",
+                        f"the point mapping of {variant} ran out of memory: {exc}",
+                    ) from exc
+                failed[key] = fail(
+                    case,
+                    variant,
+                    f"{variant}: {exc}",
+                    exc.cause,
+                    cost,
+                    traceback.format_exc(),
+                )
             except MemoryError as exc:
                 # the benchmark's own step, clock stopped: more memory is the remedy
                 # (the unit goes up), and it is not billed as the method's oom

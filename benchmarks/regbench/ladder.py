@@ -22,15 +22,28 @@ a memory cause (``resources.MEMORY_CAUSES``: ``oom``, ``writer_oom``, ``benchmar
              the unit goes up a rung.
 ``killed``   the placeholder the driver writes before it starts; it is still there when
              the process was killed before it could say why. Then, and only then, the
-             scheduler's state for the task THAT WROTE THE RECORD decides (matched by
-             ``launch_id`` in ``--accounting``, or ``--previous-state`` for the task
+             scheduler's END state for the task THAT WROTE THE RECORD decides (matched
+             by ``launch_id`` in ``--accounting``, or ``--previous-state`` for the task
              just before): ``OUT_OF_MEMORY`` makes it ``oom``, ``TIMEOUT`` makes it
              ``timeout``, and a state of :data:`STATES_INFRASTRUCTURE` (node failure,
              preemption, a cancelled job, a failed boot) makes it ``infrastructure``.
              The record is rewritten to say so, with ``cause_from`` naming the state and
              ``scheduler`` holding the task's elapsed and CPU time, so the attempt's
-             cost is the scheduler's figure and not zero. Any other state leaves it
-             ``killed``: a process that died on its own is the method's failure.
+             cost is the scheduler's figure and not zero. The rule is the same for
+             every record, whichever method and whichever job of it wrote the
+             placeholder. An end state that names no cause (``FAILED``, ``COMPLETED``)
+             is settled by the task's own script where it left a note
+             (:func:`read_exits`: Python ended by signal 9 while the script went on,
+             which is the kernel's out-of-memory killer: ``oom``); with no note it
+             stays ``killed``: a process that died on its own is the method's failure.
+no end state  the accounting does not have the task yet, or shows it in a state of
+             :data:`STATES_NOT_ENDED`. The rung task asks again until it has one
+             (``slurm/run_rung.sbatch``: ``REGBENCH_ACCT_WAIT_S``). A record still
+             ``killed`` without an end state after that wait is NOT final: the
+             ``climb`` task runs the unit again at its own rung's memory, and the
+             record it replaces says so (``cause_from``, carried into
+             ``previous_attempts``). The cause was never known, so it is neither
+             counted as a memory cause nor left as the method's last word.
 ``infrastructure``  the ``again`` task of the same rung runs the unit once more. ONE
              retry per rung: an attempt lost twice stays ``infrastructure``, which the
              tables count apart from the method's failures.
@@ -78,8 +91,9 @@ INFRASTRUCTURE = "infrastructure"
 FIRST, CLIMB, AGAIN = "first", "climb", "again"
 TASKS = (FIRST, CLIMB, AGAIN)
 # sacct's State, matched by its first word ("CANCELLED by 123", "OUT_OF_MEMORY+" are
-# seen). SLURM `sacct` manual, JOB STATE CODES `[MEMORY]`: the names as remembered, not
-# retrieved while this was written; README "Not verified" lists them.
+# seen: the manual says a state too long for its column is followed by "+"). The names
+# are those of the SLURM `sacct` manual's JOB STATE CODES `[PARTIAL: read the JOB STATE
+# CODES list and the -S, -j, -X, --name entries; missing the rest of the page]`.
 STATE_OOM = "OUT_OF_ME"
 STATE_TIMEOUT = "TIMEOUT"
 STATES_INFRASTRUCTURE = (
@@ -90,6 +104,20 @@ STATES_INFRASTRUCTURE = (
     "REQUEUED",
     "REVOKED",
 )
+# States of a task that has not ended: no evidence of how it will. PENDING, RUNNING,
+# RESIZING and SUSPENDED are sacct's (the same list); COMPLETING is squeue's name for a job whose processes are still ending, kept
+# here so that it is never read as an end. slurm/run_rung.sbatch has the same list.
+STATES_NOT_ENDED = ("PENDING", "RUNNING", "RESIZING", "SUSPENDED", "COMPLETING")
+# What the task's own script notes when Python ended by signal 9 and the script went
+# on (slurm/run_rung.sbatch): <out>/logs/accounting/exits/<launch id> holds the exit
+# code. The scheduler's own kill (time limit, scancel) ends the script too, so a note
+# is the kernel's out-of-memory killer taking the largest process of the task.
+EXITS_DIR = ("logs", "accounting", "exits")
+EXIT_SIGKILL = 137
+# `run --accounting-wanted`: the exit code that asks the script to wait for the
+# accounting and call again (sysexits.h EX_TEMPFAIL)
+EXIT_ACCOUNTING_PENDING = 75
+NO_END_STATE = "no end state in the scheduler's accounting"
 
 
 def _state(previous_state):
@@ -107,6 +135,34 @@ def scheduler_cause(state):
     if state.startswith(STATES_INFRASTRUCTURE):
         return INFRASTRUCTURE
     return None
+
+
+def ended(state):
+    """Is this a state the scheduler gives a task that is over? Not an empty one, and
+    not one of :data:`STATES_NOT_ENDED`."""
+    state = _state(state)
+    return bool(state) and not state.startswith(STATES_NOT_ENDED)
+
+
+def exits_dir(out):
+    return Path(out).joinpath(*EXITS_DIR)
+
+
+def read_exits(out):
+    """``{launch id: exit code}`` of the notes the rung tasks' scripts left under
+    ``<out>/logs/accounting/exits``: one file per task whose Python step ended by
+    signal 9 while the script itself went on."""
+    found = {}
+    try:
+        paths = sorted(exits_dir(out).iterdir())
+    except OSError:
+        return found
+    for path in paths:
+        try:
+            found[path.name] = int(path.read_text().split()[0])
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
 
 
 def _seconds(text):
@@ -203,14 +259,35 @@ def selfcheck_submissions(out):
     return found, unreadable
 
 
-def settle(path, previous_state="", accounting=None, submission=None):
+def _end_state(rec, previous_state="", accounting=None):
+    """``(end state or "", the accounting's line or None)`` of the task that wrote a
+    record. A state of a task that has not ended is no state."""
+    found = (accounting or {}).get(str(rec.get("launch_id") or ""))
+    state = found["state"] if found else _state(previous_state)
+    if not ended(state):
+        return "", None
+    return state, found
+
+
+def settle(
+    path,
+    previous_state="",
+    accounting=None,
+    submission=None,
+    exits=None,
+):
     """The cause one ``run.json`` ends with, after the scheduler has been heard: ``""``
     for a run that is ok, None when there is no record of this submission. A ``killed``
     placeholder whose task the scheduler ended for memory, for time or by losing it is
-    REWRITTEN with that cause (``cause_from`` says where it came from).
+    REWRITTEN with that cause (``cause_from`` says where it came from). So is one whose
+    end state names no cause while the task's script noted that Python ended by signal
+    9 (``exits``, :func:`read_exits`): ``oom``.
 
     The state is that of the task that WROTE the record (``accounting[launch_id]``);
-    ``previous_state`` stands in when the accounting does not have it."""
+    ``previous_state`` stands in when the accounting does not have it. The rule does
+    not ask which method, or which job of a method, wrote the placeholder."""
+    from .cases import write_json
+
     rec = _read(path)
     if rec is None or not mine(rec, submission):
         return None
@@ -219,28 +296,67 @@ def settle(path, previous_state="", accounting=None, submission=None):
     cause = str(rec.get("cause") or "exception")
     if cause != KILLED:
         return cause
-    found = (accounting or {}).get(str(rec.get("launch_id") or ""))
-    state = found["state"] if found else _state(previous_state)
+    state, found = _end_state(rec, previous_state, accounting)
     new = scheduler_cause(state)
-    if rec.get("collector"):
-        # the last job of a round whose registration ran in other jobs: nothing of the
-        # method ran in it, so a death of it is the benchmark's
-        new = {OOM: "benchmark_oom", "timeout": "benchmark"}.get(new, new)
-        if new is None and found:
-            new = "benchmark"
+    how = f"scheduler state {state} (the driver's record said killed)"
+    code = (exits or {}).get(str(rec.get("launch_id") or ""))
+    if new is None and code == EXIT_SIGKILL:
+        new = OOM
+        how = (
+            f"the task's own script saw Python end by signal 9 (exit {code}) and went "
+            "on: the kernel's out-of-memory killer (the scheduler's state "
+            f"{state or 'was not known'}; the driver's record said killed)"
+        )
     if found or new:
         if new:
             rec["cause"] = cause = new
-            rec["cause_from"] = (
-                f"scheduler state {state} (the driver's record said killed)"
-            )
+            rec["cause_from"] = how
         rec["scheduler"] = {
             "state": state,
             "elapsed_s": (found or {}).get("elapsed_s"),
             "cpu_s": (found or {}).get("cpu_s"),
         }
-        Path(path).write_text(json.dumps(rec, indent=1))
+        write_json(path, rec)
     return cause
+
+
+def unsettled(paths, previous_state="", accounting=None, submission=None, exits=None):
+    """The ``killed`` records of this submission among ``paths`` that nothing settles
+    yet: no end state of the task that wrote them, and no note of its script. Each is
+    ``(path, launch id)``. These are what the rung task waits for the accounting for."""
+    out = []
+    for p in paths:
+        rec = _read(p)
+        if rec is None or not mine(rec, submission) or rec.get("ok"):
+            continue
+        if rec.get("cause") != KILLED or rec.get("no_rerun"):
+            continue
+        launch = str(rec.get("launch_id") or "")
+        state, _ = _end_state(rec, previous_state, accounting)
+        if not state and (exits or {}).get(launch) != EXIT_SIGKILL:
+            out.append((Path(p), launch))
+    return out
+
+
+def mark_unsettled(paths, mem_gb=None):
+    """Say in each record why it is run again: it still said ``killed`` and the
+    accounting named no end state after the wait. The cause stays ``killed`` (it was
+    never known); ``cause_from`` and ``scheduler.state`` (``""``) carry the rest into
+    the next attempt's ``previous_attempts``."""
+    from .cases import write_json
+
+    for p in paths:
+        rec = _read(p)
+        if rec is None:
+            continue
+        rec["cause_from"] = (
+            f"{NO_END_STATE} after the wait: the cause is not known, and the unit is "
+            "run again"
+            + (f" at {mem_gb:g} GB" if mem_gb else "")
+            + " (the driver's record said killed)"
+        )
+        rec["scheduler"] = {"state": "", "elapsed_s": None, "cpu_s": None}
+        write_json(p, rec)
 
 
 def _records(paths, submission):
@@ -260,18 +376,29 @@ def unit_decision(
     previous_state="",
     accounting=None,
     submission=None,
+    exits=None,
+    waited=False,
+    mem_gb=None,
 ):
     """``(run the unit now?, why, lost?)`` for one array task of the chain.
 
     ``lost`` is True when this is a ``climb`` task and the unit has NO record of this
     submission: both tries of the rung below were lost before they could write one
-    (the caller writes it down with :func:`mark_lost`)."""
+    (the caller writes it down with :func:`mark_lost`).
+
+    ``waited``: the accounting is as complete as it will be for this task (the caller
+    waited for it, or there is none to ask). Then a record that still says ``killed``
+    without an end state is not final: a ``climb`` task runs the unit again at its own
+    rung (``mem_gb``, for the record)."""
     if task not in TASKS:
         raise ValueError(f"task {task!r}: one of {TASKS}")
     if task == FIRST:
         return True, "the first attempt", False
     for p in paths:
-        settle(p, previous_state, accounting, submission)
+        settle(p, previous_state, accounting, submission, exits)
+    unknown = [
+        p for p, _ in unsettled(paths, previous_state, accounting, submission, exits)
+    ]
     recs = _records(paths, submission)
     failed = [r for r in recs if not r.get("ok")]
     # `no_rerun`: the failure was retried where it happened (a stage job of its own)
@@ -319,6 +446,15 @@ def unit_decision(
             f"({', '.join(causes)})",
             False,
         )
+    if unknown and waited:
+        mark_unsettled(unknown, mem_gb)
+        return (
+            True,
+            f"{len(unknown)} result(s) still say killed and the scheduler's accounting "
+            "named no end state after the wait: the cause is not known, the unit is "
+            "run again at this rung's memory",
+            False,
+        )
     other = sorted({str(r.get("cause") or "exception") for r in failed})
     if other:
         return (
@@ -329,10 +465,19 @@ def unit_decision(
     return False, "every result is ok", False
 
 
-def unit_retry(paths, previous_state="", accounting=None, submission=None):
+def unit_retry(
+    paths, previous_state="", accounting=None, submission=None, exits=None, waited=False
+):
     """``(go up?, why)`` for one unit, from the ``run.json`` of each of its results."""
     go, why, _ = unit_decision(
-        paths, CLIMB, len(RUNGS_GB) + 1, previous_state, accounting, submission
+        paths,
+        CLIMB,
+        len(RUNGS_GB) + 1,
+        previous_state,
+        accounting,
+        submission,
+        exits,
+        waited,
     )
     return go, why
 
@@ -404,6 +549,8 @@ def mark_lost(heads, attempt, submission=None):
     (``earlier_result``, with that record's outcome). The row of THIS submission is
     ``infrastructure``: it ran nothing, so it has no result of its own, and an
     earlier ``ok`` one is not scored as this submission's."""
+    from .cases import write_json
+
     n = 0
     for path, head in heads.items():
         rec = _read(path)
@@ -439,21 +586,23 @@ def mark_lost(heads, attempt, submission=None):
                 "ok": bool(isinstance(rec, dict) and rec.get("ok")),
                 "submissions": submissions_of(rec),
             }
-        path.write_text(json.dumps(new, indent=1))
+        write_json(path, new)
         n += 1
     return n
 
 
 def settle_all(out, accounting, submission=None):
     """After everything: every ``run.json`` under ``out`` that still says ``killed`` is
-    settled against the scheduler's accounting (the last rung has no later task to do
-    it). Returns ``{cause: count}`` of the records it rewrote."""
+    settled against the scheduler's accounting and the scripts' notes (the last rung
+    has no later task to do it). Returns ``{cause: count}`` of the records it
+    rewrote."""
     changed = {}
+    exits = read_exits(out)
     for path in sorted(Path(out).glob("*/*/*/run.json")):
         rec = _read(path)
         if not rec or rec.get("ok") or rec.get("cause") != KILLED:
             continue
-        cause = settle(path, "", accounting, submission)
+        cause = settle(path, "", accounting, submission, exits)
         if cause and cause != KILLED:
             changed[cause] = changed.get(cause, 0) + 1
     return changed

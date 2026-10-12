@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,6 +18,8 @@ import pytest
 
 from benchmarks.regbench import cli, ladder
 from benchmarks.regbench.cases import Case, result_dir, write_json
+
+REPO = Path(__file__).resolve().parents[3]
 
 
 def a_case(root, case_id, group):
@@ -329,6 +332,335 @@ def test_a_record_is_settled_by_the_task_that_wrote_it(tmp_path):
         "elapsed_s": 4711.0,
         "cpu_s": 3 * 3600 + 25 * 60 + 10.0,
     }
+
+
+# ── one look at the accounting is not the answer ──────────────────────────────
+@pytest.mark.parametrize("state", ["RUNNING", "PENDING", "COMPLETING", ""])
+def test_a_task_that_has_not_ended_settles_nothing(tmp_path, state):
+    """The accounting can lag behind a task that has just ended: a state that is not
+    an end state is no evidence, and the record is left exactly as it was."""
+    path = record(tmp_path / "v" / "run.json", cause="killed", launch_id="900_3")
+    before = path.read_text()
+    acct = ladder.parse_accounting(f"900_3|{state}|10|00:00:09\n")
+    assert ladder.settle(path, "", acct) == "killed"
+    assert path.read_text() == before
+    assert ladder.unsettled([path], "", acct) == [(path, "900_3")]
+    assert not ladder.ended(state)
+
+
+def test_a_record_with_an_end_state_or_another_cause_is_not_waited_for(tmp_path):
+    died = record(tmp_path / "a" / "run.json", cause="killed", launch_id="900_3")
+    other = record(tmp_path / "b" / "run.json", cause="exception", launch_id="900_4")
+    fine = record(tmp_path / "c" / "run.json", ok=True, launch_id="900_5")
+    stage = record(
+        tmp_path / "d" / "run.json", cause="killed", launch_id="900_6", no_rerun=True
+    )
+    acct = ladder.parse_accounting("900_3|FAILED|10|00:00:09\n")
+    assert ladder.unsettled([died, other, fine, stage], "", acct) == []
+    assert ladder.unsettled([died, other, fine, stage]) == [(died, "900_3")]
+    assert all(ladder.ended(s) for s in ("FAILED", "COMPLETED", "OUT_OF_ME+"))
+
+
+def test_killed_without_an_end_state_is_not_final(tmp_path):
+    """After the wait the climb task runs such a unit again at its own rung, and the
+    record says why. Before the wait nothing is decided, and the `again` task (the
+    same memory once more) never takes it: only the scheduler's word makes a loss."""
+    path = record(tmp_path / "v" / "run.json", cause="killed", launch_id="900_3")
+    assert not ladder.unit_decision([path], ladder.CLIMB, 2)[0]
+    assert not ladder.unit_decision([path], ladder.AGAIN, 1, waited=True)[0]
+    assert "cause_from" not in json.loads(path.read_text())
+    go, why, lost = ladder.unit_decision(
+        [path], ladder.CLIMB, 2, waited=True, mem_gb=64.0
+    )
+    assert go and not lost
+    assert "no end state" in why and "this rung's memory" in why
+    rec = json.loads(path.read_text())
+    assert rec["cause"] == "killed"  # never known, so never renamed
+    assert ladder.NO_END_STATE in rec["cause_from"] and "64 GB" in rec["cause_from"]
+    assert rec["scheduler"]["state"] == ""
+
+
+@pytest.mark.parametrize("state", ["FAILED", "COMPLETED"])
+def test_killed_with_an_end_state_that_names_no_cause_stays_final(tmp_path, state):
+    """A process that died on its own under a task the scheduler saw end: the
+    method's, however long anybody waited."""
+    path = record(tmp_path / "v" / "run.json", cause="killed", launch_id="900_3")
+    acct = ladder.parse_accounting(f"900_3|{state}|10|00:00:09\n")
+    go, why, _ = ladder.unit_decision([path], ladder.CLIMB, 2, "", acct, waited=True)
+    assert not go and "killed" in why
+    assert json.loads(path.read_text())["cause"] == "killed"
+
+
+def test_memory_is_the_only_known_cause_that_climbs(tmp_path):
+    for cause in ("timeout", "exception", "gpu_oom", "writer", "infrastructure"):
+        path = record(tmp_path / cause / "run.json", cause=cause, launch_id="1_0")
+        assert not ladder.unit_decision([path], ladder.CLIMB, 2, waited=True)[0], cause
+
+
+@pytest.mark.parametrize(
+    "state, cause",
+    [
+        ("", "oom"),  # the accounting never answered
+        ("COMPLETED", "oom"),  # the script exits 0 whatever became of Python
+        ("FAILED", "oom"),
+        ("OUT_OF_MEMORY", "oom"),
+        ("NODE_FAIL", "infrastructure"),  # the scheduler names a cause: it stands
+        ("TIMEOUT", "timeout"),
+    ],
+)
+def test_python_ended_by_signal_9_under_a_script_that_went_on_is_memory(
+    tmp_path, state, cause
+):
+    out = tmp_path / "out"
+    notes = ladder.exits_dir(out)
+    notes.mkdir(parents=True)
+    (notes / "900_3").write_text("137\n")
+    (notes / "900_4").write_text("1\n")
+    (notes / "junk").write_text("not a number\n")
+    assert ladder.read_exits(out) == {"900_3": 137, "900_4": 1}
+    assert ladder.read_exits(tmp_path / "none") == {}
+    path = record(out / "v" / "d" / "c" / "run.json", cause="killed", launch_id="900_3")
+    acct = ladder.parse_accounting(f"900_3|{state}|10|00:00:09\n") if state else {}
+    exits = ladder.read_exits(out)
+    assert ladder.unsettled([path], "", acct, exits=exits) == []
+    go, _ = ladder.unit_retry([path], "", acct, exits=exits)
+    rec = json.loads(path.read_text())
+    assert rec["cause"] == cause and go is (cause == "oom")
+    assert ("signal 9" in rec["cause_from"]) is (state in ("", "COMPLETED", "FAILED"))
+    # any other exit code is evidence of nothing
+    other = record(
+        out / "v" / "d" / "e" / "run.json", cause="killed", launch_id="900_4"
+    )
+    assert ladder.settle(other, "", {}, exits=exits) == "killed"
+
+
+def test_the_settle_job_reads_the_scripts_notes_too(tmp_path):
+    path = record(
+        tmp_path / "m" / "d" / "c1" / "run.json", cause="killed", launch_id="5_0"
+    )
+    notes = ladder.exits_dir(tmp_path)
+    notes.mkdir(parents=True)
+    (notes / "5_0").write_text("137\n")
+    acct = tmp_path / "acct.psv"
+    acct.write_text("5_0|COMPLETED|30|00:00:20\n")
+    assert cli.main(["settle", "--out", str(tmp_path), "--accounting", str(acct)]) == 0
+    rec = json.loads(path.read_text())
+    assert rec["cause"] == "oom" and rec["scheduler"]["elapsed_s"] == 30.0
+
+
+def test_whichever_job_wrote_the_placeholder_is_settled_by_one_rule(tmp_path):
+    """The last job of a round whose registration ran in other jobs is settled as any
+    other unit's task: memory is `oom`, the time limit `timeout`, an unexplained death
+    `killed`, all three the method's."""
+    from benchmarks.regbench import failure_log
+
+    def settled(state, **more):
+        path = tmp_path / f"{state}{len(more)}" / "run.json"
+        rec = {"cause": "killed", "launch_id": "7_0", **more}
+        record(path, **rec)
+        acct = {"7_0": {"state": state, "elapsed_s": 5.0, "cpu_s": 1.0}}
+        return ladder.settle(path, "", acct)
+
+    for more in ({}, {"collector": True}, {"phase": "writer"}):
+        got = [settled(s, **more) for s in ("OUT_OF_MEMORY", "TIMEOUT", "FAILED")]
+        assert got == ["oom", "timeout", "killed"], more
+        assert all(failure_log.classify(c) == failure_log.METHOD for c in got)
+        assert settled("NODE_FAIL", **more) == "infrastructure"
+
+
+def test_a_settled_or_lost_record_is_replaced_whole(tmp_path, monkeypatch):
+    """Both rewrites go through the atomic writer: a task killed in the middle of one
+    leaves the record as it was, never half of a new one."""
+    from benchmarks.regbench import cases as cases_mod
+
+    path = record(tmp_path / "v" / "run.json", cause="killed", launch_id="900_3")
+    before = path.read_text()
+
+    def dies(tmp, *a, **k):
+        Path(tmp).write_text("{")  # half a record, in the temporary file
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        cases_mod, "write_json", lambda p, obj: cases_mod._atomic(p, dies)
+    )
+    with pytest.raises(KeyboardInterrupt):
+        ladder.settle(path, "OUT_OF_MEMORY")
+    assert path.read_text() == before
+    assert [p.name for p in path.parent.iterdir()] == ["run.json"]
+    missing = tmp_path / "w" / "run.json"
+    with pytest.raises(KeyboardInterrupt):
+        ladder.mark_lost({missing: {"variant": "w"}}, 1, "s1")
+    assert not missing.exists() and list(missing.parent.iterdir()) == []
+
+
+# ── the rung task's script: the wait, and the note ────────────────────────────
+PYTHON = r"""#!/bin/bash
+# python: records its arguments; with --accounting-wanted and no --accounting-waited it
+# names a task and exits 75; else it exits $FAKE/exit (default 0)
+echo "$*" >> "$FAKE/python.log"
+wanted="" waited=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --accounting-wanted) wanted="$2"; shift 2 ;;
+        --accounting-waited) waited=1; shift ;;
+        *) shift ;;
+    esac
+done
+if [ -n "$wanted" ] && [ "$waited" = 0 ] && [ ! -e "$FAKE/settled" ]; then
+    echo "901_3" > "$wanted"
+    exit 75
+fi
+exit "$(cat "$FAKE/exit" 2>/dev/null || echo 0)"
+"""
+SACCT = r"""#!/bin/bash
+# sacct: RUNNING for the first $FAKE/lag calls, then $FAKE/state
+n=$(( $(cat "$FAKE/sacct.n" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$FAKE/sacct.n"
+echo "$*" >> "$FAKE/sacct.log"
+if [ "$n" -le "$(cat "$FAKE/lag" 2>/dev/null || echo 0)" ]; then
+    echo "901_3|RUNNING|5|00:00:04"
+else
+    echo "901_3|$(cat "$FAKE/state")|5|00:00:04"
+fi
+"""
+
+
+def _rung(tmp_path, sacct=True, task="climb", out="out", **more):
+    """run_rung.sbatch as the scheduler runs task 3 of array job 902, with a stand-in
+    python (and sacct) on PATH."""
+    fake, out = tmp_path / "bin", tmp_path / out
+    fake.mkdir(exist_ok=True)
+    for name, text in (("python", PYTHON), ("sacct", SACCT)):
+        if name == "sacct" and not sacct:
+            continue
+        (fake / name).write_text(text)
+        (fake / name).chmod(0o755)
+    (out / "logs" / "gates").mkdir(parents=True, exist_ok=True)
+    (out / "logs" / "gates" / "initial.tsv").write_text("initial\tok\t-\t0\t-\n")
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
+    }
+    env.update(
+        PATH=f"{fake}:/usr/bin:/bin",
+        FAKE=str(fake),
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES=str(tmp_path / "cases"),
+        REGBENCH_OUT=str(out),
+        REGBENCH_ACCT_POLL_S="1",
+        REGBENCH_ACCT_WAIT_S="3",
+        SLURM_ARRAY_JOB_ID="902",
+        SLURM_ARRAY_TASK_ID="3",
+        SLURM_JOB_ID="950",
+        SLURM_JOB_NAME="rb-initial-multiplex-64g",
+    )
+    env.update({k: str(v) for k, v in more.items()})
+    done = subprocess.run(
+        ["bash", str(REPO / "benchmarks/regbench/slurm/run_rung.sbatch"), "initial",
+         "initial", "-", "-", "INITIAL", "0", "multiplex", "2", "64", "0", "900,901",
+         task, "1-00:00:00"],
+        env=env, capture_output=True, text=True, cwd=REPO, timeout=120,
+    )  # fmt: skip
+    calls = (fake / "python.log").read_text().splitlines()
+    return done, calls, fake, out
+
+
+def test_the_rung_task_asks_the_accounting_until_it_names_an_end_state(tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "lag").write_text("2")  # the first look and one more say RUNNING
+    (fake / "state").write_text("OUT_OF_MEMORY")
+    done, calls, fake, out = _rung(tmp_path)
+    assert done.returncode == 0, done.stdout + done.stderr
+    acct = out / "logs" / "accounting" / "initial-multiplex-3-2-0.psv"
+    # the first call: one look, and where to name the tasks it wants an end state of
+    assert (
+        f"--ladder climb --accounting {acct} --accounting-wanted {acct}.wanted"
+        in (calls[0])
+    )
+    assert "--accounting-waited" not in calls[0]
+    # the second, once the accounting has the end state: nothing run twice in between
+    assert len(calls) == 2
+    assert calls[1].endswith(f"--ladder climb --accounting-waited --accounting {acct}")
+    assert acct.read_text() == "901_3|OUT_OF_MEMORY|5|00:00:04\n"
+    asked = (fake / "sacct.log").read_text().splitlines()
+    assert len(asked) == 3 and "-j 900_3,901_3" in asked[0] and "-j 901_3 " in asked[2]
+    assert "accounting: an end state for 901_3 after 2s" in done.stdout
+    assert done.stdout.strip().splitlines()[-1].startswith("REGBENCH_END kind=run")
+
+
+def test_the_wait_for_the_accounting_is_bounded_and_said(tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "lag").write_text("1000")
+    done, calls, fake, out = _rung(tmp_path, REGBENCH_ACCT_WAIT_S=2)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(calls) == 2 and "--accounting-waited" in calls[1]
+    assert "accounting: NO end state for every task of 901_3 after 2s" in done.stdout
+    assert "REGBENCH_ACCT_WAIT_S" in done.stdout
+    assert len((fake / "sacct.log").read_text().splitlines()) == 3
+
+
+def test_a_node_without_accounting_does_not_wait(tmp_path):
+    done, calls, _, _ = _rung(tmp_path, sacct=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(calls) == 1 and calls[0].endswith("--ladder climb --accounting-waited")
+    # the first attempt of a ladder asks nothing at all
+    (tmp_path / "bin" / "python.log").unlink()
+    done, calls, _, _ = _rung(tmp_path, task="first")
+    assert len(calls) == 1 and not [w for w in calls[0].split() if "ladder" in w]
+    assert not [w for w in calls[0].split() if w.startswith("--accounting")]
+
+
+def test_the_script_notes_a_python_that_was_killed_and_only_that(tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "settled").write_text("")
+    (fake / "state").write_text("COMPLETED")
+    (fake / "exit").write_text("137")
+    done, _, fake, out = _rung(tmp_path)
+    assert done.returncode == 0 and "python exited 137" in done.stdout
+    assert ladder.read_exits(out) == {"902_3": ladder.EXIT_SIGKILL}
+    (fake / "exit").write_text("1")
+    done, _, _, out2 = _rung(tmp_path, out="out2")
+    assert "python exited 1" in done.stdout
+    assert ladder.read_exits(out2) == {} and not ladder.exits_dir(out2).exists()
+
+
+def test_the_script_and_the_ladder_agree_on_what_has_not_ended():
+    code = (REPO / "benchmarks/regbench/slurm/run_rung.sbatch").read_text()
+    assert f"/^({'|'.join(ladder.STATES_NOT_ENDED)})/" in code
+    assert f'[ "$code" = {ladder.EXIT_ACCOUNTING_PENDING} ]' in code
+    assert f'[ "$code" = {ladder.EXIT_SIGKILL} ]' in code
+
+
+def test_the_climb_task_waits_and_then_runs_a_unit_nobody_explained(
+    tmp_path, monkeypatch
+):
+    """End to end with the identity method: the first call names the task it wants an
+    end state of and decides nothing; the call after the wait runs the unit at this
+    rung, and the result carries the attempt it replaces."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = a_case(root, "P1_r1", "P1")
+    path = result_dir(out, "initial", case) / "run.json"
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "s1")
+    monkeypatch.setenv("REGBENCH_ATTEMPT", "2")
+    monkeypatch.setenv("REGBENCH_MEM_GB", "64")
+    record(path, cause="killed", launch_id="77_0", submissions=["s1"])
+    before = path.read_text()
+    wanted = tmp_path / "w"
+    code = _run(root, out, "--ladder", "climb", "--accounting-wanted", str(wanted))
+    assert code == ladder.EXIT_ACCOUNTING_PENDING == 75
+    assert wanted.read_text() == "77_0\n" and path.read_text() == before
+    code = _run(
+        root, out, "--ladder", "climb", "--accounting-wanted", str(wanted),
+        "--accounting-waited",
+    )  # fmt: skip
+    assert code == 0
+    rec = json.loads(path.read_text())
+    assert rec["ok"] and rec["attempt"] == 2 and rec["mem_requested_gb"] == 64
+    (old,) = rec["previous_attempts"]
+    assert old["cause"] == "killed" and ladder.NO_END_STATE in old["cause_from"]
+    assert "64 GB" in old["cause_from"]
 
 
 def test_the_accounting_is_parsed_by_field_and_tolerates_junk():

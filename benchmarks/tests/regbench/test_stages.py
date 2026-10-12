@@ -1011,6 +1011,58 @@ def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monke
     assert adapter.tiles_due(case, new, dict(OPTS), 1) == []
 
 
+def test_a_tile_the_submitter_did_not_see_through_is_the_launchers(
+    staged, tmp_path, monkeypatch
+):
+    """A tile task that had not ended when the round's last job ran, or that ended the
+    way the pipeline retries with attempts left: while the tile submitter has not
+    finished, the attempt after it was never submitted, and that is the launcher's.
+    Once the submitter has finished (it waits for every tile task to leave the queue),
+    the tile's own record is the answer, and it is the method's."""
+    from benchmarks.regbench import failure_log
+
+    case = staged["case"]
+    out, new = clone(staged, tmp_path)
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S-3")
+
+    def last_job():
+        with as_jobs():
+            assert methods.run_case("stare", case, out, opts={"stage_images": 1}) == []
+        return run_json(out, "stare", case)
+
+    # still running: the placeholder of its first attempt
+    rewrite(new, "tile", 1, ok=False, exit=None, cause="killed", attempt=1,
+            submission="S-3")  # fmt: skip
+    run = last_job()
+    assert run["cause"] == stages.NOT_SUBMITTED and run["no_rerun"] is True
+    assert "attempt 1 of 4 had not recorded its end" in run["error"]
+    assert "the attempt after it was never submitted" in run["error"]
+    assert "the tile submitter did not finish" in run["error"]
+    assert failure_log.classify(run["cause"]) == failure_log.LAUNCHER
+    # the scheduler's accounting does not turn it into anybody else's
+    path = result_dir(out, "stare", case) / "run.json"
+    acct = {run["launch_id"]: {"state": "COMPLETED", "elapsed_s": 1.0, "cpu_s": 1.0}}
+    assert ladder.settle(path, "", acct, "S-3") == stages.NOT_SUBMITTED
+    # ended the way the pipeline retries, and attempt 3 was never fed
+    rewrite(new, "tile", 1, exit=137, cause="oom", attempt=2)
+    run = last_job()
+    assert run["cause"] == stages.NOT_SUBMITTED
+    assert (
+        "attempt 2 of 4 ended with exit 137, which the pipeline retries"
+        in (run["error"])
+    )
+    # the last attempt is the method's own, submitter or not
+    rewrite(new, "tile", 1, exit=137, cause="oom", attempt=4)
+    assert last_job()["cause"] == "oom"
+    # and so is everything once the submitter saw the queue empty
+    rewrite(new, "tile", 1, exit=None, cause="killed", attempt=1)
+    done = Path(f"{stages.feed_state(out, 'S-3', 'stare', case.dataset)}.done")
+    done.parent.mkdir(parents=True, exist_ok=True)
+    done.write_text("")
+    run = last_job()
+    assert run["cause"] == "killed" and "TILE (tile row 1) failed" in run["error"]
+
+
 def test_a_retried_tile_runs_alone_with_the_next_attempts_memory(staged, tmp_path):
     case = staged["case"]
     out, new = clone(staged, tmp_path)
@@ -1607,32 +1659,11 @@ def test_a_command_is_ended_at_its_time_limit_with_a_retried_status(tmp_path):
     assert again["ok"] and [h["exit"] for h in again["history"]] == [143]
 
 
-def test_a_death_of_the_last_job_is_never_settled_as_the_methods(tmp_path):
-    """The placeholder of a round's last job says so (`collector`): out of memory is
-    `benchmark_oom`, the time limit and an unexplained death are `benchmark`."""
-    from benchmarks.regbench import failure_log
-
-    def settled(state, **more):
-        path = tmp_path / f"{state}{len(more)}" / "run.json"
-        path.parent.mkdir()
-        rec = {"ok": False, "cause": "killed", "launch_id": "7_0", **more}
-        path.write_text(json.dumps(rec))
-        acct = {"7_0": {"state": state, "elapsed_s": 5.0, "cpu_s": 1.0}}
-        return ladder.settle(path, "", acct)
-
-    assert settled("OUT_OF_MEMORY", collector=True) == "benchmark_oom"
-    assert settled("TIMEOUT", collector=True) == "benchmark"
-    assert settled("FAILED", collector=True) == "benchmark"
-    assert settled("NODE_FAIL", collector=True) == "infrastructure"
-    assert settled("OUT_OF_MEMORY") == "oom" and settled("FAILED") == "killed"
-    assert failure_log.classify("benchmark") == failure_log.BENCHMARK
-    assert (
-        "benchmark_oom"
-        in __import__("benchmarks.regbench.resources", fromlist=["x"]).MEMORY_CAUSES
-    )
-
-
-def test_the_placeholder_of_a_last_job_says_what_it_is(staged, tmp_path, monkeypatch):
+def test_the_placeholder_of_a_last_job_is_any_units_placeholder(
+    staged, tmp_path, monkeypatch
+):
+    """Nothing in it sets the round's last job apart: a death of it is settled by the
+    rule of every other task (`test_ladder.py`)."""
     seen = {}
     real = adapter.register
 
@@ -1646,5 +1677,6 @@ def test_the_placeholder_of_a_last_job_says_what_it_is(staged, tmp_path, monkeyp
     with as_jobs():
         methods.run_case("stare", staged["case"], out, opts={"stage_images": True})
     assert seen["placeholder"]["cause"] == "killed"
-    assert seen["placeholder"]["collector"] is True
-    assert "collector" not in run_json(out, "stare", staged["case"])
+    assert "collector" not in seen["placeholder"]
+    plain = {"ok", "error", "cause"} | set(seen["placeholder"])
+    assert plain == set(seen["placeholder"]) and "phase" not in seen["placeholder"]

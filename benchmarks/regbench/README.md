@@ -275,21 +275,34 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 
 | `cause` | what happened | goes up a rung | counted as |
 |---|---|---|---|
-| `exception` | the method raised, or reported a failed round | no | the method's |
-| `oom` | the method ran out of host memory while registering (its own error text, `resources.MEMORY_ERRORS`; the cgroup counter; the scheduler's `OUT_OF_MEMORY`) | yes | the method's |
+| `exception` | the method raised, or reported a failed round; or its own point mapping raised, or returned something that is not one X, Y pair per point | no | the method's |
+| `oom` | the method ran out of host memory while registering or inside its own point mapping (its own error text, `resources.MEMORY_ERRORS`; the cgroup counter; the scheduler's `OUT_OF_MEMORY`; the task's script noting that Python ended by signal 9) | yes | the method's |
 | `writer_oom` | the method's own writer ran out of memory: no image | yes | the method's |
 | `writer` | the method's own writer failed for another reason: no image | no | the method's |
 | `gpu_oom`, `timeout` | as named | no | the method's |
-| `killed` | the process died and neither it nor the scheduler could say why | no | the method's |
-| `benchmark_oom` | the BENCHMARK's own step ran out of memory with the clock stopped (moving the nuclei through the map) | yes | NOT the method's |
+| `killed` | the process died, and the scheduler's end state for its task names no cause (`FAILED`, `COMPLETED`) | no | the method's |
+| `killed`, no end state | the process died and the scheduler's accounting named no end state for its task within the wait (`REGBENCH_ACCT_WAIT_S`) | not as a memory cause: the `climb` task runs the unit once more at its own rung, and `cause_from` says so | the method's while it stands |
+| `benchmark_oom` | the BENCHMARK's own lines ran out of memory with the clock stopped (the lattice, the arrays and the files around the method's point mapping; never the mapping itself) | yes | NOT the method's |
+| `benchmark` | the benchmark's own lines around the method's point mapping failed for another reason | no | NOT the method's |
+| `not_submitted` | a stage job of a registration in several jobs never reached the queue, or was left without the attempt the pipeline would have given it next (the tile submitter was refused or did not finish) | no | NOT the method's (the launcher's) |
 | `infrastructure` | the scheduler lost the attempt (`NODE_FAIL`, `PREEMPTED`, `BOOT_FAIL`, `CANCELLED`, `REQUEUED`, `REVOKED`), twice at one rung, or the task never started | no: the same rung once more, then it stands | NOT the method's |
 | `not_run` | the scorer's word for a result with no record, or with a record of another submission | | neither |
 
-`failures.csv` and the summary count the last two groups apart
+`failures.csv` and the summary count the causes that are not the method's apart
 (`launches_failed_method`, `launches_lost_not_method`, `rounds_lost_not_method`). A round
-lost for a reason that is not the method's is still scored at the unregistered pose in the
-cell tables, and the summary says so in bold above the failure table: submit it again
-before reading those rows.
+lost for a cause that is not the method's (`resources.NOT_THE_METHOD`) is LEFT OUT of that
+method's summaries, differences and known-truth rows, and is in no common block; its row
+stays in `cells.csv` with `excluded_from_summaries`, it is named in `excluded_rounds.csv`,
+and the summary says so in bold above the failure table: submit it again before reading
+those rows ("Scoring" has the rule; `score.NOT_THE_METHOD_ROUNDS` is the switch).
+
+**One rule of attribution for every method.** A task that dies leaves the placeholder
+(`killed`), and the scheduler's end state for that task names the cause: the same for
+every method and for every job of a method, the last job of a STARE round included
+(`OUT_OF_MEMORY` is `oom`, `TIMEOUT` is `timeout`, both the method's). `benchmark_oom`
+and `benchmark` are recorded only by the driver itself, where it can show that its own
+lines were running: the watcher saw the cgroup counter rise, or an error was raised,
+outside the method's generator, outside its point mapping and outside its writer.
 
 A memory error raised inside a method's generator is `oom` whatever the method was doing
 at that moment (the driver cannot see inside it). `writer_oom` is a writer that REPORTED
@@ -767,7 +780,8 @@ A failed, killed or never-started run is a row scored at the unregistered pose
 (`imputed_initial`), with `problem` and `cause` filled; never a gap.
 
 **A round lost for a cause that is not the method's is not imputed** (`infrastructure`: the
-scheduler lost the attempt; `benchmark_oom`: the benchmark's own step ran out of memory).
+scheduler lost the attempt; `benchmark_oom` and `benchmark`: the benchmark's own lines
+ran out of memory or failed; `not_submitted`: the launcher never queued a stage job).
 Scoring it at the unregistered pose would charge the method for the cluster, and dropping
 it silently would hide it, so: it is left out of that method's summaries, differences and
 known-truth rows (`n_excluded_not_method`, "left out" in `summary.md`), it is in no common
@@ -1575,10 +1589,10 @@ code can write against it, so a new cause cannot be added unclassified):
 
 | whose | causes | means |
 |---|---|---|
-| `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting says the node did it |
-| `benchmark` | `benchmark_oom`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
+| `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its point mapping or its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting names a cause (memory, time, a lost node) or the task's script noted a Python ended by signal 9 |
+| `benchmark` | `benchmark_oom`, `benchmark`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
 | `infrastructure` | `infrastructure`, `selfcheck_lost` | the scheduler or the node lost the attempt |
-| `launcher` | `gate_blocked`, `dropped_row`, `not_run` | a gate kept the run from starting, a row was dropped, the unit was never submitted |
+| `launcher` | `gate_blocked`, `dropped_row`, `not_run`, `not_submitted` | a gate kept the run from starting, a row was dropped, the unit was never submitted, a stage job never reached the queue |
 
 `summary.md` has a "Failures: every event, and whose it is" section: the count of events
 per run, stage, cause and whose; then every unit whose FINAL outcome is not ok, with its
@@ -1799,8 +1813,8 @@ peak memory, GPU-hours with the device named, and total time to the registered i
   and CPU time and writes them into the record (`scheduler`). The attempt is then billed
   by the scheduler's elapsed time of the WHOLE task, an upper bound (the container's
   start and the benchmark's own steps are in it), and counted in `wasted_from_scheduler`.
-  Where `sacct` gave nothing the attempt is counted in `wasted_unknown` and is in no
-  wasted total: unknown, never zero.
+  Where `sacct` gave no end state within the wait the attempt is counted in
+  `wasted_unknown` and is in no wasted total: unknown, never zero.
 - **The time limit is one rule for both kinds of unit, with one consequence to know.**
   One `REGBENCH_TIME` per round: a pair task gets it once; a patient task gets it times
   the rounds of the LARGEST patient of its array (an array has one limit), never above 7
@@ -2081,10 +2095,27 @@ script names no method.
      the state, elapsed and CPU time of its unit in every earlier job of the ladder
      (`<out>/logs/accounting/`), and a record is matched to its task by `launch_id`:
      `OUT_OF_MEMORY` makes it `oom`, `TIMEOUT` makes it `timeout`, a lost task makes it
-     `infrastructure`, anything else leaves it `killed`. The record is rewritten with
-     `cause_from` and `scheduler`. The last rung has no later task, so the `rb-settle`
-     job (step 5) runs `regbench settle` on the accounting of every job before anything
-     is scored.
+     `infrastructure`, any other END state leaves it `killed`. The record is rewritten
+     with `cause_from` and `scheduler`. The last rung has no later task, so the
+     `rb-settle` job (step 5) runs `regbench settle` on the accounting of every job
+     before anything is scored.
+   - **One look at the accounting is not the answer.** The accounting can lag behind a
+     task that has just ended. When a record says `killed` and `sacct` has no end state
+     for the task that wrote it (no line, or `PENDING`, `RUNNING`, `RESIZING`,
+     `SUSPENDED`, `COMPLETING`), the rung task decides nothing yet: it asks again every
+     `REGBENCH_ACCT_POLL_S` (30) seconds for at most `REGBENCH_ACCT_WAIT_S` (600), and
+     its log says what it got (`accounting: ...`). With an end state the rules above
+     apply. Without one after the wait (or on a node with no `sacct`) the record is NOT
+     final: the `climb` task runs the unit once more at its own rung's memory, the
+     `again` task never does, and the replaced attempt is kept in `previous_attempts`
+     with `cause: killed` and a `cause_from` that says no end state was named.
+   - **The script's own note.** `run_rung.sbatch` exits 0 whatever became of Python, so
+     a Python step the kernel's out-of-memory killer ended can leave a task the
+     scheduler calls `COMPLETED`. When Python ends with exit 137 (signal 9) and the
+     script goes on, it writes `<out>/logs/accounting/exits/<launch id>`; a `killed`
+     record of that task whose end state names no cause is then `oom` (it climbs), with
+     `cause_from` saying so. A cause the scheduler does name stands. The scheduler's own
+     kill (time limit, `scancel`) ends the script as well, so it leaves no note.
    - The output directory is kept between rungs, so the cost of a failed attempt is
      kept (`previous_attempts`). `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
      `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
@@ -2112,8 +2143,11 @@ script names no method.
 
    **The round's last job, in three sentences.** It holds the benchmark's own work
    (loading and moving the outlines, the tissue reduction), so it has the benchmark's
-   allocation and ladder, and whatever ends it outside STITCH is a benchmark-owned cause
-   (`benchmark_oom`, which goes up a rung, or `benchmark`), never STARE's. STITCH runs
+   allocation and ladder, and a death of it is attributed by the rule of every other
+   unit's task: the scheduler's `OUT_OF_MEMORY` is `oom` (it goes up a rung), `TIMEOUT`
+   is `timeout`, an unexplained death `killed`, all counted against STARE as they are
+   against any other method; `benchmark_oom` and `benchmark` only where the driver saw
+   its own lines fail. STITCH runs
    inside it as the pipeline's process: measured alone (its own time, CPU time and
    peak, `native.stitch_job`), ended at the pipeline's time limit for its attempt
    (4 h x attempt) and run again on the pipeline's retry list, the time limit included,
@@ -2299,6 +2333,7 @@ round).
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
+| `REGBENCH_ACCT_WAIT_S`, `REGBENCH_ACCT_POLL_S` | how long a ladder task waits for the scheduler's accounting to name the end state of an earlier task whose result still says `killed`, and the seconds between two looks ("The ladder") | `600`, `30` |
 | `REGBENCH_ARRAY_LIMIT` (above), `REGBENCH_STAGE_ARRAY_MAX`, `REGBENCH_STAGE_QUEUE_MAX`, `REGBENCH_STAGE_FEED_MIN`, `REGBENCH_STAGE_POLL_S`, `REGBENCH_STAGE_FEEDERS` | must be whole numbers of at least 1: the script refuses anything else before it submits | |
 | `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round | `100` |
 | `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks of ONE such run pending or running at a time (two such runs, `stare` and `stare_prep`, have a ceiling each) | `100` |
@@ -2494,10 +2529,15 @@ own `REGBENCH_OUT`. A queue that cannot be read (`squeue` fails) refuses too.
 
 ### Not verified: check these on the cluster before the real submission
 
-The script was written against SLURM's documented behaviour (`sbatch` and `sacct`
-manuals, slurm.schedmd.com `[MEMORY]`: not retrieved while this was written; the port's
-plan records an earlier partial reading of the `--dependency`, `--kill-on-invalid-dep`
-and array sections). None of the following was observed:
+The script was written against SLURM's documented behaviour (slurm.schedmd.com: the
+`sbatch` manual `[PARTIAL: read the --no-requeue, --requeue, --kill-on-invalid-dep and
+--dependency entries; missing the rest of the page, the filename patterns and the array
+section included]`, the `sacct` manual `[PARTIAL: read the -S, -j, -X and --name entries,
+the JOB STATE CODES list and the State, ElapsedRaw and TotalCPU fields; missing the rest
+of the page]`, the `squeue` manual `[PARTIAL: read the -h, -r, -u, -n, -o entries and
+the %j, %A, %F, %i, %K, %r, %T format fields; missing the rest of the page; it does not
+say what squeue exits with when the controller does not answer]`). None of the
+following was observed:
 
 - **A job cancelled for an invalid dependency satisfies `afterany`.** The scorer waits
   `afterany` on every array and every gate; if a cancelled job did not release it, the
@@ -2513,11 +2553,16 @@ and array sections). None of the following was observed:
   count. The cost tables report what each run saw either way.
 - **Memory is enforced through cgroups and a killed job is `OUT_OF_MEMORY` in `sacct`**,
   and `sacct` can be called from inside a job (every later task of a ladder asks it about
-  the earlier ones). Without `sacct` a unit whose record still says `killed` is neither
-  taken up a rung nor tried again, and its cost is `wasted_unknown`.
+  the earlier ones). Without `sacct` a unit whose record still says `killed` is run once
+  more by the next rung's `climb` task (or settled as `oom` by the script's own note of
+  a Python ended by signal 9), and the cost of the attempt it replaces is
+  `wasted_unknown`. Not observed either: that `apptainer exec` returns 137 for a Python
+  the kernel killed, and that the batch script outlives it.
 - **The states of a lost task.** `ladder.STATES_INFRASTRUCTURE` (`NODE_FAIL`,
-  `PREEMPTED`, `BOOT_FAIL`, `CANCELLED`, `REQUEUED`, `REVOKED`) is from memory of the
-  `sacct` manual's JOB STATE CODES `[MEMORY]`; a state matches by prefix (`CANCELLED by
+  `PREEMPTED`, `BOOT_FAIL`, `CANCELLED`, `REQUEUED`, `REVOKED`) and the states of a task
+  that has not ended (`PENDING`, `RUNNING`, `RESIZING`, `SUSPENDED`) are names of the
+  `sacct` manual's JOB STATE CODES (tag above); the manual says a state too long for its
+  column is followed by `+`, and a state matches by prefix here (`CANCELLED by
   <uid>`). Check on the site: what `sacct -n -X -P -j <array job>_<task> -o
   JobID,State,ElapsedRaw,TotalCPU` prints for an array task (the first field must be
   `<array job>_<task>`, which is what a record's `launch_id` is built from:
@@ -3215,12 +3260,17 @@ table and `test_stages.py` works each number out again from the text of
   (`oom` for exit 137 or a memory error, `timeout` for 140 and 143, `exception`
   otherwise, `infrastructure` when no attempt left a record) and `no_rerun: true`, and
   the round is imputed as every failed round is. A tile that never reached the queue
-  is `not_submitted` (the launcher's). STITCH runs as a process of its own inside the
+  is `not_submitted` (the launcher's), and so is a tile that had not recorded its end,
+  or had ended the way the pipeline retries with attempts left, when the round's last
+  job ran while the tile submitter had not finished: the attempt after it was never
+  submitted. Once the submitter has finished (it writes its `.done` only after every
+  tile task has left the queue) the tile's own record decides. STITCH runs as a process of its own inside the
   round's last job, which has the benchmark's allocation and ladder ("Running the
   cohort on a cluster", "The round's last job, in three sentences"): STITCH is retried
   there on the same list of statuses with the pipeline's time limit per attempt, a
   STITCH that still fails is the writer's and is run at no further rung, and the job
-  itself goes up a rung for `benchmark_oom` and is tried again once per rung when the
+  itself goes up a rung for a memory cause (`oom` when the scheduler ended it for
+  memory, as for any other unit's task) and is tried again once per rung when the
   scheduler lost it.
 - **One record per job**: `<out>/<row>/<dataset>/<case>/stages/jobs/<stage>[_<tile
   row>].json`, with the command, its exit status, wall time, CPU time and peak memory

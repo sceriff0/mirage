@@ -720,15 +720,37 @@ def _failed(rnd, stage, row, jobs):
     mine = stages.same_job(
         rec, rnd.command(stage, row), rnd.identity(stage)
     ) and ladder.mine(rec, resources.host_info()["submission"])
+    # A tile job the launcher's submitter did not see through: never put into the
+    # queue (no record of this submission), or left without the attempt the pipeline
+    # would have given it next (its record is a placeholder of a task that had not
+    # ended, or a failure the pipeline retries, below the last attempt). The submitter
+    # waits for every tile task to leave the queue before it writes its `.done`, so
+    # with a `.done` neither can be.
+    unfinished = (
+        mine
+        and stages.retryable(rec)
+        and int(rec.get("attempt") or 1) < (stages.ATTEMPTS)
+    )
     never = ""
-    if not mine and stage == stages.TILE and jobs:
+    if (not mine or unfinished) and stage == stages.TILE and jobs:
         never = stages.feed_problem(
             rnd.dir.parents[3],
             resources.host_info()["submission"],
             str(rnd.opts.get("label") or "") or "stare",
             rnd.case.dataset,
         )
-    if never:
+    if never and mine:
+        err = stages.StageFailed(
+            f"{what}: attempt {rec.get('attempt')} of {stages.ATTEMPTS} "
+            + (
+                "had not recorded its end when the round's last job ran"
+                if rec.get("exit") is None
+                else f"ended with exit {rec.get('exit')}, which the pipeline retries"
+            )
+            + f", and the attempt after it was never submitted ({never})",
+            stages.NOT_SUBMITTED,
+        )
+    elif never:
         # the launcher's tile submitter never put this job into the queue
         err = stages.StageFailed(
             f"{what}: this job was never submitted ({never})", stages.NOT_SUBMITTED

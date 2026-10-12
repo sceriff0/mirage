@@ -412,6 +412,22 @@ def build_parser():
         "the state of the task that wrote it, and keeps that task's elapsed time",
     )
     r.add_argument(
+        "--accounting-wanted",
+        default=None,
+        metavar="FILE",
+        help="with --ladder: when a record still says `killed` and the accounting has "
+        "no end state for the task that wrote it, write those tasks' ids to FILE "
+        "(one per line), run nothing and exit 75: the caller waits for the "
+        "accounting and calls again with --accounting-waited",
+    )
+    r.add_argument(
+        "--accounting-waited",
+        action="store_true",
+        help="with --ladder: the accounting is as complete as it will be (it was "
+        "waited for, or there is none to ask). A record that still says `killed` "
+        "without an end state is then run again by the climb task at its rung",
+    )
+    r.add_argument(
         "--force",
         action="store_true",
         help="run a unit whose results are all ok already (also REGBENCH_FORCE=1). "
@@ -812,19 +828,40 @@ def _run(a):
         picked = units[a.index]
     task = a.ladder or ("climb" if a.retry_oom else None)
     if task:
+        from pathlib import Path
+
         from . import ladder, resources
 
         host = resources.host_info()
         heads = ladder.unit_heads(a.out, a.method, a.label, picked)
+        ids = "+".join(c.case_id for c in picked)
+        accounting = ladder.read_accounting(a.accounting)
+        exits = ladder.read_exits(a.out)
+        if a.accounting_wanted and not a.accounting_waited:
+            pending = ladder.unsettled(
+                list(heads), a.previous_state, accounting, host["submission"], exits
+            )
+            wanted = sorted({launch for _, launch in pending if launch})
+            if wanted:
+                Path(a.accounting_wanted).write_text("".join(f"{w}\n" for w in wanted))
+                print(
+                    f"{a.dataset}/{ids} [{a.label or a.method}] {task}, rung "
+                    f"{host['attempt']}: {len(pending)} result(s) still say killed "
+                    f"and the scheduler's accounting has no end state for "
+                    f"{', '.join(wanted)}; waiting for it, nothing decided yet"
+                )
+                return ladder.EXIT_ACCOUNTING_PENDING
         go, why, lost = ladder.unit_decision(
             list(heads),
             task,
             host["attempt"],
             a.previous_state,
-            ladder.read_accounting(a.accounting),
+            accounting,
             host["submission"],
+            exits,
+            a.accounting_waited,
+            host["mem_requested_gb"],
         )
-        ids = "+".join(c.case_id for c in picked)
         print(
             f"{a.dataset}/{ids} [{a.label or a.method}] {task}, rung "
             f"{host['attempt']}: {why}; " + ("running" if go else "nothing to do")

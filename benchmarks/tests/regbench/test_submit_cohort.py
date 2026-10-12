@@ -371,7 +371,8 @@ def test_the_rung_task_passes_the_rule_and_the_allocation_on():
         r'if \[ "\$task" != first \]; then\s+args\+=\(--ladder "\$task"\)', code
     )
     assert "-o JobID,State,ElapsedRaw,TotalCPU" in code
-    assert 'args+=(--accounting "$acct")' in code
+    assert 'look "$ids" && acct_args+=(--accounting "$acct")' in code
+    assert 'regbench_py "$image" "${args[@]}" ${acct_args[@]+"${acct_args[@]}"}' in code
     assert '[ "${REGBENCH_FORCE:-0}" = 1 ] && args+=(--force)' in code
     env = code_of(SLURM / "env.sh")
     for name in ("REGBENCH_RETRY", "REGBENCH_SUBMISSION", "REGBENCH_TIME_LIMIT"):

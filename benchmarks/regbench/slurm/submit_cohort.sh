@@ -131,6 +131,10 @@
 #                                     gets it times the rounds of the largest patient,
 #                                     never above the site's longest job (7 days)
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
+#   REGBENCH_ACCT_WAIT_S (600)        the longest a ladder task waits for the scheduler's
+#                                     accounting to name the END state of an earlier
+#                                     task whose result still says "killed"
+#   REGBENCH_ACCT_POLL_S (30)         seconds between two looks at it (run_rung.sbatch)
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N); not
 #                                     applied to the tile arrays, whose limit is
 #                                     REGBENCH_STAGE_QUEUE_MAX

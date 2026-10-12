@@ -18,7 +18,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import cost, ladder, methods, resources, score
+from benchmarks.regbench import (
+    cost,
+    failure_log,
+    ladder,
+    methods,
+    resources,
+    score,
+)
 from benchmarks.regbench.cases import result_dir
 from benchmarks.regbench.mapping import MOV_TO_REF, PointMap
 
@@ -155,22 +162,99 @@ def test_the_writer_stays_outside_the_registration_clock(toy):
 
 
 # ── three stretches, three memory causes ──────────────────────────────────────
-def test_the_benchmarks_own_out_of_memory_is_not_the_methods(toy):
-    """Review item 12: the paused point warp is the benchmark's work."""
+def test_the_benchmarks_own_out_of_memory_is_not_the_methods(toy, monkeypatch):
+    """Review item 12: the benchmark's own lines around the map, clock stopped."""
     _, case, out = toy
 
-    def hungry(xy):
+    def register(case, work, opts):
+        yield "b", true_map(), {}
+
+    def full(path, **arrays):
         raise MemoryError("Unable to allocate 40. GiB for an array")
 
-    def register(case, work, opts):
-        yield "b", PointMap(hungry, MOV_TO_REF), {}
-
+    monkeypatch.setattr(methods, "write_npz", full)
     method = fake("b", ["b"], register)
     assert methods.run_case(method, case, out) == []
     run = run_json(out, "b", case)
     assert run["cause"] == "benchmark_oom" and "benchmark's own step" in run["error"]
     assert run["cause"] in resources.NOT_THE_METHOD
     # more memory is still the remedy
+    assert ladder.unit_retry(ladder.unit_paths(out, method, None, [case]))[0]
+
+
+def test_the_benchmarks_own_error_is_not_the_methods(toy, monkeypatch):
+    _, case, out = toy
+
+    def register(case, work, opts):
+        yield "b", true_map(), {}
+
+    def broken(path, **arrays):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(methods, "write_npz", broken)
+    assert methods.run_case(fake("b", ["b"], register), case, out) == []
+    run = run_json(out, "b", case)
+    assert run["cause"] == "benchmark" and "benchmark's own step" in run["error"]
+    assert failure_log.classify(run["cause"]) == failure_log.BENCHMARK
+
+
+# ── the method's own point mapping is the method's ────────────────────────────
+def _bad_shape(xy):
+    return np.zeros((len(xy), 3))
+
+
+def _raises(xy):
+    raise ValueError("no transform for this patch")
+
+
+def _not_numbers(xy):
+    return [["a", "b"]] * len(xy)
+
+
+@pytest.mark.parametrize(
+    "mapping, said",
+    [
+        (_raises, "raised ValueError: no transform for this patch"),
+        (_bad_shape, "returned an array of shape"),
+        (_not_numbers, "not numbers"),
+    ],
+)
+def test_a_mapping_that_fails_is_the_methods_failure(toy, mapping, said):
+    """An error raised inside the method's mapping function, or a result that is not
+    one X, Y pair per point, fails that row as the method's; the run goes on."""
+    _, case, out = toy
+
+    def register(case, work, opts):
+        yield "p_first", PointMap(mapping, MOV_TO_REF), {}
+        yield "p", true_map(), {}
+
+    method = fake("p", ["p_first", "p"], register)
+    assert methods.run_case(method, case, out) == ["p"]
+    run = run_json(out, "p_first", case)
+    assert run["cause"] == "exception" and said in run["error"]
+    assert "the method's point mapping" in run["error"]
+    assert "benchmark's own step" not in run["error"]
+    assert failure_log.classify(run["cause"]) == failure_log.METHOD
+    assert run["cause"] not in resources.NOT_THE_METHOD
+    assert not ladder.unit_retry(ladder.unit_paths(out, method, None, [case]))[0]
+
+
+def test_a_mapping_that_runs_out_of_memory_is_the_methods_oom(toy):
+    _, case, out = toy
+
+    def hungry(xy):
+        raise MemoryError("Unable to allocate 40. GiB for an array")
+
+    def register(case, work, opts):
+        yield "h_first", PointMap(hungry, MOV_TO_REF), {}
+        yield "h", true_map(), {}  # pragma: no cover
+
+    method = fake("h", ["h_first", "h"], register)
+    assert methods.run_case(method, case, out) == []
+    for variant in ("h_first", "h"):  # the run ends there, and the unit goes up
+        run = run_json(out, variant, case)
+        assert run["cause"] == "oom" and run["cause"] not in resources.NOT_THE_METHOD
+    assert "point mapping" in run_json(out, "h_first", case)["error"]
     assert ladder.unit_retry(ladder.unit_paths(out, method, None, [case]))[0]
 
 
@@ -242,7 +326,7 @@ def test_a_kill_while_the_method_has_the_clock_paused_is_its_writers(toy, counte
     assert run_json(out, "m", case)["cause"] == "writer_oom"
 
 
-def test_a_kill_while_the_benchmark_moves_the_nuclei_is_the_benchmarks(toy, counter):
+def test_a_kill_inside_the_methods_mapping_is_the_methods(toy, counter):
     _, case, out = toy
 
     def slow(xy):
@@ -252,6 +336,19 @@ def test_a_kill_while_the_benchmark_moves_the_nuclei_is_the_benchmarks(toy, coun
     def register(case, work, opts):
         yield "k", PointMap(slow, MOV_TO_REF), {}
 
+    methods.run_case(fake("k", ["k"], register), case, out)
+    assert run_json(out, "k", case)["cause"] == "oom"
+
+
+def test_a_kill_in_the_benchmarks_own_lines_is_the_benchmarks(
+    toy, counter, monkeypatch
+):
+    _, case, out = toy
+
+    def register(case, work, opts):
+        yield "k", true_map(), {}
+
+    monkeypatch.setattr(methods, "write_npz", lambda path, **a: _killed(counter))
     methods.run_case(fake("k", ["k"], register), case, out)
     assert run_json(out, "k", case)["cause"] == "benchmark_oom"
 
