@@ -10,6 +10,7 @@ test can refuse a call, or end the submitter in the middle of one.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -56,16 +57,28 @@ echo "$id;cluster"
 """
 
 SQUEUE = r"""#!/bin/bash
-# squeue: by name (-n) the id of a job that is still queued; else what is in the queue,
-# after letting $FAKE/ends tasks end
-name=""
-while [ $# -gt 0 ]; do case "$1" in -n) name="$2"; shift 2 ;; *) shift ;; esac; done
-[ -e "$FAKE/squeue_fails" ] && exit 1
+# squeue: by name (-n) the id of a job that is still queued; with a format that asks for
+# the reason (%r), what is in the queue as `id|name|state|reason` ($FAKE/reason, default
+# PENDING|Priority); else what is in the queue, after letting $FAKE/ends tasks end
+name="" format=""
+while [ $# -gt 0 ]; do
+    case "$1" in -n) name="$2"; shift 2 ;; -o) format="$2"; shift 2 ;; *) shift ;; esac
+done
+[ -e "$FAKE/squeue_fails" ] && { echo x >> "$FAKE/failed_looks"; exit 1; }
 touch "$FAKE/queue"
 if [ -n "$name" ]; then
     grep -qx "$name" "$FAKE/queue" && grep "job-name=$name " "$FAKE/calls" | cut -f1 | head -n 1
     exit 0
 fi
+case "$format" in *%r*)
+    n=0
+    while IFS= read -r job; do
+        n=$((n + 1))
+        echo "70_$n|$job|$(cat "$FAKE/reason" 2>/dev/null || echo "PENDING|Priority")"
+    done < "$FAKE/queue"
+    echo "71_1|someone-elses-job|PENDING|JobHeldUser"
+    exit 0 ;;
+esac
 echo x >> "$FAKE/looks"
 ends="$(cat "$FAKE/ends" 2>/dev/null || echo 1000000)"
 tail -n +"$((ends + 1))" "$FAKE/queue" > "$FAKE/queue.new"
@@ -383,18 +396,153 @@ def test_a_submitter_that_is_killed_is_continued_from_its_files(tmp_path, ends):
 
 
 def test_a_queue_that_cannot_be_read_is_not_an_empty_queue(tmp_path):
+    """Nothing is fed on a queue that cannot be read; every such look is said, and
+    after the bound the submitter gives up as the launcher's failure, promptly."""
     site = Site(tmp_path, {1: range(4), 2: []})
     (site.fake / "squeue_fails").write_text("")
-    with pytest.raises(subprocess.TimeoutExpired):
-        subprocess.run(
-            ["bash", str(SLURM / "feed_tiles.sbatch"), "stare", "stare", "-", "-",
-             "STARE_REGBENCH", "multiplex", str(site.layout), "3", "4", "1", *ALLOC],
-            env=site.env(REGBENCH_STAGE_POLL_S="1"),
-            capture_output=True,
-            cwd=REPO,
-            timeout=4,
-        )  # fmt: skip
-    assert site.calls() == []
+    done = site.run(REGBENCH_STAGE_SQUEUE_TRIES=3)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert site.calls() == []  # no sbatch at all
+    assert len((site.fake / "failed_looks").read_text().split()) == 3
+    said = [ln for ln in done.stdout.splitlines() if "could not be read" in ln]
+    assert [ln.split("look ")[1].split(" ")[0] for ln in said[:3]] == ["1", "2", "3"]
+    end = dict(w.split("=", 1) for w in last(done).split()[1:])
+    assert (end["status"], end["cause"], end["whose"]) == (
+        "refused", "not_submitted", "launcher"
+    )  # fmt: skip
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "gave up: the queue could not be read 3 times in a row" in marker
+    assert not Path(f"{site.state}.done").exists()
+    problem = stages.feed_problem(site.out, "S-1", "stare", "multiplex")
+    assert problem.startswith("the tile submitter gave up: ")
+    assert "could not be read" in problem
+    # the queue answers again: the next link feeds everything and clears the marker
+    (site.fake / "squeue_fails").unlink()
+    done = site.run(link=2)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert sorted(site.tiles()) == list(range(4))
+    assert stages.feed_problem(site.out, "S-1", "stare", "multiplex") == ""
+
+
+def test_one_unreadable_look_is_said_and_then_forgotten(tmp_path):
+    """The bound is on looks IN A ROW: a queue that answers again resets it."""
+    site = Site(tmp_path, {1: range(4), 2: []})
+    (site.fake / "squeue").write_text(
+        SQUEUE.replace(
+            '[ -e "$FAKE/squeue_fails" ]',
+            'n=$(( $(cat "$FAKE/asked" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE/asked"\n'
+            "[ $((n % 2)) = 1 ]",
+        )
+    )
+    done = site.run(REGBENCH_STAGE_SQUEUE_TRIES=2)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert sorted(site.tiles()) == list(range(4))
+    assert done.stdout.count("look 1 of at most 2 in a row") >= 2
+    assert "look 2 of" not in done.stdout
+
+
+@pytest.mark.parametrize(
+    "reason, bound, gives_up_on",
+    [
+        ("PENDING|JobHeldUser", {}, "does not leave by itself (reason: JobHeldUser)"),
+        (
+            "PENDING|DependencyNeverSatisfied",
+            {},
+            "does not leave by itself (reason: DependencyNeverSatisfied)",
+        ),
+        (
+            "PENDING|Priority",
+            {"REGBENCH_STAGE_STALL_MAX_S": 3},
+            "REGBENCH_STAGE_STALL_MAX_S=3",
+        ),
+    ],
+)
+def test_tile_tasks_that_do_not_leave_the_queue_end_the_wait_loudly(
+    tmp_path, reason, bound, gives_up_on
+):
+    """Four tile tasks stay in the queue. A held one ends the wait at the first
+    stretch; tasks that only wait their turn are waited for, each stretch said, until
+    the longer bound. The submitter never writes `.done` over tasks still queued."""
+    site = Site(tmp_path, {1: range(4), 2: []})
+    (site.fake / "ends").write_text("0")
+    (site.fake / "reason").write_text(reason)
+    done = site.run(REGBENCH_STAGE_POLL_S=1, REGBENCH_STAGE_STALL_S=1, **bound)
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert sorted(site.tiles()) == list(range(4))
+    assert "after the last attempt: 4 tile task(s) in the queue" in done.stdout
+    listed = [ln for ln in done.stdout.splitlines() if ln.startswith("70_")]
+    assert len(listed) >= 4 and all(
+        ln.split("|")[1:] == ["rb-stare-multiplex-tile-a1-o0", *reason.split("|")]
+        for ln in listed
+    )
+    assert "someone-elses-job" not in done.stdout  # only this run's tile tasks
+    waited_on = done.stdout.count("none of them is held; waiting on")
+    assert (waited_on >= 1) is bool(bound)
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "gave up: after the last attempt" in marker and gives_up_on in marker
+    assert "tile tasks of this run still queued or running: 4" in marker
+    assert "they are left in the queue" in marker
+    assert not Path(f"{site.state}.done").exists()
+    assert "status=refused cause=not_submitted whose=launcher" in last(done)
+    assert stages.feed_problem(site.out, "S-1", "stare", "multiplex").startswith(
+        "the tile submitter gave up: "
+    )
+
+
+def test_a_wait_for_room_is_ended_the_same_way(tmp_path):
+    site = Site(tmp_path, {1: range(8), 2: []})
+    (site.fake / "ends").write_text("0")
+    (site.fake / "reason").write_text("PENDING|JobHeldAdmin")
+    done = site.run(
+        REGBENCH_STAGE_POLL_S=1,
+        REGBENCH_STAGE_STALL_S=1,
+        REGBENCH_STAGE_ARRAY_MAX=4,
+        REGBENCH_STAGE_QUEUE_MAX=4,
+        REGBENCH_STAGE_FEED_MIN=2,
+    )
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert sorted(site.tiles()) == list(range(4))  # the second array never had room
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "gave up: attempt 1, waiting for 2 free slot(s) of 4" in marker
+    assert "JobHeldAdmin" in marker
+
+
+def test_an_array_that_ended_is_found_in_the_accounting_since_the_first_start(
+    tmp_path,
+):
+    """A link that restarts after midnight: the array whose id was never written down
+    has left the queue, and the accounting is asked from the time the chain started
+    (sacct's own window starts today at 00:00)."""
+    site = Site(tmp_path, {1: range(35), 2: []})
+    sacct = site.fake / "sacct"
+    sacct.write_text(
+        "#!/bin/bash\n"
+        'echo "$*" >> "$FAKE/sacct.log"\n'
+        'since="" name=""\n'
+        'while [ $# -gt 0 ]; do case "$1" in -S) since="$2"; shift 2 ;; '
+        '--name=*) name="${1#--name=}"; shift ;; *) shift ;; esac; done\n'
+        # without a start the default window would miss an array of yesterday
+        '[ -n "$since" ] || exit 0\n'
+        'grep "job-name=$name " "$FAKE/calls" | cut -f1 | head -n 1\n'
+    )
+    sacct.chmod(0o755)
+    (site.fake / "kill_at").write_text("2")
+    (site.fake / "ends").write_text("0")
+    env = dict(REGBENCH_STAGE_ARRAY_MAX=10, REGBENCH_STAGE_QUEUE_MAX=1000)
+    assert site.run(**env).returncode == -9
+    started = Path(f"{site.state}.started").read_text().strip()
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", started)
+    (site.fake / "ends").write_text("1000000")
+    (site.fake / "queue").write_text("")  # both arrays ended meanwhile
+    done = site.run(link=2, **env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    asked = (site.fake / "sacct.log").read_text().splitlines()
+    assert asked and all(f"-S {started} " in line for line in asked)
+    assert "--name=rb-stare-multiplex-tile-a1-o10" in asked[0]
+    assert sorted(site.tiles()) == list(range(35))  # found: nothing twice
+    assert "submitted again" not in done.stdout
+    # the time the chain started is written once, by its first link
+    assert Path(f"{site.state}.started").read_text().strip() == started
 
 
 def test_the_defaults_are_the_ruled_ones():

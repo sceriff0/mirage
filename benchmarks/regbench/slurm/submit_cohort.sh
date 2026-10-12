@@ -150,6 +150,10 @@
 #                                     first is ended at its time limit
 #   REGBENCH_STAGE_FEED_TIME (7-00:00:00)  the time limit of one of them (the site's
 #                                     longest job)
+#   REGBENCH_STAGE_SQUEUE_TRIES (30), REGBENCH_STAGE_STALL_S (3600),
+#   REGBENCH_STAGE_STALL_MAX_S (172800), REGBENCH_STAGE_HELD_REASONS
+#                                     when a tile submitter stops waiting and gives up
+#                                     (feed_tiles.sbatch has the rules)
 #                                     The dry run prints how many sbatch calls are made
 #                                     now, how many tile tasks are fed in later, and
 #                                     the most tasks in the queue at once

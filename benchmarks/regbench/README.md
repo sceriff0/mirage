@@ -2187,7 +2187,7 @@ script names no method.
      at or below `REGBENCH_STAGE_QUEUE_MAX`; it waits for `REGBENCH_STAGE_FEED_MIN`
      free slots (25) so that it does not submit one-task arrays, and looks again every
      `REGBENCH_STAGE_POLL_S` seconds (60). A queue it cannot read is never taken for an
-     empty one. The tile arrays carry no `%N`: the ceiling is their limit;
+     empty one (below). The tile arrays carry no `%N`: the ceiling is their limit;
    - attempts 2 to 4, each once the attempt before has left the queue: a RETRY JOB is
      one task per round that has a tile the pipeline would retry, and it runs that
      round's due tiles one after another with the attempt's memory and time (x attempt).
@@ -2202,7 +2202,11 @@ script names no method.
    the tile tasks still in the queue, and continues where the files say the first
    stopped; nothing is submitted twice, except one array whose `sbatch` was cut off
    before its id was written and which is found neither in the queue nor in the
-   accounting (a tile whose record is already ok then exits at once). With
+   accounting (a tile whose record is already ok then exits at once). The accounting
+   is asked from the time the chain's first link started (`<run>-<dataset>.started`,
+   passed as `sacct -S`): without a start `sacct --name` looks from midnight of the
+   current day only (sacct manual, DEFAULT TIME WINDOW; tag under "Not verified"), and
+   a link that restarts on a later day would not find an array that has ended. With
    `REGBENCH_STAGE_FEEDERS=2` that is 14 days of feeding; a run that needs more is
    continued by a new submission, which reuses every stage that is ok. SOLVE and the
    round's last job wait for the LAST submitter (`afterany`). A round whose tiles
@@ -2215,6 +2219,34 @@ script names no method.
    tile tasks are queued, the `scancel` line), ends with `REGBENCH_END ...
    status=refused cause=not_submitted whose=launcher`, and the next submitter of the
    chain tries again from the same files.
+
+   **It never waits in silence, and never for ever.** Two waits could otherwise last
+   until the link's time limit, with SOLVE and everything behind it waiting too:
+
+   - *A queue that cannot be read* (`squeue` fails). Nothing is submitted, every such
+     look is a line of the log, and after `REGBENCH_STAGE_SQUEUE_TRIES` (30) in a row,
+     a poll interval apart, the submitter gives up.
+   - *Tile tasks that do not leave the queue* (while it waits for room, and while it
+     waits for an attempt to be over before listing the next). When none has left for
+     `REGBENCH_STAGE_STALL_S` (3600) seconds it prints every tile task of the run still
+     there with its state and the scheduler's reason (`squeue -o '%i|%j|%T|%r'`). If
+     one of them has a reason it never leaves by itself (`REGBENCH_STAGE_HELD_REASONS`:
+     `JobHeldAdmin`, `JobHeldUser`, `JobHoldMaxRequeue`, `DependencyNeverSatisfied`,
+     `JobLaunchFailure`) it gives up at once; if none has, it waits on, says so, and
+     prints the list again after the next stretch, until
+     `REGBENCH_STAGE_STALL_MAX_S` (172800: two days) have passed without one task
+     leaving, and then gives up whatever the reasons.
+
+   Giving up is the safer of the two ways out, and the one chosen: going on would list
+   the next attempt, or write `.done`, over tiles that are still in the queue, and
+   their rounds would then be read as the method's failures. The submitter writes
+   `<run>-<dataset>.refused` (a `gave up:` line with the reason, how many tile tasks
+   are still queued, the `scancel` line), ends with `status=refused
+   cause=not_submitted whose=launcher` and exit 1, and LEAVES the queued tile tasks
+   alone. The next link of the chain starts from the same files; when it gives up too,
+   SOLVE and the last jobs run, and every round with a tile that is not done ends as
+   `not_submitted`. Release or cancel the held tasks and submit again: what is ok is
+   reused.
 4. **The realcheck gate** of `valis_mirage` and `valis120_hires`: the first patient of
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
@@ -2341,6 +2373,9 @@ round).
 | `REGBENCH_STAGE_POLL_S` | seconds between two looks at the queue | `60` |
 | `REGBENCH_STAGE_FEEDERS`, `REGBENCH_STAGE_FEED_TIME` | tile submitters chained per run and dataset, and the time limit of each | `2`, `7-00:00:00` |
 | `REGBENCH_STAGE_SUBMIT_TRIES`, `REGBENCH_STAGE_ARRAY_SPAN` | read by the tile submitter: tries of a refused `sbatch`; the widest span of indices in one tile array (below the site's `MaxArraySize`) | `5`, `1000` |
+| `REGBENCH_STAGE_SQUEUE_TRIES` | read by the tile submitter: looks in a row at a queue that cannot be read before it gives up | `30` |
+| `REGBENCH_STAGE_STALL_S`, `REGBENCH_STAGE_STALL_MAX_S` | read by the tile submitter: seconds without a tile task leaving the queue before it lists what is left (and gives up on a held one); and before it gives up whatever the reasons | `3600`, `172800` |
+| `REGBENCH_STAGE_HELD_REASONS` | the scheduler's reasons the tile submitter takes for "does not leave the queue by itself", space-separated | `JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure` |
 | `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
@@ -2536,14 +2571,22 @@ section included]`, the `sacct` manual `[PARTIAL: read the -S, -j, -X and --name
 the JOB STATE CODES list and the State, ElapsedRaw and TotalCPU fields; missing the rest
 of the page]`, the `squeue` manual `[PARTIAL: read the -h, -r, -u, -n, -o entries and
 the %j, %A, %F, %i, %K, %r, %T format fields; missing the rest of the page; it does not
-say what squeue exits with when the controller does not answer]`). None of the
-following was observed:
+say what squeue exits with when the controller does not answer]`, "Job Reason Codes"
+`[PARTIAL: read the entries for the five reasons of REGBENCH_STAGE_HELD_REASONS and
+for Priority, Resources, Dependency, BeginTime, None and the QOS* and Assoc* families;
+missing the rest of the list]`). None of the following was observed:
 
 - **A job cancelled for an invalid dependency satisfies `afterany`.** The scorer waits
   `afterany` on every array and every gate; if a cancelled job did not release it, the
   scorer would be cancelled too. Three dummy jobs show it:
   `a=$(sbatch --parsable --wrap 'exit 1'); b=$(sbatch --parsable --dependency=afterok:$a --kill-on-invalid-dep=yes --wrap true); sbatch --dependency=afterany:$b --kill-on-invalid-dep=yes --wrap 'echo ran'`:
   the second must end `CANCELLED` and the third must run.
+- **What the tile submitter's bounds rest on.** That `squeue` exits non-zero when it
+  cannot reach the controller (the manual does not say); that `%r` prints the reason
+  names of the "Job Reason Codes" page as they are spelled there, one word, last in the
+  line; that `sacct -S YYYY-MM-DDTHH:MM:SS --name <job name>` finds an array that ended
+  on an earlier day (the format is one of the manual's; the manual says `-S` selects
+  "jobs in any state after the specified time").
 - **The log names.** `slurm/env.sh` rebuilds each task's log path as
   `$REGBENCH_OUT/logs/$SLURM_JOB_NAME-<job or array_task>.log`, assuming `%x`, `%A_%a` and
   `%j` expand to `SLURM_JOB_NAME`, `SLURM_ARRAY_JOB_ID_SLURM_ARRAY_TASK_ID` and

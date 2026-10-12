@@ -25,8 +25,24 @@
 # that are pending or running (`squeue -r`, by job name) and submits only what keeps the
 # count at or below REGBENCH_STAGE_QUEUE_MAX. It waits until at least
 # REGBENCH_STAGE_FEED_MIN slots are free (or fewer tiles are left), so that it does not
-# submit one-task arrays. Between looks it sleeps REGBENCH_STAGE_POLL_S seconds. A queue
-# it cannot read is never taken for an empty one: it waits and looks again.
+# submit one-task arrays. Between looks it sleeps REGBENCH_STAGE_POLL_S seconds.
+#
+# IT NEVER WAITS IN SILENCE, AND NEVER FOR EVER.
+#   A queue it cannot read (`squeue` fails) is never taken for an empty one: nothing is
+#   submitted, every such look is a line of the log, and after
+#   REGBENCH_STAGE_SQUEUE_TRIES (30) of them in a row it GIVES UP.
+#   While it waits (for room, or for the queue to empty before the next attempt) and no
+#   tile task has left the queue for REGBENCH_STAGE_STALL_S (3600) seconds, it prints
+#   every tile task still there with its state and the scheduler's reason. A task whose
+#   reason is one it never leaves by itself (REGBENCH_STAGE_HELD_REASONS: a hold, a
+#   dependency that can never be met, a failed launch) makes it GIVE UP at once; so does
+#   REGBENCH_STAGE_STALL_MAX_S (172800: two days) without one task leaving, whatever the
+#   reasons. Otherwise it goes on waiting and says so again after the next stretch.
+#   GIVING UP is the safer of the two ways out: going on would count tiles that are
+#   still in the queue as done. It writes <layout>.refused with the reason and what is
+#   still queued, ends with exit 1, and the rounds whose tiles are not done fail as
+#   `not_submitted` (the launcher's). The tile tasks in the queue are left alone; the
+#   next link of the chain starts where this one stopped.
 #
 # RESTART. Everything it has done is in two files beside the layout:
 #   <layout>.due.a<attempt>   what is due at that attempt, one index per line, written once
@@ -36,8 +52,10 @@
 # continues from those files and from the queue: what was submitted is not submitted
 # again, and tile tasks an earlier link left in the queue are counted. A line without a
 # job id (the link died between the two writes) is looked up by job name, in the queue
-# and in the accounting; found nowhere, that one array is submitted again, and a tile
-# whose record is already ok exits at once. <layout>.done says nothing is left.
+# and in the accounting (from the time the first link started, kept in
+# <layout>.started: sacct's own window starts at midnight); found nowhere, that one array
+# is submitted again, and a tile whose record is already ok exits at once.
+# <layout>.done says nothing is left.
 #
 # REFUSED. An `sbatch` the scheduler refuses is tried REGBENCH_STAGE_SUBMIT_TRIES times.
 # After that this job writes <layout>.refused (what was refused, the scheduler's words,
@@ -45,7 +63,8 @@
 # queue fail as `not_submitted`, the launcher's failure and not the method's. The next
 # link, or a new submission, goes on from the same files.
 #
-# No job waits on `sbatch --wait`. The exit code is 0 unless an sbatch was refused.
+# No job waits on `sbatch --wait`. The exit code is 0 unless an sbatch was refused or
+# the submitter gave up.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" dataset="$6" layout="$7"
@@ -57,6 +76,14 @@ ALLOC=("" "${11}" "${12}" "${13}" "${14}")
 : "${REGBENCH_STAGE_POLL_S:=60}"
 : "${REGBENCH_STAGE_SUBMIT_TRIES:=5}"
 : "${REGBENCH_STAGE_ARRAY_SPAN:=1000}"
+: "${REGBENCH_STAGE_SQUEUE_TRIES:=30}"
+: "${REGBENCH_STAGE_STALL_S:=3600}"
+: "${REGBENCH_STAGE_STALL_MAX_S:=172800}"
+# squeue's reasons of a pending job that does not start by itself (SLURM "Job Reason
+# Codes", slurm.schedmd.com/job_reason_codes.html `[PARTIAL: read the entries named here
+# and Priority, Resources, Dependency, BeginTime, None, the QOS* and Assoc* families;
+# missing the rest of the list]`)
+: "${REGBENCH_STAGE_HELD_REASONS:=JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure}"
 HERE="$REGBENCH_REPO/benchmarks/regbench/slurm"
 state="${layout%.tsv}"
 fed="$state.fed.tsv"
@@ -94,6 +121,10 @@ if [ -s "$state.sbatch_args" ]; then
     while IFS= read -r line; do extra+=("$line"); done < "$state.sbatch_args"
 fi
 
+# when this chain of submitters first started: no array of it is older
+[ -s "$state.started" ] || date +%Y-%m-%dT%H:%M:%S > "$state.started"
+started="$(head -n 1 "$state.started")"
+
 # queued: how many tile tasks of this run and dataset are pending or running; -1 when
 # the queue cannot be read
 queued() {
@@ -104,12 +135,74 @@ queued() {
     fi
     grep -c "^$prefix" <<< "$names" || true
 }
-# drain: wait until none is left
+# gave_up <reason>: the marker a round reads (stages.feed_problem), the end line, exit 1
+gave_up() {
+    {
+        echo "time: $(date +%FT%T)"
+        echo "run: $name  dataset: $dataset  submission: ${REGBENCH_SUBMISSION:-}  link: $link"
+        echo "gave up: $1"
+        echo "tile tasks of this run still queued or running: ${2:-unknown}"
+        echo "they are left in the queue; every job id of this submission, one per line: $ids_file"
+        echo "cancel them: scancel \$(cat \"$ids_file\")"
+        echo "go on: the next link of the chain, or submit again (submit_cohort.sh); what is ok is reused"
+    } > "$state.refused"
+    cat "$state.refused"
+    end refused not_submitted
+    exit 1
+}
+# look: sets Q to the count; 1 when the queue could not be read (said, and counted: after
+# REGBENCH_STAGE_SQUEUE_TRIES in a row the submitter gives up)
+Q=0 unreadable=0
+look() {
+    Q="$(queued)"
+    if [ "$Q" -lt 0 ]; then
+        unreadable=$((unreadable + 1))
+        echo "$(date +%FT%T) the queue could not be read (squeue failed), look $unreadable of at most $REGBENCH_STAGE_SQUEUE_TRIES in a row: nothing is submitted on a queue that cannot be read"
+        [ "$unreadable" -ge "$REGBENCH_STAGE_SQUEUE_TRIES" ] \
+            && gave_up "the queue could not be read $unreadable times in a row, ${REGBENCH_STAGE_POLL_S}s apart (squeue -h -r -u $me failed)"
+        return 1
+    fi
+    unreadable=0
+    return 0
+}
+# moved <count>: a tile task left the queue, or one was just put in: the wait starts anew
+low=-1 since=$SECONDS first=$SECONDS
+moved() { low="$1"; since=$SECONDS; first=$SECONDS; }
+# waiting <what for>: called with Q at every look of a wait. Nothing for
+# REGBENCH_STAGE_STALL_S seconds: say what is still in the queue and why, give up on a
+# task that does not leave by itself or after REGBENCH_STAGE_STALL_MAX_S, else wait on.
+waiting() {
+    local what="$1" left held="" reason
+    if [ "$low" -lt 0 ] || [ "$Q" -lt "$low" ]; then
+        moved "$Q"
+        return 0
+    fi
+    [ $((SECONDS - since)) -ge "$REGBENCH_STAGE_STALL_S" ] || return 0
+    since=$SECONDS
+    if ! left="$(squeue -h -r -u "$me" -o '%i|%j|%T|%r' 2>/dev/null)"; then
+        echo "$(date +%FT%T) $what: no tile task has left the queue for $((SECONDS - first))s, and what is left could not be listed (squeue failed)"
+        return 0
+    fi
+    left="$(awk -F'|' -v p="$prefix" 'index($2, p) == 1' <<< "$left")"
+    echo "$(date +%FT%T) $what: $Q tile task(s) in the queue and none has left it for $((SECONDS - first))s. Still there (job id|name|state|reason):"
+    echo "${left:-  (none listed)}"
+    for reason in $REGBENCH_STAGE_HELD_REASONS; do
+        grep -q "|$reason\$" <<< "$left" && held="$held $reason"
+    done
+    [ -n "$held" ] && gave_up "$what: $Q tile task(s) have not left the queue for $((SECONDS - first))s and at least one does not leave by itself (reason:$held); see the log for the list" "$Q"
+    [ $((SECONDS - first)) -ge "$REGBENCH_STAGE_STALL_MAX_S" ] \
+        && gave_up "$what: no tile task has left the queue for $((SECONDS - first))s (REGBENCH_STAGE_STALL_MAX_S=$REGBENCH_STAGE_STALL_MAX_S); see the log for the list" "$Q"
+    echo "$(date +%FT%T) $what: none of them is held; waiting on (at most $REGBENCH_STAGE_STALL_MAX_S s without one leaving)"
+    return 0
+}
+# drain <what for>: wait until none is left
 drain() {
-    local q
+    low=-1
     while :; do
-        q="$(queued)"
-        [ "$q" = 0 ] && return 0
+        if look; then
+            [ "$Q" = 0 ] && return 0
+            waiting "$1"
+        fi
         sleep "$REGBENCH_STAGE_POLL_S"
     done
 }
@@ -161,7 +254,7 @@ was_submitted() {
     found="$(squeue -h -u "$me" -n "$1" -o '%A' 2>/dev/null | head -n 1)"
     [ -n "$found" ] && { echo "$found"; return 0; }
     if command -v sacct >/dev/null; then
-        found="$(sacct -n -X -P --name="$1" -o JobID 2>/dev/null | head -n 1)"
+        found="$(sacct -n -X -P -S "$started" --name="$1" -o JobID 2>/dev/null | head -n 1)"
         [ -n "$found" ] && { echo "${found%%_*}"; return 0; }
     fi
     return 1
@@ -192,12 +285,13 @@ feed() {
             [ $((start + count)) -gt "$next" ] && next=$((start + count))
         done <<< "$before"
     fi
+    low=-1
     while [ "$next" -lt "$total" ]; do
-        q="$(queued)"
-        if [ "$q" -lt 0 ]; then
+        if ! look; then
             sleep "$REGBENCH_STAGE_POLL_S"
             continue
         fi
+        q="$Q"
         room=$((REGBENCH_STAGE_QUEUE_MAX - q))
         left=$((total - next))
         want="$REGBENCH_STAGE_ARRAY_MAX"
@@ -206,6 +300,7 @@ feed() {
         [ "$need" -gt "$want" ] && need="$want"
         [ "$need" -gt "$REGBENCH_STAGE_QUEUE_MAX" ] && need="$REGBENCH_STAGE_QUEUE_MAX"
         if [ "$room" -lt "$need" ]; then
+            waiting "attempt $attempt, waiting for $need free slot(s) of $REGBENCH_STAGE_QUEUE_MAX"
             sleep "$REGBENCH_STAGE_POLL_S"
             continue
         fi
@@ -247,13 +342,14 @@ feed() {
         echo "$id" >> "$ids_file"
         echo "attempt $attempt: $jobname -> $id, $size task(s) (--array=$spec), $q in the queue before"
         next=$((next + size))
+        moved $((q + size))
     done
 }
 
 for attempt in 1 2 3 4; do
     # what is due at an attempt is read off the records once the attempt before has
     # left the queue; a link that finds the list written goes on feeding from it
-    [ -e "$state.due.a$attempt" ] || drain
+    [ -e "$state.due.a$attempt" ] || drain "before attempt $attempt is listed"
     the_due "$attempt"
     if [ ! -s "$state.due.a$attempt" ]; then
         echo "attempt $attempt: nothing is due"
@@ -262,7 +358,7 @@ for attempt in 1 2 3 4; do
     fi
     feed "$attempt"
 done
-drain
+drain "after the last attempt"
 rm -f "$state.refused"
 date +%FT%T > "$state.done"
 echo "$name on $dataset: every tile job was submitted and has left the queue"

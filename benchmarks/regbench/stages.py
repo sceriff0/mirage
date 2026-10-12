@@ -213,7 +213,8 @@ def feed_state(out, submission, run, dataset):
 
 def feed_problem(out, submission, run, dataset):
     """Why a tile of this submission may never have been submitted: the text of the
-    submitter's refusal, a note that it did not finish, or ``""`` when it finished
+    submitter's refusal or of its giving up (a queue it could not read, tile tasks
+    that did not leave it), a note that it did not finish, or ``""`` when it finished
     (or when there is no submission: a run outside the launcher)."""
     if not submission:
         return ""
@@ -222,14 +223,22 @@ def feed_problem(out, submission, run, dataset):
     if done.exists():
         return ""
     try:
-        return "the tile submitter was refused by the scheduler: " + " | ".join(
-            refused.read_text().splitlines()[:4]
-        )
+        lines = refused.read_text().splitlines()
     except OSError:
         return (
             "the tile submitter did not finish (it was ended at its time limit, or "
             f"lost): no {done.name} under {done.parent}"
         )
+    gave_up = any(ln.startswith("gave up:") for ln in lines)
+    return (
+        (
+            "the tile submitter gave up"
+            if gave_up
+            else "the tile submitter was refused by the scheduler"
+        )
+        + ": "
+        + " | ".join(lines[:4])
+    )
 
 
 # ── one job's record ──────────────────────────────────────────────────────────
