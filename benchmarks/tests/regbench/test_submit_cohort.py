@@ -602,6 +602,16 @@ def test_every_dependent_job_is_killed_on_an_invalid_dependency(dry):
     assert all(j.opt("--kill-on-invalid-dep") == "yes" for j in waiting)
 
 
+def test_no_job_is_ever_requeued(dry):
+    """A requeued task would find only the placeholder of its first start and record
+    the method's death: a lost task ends, and the ladder's `again` task is the retry."""
+    jobs, done, _ = dry
+    assert len(jobs) == N_JOBS
+    assert all("--no-requeue" in j.words for j in jobs.values())
+    assert "--requeue" not in code_of(SCRIPT)
+    assert "--requeue" not in code_of(SLURM / "feed_tiles.sbatch")
+
+
 # ── order ─────────────────────────────────────────────────────────────────────
 def test_both_anchored_rows_wait_for_the_run_they_read(dry):
     jobs, _, _ = dry

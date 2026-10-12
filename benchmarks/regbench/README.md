@@ -2053,7 +2053,13 @@ script names no method.
    that gates the run is anything but `ok`, a selfcheck that left no record included.
    Then that run, and only that run, never starts: every one of its arrays waits for its
    gate with `afterok`, and every job carries `--kill-on-invalid-dep=yes` so that it is
-   cancelled instead of pending for ever. The task itself reads the gate's record again
+   cancelled instead of pending for ever. Every job, the tile jobs included, also
+   carries `--no-requeue`: the scheduler never starts a task a second time, so a task
+   on a failed node ends as `NODE_FAIL` and the `-again` array of the ladder is the one
+   retry (sbatch manual, `--no-requeue`: "the batch job should never be requeued under
+   any circumstances" `[PARTIAL: read the --no-requeue, --requeue, --kill-on-invalid-dep
+   and --dependency entries; missing the rest of the page]`; the manual notes that a
+   site's `ForceRequeueOnFail` prolog flag overrides it). The task itself reads the gate's record again
    before it runs. `<out>/logs/gates/<run>.tsv`: run, status, rows to drop, blocked,
    the reference comparison.
 3. **The ladder**: per run and dataset, EIGHT job arrays, two per rung (16, 64, 256 and
@@ -2517,10 +2523,10 @@ and array sections). None of the following was observed:
   `<array job>_<task>`, which is what a record's `launch_id` is built from:
   `SLURM_ARRAY_JOB_ID` and `SLURM_ARRAY_TASK_ID`), for a task killed for memory, and for
   one cancelled with `scancel`. A `scancel` by the user is also read as `infrastructure`
-  and retried once: cancel the whole submission, not single tasks, to stop it. Whether a
-  preempted job is requeued under the same job id on this site (then the retry array and
-  the scheduler's own requeue would both run the unit; the second finds the first's
-  result and reuses it) was not observed.
+  and retried once: cancel the whole submission, not single tasks, to stop it. Every job
+  is submitted with `--no-requeue`; that a preempted or node-failed task then ends in
+  one of those states instead of starting again under the same job id was not observed
+  (a site's `ForceRequeueOnFail` overrides the option).
 - **The out-of-memory counter is readable inside the image.** `run.json: oom_watch` and
   the first line of the cost tables say whether it was. Not observed under `apptainer
   exec --cleanenv`. One STARE unit is enough to see it.

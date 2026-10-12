@@ -392,10 +392,13 @@ refused() {
     } >&2
     exit 2
 }
-# every job: the caller's own options, logs in one place, and never pending for ever on
-# a dependency that can no longer be met
+# every job: the caller's own options, logs in one place, never pending for ever on a
+# dependency that can no longer be met, and never requeued: a task the scheduler starts
+# a second time would find only the placeholder its first start left and read it as the
+# method's death. A node failure ends the task as NODE_FAIL, and the `again` task of the
+# same rung runs the unit once more
 common() {
-    COMMON=(--export=ALL --kill-on-invalid-dep=yes)
+    COMMON=(--export=ALL --kill-on-invalid-dep=yes --no-requeue)
     [ ${#extra[@]} -gt 0 ] && COMMON+=("${extra[@]}")
     return 0
 }

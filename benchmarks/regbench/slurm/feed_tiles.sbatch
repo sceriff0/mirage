@@ -230,7 +230,7 @@ feed() {
         try=0 got=""
         while :; do
             try=$((try + 1))
-            if got="$(sbatch --parsable --job-name="$jobname" --export=ALL ${extra[@]+"${extra[@]}"} \
+            if got="$(sbatch --parsable --job-name="$jobname" --export=ALL --no-requeue ${extra[@]+"${extra[@]}"} \
                     --output="$REGBENCH_OUT/logs/%x-%A_%a.log" --array="$spec" \
                     --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
                     "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" "$dataset" \

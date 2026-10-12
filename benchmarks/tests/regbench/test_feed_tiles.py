@@ -202,6 +202,7 @@ def test_every_tile_is_submitted_once_and_the_ceiling_is_never_exceeded(
         assert f"--mem={want['mem_gb']}G" in words and f"--time={want['time']}" in words
         assert name.startswith("rb-stare-multiplex-tile-a1-o")
         assert "--wait" not in words
+        assert "--no-requeue" in words  # a lost tile is retried by the next attempt
         assert not [w for w in words if w.startswith("--array=") and "%" in w]
         assert words[-2] == str(site.layout)
     assert "REGBENCH_END kind=submitter" in last(done) and "status=ok" in last(done)
