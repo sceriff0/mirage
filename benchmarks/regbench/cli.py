@@ -45,12 +45,19 @@ and exits 3 when it is flagged. ``run --retry-oom`` and ``selfcheck --retry-memo
 what a later rung of the memory ladder runs: they do nothing unless the attempt before
 ran out of memory (``benchmarks/regbench/ladder.py``).
 
+A method whose registration is several stage processes per round (``runs``, column
+``stages``) is never run without a statement of who starts them, ``REGBENCH_STAGES``
+(``benchmarks/regbench/methods/stare.py``): ``jobs`` from the cohort's batch script,
+``local`` from ``run --stages local`` and from ``selfcheck``, which states it for its own
+run. ``run`` without one touches nothing and ends with ``cause=not_submitted``.
+
 Run from the repository root.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 
 from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, plugins
@@ -380,6 +387,15 @@ def build_parser():
         "--work", default=None, help="scratch for the method's intermediates"
     )
     r.add_argument("--keep-work", action="store_true")
+    r.add_argument(
+        "--stages",
+        default=None,
+        choices=("jobs", "local"),
+        help="for a method whose registration is several stage processes per round: "
+        "who starts them. local: this run itself (a run by hand). jobs: the "
+        "scheduler did, with `stage`, and this run reads their records. Unset, "
+        "REGBENCH_STAGES says; with neither, the run is refused",
+    )
     r.add_argument(
         "--realcheck",
         action="store_true",
@@ -809,6 +825,59 @@ def _prepare(a):
     return importlib.import_module(f".datasets.{a.dataset}", __package__).prepare(a)
 
 
+@contextlib.contextmanager
+def _stages_stated(method, stated):
+    """For the time of one command, say who starts the stage processes of a method
+    whose registration is several per round (its ``STAGES``): ``stated`` goes into the
+    variable the method reads (its ``JOBS_ENV``) and what was there comes back after.
+    None states nothing. A method that is one job per unit has nothing to state."""
+    from .methods import load
+
+    mod = load(method)
+    name = getattr(mod, "JOBS_ENV", None) if getattr(mod, "STAGES", None) else None
+    if stated is None or name is None:
+        yield
+        return
+    before = os.environ.get(name)
+    os.environ[name] = stated
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = before
+
+
+def _stages_refused(a, picked):
+    """True when the unit's run does not say who starts its stage processes (the
+    method's ``launcher``): said on the task's end line as the launcher's failure,
+    before a record is read or written."""
+    from . import failure_log, resources, stages
+    from .methods import load
+
+    mod = load(a.method)
+    if not getattr(mod, "STAGES", None):
+        if a.stages:
+            raise SystemExit(f"{a.method} is one job per unit: --stages says nothing")
+        return False
+    try:
+        mod.launcher()
+    except stages.StageFailed as err:
+        print(f"{a.dataset} [{a.label or a.method}]: {err}")
+        failure_log.emit_end(
+            "run",
+            failure_log.outcome(False, err.regbench_cause),
+            err.regbench_cause,
+            run=a.label or a.method,
+            dataset=a.dataset,
+            unit="+".join(c.case_id for c in picked),
+            rung=resources.host_info()["attempt"],
+        )
+        return True
+    return False
+
+
 def _run(a):
     from .cases import groups, list_cases
     from .methods import parse_opts, run_case, run_group, scope_of
@@ -839,6 +908,8 @@ def _run(a):
             )
             return 0
         picked = units[a.index]
+    if _stages_refused(a, picked):
+        return 1
     task = a.ladder or ("climb" if a.retry_oom else None)
     if task:
         from pathlib import Path
@@ -1488,9 +1559,12 @@ def main(argv=None):
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":
-        return _run(a)
+        with _stages_stated(a.method, a.stages):
+            return _run(a)
     if a.cmd == "selfcheck":
-        return _selfcheck(a)
+        # the selfcheck has no scheduler jobs of its own: it starts its stages itself
+        with _stages_stated(a.method, "local"):
+            return _selfcheck(a)
     if a.cmd == "runs":
         return _runs(a)
     if a.cmd == "stage":

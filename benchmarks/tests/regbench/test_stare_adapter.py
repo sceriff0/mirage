@@ -1,9 +1,9 @@
 """The STARE adapter: the pipeline's ``high`` tier, the original slides, STARE's own STITCH.
 
-The command-line tests read the namespace the package's own parser makes of the round's
-``stare register`` command line: every stage command is built from it
-(``test_stages.py`` holds the stage commands and the cohort's separate jobs). The others
-run STARE for real, the four stage commands inside one run.
+The parameter tests read the namespace the package's own parser of ``stare register``
+makes of the round's arguments: every stage command is built from it (``test_stages.py``
+holds the stage commands and the cohort's separate jobs). The others run STARE for real,
+its stage processes started by the run itself (the local launcher).
 """
 
 import dataclasses
@@ -20,6 +20,8 @@ from benchmarks.regbench.cases import load_points, result_dir
 from benchmarks.regbench.methods import stare as adapter
 
 stare = pytest.importorskip("stare")
+
+pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
 
 REPO = Path(__file__).resolve().parents[3]
 NAMES = ["CD3", "DAPI_R2", "PANCK"]
@@ -222,11 +224,11 @@ def test_run_json_records_the_anchor_and_the_allocation(ran):
     assert impl["changed_from_tier"] == {}
     assert len(impl["benchmark_side"]) == 2
     assert "_state" not in info
-    # the stage commands ran inside this one run: its cost is this process's own clock
+    # the run started its stage processes itself: its cost is its own process tree's
     jobs = info["jobs"]
-    assert (
-        jobs["execution"] == "local" and "inside ONE job" in impl["benchmark_side"][1]
-    )
+    assert jobs["execution"] == "local" and "_cost" not in info
+    assert "started by this run itself" in impl["benchmark_side"][1]
+    assert "its own process tree's" in impl["benchmark_side"][1]
     assert (jobs["n_jobs"], jobs["n_tiles"]) == (3, 1)
     assert run["register_s"] >= jobs["wall_unlimited_parallel_s"] > 0
 
@@ -248,8 +250,7 @@ def test_the_rigid_stage_does_not_depend_on_the_stride(ran):
         assert not np.array_equal(z["cells_xy"], full_64)
 
 
-def test_native_output_is_what_stare_register_writes(ran, tmp_path):
-    import stare.cli
+def test_native_output_is_stitch_s_image_on_the_reference_grid(ran):
     import tifffile
 
     case, out = ran
@@ -257,13 +258,8 @@ def test_native_output_is_what_stare_register_writes(ran, tmp_path):
     native = run["native"]
     (written,) = native["files"]
     assert native["writer"] == "stare.stages.stitch.main" and run["write_s"] > 0
-    # undeferred: the same arguments through the command itself, STITCH included
-    argv = adapter.command(case, tmp_path, OPTS)
-    assert stare.cli.main(argv) == 0
-    direct = tifffile.imread(tmp_path / "registered.ome.tif")
     ours = tifffile.imread(written)
-    assert ours.dtype == direct.dtype and np.array_equal(ours, direct)
-    assert ours.any()
+    assert ours.any() and str(ours.dtype) == native["dtype"]
     # on the reference grid, although the moving slide has another shape: no origin
     assert list(ours.shape[-2:]) == case.ref_hw != case.mov_hw
     assert "origin_xy" not in native and "valid_box" not in native
@@ -296,8 +292,18 @@ def test_selfcheck_is_ok(tmp_path, monkeypatch):
         return real(stage_dir, stage, command, *a, **k)
 
     monkeypatch.setattr(stages, "run_command", spy)
+    # ... and the transform is obtained as the cohort's last job obtains it
+    collected, collect = [], adapter._collect
+    monkeypatch.setattr(
+        adapter,
+        "_collect",
+        lambda rnd, jobs: (
+            collected.append((rnd.case.case_id, jobs)) or collect(rnd, jobs)
+        ),
+    )
     rec = sc.run("stare", tmp_path, sizes=own)
     assert rec["status"] == "ok"
+    assert collected == [("pair_2048x2560", False), ("pair_4096x5120", False)]
     assert {(s, c[2]) for s, c in ran} == {
         ("coarse", "coarse"),
         ("tile", "reg-tile"),

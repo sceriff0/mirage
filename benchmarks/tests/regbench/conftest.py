@@ -18,6 +18,17 @@ from benchmarks.regbench.imageio import write_nuclear
 SPECS = synthetic.SUITES["test"]
 
 
+@pytest.fixture(scope="module")
+def local_stages():
+    """For a module that registers with STARE in its own process: the run itself starts
+    the stage processes (``REGBENCH_STAGES=local``, ``regbench.methods.stare``). Nothing
+    states it by default, as nothing does for a run; the module asks for this with
+    ``pytestmark = pytest.mark.usefixtures("local_stages")``."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("REGBENCH_STAGES", "local")
+        yield
+
+
 @pytest.fixture(scope="session")
 def cases_root(tmp_path_factory):
     if os.environ.get("REGBENCH_TEST_CASES"):

@@ -361,8 +361,8 @@ def run_command(
 ):
     """Run one stage command as a process of its own and leave its record; returns it.
 
-    ``command`` is the whole command line. ``execution`` is ``jobs`` (a scheduler job
-    of its own) or ``local`` (one of several inside a single run). ``identity`` is
+    ``command`` is the whole command line. ``execution`` says who started this
+    process: ``jobs`` (the scheduler) or ``local`` (the run itself). ``identity`` is
     kept in the record (``decide``). ``timeout_s`` ends the command with SIGTERM (exit
     143, a retried status) when it runs longer: the time limit of a process that
     shares its job with other work."""

@@ -15,6 +15,9 @@
 # this task is the round's last one. It runs nothing of the registration: it reads the
 # stage jobs' records, moves the benchmark's points through the transform and runs the
 # method's writer (STITCH), with the pipeline's allocation for that process.
+# `-`: the run is one job per unit. A run whose registration is stage jobs and that is
+# handed `-` is refused by `run` before it touches a record: its end line says
+# cause=not_submitted whose=launcher, and nothing is registered here in their place.
 #
 # Each rung is two arrays (benchmarks/regbench/ladder.py has the rules):
 #   first / climb   the attempt at this rung. `climb` (every rung above the first) exits

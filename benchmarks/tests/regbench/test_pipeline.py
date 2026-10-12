@@ -32,6 +32,8 @@ from benchmarks.regbench.datasets import synthetic
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 from benchmarks.regbench.score import DESCRIPTIVE, score
 
+pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
+
 WORKERS = {"workers": 2}
 GRID = np.array(
     [(x, y) for x in range(40, 400, 40) for y in range(40, 400, 40)], dtype=float

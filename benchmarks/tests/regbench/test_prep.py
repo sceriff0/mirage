@@ -17,6 +17,8 @@ from benchmarks.regbench import methods, prep, variants
 from benchmarks.regbench.cases import result_dir
 from benchmarks.regbench.methods import stare as adapter
 
+pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
+
 RNG = np.random.default_rng(3)
 
 

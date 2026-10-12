@@ -45,6 +45,8 @@ from benchmarks.regbench.datasets import hyreco
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 from benchmarks.regbench.methods import stare as stare_adapter
 
+pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
+
 PX = 0.2425  # what the stand-in files state: within 2 % of the paper's 0.24, not equal
 HW = (96, 128)
 

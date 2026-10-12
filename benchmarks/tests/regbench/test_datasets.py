@@ -14,6 +14,8 @@ from benchmarks.regbench.cases import list_cases, load_points, polys
 from benchmarks.regbench.datasets import multiplex, synthetic
 from benchmarks.regbench.score import score
 
+pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
+
 
 def _two_rounds(tmp_path, names=None):
     spec = {**synthetic._BASE, "family": "t", "n": 768, "shift": (6.0, -4.0), "seed": 5}

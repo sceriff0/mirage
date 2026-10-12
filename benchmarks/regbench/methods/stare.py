@@ -10,19 +10,33 @@ tiled_adapter.nf`` runs them: ``stare coarse`` (the anchor and the tile plan), o
 ``stare reg-tile`` process per tile, ``stare solve`` (the manifest: the transform), then
 ``stare stitch`` (the image). Each is a process of its own (``cli``), with the argument
 list ``stare.cli.register`` hands that stage (``stage_commands``), and leaves a record
-(``regbench.stages``). Two ways to run them, one code path for the commands:
+(``regbench.stages``). The benchmark never runs ``stare register`` itself.
 
-``REGBENCH_STAGES=jobs``  the cohort. COARSE, every tile and SOLVE ran as scheduler jobs
-        of their own (``run_stage``, called by ``regbench stage`` in
-        ``slurm/stage.sbatch``), each with the allocation the pipeline gives that
-        process and retried as the pipeline retries it. ``register`` runs nothing: it
-        reads their records (``_collect``), fails the round when a stage did not end
-        ok, and bills what the jobs recorded (``info["_cost"]``, ``info["jobs"]``).
-otherwise  the selfcheck, a laptop: ``register`` runs the same commands itself
-        (``_local``), the tiles ``workers`` at a time, and the run's cost is its own
-        process's.
+**One path to the transform.** COARSE, every tile and SOLVE each run through
+``run_stage``, and ``register`` obtains the transform by reading the records they left
+(``_collect``): the first stage, in order, that did not end ok for this round's command
+fails the round. What differs between two runs is only WHO STARTS the stage processes,
+and the run says so in ``REGBENCH_STAGES`` (``launcher``):
 
-STITCH is the writer in both: ``write_native`` runs it once the transform exists, and
+``jobs``   the scheduler (the cohort). Each stage is a job of its own (``regbench stage``
+        in ``slurm/stage.sbatch``), with the allocation the pipeline gives that process
+        and retried as the pipeline retries it. ``register`` starts nothing, and bills
+        what the jobs recorded (``info["_cost"]``, ``info["jobs"]``).
+``local``  ``register`` itself (``_launch``: the selfcheck, a test, a laptop). The same
+        ``run_stage`` calls in the same order, the tiles ``workers`` at a time, each
+        retried by the pipeline's rule (``stages.decide``); no stage has a memory or
+        time limit of its own. The run's cost is this process tree's, as the driver
+        measures any method; ``info["jobs"]`` holds what the stage records add up to.
+
+There is no default. A run that states neither is refused before a stage process is
+started, as the launcher's failure (``stages.NOT_SUBMITTED``): ``regbench run`` refuses
+it before it touches a record and ends with ``REGBENCH_END ... cause=not_submitted
+whose=launcher``; ``register`` refuses it for any other caller. ``slurm/run_rung.sbatch``
+exports what the launcher's ``stages`` column says (``jobs``), ``regbench selfcheck``
+states ``local`` for its own run, and a run by hand states it with ``regbench run
+--stages local``. ``run.json: info.jobs.execution`` names the launcher that ran.
+
+STITCH is the writer under both: ``write_native`` runs it once the transform exists, and
 its time is ``write_s``.
 
 **Inputs.** The slides as the case has them (``case.ref_image``, ``case.mov_image``), every
@@ -30,8 +44,8 @@ channel, read by STARE's own reader. ``--nuclear-index`` is ``case.extra["mov_ch
 (0 when the case names none). STARE takes ONE index for both slides, so a case whose
 reference has its nuclei at another index is refused.
 
-**A brightfield case** (HyReCo, ANHIR: ``case.modality == "brightfield"``). ``stare
-register`` reads ONE channel per slide, so an RGB slide cannot be handed over as it is.
+**A brightfield case** (HyReCo, ANHIR: ``case.modality == "brightfield"``). STARE reads
+ONE channel per slide, so an RGB slide cannot be handed over as it is.
 The case carries a one-channel proxy of each slide, written by its dataset module
 (``case.ref_nuclear`` / ``case.mov_nuclear``; ``datasets/hyreco.py``: inverted luminance
 by default; ``datasets/anhir.py``: inverted luminance, ``regbench.prep.grey_plane``), and
@@ -122,9 +136,9 @@ NOMINAL_PIXEL_SIZE = 1.0
 STRIDES = (64, 128, 256)
 # the jobs a round is run as on the cohort (regbench.stages); the launcher reads it
 STAGES = (stages.COARSE, stages.TILE, stages.SOLVE, stages.STITCH)
-# set to `jobs` by the launcher's last job of a round: the stages ran as jobs of their
-# own and `register` collects them; unset, it runs them itself (`_local`)
+# who starts the stage processes of a run (module docstring): stated, never assumed
 JOBS_ENV = "REGBENCH_STAGES"
+JOBS, LOCAL = "jobs", "local"
 # lib/RegPresets.groovy, STARE.high (coarse_max_dim is --max-dim), plus the stride;
 # tests/regbench/test_stare_adapter.py reads the row from that file
 TIER_HIGH_STRIDE64 = {
@@ -199,7 +213,7 @@ def nuclear_index(case):
     if ref != mov:
         raise ValueError(
             f"{case.case_id}: the nuclear channel is index {ref} on the reference and "
-            f"{mov} on the moving slide; `stare register` takes one --nuclear-index for both"
+            f"{mov} on the moving slide; STARE takes one --nuclear-index for both"
         )
     return mov
 
@@ -253,12 +267,13 @@ def info_proxy(case):
 
 
 def command(case, stage_dir, opts, inputs=None):
-    """The ONE ``stare register`` command line that is this round: the package's own
-    parser reads it (``namespace``), and every stage command is built from what it
-    parsed, the way ``stare.cli.register`` builds them (``stage_commands``). Running it
-    (``stare.cli.main(command(...))``) is the same registration in one process.
-    ``inputs`` = ``(reference, moving)`` replaces the two files STARE registers on (the
-    preprocessing row: one-channel files, index 0); everything else is the case's."""
+    """The parameters of one round, written as the arguments of ``stare register``: the
+    package's own parser reads them (``namespace``), so every value has the type and
+    the default STARE gives it, and every stage command is built from what it parsed,
+    the way ``stare.cli.register`` builds them (``stage_commands``). The list is parsed
+    and never run. ``inputs`` = ``(reference, moving)`` replaces the two files STARE
+    registers on (the preprocessing row: one-channel files, index 0); everything else
+    is the case's."""
     stage_dir = Path(stage_dir)
     values = {**TIER_HIGH_STRIDE64, "stride": stride_of(opts)}
     values.update({k: opts[k] for k in _FLAGS if k in opts and k != "stride"})
@@ -336,10 +351,12 @@ def namespace(case, stage_dir, opts, inputs=None):
 def stage_commands(ns):
     """The argument list of each stage, from the parsed ``stare register`` namespace:
     what ``stare.cli.register`` hands ``coarse.main``, ``reg_tile.main``, ``solve.main``
-    and ``stitch.main`` (stare/cli.py:79-178), and what the pipeline's four modules
-    render (modules/local/tiled_*.nf, with SOLVE's ``--max-disp`` from
-    conf/modules.config). ``tile`` and ``stitch`` are functions: of a plan row, and of
-    the moving file and the image to write."""
+    and ``stitch.main`` (stare/cli.py:79-178; stare-registration 1.2.1, installed
+    package ``[FULL: cli.py]``), and what the pipeline's four modules render
+    (modules/local/tiled_*.nf, with SOLVE's ``--max-disp`` from conf/modules.config).
+    ``tests/regbench/test_stages.py`` evaluates the four lists in the source of
+    ``stare.cli.register`` and fails when one differs. ``tile`` and ``stitch`` are
+    functions: of a plan row, and of the moving file and the image to write."""
     work = Path(ns.workdir)
     m0, plan = work / f"{ns.moving_name}_m0.json", work / f"{ns.moving_name}_tiles.csv"
     coarse = [
@@ -637,16 +654,27 @@ def _run_prep(rnd, attempt, execution):
 
 
 def run_stage(
-    case, stage_dir, opts, stage, row=None, attempt=1, execution="jobs", force=False
+    case,
+    stage_dir,
+    opts,
+    stage,
+    row=None,
+    attempt=1,
+    execution=JOBS,
+    force=False,
+    rnd=None,
 ):
     """One stage job of one round: ``prep`` (the preprocessing row only), ``coarse``,
     ``tile`` (one plan row; with ``row=None`` every row that is due, one after another)
-    or ``solve``. Returns ``[(stage, row, ran?, why, record)]``.
+    or ``solve``. Returns ``[(stage, row, ran?, why, record)]``. The one entry of every
+    stage process, whoever starts it (``execution``: ``jobs`` or ``local``).
 
     A job runs only when the stage before it is ok for this command, and when
     ``stages.decide`` says this attempt is due; otherwise it leaves everything as it
-    is. STITCH is not a job of this kind: it is the writer (``write_native``)."""
-    rnd = Round(case, stage_dir, opts)
+    is. STITCH is not a job of this kind: it is the writer (``write_native``). ``rnd``
+    is the round when the caller holds it already (``_launch``, whose tiles run in
+    threads: one ``Round`` for all of them)."""
+    rnd = rnd or Round(case, stage_dir, opts)
     submission = resources.host_info()["submission"]
     out = []
 
@@ -773,61 +801,75 @@ def _failed(rnd, stage, row, jobs):
     return err
 
 
-def _local(rnd, workers, mon):
-    """The four stage commands inside ONE run (the selfcheck, a laptop): the same
-    commands and the same records as the cohort's jobs, the tiles ``workers`` at a
-    time, each command once."""
+def _launch(rnd, workers, mon):
+    """The local launcher (``REGBENCH_STAGES=local``): start the round's stage processes
+    from here, as the scheduler starts the cohort's. Every one goes through
+    ``run_stage``, attempt after attempt while ``stages.decide`` says the next one is
+    due (the pipeline's retry rule), the tiles ``workers`` at a time. It stops at the
+    first stage that did not end ok and says nothing about it: ``_collect`` reads the
+    records and fails the round."""
     from concurrent.futures import ThreadPoolExecutor
 
-    def go(stage, row=None):
-        if stage == stages.PREP:
-            rec = _run_prep(rnd, 1, "local")
-        else:
-            rec = stages.run_command(
-                rnd.dir,
-                stage,
-                rnd.command(stage, row),
-                row,
-                1,
-                "local",
-                identity=rnd.identity(stage),
+    def start(stage, row=None):
+        for attempt in range(1, stages.ATTEMPTS + 1):
+            done = run_stage(
+                rnd.case, rnd.dir, rnd.opts, stage, row, attempt, LOCAL, rnd=rnd
             )
-        if not rec.get("ok"):
-            raise _failed(rnd, stage, row, False)
+            rec = done[-1][4] if done else None
+            if rec is None or rec.get("ok") or not stages.retryable(rec):
+                break
+        return bool(rec and rec.get("ok"))
 
-    rnd.dir.mkdir(parents=True, exist_ok=True)
     if rnd.candidate:
         mon.pause()  # benchmark-side work, not STARE's
         try:
-            go(stages.PREP)
+            if not start(stages.PREP):
+                return
         finally:
             mon.resume()
-    go(stages.COARSE)
-    rows = range(len(rnd.plan()))
+    if not start(stages.COARSE):
+        return
     rnd.identity(stages.TILE)  # once, before the pool: the same for every row
     with ThreadPoolExecutor(max(1, int(workers))) as pool:
-        list(pool.map(lambda i: go(stages.TILE, i), rows))
-    _, why = rnd.tiles_done()
-    if why:
-        raise stages.StageFailed(f"SOLVE was not run: {why}")
-    go(stages.SOLVE)
+        tiles = list(pool.map(lambda i: start(stages.TILE, i), range(len(rnd.plan()))))
+    if all(tiles):
+        start(stages.SOLVE)
 
 
-def _collect(rnd):
-    """The cohort: every stage ran in a job of its own; nothing is run here. Raises
-    for the first stage, in order, that is not ok for this round's command."""
+def _collect(rnd, jobs):
+    """The round's transform exists: every stage process left an ok record for this
+    round's command. Nothing is run here, whoever started the stages (``jobs``: the
+    scheduler). Raises for the first stage, in order, that is not ok."""
     if rnd.candidate and not rnd.done(stages.PREP):
-        raise _failed(rnd, stages.PREP, None, True)
+        raise _failed(rnd, stages.PREP, None, jobs)
     if not rnd.done(stages.COARSE):
-        raise _failed(rnd, stages.COARSE, None, True)
+        raise _failed(rnd, stages.COARSE, None, jobs)
     for i in range(len(rnd.plan())):
         if not rnd.done(stages.TILE, i):
-            raise _failed(rnd, stages.TILE, i, True)
+            raise _failed(rnd, stages.TILE, i, jobs)
     _, why = rnd.tiles_done()
     if why:
         raise stages.StageFailed(f"SOLVE's inputs are not complete: {why}")
     if not rnd.done(stages.SOLVE):
-        raise _failed(rnd, stages.SOLVE, None, True)
+        raise _failed(rnd, stages.SOLVE, None, jobs)
+
+
+def launcher():
+    """Who starts the stage processes of this run: ``JOBS`` or ``LOCAL``, as
+    ``REGBENCH_STAGES`` states it. A run that states neither is refused: it was
+    launched without its stage jobs, and that is the launcher's failure."""
+    stated = os.environ.get(JOBS_ENV) or ""
+    if stated in (JOBS, LOCAL):
+        return stated
+    err = stages.StageFailed(
+        f"{JOBS_ENV}={stated or 'unset'}: a STARE round is several stage processes, "
+        f"and the run must say who starts them: `{JOBS}` (the scheduler: the cohort's "
+        f"stage jobs, slurm/stage.sbatch) or `{LOCAL}` (this run itself: the "
+        "selfcheck, `regbench run --stages local`). Nothing was started",
+        stages.NOT_SUBMITTED,
+    )
+    err.regbench_no_rerun = True  # another rung of the same launch states no more
+    raise err
 
 
 def REUSE_KEY(cases, out, opts, label):
@@ -838,7 +880,7 @@ def REUSE_KEY(cases, out, opts, label):
     import stare
 
     key = {"stare": stare.__version__}
-    if os.environ.get(JOBS_ENV) == "jobs":
+    if os.environ.get(JOBS_ENV) == JOBS:
         solved = {}
         for case in cases:
             rnd = Round(
@@ -854,7 +896,7 @@ def register(case, work, opts):
     import stare
     from stare.stage_warp import make_warper
 
-    jobs = os.environ.get(JOBS_ENV) == "jobs"
+    jobs = launcher() == JOBS
     where = opts.get("native_dir")
     if jobs:
         if where is None:
@@ -866,10 +908,9 @@ def register(case, work, opts):
     ns, candidate = rnd.ns, rnd.candidate
     mon = opts.get("monitor") or _NullMonitor()
     try:
-        if jobs:
-            _collect(rnd)
-        else:
-            _local(rnd, ns.workers, mon)
+        if not jobs:
+            _launch(rnd, ns.workers, mon)
+        _collect(rnd, jobs)
     except stages.StageFailed as err:
         # a round that failed still cost its stage jobs: what they recorded goes with
         # the failure (the driver keeps it in run.json: info.jobs)
@@ -880,7 +921,7 @@ def register(case, work, opts):
                 [rnd.record(stages.TILE, i) for i in range(n)],
                 rnd.record(stages.SOLVE),
             )
-            spent["execution"] = "jobs" if jobs else "local"
+            spent["execution"] = JOBS if jobs else LOCAL
             err.regbench_info = {"jobs": spent}
         except Exception:  # the records are unreadable: the failure stands alone
             pass
@@ -897,7 +938,7 @@ def register(case, work, opts):
         [rnd.record(stages.TILE, i) for i in range(len(rnd.plan()))],
         rnd.record(stages.SOLVE),
     )
-    cost["execution"] = "jobs" if jobs else "local"
+    cost["execution"] = JOBS if jobs else LOCAL
     man = json.loads(Path(ns.manifest).read_text())
     warp = make_warper(man)
     entry = man["slides"][MOV_NAME]
@@ -953,7 +994,8 @@ def register(case, work, opts):
         "nuclear_index": int(ns.nuclear_index),
         "pixel_size": ns.pixel_size,
         "channel_names": list(ns.channel_names or []),
-        # the round's cost over its jobs (regbench.stages.summarise)
+        # what the round's stage records add up to (regbench.stages.summarise), and
+        # who started the stage processes (`execution`)
         "jobs": cost,
         "implementation": {
             "package": "stare-registration",
@@ -974,9 +1016,11 @@ def register(case, work, opts):
                     "that is retried runs in one job per round and attempt with the "
                     "other retried tiles of that round, one after another"
                     if jobs
-                    else "the stage commands run inside ONE job, the tiles "
-                    f"{int(ns.workers)} at a time: not the cohort's separate jobs, "
-                    "so this run's cost is this job's"
+                    else "the stage processes were started by this run itself "
+                    f"({JOBS_ENV}={LOCAL}), the tiles {int(ns.workers)} at a time, "
+                    "retried by the pipeline's rule and with no memory or time "
+                    "limit of their own: not the cohort's scheduler jobs, so this "
+                    "run's cost is its own process tree's"
                 ),
                 *(
                     [
@@ -1067,7 +1111,7 @@ def write_native(state, case_id, dest_dir):
     from stare.slide_io import open_lazy
 
     out = Path(dest_dir) / "registered.ome.tif"
-    jobs = state["execution"] == "jobs"
+    jobs = state["execution"] == JOBS
     job_gb = resources.host_info().get("mem_requested_gb")
     command = cli(stages.STITCH, state["stitch"](state["moving"], out))
     rec, failed = None, []

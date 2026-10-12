@@ -1,7 +1,7 @@
 """A registration in several scheduler jobs per round (``regbench.stages``), and STARE run
 that way: the pipeline's allocation and retry rule read from the pipeline's own files,
-the stage commands, the records, the cost of a round, and the same transform as one
-``stare register``.
+the stage commands, the records, the cost of a round, and the one path to the
+transform whoever starts the stage processes (the scheduler, or the run itself).
 
 The real registrations are on the selfcheck's 2048 x 2560 pair (two tiles), made once
 for the module.
@@ -9,8 +9,12 @@ for the module.
 
 from __future__ import annotations
 
+import ast
 import contextlib
+import dataclasses
 import importlib
+import inspect
+import io
 import json
 import math
 import os
@@ -18,6 +22,7 @@ import re
 import shutil
 import signal
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +30,7 @@ import pytest
 
 from benchmarks.regbench import ladder, methods, stages
 from benchmarks.regbench import selfcheck as sc
-from benchmarks.regbench.cases import result_dir
+from benchmarks.regbench.cases import load_case, result_dir, write_case
 from benchmarks.regbench.methods import stare as adapter
 
 stare = pytest.importorskip("stare")
@@ -497,9 +502,11 @@ OPTS = {"label": ""}
 
 
 @contextlib.contextmanager
-def as_jobs():
-    old = os.environ.get(adapter.JOBS_ENV)
-    os.environ[adapter.JOBS_ENV] = "jobs"
+def stated(launcher):
+    """`REGBENCH_STAGES` as a run states it; None: not stated at all."""
+    old = os.environ.pop(adapter.JOBS_ENV, None)
+    if launcher is not None:
+        os.environ[adapter.JOBS_ENV] = launcher
     try:
         yield
     finally:
@@ -508,105 +515,256 @@ def as_jobs():
             os.environ[adapter.JOBS_ENV] = old
 
 
+def as_jobs():
+    return stated(adapter.JOBS)
+
+
+def stage_job(cases, out, stage, *where):
+    """The arguments slurm/stage.sbatch gives `regbench stage`."""
+    argv = ["stage", "--cases", str(cases), "--out", str(out), "--dataset", "synthetic"]
+    argv += ["--method", "stare", "--stage", stage, "--attempt", "1"]
+    return [*argv, *map(str, where)]
+
+
 @pytest.fixture(scope="module")
 def staged(tmp_path_factory):
-    """The pair registered stage by stage, each stage a call of its own as a cohort job
-    makes it, then collected by the driver; and once by a single `stare register`."""
-    import stare.cli
+    """The pair registered twice, by the two launchers. As the cohort does it: every
+    stage a `regbench stage` call of its own, the tiles by their place in the layout
+    (behind another round's tile), then the driver, which collects; `due` keeps what
+    the tile submitter is told between those jobs. And by the local launcher:
+    `register` starts the same stage processes itself and collects."""
+    from benchmarks.regbench import cli
 
     tmp = tmp_path_factory.mktemp("staged")
     pair = sc.make_pair(tmp / "pair")
-    case = sc.pair_case(pair, tmp / "cases")
-    out = tmp / "out"
+    # the selfcheck's pair as a case of a dataset `regbench stage` takes, the second
+    # round of two: the first (one tile) is never registered
+    case = dataclasses.replace(sc.pair_case(pair, tmp / "made"), dataset="synthetic")
+    first = dataclasses.replace(case, case_id="a_first", ref_hw=[1024, 1280])
+    write_case(tmp / "cases", first)
+    case = load_case(write_case(tmp / "cases", case))
+    out, layout = tmp / "out", tmp / "layout.tsv"
     stage_dir = adapter.stage_dir_of(out, None, case)
     assert stage_dir == result_dir(out, "stare", case) / "stages"
     assert adapter.tile_count(case, OPTS) == 2
-    ran = []
-    for stage, row in (("coarse", None), ("tile", 0), ("tile", 1), ("solve", None)):
-        ran += adapter.run_stage(case, stage_dir, dict(OPTS), stage, row)
-    assert [(s, r, go) for s, r, go, _, _ in ran] == [
-        ("coarse", None, True),
-        ("tile", 0, True),
-        ("tile", 1, True),
-        ("solve", None, True),
-    ]
-    assert all(rec["ok"] and rec["execution"] == "jobs" for *_, rec in ran)
-    with as_jobs():
-        done = methods.run_case("stare", case, out, opts={"stage_images": True})
-    assert done == ["stare_rigid", "stare"]
-    direct = tmp / "direct"
-    assert stare.cli.main(adapter.command(case, direct, {"workers": 2})) == 0
-    return {"case": case, "out": out, "dir": stage_dir, "direct": direct, "tmp": tmp}
+    base = ["--cases", str(tmp / "cases"), "--dataset", "synthetic", "--method"]
+    sized = ["stages", *base, "stare", "--layout", str(layout)]
+    assert cli.main(sized) == 0
+    collected, real = [], adapter._collect
+
+    def spy(rnd, jobs):
+        collected.append((rnd.dir, jobs))
+        return real(rnd, jobs)
+
+    def job(stage, *where):
+        assert cli.main(stage_job(tmp / "cases", out, stage, *where)) == 0
+
+    def tile(flat):
+        job("tile", "--flat", flat, "--layout", layout)
+
+    due = {}
+
+    def ask(when):
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            for attempt in ("1", "2"):
+                assert cli.main([*sized, "--out", str(out), "--due", attempt]) == 0
+                print("|")
+        due[when] = said.getvalue().replace("\n", " ").strip()
+
+    adapter._collect = spy
+    try:
+        with stated(None):  # a stage job needs no statement: it IS the scheduler's
+            tile(1)  # before COARSE: the job does nothing
+            due["tile before coarse"] = stages.read_record(stage_dir, "tile", 0)
+            ask("before coarse")
+            job("coarse", "--index", 1)
+            ask("after coarse")
+            tile(1)
+            ask("after the first tile")
+            tile(2)
+            ask("after the tiles")
+            job("solve", "--index", 1)
+        with as_jobs():
+            done = methods.run_case("stare", case, out, opts={"stage_images": True})
+        assert done == ["stare_rigid", "stare"]
+        with stated(adapter.LOCAL):
+            names = [v for v, _, _ in adapter.register(case, tmp / "l", {"workers": 2})]
+        assert names == ["stare_rigid", "stare"]
+    finally:
+        adapter._collect = real
+    return {
+        "case": case,
+        "cases": tmp / "cases",
+        "out": out,
+        "layout": layout,
+        "dir": stage_dir,
+        "local": tmp / "l" / "stages",
+        "collected": collected,
+        "due": due,
+        "tmp": tmp,
+    }
 
 
 def run_json(out, variant, case):
     return json.loads((result_dir(out, variant, case) / "run.json").read_text())
 
 
-def test_stage_by_stage_is_the_transform_of_one_stare_register(staged):
-    """Byte for byte: the anchor, the tile plan, every tile's control points and the
-    manifest (the transform); SOLVE's report, value for value except its own clock; and
-    the written image, pixel for pixel. Equal bytes, not a tolerance: both paths run the
-    same stage functions on the same arguments, and nothing in those files names a
-    directory."""
-    ours, direct = staged["dir"], staged["direct"]
-    names = sorted(p.name for p in direct.iterdir() if p.suffix in (".json", ".csv"))
-    assert names == [
-        "manifest.json",
-        "moving_0_0_ctrl.json",
-        "moving_1_0_ctrl.json",
-        "moving_m0.json",
-        "moving_tiles.csv",
-        "tre.json",
-    ]
-    for name in names:
-        if name == "tre.json":
-            continue
-        assert (ours / name).read_bytes() == (direct / name).read_bytes(), name
-    # SOLVE's report holds one clock reading, `solve.solve_seconds`: equal without it
-    a, b = (json.loads((d / "tre.json").read_text()) for d in (ours, direct))
-    assert a["solve"].pop("solve_seconds") > 0 and b["solve"].pop("solve_seconds") > 0
-    assert a == b and a["solve"]["solver"] == "dctpls"
-    man = json.loads((ours / "manifest.json").read_text())
-    assert man["slides"]["moving"]["mesh"] is not None  # a real mesh, not the anchor
+EVERY = (("coarse", None), ("tile", 0), ("tile", 1), ("solve", None))
+# px. One `stare reg-tile` command on identical inputs does not give identical bytes
+# in two fresh processes: its float64 values differ by about 1e-8 relative, and a
+# control value, which the stage rounds to 4 decimals, by one unit of the fourth
+# (1e-4 px), more often on a busy machine. SOLVE smooths the controls into the mesh,
+# so the transform of two launches differs by less than that unit: 8e-5 px was the
+# largest difference seen, in the manifest and in the mapped points, when this test
+# ran ten times in a row on a machine under heavy load (three of the ten were equal
+# to the byte). 1e-3 px is ten of those units and twelve times the largest difference
+# seen: far above what a rounding flip can do, and 0.3 nm on a slide of 0.325 um per
+# px.
+TRANSFORM_TOL_PX = 1e-3
+
+
+def same_but_floats(a, b, tol, at="manifest"):
+    """Two JSON values with the same shape, the same keys and the same strings,
+    integers, booleans and nulls; a float may differ by at most ``tol``."""
+    if isinstance(a, float) and isinstance(b, float):
+        assert abs(a - b) <= tol, (at, a, b)
+    elif isinstance(a, dict) and isinstance(b, dict):
+        assert list(a) == list(b), at
+        for key in a:
+            same_but_floats(a[key], b[key], tol, f"{at}.{key}")
+    elif isinstance(a, list) and isinstance(b, list):
+        assert len(a) == len(b), at
+        for i, (x, y) in enumerate(zip(a, b)):
+            same_but_floats(x, y, tol, f"{at}[{i}]")
+    else:
+        assert type(a) is type(b) and a == b, (at, a, b)
+
+
+def test_the_scheduler_and_the_local_launcher_give_one_transform(staged):
+    """The same stage commands, started by `regbench stage` (one call per stage, as
+    slurm/stage.sbatch makes it) and by the adapter's local launcher: the anchor and
+    the tile plan are equal BYTE FOR BYTE, the records are the same jobs, and the
+    transform is equal within `TRANSFORM_TOL_PX` (why not to the byte, and why that
+    number: the comment on it)."""
+    from stare.stage_warp import make_warper
+
+    ours, local = staged["dir"], staged["local"]
+    for name in ("moving_m0.json", "moving_tiles.csv"):
+        assert (ours / name).read_bytes() == (local / name).read_bytes(), name
+    for stage, row in EVERY:
+        a, b = (stages.read_record(d, stage, row) for d in (ours, local))
+        assert a["ok"] and b["ok"], (stage, row)
+        assert (a["execution"], b["execution"]) == ("jobs", "local")
+        # one command, but for the folder the round's files are in
+        assert a["command"] == [c.replace(str(local), str(ours)) for c in b["command"]]
+        assert a["attempt"] == b["attempt"] == 1 and a["mem_gb"] == b["mem_gb"]
+    mans = [json.loads((d / "manifest.json").read_text()) for d in (ours, local)]
+    assert mans[0]["slides"]["moving"]["mesh"] is not None  # a mesh, not the anchor
+    assert mans[0]["slides"]["moving"]["M0"] == mans[1]["slides"]["moving"]["M0"]
+    same_but_floats(*mans, TRANSFORM_TOL_PX)
+    h, w = staged["case"].ref_hw
+    ys, xs = np.mgrid[0:h:64, 0:w:64]
+    points = np.stack([xs.ravel(), ys.ravel()], axis=1).astype(float)
+    warps = [make_warper(m) for m in mans]
+    rigid = [np.asarray(f("moving", points, "rigid")) for f in warps]
+    assert np.array_equal(*rigid)
+    full = [np.asarray(f("moving", points, "refined")) for f in warps]
+    assert np.abs(full[0] - full[1]).max() <= TRANSFORM_TOL_PX
+    assert np.abs(full[0] - rigid[0]).max() > 100 * TRANSFORM_TOL_PX  # the mesh moves
+    tres = [json.loads((d / "tre.json").read_text()) for d in (ours, local)]
+    assert tres[0]["solve"]["solver"] == tres[1]["solve"]["solver"] == "dctpls"
+    # STITCH wrote the cohort round's image from that manifest
     import tifffile
 
     run = run_json(staged["out"], "stare", staged["case"])
-    written = tifffile.imread(run["native"]["files"][0])
-    assert np.array_equal(written, tifffile.imread(direct / "registered.ome.tif"))
-    assert written.any()
+    assert tifffile.imread(run["native"]["files"][0]).any()
 
 
-def test_each_stage_command_is_what_stare_register_hands_that_stage(
-    staged, monkeypatch, tmp_path
-):
-    """Every flag of every stage, against the package's own `register`: its four stage
-    functions are replaced by recorders and the argument lists compared whole."""
+def test_both_launchers_reach_the_transform_through_the_same_collector(staged):
+    """`register` obtains the transform by collecting the stage records, whoever
+    started the stage processes: one call of `_collect` per round, on that round's
+    stage folder."""
+    assert staged["collected"] == [(staged["dir"], True), (staged["local"], False)]
+    run = run_json(staged["out"], "stare", staged["case"])
+    assert run["info"]["jobs"]["execution"] == "jobs"
+
+
+def lists_in_register(ns, row, plan_row):
+    """The four stage argument lists as the SOURCE of ``stare.cli.register`` writes
+    them, for the parsed arguments ``ns`` and one plan row. The function is read, not
+    called: its assignments to the names below and the list literals it hands
+    ``coarse.main`` and ``jobs.append`` are evaluated one by one, an ``if`` by its own
+    test, and no stage is imported or run."""
     import stare.cli
-    from stare.stages import coarse, reg_tile, solve, stitch
 
+    names = {"ref_name", "mov_name", "work", "m0_f", "tiles_f", "out", "max_disp"}
+    names |= {"solve_argv", "stitch_argv"}
+    env = {"a": ns, "Path": Path, "_slide_name": stare.cli._slide_name}
+    env.update(row=row, r=plan_row, rc=0)
+    got = {}
+
+    def value(node):
+        code = compile(ast.Expression(node), "stare.cli.register", "eval")
+        return eval(code, env)
+
+    def handed(node, owner, method):
+        """The list literal of a call ``owner.method([...])`` inside ``node``."""
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == method
+                and getattr(call.func.value, "id", None) == owner
+                and isinstance(call.args[0], ast.List)
+            ):
+                return value(call.args[0])
+        return None
+
+    def read(body):
+        for st in body:
+            if isinstance(st, ast.If):
+                read(st.body if value(st.test) else st.orelse)
+            elif isinstance(st, (ast.For, ast.With)):
+                read(st.body)
+            elif isinstance(st, ast.Try):
+                read(st.body)
+            elif isinstance(st, ast.AugAssign) and st.target.id in names:
+                env[st.target.id] = env[st.target.id] + value(st.value)
+            elif isinstance(st, ast.Assign) and st.targets[0].id in names:
+                env[st.targets[0].id] = value(st.value)
+            elif isinstance(st, (ast.Assign, ast.Expr)):
+                for key, (owner, method) in {
+                    "coarse": ("coarse", "main"),
+                    "tile": ("jobs", "append"),
+                }.items():
+                    found = handed(st, owner, method)
+                    if found is not None:
+                        got[key] = found
+
+    (func,) = ast.parse(textwrap.dedent(inspect.getsource(stare.cli.register))).body
+    read(func.body)
+    return {**got, "solve": env["solve_argv"], "stitch": env["stitch_argv"]}
+
+
+def test_each_stage_command_is_what_stare_register_hands_that_stage(staged, tmp_path):
+    """Every flag of every stage, against the package's own `register`, which is read
+    and never run (`lists_in_register`): the four argument lists, compared whole."""
     case = staged["case"]
     ns = adapter.namespace(case, tmp_path, {"workers": 1})
-    seen = {}
-
-    def plan(argv):  # the recorder of COARSE leaves the plan `register` reads next
-        seen.setdefault("coarse", []).append(list(argv))
-        shutil.copy(staged["dir"] / "moving_tiles.csv", tmp_path / "moving_tiles.csv")
-        return 0
-
-    monkeypatch.setattr(coarse, "main", plan)
-    for name, mod in (("tile", reg_tile), ("solve", solve), ("stitch", stitch)):
-        monkeypatch.setattr(
-            mod,
-            "main",
-            lambda argv, n=name: seen.setdefault(n, []).append(list(argv)) or 0,
-        )
-    assert stare.cli.register(ns) == 0
     ours = adapter.stage_commands(ns)
-    assert ours["coarse"] == seen["coarse"][0]
-    assert [ours["tile"](0, 0, 0), ours["tile"](1, 1, 0)] == seen["tile"]
-    assert sorted(ours["solve"]) == sorted(seen["solve"][0])
-    assert ours["stitch"](ns.moving, ns.out) == seen["stitch"][0]
+    rows = adapter.Round(case, staged["dir"], dict(OPTS)).plan()
+    assert [(r["ix"], r["iy"]) for r in rows] == [("0", "0"), ("1", "0")]
+    for i, r in enumerate(rows):
+        theirs = lists_in_register(ns, i, r)
+        assert set(theirs) == {"coarse", "tile", "solve", "stitch"}
+        assert ours["coarse"] == theirs["coarse"]
+        assert ours["tile"](i, int(r["ix"]), int(r["iy"])) == theirs["tile"]
+        assert ours["solve"] == theirs["solve"]
+        assert ours["stitch"](ns.moving, ns.out) == theirs["stitch"]
+    # the paths of the files one stage leaves for the next
+    assert ours["m0"] == tmp_path / "moving_m0.json"
+    assert ours["plan"] == tmp_path / "moving_tiles.csv"
     # the values the pipeline's modules render (modules/local/tiled_*.nf)
     flags = dict(zip(ours["coarse"][::2], ours["coarse"][1::2]))
     assert flags["--tile"] == "2048" and flags["--halo"] == "256"
@@ -639,6 +797,172 @@ def test_each_stage_command_is_what_stare_register_hands_that_stage(
         adapter.cli("coarse", [])[3] == "coarse"
         and adapter.cli("stitch", [])[3] == "stitch"
     )
+
+
+# ── who starts the stage processes is stated, never assumed ───────────────────
+def no_stage_process(monkeypatch):
+    """Fail the test when a stage process is started; returns the calls seen."""
+    started = []
+
+    def run(stage_dir, stage, command, *a, **k):
+        started.append((stage, command))
+        raise AssertionError(f"a {stage} process was started")
+
+    monkeypatch.setattr(stages, "run_command", run)
+    return started
+
+
+@pytest.mark.parametrize("value", [None, "", "1", "one process"])
+def test_a_round_whose_launcher_is_not_stated_is_refused(
+    staged, tmp_path, monkeypatch, value
+):
+    """No default: without `jobs` or `local` in REGBENCH_STAGES nothing is started
+    and nothing collected, and the failure is the launcher's."""
+    from benchmarks.regbench import failure_log
+
+    started = no_stage_process(monkeypatch)
+    monkeypatch.setattr(adapter, "_collect", lambda *a: started.append("collect"))
+    with stated(value), pytest.raises(stages.StageFailed, match="who starts") as err:
+        next(adapter.register(staged["case"], tmp_path / "w", {}))
+    assert err.value.regbench_cause == stages.NOT_SUBMITTED
+    assert err.value.regbench_no_rerun is True
+    assert failure_log.classify(err.value.regbench_cause) == failure_log.LAUNCHER
+    assert started == [] and not (tmp_path / "w").exists()
+    for value in (adapter.JOBS, adapter.LOCAL):
+        with stated(value):
+            assert adapter.launcher() == value
+
+
+def test_a_cohort_unit_without_the_launcher_stated_refuses_before_any_work(
+    staged, tmp_path, monkeypatch, capsys
+):
+    """`regbench run`, as slurm/run_rung.sbatch calls it, for a run of stage jobs
+    that was not told so: no stage process, no driver, no record; the end line says
+    whose failure it is."""
+    from benchmarks.regbench import cli
+
+    started = no_stage_process(monkeypatch)
+    monkeypatch.setattr(methods, "run_case", lambda *a, **k: started.append("driver"))
+    out = tmp_path / "out"
+    argv = ["run", "--cases", str(staged["cases"]), "--out", str(out)]
+    argv += ["--dataset", "synthetic", "--method", "stare", "--index", "1"]
+    capsys.readouterr()
+    with stated(None):
+        assert cli.main(argv) == 1
+    said = capsys.readouterr().out.strip().splitlines()
+    assert "REGBENCH_STAGES=unset" in said[-2] and "Nothing was started" in said[-2]
+    assert said[-1].startswith("REGBENCH_END kind=run run=stare dataset=synthetic ")
+    assert f"unit={staged['case'].case_id} " in said[-1]
+    assert "status=lost cause=not_submitted whose=launcher" in said[-1]
+    assert started == [] and not out.exists()
+    # ... at every task of the ladder: a later rung reads no record either
+    with stated(None):
+        assert cli.main([*argv, "--ladder", "climb", "--accounting-waited"]) == 1
+    assert started == [] and not out.exists()
+    # stated on the command line (a run by hand), for the time of that run only
+    seen = []
+    monkeypatch.setattr(
+        methods,
+        "run_case",
+        lambda *a, **k: seen.append(os.environ.get(adapter.JOBS_ENV)) or [],
+    )
+    with stated(None):
+        assert cli.main([*argv, "--stages", "local"]) == 1  # the stub made no result
+        assert seen == ["local"] and adapter.JOBS_ENV not in os.environ
+    # a method that is one job per unit has no stages to state
+    with pytest.raises(SystemExit, match="one job per unit"):
+        cli.main(
+            [*argv[:-4], "--method", "initial", "--index", "0", "--stages", "jobs"]
+        )
+
+
+def test_the_selfcheck_states_the_local_launcher_for_its_own_run(
+    tmp_path, monkeypatch, capsys
+):
+    """`regbench selfcheck` has no stage jobs of the scheduler: it says `local`
+    whatever its job's environment says, and leaves the environment as it was."""
+    from benchmarks.regbench import cli
+
+    seen = []
+
+    def run(method, *a, **k):
+        seen.append((method, os.environ.get(adapter.JOBS_ENV)))
+        return {"variants": {}, "status": "ok"}
+
+    monkeypatch.setattr(sc, "run", run)
+    for before in (None, adapter.JOBS):
+        with stated(before):
+            argv = ["selfcheck", "--method", "stare", "--work", str(tmp_path)]
+            assert cli.main(argv) == 0
+            assert os.environ.get(adapter.JOBS_ENV) == before
+    assert seen == [("stare", "local"), ("stare", "local")]
+    # a method that is one job per unit is told nothing
+    with stated(None):
+        assert (
+            cli.main(["selfcheck", "--method", "initial", "--work", str(tmp_path)]) == 0
+        )
+    assert seen[-1] == ("initial", None)
+
+
+def scripted_stage(monkeypatch, stage, row, codes):
+    """The process of one stage job replaced by scripted exits, one per attempt; any
+    other stage process fails the test. Returns the attempts that were started."""
+    calls = []
+
+    def run(stage_dir, st, command, r=None, attempt=1, execution="jobs", **kw):
+        assert (st, r) == (stage, row), f"a {st} process was started (row {r})"
+        calls.append(attempt)
+        code = codes[len(calls) - 1]
+        rec = {
+            **stages.read_record(stage_dir, st, r),
+            "ok": False,
+            "exit": code,
+            "cause": stages.cause_of(code),
+            "error": "Killed" if code == 137 else "boom",
+            "attempt": attempt,
+            "mem_gb": stages.allocation(st, attempt)["mem_gb"],
+            "command": list(command),
+            "identity": kw.get("identity"),
+            "execution": execution,
+        }
+        stages._write(stages.record_path(stage_dir, st, r), rec)
+        return rec
+
+    monkeypatch.setattr(stages, "run_command", run)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "codes, attempts, cause",
+    [
+        ([137, 137, 137, 137], 4, "oom"),  # retried as the pipeline retries it
+        ([1], 1, "exception"),  # an exit the pipeline does not retry
+    ],
+)
+def test_a_stage_that_fails_under_the_local_launcher_fails_the_round(
+    staged, tmp_path, monkeypatch, codes, attempts, cause
+):
+    """The local launcher starts a failed tile again by the pipeline's rule and no
+    stage behind it; the round then fails where every round fails, in `_collect`,
+    with the tile's own cause (the method's)."""
+    from benchmarks.regbench import failure_log
+
+    work = tmp_path / "w"
+    shutil.copytree(staged["local"], work / "stages")
+    for path in (work / "stages").rglob("*.json"):
+        text = path.read_text().replace(str(staged["local"]), str(work / "stages"))
+        path.write_text(text)
+    rewrite(work / "stages", "tile", 1, ok=False, exit=137, cause="oom")
+    calls = scripted_stage(monkeypatch, "tile", 1, codes)
+    with stated(adapter.LOCAL), pytest.raises(stages.StageFailed) as err:
+        next(adapter.register(staged["case"], work, {"workers": 2}))
+    assert calls == list(range(1, attempts + 1))  # COARSE and tile 0 were ok already
+    assert f"TILE (tile row 1) failed at attempt {attempts} of 4" in str(err.value)
+    assert err.value.regbench_cause == cause
+    assert failure_log.classify(cause) == failure_log.METHOD
+    assert err.value.regbench_no_rerun is False
+    spent = err.value.regbench_info["jobs"]
+    assert spent["execution"] == "local" and spent["complete"] is False
 
 
 def test_a_model_the_first_stage_refuses_is_refused_before_any_job(staged, tmp_path):
@@ -741,6 +1065,16 @@ def test_a_round_that_is_done_is_reused_stage_by_stage(staged):
         )
     assert again == ["stare_rigid", "stare"]
     assert run_json(staged["out"], "stare", case)["reused_by"]
+    # the local launcher on a round that is done starts nothing either
+    started = []
+    real = stages.run_command
+    stages.run_command = lambda *a, **k: started.append(a[1]) or real(*a, **k)
+    try:
+        with stated(adapter.LOCAL):
+            list(adapter.register(case, staged["local"].parent, {"workers": 2}))
+    finally:
+        stages.run_command = real
+    assert started == []
 
 
 def clone(staged, tmp_path):
@@ -819,8 +1153,15 @@ def test_a_stage_without_a_record_is_the_schedulers_loss(staged, tmp_path):
     case = staged["case"]
     out, new = clone(staged, tmp_path)
     stages.record_path(new, "coarse").unlink()
-    with as_jobs():
-        assert methods.run_case("stare", case, out, opts={"stage_images": True}) == []
+    started, real = [], stages.run_command
+    stages.run_command = lambda *a, **k: started.append(a[1]) or real(*a, **k)
+    try:
+        with as_jobs():
+            done = methods.run_case("stare", case, out, opts={"stage_images": True})
+    finally:
+        stages.run_command = real
+    # the round's last job fails the round instead of running the stage itself
+    assert done == [] and started == []
     run = run_json(out, "stare", case)
     assert run["cause"] == "infrastructure" and run["no_rerun"] is True
     assert "COARSE: no attempt of this job left a record" in run["error"]
@@ -937,20 +1278,21 @@ def test_another_stare_version_or_other_preprocessing_code_is_another_job(
     assert adapter.Round(case, tmp_path / "p", dict(other)).identity("prep") != before
 
 
-def test_a_result_made_in_one_process_is_not_reused_as_the_staged_row(staged):
-    """The unit's reuse key says how it was executed and by which code."""
+def test_a_result_of_the_other_launcher_is_not_reused_as_the_staged_row(staged):
+    """The unit's reuse key says which launcher started its stages and by which code."""
     from benchmarks.regbench import resources
 
     case, out = staged["case"], staged["out"]
     run = run_json(out, "stare", case)
     with as_jobs():
         jobs = methods.reuse_key("stare", [case], out, run["opts"], None)
-    local = methods.reuse_key("stare", [case], out, run["opts"], None)
+    with stated(adapter.LOCAL):
+        local = methods.reuse_key("stare", [case], out, run["opts"], None)
     assert (
         run["reuse_key"] == jobs
         and run_json(out, "stare_rigid", case)["reuse_key"] == jobs
     )
-    assert (jobs["execution"], local["execution"]) == ("jobs", "one process")
+    assert (jobs["execution"], local["execution"]) == ("jobs", "local")
     assert jobs["method"]["stare"] == stare.__version__ == local["method"]["stare"]
     solve = stages.read_record(staged["dir"], "solve")["identity"]
     assert jobs["method"]["solve"] == {case.case_id: solve}
@@ -1086,82 +1428,52 @@ def test_a_retried_tile_runs_alone_with_the_next_attempts_memory(staged, tmp_pat
     assert cost["wasted_attempts"] == 1 and cost["wasted_wall_s"] > 0
 
 
-def test_the_stage_command_of_the_cli_runs_a_round(
-    synthetic_cases, cases_root, tmp_path, capsys
-):
+def test_the_stage_command_of_the_cli_runs_a_round(staged, capsys):
     """`regbench stage`, as stage.sbatch calls it: by round, and a tile by its place in
-    the layout the launcher wrote."""
+    the layout the launcher wrote; and what the tile submitter is told between the
+    jobs (`stages --due`, attempt 1 | attempt 2), as the fixture kept it."""
     from benchmarks.regbench import cli
 
-    names = sorted(synthetic_cases)
-    index = names.index("crop")
-    layout = tmp_path / "layout.tsv"
-    base = ["--cases", str(cases_root), "--dataset", "synthetic", "--method", "stare"]
-    assert cli.main(["stages", *base, "--layout", str(layout)]) == 0
+    layout, out = staged["layout"], staged["out"]
     rows = stages.read_layout(layout)
-    assert [c for c, _ in rows] == names and all(n == 1 for _, n in rows)
-    flat = sum(n for _, n in rows[:index])
-    run = ["stage", *base, "--out", str(tmp_path / "out")]
-    assert (
-        cli.main(
-            [*run, "--stage", "tile", "--flat", str(flat), "--layout", str(layout)]
+    assert rows == [("a_first", 1), (staged["case"].case_id, 2)]
+    assert layout.read_text().splitlines()[1].split("\t")[3] == "1"  # its offset
+    due = staged["due"]
+    # a tile job of a round without COARSE does nothing, and nothing of it is due
+    assert due["tile before coarse"] is None and due["before coarse"] == "| |"
+    # COARSE ok: both tiles by their place in the layout; at a later attempt a tile
+    # without a record never started, so its round is due
+    assert due["after coarse"] == "1 2 | 1 |"
+    assert due["after the first tile"] == "2 | 1 |"
+    assert due["after the tiles"] == "| |"  # no first attempt left, no retry due
+    assert all(stages.read_record(staged["dir"], s, r)["ok"] for s, r in EVERY)
+    assert (staged["dir"] / "manifest.json").exists()
+    kept = {p: p.read_bytes() for p in sorted(staged["dir"].rglob("*.json"))}
+
+    def tile(flat, where):
+        argv = stage_job(
+            staged["cases"], out, "tile", "--flat", flat, "--layout", where
         )
-        == 0
-    )
-    case = synthetic_cases["crop"]
-    stage_dir = adapter.stage_dir_of(tmp_path / "out", None, case)
-    assert not stages.record_path(stage_dir, "tile", 0).exists()  # COARSE has not run
-    # what the tile submitter asks: nothing is due of a round without COARSE
-    due = ["stages", *base, "--layout", str(layout), "--out", str(tmp_path / "out")]
-    capsys.readouterr()
-    assert cli.main([*due, "--due", "1"]) == 0 and capsys.readouterr().out == ""
-    assert cli.main([*run, "--stage", "coarse", "--index", str(index)]) == 0
-    # ... then that round's tile, by its place in the layout; no retry is due
-    capsys.readouterr()
-    assert cli.main([*due, "--due", "1"]) == 0
-    assert capsys.readouterr().out == f"{flat}\n"
-    # a tile without a record at a later attempt never started: its round is due
-    assert cli.main([*due, "--due", "2"]) == 0
-    assert capsys.readouterr().out == f"{index}\n"
-    assert (
-        cli.main(
-            [*run, "--stage", "tile", "--flat", str(flat), "--layout", str(layout)]
-        )
-        == 0
-    )
-    capsys.readouterr()
-    for attempt in ("1", "2"):
-        assert cli.main([*due, "--due", attempt]) == 0
-        assert capsys.readouterr().out == ""
-    assert (
-        cli.main([*run, "--stage", "solve", "--index", str(index), "--attempt", "2"])
-        == 0
-    )
-    assert all(
-        stages.read_record(stage_dir, s, r)["ok"]
-        for s, r in (("coarse", None), ("tile", 0), ("solve", None))
-    )
-    assert (stage_dir / "manifest.json").exists()
-    assert (
-        cli.main([*run, "--stage", "tile", "--flat", "99", "--layout", str(layout)])
-        == 0
-    )
-    # COARSE planned another number of tiles than the arrays were sized for: the task
-    # says so on its end line, as the launcher's failure, and exits through it
-    wrong = [(c, n + 1 if c == "crop" else n) for c, n in rows]
-    stages.write_layout(layout, wrong)
-    capsys.readouterr()
-    again = [*run, "--stage", "tile", "--flat", str(flat), "--layout", str(layout)]
-    assert cli.main(again) == 1
-    said = capsys.readouterr().out.strip().splitlines()
-    assert "COARSE planned 1 tiles, the arrays were sized for 2" in said[-2]
-    assert said[-1].startswith("REGBENCH_END kind=stage ")
-    assert "status=failed cause=not_submitted whose=launcher" in said[-1]
-    assert "planned=1 sized_for=2" in said[-1]
-    # arrays sized for another set of cases are refused
-    stages.write_layout(layout, rows[:-1])
-    with pytest.raises(SystemExit, match="does not list"):
-        cli.main([*run, "--stage", "tile", "--flat", "0", "--layout", str(layout)])
+        return cli.main(argv)
+
+    with stated(None):
+        assert tile(99, layout) == 0  # past the last tile: nothing to do
+        # COARSE planned another number of tiles than the arrays were sized for: the
+        # task says so on its end line, as the launcher's failure, and exits through it
+        wrong = staged["tmp"] / "wrong.tsv"
+        stages.write_layout(wrong, [(c, n + 1 if n == 2 else n) for c, n in rows])
+        capsys.readouterr()
+        assert tile(1, wrong) == 1
+        said = capsys.readouterr().out.strip().splitlines()
+        assert "COARSE planned 2 tiles, the arrays were sized for 3" in said[-2]
+        assert said[-1].startswith("REGBENCH_END kind=stage ")
+        assert "status=failed cause=not_submitted whose=launcher" in said[-1]
+        assert "planned=2 sized_for=3" in said[-1]
+        # arrays sized for another set of cases are refused
+        stages.write_layout(wrong, rows[:-1])
+        with pytest.raises(SystemExit, match="does not list"):
+            tile(0, wrong)
+    assert kept == {p: p.read_bytes() for p in sorted(staged["dir"].rglob("*.json"))}
 
 
 def test_the_preprocessing_row_runs_in_the_same_jobs(synthetic_cases, tmp_path):
@@ -1387,8 +1699,9 @@ def test_the_batch_scripts_register_a_round_end_to_end(
     assert run["attempt"] == 1 and run["mem_requested_gb"] == 4
     assert run["submissions"] == ["S-1"] and run["time_limit"] == "0-04:00:00"
     assert run["native"]["files"] and stages.read_record(stage_dir, "stitch")["ok"]
-    # ... and without the stages, that job fails the round instead of running them
-    other = synthetic_cases[names[index - 1]]
+    # ... and a round the launcher did not say is in stage jobs (`-`) is refused
+    # before anything: nothing is registered here in the stage jobs' place
+    other = synthetic_cases[names[1]]
     said = sbatch(
         "run_rung.sbatch",
         "0",
@@ -1399,14 +1712,14 @@ def test_the_batch_scripts_register_a_round_end_to_end(
         "-",
         "first",
         "0-04:00:00",
-        "jobs",
-        task=index - 1,
+        "-",
+        task=1,
     )
-    lost = run_json(out, "stare", other)
-    assert (
-        lost["ok"] is False and lost["cause"] == "infrastructure" and lost["no_rerun"]
-    )
-    assert not adapter.stage_dir_of(out, None, other).exists()
+    end = said.strip().splitlines()[-1]
+    assert end.startswith("REGBENCH_END kind=run run=stare dataset=synthetic ")
+    assert f"unit={other.case_id} " in end
+    assert "status=lost cause=not_submitted whose=launcher" in end
+    assert not result_dir(out, "stare", other).exists()
 
 
 # ── a staged result through the scorer, end to end ────────────────────────────
