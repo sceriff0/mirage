@@ -127,6 +127,9 @@ def launch(site, *args, env=None, dry=True, log="calls"):
         REGBENCH_OUT=str(out),
         REGBENCH_SBATCH_GPU=GPU,
         REGBENCH_SITE_CONFIG="none",  # never the real site overlay of a checkout
+        # the stand-in "images" are this machine's python, which has not the methods'
+        # packages: the preflight has its own tests
+        REGBENCH_PREFLIGHT="0",
         SBATCH_LOG=str(tmp / f"{log}.tsv"),
     )
     base.update(env or {})
@@ -1600,6 +1603,214 @@ def _exec_line(tmp_path, image, **env):
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
     return done.stdout
+
+
+def _inside(tmp_path, image, **env):
+    """What reaches the inside of an image: the runtime's own arguments, and every
+    variable the launcher sets for it (`APPTAINERENV_<name>`), with a stand-in runtime
+    that prints both."""
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    runtime = fake / "apptainer"
+    runtime.write_text(
+        '#!/bin/bash\necho "ARGS $*"\nenv | grep "^APPTAINERENV_" | sort\n'
+    )
+    runtime.chmod(0o755)
+    base = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("REGBENCH_", "APPTAINERENV_", "SINGULARITYENV_"))
+    }
+    base.pop("CUDA_VISIBLE_DEVICES", None)
+    base.update(
+        PATH=f"{fake}:{base['PATH']}",
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES="/c",
+        REGBENCH_OUT="/o",
+        PYTHONPATH="/home/someone/my-own-packages",
+        **{f"REGBENCH_SIF_{image}": f"/images/{image}.sif"},
+        **env,
+    )
+    done = subprocess.run(
+        ["bash", "-c", f'source "{SLURM}/env.sh" && regbench_py {image} runs'],
+        env=base, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    inside = dict(
+        ln[len("APPTAINERENV_") :].split("=", 1) for ln in lines if "=" in ln[:60]
+    )
+    return lines[0], inside
+
+
+def test_no_package_of_the_host_can_shadow_one_inside_an_image(tmp_path):
+    """PYTHONNOUSERSITE=1 in every image, and a PYTHONPATH that holds the checkout (and
+    the STARE source where the image has none) and nothing of the host's."""
+    images = {r.image for r in variants.RUNS} | {variants.SCORER_IMAGE}
+    without = {"ASHLAR", "VALIS_MIRAGE"}  # pulled as their projects publish them
+    assert without <= images
+    tag = re.search(
+        r"tags/([^\s]+)\.tar\.gz", (REPO / "requirements" / "stare.txt").read_text()
+    )[1]
+    for image in sorted(images):
+        args, inside = _inside(tmp_path, image)
+        assert "--cleanenv" in args
+        assert inside["PYTHONNOUSERSITE"] == "1", image
+        want = str(REPO)
+        if image in without:
+            want += f":/o/cache/stare-{tag}/src"
+        assert inside["PYTHONPATH"] == want, image
+        assert "my-own-packages" not in "".join(inside.values())
+    # the same switch for an environment that is not an image
+    code = code_of(SLURM / "env.sh")
+    assert code.count('PYTHONNOUSERSITE=1 "$@"') == 1
+    assert 'PYTHONNOUSERSITE=1 PATH="$venv/bin:$PATH" "$@"' in code
+
+
+def test_the_work_folder_the_temp_folder_and_the_plugin_switch_reach_the_image(
+    tmp_path,
+):
+    scratch, private = tmp_path / "scratch", tmp_path / "private"
+    scratch.mkdir()
+    args, inside = _inside(
+        tmp_path,
+        "PALOM",
+        TMPDIR=f"{scratch}/",
+        REGBENCH_WORK="/work",
+        REGBENCH_PRIVATE="1",
+        REGBENCH_PRIVATE_DIR=str(private),
+    )
+    assert inside["TMPDIR"] == f"{scratch}/" and inside["REGBENCH_WORK"] == "/work"
+    assert inside["REGBENCH_PRIVATE"] == "1"
+    assert inside["REGBENCH_PRIVATE_DIR"] == str(private)
+    bound = args.split("--bind ", 1)[1].split()[0].split(",")
+    assert {"/work", str(scratch), str(private), "/c", "/o", str(REPO)} <= set(bound)
+    # unset, none of them is invented: the plug-in stays off
+    args, inside = _inside(tmp_path, "PALOM", TMPDIR="/no/such/folder")
+    assert "REGBENCH_PRIVATE" not in inside and "REGBENCH_WORK" not in inside
+    assert "/no/such/folder" not in args.split("--bind ", 1)[1].split()[0]
+
+
+def test_the_pinned_stare_source_is_fetched_once_for_the_images_without_one(tmp_path):
+    """`regbench_fetch_stare`, with a stand-in `curl` that serves an archive laid out
+    as the release's: the source of the pinned tag, under the results folder's cache."""
+    import tarfile
+
+    release = tmp_path / "stare-9.9.9" / "src" / "stare"
+    release.mkdir(parents=True)
+    (release / "slide_io.py").write_text("WHAT = 'the pinned source'\n")
+    (release / "__init__.py").write_text("")
+    archive = tmp_path / "release.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(tmp_path / "stare-9.9.9", arcname="stare-9.9.9")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    curl = fake / "curl"
+    curl.write_text(
+        f'#!/bin/bash\necho "$*" >> "{tmp_path}/curl.log"\ncat "{archive}"\n'
+    )
+    curl.chmod(0o755)
+    out = tmp_path / "out"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
+    env.update(
+        PATH=f"{fake}:{env['PATH']}", REGBENCH_REPO=str(REPO), REGBENCH_OUT=str(out)
+    )
+    call = f'source "{SLURM}/env.sh" && regbench_fetch_stare && regbench_stare_src'
+    url = re.search(
+        r"https://github\.com/sceriff0/stare/\S+\.tar\.gz",
+        (REPO / "requirements" / "stare.txt").read_text(),
+    )[0]
+    for _ in (1, 2):
+        done = subprocess.run(
+            ["bash", "-c", call], env=env, capture_output=True, text=True
+        )
+        assert done.returncode == 0, done.stderr
+        first, second = done.stdout.split()
+        assert first == second and Path(first).parent.parent == out / "cache"
+        assert Path(first, "stare", "slide_io.py").read_text().startswith("WHAT")
+    asked = (tmp_path / "curl.log").read_text().splitlines()
+    assert len(asked) == 1 and asked[0].endswith(url)  # once, the pinned release
+    # nothing fetched, nothing there: said, and non-zero
+    curl.write_text("#!/bin/bash\nexit 22\n")
+    env["REGBENCH_OUT"] = str(tmp_path / "other")
+    done = subprocess.run(["bash", "-c", call], env=env, capture_output=True, text=True)
+    assert done.returncode != 0 and "could not fetch STARE from" in done.stderr
+
+
+# ── the preflight: before anything is submitted ───────────────────────────────
+def test_the_preflight_stops_the_launch_with_one_line_per_failure(site, tmp_path):
+    """The stand-in "image" is this machine's python: it has STARE and not PALOM."""
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_PREFLIGHT": "1",
+        "REGBENCH_WORK": str(tmp_path / "work"),
+    }
+    bad, log, out = launch(
+        site, "--runs", "stare palom", env=env, dry=False, log="preflight-bad"
+    )
+    assert bad.returncode == 2 and not log.exists()  # no sbatch was called
+    lines = [ln for ln in bad.stdout.splitlines() if ln.startswith("preflight")]
+    fails = [ln for ln in lines if ln.startswith("preflight FAIL")]
+    assert fails == [
+        ln
+        for ln in fails
+        if ln.startswith("preflight FAIL [PALOM palom] cannot import")
+    ] and any("cannot import palom:" in ln for ln in fails)
+    assert "preflight [STARE_REGBENCH stare] ok" in lines
+    assert any(
+        ln.startswith("preflight [PALOM palom] ") and "failure(s)" in ln for ln in lines
+    )
+    assert (
+        "the preflight failed" in bad.stderr and "Nothing was submitted." in bad.stderr
+    )
+    assert not (out / "logs" / "jobs.tsv").exists()
+    # the same run list without the image that fails: the launch goes on
+    good, log, out = launch(
+        site, "--runs", "stare", env=env, dry=False, log="preflight-ok"
+    )
+    assert good.returncode == 0, good.stderr
+    assert "# preflight: ok" in good.stdout and log.exists()
+    assert good.stdout.index("# preflight: ok") < good.stdout.index("rb-sc-stare-64g")
+    assert (tmp_path / "work").is_dir()  # the work folder was written to
+    # alone: the same checks, nothing submitted, no submission id left behind
+    alone, log, out = launch(
+        site,
+        "--preflight",
+        "--runs",
+        "stare",
+        env=env,
+        dry=False,
+        log="preflight-alone",
+    )
+    assert alone.returncode == 0 and not log.exists()
+    assert "# --preflight: nothing was submitted" in alone.stdout
+    assert not (out / "logs" / "submission").exists()
+    # a dry run does not start an image, and says so; skipping is said aloud
+    dry_run, _, _ = launch(site, "--runs", "stare", env=env, log="preflight-dry")
+    assert "# preflight: not run in a dry run" in dry_run.stdout
+    skipped, _, _ = launch(
+        site, "--runs", "palom", env={**env, "REGBENCH_PREFLIGHT": "0"}, dry=False,
+        log="preflight-skip",
+    )  # fmt: skip
+    assert skipped.returncode == 0 and "# WARNING preflight SKIPPED" in skipped.stdout
+
+
+def test_an_image_that_does_not_start_is_one_preflight_failure(site, tmp_path):
+    fake = _image_runtime(tmp_path, ())  # an image with no interpreter at all
+    env = {
+        "REGBENCH_PREFLIGHT": "1",
+        "REGBENCH_SIF_PALOM": "/images/palom.sif",
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{fake}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+    }
+    done, log, _ = launch(
+        site, "--preflight", "--runs", "palom", env=env, dry=False, log="noimage"
+    )
+    assert done.returncode == 2 and not log.exists()
+    fails = [ln for ln in done.stdout.splitlines() if ln.startswith("preflight FAIL")]
+    assert len(fails) == 1 and fails[0].startswith(
+        "preflight FAIL [PALOM palom] the image did not start, or has neither python nor python3"
+    )
 
 
 def test_valis_120_is_started_with_a_writable_tmpfs_and_no_other_image(tmp_path):

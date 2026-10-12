@@ -21,6 +21,17 @@
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
 #
+# THE PREFLIGHT runs before the first sbatch of a real submission, on the login node, and
+# alone with --preflight (same --runs and --datasets; nothing is submitted): each image a
+# selected run uses is started exactly as a job starts it and asked whether the run's
+# modules import, whether the method's package is the version its adapter enforces,
+# whether numpy resolves inside the image, and whether the results and work folders can
+# be written (`regbench preflight`, benchmarks/regbench/preflight.py). One line per
+# failure, and a failure stops the launch. For the images without a `stare` package
+# (REGBENCH_STARE_SRC_IMAGES) the pinned STARE source is fetched first, once, into
+# $REGBENCH_OUT/cache. REGBENCH_PREFLIGHT=0 skips it (a login node without the
+# container runtime) and says so.
+#
 # THE RUN LIST is read from `python -m benchmarks.regbench runs` and from nowhere else:
 # this script names no method. What it submits, in order:
 #
@@ -246,12 +257,13 @@ DRY="${REGBENCH_DRY:-0}"
 # The ANHIR sets (anhir, anhir_tune) are never part of the default either.
 DEFAULT_DATASETS="multiplex synthetic"
 DORMANT_DATASETS="semisynth hyreco_a hyreco_b"
-prepare=0 score_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
+prepare=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --prepare) prepare=1; shift ;;
         --score-only) score_only=1; shift ;;
+        --preflight) preflight_only=1; shift ;;
         --runs) only_runs="$2"; shift 2 ;;
         --datasets) datasets="$2"; shift 2 ;;
         --) shift; break ;;
@@ -278,6 +290,7 @@ need_int REGBENCH_STAGE_FEED_MIN 1
 need_int REGBENCH_STAGE_POLL_S 1
 need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
+[ "$preflight_only" = 1 ] && DRY=0   # it starts the images; it submits nothing
 [ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
 
 # one id per call: every record of this submission carries it. --score-only makes no
@@ -408,7 +421,7 @@ else
     export REGBENCH_IDS_FILE="$IDS_FILE"
     # A second submission while jobs of an earlier one are still in the queue: their
     # tasks read the gate records and the stage files this call would replace.
-    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ -s "$JOBS_FILE" ]; then
+    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ "$preflight_only" != 1 ] && [ -s "$JOBS_FILE" ]; then
         in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
             || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
         still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' - || true)"
@@ -417,7 +430,7 @@ else
         fi
     fi
     # the last submission that ran anything into this folder: what --score-only scores
-    [ "$prepare" = 1 ] || [ "$score_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
+    [ "$prepare" = 1 ] || [ "$score_only" = 1 ] || [ "$preflight_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
 fi
 
 # ── the run list, from the harness alone ──────────────────────────────────────────────
@@ -614,6 +627,62 @@ has "$sized" multiplex && ordered="multiplex"
 for ds in $sized; do [ "$ds" = multiplex ] || ordered="$ordered $ds"; done
 sized="$ordered"
 first_dataset="${sized# }"; first_dataset="${first_dataset%% *}"
+
+# ── the preflight: every image, started as a job starts it, before the first sbatch ───
+preflight() {
+    local seen="" failed=0 name method image out code key src where=()
+    if [ "${REGBENCH_PREFLIGHT:-1}" = 0 ]; then
+        echo "# WARNING preflight SKIPPED (REGBENCH_PREFLIGHT=0): nothing checked that the images hold what their runs import"
+        return 0
+    fi
+    mkdir -p "$REGBENCH_OUT" || die "cannot create REGBENCH_OUT=$REGBENCH_OUT. Nothing was submitted."
+    # the pinned STARE source, for the images that have none inside
+    for image in $images; do
+        has "$REGBENCH_STARE_SRC_IMAGES" "$image" || continue
+        src="$(regbench_fetch_stare)" || die "preflight: the image $image has no STARE package and the pinned STARE source could not be fetched (line above; REGBENCH_STARE_SRC names a copy that is already there). Nothing was submitted."
+        echo "# preflight: STARE source for the images without one ($REGBENCH_STARE_SRC_IMAGES) -> $src"
+        break
+    done
+    where=(--writable "$REGBENCH_OUT")
+    if [ -n "${REGBENCH_WORK:-}" ]; then
+        where+=(--writable "$REGBENCH_WORK")
+    else
+        echo "# preflight: REGBENCH_WORK is not set: a job's work folder is its own TMPDIR, which cannot be checked from here"
+    fi
+    while IFS=$'\t' read -r name method _ _ image _; do
+        has "$selected" "$name" || continue
+        key="$image:$method"
+        has "$seen" "$key" && continue
+        seen="$seen $key"
+        out="$(regbench_py "$image" preflight --method "$method" --image "$image" "${where[@]}" 2>&1)" && code=0 || code=$?
+        grep -E '^preflight( FAIL)? \[' <<< "$out" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$' || true
+        if [ "$code" != 0 ]; then
+            failed=1
+            grep -q '^preflight FAIL \[' <<< "$out" \
+                || echo "preflight FAIL [$image $method] the image did not start, or has neither python nor python3, or the harness does not import there (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+        fi
+    done < "$table"
+    image="$REGBENCH_SCORER_IMAGE"
+    out="$(regbench_py "$image" preflight --scorer --image "$image" --writable "$REGBENCH_OUT" 2>&1)" && code=0 || code=$?
+    grep -E '^preflight( FAIL)? \[' <<< "$out" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$' || true
+    if [ "$code" != 0 ]; then
+        failed=1
+        grep -q '^preflight FAIL \[' <<< "$out" \
+            || echo "preflight FAIL [$image the scorer] the image did not start, or has neither python nor python3 (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+    fi
+    [ "$failed" = 0 ] || die "the preflight failed (the 'preflight FAIL' lines above, one per failure). Nothing was submitted."
+    echo "# preflight: ok"
+}
+if [ "$preflight_only" = 1 ]; then
+    preflight
+    echo "# --preflight: nothing was submitted"
+    exit 0
+fi
+if [ "$DRY" = 1 ]; then
+    echo "# preflight: not run in a dry run (submit_cohort.sh --preflight runs it alone; a real submission runs it first)"
+else
+    preflight
+fi
 
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
 needed=""

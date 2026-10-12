@@ -1,0 +1,117 @@
+"""`regbench preflight`: what each image is asked before anything is submitted."""
+
+from __future__ import annotations
+
+import sys
+import types
+
+import pytest
+
+from benchmarks.regbench import cli, methods, preflight, variants
+
+pytest.importorskip("stare")
+
+
+def test_every_method_of_the_run_list_has_its_package_named():
+    used = {r.method for r in variants.RUNS}
+    assert used <= set(preflight.PACKAGE)
+    # the harness reads every image through STARE's reader, in every image
+    assert "stare.slide_io" in preflight.COMMON and "stare.slide_io" in preflight.SCORER
+    assert {"zarr", "imagecodecs", "tifffile", "numpy"} <= set(preflight.COMMON)
+    # the version each adapter enforces is the one the preflight compares with
+    for method in ("ashlar", "valis", "valis_mirage", "deeperhistreg", "palom"):
+        assert methods.load(method).VERSION
+
+
+def test_an_environment_that_holds_what_the_run_needs_passes(tmp_path, capsys):
+    notes, failures = preflight.check("stare", [tmp_path / "out"])
+    assert failures == []
+    assert any(n.startswith("numpy from ") for n in notes)
+    assert f"writable: {tmp_path / 'out'}" in notes
+    code = cli.main(["preflight", "--method", "stare", "--image", "STARE_REGBENCH"])
+    said = capsys.readouterr()
+    assert code == 0 and said.out.splitlines()[-1] == (
+        "preflight [STARE_REGBENCH stare] ok"
+    )
+
+
+def test_a_package_that_is_not_there_is_one_line(capsys):
+    """This machine has no ASHLAR: its adapter's imports fail one by one, and nothing
+    else is reported as failing."""
+    pytest.importorskip("numpy")
+    try:
+        import ashlar  # noqa: F401
+
+        pytest.skip("ashlar is installed here")
+    except ImportError:
+        pass
+    notes, failures = preflight.check("ashlar")
+    assert [f.split(":")[0] for f in failures] == [
+        "cannot import ashlar",
+        "cannot import benchmarks.ashlar.original",
+        "cannot import benchmarks.ashlar.retile",
+    ][: len(failures)] and failures[0].startswith("cannot import ashlar: ")
+    code = cli.main(["preflight", "--method", "ashlar", "--image", "ASHLAR"])
+    said = capsys.readouterr()
+    assert code == 1
+    assert said.err.splitlines() == [
+        f"preflight FAIL [ASHLAR ashlar] {f}" for f in failures
+    ]
+    assert said.out.splitlines()[-1] == (
+        f"preflight [ASHLAR ashlar] {len(failures)} failure(s)"
+    )
+
+
+def test_the_version_the_adapter_enforces_is_surfaced_and_not_weakened(monkeypatch):
+    """ASHLAR's version comes from versioneer: whatever the installed package prints is
+    reported beside what the adapter runs, and the adapter's own check is as it was."""
+    fake = types.ModuleType("ashlar")
+    fake.__file__ = "/image/site-packages/ashlar/__init__.py"
+    fake.__version__ = "1.20.0+3.gabc1234"
+    monkeypatch.setitem(sys.modules, "ashlar", fake)
+    for name in preflight.NEEDS["ashlar"]:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    notes, failures = preflight.check("ashlar")
+    assert len(failures) == 1
+    assert "ashlar says its version is '1.20.0+3.gabc1234'" in failures[0]
+    assert "runs '1.20.0' and nothing else" in failures[0]
+    fake.__version__ = methods.load("ashlar").VERSION
+    notes, failures = preflight.check("ashlar")
+    assert (
+        failures == [] and "ashlar 1.20.0 (the version the adapter enforces)" in notes
+    )
+    assert methods.load("ashlar").VERSION == "1.20.0"
+
+
+def test_numpy_from_the_users_own_site_packages_is_a_failure(monkeypatch):
+    import numpy
+
+    home = str(__import__("pathlib").Path(numpy.__file__).resolve().parents[1])
+    monkeypatch.setattr(preflight, "_user_sites", lambda: [home])
+    monkeypatch.delenv("PYTHONNOUSERSITE", raising=False)
+    notes, failures = preflight.check("stare")
+    (line,) = [f for f in failures if f.startswith("numpy resolves OUTSIDE the image")]
+    assert numpy.__file__ in line and "PYTHONNOUSERSITE is 'not set' here" in line
+    assert preflight.outside_the_image("") is False
+
+
+def test_a_folder_that_cannot_be_written_is_a_failure(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        notes, failures = preflight.check("stare", [locked, tmp_path / "fine"])
+    finally:
+        locked.chmod(0o700)
+    assert len(failures) == 1 and failures[0].startswith(
+        f"{locked} is not visible or not writable from inside the image"
+    )
+    assert f"writable: {tmp_path / 'fine'}" in notes
+
+
+def test_the_scorers_image_is_checked_for_what_the_scorer_imports(capsys):
+    notes, failures = preflight.check(scorer=True)
+    assert all(f.startswith("cannot import ") for f in failures)
+    code = cli.main(["preflight", "--scorer", "--image", "STARE_REGBENCH"])
+    assert code == (1 if failures else 0)
+    assert "[STARE_REGBENCH the scorer]" in capsys.readouterr().out

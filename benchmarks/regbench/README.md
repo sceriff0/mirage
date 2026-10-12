@@ -2267,6 +2267,10 @@ round).
 | `REGBENCH_SCORE_TIME` | time limit of one task of those arrays (never above 7 days). A task that runs out keeps the pair records it finished; `--score-only` goes on from there | `24:00:00` |
 | `REGBENCH_HEAD_IMAGE` | the image the script itself reads the run list with, on the login node | `STARE_REGBENCH` |
 | `REGBENCH_WRITABLE_TMPFS_IMAGES` | images started with `--writable-tmpfs` | `VALIS120` |
+| `REGBENCH_STARE_SRC_IMAGES` | images that have no `stare` package inside: the pinned STARE source is put on their `PYTHONPATH` | `ASHLAR VALIS_MIRAGE` |
+| `REGBENCH_STARE_SRC` | where that source is; fetched once by the launcher on the login node when it is not there | `$REGBENCH_OUT/cache/stare-<tag>/src` |
+| `REGBENCH_PREFLIGHT` | `0`: submit without the preflight (a login node without the container runtime); said aloud | `1` |
+| `REGBENCH_PRIVATE`, `REGBENCH_PRIVATE_DIR` | the private plug-in's switch and folder (`plugins.py`); passed into every image, the folder bound | unset |
 
 Partition, account and node type go after `--` and reach every job, e.g.
 `-- --partition=cpu --constraint=<one node type>`. Pin one node type, or the timings
@@ -2297,7 +2301,10 @@ REGBENCH_MANIFEST=$PWD/one.csv benchmarks/regbench/slurm/submit_cohort.sh --prep
 regbench_py STARE_REGBENCH list --cases "$REGBENCH_CASES" --dataset multiplex --sizes
 #    prints "<rounds> 1 <rounds>"
 
-# 3. STARE and ASHLAR on that patient: first what would be submitted, then for real
+# 3. STARE and ASHLAR on that patient: the images first (nothing is submitted), then
+#    what would be submitted, then for real
+benchmarks/regbench/slurm/submit_cohort.sh --preflight --runs "stare ashlar" --datasets multiplex
+#    ok: no "preflight FAIL" line, and "# preflight: ok"
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run --runs "stare ashlar" --datasets multiplex -- <site options>
 benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets multiplex -- <site options>
 #    (the dry run ends with "# N job(s) ..., M task(s) in them: N sbatch call(s) would
@@ -2322,6 +2329,7 @@ benchmarks/regbench/slurm/submit_cohort.sh --score-only --datasets multiplex -- 
 # 4. the whole cohort: prepare (a NEW $REGBENCH_CASES: the known-truth cases of an older
 #    truth spec are refused), look at the dry run, submit
 REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare -- <site options>
+benchmarks/regbench/slurm/submit_cohort.sh --preflight
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run -- <site options> | less
 benchmarks/regbench/slurm/submit_cohort.sh -- <site options>
 ```
@@ -2346,6 +2354,48 @@ nothing else.
 patient's rounds. `--runs` takes any subset of run names; the selfchecks a subset stands
 behind are submitted with it. A run whose results another reads but which is not in the
 subset is assumed to be under `$REGBENCH_OUT` already, and the script says so.
+
+### The preflight, and what every image is started with
+
+`submit_cohort.sh --preflight [--runs ...]` starts every image a selected run uses, on
+the login node, exactly as a job starts it, and asks inside it (`regbench preflight`,
+`preflight.py`): do `numpy`, `tifffile`, `zarr`, `imagecodecs` and `stare.slide_io`
+import, does the method's package import with what its adapter imports beside it, is
+the package the version the adapter enforces, do `numpy` and the package resolve inside
+the image and not under `~/.local`, and can `REGBENCH_OUT` and `REGBENCH_WORK` be
+written. It prints one `preflight FAIL [<image> <method>] ...` line per failure; an image
+that does not start or has neither `python` nor `python3` is one such line. A real
+submission runs the same preflight before its first `sbatch` and stops on a failure
+with nothing submitted; a dry run does not start an image and says so.
+
+- **The version check is the adapter's, shown early.** The preflight reads the version
+  the way the adapter reads it and compares it with the adapter's `VERSION`; the adapter
+  is unchanged and still refuses any other version when a unit runs. ASHLAR's version
+  string comes from versioneer `[MEMORY: the ASHLAR repository's setup, not retrieved
+  while this was written]`: if the official image prints something other than exactly
+  `1.20.0`, the preflight line quotes what it prints, and the owner decides (the
+  adapter's `--opt any_version=1` exists for a reviewed exception).
+- **`stare` in the images that do not ship it.** The harness reads every image through
+  `stare.slide_io`, and the benchmark's ASHLAR command path imports STARE's manifest
+  code. The official ASHLAR image and upstream's VALIS 1.0.0 image have no `stare`
+  (`REGBENCH_STARE_SRC_IMAGES`). For those the launcher fetches the release pinned in
+  `requirements/stare.txt` once, as source, into `$REGBENCH_OUT/cache/stare-<tag>/src`
+  (`regbench_fetch_stare`, on the login node; a job never downloads), and puts that
+  folder on `PYTHONPATH` inside the image. That is STARE's pure-Python code only: the
+  image must already hold what it imports that is compiled or third-party, `numpy`,
+  `tifffile`, `zarr` (with `numcodecs`) and `imagecodecs`; `psutil` where the memory
+  monitor is to use it (without it the monitor reads `/proc`, `rss_method: proc`).
+  Whether those two images hold them was not checked from here: the preflight is
+  where it shows.
+- **Inside every image** (`slurm/env.sh`, through `APPTAINERENV_<name>`, which sets a
+  variable under `--cleanenv`): `PYTHONNOUSERSITE=1`, so the packages in the host
+  user's `~/.local` (the home folder is mounted) cannot shadow a pinned one;
+  `PYTHONPATH` is the checkout plus that STARE source and nothing of the host's own
+  `PYTHONPATH`; `TMPDIR` is the job's, bound and passed on; `REGBENCH_WORK`,
+  `REGBENCH_PRIVATE` and `REGBENCH_PRIVATE_DIR` are passed on as exported (the plug-in
+  folder is bound; a plug-in that is switched on and cannot be read stops the run as
+  before). An environment that is not an image (`REGBENCH_CONDA_X`, `REGBENCH_VENV_X`)
+  gets `PYTHONNOUSERSITE=1` too.
 
 ### What the site must allow
 

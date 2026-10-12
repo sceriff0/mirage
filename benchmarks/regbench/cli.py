@@ -706,6 +706,18 @@ def build_parser():
     )
     sl.add_argument("--out", default=None, help="with --due: the results folder")
 
+    pf = sub.add_parser(
+        "preflight",
+        help="inside an image, before anything is submitted: do the modules a run "
+        "needs import, is the package the version its adapter enforces, does numpy "
+        "resolve inside the image, are the folders writable (regbench.preflight)",
+    )
+    what = pf.add_mutually_exclusive_group(required=True)
+    what.add_argument("--method", choices=METHODS)
+    what.add_argument("--scorer", action="store_true", help="the scorer's image")
+    pf.add_argument("--image", default="", help="the image's name, for the lines")
+    pf.add_argument("--writable", action="append", default=[], metavar="DIR")
+
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
@@ -1395,6 +1407,10 @@ def main(argv=None):
         from . import nuclei
 
         return nuclei.main(a)
+    if a.cmd == "preflight":
+        from . import preflight
+
+        return preflight.main(a)
     if a.cmd == "prepare":
         return _prepare(a)
     if a.cmd == "prep-select":

@@ -32,6 +32,36 @@
 #                                    VALIS120, whose package rewrites a file of its own
 #                                    at every JVM start)
 #
+#   REGBENCH_STARE_SRC_IMAGES        images that have no `stare` package inside (default:
+#                                    ASHLAR VALIS_MIRAGE, the two pulled as their
+#                                    projects publish them). The harness reads every
+#                                    image through `stare.slide_io`, so for these the
+#                                    source of the release pinned in
+#                                    requirements/stare.txt is put on PYTHONPATH: pure
+#                                    Python only. The image must have what that code
+#                                    imports and what is compiled: numpy, tifffile, zarr
+#                                    (with numcodecs), imagecodecs; psutil if the
+#                                    monitor is to use it. `regbench preflight` checks
+#   REGBENCH_STARE_SRC               where that source is (default
+#                                    $REGBENCH_OUT/cache/stare-<tag>/src): fetched once
+#                                    by submit_cohort.sh on the login node
+#                                    (regbench_fetch_stare), never by a job
+#
+# INSIDE EVERY IMAGE (`--cleanenv` passes nothing of the host's environment; a variable
+# is set inside through APPTAINERENV_<name> / SINGULARITYENV_<name>, the mechanism
+# Apptainer documents for it: "Environment and Metadata" of the Apptainer user guide
+# `[MEMORY]`, not retrieved while this was written):
+#   PYTHONNOUSERSITE=1   the host user's ~/.local/lib/pythonX.Y/site-packages (the home
+#                        folder is mounted into the image) cannot shadow a pinned package
+#   PYTHONPATH           the checkout, and for REGBENCH_STARE_SRC_IMAGES the STARE source:
+#                        nothing of the host's own PYTHONPATH
+#   TMPDIR               the job's, when it is a folder: bound and passed on, so that a
+#                        method's temporary files go to the node's scratch
+#   REGBENCH_WORK, REGBENCH_PRIVATE, REGBENCH_PRIVATE_DIR   as exported (the private
+#                        plug-in folder is bound when it is named; a plug-in that is
+#                        switched on and cannot be read still stops the run:
+#                        benchmarks/regbench/plugins.py)
+#
 # A GPU is passed into an image (--nv) only for a run whose `gpu` column is 1: the
 # launcher exports REGBENCH_GPU for each job. VALIS 1.2.0's image has a CUDA torch
 # inside and must never see one.
@@ -56,12 +86,44 @@
 : "${REGBENCH_CPUS:=4}"
 : "${REGBENCH_MEM:=16G}"
 : "${REGBENCH_WRITABLE_TMPFS_IMAGES:=VALIS120}"
+: "${REGBENCH_STARE_SRC_IMAGES:=ASHLAR VALIS_MIRAGE}"
 export REGBENCH_REPO REGBENCH_CASES REGBENCH_OUT REGBENCH_CPUS REGBENCH_MEM
+export REGBENCH_STARE_SRC_IMAGES
 
 # The harness is imported from the checkout as `benchmarks.regbench`. STARE itself is the
 # pinned release installed in the method's environment (requirements/stare.txt).
 export PYTHONPATH="$REGBENCH_REPO${PYTHONPATH:+:$PYTHONPATH}"
 REGBENCH_MODULE=benchmarks.regbench
+
+# The STARE release the checkout pins (requirements/stare.txt), as source, for the images
+# that have no `stare` inside (REGBENCH_STARE_SRC_IMAGES).
+regbench_stare_url() {
+    grep -oE 'https://github\.com/sceriff0/stare/archive/refs/tags/[^[:space:]]+\.tar\.gz' \
+        "$REGBENCH_REPO/requirements/stare.txt" | head -n 1
+}
+regbench_stare_src() {
+    local url
+    url="$(regbench_stare_url)"
+    echo "${REGBENCH_STARE_SRC:-$REGBENCH_OUT/cache/stare-$(basename "$url" .tar.gz)/src}"
+}
+# regbench_fetch_stare: download that source once (the login node: a job may have no
+# network). Prints the folder; non-zero when it is not there afterwards.
+regbench_fetch_stare() {
+    local url src tmp
+    url="$(regbench_stare_url)"
+    src="$(regbench_stare_src)"
+    [ -n "$url" ] || { echo "no STARE release URL in $REGBENCH_REPO/requirements/stare.txt" >&2; return 1; }
+    if [ ! -f "$src/stare/slide_io.py" ]; then
+        mkdir -p "$(dirname "$src")" || return 1
+        tmp="$(mktemp -d "$(dirname "$src")/dl.XXXXXX")" || return 1
+        if curl -fsSL "$url" | tar -xz -C "$tmp" --strip-components=1 && [ -d "$tmp/src" ]; then
+            mv -n "$tmp/src" "$src" 2>/dev/null || true
+        fi
+        rm -rf "$tmp"
+    fi
+    [ -f "$src/stare/slide_io.py" ] || { echo "could not fetch STARE from $url into $src" >&2; return 1; }
+    echo "$src"
+}
 
 _regbench_var() {  # _regbench_var SIF valis120 -> value of REGBENCH_SIF_VALIS120
     local name
@@ -126,8 +188,17 @@ regbench_exec() (
         bind="$bind${REGBENCH_ANHIR:+,$REGBENCH_ANHIR}"
         # a site config outside the checkout (the model and settings of that re-run)
         case "${REGBENCH_SITE_CONFIG:-none}" in none|-) ;; *) bind="$bind,$REGBENCH_SITE_CONFIG" ;; esac
+        # the private plug-in's folder, when one is named, and the job's TMPDIR
+        bind="$bind${REGBENCH_PRIVATE_DIR:+,$REGBENCH_PRIVATE_DIR}"
+        [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ] && bind="$bind,${TMPDIR%/}"
+        # Inside the image: the checkout on PYTHONPATH (plus the STARE source for an
+        # image without one) and nothing of the host's; no user site-packages.
+        local inside="$REGBENCH_REPO"
+        case " $REGBENCH_STARE_SRC_IMAGES " in *" $upper "*) inside="$inside:$(regbench_stare_src)" ;; esac
+        export "SINGULARITYENV_PYTHONPATH=$inside" "APPTAINERENV_PYTHONPATH=$inside"
+        export SINGULARITYENV_PYTHONNOUSERSITE=1 APPTAINERENV_PYTHONNOUSERSITE=1
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
-        for v in PYTHONPATH SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
+        for v in TMPDIR REGBENCH_WORK REGBENCH_PRIVATE REGBENCH_PRIVATE_DIR SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB REGBENCH_SELFCHECK_STATUS \
                  REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
                  REGBENCH_STAGES \
@@ -150,9 +221,9 @@ regbench_exec() (
     elif [ -n "$conda" ]; then
         # shellcheck disable=SC1091
         source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$conda"
-        "$@"
+        PYTHONNOUSERSITE=1 "$@"
     elif [ -n "$venv" ]; then
-        PATH="$venv/bin:$PATH" "$@"
+        PYTHONNOUSERSITE=1 PATH="$venv/bin:$PATH" "$@"
     else
         "$@"
     fi
