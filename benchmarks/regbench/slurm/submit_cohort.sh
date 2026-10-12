@@ -44,9 +44,14 @@
 #      A run whose registration is several scheduler jobs per round (column `stages`:
 #      the pipeline's own shape) has a chain of stage jobs instead, each with the
 #      pipeline's allocation for that process: per attempt an array over the rounds for
-#      COARSE and for SOLVE, ONE TASK PER TILE (every tile of every round, in arrays of
-#      at most REGBENCH_STAGE_ARRAY_MAX tasks), and last the writer on its own four
-#      rungs. Every task is submitted here, up front; `stage_chain` and `staged` below.
+#      COARSE and for SOLVE, and last the round's last job on its own rungs, all
+#      submitted here. THE TILE JOBS ARE NOT: one task per tile would be hundreds of
+#      thousands of queued tasks. Between COARSE and SOLVE sits the run's TILE SUBMITTER
+#      (feed_tiles.sbatch), a small job on a compute node that calls sbatch itself, as
+#      a Nextflow head job does: still one job per tile with the pipeline's allocation,
+#      in arrays of at most REGBENCH_STAGE_ARRAY_MAX tasks, never more than
+#      REGBENCH_STAGE_QUEUE_MAX of them pending or running. SOLVE waits for it.
+#      `stage_chain` and `staged` below.
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
 #      realcheck.json; everything else of that run waits for it.
@@ -67,7 +72,17 @@
 # with the gate records that submission left. Nothing is run again, and a case whose
 # record is still valid is not computed again.
 #
-# Nothing waits on the login node: no `sbatch --wait`, no job that submits jobs.
+# Nothing waits on the login node and no job waits on `sbatch --wait`. One kind of job
+# submits jobs: the tile submitter of a run whose registration is several jobs per round.
+#
+# A SECOND SUBMISSION into a REGBENCH_OUT whose earlier jobs are still pending or running
+# is REFUSED (its gate records would replace the ones those jobs read). Wait, cancel them
+# (the refusal prints the line), or use another REGBENCH_OUT. --prepare and --score-only
+# are not refused.
+#
+# AN sbatch THE SCHEDULER REFUSES stops this script at once: it says how many jobs of
+# this call are already queued, where their ids are, and the scancel line that removes
+# them. Nothing is left half-submitted without that being said.
 #
 # AN EXTERNAL LANDMARK SET (HyReCo) is submitted on its own, never with the cohort:
 #
@@ -105,10 +120,24 @@
 #                                     gets it times the rounds of the largest patient,
 #                                     never above the site's longest job (7 days)
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
-#   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N)
-#   REGBENCH_STAGE_ARRAY_MAX (1000)   the most tasks in one tile array; keep it below
-#                                     the site's MaxArraySize. The dry run prints how
-#                                     many jobs and array tasks a submission holds
+#   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N); not
+#                                     applied to the tile arrays, whose limit is
+#                                     REGBENCH_STAGE_QUEUE_MAX
+#   REGBENCH_STAGE_ARRAY_MAX (100)    the most tasks in one tile array
+#   REGBENCH_STAGE_QUEUE_MAX (100)    the most tile tasks of ONE run pending or running
+#                                     at a time (the tile submitter's ceiling)
+#   REGBENCH_STAGE_FEED_MIN (25)      the submitter waits for that many free slots
+#                                     before it submits an array (fewer when fewer
+#                                     tiles are left)
+#   REGBENCH_STAGE_POLL_S (60)        seconds between two looks at the queue
+#   REGBENCH_STAGE_FEEDERS (2)        tile submitters chained per run and dataset: the
+#                                     second goes on where the first stopped when the
+#                                     first is ended at its time limit
+#   REGBENCH_STAGE_FEED_TIME (7-00:00:00)  the time limit of one of them (the site's
+#                                     longest job)
+#                                     The dry run prints how many sbatch calls are made
+#                                     now, how many tile tasks are fed in later, and
+#                                     the most tasks in the queue at once
 #   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
 #   REGBENCH_RUN_ORDER                the order the runs are SUBMITTED in, and so dealt
 #                                     onto the lanes: family or run names, space-separated
@@ -200,7 +229,13 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 : "${REGBENCH_RUN_LANES:=0}"
-: "${REGBENCH_STAGE_ARRAY_MAX:=1000}"
+: "${REGBENCH_STAGE_ARRAY_MAX:=100}"
+: "${REGBENCH_STAGE_QUEUE_MAX:=100}"
+: "${REGBENCH_STAGE_FEED_MIN:=25}"
+: "${REGBENCH_STAGE_POLL_S:=60}"
+: "${REGBENCH_STAGE_FEEDERS:=2}"
+: "${REGBENCH_STAGE_FEED_TIME:=7-00:00:00}"
+export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_QUEUE_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
 # multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
@@ -224,6 +259,21 @@ extra=("$@")
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+# whole numbers of at least <least>: a zero here is an array of no task, or a loop
+# that never ends
+need_int() {
+    local var="$1" least="$2" value="${!1}"
+    case "$value" in ''|*[!0-9]*) die "$var='$value': a whole number of at least $least. Nothing was submitted." ;; esac
+    [ "$((10#$value))" -ge "$least" ] || die "$var='$value': a whole number of at least $least. Nothing was submitted."
+    printf -v "$var" '%s' "$((10#$value))"
+}
+need_int REGBENCH_ARRAY_LIMIT 1
+need_int REGBENCH_STAGE_ARRAY_MAX 1
+need_int REGBENCH_STAGE_QUEUE_MAX 1
+need_int REGBENCH_STAGE_FEED_MIN 1
+need_int REGBENCH_STAGE_POLL_S 1
+need_int REGBENCH_STAGE_FEEDERS 1
+need_int REGBENCH_RUN_LANES 0
 [ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
 
 # one id per call: every record of this submission carries it. --score-only makes no
@@ -303,10 +353,27 @@ submit() {
         return 0
     fi
     local got
-    got="$(sbatch --parsable --job-name="$name" "$@" < /dev/null)"
+    if ! got="$(sbatch --parsable --job-name="$name" "$@" < /dev/null 2>&1)"; then
+        refused "$name" "$got"
+    fi
     JOB_ID="${got%%;*}"
+    case "$JOB_ID" in ''|*[!0-9_]*) refused "$name" "sbatch printed no job id: $got" ;; esac
     printf '%s\t%s\n' "$name" "$JOB_ID"
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$name" "$JOB_ID" >> "$JOBS_FILE"
+    echo "$JOB_ID" >> "$IDS_FILE"
+}
+# refused <job name> <the scheduler's words>: an sbatch that did not go through. The
+# jobs before it ARE queued, and some of them wait for jobs that will never exist.
+refused() {
+    local queued=$((N_JOBS - 1))
+    {
+        echo "submit_cohort: sbatch REFUSED the job '$1': $2"
+        echo "submit_cohort: $queued job(s) of this call are already queued (submission $REGBENCH_SUBMISSION); the rest was NOT submitted, so the graph is incomplete."
+        echo "submit_cohort: their ids, one per line: $IDS_FILE (with names: $JOBS_FILE)"
+        echo "submit_cohort: cancel them:  scancel \$(cat \"$IDS_FILE\")"
+        echo "submit_cohort: then submit again, once the reason above is gone (a limit on queued jobs: see README, \"What the site must allow\")."
+    } >&2
+    exit 2
 }
 # every job: the caller's own options, logs in one place, and never pending for ever on
 # a dependency that can no longer be met
@@ -331,6 +398,20 @@ else
     mkdir -p "$REGBENCH_OUT/logs/gates" "$REGBENCH_OUT/logs/selfcheck"
     scratch="$REGBENCH_OUT/logs"
     JOBS_FILE="$REGBENCH_OUT/logs/jobs.tsv"
+    mkdir -p "$REGBENCH_OUT/logs/submitted"
+    # every job id of THIS call, one per line (the tile submitters add theirs)
+    IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.ids"
+    export REGBENCH_IDS_FILE="$IDS_FILE"
+    # A second submission while jobs of an earlier one are still in the queue: their
+    # tasks read the gate records and the stage files this call would replace.
+    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ -s "$JOBS_FILE" ]; then
+        in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
+            || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
+        still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' - || true)"
+        if [ -n "$still" ]; then
+            die "$(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier submission into $REGBENCH_OUT are still pending or running ($still). A second submission would replace the gate records and stage files their tasks read, so it is refused. Wait for them; or cancel them:  scancel $still ; or submit into another REGBENCH_OUT. Nothing was submitted."
+        fi
+    fi
     # the last submission that ran anything into this folder: what --score-only scores
     [ "$prepare" = 1 ] || [ "$score_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
 fi
@@ -647,11 +728,15 @@ ladder() {
 #   prep, coarse, solve   four arrays over the rounds, one per attempt: attempt 1 runs
 #                         the stage; 2 to 4 exit at once unless the attempt before ended
 #                         the way the pipeline retries
-#   tile                  attempt 1: ONE TASK PER TILE, every round's tiles laid end to
-#                         end in arrays of at most REGBENCH_STAGE_ARRAY_MAX tasks (the
-#                         count of a round is known from its reference's size alone,
-#                         `regbench stages`); attempts 2 to 4: one array over the rounds,
-#                         a task running the tiles of its round that are due
+#   tile                  NOT submitted here: REGBENCH_STAGE_FEEDERS tile submitters
+#                         (feed_tiles.sbatch), one after the other. The first submits
+#                         ONE TASK PER TILE (the count of a round is known from its
+#                         reference's size alone, `regbench stages`) in arrays of at
+#                         most REGBENCH_STAGE_ARRAY_MAX tasks, keeping at most
+#                         REGBENCH_STAGE_QUEUE_MAX of them pending or running, then
+#                         per attempt 2 to 4 one task per round that has a tile to
+#                         retry; a later one goes on where the one before stopped and
+#                         exits at once when nothing is left
 #   stitch                the round's last job (run_rung.sbatch, `jobs`): it collects the
 #                         stage records and runs the writer, on its own four rungs
 stage_chain() {
@@ -666,8 +751,8 @@ stage_chain() {
     done
 }
 staged() {
-    local base="$1" layout n_rounds n_tiles stage dep offset size chunk=0 tiles="" alloc cpus gb time
-    local attempt items o made what=()
+    local base="$1" layout n_rounds n_tiles stage dep alloc cpus gb time
+    local attempt items o made what=() per_attempt link
     # one line per round: where its tiles start in the arrays. Kept per submission: the
     # tile tasks read it, and a later submission must not move it under them
     layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
@@ -692,35 +777,36 @@ staged() {
                 stage_chain "$stage" "0-$((n_rounds - 1))" "$dep"
                 dep="$base,afterany:$JOB_ID" ;;
             tile)
-                alloc="ALLOC_tile_1"; read -r cpus gb time <<< "${!alloc}"
-                offset=0
-                while [ "$offset" -lt "$n_tiles" ]; do
-                    size=$((n_tiles - offset))
-                    [ "$size" -gt "$REGBENCH_STAGE_ARRAY_MAX" ] && size="$REGBENCH_STAGE_ARRAY_MAX"
-                    submit "rb-$name-$ds-tile-a1-c$chunk" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-                        --array="0-$((size - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
-                        --time="$time" "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" \
-                        "$ds" tile 1 "$gb" "$time" "$layout" "$offset"
-                    tiles="$tiles:$JOB_ID"
-                    offset=$((offset + size)); chunk=$((chunk + 1))
-                done
-                dep="$base,afterany$tiles"
-                for attempt in 2 3 4; do
+                per_attempt=()
+                for attempt in 1 2 3 4; do
                     alloc="ALLOC_tile_$attempt"; read -r cpus gb time <<< "${!alloc}"
-                    submit "rb-$name-$ds-tile-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-                        --array="0-$((n_rounds - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
-                        --time="$time" "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" \
-                        "$ds" tile "$attempt" "$gb" "$time"
+                    per_attempt+=("$cpus:$gb:$time")
+                done
+                if [ "$DRY" != 1 ]; then
+                    # the caller's own sbatch arguments, for the jobs the submitter submits
+                    : > "${made%.tsv}.sbatch_args"
+                    [ ${#extra[@]} -gt 0 ] && printf '%s\n' "${extra[@]}" > "${made%.tsv}.sbatch_args"
+                    rm -f "${made%.tsv}.done" "${made%.tsv}.refused"
+                fi
+                for link in $(seq 1 "$REGBENCH_STAGE_FEEDERS"); do
+                    submit "rb-$name-$ds-feed-$link" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
+                        --cpus-per-task=1 --mem=1G --time="$feed_time" "$HERE/feed_tiles.sbatch" \
+                        "$name" "$method" "$label" "$opts" "$image" "$ds" "$layout" \
+                        "$n_rounds" "$n_tiles" "$link" "${per_attempt[@]}"
                     dep="$base,afterany:$JOB_ID"
-                done ;;
+                done
+                N_FED=$((N_FED + n_tiles))
+                has "$FED_RUNS" "$name" || FED_RUNS="$FED_RUNS $name" ;;
             stitch)
                 ladder "rb-$name-$ds-stitch" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
             *) die "$name: no job is defined for the stage '$stage' (column stages of the run list)." ;;
         esac
     done
-    echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) in $chunk array(s) of at most $REGBENCH_STAGE_ARRAY_MAX"
+    echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) fed in later by its tile submitter, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX, at most $REGBENCH_STAGE_QUEUE_MAX in the queue"
 }
 
+N_FED=0 FED_RUNS=""
+feed_time="$(limit "$(seconds "$REGBENCH_STAGE_FEED_TIME")")"
 finals="" prev_ds="" n_laned=0
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
@@ -850,7 +936,13 @@ else
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 fi
 
-echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task)"
+echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
+if [ "$N_FED" -gt 0 ]; then
+    n_fed_runs="$(wc -w <<< "$FED_RUNS" | tr -d ' ')"
+    echo "# later, by the tile submitters (feed_tiles.sbatch): $N_FED tile task(s), one per tile, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX; plus, per attempt 2 to 4, one retry task per round that has a tile to retry"
+    echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $REGBENCH_STAGE_QUEUE_MAX tile task(s) for each of the $n_fed_runs run(s) with a tile submitter (${FED_RUNS# }): $((N_TASKS + n_fed_runs * REGBENCH_STAGE_QUEUE_MAX)) task(s)"
+fi
+[ "$DRY" = 1 ] || echo "# job ids    -> $IDS_FILE (this call's, one per line; cancel everything: scancel \$(cat \"$IDS_FILE\"))"
 if [ "$score_only" = 1 ]; then
     echo "# submission  -> $REGBENCH_SUBMISSION (scored as it is under $REGBENCH_OUT: nothing is run again)"
 else

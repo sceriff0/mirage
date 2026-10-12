@@ -677,6 +677,45 @@ def test_a_stage_without_a_record_is_the_schedulers_loss(staged, tmp_path):
         ]
 
 
+def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monkeypatch):
+    """The tile submitter's question (`tiles_due`), and what the round's last job says
+    of a tile no job of this submission ran: the launcher's failure while the submitter
+    has not finished, the scheduler's once it has."""
+    case = staged["case"]
+    out, new = clone(staged, tmp_path)
+    assert adapter.tiles_due(case, new, dict(OPTS), 1) == []
+    assert adapter.tiles_due(case, new, dict(OPTS), 2) == []
+    rewrite(new, "tile", 1, ok=False, exit=137, cause="oom")
+    assert adapter.tiles_due(case, new, dict(OPTS), 2) == [1]
+    assert adapter.tiles_due(case, new, dict(OPTS), 1) == [1]
+    rewrite(new, "tile", 1, ok=False, exit=1, cause="exception")
+    assert adapter.tiles_due(case, new, dict(OPTS), 2) == []  # not a retried exit
+    stages.record_path(new, "tile", 1).unlink()
+    assert adapter.tiles_due(case, new, dict(OPTS), 1) == [1]
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S-2")
+    with as_jobs():
+        assert methods.run_case("stare", case, out, opts={"stage_images": True}) == []
+    run = run_json(out, "stare", case)
+    assert run["cause"] == stages.NOT_SUBMITTED and run["no_rerun"] is True
+    assert "TILE (tile row 1): this job was never submitted" in run["error"]
+    assert "the tile submitter did not finish" in run["error"]
+    from benchmarks.regbench import failure_log, resources, score
+
+    assert failure_log.classify(run["cause"]) == failure_log.LAUNCHER
+    assert run["cause"] in resources.NOT_THE_METHOD and run["cause"] in score.CAUSES
+    assert set(score.NOT_THE_METHOD) == set(resources.NOT_THE_METHOD)
+    # the submitter finished: the tile's job was in the queue and left no record
+    state = stages.feed_state(out, "S-2", "stare", case.dataset)
+    state.parent.mkdir(parents=True)
+    Path(f"{state}.done").write_text("")
+    with as_jobs():
+        assert methods.run_case("stare", case, out, opts={"stage_images": True}) == []
+    assert run_json(out, "stare", case)["cause"] == "infrastructure"
+    # COARSE not ok: no tile of that round is ever due
+    stages.record_path(new, "coarse").unlink()
+    assert adapter.tiles_due(case, new, dict(OPTS), 1) == []
+
+
 def test_a_retried_tile_runs_alone_with_the_next_attempts_memory(staged, tmp_path):
     case = staged["case"]
     out, new = clone(staged, tmp_path)
@@ -700,7 +739,7 @@ def test_a_retried_tile_runs_alone_with_the_next_attempts_memory(staged, tmp_pat
 
 
 def test_the_stage_command_of_the_cli_runs_a_round(
-    synthetic_cases, cases_root, tmp_path
+    synthetic_cases, cases_root, tmp_path, capsys
 ):
     """`regbench stage`, as stage.sbatch calls it: by round, and a tile by its place in
     the layout the launcher wrote."""
@@ -724,13 +763,28 @@ def test_the_stage_command_of_the_cli_runs_a_round(
     case = synthetic_cases["crop"]
     stage_dir = adapter.stage_dir_of(tmp_path / "out", None, case)
     assert not stages.record_path(stage_dir, "tile", 0).exists()  # COARSE has not run
+    # what the tile submitter asks: nothing is due of a round without COARSE
+    due = ["stages", *base, "--layout", str(layout), "--out", str(tmp_path / "out")]
+    capsys.readouterr()
+    assert cli.main([*due, "--due", "1"]) == 0 and capsys.readouterr().out == ""
     assert cli.main([*run, "--stage", "coarse", "--index", str(index)]) == 0
+    # ... then that round's tile, by its place in the layout; no retry is due
+    capsys.readouterr()
+    assert cli.main([*due, "--due", "1"]) == 0
+    assert capsys.readouterr().out == f"{flat}\n"
+    # a tile without a record at a later attempt never started: its round is due
+    assert cli.main([*due, "--due", "2"]) == 0
+    assert capsys.readouterr().out == f"{index}\n"
     assert (
         cli.main(
             [*run, "--stage", "tile", "--flat", str(flat), "--layout", str(layout)]
         )
         == 0
     )
+    capsys.readouterr()
+    for attempt in ("1", "2"):
+        assert cli.main([*due, "--due", attempt]) == 0
+        assert capsys.readouterr().out == ""
     assert (
         cli.main([*run, "--stage", "solve", "--index", str(index), "--attempt", "2"])
         == 0

@@ -9,11 +9,21 @@ import pytest
 
 from benchmarks.regbench import ladder, prep, variants
 
-from .test_submit_cohort import SCRIPT, _case, jobs_of, launch
+from .test_submit_cohort import (
+    SCRIPT,
+    _case,
+    first_rung,
+    jobs_of,
+    launch,
+    launch_jobs,
+)
 
-RUNS = [variants.run_name(r) for r in variants.runs_for("anhir")]
-CANDIDATES = [variants.run_name(r) for r in variants.TUNING_RUNS]
-PER_RUN = len(ladder.SELFCHECK_RUNGS_GB) + 1 + 2 * len(ladder.RUNGS_GB)
+SPECS = {variants.run_name(r): r for r in variants.runs_for("anhir")}
+RUNS = list(SPECS)
+TUNING = {variants.run_name(r): r for r in variants.TUNING_RUNS}
+CANDIDATES = list(TUNING)
+# three selfcheck attempts and a gate before each run's own jobs
+BEFORE = len(ladder.SELFCHECK_RUNGS_GB) + 1
 SOURCE = {"REGBENCH_ANHIR": "/data/anhir"}  # bound into every image: the cases name it
 
 
@@ -44,10 +54,10 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
     assert laddered == set(RUNS) and len(RUNS) == 8
     # ... the settle job and the set's own scorer
-    assert len(jobs) == len(RUNS) * PER_RUN + 2
+    assert len(jobs) == sum(BEFORE + launch_jobs(r) for r in SPECS.values()) + 2
     assert "# anhir: 4 case(s), 4 patient(s), at most 1 round(s)" in done.stdout
     for run in RUNS:
-        first = jobs[f"rb-{run}-anhir-16g"]
+        first = jobs[first_rung(SPECS[run], "anhir")]
         assert first.opt("--array") == "0-3%20" and first.opt("--cpus-per-task") == "4"
     # no tissue job, no unit sent ahead for a realcheck, the set's own tables
     assert not [j for j in jobs if "tissue" in j or "realgate" in j]
@@ -60,7 +70,7 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     assert any(ln.startswith("# anhir: palom is not run (") for ln in left)
     # the GPU rows ask for the site's GPU, the others for none
     assert jobs["rb-deeperhistreg_hr_gpu-anhir-16g"].opt("--gres")
-    assert not jobs["rb-stare_prep-anhir-16g"].opt("--gres")
+    assert not jobs[first_rung(SPECS["stare_prep"], "anhir")].opt("--gres")
 
 
 def test_the_provisional_preprocessing_is_said_aloud(site):
@@ -81,7 +91,7 @@ def test_the_provisional_preprocessing_is_said_aloud(site):
     done, _, _ = launch(site, "--runs", f"stare {prep.ROW}", log="cohort")
     assert done.returncode == 0, done.stderr
     assert ("# WARNING" in done.stdout) == (record["status"] == "provisional")
-    assert f"rb-{prep.ROW}-multiplex-16g" in jobs_of(done)
+    assert first_rung(variants.run_of(prep.ROW), "multiplex") in jobs_of(done)
 
 
 def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
@@ -92,9 +102,9 @@ def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
     assert laddered == set(CANDIDATES) and len(CANDIDATES) == len(prep.CANDIDATES)
     checked = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
     assert checked == set(CANDIDATES)  # each candidate behind its own selfcheck
-    assert len(jobs) == len(CANDIDATES) * PER_RUN + 2
+    assert len(jobs) == sum(BEFORE + launch_jobs(r) for r in TUNING.values()) + 2
     for name, c in zip(CANDIDATES, prep.CANDIDATES):
-        first = jobs[f"rb-{name}-anhir_tune-16g"]
+        first = jobs[first_rung(TUNING[name], "anhir_tune")]
         assert first.args[1:4] == ["stare", name, f"prep={c}"]
         assert first.opt("--array") == "0-1%20"  # the two tuning-side pairs
     assert "Nothing in its tables is a result".lower() in done.stdout.lower()

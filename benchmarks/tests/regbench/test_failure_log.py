@@ -108,6 +108,7 @@ EXPECTED = {
     "writer_oom": ("writer", "method", "failed"),
     "benchmark_oom": ("benchmark_points", "benchmark", "lost"),
     "infrastructure": ("register", "infrastructure", "lost"),
+    "not_submitted": ("register", "launcher", "lost"),
 }
 
 

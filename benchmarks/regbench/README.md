@@ -1980,11 +1980,13 @@ every step in its own column, per patient and per result that wrote an image:
 
 ## Running the cohort on a cluster
 
-`slurm/submit_cohort.sh` submits everything from a login node and returns; nothing waits
-there, and no job submits a job. **It has never been submitted**: what is tested is the
-job graph its dry run prints, and the same graph through a stand-in `sbatch`
-(`test_submit_cohort.py`), plus the rules its jobs apply (`test_ladder.py`, `test_failures.py`,
-`test_gates.py`).
+`slurm/submit_cohort.sh` submits from a login node and returns; nothing waits there and
+no job waits on `sbatch --wait`. One kind of job submits jobs: the tile submitter of a
+run whose registration is several jobs per round (`feed_tiles.sbatch`, below). **It has
+never been submitted**: what is tested is the job graph its dry run prints, the same
+graph through a stand-in `sbatch` (`test_submit_cohort.py`), the tile submitter against
+a stand-in `sbatch` and `squeue` that keep a queue (`test_feed_tiles.py`), and the rules
+its jobs apply (`test_ladder.py`, `test_failures.py`, `test_gates.py`).
 
 ### What it submits
 
@@ -2029,8 +2031,9 @@ script names no method.
      (`<out>/logs/accounting/`), and a record is matched to its task by `launch_id`:
      `OUT_OF_MEMORY` makes it `oom`, `TIMEOUT` makes it `timeout`, a lost task makes it
      `infrastructure`, anything else leaves it `killed`. The record is rewritten with
-     `cause_from` and `scheduler`. The last rung has no later task, so the scorer's job
-     runs `regbench settle` on the accounting of every job first.
+     `cause_from` and `scheduler`. The last rung has no later task, so the `rb-settle`
+     job (step 5) runs `regbench settle` on the accounting of every job before anything
+     is scored.
    - The output directory is kept between rungs, so the cost of a failed attempt is
      kept (`previous_attempts`). `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
      `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
@@ -2050,19 +2053,64 @@ script names no method.
    |---|---|---|
    | `rb-<run>-<ds>-prep-a1..a4` (`stare_prep` only) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
    | `rb-<run>-<ds>-coarse-a1..a4` | 4 arrays of R tasks | 2; 2, 4, 6, 8 GB; 2, 4, 6, 8 h |
-   | `rb-<run>-<ds>-tile-a1-c0..` | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` | 2; 4 GB; 2 h |
-   | `rb-<run>-<ds>-tile-a2..a4` | 3 arrays of R tasks: a task runs the tiles of its round that are due for a retry, one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
+   | `rb-<run>-<ds>-feed-1..2` | the TILE SUBMITTERS (`feed_tiles.sbatch`), `REGBENCH_STAGE_FEEDERS` of them chained: not a tile job, the job that submits them | 1; 1 GB; 7 days |
+   | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most `REGBENCH_STAGE_QUEUE_MAX` (100) of them pending or running | 2; 4 GB; 2 h |
+   | `rb-<run>-<ds>-tile-a<2..4>-o<n>` (the same) | a RETRY JOB: one task per round that has a tile the pipeline would retry; it runs that round's due tiles one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
    | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
    | `rb-<run>-<ds>-stitch-<4,8,12,16>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's last job reads the stage records, moves the benchmark's points and runs STITCH | 4; 4, 8, 12, 16 GB; 4, 8, 12, 16 h |
 
    Attempt 1 of a stage runs it; a task of attempts 2 to 4 exits at once unless the
    attempt before ended the way the pipeline retries. A task whose stage before it is
-   not ok does nothing: the tile tasks of a round whose COARSE failed start, read
-   COARSE's record and exit. Every array is throttled by `REGBENCH_ARRAY_LIMIT`
-   (`%N`), each array on its own: C tile arrays run up to C x N tiles at once. A run
-   that reads this run's results, the same run on the next dataset, the next run of
-   its lane and the settle job all wait for its LAST job, the last `stitch` array. No
-   job submits a job: every tile task is submitted up front.
+   not ok does nothing. The arrays the launcher submits are throttled by
+   `REGBENCH_ARRAY_LIMIT` (`%N`). A run that reads this run's results, the same run on
+   the next dataset, the next run of its lane and the settle job all wait for its LAST
+   job, the last `stitch` array.
+
+   **The tile submitter** (owner's ruling: the tile jobs reach the queue through a
+   throttled submitter, as Nextflow's queue size does for the pipeline). One task per
+   tile for a cohort is hundreds of thousands of tasks; submitted up front they would
+   all be pending at once. So the launcher submits, between COARSE's last attempt and
+   SOLVE's first, a small job per run and dataset that runs on a compute node OUTSIDE
+   any image and calls `sbatch` and `squeue` itself, the way a Nextflow head job does.
+   It asks the harness what is due (`regbench stages --due <attempt>`, in the run's
+   image), and then:
+
+   - attempt 1: one task per tile that is due (every tile of every round whose COARSE
+     is ok, less the tiles a reusable record already covers), in arrays of at most
+     `REGBENCH_STAGE_ARRAY_MAX` tasks, each task with the pipeline's allocation for
+     `TILED_REG_TILE`. Before each `sbatch` it counts this run's tile tasks that are
+     pending or running (`squeue -r`, by job name) and submits only what keeps the count
+     at or below `REGBENCH_STAGE_QUEUE_MAX`; it waits for `REGBENCH_STAGE_FEED_MIN`
+     free slots (25) so that it does not submit one-task arrays, and looks again every
+     `REGBENCH_STAGE_POLL_S` seconds (60). A queue it cannot read is never taken for an
+     empty one. The tile arrays carry no `%N`: the ceiling is their limit;
+   - attempts 2 to 4, each once the attempt before has left the queue: a RETRY JOB is
+     one task per round that has a tile the pipeline would retry, and it runs that
+     round's due tiles one after another with the attempt's memory and time (x attempt).
+     A retried tile is therefore not a job of its own, which the pipeline's is;
+   - it ends when an attempt has nothing due, or after attempt 4, and leaves
+     `<out>/logs/stages/<submission>/<run>-<dataset>.done`.
+
+   It is RESTARTABLE from two files beside the layout: `.due.a<attempt>` (what is due,
+   written once) and `.fed.tsv` (one line before and one after each `sbatch`). Its time
+   limit is `REGBENCH_STAGE_FEED_TIME` (7 days, the site's longest job). When the
+   scheduler ends it there, the next submitter of the chain starts (`afterany`), counts
+   the tile tasks still in the queue, and continues where the files say the first
+   stopped; nothing is submitted twice, except one array whose `sbatch` was cut off
+   before its id was written and which is found neither in the queue nor in the
+   accounting (a tile whose record is already ok then exits at once). With
+   `REGBENCH_STAGE_FEEDERS=2` that is 14 days of feeding; a run that needs more is
+   continued by a new submission, which reuses every stage that is ok. SOLVE and the
+   round's last job wait for the LAST submitter (`afterany`). A round whose tiles
+   never reached the queue fails as `not_submitted`: the launcher's failure, counted
+   apart from the method's, and never retried on a higher rung.
+
+   An `sbatch` the scheduler refuses inside the submitter is tried
+   `REGBENCH_STAGE_SUBMIT_TRIES` times (5), a poll interval apart. Then the submitter
+   writes `<run>-<dataset>.refused` (what was refused, the scheduler's words, how many
+   tile tasks are queued, the `scancel` line), ends with `REGBENCH_END ...
+   status=refused cause=not_submitted whose=launcher`, and the next submitter of the
+   chain tries again from the same files.
 4. **The realcheck gate** of `valis_mirage` and `valis120_hires`: the first patient of
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
@@ -2146,7 +2194,13 @@ round).
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
-| `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round; set it below the site's `MaxArraySize` | `1000` |
+| `REGBENCH_ARRAY_LIMIT` (above), `REGBENCH_STAGE_ARRAY_MAX`, `REGBENCH_STAGE_QUEUE_MAX`, `REGBENCH_STAGE_FEED_MIN`, `REGBENCH_STAGE_POLL_S`, `REGBENCH_STAGE_FEEDERS` | must be whole numbers of at least 1: the script refuses anything else before it submits | |
+| `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round | `100` |
+| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks of ONE such run pending or running at a time (two such runs, `stare` and `stare_prep`, have a ceiling each) | `100` |
+| `REGBENCH_STAGE_FEED_MIN` | free slots the tile submitter waits for before it submits an array (fewer when fewer tiles are left) | `25` |
+| `REGBENCH_STAGE_POLL_S` | seconds between two looks at the queue | `60` |
+| `REGBENCH_STAGE_FEEDERS`, `REGBENCH_STAGE_FEED_TIME` | tile submitters chained per run and dataset, and the time limit of each | `2`, `7-00:00:00` |
+| `REGBENCH_STAGE_SUBMIT_TRIES`, `REGBENCH_STAGE_ARRAY_SPAN` | read by the tile submitter: tries of a refused `sbatch`; the widest span of indices in one tile array (below the site's `MaxArraySize`) | `5`, `1000` |
 | `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
@@ -2200,9 +2254,10 @@ regbench_py STARE_REGBENCH list --cases "$REGBENCH_CASES" --dataset multiplex --
 # 3. STARE and ASHLAR on that patient: first what would be submitted, then for real
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run --runs "stare ashlar" --datasets multiplex -- <site options>
 benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets multiplex -- <site options>
-#    (the dry run ends with "# N job(s) ..., M task(s) in them" and says, for stare,
-#    "# stare on multiplex: R round(s) as separate jobs (coarse,tile,solve,stitch); T tile
-#    job(s) in C array(s) of at most 1000": M must be within the site's submit limits)
+#    (the dry run ends with "# N job(s) ..., M task(s) in them: N sbatch call(s) would
+#    be made now", then "# later, by the tile submitters: T tile task(s) ..." and
+#    "# the most in the queue at once: ... task(s)": that last number must be within the
+#    site's submit limits, "What the site must allow")
 #    ok: $REGBENCH_OUT/logs/gates/stare.tsv and ashlar.tsv read "<run> ok - 0 -";
 #        every $REGBENCH_OUT/<stare|ashlar>/multiplex/<case>/run.json has "ok": true;
 #        every $REGBENCH_OUT/stare/multiplex/<case>/stages/jobs/ holds coarse.json,
@@ -2245,6 +2300,42 @@ nothing else.
 patient's rounds. `--runs` takes any subset of run names; the selfchecks a subset stands
 behind are submitted with it. A run whose results another reads but which is not in the
 subset is assumed to be under `$REGBENCH_OUT` already, and the script says so.
+
+### What the site must allow
+
+The dry run prints three numbers for a submission; each has a limit on the site.
+
+| what the dry run prints | what it is | the site's limit, and how to read it |
+|---|---|---|
+| `N sbatch call(s) would be made now` and `M task(s) in them` | everything the launcher submits at once: 445 calls for the default submission on two datasets, and one task per unit and rung for each run, per case for the scoring arrays | array tasks count against the per-user and per-association `MaxSubmitJobs` and the cluster's `MaxJobCount`: `sacctmgr show assoc user=$USER format=Account,MaxSubmitJobs,MaxJobs`, `sacctmgr show qos format=Name,MaxSubmitPU,MaxWall`, `scontrol show config \| grep -E "MaxArraySize\|MaxJobCount"` |
+| `T tile task(s)` fed in later | one per tile, never in the queue together | none: they pass through the ceiling |
+| `the most in the queue at once` | M plus `REGBENCH_STAGE_QUEUE_MAX` for each run with a tile submitter | the same `MaxSubmitJobs`. Lower it with `REGBENCH_STAGE_QUEUE_MAX`, `--runs` or `--datasets` |
+
+Besides that:
+
+- **A compute node may call `sbatch` and `squeue`** (this site's Nextflow head jobs do).
+  Check: `srun -c 1 --mem=1G --time=5 bash -c 'sbatch --version && squeue -h -u $USER | head -n 3'`.
+- **A job of 7 days at 1 CPU and 1 GB** is accepted on the partition given after `--`
+  (`REGBENCH_STAGE_FEED_TIME` shortens it; the chain of `REGBENCH_STAGE_FEEDERS`
+  submitters then covers less time).
+- **`MaxArraySize`** is above `REGBENCH_STAGE_ARRAY_SPAN` (1000; SLURM's default
+  `MaxArraySize` is 1001 `[MEMORY]`) and above the rounds of a dataset.
+
+**When the scheduler refuses an `sbatch` of the launcher** (a limit above, a wrong
+partition), the script stops at that call and says so on stderr: the job it could not
+submit and the scheduler's words, how many jobs of this call are already queued, the
+file holding their ids (`<out>/logs/submitted/<submission>.ids`, one per line; the tile
+submitters add theirs), and the line that removes them, `scancel $(cat <that file>)`.
+The jobs before the refusal ARE queued and wait for jobs that do not exist: cancel
+them, remove the reason, submit again.
+
+**One submission at a time into a results folder.** A second `submit_cohort.sh` into a
+`REGBENCH_OUT` whose earlier jobs are still pending or running is REFUSED before
+anything is touched: it would remove the gate records those jobs' tasks read. The
+refusal names the jobs and the `scancel` line. So the cohort is not submitted patient
+by patient into one folder while the first patient runs: wait for it, or give each its
+own `REGBENCH_OUT`. A queue that cannot be read (`squeue` fails) refuses too.
+`--prepare`, `--score-only` and `--dry-run` are not refused.
 
 ### Not verified: check these on the cluster before the real submission
 
@@ -2295,26 +2386,13 @@ and array sections). None of the following was observed:
   it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
   rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
   of this benchmark, and it is the owner's to rule on.
-- **`MaxSubmit`, `MaxArraySize` and the tile jobs.** The default submission is 19
-  gates, 51 selfcheck attempts, the settle, tissue and score jobs, one per-case scoring
-  array per dataset, eight arrays per dataset for each of the 17 runs that are one job
-  per unit (the two with a realcheck gate have a second, one-task ladder and a gate
-  more), and per dataset 19 + C arrays for `stare` and 23 + C for `stare_prep`, C being
-  the tile arrays: 453 `sbatch` calls with the two default datasets when C is 1. The
-  TASKS are another matter: `stare` and `stare_prep` each submit one task per tile, about
-  1,200 for a 60,000 x 80,000 px slide, so about 12,000 per patient of ten rounds and
-  run, and tens of thousands for the cohort, all pending at once behind COARSE. The
-  dry run prints both numbers (`# N job(s) ..., M task(s) in them`) and, per such run
-  and dataset, its tile count. Before launching, ask the site for `MaxArraySize` (the
-  default is 1001: `REGBENCH_STAGE_ARRAY_MAX` must stay below it), for the per-user and
-  per-association `MaxSubmitJobs` (array tasks count), and for the cluster's `MaxJobCount`:
-  `scontrol show config | grep -E "MaxArraySize|MaxJobCount"` and `sacctmgr show assoc
-  user=$USER format=MaxSubmitJobs,MaxJobs`. If M is above what they allow, `sbatch`
-  refuses the array that crosses the limit and the script stops there with the jobs
-  before it submitted: submit patient by patient (a `REGBENCH_CASES` per patient) or by
-  `--runs`. Nothing here works around a limit, and nothing here was tried against one.
-  The other array TASKS also count: the scoring arrays add one
-  task per case. Submit by `--datasets` or `--runs` if the limit is lower.
+- **The tile submitter** (`feed_tiles.sbatch`) was run only against stand-ins. On the
+  site, before the first staged run, see "What the site must allow": that a compute
+  node can call `sbatch` and `squeue`, that `squeue -h -r -u $USER -o %j` prints one
+  line per array TASK, pending ones included, with the job's full name, and that
+  `squeue -h -u $USER -o '%F %A'` prints the array's job id first (the launcher
+  matches either field against the ids it recorded). The `squeue` and `sbatch`
+  manuals were not retrieved while this was written `[MEMORY]`.
 - **The per-case scoring array** (`score_cohort.sbatch case`), `--score-only`, and the
   `python3` fallback inside ASHLAR's image: tested through stand-ins and through the
   real CLI on a laptop, never on a scheduler or inside that image.

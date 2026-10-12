@@ -177,9 +177,10 @@ CAUSES = (
     "writer_oom",
     "benchmark_oom",
     "infrastructure",
+    "not_submitted",
     "not_run",
 )
-NOT_THE_METHOD = ("benchmark_oom", "infrastructure")
+NOT_THE_METHOD = ("benchmark_oom", "infrastructure", "not_submitted")
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every
 # method; it is counted and named, and its row stays in cells.csv. "impute": it is

@@ -621,6 +621,27 @@ def run_stage(
     raise ValueError(f"stage {stage!r}: one of prep, coarse, tile, solve")
 
 
+def tiles_due(case, stage_dir, opts, attempt, force=False):
+    """The plan rows of a round whose tile job is due at ``attempt``
+    (``stages.decide``): what the launcher's tile submitter puts into the queue.
+    None of a round whose COARSE (or preprocessing) is not ok."""
+    rnd = Round(case, stage_dir, opts)
+    if (rnd.candidate and not rnd.done(stages.PREP)) or not rnd.done(stages.COARSE):
+        return []
+    submission = resources.host_info()["submission"]
+    return [
+        i
+        for i in range(len(rnd.plan()))
+        if stages.decide(
+            rnd.record(stages.TILE, i),
+            attempt,
+            rnd.command(stages.TILE, i),
+            submission,
+            force,
+        )[0]
+    ]
+
+
 def _failed(rnd, stage, row, jobs):
     """The error of a round whose job ``stage`` did not end ok for this command."""
     rec = rnd.record(stage, row)
@@ -630,7 +651,20 @@ def _failed(rnd, stage, row, jobs):
         and rec.get("command") == rnd.command(stage, row)
         and ladder.mine(rec, resources.host_info()["submission"])
     )
-    if not mine:
+    never = ""
+    if not mine and stage == stages.TILE and jobs:
+        never = stages.feed_problem(
+            rnd.dir.parents[3],
+            resources.host_info()["submission"],
+            str(rnd.opts.get("label") or "") or "stare",
+            rnd.case.dataset,
+        )
+    if never:
+        # the launcher's tile submitter never put this job into the queue
+        err = stages.StageFailed(
+            f"{what}: this job was never submitted ({never})", stages.NOT_SUBMITTED
+        )
+    elif not mine:
         # no job of this submission wrote a record: none of them started
         err = stages.StageFailed(
             f"{what}: no attempt of this job left a record (lost to the scheduler)",

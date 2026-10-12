@@ -34,6 +34,8 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # the four attempts of the pipeline's allocation for STITCH where the others have the
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
+FEEDERS = 2  # tile submitters chained per staged run and dataset
+N_JOBS = 445  # sbatch calls of the default submission on the fixture
 STITCH_GB = tuple(stages.allocation("stitch", a)["mem_gb"] for a in (1, 2, 3, 4))
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
 # guard that asks "does this command run" reads the comment-stripped text
@@ -92,11 +94,22 @@ def site(tmp_path_factory):
     sbatch.write_text(
         "#!/bin/bash\n"
         'n=$(( $(cat "$SBATCH_LOG.n" 2>/dev/null || echo 1000) + 1 ))\n'
+        # SBATCH_REFUSE_AT: the scheduler takes no job from that id on
+        'if [ -n "${SBATCH_REFUSE_AT:-}" ] && [ "$n" -ge "$SBATCH_REFUSE_AT" ]; then\n'
+        '  echo "sbatch: error: QOSMaxSubmitJobPerUserLimit" >&2; exit 1\nfi\n'
         'echo "$n" > "$SBATCH_LOG.n"\n'
         'printf "%s\\t%s\\n" "$n" "$*" >> "$SBATCH_LOG"\n'
         'echo "$n;cluster"\n'
     )
     sbatch.chmod(0o755)
+    # the queue: the job ids in SQUEUE_FILE (none without it), as `-o "%F %A"` prints
+    squeue = fake / "squeue"
+    squeue.write_text(
+        "#!/bin/bash\n"
+        '[ -n "${SQUEUE_FAILS:-}" ] && exit 1\n'
+        '[ -n "${SQUEUE_FILE:-}" ] && cat "$SQUEUE_FILE"\nexit 0\n'
+    )
+    squeue.chmod(0o755)
     return tmp, cases, fake
 
 
@@ -191,6 +204,26 @@ def last_job(run, dataset="multiplex"):
     return f"rb-{run}-{dataset}{_last(run, '')}-{rung_gb(run)[-1]}g-again"
 
 
+def launch_jobs(spec):
+    """How many jobs the launcher submits for one run on one dataset, after its gate:
+    the ladder's eight, or for a run in several jobs per round four attempts of each
+    stage that is an array over the rounds, its tile submitters, and the last job's
+    eight."""
+    names = variants.stages_of(spec)
+    if not names:
+        return 2 * len(ladder.RUNGS_GB)
+    arrays = sum(st in names for st in ("prep", "coarse", "solve"))
+    return 4 * arrays + FEEDERS + 2 * len(STITCH_GB)
+
+
+def first_rung(spec, dataset):
+    """The name of the first array of a run's ladder (its last job's, when staged)."""
+    name = variants.run_name(spec)
+    if variants.stages_of(spec):
+        return f"rb-{name}-{dataset}-stitch-{STITCH_GB[0]}g"
+    return f"rb-{name}-{dataset}-{ladder.RUNGS_GB[0]}g"
+
+
 def chain(jobs, run, dataset="multiplex", suffix=""):
     """The ladder in the order it runs: attempt, again, attempt, again, ..."""
     both = zip(rungs(jobs, run, dataset, suffix), agains(jobs, run, dataset, suffix))
@@ -202,12 +235,14 @@ def test_a_dry_run_submits_nothing(dry):
     jobs, done, log = dry
     assert len(jobs) > 100 and not log.exists()
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
-    # nothing waits on the login node, and no job submits a job
+    # nothing waits on the login node, and no job waits on a job it submitted
     assert all("--wait" not in j.words for j in jobs.values())
     for path in [SCRIPT, *SLURM.glob("*.sbatch")]:
         assert "--wait" not in code_of(path), path.name
-    for path in SLURM.glob("*.sbatch"):
-        assert "sbatch " not in code_of(path), path.name
+    # ONE kind of job submits jobs: the tile submitter
+    assert {p.name for p in SLURM.glob("*.sbatch") if "sbatch " in code_of(p)} == {
+        "feed_tiles.sbatch"
+    }
 
 
 def test_the_environment_switch_is_the_same_dry_run(site, dry):
@@ -700,14 +735,14 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     assert (scorer.opt("--cpus-per-task"), scorer.opt("--time")) == ("4", "1-00:00:00")
     # the default submission: the settle job, an array per dataset, tissue, the scorer
     # a run in several jobs per round has, per dataset, 4 attempts of COARSE and of SOLVE,
-    # one tile array and 3 retry arrays, and the writer's 8 (and 4 of its preprocessing)
-    # where another run has the ladder's 8
-    more = sum(4 + 1 + 3 + 4 + (4 if "prep" in st else 0) for st in STAGED.values())
-    assert more == 12 + 16 and len(STAGED) == 2
+    # its two tile submitters (the tile jobs are theirs to submit), and the last job's 8
+    # (and 4 of its preprocessing) where another run has the ladder's 8
+    more = sum(4 + FEEDERS + 4 + (4 if "prep" in st else 0) for st in STAGED.values())
+    assert more == 10 + 14 and len(STAGED) == 2
     assert (
         len(jobs)
         == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 + 2 * more
-        == 453
+        == N_JOBS
     )
 
 
@@ -1142,7 +1177,7 @@ def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
         names[job_id] = job.name
         deps[job_id] = {n for _, n in job.deps}
     order = _sorted_topologically(deps)
-    assert len(order) == len(deps) == 453
+    assert len(order) == len(deps) == N_JOBS
     # a cycle would be found: the check is not vacuous
     a, b = list(deps)[:2]
     with pytest.raises(AssertionError, match="a cycle"):
@@ -1162,9 +1197,9 @@ def attempts(jobs, run, stage, dataset="multiplex"):
     return [jobs[f"rb-{run}-{dataset}-{stage}-a{a}"] for a in (1, 2, 3, 4)]
 
 
-def tile_arrays(jobs, run, dataset="multiplex"):
-    names = [n for n in jobs if n.startswith(f"rb-{run}-{dataset}-tile-a1-c")]
-    return [jobs[n] for n in sorted(names, key=lambda n: int(n.rsplit("c", 1)[1]))]
+def feeders(jobs, run, dataset="multiplex"):
+    """The chain of tile submitters of a run on a dataset, in order."""
+    return [jobs[f"rb-{run}-{dataset}-feed-{i}"] for i in range(1, FEEDERS + 1)]
 
 
 def after(job):
@@ -1185,21 +1220,37 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
         before = None  # the last job of the stage before
         for stage in names[:-1]:
             if stage == "tile":
-                (first,) = tile_arrays(jobs, run)
-                retries = [jobs[f"rb-{run}-multiplex-tile-a{a}"] for a in (2, 3, 4)]
-                # four cases of six tiles: one task per tile, laid end to end
-                assert first.opt("--array") == f"0-{4 * TILES - 1}%20"
-                assert first.args[6:9] == ["tile", "1", "4"] and first.args[11] == "0"
-                assert first.args[10].endswith(
-                    f"/logs/stages/<submission>/{run}-multiplex.tsv"
-                )
-                # a retry is one task per ROUND: it runs the round's tiles that are due
-                assert [j.opt("--array") for j in retries] == ["0-3%20"] * 3
-                assert [len(j.args) for j in retries] == [10] * 3
-                chained = [first, *retries]
-            else:
-                chained = attempts(jobs, run, stage)
-                assert [j.opt("--array") for j in chained] == ["0-3%20"] * 4, stage
+                # no tile job is submitted by the launcher: the run's tile submitters
+                # are, one after the other, between COARSE and SOLVE
+                assert not [n for n in jobs if n.startswith(f"rb-{run}-multiplex-tile")]
+                for link, job in enumerate(feeders(jobs, run), 1):
+                    assert job.script == "feed_tiles.sbatch" and gate in job.deps
+                    assert after(job) == {before}, job.name
+                    assert job.opt("--array") is None and "--wait" not in job.words
+                    assert (job.opt("--cpus-per-task"), job.opt("--mem")) == ("1", "1G")
+                    assert job.opt("--time") == "7-00:00:00"
+                    assert job.args[:6] == [
+                        run,
+                        spec.method,
+                        spec.label or "-",
+                        ",".join(variants.opt_args(spec)) or "-",
+                        spec.image,
+                        "multiplex",
+                    ]
+                    assert job.args[6].endswith(
+                        f"/logs/stages/<submission>/{run}-multiplex.tsv"
+                    )
+                    # four rounds of six tiles, this link, and the pipeline's
+                    # allocation of a tile job at each of its four attempts
+                    assert job.args[7:10] == ["4", str(4 * TILES), str(link)]
+                    assert job.args[10:] == [
+                        "{cpus}:{mem_gb}:{time}".format(**stages.allocation("tile", a))
+                        for a in (1, 2, 3, 4)
+                    ]
+                    before = job.name
+                continue
+            chained = attempts(jobs, run, stage)
+            assert [j.opt("--array") for j in chained] == ["0-3%20"] * 4, stage
             for attempt, job in enumerate(chained, 1):
                 want = stages.allocation(stage, attempt)
                 assert job.script == "stage.sbatch" and gate in job.deps
@@ -1239,7 +1290,13 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     assert [j.opt("--time") for j in attempts(jobs, "stare", "solve")] == [
         "0-08:00:00", "0-16:00:00", "1-00:00:00", "1-08:00:00"
     ]  # fmt: skip
-    assert jobs["rb-stare-multiplex-tile-a4"].opt("--mem") == "16G"
+    assert feeders(jobs, "stare")[0].args[10:] == [
+        "2:4:0-02:00:00", "2:8:0-04:00:00", "2:12:0-06:00:00", "2:16:0-08:00:00"
+    ]  # fmt: skip
+    # SOLVE waits for the LAST tile submitter and for nothing else of the run
+    assert after(jobs["rb-stare-multiplex-solve-a1"]) == {
+        f"rb-stare-multiplex-feed-{FEEDERS}"
+    }
     # the preprocessing is the benchmark's own step, with the benchmark's allocation
     prep = attempts(jobs, "stare_prep", "prep")
     assert [(j.opt("--cpus-per-task"), j.opt("--mem")) for j in prep] == [
@@ -1260,58 +1317,77 @@ def small(tmp_path_factory):
     return cases
 
 
-@pytest.mark.parametrize(
-    "most, want",
-    [
-        (9, [("0-8", "0")]),  # exactly the maximum: one array
-        (10, [("0-8", "0")]),
-        (8, [("0-7", "0"), ("0-0", "8")]),  # one more than the maximum: a second array
-        (4, [("0-3", "0"), ("0-3", "4"), ("0-0", "8")]),
-        (3, [("0-2", "0"), ("0-2", "3"), ("0-2", "6")]),
-        (1, [("0-0", str(i)) for i in range(9)]),
-    ],
-)
-def test_tile_arrays_are_cut_at_the_sites_array_maximum(site, small, most, want):
-    env = {"REGBENCH_STAGE_ARRAY_MAX": str(most), "REGBENCH_CASES": str(small)}
-    done, _, _ = launch(site, "--runs", "stare", env=env, log=f"cut-{most}")
+def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, small):
+    env = {
+        "REGBENCH_CASES": str(small),
+        "REGBENCH_STAGE_ARRAY_MAX": "7",
+        "REGBENCH_STAGE_QUEUE_MAX": "30",
+    }
+    done, _, _ = launch(site, "--runs", "stare stare_prep", env=env, log="totals")
     jobs = jobs_of(done)
-    got = tile_arrays(jobs, "stare")
-    assert [(j.opt("--array").split("%")[0], j.args[11]) for j in got] == want
-    # every tile exactly once: offset + task id runs over 0 .. 8
-    flat = sorted(
-        int(j.args[11]) + i
-        for j in got
-        for i in range(int(j.opt("--array").split("%")[0].split("-")[1]) + 1)
-    )
-    assert flat == list(range(9))
-    # the retry of the tiles waits for EVERY array of them
-    assert after(jobs["rb-stare-multiplex-tile-a2"]) == {j.name for j in got}
-    assert all(after(j) == {"rb-stare-multiplex-coarse-a4"} for j in got)
-    # a round of one tile: an array of one task
-    (one,) = tile_arrays(jobs, "stare", "synthetic")
-    assert one.opt("--array") == "0-0%20" and one.args[11] == "0"
-    # the dry run says how much it would submit
-    said = f"# stare on multiplex: 3 round(s) as separate jobs (coarse,tile,solve,stitch); 9 tile job(s) in {len(want)} array(s) of at most {most}"
-    assert said in done.stdout
     tasks = sum(
         int(r.split("-")[1]) - int(r.split("-")[0]) + 1
         for j in jobs.values()
         for r in [(j.opt("--array") or "0-0").split("%")[0]]
     )
+    said = done.stdout
+    # multiplex: rounds of 1, 6 and 2 tiles; synthetic: one tile; for each of two runs
     assert (
-        f"# {len(jobs)} job(s) would be submitted; nothing was, {tasks} task(s) in them"
-        in done.stdout
+        "# stare on multiplex: 3 round(s) as separate jobs (coarse,tile,solve,stitch); "
+        "9 tile job(s) fed in later by its tile submitter, in arrays of at most 7, at "
+        "most 30 in the queue" in said
     )
+    assert (
+        f"# {len(jobs)} job(s) would be submitted; nothing was, {tasks} task(s) in them "
+        f"(an array counts once as a job and once per task): {len(jobs)} sbatch "
+        "call(s) would be made now" in said
+    )
+    assert (
+        "# later, by the tile submitters (feed_tiles.sbatch): 20 tile task(s), one per "
+        "tile, in arrays of at most 7; plus, per attempt 2 to 4, one retry task per "
+        "round that has a tile to retry" in said
+    )
+    assert (
+        f"# the most in the queue at once: the {tasks} task(s) above plus at most 30 "
+        f"tile task(s) for each of the 2 run(s) with a tile submitter (stare "
+        f"stare_prep): {tasks + 2 * 30} task(s)" in said
+    )
+    # no tile task is among what is submitted now
+    assert not [n for n in jobs if "-tile-" in n]
+    # a submission without such a run says nothing about tile submitters
+    done, _, _ = launch(site, "--runs", "palom", log="totals-none")
+    assert "tile submitter" not in done.stdout
 
 
-def test_the_tile_tasks_read_the_layout_the_submission_wrote(site, small):
-    """The real path: the layout file exists where the tile arrays are told to read it,
-    under the results folder, in a folder of this submission."""
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("REGBENCH_STAGE_ARRAY_MAX", "0"),
+        ("REGBENCH_STAGE_ARRAY_MAX", "ten"),
+        ("REGBENCH_STAGE_QUEUE_MAX", "0"),
+        ("REGBENCH_STAGE_QUEUE_MAX", "-5"),
+        ("REGBENCH_ARRAY_LIMIT", "0"),
+        ("REGBENCH_ARRAY_LIMIT", "2.5"),
+        ("REGBENCH_STAGE_FEEDERS", "0"),
+    ],
+)
+def test_a_limit_that_is_not_a_whole_number_of_at_least_one_is_refused(
+    site, name, value
+):
+    done, log, _ = launch(site, env={name: value}, dry=False, log="limits")
+    assert done.returncode == 2 and not log.exists()
+    assert f"{name}='{value}': a whole number of at least 1" in done.stderr
+    assert "Nothing was submitted." in done.stderr
+
+
+def test_the_tile_submitter_reads_the_layout_the_submission_wrote(site, small):
+    """The real path: the layout file exists where the tile submitters are told to read
+    it, under the results folder, in a folder of this submission; the caller's own
+    sbatch arguments are beside it, for the jobs the submitter submits."""
     env = {
         "REGBENCH_CASES": str(small),
         "REGBENCH_ALLOW_PATH_PYTHON": "1",
         "REGBENCH_SUBMISSION": "S-7",
-        "REGBENCH_STAGE_ARRAY_MAX": "5",
     }
     done, log, out = launch(
         site,
@@ -1319,6 +1395,9 @@ def test_the_tile_tasks_read_the_layout_the_submission_wrote(site, small):
         "stare",
         "--datasets",
         "multiplex",
+        "--",
+        "--account=lab",
+        "--partition=long",
         env=env,
         dry=False,
         log="layout",
@@ -1327,14 +1406,101 @@ def test_the_tile_tasks_read_the_layout_the_submission_wrote(site, small):
     calls = [
         Job("sbatch " + ln.split("\t", 1)[1]) for ln in log.read_text().splitlines()
     ]
-    tiles = [j for j in calls if j.name.startswith("rb-stare-multiplex-tile-a1-c")]
-    assert [j.args[11] for j in tiles] == ["0", "5"]
+    assert not [j for j in calls if "-tile-" in j.name]
+    links = [j for j in calls if j.name.startswith("rb-stare-multiplex-feed-")]
     layout = out / "logs" / "stages" / "S-7" / "stare-multiplex.tsv"
-    assert {j.args[10] for j in tiles} == {str(layout)}
+    assert len(links) == FEEDERS and {j.args[6] for j in links} == {str(layout)}
+    assert [j.args[7:9] for j in links] == [["3", "9"]] * FEEDERS
+    assert layout == Path(f"{stages.feed_state(out, 'S-7', 'stare', 'multiplex')}.tsv")
     assert stages.read_layout(layout) == [("P1_a", 1), ("P1_b", 6), ("P2_a", 2)]
+    assert layout.with_suffix(".sbatch_args").read_text().splitlines() == [
+        "--account=lab",
+        "--partition=long",
+    ]
     assert [stages.locate([1, 6, 2], i) for i in (0, 1, 6, 7, 8, 9)] == [
         (0, 0), (1, 0), (1, 5), (2, 0), (2, 1), None
     ]  # fmt: skip
+    # this call's job ids, one per line: what a refusal tells the user to cancel
+    ids = (out / "logs" / "submitted" / "S-7.ids").read_text().split()
+    assert (
+        len(ids) == len(calls)
+        and f'scancel $(cat "{out}/logs/submitted/S-7.ids")' in done.stdout
+    )
+
+
+# ── a launch that cannot leave a silent partial graph ─────────────────────────
+def test_a_refused_sbatch_stops_the_launch_and_says_how_to_undo_it(site):
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_SUBMISSION": "S-9",
+        "SBATCH_REFUSE_AT": "1031",  # the scheduler takes 30 jobs, then no more
+    }
+    done, log, out = launch(site, env=env, dry=False, log="refused")
+    assert done.returncode == 2
+    assert len(log.read_text().splitlines()) == 30
+    ids = out / "logs" / "submitted" / "S-9.ids"
+    assert ids.read_text().split() == [str(i) for i in range(1001, 1031)]
+    said = done.stderr
+    assert "sbatch REFUSED the job 'rb-" in said
+    assert "QOSMaxSubmitJobPerUserLimit" in said
+    assert "30 job(s) of this call are already queued (submission S-9)" in said
+    assert "the rest was NOT submitted, so the graph is incomplete" in said
+    assert f'scancel $(cat "{ids}")' in said and str(out / "logs" / "jobs.tsv") in said
+    assert "job(s) submitted" not in done.stdout  # the closing lines never appear
+
+
+def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tmp_path):
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1"}
+    first, log, out = launch(site, "--runs", "palom", env=env, dry=False, log="twice")
+    assert first.returncode == 0, first.stderr
+    n = len(log.read_text().splitlines())
+    ids = (out / "logs" / "jobs.tsv").read_text().splitlines()
+    one = ids[3].split("\t")[2]
+    record = out / "logs" / "gates" / "palom.tsv"
+    record.write_text("palom\tok\t-\t0\t-\n")
+    queue = tmp_path / "queue"
+    # an array task of the first submission is still running; another user's job is not ours
+    queue.write_text(f"{one} {one}_4\n999999 999999\n")
+    again, _, _ = launch(
+        site,
+        "--runs",
+        "palom",
+        env={**env, "SQUEUE_FILE": str(queue)},
+        dry=False,
+        log="twice",
+    )
+    assert again.returncode == 2 and len(log.read_text().splitlines()) == n
+    assert (
+        f"1 job(s) of an earlier submission into {out} are still pending or running "
+        f"({one})" in again.stderr
+    )
+    assert (
+        f"scancel {one} ;" in again.stderr and "Nothing was submitted." in again.stderr
+    )
+    # the gate record the first submission's tasks read is as its gate job left it
+    assert record.read_text() == "palom\tok\t-\t0\t-\n"
+    # a queue that cannot be read is not an empty queue
+    blind, _, _ = launch(
+        site,
+        "--runs",
+        "palom",
+        env={**env, "SQUEUE_FAILS": "1"},
+        dry=False,
+        log="twice",
+    )
+    assert blind.returncode == 2 and "the queue cannot be read (squeue)" in blind.stderr
+    # --score-only and a dry run are not refused; and once the queue is empty, neither
+    # is a second submission
+    queue.write_text("999999 999999\n")
+    for args, dry in (
+        (["--score-only"], False),
+        ([], True),
+        (["--runs", "palom"], False),
+    ):
+        done, _, _ = launch(
+            site, *args, env={**env, "SQUEUE_FILE": str(queue)}, dry=dry, log="twice"
+        )
+        assert done.returncode == 0, (args, done.stderr)
 
 
 def test_the_stage_task_and_the_last_job_are_told_what_they_are():
@@ -1344,7 +1510,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     assert '--stage "$stage" --attempt "$attempt"' in code
     assert 'if [ "$blocked" != 0 ]; then' in code  # the second lock behind the gate job
     assert code.rstrip().endswith("exit 0")
-    assert "sbatch " not in code and "--wait" not in code  # no job submits a job
+    assert "sbatch " not in code and "--wait" not in code  # a tile job submits none
     rung = code_of(SLURM / "run_rung.sbatch")
     assert 'stages="${14:--}"' in rung
     assert '[ "$stages" = - ] || export REGBENCH_STAGES="$stages"' in rung
@@ -1352,7 +1518,8 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     assert re.search(r"for v in [^;]*\bREGBENCH_STAGES\b", code_of(SLURM / "env.sh"))
     launcher = code_of(SCRIPT)
     assert "sbatch --wait" not in launcher
-    assert ': "${REGBENCH_STAGE_ARRAY_MAX:=1000}"' in launcher
+    assert ': "${REGBENCH_STAGE_ARRAY_MAX:=100}"' in launcher
+    assert ': "${REGBENCH_STAGE_QUEUE_MAX:=100}"' in launcher
 
 
 # ── the realcheck as a gate ───────────────────────────────────────────────────

@@ -693,6 +693,17 @@ def build_parser():
     sl.add_argument("--label", default=None)
     sl.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
     sl.add_argument("--layout", required=True)
+    sl.add_argument(
+        "--due",
+        type=int,
+        default=None,
+        metavar="ATTEMPT",
+        help="write no layout: READ it, and print what the tile submitter puts into "
+        "the queue at that attempt, one index per line. Attempt 1: every tile that "
+        "is due, counted over every case's tiles laid end to end. Attempts 2 to 4: "
+        "every case (round) that has a tile the pipeline would retry",
+    )
+    sl.add_argument("--out", default=None, help="with --due: the results folder")
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -851,6 +862,31 @@ def _stages(a):
 
     mod, opts = load(a.method), _stage_opts(a)
     cases = list_cases(a.cases, a.dataset)
+    if a.due is not None:
+        import os
+
+        if not a.out:
+            raise SystemExit("--due needs --out (the stage records are under it)")
+        layout = stages.read_layout(a.layout)
+        if [c for c, _ in layout] != [c.case_id for c in cases]:
+            raise SystemExit(
+                f"{a.layout} does not list the {a.dataset} cases under {a.cases}: the "
+                "cases changed after the arrays were sized. Submit again"
+            )
+        force = os.environ.get("REGBENCH_FORCE") == "1"
+        offset = 0
+        for index, (case, (_, n)) in enumerate(zip(cases, layout)):
+            due = mod.tiles_due(
+                case, mod.stage_dir_of(a.out, a.label, case), opts, a.due, force
+            )
+            if a.due == 1:
+                for row in due:
+                    if row < n:
+                        print(offset + row)
+            elif due:
+                print(index)
+            offset += n
+        return 0
     rows = [(c.case_id, mod.tile_count(c, opts)) for c in cases]
     print(len(rows), stages.write_layout(a.layout, rows))
     return 0

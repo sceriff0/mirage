@@ -111,7 +111,14 @@ RETRY_EXIT = (104, 134, 135, 137, 139, 140, 143)
 MAX_RETRIES = 3
 ATTEMPTS = MAX_RETRIES + 1
 KILLED = "killed"
-ARRAY_MAX = 1000  # tasks per tile array unless REGBENCH_STAGE_ARRAY_MAX says otherwise
+# The tile jobs reach the queue through a throttled submitter (slurm/feed_tiles.sbatch),
+# as Nextflow's queue size does for the pipeline: arrays of at most ARRAY_MAX tasks, at
+# most QUEUE_MAX tile tasks of a run pending or running. Both are the defaults of the
+# launcher's REGBENCH_STAGE_ARRAY_MAX and REGBENCH_STAGE_QUEUE_MAX.
+ARRAY_MAX = 100
+QUEUE_MAX = 100
+# a stage job that was never submitted: the launcher's failure (regbench.failure_log)
+NOT_SUBMITTED = "not_submitted"
 
 
 class StageFailed(RuntimeError):
@@ -181,6 +188,34 @@ def read_layout(path):
             _, case_id, n, _ = line.split("\t")
             rows.append((case_id, int(n)))
     return rows
+
+
+def feed_state(out, submission, run, dataset):
+    """The path prefix of a run's tile submitter on a dataset: ``<prefix>.tsv`` is the
+    layout, ``.fed.tsv`` what it submitted, ``.done`` that nothing is left, ``.refused``
+    the scheduler's refusal (slurm/feed_tiles.sbatch)."""
+    return Path(out) / "logs" / "stages" / str(submission) / f"{run}-{dataset}"
+
+
+def feed_problem(out, submission, run, dataset):
+    """Why a tile of this submission may never have been submitted: the text of the
+    submitter's refusal, a note that it did not finish, or ``""`` when it finished
+    (or when there is no submission: a run outside the launcher)."""
+    if not submission:
+        return ""
+    state = feed_state(out, submission, run, dataset)
+    done, refused = Path(f"{state}.done"), Path(f"{state}.refused")
+    if done.exists():
+        return ""
+    try:
+        return "the tile submitter was refused by the scheduler: " + " | ".join(
+            refused.read_text().splitlines()[:4]
+        )
+    except OSError:
+        return (
+            "the tile submitter did not finish (it was ended at its time limit, or "
+            f"lost): no {done.name} under {done.parent}"
+        )
 
 
 # ── one job's record ──────────────────────────────────────────────────────────

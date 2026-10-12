@@ -67,6 +67,8 @@ WHOSE = {
     "benchmark_oom": BENCHMARK,
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
+    # a stage job never reached the queue: the tile submitter was refused or ended
+    "not_submitted": LAUNCHER,
     # the gates
     "gate_blocked": LAUNCHER,
     "dropped_row": LAUNCHER,

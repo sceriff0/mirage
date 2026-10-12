@@ -10,7 +10,19 @@ import pytest
 
 from benchmarks.regbench import ladder, variants
 
-from .test_submit_cohort import SCRIPT, _case, _sbatch_lines, code_of, jobs_of, launch
+from .test_submit_cohort import (
+    SCRIPT,
+    STAGED,
+    _case,
+    _sbatch_lines,
+    code_of,
+    first_rung,
+    jobs_of,
+    last_job,
+    launch,
+    launch_jobs,
+    rungs,
+)
 
 RUNS = ["stare", "valis120", "valis120_hires"]
 DATA = {
@@ -47,9 +59,11 @@ def dry(site):
 def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     jobs, done, log, out = dry
     assert not log.exists()
-    # per run: three selfcheck attempts, a gate, four rungs; then the settle job and
-    # the set's scorer
-    assert len(jobs) == 3 * (3 + 1 + 8) + 2 == 38
+    # per run: three selfcheck attempts, a gate, and its own jobs (the ladder's eight;
+    # for STARE its stage arrays, tile submitters and last job); then the settle job
+    # and the set's scorer
+    own = [launch_jobs(variants.run_of(r)) for r in RUNS]
+    assert own == [18, 8, 8] and len(jobs) == sum(3 + 1 + n for n in own) + 2 == 48
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout
@@ -70,14 +84,17 @@ def test_only_the_runs_with_a_brightfield_rule_are_submitted(dry):
 def test_each_run_has_the_existing_ladder_on_the_set(dry):
     jobs, _, _, _ = dry
     for run in RUNS:
-        rungs = [jobs[f"rb-{run}-hyreco_b-{gb}g"] for gb in ladder.RUNGS_GB]
-        assert [j.opt("--mem") for j in rungs] == ["16G", "64G", "256G", "512G"]
-        assert all(j.opt("--cpus-per-task") == "4" for j in rungs)
+        ladder_of = rungs(jobs, run, "hyreco_b")
+        if run not in STAGED:  # STARE's last job has the pipeline's rungs for STITCH
+            assert [j.opt("--mem") for j in ladder_of] == [
+                f"{gb}G" for gb in ladder.RUNGS_GB
+            ]
+        assert all(j.opt("--cpus-per-task") == "4" for j in ladder_of)
         # three pairs, one task each: a pair is its own patient for the VALIS rows too
-        assert all(j.opt("--array") == "0-2%20" for j in rungs)
-        assert all(j.args[6] == "hyreco_b" for j in rungs)
-        assert ("afterok", f"<rb-gate-{run}>") in rungs[0].deps
-        for below, above in zip(rungs, rungs[1:]):
+        assert all(j.opt("--array") == "0-2%20" for j in ladder_of)
+        assert all(j.args[6] == "hyreco_b" for j in ladder_of)
+        assert ("afterok", f"<rb-gate-{run}>") in ladder_of[0].deps
+        for below, above in zip(ladder_of, ladder_of[1:]):
             assert ("afterany", f"<{below.name}-again>") in above.deps
     # no run of the set needs a GPU
     assert all(j.args[5] == "0" for j in jobs.values() if j.script == "run_rung.sbatch")
@@ -102,7 +119,7 @@ def test_the_scorer_is_the_sets_own_and_waits_for_everything(dry):
     assert settle.args == ["settle"]
     waited = {name for kind, name in settle.deps if kind == "afterany"}
     for run in RUNS:
-        assert f"<rb-{run}-hyreco_b-512g-again>" in waited
+        assert f"<{last_job(run, 'hyreco_b')}>" in waited
         assert f"<rb-gate-{run}>" in waited
     code = code_of(SCRIPT.parent / "score_cohort.sbatch")
     assert 'args+=(--dataset "$external")' in code
@@ -112,7 +129,7 @@ def test_the_tuning_set_is_submitted_the_same_way_and_labelled(site):
     done, _, out = launch(site, "--datasets", "hyreco_a", log="ha")
     jobs = jobs_of(done)
     assert jobs["rb-score-hyreco_a"].args == ["score", "hyreco_a"]
-    assert "rb-stare-hyreco_a-16g" in jobs
+    assert first_rung(variants.run_of("stare"), "hyreco_a") in jobs
     assert "# hyreco_a is the TUNING set: nothing in its tables is a result" in (
         done.stdout
     )
