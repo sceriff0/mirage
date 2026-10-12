@@ -993,3 +993,101 @@ def test_the_batch_scripts_register_a_round_end_to_end(
         lost["ok"] is False and lost["cause"] == "infrastructure" and lost["no_rerun"]
     )
     assert not adapter.stage_dir_of(out, None, other).exists()
+
+
+# ── a staged result through the scorer, end to end ────────────────────────────
+def register_as_jobs(case, out, label=None, opts=None):
+    """One round as the cohort runs it: every stage a call of its own, then the driver."""
+    stage_dir = adapter.stage_dir_of(out, label, case)
+    for stage in ("coarse", "tile", "solve"):
+        got = adapter.run_stage(case, stage_dir, {"label": label or ""}, stage)
+        assert all(rec["ok"] for *_, rec in got), stage
+    with as_jobs():
+        return methods.run_case("stare", case, out, opts=opts, label=label)
+
+
+def test_a_staged_result_is_scored_end_to_end(tmp_path, monkeypatch):
+    """`score.score` on results made in several jobs: the rigid row (jobs, no image),
+    the final row (jobs and STITCH's own job), and the same round with a writer that
+    failed. One case in a cases folder of its own: scoring a case is the slow part."""
+    from benchmarks.regbench import score
+    from benchmarks.regbench.cases import load_case
+    from benchmarks.regbench.datasets import synthetic
+
+    root = tmp_path / "cases"
+    synthetic.prepare_one(root, "crop", synthetic.SUITES["test"]["crop"])
+    case = load_case(root / "synthetic" / "crop")
+    out, lost = tmp_path / "out", tmp_path / "lost"
+    assert register_as_jobs(case, out) == ["stare_rigid", "stare"]
+
+    def scored(where):
+        got = score.score(
+            root,
+            where,
+            datasets=["synthetic"],
+            expected=["stare_rigid", "stare"],
+            primary=["stare"],
+            with_tissue=False,
+        )
+        assert (where / "tables" / "resources.csv").exists()
+        assert (where / "tables" / "summary.md").exists()
+        rows = {(r["case_id"], r["method"]): r for r in got["resources"]}
+        per = {(r["group"], r["method"]): r for r in got["summary_resources"]}
+        return rows, per
+
+    rows, per = scored(out)
+    rigid, final = rows[("crop", "stare_rigid")], rows[("crop", "stare")]
+    assert rigid["n_jobs"] == final["n_jobs"] == 3
+    assert rigid["write_cpu_h_allocated"] == "" and rigid["write_peak_gb"] == ""
+    assert final["write_cpu_h_allocated"] > 0 and final["write_peak_gb"] > 0
+    assert math.isnan(per[(case.group, "stare_rigid")]["write_cpu_h_allocated"])
+    assert math.isnan(per[(case.group, "stare_rigid")]["write_peak_gb"])
+    mine = per[(case.group, "stare")]
+    assert mine["write_cpu_h_allocated"] == pytest.approx(
+        final["write_cpu_h_allocated"]
+    )
+    assert mine["write_peak_gb"] == pytest.approx(final["write_peak_gb"])
+    # the same stage records under another results folder, and a writer that fails
+    shutil.copytree(out, lost)
+    old = adapter.stage_dir_of(out, None, case)
+    for path in adapter.stage_dir_of(lost, None, case).rglob("*.json"):
+        path.write_text(path.read_text().replace(str(old), str(path.parents[1])))
+
+    def broken(state, case_id, dest_dir):
+        raise RuntimeError("no space left on device")
+
+    monkeypatch.setattr(adapter, "write_native", broken)
+    with as_jobs():
+        assert methods.run_case("stare", case, lost) == ["stare_rigid"]
+    monkeypatch.undo()
+    failed = run_json(lost, "stare", case)
+    assert failed["cause"] == "writer" and failed["info"]["jobs"]["n_jobs"] == 3
+    rows, per = scored(lost)
+    assert rows[("crop", "stare")]["ok"] is False
+    assert rows[("crop", "stare")]["cause"] == "writer"
+    assert rows[("crop", "stare_rigid")]["ok"] is True
+    assert per[(case.group, "stare")]["n_jobs"] == ""
+
+
+def test_the_other_scorers_summarise_a_staged_row_through_the_same_function():
+    """`landmarks.score` and `challenge.score` build their cost rows with
+    `score.resource_row` and `score.summarise_resources`: a staged row without an
+    image goes through both."""
+    from benchmarks.regbench import challenge, landmarks, score
+
+    assert landmarks.cohort is score and challenge.cohort is score
+    jobs = {**stages.summarise(*round_records()), "execution": "jobs"}
+    run = {
+        "ok": True,
+        "method": "stare",
+        "unit": "pair",
+        "launch_id": "9_0",
+        "register_s": 140.0,
+        "resources": {"wall_s": 140.0, "cpu_s": 300.0, "peak_rss_mb": 3900.0},
+        "info": {"jobs": jobs},
+        "native": None,
+    }
+    row = {**score.resource_row(run), "dataset": "hyreco_b", "group": "g"}
+    (rec,) = score.summarise_resources([{**row, "method": "stare_rigid"}])
+    assert rec["n_jobs"] == 6 and math.isnan(rec["write_cpu_h_allocated"])
+    assert math.isnan(rec["write_peak_gb"])

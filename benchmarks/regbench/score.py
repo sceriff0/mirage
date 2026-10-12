@@ -294,7 +294,9 @@ def _keep_features(ps, keep):
 
 
 def _f(value):
-    return math.nan if value is None else float(value)
+    """A cell as a number: NaN for a missing one and for a blank one (a column that
+    does not apply to that row, as the writer's job for a row without an image)."""
+    return math.nan if value is None or value == "" else float(value)
 
 
 def resource_row(run):
@@ -1906,9 +1908,8 @@ def summarise_resources(res_rows):
             "write_cpu_h_allocated",
         ):
             rec[key] = _stat(_values(split, key), np.sum) if split else ""
-        rec["peak_cpus_at_once"] = (
-            _stat(_values(split, "peak_cpus_at_once"), np.max) if split else ""
-        )
+        for key in ("peak_cpus_at_once", "write_peak_gb"):
+            rec[key] = _stat(_values(split, key), np.max) if split else ""
         # The writer's time is the SUM over the rounds for both units: a per-patient
         # method records each round's share of one writer call (or each slide's own
         # time), a pair method each round's own. The time to an image is the
