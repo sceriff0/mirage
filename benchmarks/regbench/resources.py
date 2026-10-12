@@ -318,11 +318,14 @@ CAUSES = (
     # a stage job of the registration never reached the queue (the launcher's tile
     # submitter was refused or did not finish): the launcher's failure
     "not_submitted",
+    # the benchmark's own step failed or was ended, and not for memory: moving the
+    # points, or the last job of a round whose registration ran in other jobs
+    "benchmark",
 )
 # more memory is the remedy: the unit goes up a rung (regbench.ladder)
 MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
 # counted apart from a method's failures in every table that counts failures
-NOT_THE_METHOD = ("infrastructure", "benchmark_oom", "not_submitted")
+NOT_THE_METHOD = ("infrastructure", "benchmark_oom", "not_submitted", "benchmark")
 
 
 def classify_text(text):

@@ -752,25 +752,25 @@ done < "$table"
 # the one before; sets LADDER_LAST. Reads the current row's variables. Every task is
 # given the ids of all the ladder's earlier jobs: it asks the scheduler what became of
 # its unit in each.
-# With a sixth argument `jobs` (a run whose registration is several jobs per round: this
-# is each round's last job, the writer) the four rungs are the four attempts of the
-# pipeline's allocation for that process (ALLOC_stitch_<attempt>), not the memory ladder.
+# With a sixth argument `jobs` (a run whose registration is several jobs per round) this
+# is each round's LAST job: it holds the benchmark's own work (the points, the tissue
+# reduction), so it has the benchmark's allocation, the same ladder, and inside it the
+# method's writer runs as a process of its own with the pipeline's time limit and
+# retries (methods/stare.py: write_native). Its time is one round's plus the writer's
+# four attempts.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
-    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB" alloc
+    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB" alloc extra_s=0 t
     if [ "$staged" != - ]; then
-        rungs=""
         for attempt in 1 2 3 4; do
-            alloc="ALLOC_stitch_$attempt"; read -r _ gb _ <<< "${!alloc}"
-            rungs="$rungs $gb"
+            alloc="ALLOC_stitch_$attempt"; read -r _ _ t <<< "${!alloc}"
+            extra_s=$((extra_s + $(seconds "$t")))
         done
         attempt=0
+        time="$(limit $((round_s + extra_s)))"
     fi
     for gb in $rungs; do
         attempt=$((attempt + 1))
-        if [ "$staged" != - ]; then
-            alloc="ALLOC_stitch_$attempt"; read -r cpus _ time <<< "${!alloc}"
-        fi
         for task in attempt again; do
             jobname="$prefix-${gb}g"
             if [ "$task" = again ]; then
@@ -810,8 +810,9 @@ ladder() {
 #                         per attempt 2 to 4 one task per round that has a tile to
 #                         retry; a later one goes on where the one before stopped and
 #                         exits at once when nothing is left
-#   stitch                the round's last job (run_rung.sbatch, `jobs`): it collects the
-#                         stage records and runs the writer, on its own four rungs
+#   stitch                the round's last job (run_rung.sbatch, `jobs`), on the
+#                         benchmark's memory ladder: it collects the stage records, moves
+#                         the benchmark's points, and runs the writer as its own process
 stage_chain() {
     local stage="$1" range="$2" dep="$3" attempt alloc cpus gb time
     for attempt in 1 2 3 4; do
@@ -871,7 +872,7 @@ staged() {
                 N_FED=$((N_FED + n_tiles))
                 has "$FED_RUNS" "$name" || FED_RUNS="$FED_RUNS $name" ;;
             stitch)
-                ladder "rb-$name-$ds-stitch" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
+                ladder "rb-$name-$ds-last" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
             *) die "$name: no job is defined for the stage '$stage' (column stages of the run list)." ;;
         esac
     done

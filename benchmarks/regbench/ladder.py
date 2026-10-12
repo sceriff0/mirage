@@ -221,6 +221,12 @@ def settle(path, previous_state="", accounting=None, submission=None):
     found = (accounting or {}).get(str(rec.get("launch_id") or ""))
     state = found["state"] if found else _state(previous_state)
     new = scheduler_cause(state)
+    if rec.get("collector"):
+        # the last job of a round whose registration ran in other jobs: nothing of the
+        # method ran in it, so a death of it is the benchmark's
+        new = {OOM: "benchmark_oom", "timeout": "benchmark"}.get(new, new)
+        if new is None and found:
+            new = "benchmark"
     if found or new:
         if new:
             rec["cause"] = cause = new

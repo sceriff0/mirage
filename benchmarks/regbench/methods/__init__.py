@@ -557,6 +557,8 @@ def _run(
         **host,
         "launch_id": launch_id,
     }
+    # the last job of a round whose registration ran in scheduler jobs of its own
+    collector = os.environ.get("REGBENCH_STAGES") == "jobs"
     lock = threading.Lock()
     done, failed, final_maps = {}, {}, {}  # keyed by (case_id, variant)
     infos = {}  # the live info of each yield, for a declared offset (realcheck)
@@ -618,8 +620,8 @@ def _run(
                         "mem_requested_gb": old.get("mem_requested_gb"),
                         "launch_id": old.get("launch_id"),
                         "retry": old.get("retry", 0),
-                        "wall_s": res.get("wall_s"),
-                        "cpu_s": res.get("cpu_s"),
+                        "wall_s": res.get("driver_wall_s", res.get("wall_s")),
+                        "cpu_s": res.get("driver_cpu_s", res.get("cpu_s")),
                         # the scheduler's figures for the whole task, where the
                         # process could record none (ladder.settle)
                         "scheduler_state": sched.get("state"),
@@ -633,7 +635,11 @@ def _run(
                         "log_path": old.get("log_path") or "",
                     },
                 ]
-            fail(case, variant, KILLED, "killed")
+            placeholder = fail(case, variant, KILLED, "killed")
+            if collector:
+                # no registration runs in this job: whatever ends it is not the method
+                placeholder["collector"] = True
+                write_json(d / "run.json", placeholder)
 
     # for a method whose own writer runs at a yield: the clock to pause, and where the
     # image belongs (the work directory does not outlive the run)
@@ -708,7 +714,16 @@ def _run(
             native = info.pop("native", None)
             # a registration that ran in jobs of its own bills what those jobs
             # recorded: this process's clock saw none of it (regbench.stages)
-            cost = {**cost, **(info.pop("_cost", None) or {})}
+            billed = info.pop("_cost", None)
+            if billed:
+                # what THIS process cost is kept beside it: a later attempt of this
+                # job wastes that, not the registration the other jobs ran
+                cost = {
+                    **cost,
+                    **billed,
+                    "driver_wall_s": cost.get("wall_s"),
+                    "driver_cpu_s": cost.get("cpu_s"),
+                }
             try:
                 if watch.rose():
                     # it rose before this yield: in the method's stretch, or in a
@@ -832,8 +847,9 @@ def _run(
                 failed[key] = fail(
                     case,
                     variant,
-                    f"{type(exc).__name__}: {exc}",
-                    "exception",
+                    "the benchmark's own step failed while it moved the points of "
+                    f"{variant} through the map: {type(exc).__name__}: {exc}",
+                    "benchmark",
                     cost,
                     traceback.format_exc(),
                 )
@@ -886,13 +902,23 @@ def _run(
         phase["now"] = "writer"
         dead = ""  # a memory death: the rounds not yet written share it
 
-        def lose(case, why, how, trace=""):
+        def lose(case, why, how, trace="", no_rerun=False):
             key = (case.case_id, final)
             rec = done.pop(key)
             final_maps.pop(key, None)
             failed[key] = fail(
-                case, final, why, how, rec.get("resources"), trace, rec.get("info")
+                case,
+                final,
+                why,
+                how,
+                rec.get("resources"),
+                trace,
+                rec.get("info"),
+                no_rerun,
             )
+            # the transform exists: what failed is the writer or the job around it
+            failed[key]["registered"] = True
+            write_json(result_dir(out, names[final], case) / "run.json", failed[key])
 
         for case in cases:
             key = (case.case_id, final)
@@ -923,7 +949,11 @@ def _run(
                 if isinstance(got, dict) and got.get("error") and not got.get("files"):
                     raise RuntimeError(str(got["error"]))
                 natives[case.case_id] = got
-                write_s[case.case_id] = time.perf_counter() - t0
+                own = got.pop("write_s", None) if isinstance(got, dict) else None
+                # the writer's own figure where it gives one (a process it timed)
+                write_s[case.case_id] = (
+                    float(own) if own is not None else time.perf_counter() - t0
+                )
             except KeyboardInterrupt:
                 if not watch.fired:
                     raise
@@ -937,13 +967,25 @@ def _run(
                     if resources.classify_error(exc) == "oom" or watch.rose()
                     else "writer"
                 )
+                # a writer that names its own cause (STARE's STITCH inside the
+                # round's last job: the writer's, or the job's memory)
+                named = getattr(exc, "regbench_cause", None)
+                if named in ("writer", "writer_oom", "benchmark_oom", "benchmark"):
+                    how = named
                 if how == "writer_oom":
                     dead = text
                 lose(
                     case,
-                    f"the method's own writer failed: {text}",
+                    (
+                        "the benchmark's job ran out of memory around the method's "
+                        "own writer: "
+                        if how == "benchmark_oom"
+                        else "the method's own writer failed: "
+                    )
+                    + text,
                     how,
                     traceback.format_exc(),
+                    bool(getattr(exc, "regbench_no_rerun", False)),
                 )
         phase["now"] = "method"
     watch.stop()

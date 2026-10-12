@@ -36,7 +36,8 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
 N_JOBS = 445  # sbatch calls of the default submission on the fixture
-STITCH_GB = tuple(stages.allocation("stitch", a)["mem_gb"] for a in (1, 2, 3, 4))
+# the last job of a staged round has the benchmark's ladder (its own work is in it)
+STITCH_GB = ladder.RUNGS_GB
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
 # guard that asks "does this command run" reads the comment-stripped text
 if str(REPO / "tests") not in sys.path:
@@ -182,11 +183,11 @@ def dry(site):
 
 
 def rung_gb(run):
-    return STITCH_GB if run in STAGED else ladder.RUNGS_GB
+    return ladder.RUNGS_GB
 
 
 def _last(run, suffix):
-    return suffix + ("-stitch" if run in STAGED else "")
+    return suffix + ("-last" if run in STAGED else "")
 
 
 def rungs(jobs, run, dataset="multiplex", suffix=""):
@@ -223,7 +224,7 @@ def first_rung(spec, dataset):
     """The name of the first array of a run's ladder (its last job's, when staged)."""
     name = variants.run_name(spec)
     if variants.stages_of(spec):
-        return f"rb-{name}-{dataset}-stitch-{STITCH_GB[0]}g"
+        return f"rb-{name}-{dataset}-last-{STITCH_GB[0]}g"
     return f"rb-{name}-{dataset}-{ladder.RUNGS_GB[0]}g"
 
 
@@ -327,7 +328,9 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
     for run in RUNS:
         got = rungs(jobs, run)
         gbs = rung_gb(run)
-        assert gbs == ((4, 8, 12, 16) if run in STAGED else (16, 64, 256, 512)), run
+        # the benchmark's ladder for every run: the last job of a staged round holds
+        # the benchmark's own work beside the method's writer
+        assert gbs == (16, 64, 256, 512), run
         assert [j.opt("--mem") for j in got] == [f"{gb}G" for gb in gbs], run
         assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 4, run
         # attempt and memory reach the task: REGBENCH_ATTEMPT, REGBENCH_MEM_GB
@@ -420,8 +423,8 @@ def test_no_job_asks_for_more_than_seven_days(site):
     # three rounds at three days each would be nine: capped at the site's maximum
     assert rungs(jobs, "valis_mirage", suffix="-first")[0].opt("--time") == "7-00:00:00"
     assert rungs(jobs, "palom")[0].opt("--time") == "3-00:00:00"
-    # a run in several jobs per round has the pipeline's time limits, whatever that is
-    assert rungs(jobs, "stare")[0].opt("--time") == "0-04:00:00"
+    # the last job of a staged round: one round's time plus the writer's 40 h
+    assert rungs(jobs, "stare")[0].opt("--time") == "4-16:00:00"
 
 
 def test_patient_runs_get_one_rounds_time_for_every_round(dry):
@@ -431,8 +434,12 @@ def test_patient_runs_get_one_rounds_time_for_every_round(dry):
         job = rungs(jobs, run)[0]
         # P1 has three rounds: 3 x 24 h for a run that registers a patient at once
         want = "3-00:00:00" if per_patient else "1-00:00:00"
-        if run in STAGED:  # the pipeline's limit for the writer's process
-            want = stages.allocation("stitch")["time"]
+        if run in STAGED:
+            # the round's last job: one round's time for the benchmark's own work,
+            # and the four attempts the pipeline gives the writer (4 + 8 + 12 + 16 h)
+            hours = sum(stages.allocation("stitch", a)["hours"] for a in (1, 2, 3, 4))
+            assert hours == 40
+            want = "2-16:00:00"
         assert job.opt("--time") == want, run
 
 

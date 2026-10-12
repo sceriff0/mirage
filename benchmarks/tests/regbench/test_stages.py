@@ -1309,3 +1309,198 @@ def test_the_other_scorers_summarise_a_staged_row_through_the_same_function():
     (rec,) = score.summarise_resources([{**row, "method": "stare_rigid"}])
     assert rec["n_jobs"] == 6 and math.isnan(rec["write_cpu_h_allocated"])
     assert math.isnan(rec["write_peak_gb"])
+
+
+# ── the round's last job: the benchmark's allocation, STITCH as its own process ──
+def scripted_stitch(monkeypatch, outcomes):
+    """STITCH's process replaced by scripted outcomes, one per attempt: an exit code
+    to fail with, or None to run the real command. Returns what each call was given."""
+    real, calls = stages.run_command, []
+
+    def run(stage_dir, stage, command, row=None, attempt=1, execution="jobs", **kw):
+        if stage != stages.STITCH:
+            return real(stage_dir, stage, command, row, attempt, execution, **kw)
+        calls.append({"attempt": attempt, **kw})
+        code = outcomes[len(calls) - 1]
+        if code is None:
+            return real(stage_dir, stage, command, row, attempt, execution, **kw)
+        alloc = stages.allocation(stage, attempt)
+        return {
+            "ok": False,
+            "exit": code,
+            "cause": stages.cause_of(code),
+            "error": "Killed" if code == 137 else "boom",
+            "attempt": attempt,
+            "wall_s": 100.0 * attempt,
+            "cpus": alloc["cpus"],
+            "mem_gb": alloc["mem_gb"],
+        }
+
+    monkeypatch.setattr(stages, "run_command", run)
+    return calls
+
+
+def last_job(staged, tmp_path, monkeypatch, outcomes, **env):
+    out, _ = clone(staged, tmp_path)
+    calls = scripted_stitch(monkeypatch, outcomes)
+    for key, value in {"REGBENCH_MEM_GB": "16", **env}.items():
+        monkeypatch.setenv(key, value)
+    with as_jobs():
+        done = methods.run_case(
+            "stare", staged["case"], out, opts={"stage_images": True}
+        )
+    return out, done, calls
+
+
+def test_stitch_is_retried_in_the_last_job_as_the_pipeline_retries_it(
+    staged, tmp_path, monkeypatch
+):
+    """A time limit (143) and a signal (139) are retried with the next attempt; each
+    attempt has the pipeline's time limit; the row's write_s is the attempt that wrote
+    the image and the failed ones are kept apart."""
+    out, done, calls = last_job(staged, tmp_path, monkeypatch, [143, 139, None])
+    assert done == ["stare_rigid", "stare"]
+    assert [c["attempt"] for c in calls] == [1, 2, 3]
+    assert [c["timeout_s"] for c in calls] == [4 * 3600, 8 * 3600, 12 * 3600]
+    run = run_json(out, "stare", staged["case"])
+    job = run["native"]["stitch_job"]
+    assert (job["attempt"], job["cpus"], job["mem_gb"]) == (3, 4, 12)
+    assert [(f["attempt"], f["exit"], f["cause"]) for f in job["failed_attempts"]] == [
+        (1, 143, "timeout"),
+        (2, 139, "exception"),
+    ]
+    assert job["over_allocation"] is False
+    assert run["write_s"] == job["wall_s"] and "write_s" not in run["native"]
+    row = __import__("benchmarks.regbench.score", fromlist=["x"]).resource_row(run)
+    assert row["total_to_image_s"] == pytest.approx(run["register_s"] + job["wall_s"])
+    # the allocation in the record is the benchmark's job, not STITCH's
+    assert run["mem_requested_gb"] == 16
+
+
+@pytest.mark.parametrize(
+    "outcomes, cause, attempts",
+    [
+        ([143, 143, 143, 143], "writer", 4),  # the time limit, four times
+        ([137, 137, 137, 137], "writer_oom", 4),
+        ([1], "writer", 1),  # an exit the pipeline does not retry
+    ],
+)
+def test_a_stitch_that_fails_after_a_good_registration_is_the_writers(
+    staged, tmp_path, monkeypatch, outcomes, cause, attempts
+):
+    from benchmarks.regbench import failure_log, score
+
+    out, done, calls = last_job(
+        staged, tmp_path, monkeypatch, outcomes, REGBENCH_MEM_GB="64"
+    )
+    assert done == ["stare_rigid"] and len(calls) == attempts
+    case = staged["case"]
+    run, rigid = run_json(out, "stare", case), run_json(out, "stare_rigid", case)
+    assert (run["ok"], run["cause"], run["no_rerun"]) == (False, cause, True)
+    assert run["registered"] is True and rigid["ok"] is True
+    assert f"stare stitch failed at attempt {attempts}" in run["error"]
+    assert failure_log.classify(cause) == failure_log.METHOD
+    assert failure_log.stage_of(cause) == "writer"
+    # no rung of the benchmark's ladder runs the round again for it
+    paths = [result_dir(out, v, case) / "run.json" for v in ("stare_rigid", "stare")]
+    for task in (ladder.CLIMB, ladder.AGAIN):
+        assert ladder.unit_decision(paths, task, 2)[0] is False
+    # the registration is not a wasted attempt: it was done, and the rigid row has it
+    base = {"dataset": "multiplex", "group": "P1"}
+    rows = [
+        {**score.resource_row(r), **base, "method": r["variant"]} for r in (rigid, run)
+    ]
+    assert rows[1]["registered"] is True and rows[1]["register_s"] > 0
+    per = {r["method"]: r for r in score.summarise_resources(rows)}
+    assert per["stare"]["wasted_wall_s"] == 0 and per["stare"]["wasted_cpu_h"] == 0
+    assert per["stare_rigid"]["register_s"] == pytest.approx(rigid["register_s"])
+
+
+def test_a_stitch_killed_for_the_jobs_memory_is_the_benchmarks_and_climbs(
+    staged, tmp_path, monkeypatch
+):
+    """STITCH's allocation plus the benchmark's own memory above what the job has:
+    the job's limit. The same death in a job with room is STITCH's own attempt."""
+    out, done, calls = last_job(
+        staged, tmp_path, monkeypatch, [137], REGBENCH_MEM_GB="4"
+    )
+    case = staged["case"]
+    run = run_json(out, "stare", case)
+    assert done == ["stare_rigid"] and len(calls) == 1
+    assert run["cause"] == "benchmark_oom" and "no_rerun" not in run
+    assert "the job's limit, not STITCH's allocation" in run["error"]
+    assert run["error"].startswith("the benchmark's job ran out of memory")
+    paths = [result_dir(out, v, case) / "run.json" for v in ("stare_rigid", "stare")]
+    assert ladder.unit_decision(paths, ladder.CLIMB, 2)[0] is True
+    # the next rung: the round's last job again, and what the lost one cost is ITS
+    # own time, not the registration the other jobs ran
+    monkeypatch.setenv("REGBENCH_ATTEMPT", "2")
+    monkeypatch.setenv("REGBENCH_MEM_GB", "64")
+    calls.clear()
+    monkeypatch.setattr(stages, "run_command", stages.run_command)  # scripted: [137]
+    with as_jobs():
+        done = methods.run_case(
+            "stare", case, out, opts={"stage_images": True}, resume=True
+        )
+    again = run_json(out, "stare", case)
+    (before,) = again["previous_attempts"]
+    assert before["cause"] == "benchmark_oom"
+    assert before["wall_s"] == run["resources"]["driver_wall_s"]
+    assert before["wall_s"] < run["register_s"] / 2
+    row = __import__("benchmarks.regbench.score", fromlist=["x"]).resource_row(again)
+    assert row["wasted_wall_s"] == pytest.approx(before["wall_s"])
+
+
+def test_a_command_is_ended_at_its_time_limit_with_a_retried_status(tmp_path):
+    marker = tmp_path / "quick"
+    code = f"import os, time; time.sleep(0 if os.path.exists({str(marker)!r}) else 30)"
+    rec = stages.run_command(tmp_path, stages.STITCH, [PY, "-c", code], timeout_s=0.5)
+    assert rec["exit"] == 143 and rec["cause"] == "timeout" and stages.retryable(rec)
+    assert rec["wall_s"] < 10
+    # every failed attempt of the job is kept, whichever scheduler job ran it
+    marker.write_text("")
+    again = stages.run_command(tmp_path, stages.STITCH, [PY, "-c", code], timeout_s=20)
+    assert again["ok"] and [h["exit"] for h in again["history"]] == [143]
+
+
+def test_a_death_of_the_last_job_is_never_settled_as_the_methods(tmp_path):
+    """The placeholder of a round's last job says so (`collector`): out of memory is
+    `benchmark_oom`, the time limit and an unexplained death are `benchmark`."""
+    from benchmarks.regbench import failure_log
+
+    def settled(state, **more):
+        path = tmp_path / f"{state}{len(more)}" / "run.json"
+        path.parent.mkdir()
+        rec = {"ok": False, "cause": "killed", "launch_id": "7_0", **more}
+        path.write_text(json.dumps(rec))
+        acct = {"7_0": {"state": state, "elapsed_s": 5.0, "cpu_s": 1.0}}
+        return ladder.settle(path, "", acct)
+
+    assert settled("OUT_OF_MEMORY", collector=True) == "benchmark_oom"
+    assert settled("TIMEOUT", collector=True) == "benchmark"
+    assert settled("FAILED", collector=True) == "benchmark"
+    assert settled("NODE_FAIL", collector=True) == "infrastructure"
+    assert settled("OUT_OF_MEMORY") == "oom" and settled("FAILED") == "killed"
+    assert failure_log.classify("benchmark") == failure_log.BENCHMARK
+    assert (
+        "benchmark_oom"
+        in __import__("benchmarks.regbench.resources", fromlist=["x"]).MEMORY_CAUSES
+    )
+
+
+def test_the_placeholder_of_a_last_job_says_what_it_is(staged, tmp_path, monkeypatch):
+    seen = {}
+    real = adapter.register
+
+    def spy(case, work, opts):
+        path = result_dir(tmp_path / "out", "stare", case) / "run.json"
+        seen["placeholder"] = json.loads(path.read_text())
+        yield from real(case, work, opts)
+
+    out, _ = clone(staged, tmp_path)
+    monkeypatch.setattr(adapter, "register", spy)
+    with as_jobs():
+        methods.run_case("stare", staged["case"], out, opts={"stage_images": True})
+    assert seen["placeholder"]["cause"] == "killed"
+    assert seen["placeholder"]["collector"] is True
+    assert "collector" not in run_json(out, "stare", staged["case"])

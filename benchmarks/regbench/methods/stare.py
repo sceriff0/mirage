@@ -991,22 +991,76 @@ def register(case, work, opts):
     yield "stare", PointMap(refined, MOV_TO_REF), {**info, "_state": state}
 
 
+def _own_rss_gb():
+    """This process's own peak memory, in GB (the benchmark's part of the job)."""
+    import resource
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak * (1.0 if sys.platform == "darwin" else 1024.0) / (1 << 30)
+
+
 def write_native(state, case_id, dest_dir):
-    """STARE's own STITCH, as a process of its own, on the manifest SOLVE wrote."""
+    """STARE's own STITCH, as a process of its own, on the manifest SOLVE wrote.
+
+    On the cohort it runs inside the round's LAST JOB, which has the benchmark's
+    allocation because the benchmark's own work is in it (the points, the tissue
+    reduction). STITCH is still the pipeline's process: measured alone (``os.wait4``),
+    ended at the pipeline's time limit for its attempt, and run again as the pipeline
+    retries it (``stages.RETRY_EXIT``, the time limit included), up to four attempts.
+    The job is not STITCH's cgroup, so the pipeline's MEMORY for an attempt is not
+    enforced: ``stitch_job.over_allocation`` says when STITCH's peak was above it. A
+    STITCH killed for memory while its allocation plus this process's own memory was
+    more than the job had is the job's limit, not STITCH's: ``benchmark_oom``, and the
+    job goes up a rung. A STITCH that fails after its attempts fails the row as the
+    writer's (``writer`` / ``writer_oom``), and no rung runs it again."""
     from stare.slide_io import open_lazy
 
     out = Path(dest_dir) / "registered.ome.tif"
-    attempt = resources.host_info()["attempt"] if state["execution"] == "jobs" else 1
-    rec = stages.run_command(
-        state["stage_dir"],
-        stages.STITCH,
-        cli(stages.STITCH, state["stitch"](state["moving"], out)),
-        attempt=min(attempt, stages.ATTEMPTS),
-        execution=state["execution"],
-    )
+    jobs = state["execution"] == "jobs"
+    job_gb = resources.host_info().get("mem_requested_gb")
+    command = cli(stages.STITCH, state["stitch"](state["moving"], out))
+    rec, failed = None, []
+    for attempt in range(1, (stages.ATTEMPTS if jobs else 1) + 1):
+        alloc = stages.allocation(stages.STITCH, attempt)
+        rec = stages.run_command(
+            state["stage_dir"],
+            stages.STITCH,
+            command,
+            attempt=attempt,
+            execution=state["execution"],
+            timeout_s=alloc["hours"] * 3600 if jobs else None,
+        )
+        if rec["ok"]:
+            break
+        failed.append(
+            {k: rec.get(k) for k in ("attempt", "exit", "cause", "wall_s", "cpus")}
+        )
+        if (
+            jobs
+            and rec.get("cause") == "oom"
+            and job_gb
+            and alloc["mem_gb"] + _own_rss_gb() > float(job_gb)
+        ):
+            raise stages.StageFailed(
+                f"stare stitch was killed for memory at attempt {attempt} (the "
+                f"pipeline gives it {alloc['mem_gb']} GB) in a job of {job_gb} GB that "
+                f"also holds the benchmark's own {_own_rss_gb():.1f} GB: the job's "
+                "limit, not STITCH's allocation",
+                "benchmark_oom",
+            )
+        if not stages.retryable(rec):
+            break
     if not rec["ok"]:
-        text = f"stare stitch exited {rec['exit']}: {str(rec['error'])[-600:]}"
-        raise MemoryError(text) if rec["cause"] == "oom" else RuntimeError(text)
+        err = stages.StageFailed(
+            f"stare stitch failed at attempt {rec['attempt']} of "
+            f"{stages.ATTEMPTS if jobs else 1} with exit {rec['exit']} "
+            f"({rec.get('cause')}): {str(rec['error'])[-600:]}",
+            "writer_oom" if rec.get("cause") == "oom" else "writer",
+        )
+        # retried here as the pipeline retries it: no rung runs the round again
+        err.regbench_no_rerun = jobs
+        err.failed_attempts = failed
+        raise err
     arr, dtype, close = open_lazy(out)
     try:
         channels, hw = int(arr.shape[0]), [int(v) for v in arr.shape[1:]]
@@ -1023,10 +1077,18 @@ def write_native(state, case_id, dest_dir):
         "channels": channels,
         "dtype": str(np.dtype(dtype)),
         "writer": "stare.stages.stitch.main",
-        # the writer's own job: allocated CPUs, its CPU time and peak memory
+        # STITCH's own process: the pipeline's allocation for the attempt that wrote
+        # the image, its time, CPU time and peak memory; and the attempts before it
         "stitch_job": {
-            k: rec[k] for k in ("cpus", "mem_gb", "wall_s", "cpu_s", "peak_rss_mb")
+            **{
+                k: rec[k]
+                for k in ("attempt", "cpus", "mem_gb", "wall_s", "cpu_s", "peak_rss_mb")
+            },
+            "over_allocation": bool(rec["peak_rss_mb"] > rec["mem_gb"] * 1024.0),
+            "failed_attempts": failed,
         },
+        # the row's write_s: the attempt that wrote the image (a failed one is wasted)
+        "write_s": rec["wall_s"],
     }
     if state.get("proxy"):  # a brightfield case: not the slide, its registered proxy
         native["content"] = "the one-channel proxy STARE was given, registered"

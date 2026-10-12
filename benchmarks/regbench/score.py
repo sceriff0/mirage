@@ -178,9 +178,10 @@ CAUSES = (
     "benchmark_oom",
     "infrastructure",
     "not_submitted",
+    "benchmark",
     "not_run",
 )
-NOT_THE_METHOD = ("benchmark_oom", "infrastructure", "not_submitted")
+NOT_THE_METHOD = ("benchmark_oom", "infrastructure", "not_submitted", "benchmark")
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every
 # method; it is counted and named, and its row stays in cells.csv. "impute": it is
@@ -418,6 +419,9 @@ def resource_row(run):
         # attempts whose cost nobody recorded (in NO wasted total)
         "wasted_from_scheduler": from_scheduler,
         "wasted_unknown": unknown,
+        # the transform existed when this row failed: its writer, or the job around
+        # the writer, failed. The registration is then no wasted attempt
+        "registered": bool(run.get("registered")),
         "retry": run.get("retry", 0),
         "time_limit": run.get("time_limit", ""),
         # "" when the run recorded nothing about its watcher (an older record)
@@ -1926,7 +1930,11 @@ def summarise_resources(res_rows):
         rec["gpu_model"] = "; ".join(sorted({r["gpu_model"] for r in ok} - {""}))
         # A failed round inside a per-patient launch that otherwise finished is not a
         # wasted attempt; a launch that produced nothing is.
-        lost = [r for r in mine if not r["ok"] and r["cause"] != "not_run"]
+        lost = [
+            r
+            for r in mine
+            if not r["ok"] and r["cause"] != "not_run" and not r.get("registered")
+        ]
         if patient and ok:
             lost = []
         last = {

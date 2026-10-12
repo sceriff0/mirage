@@ -333,12 +333,15 @@ def run_command(
     execution="jobs",
     env=None,
     identity=None,
+    timeout_s=None,
 ):
     """Run one stage command as a process of its own and leave its record; returns it.
 
     ``command`` is the whole command line. ``execution`` is ``jobs`` (a scheduler job
     of its own) or ``local`` (one of several inside a single run). ``identity`` is
-    kept in the record (``decide``)."""
+    kept in the record (``decide``). ``timeout_s`` ends the command with SIGTERM (exit
+    143, a retried status) when it runs longer: the time limit of a process that
+    shares its job with other work."""
     path = record_path(stage_dir, stage, row)
     old = read_record(stage_dir, stage, row)
     host = resources.host_info()
@@ -346,8 +349,10 @@ def run_command(
     if (
         same_job(old, command, identity)
         and ladder.mine(old, host["submission"])
-        and int(old.get("attempt") or 1) < int(attempt)
+        and not old.get("ok")
     ):
+        # every failed attempt of this job in this submission, whichever job of the
+        # scheduler ran it
         history = [*(old.get("history") or []), _summary(old)]
     alloc = allocation(stage, attempt)
     rec = {
@@ -376,6 +381,13 @@ def run_command(
     proc = subprocess.Popen(
         list(command), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env
     )
+    timer = None
+    if timeout_s:
+        import threading
+
+        timer = threading.Timer(float(timeout_s), proc.terminate)
+        timer.daemon = True
+        timer.start()
     tail = []
     for line in proc.stdout:
         text = line.decode(errors="replace")
@@ -384,6 +396,8 @@ def run_command(
         tail = [*tail[-39:], text]
     proc.stdout.close()
     _, status, usage = os.wait4(proc.pid, 0)
+    if timer is not None:
+        timer.cancel()
     proc.returncode = code = os.waitstatus_to_exitcode(status)
     if code < 0:  # ended by a signal: the status a shell (and Nextflow) reports
         code = 128 - code

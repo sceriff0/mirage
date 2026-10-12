@@ -12,7 +12,6 @@ from benchmarks.regbench import ladder, variants
 
 from .test_submit_cohort import (
     SCRIPT,
-    STAGED,
     _case,
     _sbatch_lines,
     code_of,
@@ -85,10 +84,9 @@ def test_each_run_has_the_existing_ladder_on_the_set(dry):
     jobs, _, _, _ = dry
     for run in RUNS:
         ladder_of = rungs(jobs, run, "hyreco_b")
-        if run not in STAGED:  # STARE's last job has the pipeline's rungs for STITCH
-            assert [j.opt("--mem") for j in ladder_of] == [
-                f"{gb}G" for gb in ladder.RUNGS_GB
-            ]
+        assert [j.opt("--mem") for j in ladder_of] == [
+            f"{gb}G" for gb in ladder.RUNGS_GB
+        ]
         assert all(j.opt("--cpus-per-task") == "4" for j in ladder_of)
         # three pairs, one task each: a pair is its own patient for the VALIS rows too
         assert all(j.opt("--array") == "0-2%20" for j in ladder_of)

@@ -2068,7 +2068,26 @@ script names no method.
    | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most `REGBENCH_STAGE_QUEUE_MAX` (100) of them pending or running | 2; 4 GB; 2 h |
    | `rb-<run>-<ds>-tile-a<2..4>-o<n>` (the same) | a RETRY JOB: one task per round that has a tile the pipeline would retry; it runs that round's due tiles one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
    | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
-   | `rb-<run>-<ds>-stitch-<4,8,12,16>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's last job reads the stage records, moves the benchmark's points and runs STITCH | 4; 4, 8, 12, 16 GB; 4, 8, 12, 16 h |
+   | `rb-<run>-<ds>-last-<16,64,256,512>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
+
+   **The round's last job, in three sentences.** It holds the benchmark's own work
+   (loading and moving the outlines, the tissue reduction), so it has the benchmark's
+   allocation and ladder, and whatever ends it outside STITCH is a benchmark-owned cause
+   (`benchmark_oom`, which goes up a rung, or `benchmark`), never STARE's. STITCH runs
+   inside it as the pipeline's process: measured alone (its own time, CPU time and
+   peak, `native.stitch_job`), ended at the pipeline's time limit for its attempt
+   (4 h x attempt) and run again on the pipeline's retry list, the time limit included,
+   up to four attempts; the job is not STITCH's cgroup, so the pipeline's memory for an
+   attempt (4 GB x attempt) is reported against (`stitch_job.over_allocation`), not
+   enforced. A STITCH that fails after a good registration fails the row as the
+   writer's (`writer`, `writer_oom`; `registered: true`), no rung runs it again, and
+   the registration is not booked as a wasted attempt: `total_to_image_s` stays the
+   registration plus the STITCH attempt that wrote the image.
+
+   A STITCH killed for memory while its allocation plus the job's own memory exceeded
+   what the job had (a 16 GB job, STITCH at its fourth attempt) is the job's limit:
+   `benchmark_oom`, and the next rung runs the last job again. What a lost last job
+   cost is its own time (`resources.driver_wall_s`), not the registration's.
 
    Attempt 1 of a stage runs it; a task of attempts 2 to 4 exits at once unless the
    attempt before ended the way the pipeline retries. A task whose stage before it is

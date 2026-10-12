@@ -65,6 +65,7 @@ WHOSE = {
     "writer": METHOD,
     "writer_oom": METHOD,
     "benchmark_oom": BENCHMARK,
+    "benchmark": BENCHMARK,  # its own step failed or was ended, not for memory
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended
@@ -136,7 +137,7 @@ def stage_of(cause, phase=""):
     """Where in a registration attempt a cause arose."""
     if cause in ("writer", "writer_oom") or phase == "writer":
         return "writer"
-    if cause == "benchmark_oom":
+    if cause in ("benchmark_oom", "benchmark"):
         return "benchmark_points"
     return "register"
 
