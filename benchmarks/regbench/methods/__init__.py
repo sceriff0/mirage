@@ -28,6 +28,9 @@ full-resolution pixels of the native slides. Optional hooks:
 ``SELFCHECK_SUBPROCESS``  used by the selfcheck and the realcheck only; their signatures are
         in ``regbench.selfcheck``. A point mapping must stay valid until the run ends: the
         realcheck calls it after the writer.
+``info["_cost"]``  for a registration that ran in scheduler jobs of its own: the
+        ``wall_s`` / ``cpu_s`` / ``peak_rss_mb`` those jobs recorded, which replace this
+        process's own measurement in ``run.json`` (``register_s``, ``resources``).
 ``info["band_mov_nuc"]`` / ``info["band_ref_nuc"]``  the same seam rule applied to the
         BARE nuclei of that side (``cases.polys(points, side, "nuclei")``). Used only
         where the case does not say which outline each nucleus belongs to
@@ -64,7 +67,9 @@ cost. Warping the benchmark's points and a method's writer are not billed.
 **How a run ends.** ``run.json`` is written as ``ok: false, cause: killed`` before the
 method starts, so a task the scheduler kills leaves a failed row, not a gap. A method that
 raises (``SystemExit`` included: STARE's argument errors raise it) is ``exception``, or
-``oom`` / ``gpu_oom`` / ``timeout`` when the error says so (``resources.classify_error``).
+``oom`` / ``gpu_oom`` / ``timeout`` when the error says so (``resources.classify_error``). An error that carries ``regbench_no_rerun`` (a stage
+job that failed after its own retries, ``regbench.stages``) is recorded with
+``no_rerun: true``: the ladder runs such a unit at no further rung.
 A watcher polls the task's cgroup out-of-memory counter from before the method starts
 until its writer has finished, and ends the run when it rises, because the kernel may
 kill one worker and leave the parent waiting. ``run.json: oom_watch`` says whether the
@@ -487,7 +492,7 @@ def _run(
             "previous_attempts": earlier.get((case.case_id, variant), []),
         }
 
-    def fail(case, variant, error, cause, cost=None, tb="", info=None):
+    def fail(case, variant, error, cause, cost=None, tb="", info=None, no_rerun=False):
         d = result_dir(out, names[variant], case)
         (d / "warped.npz").unlink(missing_ok=True)
         # nothing an earlier attempt left may answer for this one (a gate reads it)
@@ -499,6 +504,8 @@ def _run(
             rec["traceback"] = tb
         if info:
             rec["info"] = _jsonable(info)
+        if no_rerun:
+            rec["no_rerun"] = True
         write_json(d / "run.json", rec)
         return rec
 
@@ -587,6 +594,7 @@ def _run(
 
     state = None
     error = cause = tb = ""
+    no_rerun = False
     mon.start()
     watch.start()
     base["oom_watch"] = watch.record()
@@ -616,6 +624,9 @@ def _run(
             band_nuc_own = info.pop("band_mov_nuc", None)
             band_ref_nuc_own = info.pop("band_ref_nuc", None)
             native = info.pop("native", None)
+            # a registration that ran in jobs of its own bills what those jobs
+            # recorded: this process's clock saw none of it (regbench.stages)
+            cost = {**cost, **(info.pop("_cost", None) or {})}
             try:
                 if watch.rose():
                     # it rose before this yield: in the method's stretch, or in a
@@ -765,6 +776,8 @@ def _run(
     ) as exc:  # a failed case is scored at the initial pose
         error = f"{type(exc).__name__}: {exc}"
         cause, tb = resources.classify_error(exc), traceback.format_exc()
+        # already retried where it happened (a stage job): no rung above runs it again
+        no_rerun = bool(getattr(exc, "regbench_no_rerun", False))
         if isinstance(exc, _OutOfMemory):
             cause = MEMORY_CAUSE[exc.phase]
         elif watch.rose():
@@ -877,6 +890,7 @@ def _run(
                     cause or "exception",
                     {**cost, **end},
                     tb,
+                    no_rerun=no_rerun,
                 )
     # Clock stopped, writers done: what each written image IS (channels, pyramid or not,
     # compression, size), read from the file. A method whose own output is not the file

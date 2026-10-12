@@ -41,6 +41,12 @@
 #      patient. A run that reads another's results waits for that run's last array on
 #      the same dataset. A unit whose results are all ok already (an earlier
 #      submission into the same REGBENCH_OUT) is reused, not run: REGBENCH_FORCE=1.
+#      A run whose registration is several scheduler jobs per round (column `stages`:
+#      the pipeline's own shape) has a chain of stage jobs instead, each with the
+#      pipeline's allocation for that process: per attempt an array over the rounds for
+#      COARSE and for SOLVE, ONE TASK PER TILE (every tile of every round, in arrays of
+#      at most REGBENCH_STAGE_ARRAY_MAX tasks), and last the writer on its own four
+#      rungs. Every task is submitted here, up front; `stage_chain` and `staged` below.
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
 #      realcheck.json; everything else of that run waits for it.
@@ -100,6 +106,9 @@
 #                                     never above the site's longest job (7 days)
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N)
+#   REGBENCH_STAGE_ARRAY_MAX (1000)   the most tasks in one tile array; keep it below
+#                                     the site's MaxArraySize. The dry run prints how
+#                                     many jobs and array tasks a submission holds
 #   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
 #   REGBENCH_RUN_ORDER                the order the runs are SUBMITTED in, and so dealt
 #                                     onto the lanes: family or run names, space-separated
@@ -191,6 +200,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 : "${REGBENCH_RUN_LANES:=0}"
+: "${REGBENCH_STAGE_ARRAY_MAX:=1000}"
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
 # multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
@@ -272,11 +282,19 @@ limit() {
 
 # submit <job name> <sbatch arguments...>: sets JOB_ID. Dry: prints the command.
 N_JOBS=0
+N_TASKS=0
 JOB_ID=""
 JOBS_FILE=""
 submit() {
-    local name="$1"; shift
+    local name="$1" arg range; shift
     N_JOBS=$((N_JOBS + 1))
+    range=""
+    for arg in "$@"; do case "$arg" in --array=*) range="${arg#--array=}"; range="${range%%\%*}" ;; esac; done
+    if [ -n "$range" ]; then
+        N_TASKS=$((N_TASKS + ${range#*-} - ${range%%-*} + 1))
+    else
+        N_TASKS=$((N_TASKS + 1))
+    fi
     if [ "$DRY" = 1 ]; then
         printf 'sbatch --parsable --job-name=%s' "$name"
         printf ' %s' "$@"
@@ -566,16 +584,39 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
 done < "$table"
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
+# the pipeline's allocation per stage and attempt, for the runs that are several jobs
+# per round: ALLOC_<stage>_<attempt>="<cpus> <GB> <time>"
+while IFS=$'\t' read -r _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
+    [ "${stages:--}" = - ] && continue
+    while IFS=$'\t' read -r stage attempt cpus gb time; do
+        printf -v "ALLOC_${stage}_$attempt" '%s %s %s' "$cpus" "$gb" "$time"
+    done < <(regbench_py "$REGBENCH_HEAD_IMAGE" runs --stage-allocation)
+    break
+done < "$table"
 # ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: two arrays per
 # rung (the attempt, then the same rung again for a unit the scheduler lost), each after
 # the one before; sets LADDER_LAST. Reads the current row's variables. Every task is
 # given the ids of all the ladder's earlier jobs: it asks the scheduler what became of
 # its unit in each.
+# With a sixth argument `jobs` (a run whose registration is several jobs per round: this
+# is each round's last job, the writer) the four rungs are the four attempts of the
+# pipeline's allocation for that process (ALLOC_stitch_<attempt>), not the memory ladder.
 ladder() {
-    local prefix="$1" range="$2" real="$3" base="$4" time="$5"
-    local earlier="" attempt=0 gb dep task jobname
-    for gb in $RUNGS_GB; do
+    local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
+    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB" alloc
+    if [ "$staged" != - ]; then
+        rungs=""
+        for attempt in 1 2 3 4; do
+            alloc="ALLOC_stitch_$attempt"; read -r _ gb _ <<< "${!alloc}"
+            rungs="$rungs $gb"
+        done
+        attempt=0
+    fi
+    for gb in $rungs; do
         attempt=$((attempt + 1))
+        if [ "$staged" != - ]; then
+            alloc="ALLOC_stitch_$attempt"; read -r cpus _ time <<< "${!alloc}"
+        fi
         for task in attempt again; do
             jobname="$prefix-${gb}g"
             if [ "$task" = again ]; then
@@ -588,20 +629,102 @@ ladder() {
             dep="$base"
             [ -z "$earlier" ] || dep="$dep,afterany:${earlier##*,}"
             submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-                --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$CPUS" --mem="${gb}G" \
+                --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
                 --time="$time" ${gres[@]+"${gres[@]}"} \
                 "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
-                "$ds" "$attempt" "$gb" "$real" "${earlier:--}" "$task" "$time"
+                "$ds" "$attempt" "$gb" "$real" "${earlier:--}" "$task" "$time" "$staged"
             earlier="${earlier:+$earlier,}$JOB_ID"
         done
     done
     LADDER_LAST="${earlier##*,}"
 }
 
+# staged <dependencies>: the jobs of a run whose registration is several scheduler jobs
+# per round (column `stages`), each stage with the pipeline's allocation for that process
+# (`regbench stages --allocation`, benchmarks/regbench/stages.py), every job after the one
+# before it (`afterany`); sets LADDER_LAST to the last job of the last stage. Reads the
+# current row's variables.
+#   prep, coarse, solve   four arrays over the rounds, one per attempt: attempt 1 runs
+#                         the stage; 2 to 4 exit at once unless the attempt before ended
+#                         the way the pipeline retries
+#   tile                  attempt 1: ONE TASK PER TILE, every round's tiles laid end to
+#                         end in arrays of at most REGBENCH_STAGE_ARRAY_MAX tasks (the
+#                         count of a round is known from its reference's size alone,
+#                         `regbench stages`); attempts 2 to 4: one array over the rounds,
+#                         a task running the tiles of its round that are due
+#   stitch                the round's last job (run_rung.sbatch, `jobs`): it collects the
+#                         stage records and runs the writer, on its own four rungs
+stage_chain() {
+    local stage="$1" range="$2" dep="$3" attempt alloc cpus gb time
+    for attempt in 1 2 3 4; do
+        alloc="ALLOC_${stage}_$attempt"; read -r cpus gb time <<< "${!alloc}"
+        submit "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+            --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
+            "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" "$ds" "$stage" \
+            "$attempt" "$gb" "$time"
+        dep="$base,afterany:$JOB_ID"
+    done
+}
+staged() {
+    local base="$1" layout n_rounds n_tiles stage dep offset size chunk=0 tiles="" alloc cpus gb time
+    local attempt items o made what=()
+    # one line per round: where its tiles start in the arrays. Kept per submission: the
+    # tile tasks read it, and a later submission must not move it under them
+    layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
+    made="$layout"
+    if [ "$DRY" = 1 ]; then
+        made="$scratch/stages/$name-$ds.tsv"
+        layout="$REGBENCH_OUT/logs/stages/<submission>/$name-$ds.tsv"
+    fi
+    what=(stages --cases "$REGBENCH_CASES" --dataset "$ds" --method "$method" --layout "$made")
+    [ "$label" != - ] && what+=(--label "$label")
+    if [ "$opts" != - ]; then
+        IFS=, read -ra items <<< "$opts"
+        for o in "${items[@]}"; do what+=(--opt "$o"); done
+    fi
+    read -r n_rounds n_tiles < <(regbench_py "$image" "${what[@]}") \
+        || die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages). Jobs submitted before this stay submitted: cancel them."
+    [ "${n_tiles:-0}" -gt 0 ] || die "$name on $ds: no tile to register (python -m benchmarks.regbench stages printed '$n_rounds $n_tiles')."
+    dep="$base"
+    for stage in ${stages//,/ }; do
+        case "$stage" in
+            prep|coarse|solve)
+                stage_chain "$stage" "0-$((n_rounds - 1))" "$dep"
+                dep="$base,afterany:$JOB_ID" ;;
+            tile)
+                alloc="ALLOC_tile_1"; read -r cpus gb time <<< "${!alloc}"
+                offset=0
+                while [ "$offset" -lt "$n_tiles" ]; do
+                    size=$((n_tiles - offset))
+                    [ "$size" -gt "$REGBENCH_STAGE_ARRAY_MAX" ] && size="$REGBENCH_STAGE_ARRAY_MAX"
+                    submit "rb-$name-$ds-tile-a1-c$chunk" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+                        --array="0-$((size - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
+                        --time="$time" "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" \
+                        "$ds" tile 1 "$gb" "$time" "$layout" "$offset"
+                    tiles="$tiles:$JOB_ID"
+                    offset=$((offset + size)); chunk=$((chunk + 1))
+                done
+                dep="$base,afterany$tiles"
+                for attempt in 2 3 4; do
+                    alloc="ALLOC_tile_$attempt"; read -r cpus gb time <<< "${!alloc}"
+                    submit "rb-$name-$ds-tile-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+                        --array="0-$((n_rounds - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
+                        --time="$time" "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" \
+                        "$ds" tile "$attempt" "$gb" "$time"
+                    dep="$base,afterany:$JOB_ID"
+                done ;;
+            stitch)
+                ladder "rb-$name-$ds-stitch" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
+            *) die "$name: no job is defined for the stage '$stage' (column stages of the run list)." ;;
+        esac
+    done
+    echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) in $chunk array(s) of at most $REGBENCH_STAGE_ARRAY_MAX"
+}
+
 finals="" prev_ds="" n_laned=0
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
-    while IFS=$'\t' read -r name method label opts image gpu scope after _ _ _ _ _ _ realcheck; do
+    while IFS=$'\t' read -r name method label opts image gpu scope after _ _ _ _ _ _ realcheck stages; do
         has "$selected" "$name" || continue
         gres=()
         [ "$gpu" = 1 ] && gres=(${GPU_ARGS[@]+"${GPU_ARGS[@]}"})
@@ -637,6 +760,17 @@ for ds in $sized; do
             fi
             lane="LANE_LAST_${!lane}"
             [ -n "${!lane:-}" ] && base="$base,afterany:${!lane}"
+        fi
+        if [ "${stages:--}" != - ]; then
+            [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck gate: the launcher sends no first unit ahead for such a run."
+            staged "$base"
+            printf -v "LAST_${ds}_$name" '%s' "$LADDER_LAST"
+            finals="$finals $LADDER_LAST"
+            if [ "$REGBENCH_RUN_LANES" -gt 0 ]; then
+                lane="LANE_OF_$name"
+                printf -v "LANE_LAST_${!lane}" '%s' "$LADDER_LAST"
+            fi
+            continue
         fi
         start=0
         if [ "${realcheck:--}" != - ]; then
@@ -716,7 +850,7 @@ else
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 fi
 
-echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted')"
+echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task)"
 if [ "$score_only" = 1 ]; then
     echo "# submission  -> $REGBENCH_SUBMISSION (scored as it is under $REGBENCH_OUT: nothing is run again)"
 else

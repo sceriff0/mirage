@@ -345,6 +345,15 @@ def resource_row(run):
         elif run.get("launch_id"):
             unknown += 1
     watch = run.get("oom_watch") if isinstance(run.get("oom_watch"), dict) else None
+    # A registration that ran as several scheduler jobs per round (regbench.stages):
+    # its cost is summed over those jobs, and the CPUs behind its wall time are the
+    # jobs', not this record's own allocation (the round's last job, the writer).
+    jobs = info.get("jobs") if isinstance(info.get("jobs"), dict) else {}
+    staged = jobs.get("execution") == "jobs"
+    allocated_h = _f(jobs.get("cpu_h_allocated")) if staged else math.nan
+    stitch = (
+        native.get("stitch_job") if isinstance(native.get("stitch_job"), dict) else {}
+    )
     return {
         "ok": ok,
         "cause": run.get("cause", ""),
@@ -358,7 +367,37 @@ def resource_row(run):
         "register_s_per_round": _f(per_round),
         "cpu_h": cpu / 3600.0,
         # CPU time over wall x CPUs: above 1 where a method's threads are not confined
-        "cpu_efficiency": cpu / (wall * cpus) if wall and cpus else math.nan,
+        # (for a registration in several jobs: measured CPU time over allocated CPU time)
+        "cpu_efficiency": (
+            cpu / 3600.0 / allocated_h
+            if staged and allocated_h
+            else cpu / (wall * cpus)
+            if wall and cpus and not staged
+            else math.nan
+        ),
+        # only for a registration that ran as several scheduler jobs per round, blank
+        # elsewhere (definitions: regbench.stages). `register_s` of such a row IS
+        # `wall_unlimited_parallel_s`, `cpu_h` the measured CPU time summed over its
+        # jobs, and `peak_rss_gb` the peak of its largest single job.
+        "elapsed_with_queue_s": _f(jobs.get("elapsed_with_queue_s")) if staged else "",
+        "wall_unlimited_parallel_s": _f(jobs.get("wall_unlimited_parallel_s"))
+        if staged
+        else "",
+        "cpu_h_allocated": allocated_h if staged else "",
+        "largest_job": str(jobs.get("largest_job") or "") if staged else "",
+        "peak_cpus_at_once": _f(jobs.get("peak_cpus_at_once")) if staged else "",
+        "n_jobs": _f(jobs.get("n_jobs")) if staged else "",
+        "n_tiles": _f(jobs.get("n_tiles")) if staged else "",
+        "n_job_retries": _f(jobs.get("n_retries")) if staged else "",
+        # the writer's own job: allocated CPUs x its duration, and its peak
+        "write_cpu_h_allocated": _f(stitch.get("cpus"))
+        * _f(stitch.get("wall_s"))
+        / 3600.0
+        if staged and stitch
+        else "",
+        "write_peak_gb": _f(stitch.get("peak_rss_mb")) / 1024.0
+        if staged and stitch
+        else "",
         "peak_rss_gb": gb("peak_rss_mb"),
         # for a method whose writer cannot be paused, the peak it read after registering
         "peak_rss_after_register_gb": after if after == after else gb("peak_rss_mb"),
@@ -1854,6 +1893,22 @@ def summarise_resources(res_rows):
         }
         for key in ("register_s", "cpu_h", "gpu_h"):
             rec[key] = _stat(_values(ok, key), total)
+        # a registration in several scheduler jobs per round: the patient's sums over
+        # its rounds, and the most CPUs one round had at once (blank elsewhere)
+        split = [r for r in ok if r.get("n_jobs") not in ("", None)]
+        for key in (
+            "elapsed_with_queue_s",
+            "wall_unlimited_parallel_s",
+            "cpu_h_allocated",
+            "n_jobs",
+            "n_tiles",
+            "n_job_retries",
+            "write_cpu_h_allocated",
+        ):
+            rec[key] = _stat(_values(split, key), np.sum) if split else ""
+        rec["peak_cpus_at_once"] = (
+            _stat(_values(split, "peak_cpus_at_once"), np.max) if split else ""
+        )
         # The writer's time is the SUM over the rounds for both units: a per-patient
         # method records each round's share of one writer call (or each slide's own
         # time), a pair method each round's own. The time to an image is the

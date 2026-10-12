@@ -648,6 +648,52 @@ def build_parser():
     rg.add_argument("--record", default=None, help="as `gate --record`")
     rg.add_argument("--allow-unchecked", action="store_true")
 
+    sg = sub.add_parser(
+        "stage",
+        help="one stage job of one round of a run whose registration is several "
+        "scheduler jobs (`runs`, column `stages`): prep, coarse, tile or solve",
+    )
+    sg.add_argument("--cases", required=True)
+    sg.add_argument("--out", required=True)
+    sg.add_argument("--dataset", required=True, choices=ALL_DATASETS)
+    sg.add_argument("--method", required=True, choices=METHODS)
+    sg.add_argument("--label", default=None)
+    sg.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
+    sg.add_argument(
+        "--stage", required=True, choices=("prep", "coarse", "tile", "solve")
+    )
+    sg.add_argument(
+        "--attempt",
+        type=int,
+        default=1,
+        help="1 runs the job; 2 to 4 run it only when the attempt before ended the "
+        "way the pipeline retries (regbench.stages)",
+    )
+    where = sg.add_mutually_exclusive_group(required=True)
+    where.add_argument("--index", type=int, default=None, help="the case (round)")
+    where.add_argument(
+        "--flat",
+        type=int,
+        default=None,
+        help="with --stage tile: one tile, counted over every case's tiles laid end "
+        "to end as --layout lists them",
+    )
+    sg.add_argument("--layout", default=None, help="the file `stages --layout` wrote")
+    sg.add_argument("--force", action="store_true", help="also REGBENCH_FORCE=1")
+
+    sl = sub.add_parser(
+        "stages",
+        help="size the tile arrays of a run on a dataset: writes the layout file "
+        "(one line per case: index, case id, tiles, offset) and prints `<cases> "
+        "<tiles>`",
+    )
+    sl.add_argument("--cases", required=True)
+    sl.add_argument("--dataset", required=True, choices=ALL_DATASETS)
+    sl.add_argument("--method", required=True, choices=METHODS)
+    sl.add_argument("--label", default=None)
+    sl.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
+    sl.add_argument("--layout", required=True)
+
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
@@ -682,6 +728,13 @@ def build_parser():
         action="store_true",
         help="with --order: print instead one line per run that was moved behind the "
         "run it reads",
+    )
+    rn.add_argument(
+        "--stage-allocation",
+        action="store_true",
+        help="print only, for the runs that are several scheduler jobs per round "
+        "(column `stages`), one line per stage and attempt: stage, attempt, CPUs, "
+        "memory in GB, time limit (the pipeline's allocation of that process)",
     )
     rn.add_argument(
         "--prep-status",
@@ -779,6 +832,93 @@ def _run(a):
         return 1
     if a.realcheck and _realcheck_flagged(a, picked, done):
         return 3
+    return 0
+
+
+def _stage_opts(a):
+    from .methods import parse_opts
+
+    opts = parse_opts(a.opt)
+    opts["label"] = a.label or ""
+    return opts
+
+
+def _stages(a):
+    """`stages`: the layout of a run's tile arrays on a dataset."""
+    from . import stages
+    from .cases import list_cases
+    from .methods import load
+
+    mod, opts = load(a.method), _stage_opts(a)
+    cases = list_cases(a.cases, a.dataset)
+    rows = [(c.case_id, mod.tile_count(c, opts)) for c in cases]
+    print(len(rows), stages.write_layout(a.layout, rows))
+    return 0
+
+
+def _stage(a):
+    """`stage`: one stage job. The exit code is 0 whatever became of the stage: its
+    record says, and the round's last job reads it."""
+    import os
+
+    from . import failure_log, stages
+    from .cases import list_cases
+    from .methods import load
+
+    mod, opts = load(a.method), _stage_opts(a)
+    cases = list_cases(a.cases, a.dataset)
+    index, row = a.index, None
+    if a.flat is not None:
+        if a.stage != "tile" or not a.layout:
+            raise SystemExit("--flat goes with --stage tile and --layout")
+        layout = stages.read_layout(a.layout)
+        if [c for c, _ in layout] != [c.case_id for c in cases]:
+            raise SystemExit(
+                f"{a.layout} does not list the {a.dataset} cases under {a.cases}: the "
+                "cases changed after the arrays were sized. Submit again"
+            )
+        at = stages.locate([n for _, n in layout], a.flat)
+        if at is None:
+            print(f"tile {a.flat}: past the last tile of {a.dataset}; nothing to do")
+            return 0
+        index, row = at
+    if index >= len(cases):
+        print(f"index {index}: only {len(cases)} {a.dataset} cases; nothing to do")
+        return 0
+    case = cases[index]
+    force = a.force or os.environ.get("REGBENCH_FORCE") == "1"
+    stage_dir = mod.stage_dir_of(a.out, a.label, case)
+    done = mod.run_stage(case, stage_dir, opts, a.stage, row, a.attempt, "jobs", force)
+    if a.flat is not None and done and done[0][4] is not None:
+        planned = len(mod.Round(case, stage_dir, opts).plan())
+        if planned != layout[index][1]:
+            raise SystemExit(
+                f"{a.dataset}/{case.case_id}: COARSE planned {planned} tiles, the "
+                f"arrays were sized for {layout[index][1]}"
+            )
+    state, reason = "ok", ""
+    for stage, r, ran, why, rec in done:
+        at = f" row {r}" if r is not None else ""
+        print(
+            f"{a.dataset}/{case.case_id} [{a.label or a.method}] {stage}{at}, "
+            f"attempt {a.attempt}: {why}; "
+            + ("ran" if ran else "nothing to do")
+            + (f", exit {rec.get('exit')}" if ran and rec else "")
+        )
+        if rec is None:
+            state, reason = "waiting", ""
+        elif not rec.get("ok") and state == "ok":
+            state, reason = "failed", str(rec.get("cause") or "exception")
+    failure_log.emit_end(
+        "stage",
+        state,
+        reason,
+        run=a.label or a.method,
+        dataset=a.dataset,
+        unit=case.case_id,
+        stage=a.stage,
+        attempt=a.attempt,
+    )
     return 0
 
 
@@ -902,6 +1042,16 @@ def _runs(a):
 
     if a.scorer_image:
         print(variants.SCORER_IMAGE)
+        return 0
+    if a.stage_allocation:
+        from . import stages
+
+        for stage in stages.ALLOCATION:
+            for attempt in range(1, stages.ATTEMPTS + 1):
+                got = stages.allocation(stage, attempt)
+                print(
+                    f"{stage}\t{attempt}\t{got['cpus']}\t{got['mem_gb']}\t{got['time']}"
+                )
         return 0
     if a.prep_status:
         from . import prep
@@ -1211,6 +1361,10 @@ def main(argv=None):
         return _selfcheck(a)
     if a.cmd == "runs":
         return _runs(a)
+    if a.cmd == "stage":
+        return _stage(a)
+    if a.cmd == "stages":
+        return _stages(a)
     if a.cmd == "gate":
         return _gate(a)
     if a.cmd == "realgate":

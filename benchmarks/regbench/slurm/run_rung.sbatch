@@ -9,6 +9,12 @@
 #                   <attempt> <memory GB> <realcheck 0|1>
 #                   <this ladder's earlier job ids, comma-separated|->
 #                   <task: first|climb|again> <time limit of this task>
+#                   <stages: -|jobs>
+#
+# `jobs`: the run's registration is several scheduler jobs per round (stage.sbatch) and
+# this task is the round's last one. It runs nothing of the registration: it reads the
+# stage jobs' records, moves the benchmark's points through the transform and runs the
+# method's writer (STITCH), with the pipeline's allocation for that process.
 #
 # Each rung is two arrays (benchmarks/regbench/ladder.py has the rules):
 #   first / climb   the attempt at this rung. `climb` (every rung above the first) exits
@@ -23,7 +29,8 @@ set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" gpu="$6" dataset="$7"
 attempt="$8" mem_gb="$9" realcheck="${10}" previous="${11:--}" task="${12:-first}"
-limit="${13:-}"
+limit="${13:-}" stages="${14:--}"
+[ "$stages" = - ] || export REGBENCH_STAGES="$stages"
 retry=0
 [ "$task" = again ] && retry=1
 export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU="$gpu"

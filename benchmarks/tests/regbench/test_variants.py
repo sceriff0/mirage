@@ -373,6 +373,7 @@ COLUMNS = (
     "active",
     "gate_variants",
     "realcheck",
+    "stages",
 )
 # The twelve columns of the first version: a launcher written against them reads the
 # same positions for ever; new columns only go on the end.
@@ -396,7 +397,13 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
     assert len(got) == 19
-    assert all(len(r) == len(COLUMNS) == 15 for r in got)
+    assert all(len(r) == len(COLUMNS) == 16 for r in got)
+    # the two runs whose registration is several scheduler jobs per round
+    staged = {r[0]: r[15] for r in got if r[15] != "-"}
+    assert staged == {
+        "stare": "coarse,tile,solve,stitch",
+        "stare_prep": "prep,coarse,tile,solve,stitch",
+    }
     assert [r[0] for r in got] == [variants.run_name(r) for r in variants.RUNS]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
     assert all(field for r in got for field in r)
@@ -420,6 +427,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "active": "1",
         "gate_variants": "stare_rigid,stare",
         "realcheck": "-",
+        "stages": "coarse,tile,solve,stitch",
     }
     assert got["affine_ashlar_clean"] == {
         "name": "affine_ashlar_clean",
@@ -437,6 +445,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "active": "1",
         "gate_variants": "affine_ashlar_clean",
         "realcheck": "-",
+        "stages": "-",
     }
     hr = got["deeperhistreg_hr_fluo_gpu"]
     assert hr["opts"] == f"device=cuda:0,config={variants.HR_CONFIG},fluo=1"

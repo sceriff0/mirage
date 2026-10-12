@@ -41,6 +41,9 @@ no record of this submission   the task that should have written it never starte
              (:func:`mark_lost`), so that it is never read as "not run" or as failed.
 anything else (``ok``, ``exception``, ``timeout``, ``gpu_oom``, ``writer``): the unit is
              never re-run.
+``no_rerun: true``  whatever its cause, the record is of a failure that was already
+             retried where it happened: a stage job of a registration that runs as
+             several jobs (``regbench.stages``). No rung runs the unit again.
 
 A unit is one case for a method that runs per pair and one patient for a method that runs
 per patient; a patient goes up as a whole when any of its rounds ran out of memory.
@@ -263,12 +266,14 @@ def unit_decision(
         settle(p, previous_state, accounting, submission)
     recs = _records(paths, submission)
     failed = [r for r in recs if not r.get("ok")]
-    memory = [r for r in failed if r.get("cause") in resources.MEMORY_CAUSES]
+    # `no_rerun`: the failure was retried where it happened (a stage job of its own)
+    again = [r for r in failed if not r.get("no_rerun")]
+    memory = [r for r in again if r.get("cause") in resources.MEMORY_CAUSES]
     here = [r for r in recs if int(r.get("attempt") or 1) >= attempt]
     if task == AGAIN:
         lost = [
             r
-            for r in failed
+            for r in again
             if r.get("cause") == INFRASTRUCTURE
             and int(r.get("attempt") or 1) == attempt
             and int(r.get("retry") or 0) < RETRIES_PER_RUNG

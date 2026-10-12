@@ -49,6 +49,10 @@ only ever added at the end, so a position never changes.
                        (``realcheck_gate()``): the launcher sends the run's first unit
                        ahead with ``run --realcheck`` and starts the rest only when
                        that row's ``realcheck.json`` is not flagged.
+16. ``stages``         for a run whose registration is several scheduler jobs per round
+                       (``stages_of()``): their names in order, joined by commas
+                       (``coarse,tile,solve,stitch``, with ``prep`` first for the
+                       preprocessing row); ``-`` for a run that is one job per unit.
 
 **An external brightfield dataset** has a shorter list (``runs_for(dataset)``), every
 other active run being left out with a reason (``excluded_for(dataset)``: a method
@@ -352,6 +356,7 @@ RUNS_COLUMNS = (
     "active",
     "gate_variants",
     "realcheck",
+    "stages",
 )
 NONE = "-"
 
@@ -619,6 +624,16 @@ def scope(method):
     return methods.scope_of(method)
 
 
+def stages_of(run):
+    """The scheduler jobs one round of this run is registered in, in order, or ``()``
+    for a run that is one job per unit: the method's ``STAGES``, behind ``prep`` when
+    the run has a benchmark-side preprocessing (``regbench.stages``)."""
+    names = tuple(getattr(methods.load(run.method), "STAGES", ()) or ())
+    if names and (run.opts or {}).get("prep"):
+        names = ("prep", *names)
+    return names
+
+
 def counts():
     """``(runs, runs on a GPU, runs per patient)``, of the active runs."""
     runs = active_runs()
@@ -835,6 +850,7 @@ def runs_table(paused=False, dataset=None, order=None):
                 NONE
                 if dataset in EXTERNAL_DATASETS
                 else realcheck_gate(run_name(run)) or NONE,
+                ",".join(stages_of(run)) or NONE,
             )
         )
     return table

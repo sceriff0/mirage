@@ -1,7 +1,9 @@
 """The STARE adapter: the pipeline's ``high`` tier, the original slides, STARE's own STITCH.
 
-The command-line tests replace ``stare.cli.register`` with a recorder, so they see exactly
-the namespace ``stare register`` would run with. The others run STARE for real.
+The command-line tests read the namespace the package's own parser makes of the round's
+``stare register`` command line: every stage command is built from it
+(``test_stages.py`` holds the stage commands and the cohort's separate jobs). The others
+run STARE for real, the four stage commands inside one run.
 """
 
 import dataclasses
@@ -12,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import imageio, methods
+from benchmarks.regbench import imageio, methods, stages
 from benchmarks.regbench import selfcheck as sc
 from benchmarks.regbench.cases import load_points, result_dir
 from benchmarks.regbench.methods import stare as adapter
@@ -40,17 +42,22 @@ def multichannel(case, **extra):
 
 @pytest.fixture
 def recorded(monkeypatch, tmp_path):
-    """``ns = recorded(case, opts)``: what ``stare register`` would have been run with."""
-    import stare.cli
+    """``ns = recorded(case, opts)``: the parameters the round's stages are run with."""
 
     def record(case, opts=None):
-        seen = []
-        monkeypatch.setattr(stare.cli, "register", lambda ns: seen.append(ns) or 7)
-        with pytest.raises(RuntimeError, match="exited 7"):
-            next(adapter.register(case, tmp_path, dict(opts or {})))
-        return seen[0]
+        return adapter.namespace(case, tmp_path, dict(opts or {}))
 
     return record
+
+
+@pytest.fixture
+def no_stage(monkeypatch):
+    """Every stage command that would be run, recorded and not run."""
+    called = []
+    monkeypatch.setattr(
+        stages, "run_command", lambda *a, **k: called.append(a) or {"ok": False}
+    )
+    return called
 
 
 # ── the command ───────────────────────────────────────────────────────────────
@@ -102,11 +109,8 @@ def test_the_stride_option_reaches_the_command(synthetic_cases, recorded, stride
 
 
 @pytest.mark.parametrize("bad", ["32", "96", "512", "64.0", "abc", "", 0])
-def test_only_three_strides_are_accepted(synthetic_cases, tmp_path, monkeypatch, bad):
-    import stare.cli
-
-    called = []
-    monkeypatch.setattr(stare.cli, "register", lambda ns: called.append(ns) or 0)
+def test_only_three_strides_are_accepted(synthetic_cases, tmp_path, no_stage, bad):
+    called = no_stage
     case = synthetic_cases["rigid"]
     assert methods.run_case("stare", case, tmp_path, opts={"stride": bad}) == []
     assert not called
@@ -141,12 +145,9 @@ def test_the_nuclear_index_defaults_to_zero(synthetic_cases, recorded):
 
 
 def test_a_reference_with_another_nuclear_index_fails_the_case(
-    synthetic_cases, tmp_path, monkeypatch
+    synthetic_cases, tmp_path, no_stage
 ):
-    import stare.cli
-
-    called = []
-    monkeypatch.setattr(stare.cli, "register", lambda ns: called.append(ns) or 0)
+    called = no_stage
     case = multichannel(synthetic_cases["rigid"], ref_channel=0, mov_channel=2)
     assert methods.run_case("stare", case, tmp_path) == []
     run = run_json(tmp_path, "stare", case)
@@ -221,6 +222,13 @@ def test_run_json_records_the_anchor_and_the_allocation(ran):
     assert impl["changed_from_tier"] == {}
     assert len(impl["benchmark_side"]) == 2
     assert "_state" not in info
+    # the stage commands ran inside this one run: its cost is this process's own clock
+    jobs = info["jobs"]
+    assert (
+        jobs["execution"] == "local" and "inside ONE job" in impl["benchmark_side"][1]
+    )
+    assert (jobs["n_jobs"], jobs["n_tiles"]) == (3, 1)
+    assert run["register_s"] >= jobs["wall_unlimited_parallel_s"] > 0
 
 
 def test_the_rigid_stage_does_not_depend_on_the_stride(ran):
@@ -266,15 +274,37 @@ def test_native_output_is_what_stare_register_writes(ran, tmp_path):
 
 
 @pytest.mark.slow
-def test_selfcheck_is_ok(tmp_path):
+def test_selfcheck_is_ok(tmp_path, monkeypatch):
     """STARE for real on its own two pairs. The cluster's list also holds ASHLAR's pair
     and patient on 8192 x 10240 (five registrations, 5.5 minutes on a laptop): their
     place in the list and the lookup of their matrices are tested without running them
     (`test_ashlar_adapter.py::test_stares_selfcheck_holds_the_anchors_of_ashlars_own_cases`)."""
     own = [(sc.DEFAULT_HW, None), (sc.LARGE_HW, None)]
     assert sc.sizes_for("stare")[:2] == own == sc.sizes_for("stare_prep")
+    # the gate checks the code path that makes the cohort's results: the four stage
+    # commands, each a process of its own, and never `stare register`
+    import stare.cli
+
+    def never(ns):
+        raise AssertionError("the selfcheck ran `stare register`")
+
+    monkeypatch.setattr(stare.cli, "register", never)
+    ran, real = [], stages.run_command
+
+    def spy(stage_dir, stage, command, *a, **k):
+        ran.append((stage, command[1:4]))
+        return real(stage_dir, stage, command, *a, **k)
+
+    monkeypatch.setattr(stages, "run_command", spy)
     rec = sc.run("stare", tmp_path, sizes=own)
     assert rec["status"] == "ok"
+    assert {(s, c[2]) for s, c in ran} == {
+        ("coarse", "coarse"),
+        ("tile", "reg-tile"),
+        ("solve", "solve"),
+        ("stitch", "stitch"),
+    }
+    assert all(c[:2] == ["-m", "stare.cli"] for _, c in ran)
     assert rec["variants"] == {"stare_rigid": sc.NO_STAGE_IMAGE, "stare": sc.OK}
     assert [p["case_id"] for p in rec["pairs"]] == ["pair_2048x2560", "pair_4096x5120"]
     for pair in rec["pairs"]:

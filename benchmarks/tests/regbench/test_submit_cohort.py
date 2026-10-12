@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.regbench import ladder, variants
+from benchmarks.regbench import ladder, stages, variants
 from benchmarks.regbench.cases import Case, write_json
 
 REPO = Path(__file__).resolve().parents[3]
@@ -30,6 +30,11 @@ SCRIPT = SLURM / "submit_cohort.sh"
 GPU = "--gres=gpu:nvidia_h200:1"
 RUNS = {variants.run_name(r): r for r in variants.active_runs()}
 GATING = sorted({variants.gated_by(n) for n in RUNS})
+# the runs whose registration is several jobs per round: their last job (the writer) has
+# the four attempts of the pipeline's allocation for STITCH where the others have the
+# memory ladder
+STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
+STITCH_GB = tuple(stages.allocation("stitch", a)["mem_gb"] for a in (1, 2, 3, 4))
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
 # guard that asks "does this command run" reads the comment-stripped text
 if str(REPO / "tests") not in sys.path:
@@ -49,10 +54,16 @@ THREADS = (
 )
 
 
-def _case(root, dataset, case_id, group):
+# every fixture slide: 2 x 3 tiles of 2048 px, so a round is six REG-TILE jobs
+REF_HW = (4096, 6144)
+TILES = 6
+
+
+def _case(root, dataset, case_id, group, ref_hw=REF_HW):
     case = Case(
         dataset=dataset, case_id=case_id, group=group, ref_nuclear="", mov_nuclear="",
         ref_image="", mov_image="", modality="fluorescence", diagonal=1.0,
+        ref_hw=list(ref_hw),
     )  # fmt: skip
     d = root / dataset / case_id
     d.mkdir(parents=True)
@@ -154,13 +165,30 @@ def dry(site):
     return jobs_of(done), done, log
 
 
+def rung_gb(run):
+    return STITCH_GB if run in STAGED else ladder.RUNGS_GB
+
+
+def _last(run, suffix):
+    return suffix + ("-stitch" if run in STAGED else "")
+
+
 def rungs(jobs, run, dataset="multiplex", suffix=""):
-    """The attempt of each rung (the `-again` arrays are `agains`)."""
-    return [jobs[f"rb-{run}-{dataset}{suffix}-{gb}g"] for gb in ladder.RUNGS_GB]
+    """The attempt of each rung (the `-again` arrays are `agains`). For a run that is
+    several jobs per round: the rungs of its last job."""
+    tail = _last(run, suffix)
+    return [jobs[f"rb-{run}-{dataset}{tail}-{gb}g"] for gb in rung_gb(run)]
 
 
 def agains(jobs, run, dataset="multiplex", suffix=""):
-    return [jobs[f"rb-{run}-{dataset}{suffix}-{gb}g-again"] for gb in ladder.RUNGS_GB]
+    tail = _last(run, suffix)
+    return [jobs[f"rb-{run}-{dataset}{tail}-{gb}g-again"] for gb in rung_gb(run)]
+
+
+def last_job(run, dataset="multiplex"):
+    """The name of the last job a run submits on a dataset: what a run that reads its
+    results, the next dataset, the next run of its lane and the settle job wait for."""
+    return f"rb-{run}-{dataset}{_last(run, '')}-{rung_gb(run)[-1]}g-again"
 
 
 def chain(jobs, run, dataset="multiplex", suffix=""):
@@ -223,10 +251,29 @@ def test_a_paused_run_is_not_submitted(site, monkeypatch, tmp_path):
     (tmp_path / "benchmarks" / "__init__.py").write_text("")
     (stub / "__init__.py").write_text("")
     lines = "\\n".join("\\t".join(r) for r in kept)
+    alloc = "\\n".join(
+        "\\t".join(
+            map(
+                str,
+                (
+                    st,
+                    a,
+                    *list(stages.allocation(st, a).values())[:2],
+                    stages.allocation(st, a)["time"],
+                ),
+            )
+        )
+        for st in stages.ALLOCATION
+        for a in (1, 2, 3, 4)
+    )
     (stub / "__main__.py").write_text(
         "import sys\n"
         "a = sys.argv[1:]\n"
-        "if a[:1] == ['runs']:\n"
+        "if a[:1] == ['runs'] and '--stage-allocation' in a:\n"
+        f"    print('{alloc}')\n"
+        "elif a[:1] == ['stages']:\n"
+        f"    print('4 {4 * TILES}')\n"
+        "elif a[:1] == ['runs']:\n"
         f"    print('{variants.SCORER_IMAGE}' if '--scorer-image' in a else '{lines}')\n"
         "elif a[:1] == ['list']:\n"
         "    print('4 2 3' if 'multiplex' in a else '0 0 0')\n"
@@ -241,12 +288,16 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
     jobs, _, _ = dry
     for run in RUNS:
         got = rungs(jobs, run)
-        assert [j.opt("--mem") for j in got] == ["16G", "64G", "256G", "512G"], run
+        gbs = rung_gb(run)
+        assert gbs == ((4, 8, 12, 16) if run in STAGED else (16, 64, 256, 512)), run
+        assert [j.opt("--mem") for j in got] == [f"{gb}G" for gb in gbs], run
         assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 4, run
         # attempt and memory reach the task: REGBENCH_ATTEMPT, REGBENCH_MEM_GB
         assert [j.args[7:9] for j in got] == [
-            ["1", "16"], ["2", "64"], ["3", "256"], ["4", "512"]
-        ], run  # fmt: skip
+            [str(i), str(gb)] for i, gb in enumerate(gbs, 1)
+        ], run
+        # only the last job of a run in several jobs is told to collect them
+        assert {j.args[13] for j in got} == {"jobs" if run in STAGED else "-"}, run
         assert [j.args[11] for j in got] == ["first", "climb", "climb", "climb"], run
         assert got[0].args[10] == "-"
         assert all("--wait" not in j.words for j in got)
@@ -315,7 +366,7 @@ def test_a_dormant_dataset_is_submitted_only_when_named(site):
             order.append(job.args[6])
     assert order == ["multiplex", "synthetic", "semisynth"]  # the cohort first
     first = rungs(jobs, "stare", "semisynth")[0]
-    assert ("afterany", "<rb-stare-synthetic-512g-again>") in first.deps
+    assert ("afterany", f"<{last_job('stare', 'synthetic')}>") in first.deps
     code = code_of(SCRIPT)
     assert 'DEFAULT_DATASETS="multiplex synthetic"' in code
     assert 'DORMANT_DATASETS="semisynth hyreco_a hyreco_b"' in code
@@ -330,7 +381,9 @@ def test_no_job_asks_for_more_than_seven_days(site):
         assert int(days) * 86400 + h * 3600 + m * 60 + s <= 7 * 86400, job.name
     # three rounds at three days each would be nine: capped at the site's maximum
     assert rungs(jobs, "valis_mirage", suffix="-first")[0].opt("--time") == "7-00:00:00"
-    assert rungs(jobs, "stare")[0].opt("--time") == "3-00:00:00"
+    assert rungs(jobs, "palom")[0].opt("--time") == "3-00:00:00"
+    # a run in several jobs per round has the pipeline's time limits, whatever that is
+    assert rungs(jobs, "stare")[0].opt("--time") == "0-04:00:00"
 
 
 def test_patient_runs_get_one_rounds_time_for_every_round(dry):
@@ -339,7 +392,10 @@ def test_patient_runs_get_one_rounds_time_for_every_round(dry):
         per_patient = variants.scope(spec.method) == "group"
         job = rungs(jobs, run)[0]
         # P1 has three rounds: 3 x 24 h for a run that registers a patient at once
-        assert job.opt("--time") == ("3-00:00:00" if per_patient else "1-00:00:00"), run
+        want = "3-00:00:00" if per_patient else "1-00:00:00"
+        if run in STAGED:  # the pipeline's limit for the writer's process
+            want = stages.allocation("stitch")["time"]
+        assert job.opt("--time") == want, run
 
 
 def test_pair_runs_are_arrays_over_cases_and_patient_runs_over_patients(dry):
@@ -370,6 +426,8 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
         return {name.strip("<>") for _, name in job.deps}
 
     def head(jobs, run, dataset="multiplex"):
+        if run in STAGED:  # the first job of its first stage
+            return jobs[f"rb-{run}-{dataset}-{STAGED[run][0]}-a1"]
         return jobs.get(f"rb-{run}-{dataset}-first-16g") or rungs(jobs, run, dataset)[0]
 
     done, _, _ = launch(site, env={"REGBENCH_RUN_LANES": str(lanes)}, log="lanes")
@@ -506,7 +564,11 @@ def test_both_anchored_rows_wait_for_the_run_they_read(dry):
         assert RUNS[run].after == "stare"
         for dataset in ("multiplex", "synthetic"):
             first = rungs(jobs, run, dataset)[0]
-            assert ("afterany", f"<rb-stare-{dataset}-512g-again>") in first.deps, run
+            assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps, run
+            # the anchor's LAST job, the writer's last rung: none of its earlier ones
+            assert {n for _, n in first.deps if "rb-stare-" in n} == {
+                f"<{last_job('stare', dataset)}>"
+            }
     assert not any("stare-" in n for _, n in rungs(jobs, "ashlar")[0].deps)
 
 
@@ -548,7 +610,7 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     for run in RUNS:
         assert f"rb-gate-{run}" in waited
         for dataset in ("multiplex", "synthetic"):
-            assert f"rb-{run}-{dataset}-512g-again" in waited, (run, dataset)
+            assert last_job(run, dataset) in waited, (run, dataset)
     # every array of the per-case scoring waits for it, and for nothing else directly
     arrays = [j for n, j in jobs.items() if n.startswith("rb-score-case-")]
     assert len(arrays) == 2
@@ -637,7 +699,16 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     # the tables keep their allocation: the cases were scored before them
     assert (scorer.opt("--cpus-per-task"), scorer.opt("--time")) == ("4", "1-00:00:00")
     # the default submission: the settle job, an array per dataset, tissue, the scorer
-    assert len(jobs) == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 == 397
+    # a run in several jobs per round has, per dataset, 4 attempts of COARSE and of SOLVE,
+    # one tile array and 3 retry arrays, and the writer's 8 (and 4 of its preprocessing)
+    # where another run has the ladder's 8
+    more = sum(4 + 1 + 3 + 4 + (4 if "prep" in st else 0) for st in STAGED.values())
+    assert more == 12 + 16 and len(STAGED) == 2
+    assert (
+        len(jobs)
+        == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 + 2 * more
+        == 453
+    )
 
 
 def test_the_case_arrays_have_their_own_allocation_and_are_throttled(site):
@@ -991,7 +1062,7 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
         assert wanted.index(run) > wanted.index("stare")
         for dataset in ("multiplex", "synthetic"):
             first = rungs(jobs, run, dataset)[0]
-            assert ("afterany", f"<rb-stare-{dataset}-512g-again>") in first.deps
+            assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps
     anchored = jobs["rb-sc-affine_ashlar-64g"]
     assert ("afterok", "<rb-sc-stare-512g>") in anchored.deps
     # on lanes, each run starts behind the run dealt onto its lane before it
@@ -1071,7 +1142,7 @@ def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
         names[job_id] = job.name
         deps[job_id] = {n for _, n in job.deps}
     order = _sorted_topologically(deps)
-    assert len(order) == len(deps) == 397
+    assert len(order) == len(deps) == 453
     # a cycle would be found: the check is not vacuous
     a, b = list(deps)[:2]
     with pytest.raises(AssertionError, match="a cycle"):
@@ -1079,7 +1150,209 @@ def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
     # an anchored run and its anchor on ONE lane: the anchor's ladder comes first
     by_name = {n: i for i, n in names.items()}
     anchored = deps[by_name["rb-affine_ashlar-multiplex-16g"]]
-    assert by_name["rb-stare-multiplex-512g-again"] in anchored
+    assert by_name[last_job("stare")] in anchored
+    # ... and of the anchor's jobs it waits for that one alone: not COARSE, not SOLVE
+    assert {names[i] for i in anchored if names[i].startswith("rb-stare-")} == {
+        last_job("stare")
+    }
+
+
+# ── a run whose registration is several jobs per round ────────────────────────
+def attempts(jobs, run, stage, dataset="multiplex"):
+    return [jobs[f"rb-{run}-{dataset}-{stage}-a{a}"] for a in (1, 2, 3, 4)]
+
+
+def tile_arrays(jobs, run, dataset="multiplex"):
+    names = [n for n in jobs if n.startswith(f"rb-{run}-{dataset}-tile-a1-c")]
+    return [jobs[n] for n in sorted(names, key=lambda n: int(n.rsplit("c", 1)[1]))]
+
+
+def after(job):
+    return {n.strip("<>") for kind, n in job.deps if kind == "afterany"}
+
+
+def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
+    """COARSE, one REG-TILE task per tile, SOLVE, then the writer: each with the
+    allocation the pipeline gives that process, each attempt after the one before."""
+    jobs, _, _ = dry
+    assert STAGED == {
+        "stare": ("coarse", "tile", "solve", "stitch"),
+        "stare_prep": ("prep", "coarse", "tile", "solve", "stitch"),
+    }
+    for run, names in STAGED.items():
+        spec = RUNS[run]
+        gate = ("afterok", f"<rb-gate-{run}>")
+        before = None  # the last job of the stage before
+        for stage in names[:-1]:
+            if stage == "tile":
+                (first,) = tile_arrays(jobs, run)
+                retries = [jobs[f"rb-{run}-multiplex-tile-a{a}"] for a in (2, 3, 4)]
+                # four cases of six tiles: one task per tile, laid end to end
+                assert first.opt("--array") == f"0-{4 * TILES - 1}%20"
+                assert first.args[6:9] == ["tile", "1", "4"] and first.args[11] == "0"
+                assert first.args[10].endswith(
+                    f"/logs/stages/<submission>/{run}-multiplex.tsv"
+                )
+                # a retry is one task per ROUND: it runs the round's tiles that are due
+                assert [j.opt("--array") for j in retries] == ["0-3%20"] * 3
+                assert [len(j.args) for j in retries] == [10] * 3
+                chained = [first, *retries]
+            else:
+                chained = attempts(jobs, run, stage)
+                assert [j.opt("--array") for j in chained] == ["0-3%20"] * 4, stage
+            for attempt, job in enumerate(chained, 1):
+                want = stages.allocation(stage, attempt)
+                assert job.script == "stage.sbatch" and gate in job.deps
+                assert job.opt("--cpus-per-task") == str(want["cpus"]), (stage, attempt)
+                assert job.opt("--mem") == f"{want['mem_gb']}G", (stage, attempt)
+                assert job.opt("--time") == want["time"], (stage, attempt)
+                assert job.args[:10] == [
+                    run,
+                    spec.method,
+                    spec.label or "-",
+                    ",".join(variants.opt_args(spec)) or "-",
+                    spec.image,
+                    "multiplex",
+                    stage,
+                    str(attempt),
+                    str(want["mem_gb"]),
+                    want["time"],
+                ]
+                assert "--wait" not in job.words and GPU not in job.words
+                # each job after the one before it, whatever became of that one
+                assert after(job) == ({before} if before else set()), job.name
+                before = job.name
+        # the writer: the round's last job, after SOLVE's last attempt
+        last = rungs(jobs, run)[0]
+        assert last.script == "run_rung.sbatch" and after(last) == {before}
+        assert last.args[13] == "jobs" and last.opt("--array") == "0-3%20"
+    # the allocations, as numbers: the pipeline's at the high tier and stride 64
+    got = {
+        st: [
+            (j.opt("--cpus-per-task"), j.opt("--mem"))
+            for j in attempts(jobs, "stare", st)
+        ]
+        for st in ("coarse", "solve")
+    }
+    assert got["coarse"] == [("2", "2G"), ("2", "4G"), ("2", "6G"), ("2", "8G")]
+    assert got["solve"] == [("1", "1G"), ("1", "2G"), ("1", "3G"), ("1", "4G")]
+    assert [j.opt("--time") for j in attempts(jobs, "stare", "solve")] == [
+        "0-08:00:00", "0-16:00:00", "1-00:00:00", "1-08:00:00"
+    ]  # fmt: skip
+    assert jobs["rb-stare-multiplex-tile-a4"].opt("--mem") == "16G"
+    # the preprocessing is the benchmark's own step, with the benchmark's allocation
+    prep = attempts(jobs, "stare_prep", "prep")
+    assert [(j.opt("--cpus-per-task"), j.opt("--mem")) for j in prep] == [
+        ("4", "16G"), ("4", "32G"), ("4", "48G"), ("4", "64G")
+    ]  # fmt: skip
+    assert "rb-stare-multiplex-prep-a1" not in jobs
+
+
+@pytest.fixture(scope="module")
+def small(tmp_path_factory):
+    """Cases of other sizes: `multiplex` three rounds of 1, 6 and 2 tiles, `synthetic`
+    one round of a single tile."""
+    cases = tmp_path_factory.mktemp("small")
+    _case(cases, "multiplex", "P1_a", "P1", (1024, 1024))
+    _case(cases, "multiplex", "P1_b", "P1")
+    _case(cases, "multiplex", "P2_a", "P2", (2048, 4096))
+    _case(cases, "synthetic", "blob_grid_p0", "blob_grid", (1024, 1024))
+    return cases
+
+
+@pytest.mark.parametrize(
+    "most, want",
+    [
+        (9, [("0-8", "0")]),  # exactly the maximum: one array
+        (10, [("0-8", "0")]),
+        (8, [("0-7", "0"), ("0-0", "8")]),  # one more than the maximum: a second array
+        (4, [("0-3", "0"), ("0-3", "4"), ("0-0", "8")]),
+        (3, [("0-2", "0"), ("0-2", "3"), ("0-2", "6")]),
+        (1, [("0-0", str(i)) for i in range(9)]),
+    ],
+)
+def test_tile_arrays_are_cut_at_the_sites_array_maximum(site, small, most, want):
+    env = {"REGBENCH_STAGE_ARRAY_MAX": str(most), "REGBENCH_CASES": str(small)}
+    done, _, _ = launch(site, "--runs", "stare", env=env, log=f"cut-{most}")
+    jobs = jobs_of(done)
+    got = tile_arrays(jobs, "stare")
+    assert [(j.opt("--array").split("%")[0], j.args[11]) for j in got] == want
+    # every tile exactly once: offset + task id runs over 0 .. 8
+    flat = sorted(
+        int(j.args[11]) + i
+        for j in got
+        for i in range(int(j.opt("--array").split("%")[0].split("-")[1]) + 1)
+    )
+    assert flat == list(range(9))
+    # the retry of the tiles waits for EVERY array of them
+    assert after(jobs["rb-stare-multiplex-tile-a2"]) == {j.name for j in got}
+    assert all(after(j) == {"rb-stare-multiplex-coarse-a4"} for j in got)
+    # a round of one tile: an array of one task
+    (one,) = tile_arrays(jobs, "stare", "synthetic")
+    assert one.opt("--array") == "0-0%20" and one.args[11] == "0"
+    # the dry run says how much it would submit
+    said = f"# stare on multiplex: 3 round(s) as separate jobs (coarse,tile,solve,stitch); 9 tile job(s) in {len(want)} array(s) of at most {most}"
+    assert said in done.stdout
+    tasks = sum(
+        int(r.split("-")[1]) - int(r.split("-")[0]) + 1
+        for j in jobs.values()
+        for r in [(j.opt("--array") or "0-0").split("%")[0]]
+    )
+    assert (
+        f"# {len(jobs)} job(s) would be submitted; nothing was, {tasks} task(s) in them"
+        in done.stdout
+    )
+
+
+def test_the_tile_tasks_read_the_layout_the_submission_wrote(site, small):
+    """The real path: the layout file exists where the tile arrays are told to read it,
+    under the results folder, in a folder of this submission."""
+    env = {
+        "REGBENCH_CASES": str(small),
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_SUBMISSION": "S-7",
+        "REGBENCH_STAGE_ARRAY_MAX": "5",
+    }
+    done, log, out = launch(
+        site,
+        "--runs",
+        "stare",
+        "--datasets",
+        "multiplex",
+        env=env,
+        dry=False,
+        log="layout",
+    )
+    assert done.returncode == 0, done.stderr
+    calls = [
+        Job("sbatch " + ln.split("\t", 1)[1]) for ln in log.read_text().splitlines()
+    ]
+    tiles = [j for j in calls if j.name.startswith("rb-stare-multiplex-tile-a1-c")]
+    assert [j.args[11] for j in tiles] == ["0", "5"]
+    layout = out / "logs" / "stages" / "S-7" / "stare-multiplex.tsv"
+    assert {j.args[10] for j in tiles} == {str(layout)}
+    assert stages.read_layout(layout) == [("P1_a", 1), ("P1_b", 6), ("P2_a", 2)]
+    assert [stages.locate([1, 6, 2], i) for i in (0, 1, 6, 7, 8, 9)] == [
+        (0, 0), (1, 0), (1, 5), (2, 0), (2, 1), None
+    ]  # fmt: skip
+
+
+def test_the_stage_task_and_the_last_job_are_told_what_they_are():
+    code = code_of(SLURM / "stage.sbatch")
+    assert 'args+=(--flat "$((offset + task))" --layout "$layout")' in code
+    assert 'args+=(--index "$task")' in code
+    assert '--stage "$stage" --attempt "$attempt"' in code
+    assert 'if [ "$blocked" != 0 ]; then' in code  # the second lock behind the gate job
+    assert code.rstrip().endswith("exit 0")
+    assert "sbatch " not in code and "--wait" not in code  # no job submits a job
+    rung = code_of(SLURM / "run_rung.sbatch")
+    assert 'stages="${14:--}"' in rung
+    assert '[ "$stages" = - ] || export REGBENCH_STAGES="$stages"' in rung
+    # ... and it reaches the process inside the image
+    assert re.search(r"for v in [^;]*\bREGBENCH_STAGES\b", code_of(SLURM / "env.sh"))
+    launcher = code_of(SCRIPT)
+    assert "sbatch --wait" not in launcher
+    assert ': "${REGBENCH_STAGE_ARRAY_MAX:=1000}"' in launcher
 
 
 # ── the realcheck as a gate ───────────────────────────────────────────────────

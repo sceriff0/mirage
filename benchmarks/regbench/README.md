@@ -599,7 +599,7 @@ CHECKED**), `via <run>: <status>` for a row whose run is gated by another run's 
 | `inconsistent` | the points do not follow the image | yes |
 | `crashed` | the method raised | yes |
 | `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` | yes |
-| `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: `stare register` writes one image). Reported, never counted as checked | no |
+| `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: STITCH writes one image). Reported, never counted as checked | no |
 
 The overall status is the worst over the checked variants.
 
@@ -1876,7 +1876,7 @@ call; it is then part of the estimate and no number is guessed for it.
 
 | method (adapter) | reading and conversion | its own conversion, reported as | the registration clock | the writer | what it writes |
 |---|---|---|---|---|---|
-| `stare` | inside the clock: STARE's own reader on the cohort's OME-TIFFs | none | `stare register` up to SOLVE's manifest (COARSE, REG-TILE, SOLVE) | STITCH, deferred until the clock has stopped, timed on its own | one OME-TIFF per round, every channel, BigTIFF, uncompressed, no pyramid |
+| `stare` | inside the clock: STARE's own reader on the cohort's OME-TIFFs | none | COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE (`wall_unlimited_parallel_s`; queue waits are in `elapsed_with_queue_s`) | STITCH, a job of its own once the transform exists, timed on its own | one OME-TIFF per round, every channel, BigTIFF, uncompressed, no pyramid |
 | `valis_mirage` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start | not separable | the pipeline's `valis_registration` up to the writer (rigid, non-rigid, micro) | `Slide.warp_and_save_slide`, clock and peak paused, timed per slide | one pyramidal OME-TIFF per round, every channel (libvips, LZW) |
 | `valis` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start | not separable | `Valis.register()` and `register_micro()` | `warp_and_save_slides`, clock and peak paused; one call writes the patient, a round's share is the call over the slides written | one pyramidal OME-TIFF per round, every channel (libvips, deflate) |
 | `deeperhistreg` | the package's own loading is inside the clock (its log's `Loading time` is kept in `stage_s`) | `convert_s` | `run_registration` with the final saving off (its diagnostic images and intermediate fields included, as shipped) | `apply_deformation_pyvips` once per channel; the conversion of each further channel before it and the benchmark's copy of those files into one after it are timed apart (`native.write_parts_s`) | one single-channel pyramidal TIFF per channel (the package's); the benchmark stacks their first pages into one OME-TIFF without a pyramid |
@@ -1901,6 +1901,38 @@ DeeperHistReg's per-channel files stacked), the adapter describes the package's 
 file before it copies it, and `native.write_parts_s` holds the three parts of the write
 step apart: `writer` (the package's), `convert` (a conversion that writer needed) and
 `benchmark` (the benchmark's own copying).
+
+### A registration in several jobs (STARE)
+
+STARE's registration of a round is COARSE, one job per tile and SOLVE, each a scheduler
+job with the pipeline's allocation ("STARE"), so its cost is summed over those jobs
+(`run.json: info.jobs`, `stages.summarise`) and its wall time is not a 4-CPU wall time.
+Every cost table opens with a line that says so and how many CPUs one round had at once.
+The columns, in `resources.csv` per round and summed per patient in
+`summary_resources.csv` (blank for every other method):
+
+| column | definition |
+|---|---|
+| `elapsed_with_queue_s` | from the start of the first COARSE attempt to the end of SOLVE, on the wall clock: the queue waits between the jobs and the array's concurrency cap are in it |
+| `wall_unlimited_parallel_s` | COARSE + the LONGEST tile + SOLVE, each the sum of its attempts: the wall time with every tile running at once and no queue |
+| `cpu_h_allocated` | sum over every attempt of every job of allocated CPUs x its duration |
+| `cpu_h` | sum over the same attempts of their measured CPU time |
+| `largest_job`, `peak_rss_gb` | the stage of the single job with the highest peak memory, and that peak |
+| `n_jobs`, `n_tiles`, `n_job_retries` | attempts run, tiles, attempts beyond the first of each job |
+| `peak_cpus_at_once` | the most allocated CPUs in jobs of the round that overlapped in time (per patient: the largest round's) |
+| `write_cpu_h_allocated`, `write_peak_gb` | STITCH's own process: 4 CPUs x its duration, and its peak |
+
+For these rows the headline columns are defined as follows. `register_s` is
+`wall_unlimited_parallel_s`: the queue-free figure, because the waits belong to the
+cluster's load and not to the method. `total_to_image_s` is `register_s` plus
+`write_s`, STITCH's wall time in the round's last job. `peak_rss_gb` is the largest
+single job's peak (no job of the round holds more), and `cgroup_peak_gb` is the last
+job's, which holds STITCH and the benchmark's own steps. `cpu_efficiency` is measured
+over allocated CPU time. A duration is the stage command's own process (Python start
+to exit), not the scheduler's elapsed time of the job, which also has the container's
+start. An attempt killed before it could record a duration is counted
+(`info.jobs.unmeasured_attempts`) and is in no sum. `wasted_*` counts the attempts of
+the last job only.
 
 ### Cost by step, as measured here (`cost_end_to_end.csv`, secondary)
 
@@ -2006,6 +2038,31 @@ script names no method.
      run's last array on the one before, and `multiplex` is always first: the cohort is
      done before the known-truth cases start. The anchored ASHLAR rows also wait for
      STARE's last array on the same dataset.
+   **A run whose registration is several jobs per round** (`runs`, column `stages`:
+   `stare` and `stare_prep`) has, per dataset, a chain of stage jobs in place of that
+   ladder, every job after the one before it (`afterany`) and all of them behind the
+   run's gate. With R rounds and T tiles in all (a round's tile count is
+   `ceil(H / 2048) x ceil(W / 2048)` of its reference, known before anything runs:
+   `regbench stages` writes one line per round to
+   `<out>/logs/stages/<submission>/<run>-<dataset>.tsv`):
+
+   | jobs | what | CPUs, memory, time per task |
+   |---|---|---|
+   | `rb-<run>-<ds>-prep-a1..a4` (`stare_prep` only) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
+   | `rb-<run>-<ds>-coarse-a1..a4` | 4 arrays of R tasks | 2; 2, 4, 6, 8 GB; 2, 4, 6, 8 h |
+   | `rb-<run>-<ds>-tile-a1-c0..` | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` | 2; 4 GB; 2 h |
+   | `rb-<run>-<ds>-tile-a2..a4` | 3 arrays of R tasks: a task runs the tiles of its round that are due for a retry, one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
+   | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
+   | `rb-<run>-<ds>-stitch-<4,8,12,16>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's last job reads the stage records, moves the benchmark's points and runs STITCH | 4; 4, 8, 12, 16 GB; 4, 8, 12, 16 h |
+
+   Attempt 1 of a stage runs it; a task of attempts 2 to 4 exits at once unless the
+   attempt before ended the way the pipeline retries. A task whose stage before it is
+   not ok does nothing: the tile tasks of a round whose COARSE failed start, read
+   COARSE's record and exit. Every array is throttled by `REGBENCH_ARRAY_LIMIT`
+   (`%N`), each array on its own: C tile arrays run up to C x N tiles at once. A run
+   that reads this run's results, the same run on the next dataset, the next run of
+   its lane and the settle job all wait for its LAST job, the last `stitch` array. No
+   job submits a job: every tile task is submitted up front.
 4. **The realcheck gate** of `valis_mirage` and `valis120_hires`: the first patient of
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
@@ -2089,6 +2146,7 @@ round).
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
+| `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round; set it below the site's `MaxArraySize` | `1000` |
 | `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
@@ -2142,8 +2200,15 @@ regbench_py STARE_REGBENCH list --cases "$REGBENCH_CASES" --dataset multiplex --
 # 3. STARE and ASHLAR on that patient: first what would be submitted, then for real
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run --runs "stare ashlar" --datasets multiplex -- <site options>
 benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets multiplex -- <site options>
+#    (the dry run ends with "# N job(s) ..., M task(s) in them" and says, for stare,
+#    "# stare on multiplex: R round(s) as separate jobs (coarse,tile,solve,stitch); T tile
+#    job(s) in C array(s) of at most 1000": M must be within the site's submit limits)
 #    ok: $REGBENCH_OUT/logs/gates/stare.tsv and ashlar.tsv read "<run> ok - 0 -";
 #        every $REGBENCH_OUT/<stare|ashlar>/multiplex/<case>/run.json has "ok": true;
+#        every $REGBENCH_OUT/stare/multiplex/<case>/stages/jobs/ holds coarse.json,
+#        solve.json, stitch.json and one tile_<row>.json per tile, each "ok": true, and
+#        that run.json has info.jobs.execution "jobs", n_tiles = the tile count and
+#        register_s = info.jobs.wall_unlimited_parallel_s;
 #        $REGBENCH_OUT/tables/summary.md exists and its cost block opens with
 #        "cores confined: yes"
 
@@ -2230,12 +2295,25 @@ and array sections). None of the following was observed:
   it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
   rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
   of this benchmark, and it is the owner's to rule on.
-- **`MaxSubmit`.** The default submission is 19 gates, 51 selfcheck attempts, the
-  settle, tissue and score jobs, one per-case scoring array per dataset, and eight
-  arrays per run and dataset: with the two default datasets 397 jobs (the two runs with
-  a realcheck gate have a second, one-task ladder and a gate more; 394 before the
-  scoring arrays and the settle job), and
-  array TASKS count toward a per-user limit on many sites: the scoring arrays add one
+- **`MaxSubmit`, `MaxArraySize` and the tile jobs.** The default submission is 19
+  gates, 51 selfcheck attempts, the settle, tissue and score jobs, one per-case scoring
+  array per dataset, eight arrays per dataset for each of the 17 runs that are one job
+  per unit (the two with a realcheck gate have a second, one-task ladder and a gate
+  more), and per dataset 19 + C arrays for `stare` and 23 + C for `stare_prep`, C being
+  the tile arrays: 453 `sbatch` calls with the two default datasets when C is 1. The
+  TASKS are another matter: `stare` and `stare_prep` each submit one task per tile, about
+  1,200 for a 60,000 x 80,000 px slide, so about 12,000 per patient of ten rounds and
+  run, and tens of thousands for the cohort, all pending at once behind COARSE. The
+  dry run prints both numbers (`# N job(s) ..., M task(s) in them`) and, per such run
+  and dataset, its tile count. Before launching, ask the site for `MaxArraySize` (the
+  default is 1001: `REGBENCH_STAGE_ARRAY_MAX` must stay below it), for the per-user and
+  per-association `MaxSubmitJobs` (array tasks count), and for the cluster's `MaxJobCount`:
+  `scontrol show config | grep -E "MaxArraySize|MaxJobCount"` and `sacctmgr show assoc
+  user=$USER format=MaxSubmitJobs,MaxJobs`. If M is above what they allow, `sbatch`
+  refuses the array that crosses the limit and the script stops there with the jobs
+  before it submitted: submit patient by patient (a `REGBENCH_CASES` per patient) or by
+  `--runs`. Nothing here works around a limit, and nothing here was tried against one.
+  The other array TASKS also count: the scoring arrays add one
   task per case. Submit by `--datasets` or `--runs` if the limit is lower.
 - **The per-case scoring array** (`score_cohort.sbatch case`), `--score-only`, and the
   `python3` fallback inside ASHLAR's image: tested through stand-ins and through the
@@ -2866,23 +2944,72 @@ bootstrap interval over units ("Scoring").
 
 **Two rows.** Everything below is the `stare` row. The `stare_prep` row is the same
 adapter with `--label stare_prep --opt prep=<frozen candidate>`: both images are first
-rewritten by `prep.py` (clock paused; `info.prep`), STARE registers those files at index
-0 with the same parameters, and the deferred STITCH draws what the plain row draws (the
-original moving slide; on a brightfield case its plain grey image) with this row's
-transform. A label and its option come together: `stare_prep` takes the frozen candidate
+rewritten by `prep.py` (a job of its own before COARSE, with the benchmark's allocation:
+4 CPUs, 16 GB; `info.prep`), STARE registers those files at index 0 with the same
+parameters in the same jobs, and STITCH draws what the plain row draws (the original
+moving slide; on a brightfield case its plain grey image) with this row's transform. A label and its option come together: `stare_prep` takes the frozen candidate
 and no other, `stare_prep_<candidate>` (ANHIR's tuning runs) that candidate, and `prep`
 without one of these labels is refused. See "ANHIR: the challenge's training pairs".
 
-One `stare register` process per pair, on the slides as the case has them
-(`ref_image`, `mov_image`), with `--nuclear-index` = the case's `mov_channel` (a case whose
-reference has its nuclei at another index is refused: the command takes one index).
+**STARE runs the way the pipeline runs it** (`subworkflows/local/adapters/tiled_adapter.nf`):
+per moving round, `stare coarse`, then one `stare reg-tile` process per tile, then
+`stare solve`, then `stare stitch`, on the slides as the case has them (`ref_image`,
+`mov_image`), with `--nuclear-index` = the case's `mov_channel` (a case whose reference
+has its nuclei at another index is refused: the commands take one index). On the cohort
+each of the four is a scheduler job of its own (`regbench.stages`,
+`slurm/stage.sbatch`; "Running the cohort on a cluster" has the job graph):
+
+| stage | pipeline process | label | CPUs | memory, attempt 1 | time, attempt 1 | where the numbers are |
+|---|---|---|---|---|---|---|
+| COARSE | `TILED_COARSE` | `process_low` | 2 | 2 GB | 2 h | `conf/modules.config:137-141` (label), `:571-590` (memory: `ceil(max(2, (0.5 + 0.1 Mpx) x 2))`, 1024 px thumbnail) |
+| REG-TILE, per tile | `TILED_REG_TILE` | `process_low` | 2 | 4 GB | 2 h | `:137-141`, `:515-544` (memory: `ceil(max(4, (0.5 + 0.13 Mpx) x 2))`, window 2048 + 2 x max(256, 3 x 64) = 2560 px) |
+| SOLVE | `TILED_SOLVE` | `process_single` | 1 | 1 GB | 8 h | `:131-135`, `:600-604` |
+| STITCH | `TILED_STITCH` | `process_medium` | 4 | 4 GB | 4 h | `:143-147` (CPUs, time), `:635-657` (memory: `ceil(max(4, (0.6 + 0.17 Mpx) x 2))`, 1024 px output tile) |
+
+Memory and time are multiplied by the attempt, as there. `stages.ALLOCATION` holds the
+table and `test_stages.py` works each number out again from the text of
+`conf/modules.config` and `lib/RegPresets.groovy`: it fails when they differ.
+
+- **Retries.** None of the four processes sets an `errorStrategy`: they inherit the
+  process-level one of `conf/base.config:11-22`, which retries an exit status of 104,
+  134, 135, 137, 139, 140 or 143 and ends the run on any other, with `maxRetries = 3`.
+  It is none of the four policies `conf/modules.config` names; in their terms it is
+  `retry-then-fail` with a shorter list of statuses. The benchmark applies it to
+  COARSE, every tile and SOLVE: up to four attempts, the next with the next attempt's
+  memory and time, and a job the scheduler killed before it could record its status, or
+  that never started, is retried too. A stage that still fails fails the round: its
+  `run.json` has the stage, the last exit status and memory in `error`, the cause
+  (`oom` for exit 137 or a memory error, `timeout` for 140 and 143, `exception`
+  otherwise, `infrastructure` when no attempt left a record) and `no_rerun: true`, and
+  the round is imputed as every failed round is. STITCH is the round's last job and
+  runs on the ladder's rules with its own four allocations (4, 8, 12, 16 GB): it is
+  run again for a memory death (`writer_oom`, `benchmark_oom`) and once per rung when
+  the scheduler lost it, not for another signal.
+- **One record per job**: `<out>/<row>/<dataset>/<case>/stages/jobs/<stage>[_<tile
+  row>].json`, with the command, its exit status, wall time, CPU time and peak memory
+  (`os.wait4`: the stage command's own process), the allocation, the job id and every
+  earlier attempt. The stage files (anchor, tile plan, one control file per tile,
+  manifest) stay beside them: a few kilobytes per tile.
+- **The same transform as one `stare register`.** `test_stages.py` registers the 2048 x
+  2560 pair stage by stage and with one `stare register`, and finds the anchor, the tile
+  plan, every tile's control points and the manifest equal byte for byte, SOLVE's report
+  equal value for value except its own clock (`solve.solve_seconds`), and the written
+  image equal pixel for pixel. Each stage's argument list is compared whole with the
+  one `stare.cli.register` hands that stage.
+- **Outside the cohort's launcher** (the selfcheck, a laptop, `run` by hand) the same
+  four commands run inside one job, each a process of its own, the tiles `workers` at a
+  time (`info.jobs.execution: local`): the selfcheck gates the commands the cohort's
+  jobs run.
 
 - **Parameters.** `TIER_HIGH_STRIDE64` = the `high` row of the STARE table in
   `lib/RegPresets.groovy` (`tile` 2048, `halo` 256, `out_tile` 1024, `max_dim` 1024) plus
   `stride` 64, all five passed explicitly; a test reads the row from that file. The two
   STITCH flags the pipeline always passes are passed too: `--pixel-size` (the case's) and
-  `--channel-names` (the case's, else the names in the moving slide's header). `--workers`
-  is the allocation; `info["cpu_count"]` records what COARSE's FFTs can use regardless.
+  `--channel-names` (the case's, else the names in the moving slide's header). SOLVE is
+  given `--max-disp` = the halo, as `conf/modules.config` gives `TILED_SOLVE`. A tile job
+  names its tile by `--plan <COARSE's tile plan> --row <n>`, which reads the values the
+  pipeline's module passes one by one. `info["cpu_count"]` records what COARSE's FFTs
+  can use on the node.
 - **Stride.** `--opt stride=<64|128|256>`; unset is 64; any other value fails the case.
   With `--label stare_s128` the results are named `stare_s128_rigid` and `stare_s128`.
   The rigid stage does not depend on the stride (COARSE is never given it and SOLVE stores
@@ -2891,11 +3018,12 @@ reference has its nuclei at another index is refused: the command takes one inde
   of stages/solve.py and stages/stitch.py, manifest.slide_entry; stages/coarse.py and
   coarse_align.py only searched for "stride" (no match) and for the argument list]`), and a test finds `info["m0"]` and the rigid
   row's warped nuclei identical to the last bit at stride 64 and 256. So a stride run adds
-  one result, its final variant; its `_rigid` row repeats `stare_rigid` (with another cost,
-  because both variants are yielded after SOLVE).
+  one result, its final variant; its `_rigid` row repeats `stare_rigid`.
 - **Output.** STARE's own STITCH on the reference grid: no `origin_xy`, nothing padded
-  (0 where the moving slide has no pixels). `run.json: info.m0` is the anchor, moving px ->
-  reference px.
+  (0 where the moving slide has no pixels). It runs once the transform exists and its
+  time is `write_s`. `run.json: info.m0` is the anchor, moving px -> reference px.
+- **Cost.** `run.json: info.jobs` is the round's cost over its jobs ("Cost", "A
+  registration in several jobs").
 
 Selfcheck per stride (2026-10-09, macOS arm64, `--opt workers=4`, `stare` 1.2.1), every one
 `ok` with no failed block, `stare_rigid` `no_stage_image`:
@@ -3677,6 +3805,7 @@ when it is on this machine and skips otherwise. `test_prep.py` checks every cand
 and registers one synthetic pair three times with the installed STARE (plain, the
 identity candidate, CLAHE). `test_submit_anhir.py` reads the job graphs of
 `--datasets anhir` and `--datasets anhir_tune` off the dry run.
-`test_selfcheck.py` runs `stare register` once for real, on a 1024 x 1280 pair;
-`test_stare_adapter.py` runs STARE's whole selfcheck (both pairs and the two rounds of
-ASHLAR's patient) and two real registrations.
+`test_selfcheck.py` runs STARE once for real, on a 1024 x 1280 pair;
+`test_stare_adapter.py` runs STARE's selfcheck on its own two pairs and two real
+registrations; `test_stages.py` registers the 2048 x 2560 pair stage by stage, as the
+cohort's jobs do, and once with a single `stare register`, and compares the two.

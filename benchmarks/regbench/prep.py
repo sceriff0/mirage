@@ -505,6 +505,12 @@ def _peak_rss_mb():
 
 
 # ── a case ────────────────────────────────────────────────────────────────────
+def input_paths(dest, name):
+    """``(reference, moving)``: where ``write_inputs`` puts the two files."""
+    dest = Path(dest)
+    return dest / f"reference.{name}.ome.tif", dest / f"moving.{name}.ome.tif"
+
+
 def write_inputs(case, dest, name, channel=0):
     """Both images of a case, preprocessed, under ``dest``. Returns ``{"reference",
     "moving", "record"}``: the two files STARE is given (channel 0 of each) and what was
@@ -533,7 +539,7 @@ def write_inputs(case, dest, name, channel=0):
             reader = array_reader(read_rgb(src))
         else:
             reader = channel_reader(src, channel)
-        path = dest / f"{'reference' if side == 'ref' else 'moving'}.{name}.ome.tif"
+        path = input_paths(dest, name)[side == "mov"]
         try:
             shapes[side] = write(reader, name, path, case.pixel_size_um)
         finally:

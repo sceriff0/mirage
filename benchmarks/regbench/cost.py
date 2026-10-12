@@ -84,8 +84,10 @@ CLOCK = {
     "stare": {
         "reading": "inside the clock: STARE's own reader on the cohort's OME-TIFFs",
         "convert": NONE,
-        "estimate": "`stare register` up to SOLVE's manifest (COARSE, REG-TILE, SOLVE)",
-        "write": "STITCH, deferred until the clock has stopped, timed on its own",
+        "estimate": "COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job "
+        "of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE "
+        "(`wall_unlimited_parallel_s`; queue waits are in `elapsed_with_queue_s`)",
+        "write": "STITCH, a job of its own once the transform exists, timed on its own",
         "writes": "one OME-TIFF per round, every channel, BigTIFF, uncompressed, no "
         "pyramid",
     },
@@ -255,6 +257,26 @@ def header_lines(res_rows):
             else "No run found one set in its own process."
         )
     )
+    split = [r for r in ran if r.get("ok") and _is_number(r.get("peak_cpus_at_once"))]
+    if split:
+        names = ", ".join(sorted({str(r.get("adapter") or "?") for r in split}))
+        most = int(max(r["peak_cpus_at_once"] for r in split))
+        tiles = [r["n_tiles"] for r in split if _is_number(r.get("n_tiles"))]
+        from .stages import ALLOCATION as alloc
+
+        lines.append(
+            f"several jobs per round ({names}): its registration ran as separate "
+            "scheduler jobs with the pipeline's allocation for each (COARSE "
+            f"{alloc['coarse']['cpus']} CPUs, every tile {alloc['tile']['cpus']} CPUs, "
+            f"SOLVE {alloc['solve']['cpus']} CPU), so its wall time used more than 4 "
+            f"CPUs at once, up to {most} for one round; its wall time is NOT comparable "
+            "with the 4-CPU methods', its CPU-hours (`cpu_h`, `cpu_h_allocated`) are. "
+            "For these rows `register_s` is `wall_unlimited_parallel_s` (COARSE + the "
+            "longest tile + SOLVE, no queue; `elapsed_with_queue_s` has the waits), "
+            "`total_to_image_s` adds STITCH's own job, and `peak_rss_gb` is the peak "
+            "of the largest single job (`largest_job`)"
+            + (f"; {int(_median(tiles))} tiles per round (median)." if tiles else ".")
+        )
     reused = sum(bool(r.get("reused")) for r in ran)
     lines.append(
         f"reused: {reused} of {len(ran)} results were already ok for the same "
