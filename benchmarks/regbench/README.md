@@ -1892,8 +1892,9 @@ make the registration a wasted attempt.
 | `cpu_h_reserved` | allocated CPUs x duration, summed over the good attempts. One process: the job's CPUs x `register_s`. Several jobs: each stage attempt's CPUs x its own duration | all three |
 | `cpu_efficiency` | `cpu_h_used / cpu_h_reserved` (per patient: of the patient's sums) | all three |
 | `gb_h_reserved` | requested memory (GB) x duration over the same attempts. One process: the rung's memory x `register_s`. Several jobs: each stage attempt's own memory x its duration, read from the stage jobs' records when the tables are written (blank in a row whose records are gone or are another attempt's: `billing_note`) | all three |
-| `wasted_cpu_h_used`, `wasted_cpu_h_reserved`, `wasted_gb_h_reserved` | the same three over the wasted attempts. An attempt the scheduler killed before it could bill itself is billed by the scheduler's elapsed and CPU time of the whole task (`wasted_from_scheduler`, an upper bound); one nobody recorded is in no sum (`wasted_unknown`) | `resources.csv`, `summary_resources.csv` |
-| `total_cpu_h_used`, `total_cpu_h_reserved`, `total_gb_h_reserved` | good + wasted | all three |
+| `wasted_cpu_h_used`, `wasted_cpu_h_reserved`, `wasted_gb_h_reserved` | the same three over the wasted attempts. An attempt the scheduler killed before it could bill itself is billed by the scheduler's elapsed and CPU time of the whole task (`wasted_from_scheduler`, an upper bound); one nobody recorded is in no sum (`wasted_unknown`), and a sum whose attempts all lack the figure is blank, not 0 | `resources.csv`, `summary_resources.csv` |
+| `total_cpu_h_used`, `total_cpu_h_reserved`, `total_gb_h_reserved` | good + wasted. Blank when a good attempt lacks the figure (never the wasted part alone) | all three |
+| `lost_cpu_h_used`, `lost_cpu_h_reserved`, `lost_gb_h_reserved`, `lost_attempts` | the same three over the attempts lost to causes that are not the method's (`resources.NOT_THE_METHOD`: a node that failed, a cancelled job, the benchmark's own step), and how many they are | `resources.csv`, `summary_resources.csv` |
 | `write_cpu_h_reserved`, `write_cpu_h_used` | the method's own writer, the attempt that wrote the image: the CPUs of the job it ran in x `write_s` (STARE: STITCH's own 4 CPUs x its duration), and its measured CPU time: STITCH's own process for STARE; for a writer inside the row's own job, what the run's CPU counter advanced by while it ran (`run.json: write_cpu_s`; `billing_note` says when that stretch holds more than the writer). Blank for a row that failed | `resources.csv`, `summary_resources.csv` |
 | `write_wasted_cpu_h_reserved` | writer attempts that failed, where they are recorded (STITCH's retries; blank elsewhere: there a failed writer fails the row) | the same two |
 | `gpu_h`, `device`, `device_name`, `gpu_model` | GPU-hours are a column of their own (registration time x GPUs). `device` is `gpu` for a row whose registration had a GPU and `cpu` otherwise (`device_name` is what the run recorded, `cuda:0`). The `device` column stands beside the CPU columns in `summary.md`: a `gpu` row's CPU-hours are never read without it | all three |
@@ -1909,13 +1910,25 @@ registered), `cpu_h_allocated` and `write_cpu_h_allocated` are `cpu_h_reserved` 
 holds STITCH's failed attempts; the `wasted_*_reserved` columns do not, because STITCH
 is the writer (`write_wasted_cpu_h_reserved`).
 
+**Attempts lost to the cluster are not the method's cost.** An attempt that ended for
+a cause that is not the method's (a node that failed, a pre-empted or cancelled job, a
+task that never started, the benchmark's own step) is billed in the `lost_*` columns
+and counted in `lost_attempts`. It is in no `wasted_*` and no `total_*` figure, so a
+method is not charged for the node it happened to run on.
+
 **Aggregation.** Per patient: the sum over its rounds for a method that runs per pair,
-the launch's own figure for a per-patient method. A patient's wasted attempts are every
+the launch's own figure for a per-patient method. The good figures are over the rounds
+that registered, a round whose writer then failed included, and a patient's figure is
+blank when one of those rounds lacks it (`gb_h_reserved` without a memory request or a
+stage record, `cpu_h_scheduler` without the job in the accounting): every column of a
+patient is over the same rounds. A patient's wasted attempts are every
 failed attempt of it; a failed round inside a per-patient launch that otherwise
 finished shares that launch's clock and is no attempt of its own. Per method: the
 median over patients, given twice (`cost_summary.csv`): over the patients that method
 completed, and over the patients EVERY compared row completed (`*_common_med`, with
-`n_patients_common`), each with its mean. Only the second may be placed beside another
+`n_patients_common`), each with its mean. A cost a complete patient can lack
+(`gb_h_reserved`, `total_gb_h_reserved`, `cpu_h_scheduler`, `cpu_h_used_vs_scheduler`)
+has the number of patients each median is over beside it (`*_n`, `*_common_n`). Only the second may be placed beside another
 method's, and `summary.md` prints the two counts on the same line.
 
 **Which ratios are valid.** CPU-hours (used, reserved, total) between rows, on the
@@ -1931,8 +1944,12 @@ cgroup at the start and end of every stretch it bills (`cgroup_v2`: `usage_usec`
 however short its life. Where there is no such counter (a laptop, a site that gives a
 job no cgroup of its own) it reads `os.times()`, this process and every child that
 has been waited for, plus the processes still alive, each in exactly one of the two
-(`rusage+live`). A registration in several jobs is measured by `os.wait4` of each
-stage command, the same kind of figure. `cpu_instrument` (`resources.csv`,
+(`rusage+live`). With that instrument, and with `rusage` (no way to read live
+descendants), a child's time is counted when the child is reaped, not when it was
+spent: a child that exits before a pause of the clock and is reaped during it is
+billed to the paused stretch (the writer's, or the benchmark's own), not to the
+registration; the cgroup counters do not have this. A registration in several jobs is
+measured by `os.wait4` of each stage command, the same kind of figure. `cpu_instrument` (`resources.csv`,
 `run.json: resources.cpu_instrument`) says which one a row had, and only its last
 resort, `polled (may undercount)` (no counter and no `os.times` children figures),
 samples the process tree and makes `cpu_h_used` a LOWER BOUND. The stretches taken

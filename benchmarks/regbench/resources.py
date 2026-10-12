@@ -43,9 +43,16 @@ differences. ``cpu_instrument`` names the counter, the first of these that can b
                    and never counted twice. What it cannot see: a child nobody waits
                    for, and (macOS only, where a live process does not report its
                    waited children) the finished children of a child that is still
-                   running, until that child ends.
+                   running, until that child ends. And a child's time enters the
+                   waited-for sum when it is REAPED, not when it was spent: a child
+                   that exits before a pause and is reaped during it has what the
+                   last reading of it alive had not seen billed to the paused stretch
+                   (the writer's, or the benchmark's), not to the registration.
 ``rusage``         the same without a way to read live descendants (no psutil, no
-                   ``/proc``): exact once every child has been waited for.
+                   ``/proc``): exact once every child has been waited for. Here a
+                   child that exits before a pause and is reaped during it has ALL
+                   its time billed to the paused stretch. The cgroup counters count
+                   time when it is spent and have neither effect.
 ``polled (may undercount)``  no ``os.times`` children figures (Windows): each
                    process's last sampled total, summed. CPU a child spends between its
                    last sample and its exit is lost, and a child that lives between two

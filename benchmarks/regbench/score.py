@@ -419,24 +419,30 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     previous = list(run.get("previous_attempts") or [])
     # An attempt the process could not bill (the scheduler killed it) is billed by the
     # scheduler's own figures for the whole task where the launcher got them; where it
-    # did not, the attempt is counted as UNKNOWN, never as zero.
-    wasted, from_scheduler, unknown = [], 0, 0
-    for p in previous:
+    # did not, the attempt is counted as UNKNOWN, never as zero. An attempt that ended
+    # for a cause that is not the method's is LOST, not wasted: it is in the `lost_*`
+    # columns and in no `wasted_*` and no `total_*` figure.
+    earlier, from_scheduler, unknown = [], 0, 0
+    kinds = [billing.kind_of(p.get("cause")) for p in previous]
+    for p, kind in zip(previous, kinds):
         wall_p, cpu_p = p.get("wall_s"), p.get("cpu_s")
         if wall_p is None and p.get("scheduler_elapsed_s") is not None:
             wall_p, cpu_p = p["scheduler_elapsed_s"], p.get("scheduler_cpu_s")
-            from_scheduler += 1
+            from_scheduler += kind == billing.WASTED
         elif wall_p is None:
-            unknown += 1
-        wasted.append((_f(wall_p), _f(cpu_p)))
+            unknown += kind == billing.WASTED
+        earlier.append((_f(wall_p), _f(cpu_p)))
+    wasted = [e for e, kind in zip(earlier, kinds) if kind == billing.WASTED]
+    # this row's own last attempt, when it registered nothing
+    own_kind = billing.kind_of(run.get("cause"))
     sched = run.get("scheduler") or {}
     if not ok and run.get("resources") is None and run.get("cause") != "not_run":
         # this result's own last attempt, killed before it could bill itself
         if sched.get("elapsed_s") is not None:
             wall, cpu = _f(sched["elapsed_s"]), _f(sched.get("cpu_s"))
-            from_scheduler += 1
+            from_scheduler += own_kind == billing.WASTED
         elif run.get("launch_id"):
-            unknown += 1
+            unknown += own_kind == billing.WASTED
     watch = run.get("oom_watch") if isinstance(run.get("oom_watch"), dict) else None
     # ── the attempts of this row's registration (regbench.billing) ──
     registered = ok or bool(run.get("registered"))
@@ -445,14 +451,14 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     # rung (ladder.CPUS), its memory is the rung's
     attempts = [
         billing.attempt(
-            billing.WASTED,
+            kind,
             cpus,
             p.get("mem_requested_gb"),
             wall_p,
             cpu_p,
             p.get("launch_id"),
         )
-        for p, (wall_p, cpu_p) in zip(previous, wasted)
+        for p, (wall_p, cpu_p), kind in zip(previous, earlier, kinds)
     ]
     notes, good_jobs = [], []
     # A registration that ran as several scheduler jobs per round (regbench.stages):
@@ -461,6 +467,9 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     jobs = info.get("jobs") if isinstance(info.get("jobs"), dict) else {}
     staged = jobs.get("execution") == "jobs"
     allocated_h = _f(jobs.get("cpu_h_allocated")) if staged else math.nan
+    # what `cpu_efficiency` of a staged row divides by: the allocation of the attempts
+    # whose CPU time `cpu` holds
+    spent_alloc_h = allocated_h
     stitch = (
         native.get("stitch_job") if isinstance(native.get("stitch_job"), dict) else {}
     )
@@ -475,18 +484,24 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
                 _f(jobs.get("wasted_cpu_h_measured")) * 3600,
             )
         ] * bool(jobs.get("wasted_attempts"))
-        spent += [
-            (_f(a.get("wall_s")), math.nan) for a in stitch.get("failed_attempts") or []
-        ]
         if not ok and not run.get("registered"):
             # a round that failed: what its stage jobs cost, not this job's own clock
+            # and not the writer's (STITCH's failed attempts are the writer's time)
             good = _f(jobs.get("cpu_h_measured")) * 3600.0
             wall = _f(jobs.get("wall_unlimited_parallel_s")) + float(
                 np.nansum([w for w, _ in spent])
             )
             cpu = good + float(np.nansum([c for _, c in spent]))
+            # the allocation that CPU time was used on: the failed attempts' too
+            if jobs.get("wasted_attempts"):
+                spent_alloc_h = float(
+                    np.nansum([allocated_h, _f(jobs.get("wasted_cpu_h_allocated"))])
+                )
         else:
-            wasted += spent
+            wasted += spent + [
+                (_f(a.get("wall_s")), math.nan)
+                for a in stitch.get("failed_attempts") or []
+            ]
     if staged:
         recs = None
         if stage is not None:
@@ -501,8 +516,12 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
             attempts += recs
             good_jobs = [a["job"] for a in recs if a["kind"] == billing.GOOD]
         elif recs is not None:
-            # a round that failed: every attempt of its stage jobs is wasted
-            attempts += [{**a, "kind": billing.WASTED} for a in recs]
+            # a round that failed: every attempt of its stage jobs is wasted, or lost
+            # when the round ended for a cause that is not the method's
+            attempts += [
+                {**a, "kind": own_kind if a["kind"] == billing.GOOD else a["kind"]}
+                for a in recs
+            ]
         else:
             good_h = (_f(jobs.get("cpu_h_measured")), allocated_h)
             lost_h = (
@@ -520,7 +539,7 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
             else:
                 attempts.append(
                     billing.hours(
-                        billing.WASTED,
+                        own_kind,
                         float(np.nansum([good_h[0], lost_h[0]])),
                         float(np.nansum([good_h[1], lost_h[1]])),
                     )
@@ -533,7 +552,7 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     elif run.get("cause") != "not_run" and wall == wall:
         # this row's own last attempt, which registered nothing
         attempts.append(
-            billing.attempt(billing.WASTED, cpus, mem, wall, cpu, run.get("launch_id"))
+            billing.attempt(own_kind, cpus, mem, wall, cpu, run.get("launch_id"))
         )
     bill = billing.sums(attempts)
     patient_unit = run.get("unit") == "patient"
@@ -613,8 +632,8 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # `cpu_h_used / cpu_h_reserved`: above 1 where a method's threads are not
         # confined to its CPUs
         "cpu_efficiency": (
-            cpu / 3600.0 / allocated_h
-            if staged and allocated_h
+            cpu / 3600.0 / spent_alloc_h
+            if staged and spent_alloc_h
             else cpu / (wall * cpus)
             if wall and cpus and not staged
             else math.nan
@@ -657,8 +676,17 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # attempts whose cost is the scheduler's elapsed time of the whole task (an
         # upper bound: container start and the benchmark's own steps are in it), and
         # attempts whose cost nobody recorded (in NO wasted total)
-        "wasted_from_scheduler": from_scheduler,
-        "wasted_unknown": unknown,
+        "wasted_from_scheduler": int(from_scheduler),
+        "wasted_unknown": int(unknown),
+        # attempts that ended for a cause that is not the method's (a node failure, a
+        # cancelled job, the benchmark's own step): billed in `lost_*`, in no
+        # `wasted_*` and no `total_*`
+        "lost_attempts": sum(kind == billing.LOST for kind in kinds)
+        + int(
+            own_kind == billing.LOST
+            and not registered
+            and run.get("cause") != "not_run"
+        ),
         # stage attempts that ended without a recorded duration (a job the scheduler
         # ended at its time limit): every time and CPU figure of the row is then a
         # LOWER BOUND. Blank for a run that is one job
@@ -1952,6 +1980,13 @@ def _stat(values, fn):
     return float(fn(v)) if v.size else math.nan
 
 
+def _whole(values, fn):
+    """``fn`` of the values when every one of them is a figure, else NaN: a sum over
+    the rows that happen to have one is a sum over another set of rows."""
+    v = np.asarray(values, dtype=float)
+    return float(fn(v)) if v.size and np.isfinite(v).all() else math.nan
+
+
 def _per_patient(rows, key):
     """``{independent unit: median over its rounds}`` (``UNIT_IS``)."""
     by = {}
@@ -2332,7 +2367,8 @@ def summarise_resources(res_rows):
     """Per (dataset, patient, method). A patient's cost is the sum over its rounds for a
     pair method and the launch's own total for a per-patient one; the peak is the maximum
     and is never divided by rounds. Only completed runs are a cost. ``wasted_*`` is the
-    earlier attempts of the ladder plus a last attempt that failed outright.
+    earlier attempts of the ladder plus a last attempt that failed outright, and
+    ``lost_*`` the attempts among them that ended for a cause that is not the method's.
 
     ``write_s`` and ``total_to_image_s`` are the patient's totals for both units. A
     patient is ``complete`` when every round of it registered; ``summarise_cost`` reads
@@ -2363,11 +2399,13 @@ def summarise_resources(res_rows):
         }
         for key in ("register_s", "cpu_h", "gpu_h"):
             rec[key] = _stat(_values(ok, key), total)
-        # regbench.billing, per patient. Good: over the rounds that registered. Wasted:
-        # every failed attempt of the patient; a failed round inside a per-patient
-        # launch that otherwise finished shares that launch's clock and is no attempt
-        # of its own, so there the wasted attempts are the finished rounds' earlier
-        # ones. Total: good + wasted.
+        # regbench.billing, per patient. Good: over the rounds that registered (a
+        # round whose writer failed registered: its registration is a cost like any
+        # other), and blank when one of them lacks the figure, so that every column
+        # of a patient is over the same rounds. Wasted, and lost: every such attempt
+        # of the patient; a failed round inside a per-patient launch that otherwise
+        # finished shares that launch's clock and is no attempt of its own, so there
+        # they are the registered rounds' earlier ones. Total: good + wasted.
         rec["device"] = (
             (
                 billing.GPU
@@ -2377,15 +2415,19 @@ def summarise_resources(res_rows):
             if ok
             else ""
         )
-        spent = ok if patient and ok else mine
+        reg = [r for r in mine if r["ok"] or r.get("registered")]
+        spent = reg if patient and reg else mine
         for stem, _ in billing.SUMS:
-            good = _stat(_values(ok, stem), total)
-            lost = _stat(_values(spent, f"wasted_{stem}"), total)
+            good = _whole(_values(reg, stem), total)
+            failed = _stat(_values(spent, f"wasted_{stem}"), total)
             rec[stem] = good
-            rec[f"wasted_{stem}"] = lost
-            both = [v for v in (good, lost) if v == v]
-            rec[f"total_{stem}"] = float(sum(both)) if both else math.nan
-        rec["cpu_h_scheduler"] = _stat(_values(ok, "cpu_h_scheduler"), total)
+            rec[f"wasted_{stem}"] = failed
+            both = [v for v in (good, failed) if v == v]
+            rec[f"total_{stem}"] = (
+                float(sum(both)) if both and not (reg and good != good) else math.nan
+            )
+            rec[f"lost_{stem}"] = _stat(_values(spent, f"lost_{stem}"), total)
+        rec["cpu_h_scheduler"] = _whole(_values(reg, "cpu_h_scheduler"), total)
         rec["cpu_h_used_vs_scheduler"] = billing.ratio(
             rec["cpu_h_used"], rec["cpu_h_scheduler"]
         )
@@ -2442,7 +2484,9 @@ def summarise_resources(res_rows):
         lost = [
             r
             for r in mine
-            if not r["ok"] and r["cause"] != "not_run" and not r.get("registered")
+            if not r["ok"]
+            and r["cause"] not in ("not_run", *NOT_THE_METHOD)
+            and not r.get("registered")
         ]
         if patient and ok:
             lost = []
@@ -2454,7 +2498,7 @@ def summarise_resources(res_rows):
         for key, extra in last.items():
             earlier = _stat(_values(mine, key), total)
             rec[key] = float(np.nansum([earlier, extra]))
-        for key in ("wasted_from_scheduler", "wasted_unknown"):
+        for key in ("wasted_from_scheduler", "wasted_unknown", "lost_attempts"):
             rec[key] = _stat(_values(mine, key), total)
         out.append(rec)
     return out
@@ -2486,6 +2530,14 @@ PARALLEL_TIMES = {
     "register_s": "time_unlimited_parallel_tiles_s",
     "total_to_image_s": "to_image_unlimited_parallel_tiles_s",
 }
+# costs a patient can lack while it is complete (no stage record read, nothing in the
+# accounting): beside each of their medians, the number of patients it is over
+COUNTED_KEYS = (
+    "gb_h_reserved",
+    "total_gb_h_reserved",
+    "cpu_h_scheduler",
+    "cpu_h_used_vs_scheduler",
+)
 VALID_RATIOS = (
     "Valid between rows: CPU-hours (`cpu_h_used`, `cpu_h_reserved`, `total_*`), read "
     "on the common patients, with `device` beside them. NOT valid: the time with "
@@ -2554,6 +2606,9 @@ def summarise_cost(res_summary, primary=None):
             rec[f"{name}_mean"] = _stat(_values(done, key), np.mean)
             rec[f"{name}_common_med"] = _stat(_values(shared, key), np.median)
             rec[f"{name}_common_mean"] = _stat(_values(shared, key), np.mean)
+            if key in COUNTED_KEYS:
+                rec[f"{name}_n"] = int(np.isfinite(_values(done, key)).sum())
+                rec[f"{name}_common_n"] = int(np.isfinite(_values(shared, key)).sum())
         out.append(rec)
     return out
 
@@ -3516,6 +3571,7 @@ def summary_markdown(
                 "gb_h_reserved": r.get("gb_h_reserved", math.nan),
                 "wasted_cpu_h_reserved": r.get("wasted_cpu_h_reserved", math.nan),
                 "total_cpu_h_reserved": r.get("total_cpu_h_reserved", math.nan),
+                "lost_cpu_h_reserved": r.get("lost_cpu_h_reserved", math.nan),
                 "cpu_h_scheduler": r.get("cpu_h_scheduler", math.nan),
                 "cpu_h_used_vs_scheduler": r.get("cpu_h_used_vs_scheduler", math.nan),
                 "cpu_h_used_per_gpx": r.get("cpu_h_used_per_gpx", math.nan),
@@ -3536,6 +3592,7 @@ def summary_markdown(
                 "wasted_attempts",
                 "wasted_from_scheduler",
                 "wasted_unknown",
+                "lost_attempts",
                 "unmeasured_attempts",
             ):
                 line[key] = r.get(key, "")
@@ -3549,6 +3606,10 @@ def summary_markdown(
             "attempts that succeeded, every job of the row; `cpu_efficiency` is used "
             "over reserved; `wasted_*` are the same over the attempts that failed (a "
             "rung of the memory ladder, a retried stage job) and `total_*` is both. "
+            "`lost_*` are the attempts lost to causes that are not the method's (a "
+            "node that failed, a cancelled job, the benchmark's own step), counted in "
+            "`lost_attempts`: they are in no `wasted_*` and no `total_*` figure. A "
+            "patient's figure is blank when one of its registered rounds lacks it. "
             "The method's writer and the benchmark's own work (moving the nuclei, "
             "scoring) are in none of them. CPU time is read from a counter the kernel "
             "keeps, never by sampling: `cpu_instrument` in `resources.csv` names it "
@@ -3608,10 +3669,13 @@ def summary_markdown(
         def cell(r, key):
             if f"{key}_med" not in r:
                 return "-"
-            return (
+            text = (
                 f"{_fmt(r[f'{key}_med']) or '-'} / "
                 f"{_fmt(r[f'{key}_common_med']) or '-'}"
             )
+            if f"{key}_n" in r:  # a cost a complete patient can lack
+                text += f" (n {r[f'{key}_n']} / {r[f'{key}_common_n']})"
+            return text
 
         table = []
         for r in cost_summary:
@@ -3639,8 +3703,15 @@ def summary_markdown(
             "The first is over survivors: a method that fails on the largest patients "
             "looks cheaper there. Only the second is on the same patients for every "
             "method (compared rows: "
-            + (cost_summary[0]["common_among"] or "none ran")
-            + "). The columns are CPU-hours used, reserved and their ratio, GPU-hours "
+            + "; ".join(
+                f"{ds}: {among or 'none ran'}"
+                for ds, among in dict.fromkeys(
+                    (r["dataset"], r["common_among"]) for r in cost_summary
+                )
+            )
+            + "). A cell with `(n a / b)` is a cost a complete patient can lack (no "
+            "stage record, nothing in the accounting): its two medians are over `a` "
+            "and `b` patients. The columns are CPU-hours used, reserved and their ratio, GPU-hours "
             "with the device, then the totals with failed attempts, memory-hours, "
             "CPU-hours per gigapixel of moving image and the scheduler cross-check, "
             "and only then times. "

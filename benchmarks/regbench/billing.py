@@ -10,8 +10,10 @@ registers in one process, the job of one rung of the memory ladder; for a regist
 that runs as several scheduler jobs per round (``regbench.stages``), one attempt of one
 stage job. Each attempt has the CPUs and the memory it was given, how long it ran, and
 the CPU time its processes used. An attempt is *good* when its result is part of the
-registration the row reports, and *wasted* otherwise (a rung that ran out of memory, a
-tile attempt that was retried, the last attempt of a registration that failed).
+registration the row reports, *lost* when it ended for a cause that is not the method's
+(``regbench.resources.NOT_THE_METHOD``: a node that failed, a cancelled job, the
+benchmark's own step), and *wasted* otherwise (a rung that ran out of memory, a tile
+attempt that was retried, the last attempt of a registration that failed).
 
 ==========================  ========================================================
 ``cpu_h_used``              user + system CPU time of the good attempts' processes
@@ -22,6 +24,10 @@ tile attempt that was retried, the last attempt of a registration that failed).
 ``wasted_cpu_h_reserved``,
 ``wasted_gb_h_reserved``    the same three over the wasted attempts
 ``total_*``                 good + wasted: what the registration cost the cluster
+``lost_cpu_h_used``,
+``lost_cpu_h_reserved``,
+``lost_gb_h_reserved``      the same three over the attempts lost to causes that are
+                            not the method's: in NO ``wasted_*`` and NO ``total_*``
 ``write_cpu_h_used``,
 ``write_cpu_h_reserved``    the method's own writer, the attempt that wrote the image
 ``write_wasted_cpu_h_reserved``  writer attempts that failed, where they are recorded
@@ -74,7 +80,7 @@ import json
 import math
 from pathlib import Path
 
-GOOD, WASTED = "good", "wasted"
+GOOD, WASTED, LOST = "good", "wasted", "lost"
 GPU, CPU = "gpu", "cpu"
 # the three sums of a set of attempts: (column stem, key of an attempt)
 SUMS = (
@@ -88,6 +94,7 @@ COLUMNS = (
     *(stem for stem, _ in SUMS),
     *(f"wasted_{stem}" for stem, _ in SUMS),
     *(f"total_{stem}" for stem, _ in SUMS),
+    *(f"lost_{stem}" for stem, _ in SUMS),
     "write_cpu_h_used",
     "write_cpu_h_reserved",
     "write_wasted_cpu_h_reserved",
@@ -156,22 +163,43 @@ def hours(kind, used_h, reserved_h, gb_h=math.nan):
     }
 
 
+def kind_of(cause, failed=WASTED):
+    """The kind of an attempt that did not end in the row's registration: lost when
+    its cause is not the method's, else ``failed``."""
+    from . import resources
+
+    return LOST if str(cause or "") in resources.NOT_THE_METHOD else failed
+
+
+def _recorded(attempts, key):
+    """The sum of what a set of failed attempts recorded: 0 without an attempt, NaN
+    when there are attempts and none has the figure (nobody knows what they cost; such
+    an attempt is counted in ``wasted_unknown``)."""
+    known = [a[key] for a in attempts if a[key] == a[key]]
+    return math.fsum(known) if known or not attempts else math.nan
+
+
 def sums(attempts):
-    """The nine columns of a row's attempts. Good: NaN when the row has no good attempt
-    or one of them lacks the figure. Wasted: the sum of what was recorded (0 without a
-    wasted attempt; an attempt nobody could bill is counted elsewhere, in
-    ``wasted_unknown``). Total: good + wasted, NaN when the row has neither."""
+    """The twelve columns of a row's attempts. Good: NaN when the row has no good
+    attempt or one of them lacks the figure. Wasted, and lost: the sum of what was
+    recorded (:func:`_recorded`). Total: good + wasted, never the lost attempts: NaN
+    when the row has neither kind of attempt or neither has a figure, and NaN when a
+    good attempt's figure is missing (a sum without it would be the wasted part alone)."""
     good = [a for a in attempts if a["kind"] == GOOD]
     bad = [a for a in attempts if a["kind"] == WASTED]
+    lost = [a for a in attempts if a["kind"] == LOST]
     out = {}
     for stem, key in SUMS:
         g = sum(a[key] for a in good) if good else math.nan
-        w = math.fsum(a[key] for a in bad if a[key] == a[key])
+        w = _recorded(bad, key)
         out[stem] = g
         out[f"wasted_{stem}"] = w
-        out[f"total_{stem}"] = (
-            math.nan if not attempts else math.fsum(v for v in (g, w) if v == v)
-        )
+        parts = [v for v in (g, w) if v == v]
+        if not parts or not (good or bad) or good and g != g:
+            out[f"total_{stem}"] = math.nan
+        else:
+            out[f"total_{stem}"] = math.fsum(parts)
+        out[f"lost_{stem}"] = _recorded(lost, key)
     return out
 
 
@@ -179,7 +207,8 @@ def sums(attempts):
 def stage_attempts(stage_dir):
     """Every attempt of COARSE, each tile and SOLVE of one round, from the records its
     stage jobs left (``<stage dir>/jobs/*.json``, ``regbench.stages``): ``(attempts,
-    unmeasured)``. An attempt is good when it is the one its job ended ok with. One
+    unmeasured)``. An attempt is good when it is the one its job ended ok with, and
+    lost when it failed for a cause that is not the method's (:func:`kind_of`). One
     without a recorded duration is counted in ``unmeasured`` and is in no sum. None
     when the folder holds no record."""
     from . import stages
@@ -205,7 +234,7 @@ def stage_attempts(stage_dir):
             ok = i == len(runs) - 1 and bool(a.get("ok"))
             out.append(
                 attempt(
-                    GOOD if ok else WASTED,
+                    GOOD if ok else kind_of(a.get("cause")),
                     a.get("cpus"),
                     a.get("mem_gb"),
                     a.get("wall_s"),

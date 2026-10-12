@@ -1957,7 +1957,11 @@ def test_a_stitch_killed_for_the_jobs_memory_is_the_benchmarks_and_climbs(
     assert before["wall_s"] == run["resources"]["driver_wall_s"]
     assert before["wall_s"] < run["register_s"] / 2
     row = __import__("benchmarks.regbench.score", fromlist=["x"]).resource_row(again)
-    assert row["wasted_wall_s"] == pytest.approx(before["wall_s"])
+    # the benchmark's own step ran out of memory: the attempt is lost, not wasted
+    assert row["lost_attempts"] == 1 and row["wasted_wall_s"] == 0.0
+    assert row["lost_cpu_h_reserved"] == pytest.approx(
+        row["cpus_requested"] * before["wall_s"] / 3600
+    )
 
 
 def test_a_command_is_ended_at_its_time_limit_with_a_retried_status(tmp_path):

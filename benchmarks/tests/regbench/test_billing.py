@@ -191,11 +191,234 @@ def test_a_row_that_failed_is_all_wasted():
     kept = score.resource_row({**run, "registered": True, "cause": "writer"})
     assert kept["cpu_h_used"] == pytest.approx(900 / H)
     assert kept["wasted_cpu_h_reserved"] == 0.0
-    # an attempt nobody could bill is in no wasted sum (it is counted as unknown)
+    # an attempt nobody could bill is counted as unknown, and a wasted sum made of
+    # such attempts alone is blank, never zero; the total is then the good part
     unknown = score.resource_row(
         single(previous_attempts=[{"attempt": 1, "mem_requested_gb": 16.0}])
     )
-    assert unknown["wasted_unknown"] == 1 and unknown["wasted_cpu_h_reserved"] == 0.0
+    assert unknown["wasted_unknown"] == 1
+    assert math.isnan(unknown["wasted_cpu_h_reserved"])
+    assert unknown["total_cpu_h_reserved"] == pytest.approx(2.0)
+
+
+def test_a_sum_is_blank_where_its_figure_is_missing_and_never_zero():
+    """4 CPUs and 16 GB for 900 s good, with no CPU time and no memory recorded for
+    it; one wasted attempt of 2 CPUs and 8 GB for 1800 s that used 600 CPU seconds."""
+    good = billing.attempt(billing.GOOD, 4, None, 900.0, None)
+    bad = billing.attempt(billing.WASTED, 2, 8, 1800.0, 600.0)
+    got = billing.sums([good, bad])
+    assert got["cpu_h_reserved"] == pytest.approx(1.0)
+    assert got["wasted_cpu_h_reserved"] == pytest.approx(1.0)
+    assert got["total_cpu_h_reserved"] == pytest.approx(2.0)
+    # the good figure is missing: the total is not the wasted part alone
+    assert math.isnan(got["gb_h_reserved"]) and math.isnan(got["total_gb_h_reserved"])
+    assert got["wasted_gb_h_reserved"] == pytest.approx(8 * 1800 / H)  # 4.0
+    assert math.isnan(got["cpu_h_used"]) and math.isnan(got["total_cpu_h_used"])
+    # wasted attempts that all lack a figure: blank; one that has it: its sum
+    blind = billing.attempt(billing.WASTED, 2, None, 1800.0, None)
+    got = billing.sums([blind, blind])
+    assert math.isnan(got["wasted_gb_h_reserved"])
+    assert math.isnan(got["wasted_cpu_h_used"])
+    assert got["wasted_cpu_h_reserved"] == pytest.approx(2.0)
+    assert math.isnan(got["total_gb_h_reserved"])
+    assert billing.sums([blind, bad])["wasted_gb_h_reserved"] == pytest.approx(4.0)
+    # no attempt of a kind is a zero of that kind, and no attempt at all no total
+    none = billing.sums([])
+    assert none["wasted_gb_h_reserved"] == 0.0 and none["lost_gb_h_reserved"] == 0.0
+    assert math.isnan(none["total_gb_h_reserved"])
+
+
+def test_an_attempt_lost_to_the_cluster_is_no_cost_of_the_method():
+    """The second rung registered (2.0 reserved CPU-hours, 32 GB-hours, 1.0 used).
+    Before it: a rung that ran out of memory (4 CPUs, 16 GB, 900 s, 1200 CPU s) and a
+    node that failed under the retry (4 CPUs, 16 GB, 450 s by the scheduler, 300 CPU
+    s by the scheduler)."""
+    oom = single()["previous_attempts"][0]
+    node = {
+        "attempt": 1,
+        "retry": 1,
+        "cause": "infrastructure",
+        "mem_requested_gb": 16.0,
+        "launch_id": "11_3",
+        "scheduler_state": "NODE_FAIL",
+        "scheduler_elapsed_s": 450.0,
+        "scheduler_cpu_s": 300.0,
+    }
+    row = score.resource_row(single(previous_attempts=[oom, node]))
+    assert row["wasted_cpu_h_reserved"] == pytest.approx(4 * 900 / H)  # 1.0
+    assert row["wasted_cpu_h_used"] == pytest.approx(1200 / H)
+    assert row["wasted_gb_h_reserved"] == pytest.approx(4.0)
+    assert row["lost_cpu_h_reserved"] == pytest.approx(4 * 450 / H)  # 0.5
+    assert row["lost_cpu_h_used"] == pytest.approx(300 / H)
+    assert row["lost_gb_h_reserved"] == pytest.approx(16 * 450 / H)  # 2.0
+    assert row["total_cpu_h_reserved"] == pytest.approx(3.0)  # 2 good + 1 wasted
+    assert row["total_gb_h_reserved"] == pytest.approx(36.0)
+    assert row["total_cpu_h_used"] == pytest.approx(4800 / H)
+    assert (row["wasted_attempts"], row["lost_attempts"]) == (1, 1)
+    assert row["wasted_cpu_h"] == pytest.approx(1200 / H)
+    assert row["wasted_wall_s"] == 900.0 and row["wasted_from_scheduler"] == 0
+    assert set(billing.COLUMNS) <= set(row)
+    # a unit whose last attempt was lost too: nothing of it is the method's
+    gone = score.resource_row(
+        single(
+            ok=False,
+            cause="infrastructure",
+            resources=None,
+            register_s=None,
+            scheduler={"state": "NODE_FAIL", "elapsed_s": 900.0, "cpu_s": 600.0},
+            previous_attempts=[node],
+        )
+    )
+    assert gone["lost_cpu_h_reserved"] == pytest.approx(4 * (450 + 900) / H)  # 1.5
+    assert gone["lost_cpu_h_used"] == pytest.approx(900 / H)
+    assert gone["wasted_cpu_h_reserved"] == 0.0 and gone["wasted_attempts"] == 0
+    assert math.isnan(gone["total_cpu_h_reserved"]) and gone["lost_attempts"] == 2
+    assert gone["wasted_from_scheduler"] == 0 and gone["wasted_unknown"] == 0
+    # per patient: the lost attempts are summed apart, and are in no total
+    base = {"dataset": "multiplex", "group": "P1", "method": "pair"}
+    rows = [
+        {**row, **base, "case_id": "P1_r1"},
+        {**gone, **base, "case_id": "P1_r2"},
+    ]
+    (patient,) = score.summarise_resources(rows)
+    assert patient["lost_cpu_h_reserved"] == pytest.approx(2.0)
+    assert patient["lost_attempts"] == 3 and patient["wasted_attempts"] == 1
+    assert patient["wasted_cpu_h_reserved"] == pytest.approx(1.0)
+    assert patient["total_cpu_h_reserved"] == pytest.approx(3.0)
+    text = score.summary_markdown([], [], [patient])
+    assert "| lost_cpu_h_reserved |" in text and "`lost_attempts`" in text
+
+
+def test_a_stage_attempt_lost_to_the_cluster_is_lost(tmp_path):
+    jobs = tmp_path / "stages" / "jobs"
+    jobs.mkdir(parents=True)
+    first = attempt_record("tile", 1, False, 2, 4, 20.0, 30.0, "t0a", 0)
+    first["cause"] = "infrastructure"
+    tile = attempt_record("tile", 2, True, 2, 8, 50.0, 70.0, "t0b", 0)
+    tile["history"] = [stages._summary(first)]
+    (jobs / "tile_000000.json").write_text(json.dumps(tile))
+    attempts, _ = billing.stage_attempts(tmp_path / "stages")
+    assert [a["kind"] for a in attempts] == [billing.LOST, billing.GOOD]
+    got = billing.sums(attempts)
+    assert got["lost_cpu_h_reserved"] == pytest.approx(2 * 20 / H)
+    assert got["wasted_cpu_h_reserved"] == 0.0
+    assert got["total_cpu_h_reserved"] == pytest.approx(2 * 50 / H)
+
+
+def test_a_patients_columns_are_over_the_same_rounds():
+    """Two rounds of a pair method, each its own job. Round 1: 1.0 CPU-hour used, 2.0
+    reserved, 32 GB-hours, and 1.5 CPU-hours by the scheduler. Round 2: 1.0 used, 4.0
+    reserved; no memory request recorded, and nothing in the accounting."""
+    base = {"dataset": "multiplex", "group": "P1", "method": "pair"}
+    r1 = {**score.resource_row(single(previous_attempts=[])), **base}
+    r2 = {
+        **score.resource_row(
+            single(
+                launch_id="20_4",
+                register_s=3600.0,
+                resources={"wall_s": 3600.0, "cpu_s": 3600.0},
+                previous_attempts=[],
+                mem_requested_gb=None,
+            )
+        ),
+        **base,
+    }
+    r1["case_id"], r2["case_id"] = "P1_r1", "P1_r2"
+    cases = [
+        types.SimpleNamespace(dataset="multiplex", case_id=c, mov_hw=None)
+        for c in ("P1_r1", "P1_r2")
+    ]
+    score.bill_from_disk([r1, r2], "/nowhere", cases, {"20_3": {"cpu_s": 5400.0}})
+    assert r1["cpu_h_scheduler"] == pytest.approx(1.5) and r2["cpu_h_scheduler"] == ""
+    (patient,) = score.summarise_resources([r1, r2])
+    assert patient["cpu_h_used"] == pytest.approx(2.0)
+    assert patient["cpu_h_reserved"] == pytest.approx(6.0)
+    assert patient["total_cpu_h_reserved"] == pytest.approx(6.0)
+    # one round lacks the figure: no sum over the other one alone, and no ratio of a
+    # two-round numerator over a one-round denominator
+    assert math.isnan(patient["gb_h_reserved"])
+    assert math.isnan(patient["total_gb_h_reserved"])
+    assert math.isnan(patient["cpu_h_scheduler"])
+    assert math.isnan(patient["cpu_h_used_vs_scheduler"])
+    # with both: 1.5 + 2.0 by the scheduler
+    score.bill_from_disk(
+        [r1, r2], "/nowhere", cases, {k: {"cpu_s": 7200.0} for k in ("20_4",)}
+    )
+    (patient,) = score.summarise_resources([r1, r2])
+    assert patient["cpu_h_scheduler"] == pytest.approx(3.5)
+    assert patient["cpu_h_used_vs_scheduler"] == pytest.approx(2.0 / 3.5)
+
+
+def test_a_round_whose_writer_failed_is_in_its_patients_cost():
+    """Round 1 registered and wrote (1.0 used, 2.0 reserved, 32 GB-hours). Round 2
+    registered (4 CPUs, 16 GB, 600 s, 900 CPU s) and its writer failed."""
+    base = {"dataset": "multiplex", "group": "P1", "method": "pair"}
+    r1 = {**score.resource_row(single(previous_attempts=[])), **base}
+    r2 = {
+        **score.resource_row(
+            single(
+                ok=False,
+                cause="writer",
+                registered=True,
+                launch_id="20_4",
+                mem_requested_gb=16.0,
+                register_s=600.0,
+                resources={"wall_s": 600.0, "cpu_s": 900.0},
+                previous_attempts=[],
+            )
+        ),
+        **base,
+    }
+    r1["case_id"], r2["case_id"] = "P1_r1", "P1_r2"
+    (patient,) = score.summarise_resources([r1, r2])
+    assert patient["cpu_h_used"] == pytest.approx((3600 + 900) / H)  # 1.25
+    assert patient["cpu_h_reserved"] == pytest.approx(2.0 + 4 * 600 / H)
+    assert patient["gb_h_reserved"] == pytest.approx(32.0 + 16 * 600 / H)
+    assert patient["total_cpu_h_reserved"] == pytest.approx(2.0 + 4 * 600 / H)
+    assert patient["wasted_cpu_h_reserved"] == 0.0 and patient["wasted_attempts"] == 0
+    assert not patient["complete"] and patient["n_ok"] == 1
+
+
+def test_the_cost_table_counts_what_a_median_is_over_and_names_each_dataset():
+    def patient(ds, g, m, gb, sched):
+        return {
+            "dataset": ds, "group": g, "method": m, "unit": "pair", "n_rounds": 1,
+            "n_ok": 1, "complete": True, "launched": True, "cpu_h_used": 1.0,
+            "gb_h_reserved": gb, "cpu_h_scheduler": sched,
+        }  # fmt: skip
+
+    nan = math.nan
+    per = [
+        patient("multiplex", "P1", "a", 8.0, 2.0),
+        patient("multiplex", "P2", "a", 4.0, nan),
+        patient("multiplex", "P3", "a", nan, nan),
+        patient("multiplex", "P1", "b", 1.0, 1.0),
+        patient("multiplex", "P2", "b", 1.0, 1.0),
+        patient("synthetic", "S1", "a", 2.0, 1.0),
+    ]
+    rows = score.summarise_cost(per)
+    a = next(r for r in rows if (r["dataset"], r["method"]) == ("multiplex", "a"))
+    assert (a["n_patients_complete"], a["n_patients_common"]) == (3, 2)
+    assert a["gb_h_reserved_med"] == 6.0 and a["gb_h_reserved_n"] == 2
+    assert a["gb_h_reserved_common_med"] == 6.0 and a["gb_h_reserved_common_n"] == 2
+    assert a["cpu_h_scheduler_med"] == 2.0
+    assert (a["cpu_h_scheduler_n"], a["cpu_h_scheduler_common_n"]) == (1, 1)
+    assert "cpu_h_used_n" not in a
+    text = score.summary_markdown([], [], [], cost_summary=rows)
+    assert "(compared rows: multiplex: a, b; synthetic: a)" in text
+    (line,) = [ln for ln in text.splitlines() if ln.startswith("| multiplex | a |")]
+    assert "6 / 6 (n 2 / 2)" in line
+
+
+def test_a_staged_round_that_failed_has_its_own_time_and_allocation(tmp_path):
+    """The fixture's round, failed before its writer: 218 good and 30 retried CPU
+    seconds, on 310 good and 40 retried allocated CPU seconds; 120 s with every tile at
+    once plus the retried attempt's 20 s. STITCH's failed 100 s are the writer's."""
+    run = staged_round(tmp_path / "out" / "stare" / "multiplex" / "P1_r1")
+    row = score.resource_row({**run, "ok": False, "cause": "exception"})
+    assert row["cpu_h"] == pytest.approx(248 / H)
+    assert row["cpu_efficiency"] == pytest.approx(248 / 350)
+    assert row["register_s"] == pytest.approx(140.0)
 
 
 def test_per_patient_sums_for_both_kinds_of_unit():
