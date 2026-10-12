@@ -206,9 +206,37 @@ def test_an_ok_job_is_reused_unless_forced():
     ok = record(0)
     assert stages.decide(ok, 1, ["x"])[0] is False
     assert stages.decide(ok, 1, ["x"], force=True)[0] is True
-    assert stages.decide(ok, 2, ["x"], force=True)[0] is False  # only the first reruns
+    # outside the launcher (no submission id) a forced run happens at attempt 1
+    assert stages.decide(ok, 2, ["x"], force=True)[0] is False
     assert stages.decide(ok, 1, ["other"])[0] is True
     assert stages.decide(record(1), 1, ["x"])[0] is True
+
+
+def test_a_forced_submission_reuses_only_its_own_ok_records_at_every_attempt():
+    """REGBENCH_FORCE=1: the ok record of an EARLIER submission is never reused, also
+    when this submission's first attempt was lost and a later attempt finds it."""
+    old = record(0, submission="A")
+    for attempt in (1, 2, 3, 4):
+        go, why = stages.decide(old, attempt, ["x"], "B", force=True)
+        assert go and "forced" in why, attempt
+        assert stages.decide(old, attempt, ["x"], "B")[0] is False  # not forced: reused
+    mine = record(0, submission="B")
+    assert not any(
+        stages.decide(mine, a, ["x"], "B", force=True)[0] for a in (1, 2, 3, 4)
+    )
+
+
+def test_an_ok_job_is_reused_only_for_what_it_was_computed_from():
+    ok = record(0, identity="abc")
+    assert stages.decide(ok, 1, ["x"], identity="abc")[0] is False
+    go, why = stages.decide(ok, 1, ["x"], identity="other")
+    assert go and why == "the first attempt"
+    assert stages.decide(record(0), 1, ["x"], identity="abc")[0] is True  # no identity
+    # ... and a failed record of another job is no evidence for a later attempt
+    failed = record(1, identity="abc", submission="A")
+    assert stages.decide(failed, 2, ["x"], "A", identity="abc")[0] is False
+    assert stages.decide(failed, 2, ["x"], "A", identity="other")[0] is True
+    assert stages.same_job(ok, ["x"], "abc") and not stages.same_job(None, ["x"], "abc")
 
 
 def test_the_cause_of_a_stage_exit():
@@ -675,6 +703,142 @@ def test_a_stage_without_a_record_is_the_schedulers_loss(staged, tmp_path):
         assert [(go, why, rec) for _, _, go, why, rec in got] == [
             (False, "COARSE is not ok", None)
         ]
+
+
+def test_stages_are_not_reused_when_an_input_file_holds_other_bytes(
+    staged, tmp_path, monkeypatch
+):
+    """Stages ok under one submission, the moving image replaced at the same path,
+    a second submission: nothing is "already ok", and the old manifest is not applied
+    to the new points."""
+    from benchmarks.regbench import cases as cases_mod
+
+    case = staged["case"]
+    out, new = clone(staged, tmp_path)
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "A")
+    with as_jobs():
+        made = methods.run_case("stare", case, out, opts={"stage_images": True})
+        assert made == ["stare_rigid", "stare"]
+    rnd = adapter.Round(case, new, dict(OPTS))
+    every = [("coarse", None), ("tile", 0), ("tile", 1), ("solve", None)]
+    assert all(rnd.done(s, r) for s, r in every)
+    ids = {s: stages.read_record(new, s, r)["identity"] for s, r in every}
+    assert all(len(v) == 64 for v in ids.values()) and len(set(ids.values())) == 3
+    assert ids == {s: rnd.identity(s) for s, _ in every}
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "B")
+    with as_jobs():
+        again = methods.run_case(
+            "stare", case, out, opts={"stage_images": True}, resume=True
+        )
+    assert again == ["stare_rigid", "stare"]
+    assert run_json(out, "stare", case)["submissions"] == ["A", "B"]  # reused
+    image = Path(case.mov_image)
+    kept, st = image.read_bytes(), image.stat()
+    assert len(kept) > cases_mod.SAMPLE_BLOCKS * cases_mod.SAMPLE_BYTES  # sampled
+    try:
+        # other bytes at the same path (a byte between the samples; a new time)
+        data = bytearray(kept)
+        data[len(kept) // 2 + 12345] ^= 0xFF
+        image.write_bytes(data)
+        os.utime(image, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        rnd = adapter.Round(case, new, dict(OPTS))
+        assert rnd.identity("coarse") != ids["coarse"]
+        assert rnd.identity("tile") != ids["tile"]
+        assert rnd.identity("solve") == ids["solve"]  # SOLVE reads no slide ...
+        assert not rnd.done("coarse") and rnd.tiles_done()[0] is None
+        # ... and is not run: the stage before it is not ok for these bytes
+        got = adapter.run_stage(case, new, dict(OPTS), "solve")
+        assert [(go, rec) for _, _, go, _, rec in got] == [(False, None)]
+        go, why = stages.decide(
+            rnd.record("coarse"), 1, rnd.command("coarse"), "B", False,
+            rnd.identity("coarse"),
+        )  # fmt: skip
+        assert go and why == "the first attempt"
+        assert adapter.run_stage(case, new, dict(OPTS), "tile", None, 2) == [
+            ("tile", None, False, "COARSE is not ok", None)
+        ]
+        # the unit: its results rest on other bytes, so they are not this run's
+        with as_jobs():
+            again = methods.run_case(
+                "stare", case, out, opts={"stage_images": True}, resume=True
+            )
+        assert again == []
+        lost = run_json(out, "stare", case)
+        assert lost["ok"] is False and "reused_by" not in lost
+        assert not (result_dir(out, "stare", case) / "warped.npz").exists()
+        # the same size AND the same time, other bytes inside a sampled block
+        data = bytearray(kept)
+        data[5000] ^= 0xFF
+        image.write_bytes(data)
+        os.utime(image, ns=(st.st_atime_ns, st.st_mtime_ns))
+        assert image.stat().st_mtime_ns == st.st_mtime_ns
+        cases_mod._FILE_FINGERPRINTS.clear()  # a job is a new process: no cache
+        assert adapter.Round(case, new, dict(OPTS)).identity("coarse") != ids["coarse"]
+    finally:
+        image.write_bytes(kept)
+        os.utime(image, ns=(st.st_atime_ns, st.st_mtime_ns))
+    cases_mod._FILE_FINGERPRINTS.clear()
+    # the file as it was: the stage records stand again
+    assert adapter.Round(case, new, dict(OPTS)).done("coarse")
+
+
+def test_another_stare_version_or_other_preprocessing_code_is_another_job(
+    staged, tmp_path, monkeypatch
+):
+    import stare as package
+
+    from benchmarks.regbench import prep
+
+    case = staged["case"]
+    _, new = clone(staged, tmp_path)
+    ids = {s: adapter.Round(case, new, dict(OPTS)).identity(s) for s in PIPELINE[:3]}
+    monkeypatch.setattr(package, "__version__", "0.0.0-other")
+    rnd = adapter.Round(case, new, dict(OPTS))
+    assert all(rnd.identity(s) != ids[s] for s in ids) and not rnd.done("coarse")
+    monkeypatch.undo()
+    # the preprocessing row: its `prep` job is keyed on the preprocessing code too
+    opts = {"prep": "grey_clahe", "label": f"{prep.ROW}_grey_clahe"}
+    before = adapter.Round(case, tmp_path / "p", dict(opts)).identity("prep")
+    monkeypatch.setattr(prep, "code_sha256", lambda: "other code")
+    assert adapter.Round(case, tmp_path / "p", dict(opts)).identity("prep") != before
+    monkeypatch.undo()
+    other = {"prep": "grey", "label": f"{prep.ROW}_grey"}
+    assert adapter.Round(case, tmp_path / "p", dict(other)).identity("prep") != before
+
+
+def test_a_result_made_in_one_process_is_not_reused_as_the_staged_row(staged):
+    """The unit's reuse key says how it was executed and by which code."""
+    from benchmarks.regbench import resources
+
+    case, out = staged["case"], staged["out"]
+    run = run_json(out, "stare", case)
+    with as_jobs():
+        jobs = methods.reuse_key("stare", [case], out, run["opts"], None)
+    local = methods.reuse_key("stare", [case], out, run["opts"], None)
+    assert (
+        run["reuse_key"] == jobs
+        and run_json(out, "stare_rigid", case)["reuse_key"] == jobs
+    )
+    assert (jobs["execution"], local["execution"]) == ("jobs", "one process")
+    assert jobs["method"]["stare"] == stare.__version__ == local["method"]["stare"]
+    solve = stages.read_record(staged["dir"], "solve")["identity"]
+    assert jobs["method"]["solve"] == {case.case_id: solve}
+    assert "solve" not in local["method"] and jobs["code"] == local["code"]
+    assert set(jobs["inputs"][case.case_id]) >= {"ref_image", "mov_image"}
+    names = dict(zip(adapter.VARIANTS, methods.variant_names("stare", None)))
+    args = (out, [case], names, "stare", None, run["opts"], False)
+    host = resources.host_info()
+    assert methods._reuse(*args, host, "x", local) is None
+    for change in ({"code": "0" * 64}, {"inputs": {}}, {"method": None}):
+        assert methods._reuse(*args, host, "x", {**jobs, **change}) is None, change
+    # the adapter's code: the driver, the adapter, and what the adapter imports
+    files = {p.name for p in methods.code_files("stare")}
+    assert files >= {"__init__.py", "stare.py", "stages.py", "prep.py", "mapping.py"}
+    assert "score.py" not in files and "valis.py" not in files
+    assert {p.name for p in methods.code_files("valis")} >= {
+        "valis.py", "_valis_points.py"
+    }  # fmt: skip
+    assert methods.code_fingerprint("stare") != methods.code_fingerprint("palom")
 
 
 def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monkeypatch):

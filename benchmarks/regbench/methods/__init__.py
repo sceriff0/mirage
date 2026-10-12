@@ -91,9 +91,18 @@ cause: killed, phase: writer``, so a kill there leaves a failed row too. The rul
 same for every method.
 
 **A unit that is already done is not run again** (``resume=True``, what ``run`` passes):
-when every result of the unit is ``ok`` for the same method, label, options and cases,
-nothing runs and no placeholder is written; the records gain this submission's id
-(``submissions``, ``reused_by``). ``REGBENCH_FORCE=1`` (``run --force``) runs it anyway.
+when every result of the unit is ``ok`` for the same method, label, options, cases and
+points, AND was computed the same way from the same bytes (``reuse_key``, kept in
+``run.json: reuse_key``), nothing runs and no placeholder is written; the records gain
+this submission's id (``submissions``, ``reused_by``). ``REGBENCH_FORCE=1``
+(``run --force``) runs it anyway. ``reuse_key`` holds, for every method: ``execution``
+(one process, or the scheduler jobs of ``REGBENCH_STAGES``), ``code`` (a sha256 of the
+driver, the adapter module, the sibling modules it imports and the ``regbench`` modules
+it imports directly: ``code_files``), ``inputs`` (``cases.inputs_fingerprint`` of every
+case: size, time and sampled bytes of its image files) and ``method`` (what the adapter
+adds through ``REUSE_KEY(cases, out, opts, label)``: STARE's version and the identity
+of its SOLVE job). The version of a package inside an image is NOT in the key unless
+the adapter puts it there: a rebuilt image is a reason for ``REGBENCH_FORCE=1``.
 """
 
 from __future__ import annotations
@@ -235,6 +244,72 @@ def load(method):
     if method not in METHODS:
         raise SystemExit(f"unknown method {method!r}; expected one of {METHODS}")
     return importlib.import_module(f"{__name__}.{method}")
+
+
+def code_files(method):
+    """The source files whose bytes are the ``code`` of a method's ``reuse_key``: this
+    driver, the adapter module, the modules of ``methods/`` it imports (followed
+    through), and the ``regbench`` modules the adapter imports directly. ``[]`` beyond
+    the driver for a module-like object without a file (a test's stand-in)."""
+    import ast
+
+    here = Path(__file__).resolve()
+    package, root = here.parent, here.parent.parent
+    mod = load(method)
+    start = getattr(mod, "__file__", None)
+    files, todo = [here], [Path(start).resolve()] if start else []
+    while todo:
+        path = todo.pop()
+        if path in files or not path.is_file():
+            continue
+        files.append(path)
+        if path.parent != package:
+            continue  # a regbench module: its bytes, not what it imports in turn
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not isinstance(node, ast.ImportFrom) or node.level not in (1, 2):
+                continue
+            base = package if node.level == 1 else root
+            names = [node.module] if node.module else [a.name for a in node.names]
+            if node.module:  # `from .x import y`: y may be a module of the package x
+                names += [f"{node.module}.{a.name}" for a in node.names]
+            for name in names:
+                target = base.joinpath(*name.split("."))
+                for found in (target.with_suffix(".py"), target / "__init__.py"):
+                    if found.is_file():
+                        todo.append(found)
+    return files
+
+
+def code_fingerprint(method):
+    """sha256 over ``code_files``: names (relative to ``regbench``) and bytes."""
+    import hashlib
+
+    root = Path(__file__).resolve().parent.parent
+    h = hashlib.sha256()
+    for path in sorted(code_files(method)):
+        try:
+            name = str(path.relative_to(root))
+        except ValueError:
+            name = path.name  # a private plug-in outside the package
+        h.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def reuse_key(method, cases, out, opts, label):
+    """What an ``ok`` result must have been computed WITH to stand for this run
+    (module docstring, "A unit that is already done"). JSON-able."""
+    from ..cases import inputs_fingerprint
+
+    mod = load(method)
+    hook = getattr(mod, "REUSE_KEY", None)
+    return _jsonable(
+        {
+            "execution": os.environ.get("REGBENCH_STAGES") or "one process",
+            "code": code_fingerprint(method),
+            "inputs": {c.case_id: inputs_fingerprint(c) for c in cases},
+            "method": hook(cases, out, opts, label) if hook else None,
+        }
+    )
 
 
 def method_name(method):
@@ -437,9 +512,15 @@ def _run(
         for k, v in opts.items()
         if k not in ("monitor", "native_dir", "label")
     }
-    if resume and os.environ.get("REGBENCH_FORCE") != "1":
+    try:
+        key = reuse_key(method, cases, out, recorded, label)
+    except (Exception, SystemExit) as exc:
+        # an adapter that cannot say what its result rests on (a refused option, an
+        # unreadable file): nothing is reused, and the run below says why it fails
+        key = {"error": f"{type(exc).__name__}: {exc}"}
+    if resume and os.environ.get("REGBENCH_FORCE") != "1" and "error" not in key:
         reused = _reuse(
-            out, cases, names, name, label, recorded, realcheck, host, launch_id
+            out, cases, names, name, label, recorded, realcheck, host, launch_id, key
         )
         if reused is not None:
             return reused
@@ -463,6 +544,7 @@ def _run(
         "method": name,
         "label": label or "",
         "opts": recorded,
+        "reuse_key": key,
         "submissions": [submission] if submission else [],
         "oom_watch": watch.record(),
         "workers": int(opts["workers"]),
@@ -967,11 +1049,12 @@ def _run(
     }
 
 
-def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id):
+def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id, key):
     """``{case_id: [variants]}`` when every result of this unit is already ``ok`` for the
-    same configuration (method, label, options, cases), else None. Nothing is run and no
-    placeholder is written; each record gains this submission and a ``reused_by`` entry.
-    A unit asked for a realcheck is reused only when it has one."""
+    same configuration (method, label, options, cases, points) and was computed the
+    same way from the same bytes (``key``: ``reuse_key``), else None. Nothing is run
+    and no placeholder is written; each record gains this submission and a
+    ``reused_by`` entry. A unit asked for a realcheck is reused only when it has one."""
     found = {}
     ids = [c.case_id for c in cases]
     for case in cases:
@@ -986,6 +1069,7 @@ def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id)
                 and rec.get("method") == name
                 and rec.get("label", "") == (label or "")
                 and rec.get("opts") == recorded
+                and rec.get("reuse_key") == key
                 and rec.get("group_cases") == ids
                 # made for the case as it is NOW: a forced re-prepare changes the
                 # points, and a result for the old ones is not this case's

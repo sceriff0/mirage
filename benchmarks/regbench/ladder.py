@@ -39,6 +39,7 @@ no record of this submission   the task that should have written it never starte
              was lost before its placeholder). A unit still without a record after
              both is written down as ``infrastructure`` by the next ``climb`` task
              (:func:`mark_lost`), so that it is never read as "not run" or as failed.
+             A record another submission left there is set aside, not destroyed.
 anything else (``ok``, ``exception``, ``timeout``, ``gpu_oom``, ``writer``): the unit is
              never re-run.
 ``no_rerun: true``  whatever its cause, the record is of a failure that was already
@@ -365,9 +366,37 @@ LOST = (
 )
 
 
+SET_ASIDE = "earlier"
+
+
+def set_aside(path):
+    """Move a result's ``run.json`` and ``warped.npz`` into ``<result>/earlier/<n>/``
+    (the first free ``n``) and return that folder, or None when there is no record.
+    The image, the stage files and everything else of the result stay where they are:
+    moving the two files back restores it."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    n = 1
+    while (path.parent / SET_ASIDE / str(n)).exists():
+        n += 1
+    dest = path.parent / SET_ASIDE / str(n)
+    dest.mkdir(parents=True)
+    for name in ("run.json", "warped.npz"):
+        if (path.parent / name).exists():
+            (path.parent / name).rename(dest / name)
+    return dest
+
+
 def mark_lost(heads, attempt, submission=None):
     """Write an ``infrastructure`` record for every result of a unit that has none of
-    this submission. ``attempt`` is the rung that was lost. Returns how many."""
+    this submission. ``attempt`` is the rung that was lost. Returns how many.
+
+    A record ANOTHER submission left there is not destroyed: it and its
+    ``warped.npz`` are set aside (``set_aside``), and the new record names where
+    (``earlier_result``, with that record's outcome). The row of THIS submission is
+    ``infrastructure``: it ran nothing, so it has no result of its own, and an
+    earlier ``ok`` one is not scored as this submission's."""
     n = 0
     for path, head in heads.items():
         rec = _read(path)
@@ -375,11 +404,19 @@ def mark_lost(heads, attempt, submission=None):
             continue
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        kept = set_aside(path)
         (path.parent / "warped.npz").unlink(missing_ok=True)
         new = {
             **head,
             "ok": False,
-            "error": LOST,
+            "error": LOST
+            + (
+                f". An earlier result of this unit ({'ok' if rec.get('ok') else 'not ok'}"
+                f", submissions {', '.join(submissions_of(rec)) or 'none'}) is kept "
+                f"under {kept}"
+                if kept and isinstance(rec, dict)
+                else ""
+            ),
             "cause": INFRASTRUCTURE,
             "cause_from": "no record of this submission",
             "attempt": int(attempt),
@@ -389,6 +426,12 @@ def mark_lost(heads, attempt, submission=None):
             "launch_id": "",
             "previous_attempts": [],
         }
+        if kept:
+            new["earlier_result"] = {
+                "kept": str(kept),
+                "ok": bool(isinstance(rec, dict) and rec.get("ok")),
+                "submissions": submissions_of(rec),
+            }
         path.write_text(json.dumps(new, indent=1))
         n += 1
     return n

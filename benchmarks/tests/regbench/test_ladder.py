@@ -8,7 +8,9 @@ decision, and that a task which must not re-run really leaves the results alone.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -365,6 +367,17 @@ def test_a_unit_lost_twice_is_written_down_as_infrastructure(tmp_path):
         assert rec["case_id"] == head["case_id"] and rec["variant"] == "initial"
         assert rec["unit"] == "pair" and "marker" not in rec
     assert stale.exists() and ladder.mark_lost(heads, 1, "new") == 0  # once
+    # the record another submission left is set aside, not destroyed
+    first = json.loads(list(heads)[0].read_text())
+    kept = Path(first["earlier_result"]["kept"])
+    assert kept == stale.parent / "earlier" / "1"
+    assert json.loads((kept / "run.json").read_text())["marker"] == 1
+    assert first["earlier_result"] == {
+        "kept": str(kept),
+        "ok": False,
+        "submissions": ["old"],
+    }
+    assert "earlier_result" not in json.loads(list(heads)[1].read_text())
     # written down, it is not tried at a higher rung
     assert not ladder.unit_decision(list(heads), ladder.AGAIN, 2, submission="new")[0]
     assert not ladder.unit_decision(list(heads), ladder.CLIMB, 3, submission="new")[0]
@@ -396,6 +409,100 @@ def test_the_last_rung_is_settled_from_the_accounting(tmp_path):
     assert json.loads(c.read_text())["cause"] == "exception"
     rec = json.loads(d.read_text())  # died on its own: still killed, cost now known
     assert rec["cause"] == "killed" and rec["scheduler"]["elapsed_s"] == 7.0
+
+
+def test_a_lost_unit_keeps_the_valid_result_of_an_earlier_submission(tmp_path):
+    """An `ok` result of submission A, then submission B loses the unit: A's record and
+    its warped points are still there, and B's row says `infrastructure`."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = a_case(root, "P1_r1", "P1")
+    heads = ladder.unit_heads(out, "initial", None, [case])
+    (path,) = heads
+    path.parent.mkdir(parents=True)
+    good = {"ok": True, "cause": "", "submissions": ["A"], "register_s": 7.0}
+    path.write_text(json.dumps(good))
+    (path.parent / "warped.npz").write_bytes(b"the points A moved")
+    (path.parent / "native").mkdir()
+    assert ladder.mark_lost(heads, 1, "B") == 1
+    now = json.loads(path.read_text())
+    assert now["cause"] == "infrastructure" and now["submissions"] == ["B"]
+    assert not (path.parent / "warped.npz").exists()  # B has no result of its own
+    kept = Path(now["earlier_result"]["kept"])
+    assert now["earlier_result"]["ok"] is True and "is kept under" in now["error"]
+    assert json.loads((kept / "run.json").read_text()) == good
+    assert (kept / "warped.npz").read_bytes() == b"the points A moved"
+    assert (path.parent / "native").is_dir()  # the image stays where it is
+    # a second loss (submission C) sets B's record aside too, beside A's
+    assert ladder.mark_lost(heads, 1, "C") == 1
+    assert sorted(p.name for p in (path.parent / "earlier").iterdir()) == ["1", "2"]
+    assert json.loads((kept / "run.json").read_text()) == good
+    # nothing set aside is taken for a result
+    assert ladder.settle_all(out, {}) == {}
+    assert [p.parent.name for p in out.glob("*/*/*/run.json")] == ["P1_r1"]
+
+
+def test_a_unit_is_not_reused_when_it_was_computed_another_way(
+    tmp_path, monkeypatch, capsys
+):
+    """The reuse key: how the unit was executed, by which code, from which bytes."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = a_case(root, "P1_r1", "P1")
+    path = result_dir(out, "initial", case) / "run.json"
+    assert _run(root, out) == 0
+    first = json.loads(path.read_text())
+    key = first["reuse_key"]
+    assert key["execution"] == "one process" and len(key["code"]) == 64
+    assert set(key) == {"execution", "code", "inputs", "method"}
+    capsys.readouterr()
+    assert _run(root, out) == 0 and "reused" in capsys.readouterr().out
+    # made by other code
+    path.write_text(json.dumps({**first, "reuse_key": {**key, "code": "0" * 64}}))
+    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+    second = json.loads(path.read_text())
+    assert second["launch_id"] != first["launch_id"] and second["reuse_key"] == key
+    # executed in another shape
+    monkeypatch.setenv("REGBENCH_STAGES", "jobs")
+    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+    assert json.loads(path.read_text())["reuse_key"]["execution"] == "jobs"
+    # a record of before the key existed
+    monkeypatch.delenv("REGBENCH_STAGES")
+    old = {k: v for k, v in second.items() if k != "reuse_key"}
+    path.write_text(json.dumps(old))
+    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+
+
+def test_a_file_fingerprint_is_its_size_time_and_sampled_bytes(tmp_path):
+    from benchmarks.regbench import cases as cases_mod
+
+    small, big = tmp_path / "small.bin", tmp_path / "big.bin"
+    small.write_bytes(b"abc" * 1000)
+    assert cases_mod.file_fingerprint(tmp_path / "none") == {"missing": True}
+    one = cases_mod.file_fingerprint(small)
+    assert one["size"] == 3000 and len(one["sample_sha256"]) == 64
+    limit = cases_mod.SAMPLE_BLOCKS * cases_mod.SAMPLE_BYTES
+    data = bytearray(os.urandom(limit + 300_000))
+    big.write_bytes(data)
+    st = big.stat()
+    base = cases_mod.file_fingerprint(big)
+
+    def with_byte(at):
+        changed = bytearray(data)
+        changed[at] ^= 0xFF
+        big.write_bytes(changed)
+        os.utime(big, ns=(st.st_atime_ns, st.st_mtime_ns))  # the same time
+        cases_mod._FILE_FINGERPRINTS.clear()
+        return cases_mod.file_fingerprint(big)
+
+    # the first and the last byte are sampled; so is the start of every block
+    assert with_byte(0) != base and with_byte(len(data) - 1) != base
+    step = (len(data) - cases_mod.SAMPLE_BYTES) // (cases_mod.SAMPLE_BLOCKS - 1)
+    assert with_byte(step * 7 + 10) != base
+    # the stated residual risk: the same size and time, a byte between two samples
+    assert with_byte(cases_mod.SAMPLE_BYTES + 5) == base
+    # a new time is a new fingerprint whatever the bytes
+    big.write_bytes(data)
+    os.utime(big, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    assert cases_mod.file_fingerprint(big) != base
 
 
 # ── the array tasks, end to end with the identity method ──────────────────────

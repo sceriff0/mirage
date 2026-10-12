@@ -505,6 +505,11 @@ def _peak_rss_mb():
 
 
 # ── a case ────────────────────────────────────────────────────────────────────
+def code_sha256():
+    """sha256 of this module's source: the preprocessing code a `prep` job ran."""
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
 def input_paths(dest, name):
     """``(reference, moving)``: where ``write_inputs`` puts the two files."""
     dest = Path(dest)

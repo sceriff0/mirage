@@ -28,7 +28,10 @@ Written as ``ok: false, cause: killed`` before the command starts, so a killed j
 leaves a failed record, and rewritten when the command ends with its exit status, wall
 time, CPU time and peak memory (``os.wait4``: the command's own process and the
 children it waited for, nothing of the benchmark's). ``history`` keeps every earlier
-attempt of the same job.
+attempt of the same job. ``identity`` is the caller's digest of what the job is computed
+from beyond its command line (its inputs' bytes, the files the stage before wrote, the
+version of the code): ``decide`` reuses an ``ok`` record only of the same command AND
+the same identity.
 
 **The cost of a round** (``summarise``), from the records of COARSE, every tile and
 SOLVE, every attempt of each (STITCH is the writer and is timed apart):
@@ -251,15 +254,35 @@ def retryable(rec):
     return rec.get("exit") in RETRY_EXIT
 
 
-def decide(rec, attempt, command, submission="", force=False):
+def same_job(rec, command, identity=None):
+    """Is ``rec`` the record of THIS job: the same command line, computed from the same
+    things (``identity``, below)?"""
+    return (
+        rec is not None
+        and rec.get("command") == list(command)
+        and rec.get("identity") == identity
+    )
+
+
+def decide(rec, attempt, command, submission="", force=False, identity=None):
     """``(run now?, why)`` for the job of attempt ``attempt`` (1 is the first).
 
-    A record another submission left is evidence of nothing, except an ``ok`` one for
-    the very same command, which is reused (``force`` runs it again)."""
+    ``identity`` says what the job is computed FROM, beyond its command line: the
+    caller's digest of its input files' bytes, of the files the stage before it wrote,
+    and of the version of the code that runs (``methods.stare.Round.identity``). A
+    record with another identity is the record of another job.
+
+    A record another submission left is evidence of nothing, except an ``ok`` one of
+    this very job, which is reused. ``force`` (``REGBENCH_FORCE=1``) reuses an ``ok``
+    record only when THIS submission made it, at every attempt: without a submission
+    id (a run outside the launcher) it runs the job again at attempt 1."""
     attempt = int(attempt)
-    same = rec is not None and rec.get("command") == list(command)
-    if rec is not None and rec.get("ok") and same and not (force and attempt == 1):
-        return False, "already ok for this command"
+    same = same_job(rec, command, identity)
+    if rec is not None and rec.get("ok") and same:
+        ours = bool(submission) and ladder.mine(rec, submission)
+        if not force or ours or (attempt > 1 and not submission):
+            return False, "already ok for this command, these inputs and this code"
+        return True, "forced: the ok record is not of this submission"
     mine = rec is not None and same and ladder.mine(rec, submission)
     if attempt == 1:
         return True, "the first attempt"
@@ -302,19 +325,26 @@ def _summary(rec):
 
 
 def run_command(
-    stage_dir, stage, command, row=None, attempt=1, execution="jobs", env=None
+    stage_dir,
+    stage,
+    command,
+    row=None,
+    attempt=1,
+    execution="jobs",
+    env=None,
+    identity=None,
 ):
     """Run one stage command as a process of its own and leave its record; returns it.
 
     ``command`` is the whole command line. ``execution`` is ``jobs`` (a scheduler job
-    of its own) or ``local`` (one of several inside a single run)."""
+    of its own) or ``local`` (one of several inside a single run). ``identity`` is
+    kept in the record (``decide``)."""
     path = record_path(stage_dir, stage, row)
     old = read_record(stage_dir, stage, row)
     host = resources.host_info()
     history = []
     if (
-        old
-        and old.get("command") == list(command)
+        same_job(old, command, identity)
         and ladder.mine(old, host["submission"])
         and int(old.get("attempt") or 1) < int(attempt)
     ):
@@ -329,6 +359,7 @@ def run_command(
         "cause": KILLED,
         "error": "killed before the command ended (out of memory or time limit?)",
         "command": list(command),
+        "identity": identity,
         "execution": execution,
         "cpus": alloc["cpus"],
         "mem_gb": alloc["mem_gb"],

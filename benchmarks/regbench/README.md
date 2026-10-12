@@ -2174,6 +2174,41 @@ folder; these rules keep one from answering for the other:
   not run again, its records gain this submission's id, and it is scored
   (`REGBENCH_FORCE=1` runs everything again).
 
+**What "the same" means for reuse: what was computed, not the command line.**
+
+- *A unit* (`run.json: reuse_key`, `methods.reuse_key`) is reused only when, besides
+  the method, label, options, cases and points, four things are equal: `execution`
+  (one process, or the scheduler jobs of a staged run), `code` (a sha256 of the driver,
+  the adapter module, the modules of `methods/` it imports and the `regbench` modules
+  it imports directly), `inputs` (for every case, the fingerprint of each image file it
+  names) and `method` (what the adapter adds: STARE's version and the identity of its
+  SOLVE job). A result made by other code, in another execution shape or from other
+  bytes is run again; so is a result of before the key existed.
+- *A stage job* of a staged run (`stages/jobs/*.json: identity`,
+  `methods.stare.Round.identity`) is reused only for the same command AND the same
+  STARE version AND the same bytes of what it reads: the two slides for COARSE and a
+  tile, the anchor and the tile plan for a tile, the anchor and every control file for
+  SOLVE, and for `prep` the slides, the candidate and a sha256 of `prep.py`. A stage
+  whose stage before it ran again and wrote other bytes is therefore run again too.
+- *A file's fingerprint* (`cases.file_fingerprint`) is its size, its modification time
+  and a sha256 over 16 blocks of 64 KiB spread evenly from its first byte to its last.
+  A whole-slide file is tens of gigabytes and a tile job reads a few megabytes of it,
+  so hashing it whole in every job would cost more than the job. Any rewrite changes
+  the time; a file put back with the same size and time is caught where it differs
+  inside a sampled block. **Residual risk:** a file of the same size and the same
+  modification time that differs only between the samples is taken for the same file.
+  The small files a stage writes (anchor, plan, control files) are hashed whole.
+- `REGBENCH_FORCE=1` holds at every attempt: a forced submission reuses an `ok` stage
+  record only when it made that record itself, so a first attempt lost to the scheduler
+  does not let a later attempt fall back on an earlier submission's record.
+- **Not in any key:** the version of a package inside an image, except STARE's. After
+  rebuilding or re-pulling an image, submit with `REGBENCH_FORCE=1`.
+- A unit the scheduler lost (`ladder.mark_lost`) gets an `infrastructure` record for
+  the current submission. A record another submission left in that folder is not
+  destroyed: `run.json` and `warped.npz` are moved to `<result>/earlier/<n>/` and the
+  new record names the folder (`earlier_result`). The current submission's row reads
+  `infrastructure`, not that earlier result; moving the two files back restores it.
+
 A GPU is asked for only for the runs whose `gpu` column is 1, with the site's own
 request string, and the script refuses to submit them without it. An image is given the
 GPU (`--nv`) only for those runs. VALIS 1.2.0's image is started with `--writable-tmpfs`.

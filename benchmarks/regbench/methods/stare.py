@@ -457,6 +457,7 @@ class Round:
 
     def __init__(self, case, stage_dir, opts):
         self.case, self.dir, self.opts = case, Path(stage_dir), opts
+        self._identity = {}
         self.candidate = prep_of(opts)
         self.inputs = None
         if self.candidate:
@@ -489,10 +490,62 @@ class Round:
     def record(self, stage, row=None):
         return stages.read_record(self.dir, stage, row)
 
+    def identity(self, stage, row=None):
+        """What a stage job is computed FROM, beyond its command line, as one digest
+        (``stages.decide``): the STARE version; for PREP the slides' bytes
+        (``cases.file_fingerprint``) and the preprocessing code and candidate; for
+        COARSE and a tile the bytes of the two files STARE reads; for a tile also the
+        anchor and the tile plan COARSE wrote; for SOLVE the anchor and every control
+        file of the plan. A stage whose inputs were replaced, or whose stage before
+        ran again and wrote something else, is another job. The same for every row."""
+        import hashlib
+
+        import stare
+
+        from ..cases import file_fingerprint
+
+        if stage in self._identity:
+            return self._identity[stage]
+
+        def sha(path):
+            try:
+                return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            except OSError:
+                return None
+
+        parts = {"stage": stage, "stare": stare.__version__}
+        if stage == stages.PREP:
+            ref, mov, _, _ = slides(self.case)
+            parts["inputs"] = [file_fingerprint(ref), file_fingerprint(mov)]
+            parts["candidate"] = self.candidate
+            parts["code"] = prep.code_sha256()
+        elif stage in (stages.COARSE, stages.TILE):
+            parts["inputs"] = [
+                file_fingerprint(self.ns.reference),
+                file_fingerprint(self.ns.moving),
+            ]
+        if stage in (stages.TILE, stages.SOLVE):
+            parts["m0"] = sha(self.argv["m0"])
+        if stage == stages.TILE:
+            parts["plan"] = sha(self.argv["plan"])
+        if stage == stages.SOLVE:
+            parts["controls"] = [
+                [self.control(i).name, sha(self.control(i))]
+                for i in range(len(self.plan()))
+            ]
+        text = json.dumps(parts, sort_keys=True)
+        self._identity[stage] = hashlib.sha256(text.encode()).hexdigest()
+        return self._identity[stage]
+
     def done(self, stage, row=None):
-        """The job's record when it is ok FOR THIS COMMAND, else None."""
+        """The job's record when it is ok FOR THIS JOB (the same command, computed
+        from the same things: ``identity``), else None."""
         rec = self.record(stage, row)
-        if rec and rec.get("ok") and rec.get("command") == self.command(stage, row):
+        if (
+            rec
+            and rec.get("ok")
+            and stages.same_job(rec, self.command(stage, row), self.identity(stage))
+        ):
             return rec
         return None
 
@@ -532,6 +585,7 @@ def _run_prep(rnd, attempt, execution):
         "row": None,
         "attempt": int(attempt),
         "command": command,
+        "identity": rnd.identity(stages.PREP),
         "execution": execution,
         "launch_id": host["launch_id"],
         "log_path": host["log_path"],
@@ -586,11 +640,14 @@ def run_stage(
     def one(stage, row=None):
         rec = rnd.record(stage, row)
         command = rnd.command(stage, row)
-        go, why = stages.decide(rec, attempt, command, submission, force)
+        identity = rnd.identity(stage)
+        go, why = stages.decide(rec, attempt, command, submission, force, identity)
         if go and stage == stages.PREP:
             rec = _run_prep(rnd, attempt, execution)
         elif go:
-            rec = stages.run_command(rnd.dir, stage, command, row, attempt, execution)
+            rec = stages.run_command(
+                rnd.dir, stage, command, row, attempt, execution, identity=identity
+            )
         out.append((stage, row, go, why, rec))
 
     if stage == stages.PREP:
@@ -638,6 +695,7 @@ def tiles_due(case, stage_dir, opts, attempt, force=False):
             rnd.command(stages.TILE, i),
             submission,
             force,
+            rnd.identity(stages.TILE),
         )[0]
     ]
 
@@ -646,11 +704,9 @@ def _failed(rnd, stage, row, jobs):
     """The error of a round whose job ``stage`` did not end ok for this command."""
     rec = rnd.record(stage, row)
     what = stage.upper() + (f" (tile row {row})" if row is not None else "")
-    mine = (
-        rec is not None
-        and rec.get("command") == rnd.command(stage, row)
-        and ladder.mine(rec, resources.host_info()["submission"])
-    )
+    mine = stages.same_job(
+        rec, rnd.command(stage, row), rnd.identity(stage)
+    ) and ladder.mine(rec, resources.host_info()["submission"])
     never = ""
     if not mine and stage == stages.TILE and jobs:
         never = stages.feed_problem(
@@ -693,7 +749,13 @@ def _local(rnd, workers, mon):
             rec = _run_prep(rnd, 1, "local")
         else:
             rec = stages.run_command(
-                rnd.dir, stage, rnd.command(stage, row), row, 1, "local"
+                rnd.dir,
+                stage,
+                rnd.command(stage, row),
+                row,
+                1,
+                "local",
+                identity=rnd.identity(stage),
             )
         if not rec.get("ok"):
             raise _failed(rnd, stage, row, False)
@@ -707,6 +769,7 @@ def _local(rnd, workers, mon):
             mon.resume()
     go(stages.COARSE)
     rows = range(len(rnd.plan()))
+    rnd.identity(stages.TILE)  # once, before the pool: the same for every row
     with ThreadPoolExecutor(max(1, int(workers))) as pool:
         list(pool.map(lambda i: go(stages.TILE, i), rows))
     _, why = rnd.tiles_done()
@@ -730,6 +793,26 @@ def _collect(rnd):
         raise stages.StageFailed(f"SOLVE's inputs are not complete: {why}")
     if not rnd.done(stages.SOLVE):
         raise _failed(rnd, stages.SOLVE, None, True)
+
+
+def REUSE_KEY(cases, out, opts, label):
+    """What a result of this run rests on beyond its options and its inputs' bytes
+    (``methods.reuse_key``): the STARE version, and, for a round that ran as jobs of
+    its own, the identity of the SOLVE job its stage records hold now. A round whose
+    stages ran again on other bytes is then another result, not a reused one."""
+    import stare
+
+    key = {"stare": stare.__version__}
+    if os.environ.get(JOBS_ENV) == "jobs":
+        solved = {}
+        for case in cases:
+            rnd = Round(
+                case, stage_dir_of(out, label, case), {**opts, "label": label or ""}
+            )
+            rec = rnd.record(stages.SOLVE) or {}
+            solved[case.case_id] = rec.get("identity") if rec.get("ok") else None
+        key["solve"] = solved
+    return key
 
 
 def register(case, work, opts):

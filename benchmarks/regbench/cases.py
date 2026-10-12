@@ -203,6 +203,61 @@ def list_cases(cases_root, dataset):
     return [load_case(d) for d in dirs]
 
 
+# ── what a file held when something was computed from it ──────────────────────
+# A whole-slide file is tens of gigabytes and a tile job reads a few megabytes of it:
+# hashing it whole in every job would cost more than the job. The fingerprint is the
+# file's size, its modification time, and a sha256 over SAMPLE_BLOCKS blocks of
+# SAMPLE_BYTES spread evenly from its first byte to its last (the first and last blocks
+# included: a TIFF's header and, for most writers, its directories). Any rewrite
+# changes the time; a file put back with the same size AND time (`cp -p`, `rsync -t`)
+# is caught where it differs inside a sampled block. NOT caught: a file of the same
+# size and time that differs only between the samples.
+SAMPLE_BLOCKS = 16
+SAMPLE_BYTES = 1 << 16
+_FILE_FINGERPRINTS = {}
+
+
+def file_fingerprint(path):
+    """``{"size", "mtime_ns", "sample_sha256"}`` of a file as it is now, or
+    ``{"missing": True}``. A file of at most ``SAMPLE_BLOCKS * SAMPLE_BYTES`` bytes is
+    hashed whole. Cached per file state."""
+    import hashlib
+
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError:
+        return {"missing": True}
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _FILE_FINGERPRINTS:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            if st.st_size <= SAMPLE_BLOCKS * SAMPLE_BYTES:
+                h.update(fh.read())
+            else:
+                last = st.st_size - SAMPLE_BYTES
+                for i in range(SAMPLE_BLOCKS):
+                    fh.seek(last * i // (SAMPLE_BLOCKS - 1))
+                    h.update(fh.read(SAMPLE_BYTES))
+        _FILE_FINGERPRINTS[key] = {
+            "size": int(st.st_size),
+            "mtime_ns": int(st.st_mtime_ns),
+            "sample_sha256": h.hexdigest(),
+        }
+    return dict(_FILE_FINGERPRINTS[key])
+
+
+def inputs_fingerprint(case):
+    """``{field: file_fingerprint}`` of the image files a case names (the slides and
+    their one-channel copies): what a result of the case was computed from."""
+    out = {}
+    for name in ("ref_image", "mov_image", "ref_nuclear", "mov_nuclear"):
+        value = getattr(case, name, "")
+        if value:
+            out[name] = file_fingerprint(value)
+    return out
+
+
 _FINGERPRINTS = {}
 POINT_GROUPS = {"cells_": "outlines", "nuclei_": "nuclei", "truth_": "truth"}
 
