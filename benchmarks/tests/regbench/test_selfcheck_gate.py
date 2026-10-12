@@ -276,8 +276,8 @@ def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0, anchored=Fals
 
 
 def test_the_overlap_cap_stands_above_the_measured_share():
-    """The measurement beside the frozen cap (2026-10-12, at the 1950 px tiles of
-    ruling R3.25), repeated: ASHLAR's only selfcheck canvas, both rounds of its patient."""
+    """The measurement beside the frozen cap, repeated: ASHLAR's only selfcheck canvas,
+    both rounds of its patient."""
     from benchmarks.ashlar import retile
     from benchmarks.regbench.methods import ashlar as am
 
@@ -315,8 +315,7 @@ def test_the_overlap_cap_stands_above_the_measured_share():
         for sy in (-reach, reach)
     )
     assert 0.23 < pushed_anchored < worst, pushed_anchored
-    # the cap was set at 1024 px tiles (worst case 0.36, plus 0.14) and is kept: it
-    # stands well above this geometry's worst case, and never hides half of the dots
+    # the cap stands well above the worst case, and never hides half of the dots
     assert worst + 0.20 < sc.MASK_MAX["overlap"] <= 0.50
     # twice ASHLAR's limit is still under it; an endless mosaic holds 0.21
     assert overlap_share(sc.ASHLAR_HW, 1, (2 * reach, 2 * reach))[0] < 0.32
@@ -325,10 +324,9 @@ def test_the_overlap_cap_stands_above_the_measured_share():
     assert 1 - (1 - 16 / 1024) ** 2 < sc.MASK_MAX["seams"] / 3
 
 
-def test_the_small_canvas_is_no_longer_one_of_ashlars():
-    """A canvas of 3 x 3 tiles (eight of them on the border) is not one of ASHLAR's:
-    2048 x 2560 was dropped for that on 2026-10-11, and at the 1950 px tiles of
-    2026-10-12 the 4096 x 5120 canvas would be that grid."""
+def test_a_canvas_of_a_few_tiles_is_not_one_of_ashlars():
+    """ASHLAR's selfcheck has one canvas, 5 x 6 tiles; the canvases the other methods
+    use would be 3 x 3 and 2 x 2 tiles, all but one of them on the border."""
     for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
         canvases = {sc.rounds_of(s)[0] for s in sc.sizes_for(name)}
         assert canvases == {sc.ASHLAR_HW}, name

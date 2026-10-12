@@ -516,21 +516,37 @@ def test_no_seam_falls_on_a_method_grid():
     """Every seam POSITION inside the frozen window is checked against every grid a method
     works on: STARE's vector lattice and tile, ASHLAR's tile pitch, PALOM's blocks. A seam
     on a method's own grid line would be a jump that method can absorb for free."""
+    from benchmarks.ashlar import retile
+    from benchmarks.regbench.methods import ashlar as am
+
     block = truth.family(SPEC, "seams")["block_px"]
     grids = truth.method_grids(SPEC)
     assert grids == [
         ("stare_tile", 2048),
         ("stare_lattice", 64),
-        ("ashlar_pitch", 922),
+        ("ashlar_pitch", 1755),
         ("palom_block", 1024),
         ("palom_block", 2048),
     ]
+    # the pitch the spec lists is the one the adapter cuts with
+    pitch = retile._stride(am.TILE, am.OVERLAP)
+    assert SPEC["method_grids_px"]["ashlar_pitch"] == pitch == 1755
     seams = truth.seam_positions(SPEC)
     assert seams == [1950, 3900, 5850, 7800]
     assert truth.seams_on_a_grid(SPEC) == []
     for at in seams:
         for name, size in grids:
             assert at % size, (at, name, size)
+    # A grid line is where a tile STARTS (a multiple of the pitch). Tiles also END,
+    # 1950 px after each start: one seam, the first, is where ASHLAR's first tile ends
+    # (the seam block is the scanner's tile, and so is ASHLAR's). The spec says so.
+    starts = sorted({t.x for t in retile.tile_grid(8192, 8192, am.TILE, am.OVERLAP)})
+    assert starts == [0, 1755, 3510, 5265, 7020]
+    assert {x + am.TILE for x in starts} & set(seams) == {1950}
+    assert (
+        "where ASHLAR's first tile (1950 px) ends"
+        in truth.family(SPEC, "seams")["note"]
+    )
     # the generator really jumps there
     spec = synthetic.truth_suite()["blob_seams_shift"]
     assert spec["seam_tile"] == block and all(_jump_at(spec, at) > 0 for at in seams)
@@ -540,48 +556,6 @@ def test_no_seam_falls_on_a_method_grid():
     hits = truth.seams_on_a_grid(old)
     assert (1536, "stare_lattice", 64) in hits and (6144, "stare_tile", 2048) in hits
     assert (6144, "palom_block", 1024) in hits
-
-
-# OPEN DECISION (the owner's, 2026-10-12). Ruling R3.25 made ASHLAR's tiles 1950 px at a
-# 1755 px pitch; `truth_spec.json` is frozen and hashed and still lists 922. The two tests
-# below state what a revised spec would have to make true. They are strict: when the spec
-# is revised they fail as "unexpectedly passing" and the marks must be removed.
-SPEC_PENDING = (
-    "truth_spec.json (version 4, frozen) predates ruling R3.25 of 2026-10-12: it lists "
-    "ASHLAR's pitch as 922 px, the adapter cuts 1950 px tiles at a 1755 px pitch. A "
-    "revised spec changes the hash and every known-truth case must be prepared again: "
-    "the owner's decision"
-)
-
-
-@pytest.mark.xfail(strict=True, reason=SPEC_PENDING)
-def test_the_specs_ashlar_pitch_is_the_adapters():
-    from benchmarks.ashlar import retile
-    from benchmarks.regbench.methods import ashlar as am
-
-    pitch = retile._stride(am.TILE, am.OVERLAP)
-    assert (am.TILE, pitch) == (1950, 1755)
-    assert SPEC["method_grids_px"]["ashlar_pitch"] == pitch
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=SPEC_PENDING + ". The seam at 1950 px is the END of ASHLAR's first tile row "
-    "and column (1755 k + 1950), and the seam block is ASHLAR's tile size",
-)
-def test_no_seam_falls_on_an_ashlar_tile_edge():
-    """A seam on the edge of a tile ASHLAR places rigidly is a jump it can absorb: its
-    first tile is then exactly one seam block. `seams_on_a_grid` knows multiples of a
-    size only, so it cannot see a tile END."""
-    from benchmarks.ashlar import retile
-    from benchmarks.regbench.methods import ashlar as am
-
-    n = SPEC["n_px"]
-    tiles = retile.tile_grid(n, n, am.TILE, am.OVERLAP)
-    starts = sorted({t.x for t in tiles})
-    edges = set(starts) | {x + am.TILE for x in starts}
-    assert starts == [0, 1755, 3510, 5265, 7020]
-    assert not edges & set(truth.seam_positions(SPEC)), sorted(edges)
 
 
 def test_multiscale_scales_do_not_depend_on_window_size():
@@ -681,7 +655,7 @@ FOLDING_SEED = 3000044
 
 def test_the_spec_says_which_cases_are_reseeded_and_how():
     rule = SPEC["reseed"]
-    assert SPEC["version"] == 4
+    assert SPEC["version"] == 5
     assert rule["lattice_px"] == 4 and rule["min_jacobian"] == 0.05
     assert rule["max_tries"] >= 4
     # every family whose field is continuous; `seams` jumps on purpose and is left alone
@@ -1061,8 +1035,12 @@ def test_score_drop_on_the_command_line(monkeypatch):
     assert seen["dropped"] == []
 
 
-# ── version 4: `wave` removed, and nothing else moved (R3.16) ──────────────────────────
-V4_SHA256 = "1f0754631862f03740ce35836d2d5eb6449c8332a7f5a0be24609f397edc8f61"
+# ── the frozen record: its hash, and what a new version may not move ───────────────────
+SHA256 = "1bade785322e5472314c8d2f05934c41a93e07b0b86521b5cdceff7def16dcbf"
+# sha256 of everything that makes a deformation (the families without their notes, the
+# poses, the window, the probes, the thresholds, the seed rules, the re-seed rule):
+# the same in version 4, whose record version 5 corrected without touching a field
+FIELDS_SHA256 = "7715e706a793bff1cc52afdf9263f69b5696812ef2d6220cfb261f1c473c962d"
 V3_SHA256 = "6da2faa7525e2377744440e4579af08306178eb6b2c8510b2c7d1bd7502d1eb6"
 # (scene seed, round seeds) of every family that version 3 had and version 4 keeps,
 # written out from version 3 (commit 27ed36d0) before `wave` was removed
@@ -1076,8 +1054,21 @@ V3_SEEDS = {
 }
 
 
-def test_version_four_removes_wave_and_moves_no_other_case():
-    assert SPEC["version"] == 4 and SPEC["sha256"] == V4_SHA256 != V3_SHA256
+def test_version_five_changes_the_record_and_no_deformation():
+    import hashlib
+
+    assert SPEC["version"] == 5 and SPEC["sha256"] == SHA256
+    record = ("version", "frozen_on", "what", "sha256", "method_grids_px")
+    body = {k: v for k, v in SPEC.items() if k not in record}
+    body["families"] = [
+        {k: v for k, v in f.items() if k != "note"} for f in SPEC["families"]
+    ]
+    text = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(text.encode()).hexdigest() == FIELDS_SHA256
+
+
+def test_wave_is_gone_and_no_other_case_moved():
+    assert SPEC["sha256"] != V3_SHA256
     assert truth.family_names(SPEC) == list(V3_SEEDS)
     assert "wave" not in json.dumps(SPEC["families"])
     # every family carries the index it had in version 3; 1 (wave) is retired

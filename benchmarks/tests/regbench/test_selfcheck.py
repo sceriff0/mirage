@@ -205,7 +205,7 @@ def squeezed(pair):
 
 @pytest.mark.parametrize("direction", DIRECTIONS)
 def test_a_dot_the_writer_shrank_is_still_a_dot(pair, direction):
-    """The case STARE's selfcheck met at 8192 x 10240 (2026-10-12): the writer's own
+    """The case STARE's selfcheck meets at 8192 x 10240: the writer's own
     transform shrinks the image somewhere, the points follow it exactly, and the dots
     there are narrower than a dot as drawn. They are found and measured like the rest."""
     image, maps = squeezed(pair)

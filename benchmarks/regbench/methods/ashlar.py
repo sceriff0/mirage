@@ -105,13 +105,11 @@ VERSION = "1.20.0"
 SELFCHECK_REF_DOTS = True
 
 # Frozen: changing one after a cohort run is a post hoc change.
-# TILE was 1024 until 2026-10-12. Ruling R3.25 (the owner, 2026-10-12) made it 1950 px,
-# the tile of the scanner the cohort was acquired on (pixel size 0.325 um), and confirmed
-# the 10 % overlap: a pitch of round(1950 x 0.9) = 1755 px (`retile._stride`). This was
-# changed BEFORE any ASHLAR result existed: no cohort run of it had been made, and its
-# selfcheck had never run (its image has no `python`). Nothing else here names a tile
-# size: the cut, the anchored cut, the point map, the seam mask and the key of the
-# shared reference tiles (`reference_tiles`) all read these two.
+# TILE is the tile of the scanner the cohort was acquired on (1950 px at 0.325 um per
+# pixel) and OVERLAP the owner's ruling: a pitch of round(1950 x 0.9) = 1755 px
+# (`retile._stride`). Nothing else here names a tile size: the cut, the anchored cut,
+# the point map, the seam mask and the key of the shared reference tiles
+# (`reference_tiles`) all read these two.
 TILE = 1950
 OVERLAP = 0.1
 MAX_SHIFT_UM = 15.0  # ASHLAR's own default (scripts/ashlar.py:63)
@@ -367,8 +365,7 @@ def mosaic_origin_xy(placement):
     then be that of a few hundred pixels at the slide's edge. On a cohort slide (about
     35 x 46 tiles) the two medians agree unless ASHLAR placed its tiles very unevenly.
     The value is always one tile's own offset (the lower weighted median), never a mean
-    of two. A placement without extents (recorded before 2026-10-12) gets the plain
-    median. The scored map does not use this number: each point takes its own tile's
+    of two. A placement without extents gets the plain median. The scored map does not use this number: each point takes its own tile's
     placement (``point_map``).
     """
     off = np.asarray(placement["ref_pos_yx"], dtype=float) - np.asarray(

@@ -352,7 +352,7 @@ def test_growing_the_outlines_does_not_touch_the_nuclei_or_the_spec(real_like):
     # the expansion distance is not a frozen parameter: the spec and its hash stand
     spec = truth.load_spec()
     assert spec["sha256"] == (
-        "1f0754631862f03740ce35836d2d5eb6449c8332a7f5a0be24609f397edc8f61"
+        "1bade785322e5472314c8d2f05934c41a93e07b0b86521b5cdceff7def16dcbf"
     )
     assert "expand" not in truth.SPEC_PATH.read_text()
 

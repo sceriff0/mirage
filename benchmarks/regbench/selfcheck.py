@@ -137,9 +137,8 @@ LARGE_HW = (4096, 5120)
 # One patient of three slides (user ruling R3.19, 2026-10-11): the reference and two
 # moving rounds on the same canvas, each round with its own map (`ROUND_POSES`).
 VALIS_PATIENT = (DEFAULT_HW, None, None)
-# ASHLAR's canvas: 5 x 6 of its 1950 px tiles at a 1755 px pitch (the same grid the
-# 4096 x 5120 canvas gave at 1024 px tiles, before ruling R3.25 of 2026-10-12; that
-# canvas would now be 3 x 3 tiles with one interior tile).
+# ASHLAR's canvas: 5 x 6 of its 1950 px tiles at a 1755 px pitch, twelve of them
+# interior, the last row and column partly padding.
 ASHLAR_HW = (8192, 10240)
 ASHLAR_PATIENT = (ASHLAR_HW, None, None)
 # A case, by method or label: a PAIR `(reference (H, W), moving (H, W) or None for the
@@ -150,7 +149,7 @@ SIZES = {
     # two cases are ASHLAR's pair and its patient, the patient run round by round (STARE
     # is a pair method): they are there for the anchored ASHLAR rows, which read STARE's
     # rigid matrix of the SAME case and round (`--m0-from`), and they cost STARE three
-    # more registrations, of ASHLAR's canvas (8192 x 10240 since 2026-10-12).
+    # more registrations, of ASHLAR's canvas.
     "stare": [(DEFAULT_HW, None), (LARGE_HW, None), (ASHLAR_HW, None), ASHLAR_PATIENT],
     # The preprocessing row and its tuning runs (`stare_prep`, `stare_prep_<candidate>`):
     # STARE's two pairs, without ASHLAR's patient (no row reads their rigid matrix).
@@ -233,12 +232,10 @@ SIZES = {
         ((40000, 50000), (40000, 48000)),
         ((40000, 48000), (40000, 50000)),
     ],
-    # ASHLAR at the cohort's own geometry, 1950 px tiles and a 1755 px pitch (R3.25,
-    # 2026-10-12; the selfcheck and the cohort read the same `TILE`), on one canvas:
-    # 8192 x 10240, 5 x 6 tiles with twelve interior tiles and four-tile corners. A
-    # canvas of 3 x 3 tiles (all but one on the border) is not checked: the 2048 x 2560
-    # pair was dropped for that on 2026-10-11 (R3.19) at 1024 px tiles, and 4096 x 5120
-    # would be the same grid at 1950 px (see `MASK_MAX`). The second case
+    # ASHLAR at the cohort's own geometry, 1950 px tiles and a 1755 px pitch (the
+    # selfcheck and the cohort read the same `TILE`), on one canvas: 8192 x 10240, 5 x 6
+    # tiles with twelve interior tiles and four-tile corners. A canvas of 3 x 3 tiles or
+    # fewer (all but one on the border) is not one of its cases. The second case
     # is one patient of three slides: ASHLAR takes every cycle in one command and aligns
     # each later cycle to the reference stitch, so two moving cycles in one mosaic (its
     # planes, its `origin_xy`, its shared reference tiles) are checked together, each
@@ -280,20 +277,18 @@ MEDIAN_STEP = 4  # ... evaluated on a lattice of this step and interpolated
 WINDOW = 7  # px: second-moment width and centroid
 # What counts as a dot: the second-moment width of a peak in the 7 px window. A dot as
 # drawn (sigma 1.5 px) measures 1.39 to 1.50; a sigma 5 px nucleus 1.92; one hot pixel 0,
-# two adjacent ones 0.35. The band must take a dot at whatever size the method's writer
-# drew it, because the check asks WHERE a dot is and registration accuracy is not its
-# business. Measured on dots resampled through a linear map (bilinear and cubic):
+# two adjacent ones 0.35. The band takes a dot at whatever size the method's writer drew
+# it, from half size to about twice, because the check asks WHERE a dot is and
+# registration accuracy is not its business. Measured on dots resampled through a
+# linear map (bilinear and cubic):
 #   scale    0.4    0.5    0.6    0.75   1      1.2    1.5
 #   width    0.60   0.75   0.90   1.12   1.40   1.57   1.71
-# with the centroid within 0.1 px of the mapped centre down to 0.4. The lower bound was
-# 1.2 until 2026-10-12, which a dot shrunk below about 0.8 fails while one stretched 1.5
-# times passes. It met its first such dot when STARE's selfcheck gained the 8192 x 10240
-# canvas: ONE dot of 8891, 110 px from the right edge and outside the tissue, where
-# STARE's mesh has nothing to hold on to and shrinks the image to 0.64 x 0.89. It was
-# drawn 0.09 px from where STARE's own map puts it, measured 1.19, and was not counted
-# as a dot, so its 512 px block read 28 of 29 found and the run `inconsistent`. 0.7 is
-# half size, as far below a dot as the upper bound is above it. Narrow detections are
-# counted (`n_narrow`): nothing about them is hidden.
+# with the centroid within 0.1 px of the mapped centre down to 0.4. A narrower band
+# makes the verdict depend on the registration's local scale: on the 8192 x 10240
+# canvas STARE's mesh shrinks the image to 0.64 x 0.89 outside the tissue, one dot of
+# 8891 is drawn there 1.19 px wide, 0.09 px from where STARE's own map puts it, and a
+# lower bound of 1.2 would turn that into a 512 px block with 28 of 29 found. Narrow
+# detections are counted (`n_narrow`): nothing about them is hidden.
 WIDTH_PX = (0.7, 1.8)
 NARROW_PX = 1.2  # below it the writer shrank the dot to under about 0.8 of its size
 NOISE_FACTOR = 8.0  # x 1.4826 x MAD of the block
@@ -323,7 +318,7 @@ COVER_NEAR_PX = 16.0
 # numbers on all dots, on the unmasked dots and on the masked dots alone are recorded
 # for every case (`sets`), with the verdict under each cap of `MASK_CAPS`.
 #   overlap  ASHLAR, 1950 px tiles at a 1755 px pitch, on the 8192 x 10240 canvas (5 x
-#            6 tiles; its only selfcheck canvas). MEASURED on that canvas on 2026-10-12
+#            6 tiles; its only selfcheck canvas). MEASURED on that canvas
 #            with the adapter's own geometry (its tile grid, `tilemap.on_seam` at the
 #            adapter's 8 px dot margin, on the selfcheck's own dots, both rounds of the
 #            patient, seeds 0 to 2; no image is involved, so this needs no ASHLAR;
@@ -339,17 +334,12 @@ COVER_NEAR_PX = 16.0
 #              these cases gives the same shares as), drawn on the
 #              grid or following the true map                       0.20 to 0.21
 #              anchored, the true map plus 46 px, worst of four     0.25
-#            (At 1024 px tiles on 4096 x 5120, measured 2026-10-11 and again
-#            2026-10-12: 0.22 to 0.23, 0.27 to 0.30, 0.36, 0.42; anchored 0.22 to
-#            0.25. The overlap is the same tenth of the pitch; the fixed 46 px and the
-#            8 px margin are a smaller part of a larger tile.) The share grows with the
-#            shifts because a moving tile drawn away from where it was cut overlaps
-#            other reference tiles; an anchored tile is cut where it belongs, so it is
-#            drawn within the map's non-rigid residual (under 10 px on these cases) of
-#            the grid. The cap was set at 1024 px tiles as that geometry's worst case
-#            within ASHLAR's own limit, 0.36, plus 0.14; it is KEPT at 0.50 for 1950 px
-#            tiles, where it stands 0.22 above the worst measured case: it is a flag,
-#            never a gate (R3.22), and at least half of the dots are always judged.
+#            The share grows with the shifts because a moving tile drawn away from
+#            where it was cut overlaps other reference tiles; an anchored tile is cut
+#            where it belongs, so it is drawn within the map's non-rigid residual
+#            (under 10 px on these cases) of the grid. The cap, 0.50, stands 0.22 above
+#            the worst case within ASHLAR's own limit: it is a flag, never a gate
+#            (R3.22), and at least half of the dots are always judged.
 #   seams    PALOM: 8 px either side of the edges between blocks with different shifts.
 #            All edges of 1024 px blocks: 1 - (1 - 16/1024)^2 = 0.03; 2048 px: 0.016.
 #            The cap is 3.2 x that share at 1024 px blocks; PALOM's adapter applies the

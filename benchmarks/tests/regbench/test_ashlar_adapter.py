@@ -133,7 +133,7 @@ def test_registered_and_named():
     assert methods.variant_names("ashlar") == ["ashlar"]
     assert not hasattr(am, "register")
     # frozen values of the plan
-    # the cohort scanner's tile and the owner's 10 % overlap (R3.25, 2026-10-12)
+    # the cohort scanner's tile and the owner's 10 % overlap
     assert (am.TILE, am.OVERLAP, am.MAX_SHIFT_UM) == (1950, 0.1, 15.0)
     assert (am.NOISE_FRAC, am.NOISE_MIN_COUNTS) == (0.002, 3.0)
     assert sc.sizes_for("ashlar_clean") == sc.sizes_for("affine_ashlar_clean")
@@ -341,10 +341,8 @@ def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
 # with the stand-in's stitch (`off_grid`: the first tile 4 px up and 7 px left of all
 # the others).
 SLIVERS = {
-    # the last tiles hold 293 and 805 px; 98 and 610 px of them are in no other tile.
-    # The first tile holds 61 % of the slide, so the origin is ITS offset
-    (2048, 2560): ((2, 2), (293, 805), [0.0, 0.0]),
-    # thin on both axes: 245 and 305 px, 50 and 110 px of them in no other tile
+    # thin on both axes: the last tiles hold 245 and 305 px, 50 and 110 px of them in
+    # no other tile. The first tile holds most of the slide, so the origin is ITS offset
     (2000, 2060): ((2, 2), (245, 305), [0.0, 0.0]),
     # the last row and column hold 150 and 135 px, ALL of them also in the tile before
     (1905, 5400): ((2, 4), (150, 135), [-7.0, -4.0]),
@@ -761,6 +759,52 @@ def test_the_anchor_is_found_in_a_stare_selfchecks_work_folder(tmp_path, pair):
         got, where = am.read_anchor({"m0_from": str(work)}, case, None)
         np.testing.assert_array_equal(got, M0)
         assert where == str(path)
+
+
+def test_stares_selfcheck_holds_the_anchors_of_ashlars_own_cases(tmp_path):
+    """The anchored rows read STARE's matrix of the SAME case: so STARE's selfcheck
+    list holds ASHLAR's pair and patient, on ASHLAR's canvas, and each of their rounds
+    is found in the folder STARE's selfcheck leaves it in (a stand-in record here: the
+    real registrations of that canvas take minutes and run on the cluster)."""
+    cases = sc.sizes_for("ashlar")
+    assert (
+        cases
+        == [(sc.ASHLAR_HW, None), sc.ASHLAR_PATIENT]
+        == sc.sizes_for("affine_ashlar_clean")
+    )
+    assert sc.sizes_for("stare")[-2:] == cases and sc.ASHLAR_HW == (8192, 10240)
+    work = tmp_path / "stare_work"
+    used, wanted = set(), []
+    for size in sc.sizes_for("stare"):
+        folder = sc.case_folder(size, used)
+        used.add(folder)
+        group, ids = sc.case_names(size)
+        wanted += [(size, folder, group, cid) for cid in ids if size in cases]
+    assert [(f, c) for _, f, _, c in wanted] == [
+        ("8192x10240", "pair_8192x10240"),
+        ("patient_8192x10240", "patient_8192x10240_round1"),
+        ("patient_8192x10240", "patient_8192x10240_round2"),
+    ]
+    for i, (_, folder, group, cid) in enumerate(wanted):
+        case = Case(
+            dataset=sc.DATASET, case_id=cid, group=group, ref_nuclear="",
+            mov_nuclear="", ref_image="", mov_image="", modality="fluorescence",
+            diagonal=1.0, ref_hw=list(sc.ASHLAR_HW), mov_hw=list(sc.ASHLAR_HW),
+        )  # fmt: skip
+        m0 = M0 + np.array([[0, 0, i], [0, 0, 0], [0, 0, 0]])  # one matrix per round
+        path = stare_run(work / folder / "out", case, m0)
+        got, where = am.read_anchor({"m0_from": str(work)}, case, None)
+        np.testing.assert_array_equal(got, m0)
+        assert where == str(path)
+    # a round STARE's selfcheck did not leave is no anchor
+    gone = Case(
+        dataset=sc.DATASET, case_id="patient_8192x10240_round3",
+        group="patient_8192x10240", ref_nuclear="", mov_nuclear="", ref_image="",
+        mov_image="", modality="fluorescence", diagonal=1.0,
+        ref_hw=list(sc.ASHLAR_HW), mov_hw=list(sc.ASHLAR_HW),
+    )  # fmt: skip
+    got, why = am.read_anchor({"m0_from": str(work)}, gone, None)
+    assert got is None and why.startswith("anchor unavailable")
 
 
 def test_anchored_moving_tiles_are_cut_where_the_anchor_puts_them(

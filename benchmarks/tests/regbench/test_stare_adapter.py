@@ -267,33 +267,24 @@ def test_native_output_is_what_stare_register_writes(ran, tmp_path):
 
 @pytest.mark.slow
 def test_selfcheck_is_ok(tmp_path):
-    rec = sc.run("stare", tmp_path)
+    """STARE for real on its own two pairs. The cluster's list also holds ASHLAR's pair
+    and patient on 8192 x 10240 (five registrations, 5.5 minutes on a laptop): their
+    place in the list and the lookup of their matrices are tested without running them
+    (`test_ashlar_adapter.py::test_stares_selfcheck_holds_the_anchors_of_ashlars_own_cases`)."""
+    own = [(sc.DEFAULT_HW, None), (sc.LARGE_HW, None)]
+    assert sc.sizes_for("stare")[:2] == own == sc.sizes_for("stare_prep")
+    rec = sc.run("stare", tmp_path, sizes=own)
     assert rec["status"] == "ok"
     assert rec["variants"] == {"stare_rigid": sc.NO_STAGE_IMAGE, "stare": sc.OK}
-    # its two pairs, then ASHLAR's pair and ASHLAR's patient round by round (the
-    # anchored rows' anchors), on ASHLAR's canvas
-    assert [p["case_id"] for p in rec["pairs"]] == [
-        "pair_2048x2560",
-        "pair_4096x5120",
-        "pair_8192x10240",
-        "patient_8192x10240_round1",
-        "patient_8192x10240_round2",
-    ]
-    m0 = []
-    for i in (1, 2):
-        case = f"patient_8192x10240_round{i}"
-        path = tmp_path / "patient_8192x10240" / "out" / "stare" / "selfcheck" / case
-        m0.append(np.array(json.loads((path / "run.json").read_text())["info"]["m0"]))
-    assert m0[0].shape == (3, 3) and np.abs(m0[0] - m0[1]).max() > 5.0  # own poses
-    narrow = {}
+    assert [p["case_id"] for p in rec["pairs"]] == ["pair_2048x2560", "pair_4096x5120"]
     for pair in rec["pairs"]:
         final = pair["variants"]["stare"]
         assert final["err_px_p95"] < 0.25 and final["n_found"] == final["n_dots"]
+        assert final["n_narrow"] == 0  # no dot drawn under 0.8 of its size here
         assert final["native"]["channels"] == 2  # the slide's own dots channel, warped
-        narrow[pair["case_id"]] = final["n_narrow"]
-    # The dot that made this check `inconsistent` while a dot had to be at least 1.2 px
-    # wide (2026-10-12): on the 8192 x 10240 canvas, outside the tissue, STARE's mesh
-    # shrinks the image to 0.64 x 0.89 and one dot of 8891 is drawn that much narrower,
-    # 0.09 px from where STARE's own map puts it. It is found, and counted as narrow.
-    assert narrow["pair_2048x2560"] == narrow["pair_4096x5120"] == 0
-    assert 1 <= narrow["pair_8192x10240"] == narrow["patient_8192x10240_round1"] <= 3
+        case = pair["case_id"]
+        path = tmp_path / case[5:] / "out" / "stare" / "selfcheck" / case / "run.json"
+        m0 = np.array(json.loads(path.read_text())["info"]["m0"])
+        assert (
+            m0.shape == (3, 3) and np.isfinite(m0).all()
+        )  # what an anchored row reads

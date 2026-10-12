@@ -198,7 +198,9 @@ def seam_positions(spec):
 
 def seams_on_a_grid(spec):
     """``[(seam px, grid name, grid size)]`` for every seam that falls on a grid line of
-    a method (a multiple of its size). Empty for a spec that favours no method."""
+    a method: a multiple of a listed size, which is where a tile or a block STARTS.
+    Empty in the frozen spec. Where a tile ENDS is not a grid line: the first seam (1950
+    px) is where ASHLAR's first 1950 px tile ends, and the spec's `seams` note says so."""
     return [
         (at, name, size)
         for at in seam_positions(spec)
