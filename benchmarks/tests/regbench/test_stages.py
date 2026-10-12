@@ -353,19 +353,25 @@ def test_the_cost_of_a_round_is_summed_over_its_jobs():
     got = stages.summarise(coarse, tiles, solve)
     # from the start of COARSE to the end of SOLVE, queue waits included
     assert got["elapsed_with_queue_s"] == pytest.approx(2010.0 - 1000.0)
-    # COARSE + the longest tile (both its attempts) + SOLVE: no queue, every tile at once
-    assert got["longest_tile_s"] == pytest.approx(70.0)
-    assert got["wall_unlimited_parallel_s"] == pytest.approx(60.0 + 70.0 + 10.0)
-    # every attempt of every job: allocated CPUs x duration, and measured CPU time
-    walls = 2 * 60.0 + 2 * (40.0 + 20.0 + 50.0 + 30.0) + 1 * 10.0
+    # COARSE + the longest tile + SOLVE, each the attempt its job ended ok with: no
+    # queue, every tile at once. Tile 1's killed attempt (20 s) is not in it
+    assert got["longest_tile_s"] == pytest.approx(50.0)
+    assert got["wall_unlimited_parallel_s"] == pytest.approx(60.0 + 50.0 + 10.0)
+    # the attempts that succeeded: allocated CPUs x duration, and measured CPU time
+    walls = 2 * 60.0 + 2 * (40.0 + 50.0 + 30.0) + 1 * 10.0
     assert got["cpu_h_allocated"] == pytest.approx(walls / 3600.0)
-    assert got["cpu_h_measured"] == pytest.approx((90 + 70 + 30 + 80 + 50 + 8) / 3600.0)
+    assert got["cpu_h_measured"] == pytest.approx((90 + 70 + 80 + 50 + 8) / 3600.0)
+    # the attempt that failed is wasted, as a failed attempt of any method is
+    assert got["wasted_attempts"] == 1 and got["wasted_wall_s"] == pytest.approx(20.0)
+    assert got["wasted_cpu_h_allocated"] == pytest.approx(2 * 20.0 / 3600.0)
+    assert got["wasted_cpu_h_measured"] == pytest.approx(30.0 / 3600.0)
+    # the peak is the largest attempt's, the failed one's here
     assert (got["largest_job_peak_mb"], got["largest_job"]) == (3900.0, "tile")
     assert got["largest_job_row"] == 1
     assert (got["n_jobs"], got["n_tiles"], got["n_retries"]) == (6, 3, 1)
     # tiles 0, 2 and the lost attempt of tile 1 overlapped: 3 jobs of 2 CPUs
     assert got["peak_cpus_at_once"] == 6
-    assert got["unmeasured_attempts"] == 0
+    assert got["unmeasured_attempts"] == 0 and got["complete"] is True
     assert got["allocation"]["tile"] == stages.allocation("tile")
 
 
@@ -386,6 +392,104 @@ def test_an_attempt_killed_without_a_duration_is_counted_and_in_no_sum():
     assert got["unmeasured_attempts"] == 1 and got["n_jobs"] == base["n_jobs"] + 1
     assert got["n_retries"] == 2
     assert got["cpu_h_allocated"] == base["cpu_h_allocated"]
+    assert got["wasted_wall_s"] == base["wasted_wall_s"]  # unknown, not zero: flagged
+
+
+def test_a_round_that_failed_shows_what_its_jobs_cost():
+    """SOLVE never ran and a tile failed for good: nothing is the cost of a transform,
+    and every attempt that ran is there, the failed ones as wasted."""
+    coarse, tiles, _ = round_records()
+    tiles[2] = {**tiles[2], "ok": False, "exit": 1}
+    got = stages.summarise(coarse, tiles, None)
+    assert got["complete"] is False and got["elapsed_with_queue_s"] is None
+    assert got["solve_s"] == 0 and got["coarse_s"] == pytest.approx(60.0)
+    assert got["wasted_attempts"] == 2
+    assert got["wasted_wall_s"] == pytest.approx(20.0 + 30.0)
+    assert got["cpu_h_measured"] == pytest.approx((90 + 70 + 80) / 3600.0)
+    assert stages.summarise(None, [], None)["n_jobs"] == 0
+
+
+def test_the_queue_time_does_not_span_two_submissions():
+    coarse, tiles, solve = round_records()
+    one = stages.summarise(
+        {**coarse, "submission": "A"}, tiles, {**solve, "submission": "A"}
+    )
+    assert one["elapsed_with_queue_s"] == pytest.approx(1010.0)
+    two = stages.summarise(
+        {**coarse, "submission": "A"}, tiles, {**solve, "submission": "B"}
+    )
+    assert two["elapsed_with_queue_s"] is None
+    assert two["wall_unlimited_parallel_s"] == one["wall_unlimited_parallel_s"]
+
+
+def test_one_retry_rule_for_a_staged_row_and_for_a_run_that_is_one_job():
+    """A failed attempt's time and CPU go to `wasted_*` and `register_s` is the
+    attempts that succeeded, whether the attempt was a stage job or a whole run."""
+    from benchmarks.regbench import score
+
+    jobs = {**stages.summarise(*round_records()), "execution": "jobs"}
+    stitch = {
+        "cpus": 4,
+        "wall_s": 30.0,
+        "peak_rss_mb": 900.0,
+        "failed_attempts": [{"attempt": 1, "exit": 143, "wall_s": 14400.0, "cpus": 4}],
+    }
+    run = {
+        "ok": True,
+        "method": "stare",
+        "unit": "pair",
+        "launch_id": "9_0",
+        "register_s": jobs["wall_unlimited_parallel_s"],
+        "write_s": 30.0,
+        "resources": {
+            "wall_s": jobs["wall_unlimited_parallel_s"],
+            "cpu_s": jobs["cpu_h_measured"] * 3600,
+        },
+        "info": {"jobs": jobs},
+        "native": {"stitch_job": stitch},
+    }
+    row = score.resource_row(run)
+    assert row["register_s"] == pytest.approx(120.0)  # no failed attempt in it
+    assert row["total_to_image_s"] == pytest.approx(150.0)
+    # the failed tile attempt and the failed STITCH attempt
+    assert row["wasted_attempts"] == 2
+    assert row["wasted_wall_s"] == pytest.approx(20.0 + 14400.0)
+    assert row["wasted_cpu_h"] == pytest.approx(30.0 / 3600.0)
+    assert row["unmeasured_attempts"] == 0
+    # a run that is one job, with one failed attempt before it: the same split
+    plain = score.resource_row(
+        {
+            "ok": True,
+            "register_s": 120.0,
+            "resources": {"wall_s": 120.0, "cpu_s": 300.0},
+            "previous_attempts": [{"wall_s": 20.0, "cpu_s": 30.0}],
+        }
+    )
+    assert plain["register_s"] == 120.0 and plain["wasted_wall_s"] == 20.0
+    assert plain["unmeasured_attempts"] == ""
+    # a staged round that failed: the row's cost is what its stage jobs spent
+    coarse, tiles, _ = round_records()
+    spent = {**stages.summarise(coarse, tiles, None), "execution": "jobs"}
+    lost = score.resource_row(
+        {
+            "ok": False,
+            "cause": "exception",
+            "method": "stare",
+            "launch_id": "9_1",
+            "register_s": 0.4,
+            "resources": {"wall_s": 0.4, "cpu_s": 0.1},
+            "info": {"jobs": spent},
+        }
+    )
+    assert lost["register_s"] == pytest.approx(60.0 + 50.0 + 20.0)
+    assert lost["cpu_h"] * 3600 == pytest.approx(90 + 70 + 80 + 50 + 30)
+    base = {"dataset": "multiplex", "group": "P1", "method": "stare", "unit": "pair"}
+    (rec,) = score.summarise_resources([{**lost, **base}])
+    assert rec["wasted_wall_s"] == pytest.approx(130.0) and rec["n_ok"] == 0
+    # an attempt without a duration: the patient's row says its sums are lower bounds
+    jobs["unmeasured_attempts"] = 2
+    (rec,) = score.summarise_resources([{**score.resource_row(run), **base}])
+    assert rec["unmeasured_attempts"] == 2
 
 
 # ── STARE as the pipeline runs it, for real ───────────────────────────────────
@@ -697,6 +801,10 @@ def test_a_stage_without_a_record_is_the_schedulers_loss(staged, tmp_path):
     run = run_json(out, "stare", case)
     assert run["cause"] == "infrastructure" and run["no_rerun"] is True
     assert "COARSE: no attempt of this job left a record" in run["error"]
+    # the failed round keeps what its stage jobs cost
+    spent = run["info"]["jobs"]
+    assert spent["complete"] is False and spent["execution"] == "jobs"
+    assert spent["n_jobs"] == 3 and spent["cpu_h_measured"] > 0
     # the stages behind a stage that is not ok do nothing
     for stage in ("tile", "solve"):
         got = adapter.run_stage(case, new, dict(OPTS), stage, force=True)
@@ -900,6 +1008,7 @@ def test_a_retried_tile_runs_alone_with_the_next_attempts_memory(staged, tmp_pat
         stages.read_record(new, "solve"),
     )
     assert (cost["n_jobs"], cost["n_retries"]) == (4, 1)
+    assert cost["wasted_attempts"] == 1 and cost["wasted_wall_s"] > 0
 
 
 def test_the_stage_command_of_the_cli_runs_a_round(

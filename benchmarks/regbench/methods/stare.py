@@ -830,10 +830,26 @@ def register(case, work, opts):
     rnd = Round(case, stage_dir, opts)
     ns, candidate = rnd.ns, rnd.candidate
     mon = opts.get("monitor") or _NullMonitor()
-    if jobs:
-        _collect(rnd)
-    else:
-        _local(rnd, ns.workers, mon)
+    try:
+        if jobs:
+            _collect(rnd)
+        else:
+            _local(rnd, ns.workers, mon)
+    except stages.StageFailed as err:
+        # a round that failed still cost its stage jobs: what they recorded goes with
+        # the failure (the driver keeps it in run.json: info.jobs)
+        try:
+            n = len(rnd.plan()) if rnd.argv["plan"].exists() else 0
+            spent = stages.summarise(
+                rnd.record(stages.COARSE),
+                [rnd.record(stages.TILE, i) for i in range(n)],
+                rnd.record(stages.SOLVE),
+            )
+            spent["execution"] = "jobs" if jobs else "local"
+            err.regbench_info = {"jobs": spent}
+        except Exception:  # the records are unreadable: the failure stands alone
+            pass
+        raise
     made = None
     if candidate:
         made = {

@@ -1200,6 +1200,8 @@ def test_valis_mirage_records_what_ran(mirage):
         "reference.ome.tif": "hard link",
         "moving.ome.tif": "hard link",
     }
+    # placing the slides is the benchmark's own arrangement: timed, clock paused
+    assert 0 <= info["place_s"] < run["register_s"]
     assert info["cost_after_register"]["wall_s"] <= run["register_s"]
     assert info["nuclear_channel"]["moving"] == {"index": 0, "name": "DAPI"}
     assert info["stage"]["crop_round"] == "probe" and run["problem"] == ""
@@ -1268,3 +1270,36 @@ def test_a_slide_the_pipeline_did_not_write_fails_its_round(tmp_path):
     run = mirage_run_json(tmp_path / "w", "valis_mirage")
     assert run["ok"] is False
     assert "wrote no registered image of moving" in run["error"]
+
+
+def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
+    tmp_path, pair, monkeypatch
+):
+    """A copy of every slide (two file systems) must not be billed as VALIS's time."""
+    import inspect
+    import time
+
+    from benchmarks.regbench import cost, resources
+
+    def slow(paths, dst_dir):
+        time.sleep(0.6)
+        return {str(p): str(p) for p in paths}, {Path(p).name: "copy" for p in paths}
+
+    monkeypatch.setattr(vp, "place_slides", slow)
+    mon = resources.Monitor()
+    mon.start()
+    placed, how, took = vp.place_slides_unbilled(
+        [pair["moving"]], tmp_path / "in", {"monitor": mon}
+    )
+    assert not mon.paused  # running again for the method
+    billed = mon.snapshot()["wall_s"]
+    mon.stop()
+    assert took >= 0.6 and billed < 0.3 and how == {"moving.ome.tif": "copy"}
+    # without the driver's monitor (a call outside a run) it still times the step
+    assert vp.place_slides_unbilled([pair["moving"]], tmp_path / "in", {})[2] >= 0.6
+    for adapter in (valis120, valis_mirage):
+        source = inspect.getsource(adapter)
+        assert "vp.place_slides_unbilled(" in source and "place_s" in source
+        assert "vp.place_slides(" not in source
+    for name in ("valis", "valis_mirage"):
+        assert "info.place_s" in cost.CLOCK[name]["reading"]

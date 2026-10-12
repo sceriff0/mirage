@@ -1887,9 +1887,9 @@ call; it is then part of the estimate and no number is guessed for it.
 
 | method (adapter) | reading and conversion | its own conversion, reported as | the registration clock | the writer | what it writes |
 |---|---|---|---|---|---|
-| `stare` | inside the clock: STARE's own reader on the cohort's OME-TIFFs | none | COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE (`wall_unlimited_parallel_s`; queue waits are in `elapsed_with_queue_s`) | STITCH, a job of its own once the transform exists, timed on its own | one OME-TIFF per round, every channel, BigTIFF, uncompressed, no pyramid |
-| `valis_mirage` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start | not separable | the pipeline's `valis_registration` up to the writer (rigid, non-rigid, micro) | `Slide.warp_and_save_slide`, clock and peak paused, timed per slide | one pyramidal OME-TIFF per round, every channel (libvips, LZW) |
-| `valis` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start | not separable | `Valis.register()` and `register_micro()` | `warp_and_save_slides`, clock and peak paused; one call writes the patient, a round's share is the call over the slides written | one pyramidal OME-TIFF per round, every channel (libvips, deflate) |
+| `stare` | inside the clock: STARE's own reader on the cohort's OME-TIFFs | none | COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE, each the attempt its job ended ok with (`wall_unlimited_parallel_s`; a failed attempt is `wasted_*`; queue waits are in `elapsed_with_queue_s`) | STITCH, a process of its own inside the round's last job once the transform exists, timed on its own (the attempt that wrote the image) | one OME-TIFF per round, every channel, BigTIFF, uncompressed, no pyramid |
+| `valis_mirage` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start. Outside it: the benchmark placing the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy) | not separable | the pipeline's `valis_registration` up to the writer (rigid, non-rigid, micro) | `Slide.warp_and_save_slide`, clock and peak paused, timed per slide | one pyramidal OME-TIFF per round, every channel (libvips, LZW) |
+| `valis` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start. Outside it: the benchmark placing the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy) | not separable | `Valis.register()` and `register_micro()` | `warp_and_save_slides`, clock and peak paused; one call writes the patient, a round's share is the call over the slides written | one pyramidal OME-TIFF per round, every channel (libvips, deflate) |
 | `deeperhistreg` | the package's own loading is inside the clock (its log's `Loading time` is kept in `stage_s`) | `convert_s` | `run_registration` with the final saving off (its diagnostic images and intermediate fields included, as shipped) | `apply_deformation_pyvips` once per channel; the conversion of each further channel before it and the benchmark's copy of those files into one after it are timed apart (`native.write_parts_s`) | one single-channel pyramidal TIFF per channel (the package's); the benchmark stacks their first pages into one OME-TIFF without a pyramid |
 | `ashlar` | inside the clock: ASHLAR's reading of the tiles it is given | `retile_s` | the command up to the last aligner; a round's share is its `layer_s` plus the reference stitch over the rounds | ASHLAR's writer, inside the same command, timed from the last aligner; then the benchmark's split of the mosaic per round, timed apart (`native.write_parts_s`) | one pyramidal OME-TIFF for the patient, every cycle's channels (BigTIFF, deflate); the benchmark's per-round copies have no pyramid |
 | `palom` | inside the clock: PALOM's reader, lazily, on the cohort's OME-TIFFs | none | `Aligner.coarse_register_affine`, `compute_shifts`, `constrain_shifts` | `block_affine_transformed_moving_img` and `write_pyramid`, timed on their own | one pyramidal OME-TIFF per round, every channel (BigTIFF, zlib) |
@@ -1924,14 +1924,15 @@ The columns, in `resources.csv` per round and summed per patient in
 
 | column | definition |
 |---|---|
-| `elapsed_with_queue_s` | from the start of the first COARSE attempt to the end of SOLVE, on the wall clock: the queue waits between the jobs and the array's concurrency cap are in it |
-| `wall_unlimited_parallel_s` | COARSE + the LONGEST tile + SOLVE, each the sum of its attempts: the wall time with every tile running at once and no queue |
-| `cpu_h_allocated` | sum over every attempt of every job of allocated CPUs x its duration |
+| `elapsed_with_queue_s` | from the start of the first COARSE attempt to the end of SOLVE, on the wall clock: the queue waits between the jobs and the tile submitter's ceiling are in it. Blank when COARSE and SOLVE are of two submissions (a reused stage is not a queue wait) |
+| `wall_unlimited_parallel_s` | COARSE + the LONGEST tile + SOLVE, each the attempt its job ended ok with: the wall time with every tile running at once and no queue |
+| `cpu_h_allocated` | sum over those attempts of allocated CPUs x duration |
 | `cpu_h` | sum over the same attempts of their measured CPU time |
-| `largest_job`, `peak_rss_gb` | the stage of the single job with the highest peak memory, and that peak |
+| `unmeasured_attempts` | stage attempts that ended without a recorded duration (a job the scheduler ended at its time limit): in no sum, so where it is not 0 every time and CPU figure of the row is a LOWER BOUND |
+| `largest_job`, `peak_rss_gb` | the stage of the single attempt with the highest peak memory, failed ones included, and that peak |
 | `n_jobs`, `n_tiles`, `n_job_retries` | attempts run, tiles, attempts beyond the first of each job |
 | `peak_cpus_at_once` | the most allocated CPUs in jobs of the round that overlapped in time (per patient: the largest round's) |
-| `write_cpu_h_allocated`, `write_peak_gb` | STITCH's own process: 4 CPUs x its duration, and its peak |
+| `write_cpu_h_allocated`, `write_peak_gb` | STITCH's own process, the attempt that wrote the image: the pipeline's 4 CPUs x its duration, and its peak |
 
 For these rows the headline columns are defined as follows. `register_s` is
 `wall_unlimited_parallel_s`: the queue-free figure, because the waits belong to the
@@ -1941,11 +1942,35 @@ single job's peak (no job of the round holds more), and `cgroup_peak_gb` is the 
 job's, which holds STITCH and the benchmark's own steps. `cpu_efficiency` is measured
 over allocated CPU time. A duration is the stage command's own process (Python start
 to exit), not the scheduler's elapsed time of the job, which also has the container's
-start. An attempt killed before it could record a duration is counted
-(`info.jobs.unmeasured_attempts`) and is in no sum. `wasted_*` counts the attempts of
-the last job only.
+start. `attempt`, `mem_requested_gb` and `cpus_requested` of such a row describe the
+round's LAST job (the benchmark's allocation), not the registration.
+
+**One retry rule for every method.** A failed attempt's seconds and CPU-hours go to
+`wasted_*`, and `register_s` is the attempts that succeeded. For a method that is one
+job the attempts are the rungs of the memory ladder (`previous_attempts`); for STARE
+they are the stage jobs' own attempts (a retried tile, a COARSE that ran twice) and
+STITCH's, so `coarse_s`, `longest_tile_s` and `solve_s` are the successful attempt of
+each and every other attempt is in `info.jobs.wasted_*` and in the row's `wasted_*`.
+A round that FAILED shows what its stage jobs cost (`info.jobs`, kept with the
+failure), not this job's own clock. A writer that fails after a good registration does
+not make the registration a wasted attempt. Every retried or failed stage attempt is a
+row of `failure_log.csv` (`retry` = `stage`, the job named in `message`): a failed
+`prep` job is the benchmark's (`benchmark`, `benchmark_oom`); a stage job that never
+recorded its end is `timeout` when the next attempt of that job started no earlier than
+its start plus its time limit (the attempts are chained, so that is when it ended), and
+`killed` otherwise, also when there is no later attempt to compare with.
 
 ### Cost by step, as measured here (`cost_end_to_end.csv`, secondary)
+
+`write_s` here IS the headline `write_s`: the method's own writer where its adapter
+times it apart from the benchmark's own copying, and otherwise its write step. The
+copying is in `benchmark_copy_s` and in no total, here or in the headline block
+(`test_cost.py::test_the_headline_write_time_and_the_by_step_one_are_the_same_number`).
+The medians are over the patients that wrote an image for EVERY round
+(`n_patients_partial` counts the others), the completeness rule of the per-method block.
+For both VALIS adapters the benchmark's placing of the slides in the folder VALIS reads
+(a hard link, or a full copy of every slide across file systems) runs with the clock
+paused and is recorded as `info.place_s`, in no cost.
 
 The headline cost is the time to ESTIMATE the transform (`register_s`), and stays so;
 the headline tables also carry the time to the written image and the memory peaks

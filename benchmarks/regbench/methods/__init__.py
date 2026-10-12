@@ -683,6 +683,7 @@ def _run(
     state = None
     error = cause = tb = ""
     no_rerun = False
+    failure_info = None
     mon.start()
     watch.start()
     base["oom_watch"] = watch.record()
@@ -876,6 +877,8 @@ def _run(
         cause, tb = resources.classify_error(exc), traceback.format_exc()
         # already retried where it happened (a stage job): no rung above runs it again
         no_rerun = bool(getattr(exc, "regbench_no_rerun", False))
+        # what the failed run cost in jobs of its own, where the method recorded it
+        failure_info = getattr(exc, "regbench_info", None)
         if isinstance(exc, _OutOfMemory):
             cause = MEMORY_CAUSE[exc.phase]
         elif watch.rose():
@@ -1014,6 +1017,7 @@ def _run(
                     cause or "exception",
                     {**cost, **end},
                     tb,
+                    info=failure_info,
                     no_rerun=no_rerun,
                 )
     # Clock stopped, writers done: what each written image IS (channels, pyramid or not,

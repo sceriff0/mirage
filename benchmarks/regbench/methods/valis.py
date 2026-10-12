@@ -246,7 +246,9 @@ def register_group(cases, work, opts):
         slide_io.init_jvm(mem_gb=heap)
 
     ref_path, moving = vp.patient_slides(cases)
-    placed, how = vp.place_slides([ref_path, *moving.values()], work / "slides")
+    placed, how, place_s = vp.place_slides_unbilled(
+        [ref_path, *moving.values()], work / "slides", opts
+    )
     kwargs = {
         "img_list": [placed[p] for p in (ref_path, *moving.values())],
         "reference_img_f": placed[ref_path],
@@ -263,6 +265,7 @@ def register_group(cases, work, opts):
         "workers_seen": int(valtils.get_ncpus_available()),
         "constructor": {k: _jsonable(v) for k, v in kwargs.items()},
         "slides_placed": how,
+        "place_s": place_s,  # the benchmark's own, clock paused: in no cost
         "jvm_cache": jvm_cache,
         "jvm_heap_gb": heap,
         "jvm_heap": f"-Xmx{heap}G, set by the benchmark through valis.slide_io."

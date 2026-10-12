@@ -233,6 +233,25 @@ def place_slides(paths, dst_dir):
     return placed, how
 
 
+def place_slides_unbilled(paths, dst_dir, opts):
+    """``place_slides`` with the run's clock and peak paused: putting the slides where
+    VALIS reads a folder from is the benchmark's arrangement (a hard link, or a full
+    copy of every slide where the folders are on two file systems), not VALIS's work.
+    Returns ``(placed, how, place_s)``; ``place_s`` is recorded as ``info["place_s"]``
+    and is in no cost."""
+    import time
+
+    mon = monitor_of(opts)
+    mon.pause()
+    t0 = time.perf_counter()
+    try:
+        placed, how = place_slides(paths, dst_dir)
+    finally:
+        took = time.perf_counter() - t0
+        mon.resume()
+    return placed, how, took
+
+
 # ── fields ────────────────────────────────────────────────────────────────────
 def numpy_field(field, warp_tools, copy=True):
     """A VALIS displacement field as a ``(2, H, W)`` array, read NOW.

@@ -85,15 +85,18 @@ CLOCK = {
         "reading": "inside the clock: STARE's own reader on the cohort's OME-TIFFs",
         "convert": NONE,
         "estimate": "COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job "
-        "of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE "
-        "(`wall_unlimited_parallel_s`; queue waits are in `elapsed_with_queue_s`)",
-        "write": "STITCH, a job of its own once the transform exists, timed on its own",
+        "of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE, "
+        "each the attempt its job ended ok with (`wall_unlimited_parallel_s`; a failed "
+        "attempt is `wasted_*`; queue waits are in `elapsed_with_queue_s`)",
+        "write": "STITCH, a process of its own inside the round's last job once the "
+        "transform exists, timed on its own (the attempt that wrote the image)",
         "writes": "one OME-TIFF per round, every channel, BigTIFF, uncompressed, no "
         "pyramid",
     },
     "valis_mirage": {
         "reading": "inside the clock: VALIS's readers, its conversion of every slide "
-        "to its working images, and the JVM start",
+        "to its working images, and the JVM start. Outside it: the benchmark placing "
+        "the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy)",
         "convert": NOT_SEPARABLE,
         "estimate": "the pipeline's `valis_registration` up to the writer (rigid, "
         "non-rigid, micro)",
@@ -102,7 +105,8 @@ CLOCK = {
     },
     "valis": {
         "reading": "inside the clock: VALIS's readers, its conversion of every slide "
-        "to its working images, and the JVM start",
+        "to its working images, and the JVM start. Outside it: the benchmark placing "
+        "the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy)",
         "convert": NOT_SEPARABLE,
         "estimate": "`Valis.register()` and `register_micro()`",
         "write": "`warp_and_save_slides`, clock and peak paused; one call writes the "
@@ -272,9 +276,15 @@ def header_lines(res_rows):
             f"CPUs at once, up to {most} for one round; its wall time is NOT comparable "
             "with the 4-CPU methods', its CPU-hours (`cpu_h`, `cpu_h_allocated`) are. "
             "For these rows `register_s` is `wall_unlimited_parallel_s` (COARSE + the "
-            "longest tile + SOLVE, no queue; `elapsed_with_queue_s` has the waits), "
-            "`total_to_image_s` adds STITCH's own job, and `peak_rss_gb` is the peak "
-            "of the largest single job (`largest_job`)"
+            "longest tile + SOLVE, each the attempt that succeeded, no queue; "
+            "`elapsed_with_queue_s` has the waits), `total_to_image_s` adds STITCH's "
+            "own process, `peak_rss_gb` is the peak of the largest single stage job "
+            "(`largest_job`), and `attempt`, `mem_requested_gb`, `cpus_requested` and "
+            "`cgroup_peak_gb` describe the round's LAST job (the benchmark's "
+            "allocation: its own work and STITCH), not the registration. A failed "
+            "stage attempt is in `wasted_*`; `unmeasured_attempts` counts attempts "
+            "with no recorded duration, and where it is not 0 every time and CPU "
+            "figure of that row is a lower bound"
             + (f"; {int(_median(tiles))} tiles per round (median)." if tiles else ".")
         )
     reused = sum(bool(r.get("reused")) for r in ran)
@@ -350,6 +360,7 @@ COLUMNS = (
     "device",
     "gpu_model",
     "n_rounds",
+    "complete",
     "method_convert_s",
     "benchmark_prep_s",
     "estimate_s",
@@ -409,11 +420,10 @@ def end_to_end(res_rows):
             else:  # and the conversion its writer needed, where that is timed apart
                 convert = _sum([convert, _sum(r.get("write_convert_s") for r in ok)])
         estimate = (_max if patient else _sum)(r["register_s"] for r in ok)
-        # the package's own writer where the adapter times it apart, else the step
-        write = _sum(
-            r["write_writer_s"] if _is_number(r.get("write_writer_s")) else r["write_s"]
-            for r in ok
-        )
+        # the package's own writer where the adapter times it apart, else the step:
+        # `score.resource_row` puts exactly that in the row's `write_s`, so this
+        # column and the headline `write_s` are one number
+        write = _sum(r["write_s"] for r in ok)
         copy = _sum(r.get("write_benchmark_s") for r in ok)
         # The stare_prep row: the benchmark's preprocessing of both images. It runs
         # before the registration clock, so it is NOT in `estimate_s`; it is what that
@@ -443,6 +453,10 @@ def end_to_end(res_rows):
                     sorted({r.get("gpu_model") or "" for r in ok} - {""})
                 ),
                 "n_rounds": len(ok),
+                # every round of the patient wrote its image: only then is the sum
+                # over the rounds the patient's cost (`summarise` reads these alone,
+                # the rule of the per-method block, `score.summarise_cost`)
+                "complete": len(ok) == len(mine),
                 "method_convert_s": convert,
                 "benchmark_prep_s": prep if _is_number(prep) else NONE,
                 "estimate_s": estimate,
@@ -491,13 +505,17 @@ def summarise(rows, common=None, cohort=None):
     those patients only (``n_patients_common``), the same ones for every result."""
     out = []
     for ds, method in dict.fromkeys((r["dataset"], r["method"]) for r in rows):
-        mine = [r for r in rows if (r["dataset"], r["method"]) == (ds, method)]
+        every = [r for r in rows if (r["dataset"], r["method"]) == (ds, method)]
+        # a patient some of whose rounds wrote no image has no cost of its own: the
+        # sum over the rounds it has is not the patient's
+        mine = [r for r in every if r.get("complete", True)]
         rec = {
             "dataset": ds,
             "method": method,
-            "device": "; ".join(sorted({r["device"] for r in mine})),
-            "gpu_model": "; ".join(sorted({r["gpu_model"] for r in mine} - {""})),
+            "device": "; ".join(sorted({r["device"] for r in every})),
+            "gpu_model": "; ".join(sorted({r["gpu_model"] for r in every} - {""})),
             "n_patients": len(mine),
+            "n_patients_partial": len(every) - len(mine),
             "n_patients_cohort": (cohort or {}).get((ds, method), len(mine)),
         }
         shared = (
@@ -538,6 +556,7 @@ SUMMARY_COLUMNS = (
     "device",
     "gpu_model",
     "n_patients",
+    "n_patients_partial",
     "n_patients_cohort",
     "n_patients_common",
     "method_convert_s",
@@ -565,12 +584,19 @@ def markdown(rows, summary, table):
         "puts the other steps beside it, each in its own column, per result that wrote "
         "an image (median over patients; seconds). Every number was measured in this "
         "benchmark, in the method's own job at 4 CPUs (DeeperHistReg's GPU rows also "
-        "had one GPU: column `device`); nothing is taken from another run. "
+        "had one GPU: column `device`), EXCEPT a result whose registration ran as "
+        "several scheduler jobs per round (STARE): its `estimate_s` is COARSE + the "
+        "longest tile + SOLVE, jobs of 2, 2 and 1 CPUs, many tiles at once, and is not "
+        "a 4-CPU time; nothing is taken from another run. "
         "`measured_here_s` is the sum of `method_convert_s`, `benchmark_prep_s`, "
         "`estimate_s` and `write_s`: the total measured time from the cohort's files "
         "to the image that result wrote. The two peaks are the largest over the "
-        "patients: `estimate_peak_gb_max` the process tree while registering, "
-        "`job_peak_gb_max` the whole job, writer included. Methods keep their own "
+        "patients: `estimate_peak_gb_max` the process tree while registering (for a "
+        "result in several jobs: its largest single stage job), `job_peak_gb_max` the "
+        "whole job, writer included (for such a result: its round's LAST job, which "
+        "holds the benchmark's own work and the writer, not the registration). "
+        "`write_s` is the method's own writer and is the headline's `write_s`: the "
+        "benchmark's own copying is in neither. Methods keep their own "
         "readers and writers, so the outputs differ: `written` says what each leaves "
         "on disk, and `merged_image` whether that is already one pyramidal file for "
         "the patient with every round's channels (`yes`) or a file per round (`no`), "
@@ -578,9 +604,11 @@ def markdown(rows, summary, table):
         "that made the cohort's files, are not measured here and are in no number. "
         f"`{NOT_SEPARABLE}` means the package does that step inside its registration "
         "call (it is in `estimate_s`); no number is guessed. Each median is over the "
-        "`n_patients` for which that result wrote an image, of the "
-        "`n_patients_cohort` it was run on: survivors only, so a result that fails "
-        "on the largest patients looks cheaper. The `*_common` columns are the same "
+        "`n_patients` for which that result wrote an image for EVERY round, of the "
+        "`n_patients_cohort` it was run on (a patient with some rounds missing is "
+        "counted in `n_patients_partial` and is in no median): survivors only, so a "
+        "result that fails on the largest patients looks cheaper. The `*_common` "
+        "columns are the same "
         "medians on the `n_patients_common` patients every compared row completed: "
         "only those are on the same patients for every result.\n",
         table(summary, list(SUMMARY_COLUMNS)),

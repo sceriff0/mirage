@@ -380,7 +380,9 @@ def register_group(cases, work, opts):
         )
 
     input_dir, out_dir = work / INPUT_DIR, work / OUT_DIR
-    placed, how = vp.place_slides([ref_path, *moving.values()], input_dir)
+    placed, how, place_s = vp.place_slides_unbilled(
+        [ref_path, *moving.values()], input_dir, opts
+    )
     host = resources.host_info()
     call = {
         **ARGS,
@@ -391,6 +393,7 @@ def register_group(cases, work, opts):
         "n_cpus": int(opts.get("workers") or resources.n_cpus()),
     }
     state = {
+        "place_s": place_s,
         "stages": {},
         "stage_files": {},
         "written": {},
@@ -497,6 +500,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         "cost_after_register": state.get("cost_after_register"),
         "capture_error": state.get("capture_error", ""),
         "slides_placed": how,
+        "place_s": state.get("place_s"),  # the benchmark's own, clock paused
         "slides_written": sorted(state["written"]),
         "slides_expected": sorted(Path(p).name for p in placed.values()),
         "implementation": {

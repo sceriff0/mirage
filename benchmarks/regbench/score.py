@@ -314,6 +314,12 @@ def resource_row(run):
     if per_round is None:
         per_round = wall / rounds if patient else wall
     write_s = _f(run.get("write_s") or 0.0)
+    # The method's own writer where its adapter times it apart from the benchmark's own
+    # copying (ASHLAR's split of the mosaic, DeeperHistReg's stacking): that copying is
+    # in no total. `cost.end_to_end` takes the same number: ONE definition of write_s.
+    own_writer = (run.get("native") or {}).get("write_parts_s")
+    if isinstance(own_writer, dict) and own_writer.get("writer") is not None:
+        write_s = _f(own_writer["writer"])
 
     def gb(key, src=r):
         return src[key] / 1024.0 if src.get(key) is not None else math.nan
@@ -358,6 +364,29 @@ def resource_row(run):
     stitch = (
         native.get("stitch_job") if isinstance(native.get("stitch_job"), dict) else {}
     )
+    unmeasured = 0
+    if staged:
+        # ONE rule for every method: an attempt that failed is wasted, and the cost is
+        # the attempts that succeeded. Here the attempts are the stage jobs'.
+        unmeasured = int(jobs.get("unmeasured_attempts") or 0)
+        spent = [
+            (
+                _f(jobs.get("wasted_wall_s")),
+                _f(jobs.get("wasted_cpu_h_measured")) * 3600,
+            )
+        ] * bool(jobs.get("wasted_attempts"))
+        spent += [
+            (_f(a.get("wall_s")), math.nan) for a in stitch.get("failed_attempts") or []
+        ]
+        if not ok and not run.get("registered"):
+            # a round that failed: what its stage jobs cost, not this job's own clock
+            good = _f(jobs.get("cpu_h_measured")) * 3600.0
+            wall = _f(jobs.get("wall_unlimited_parallel_s")) + float(
+                np.nansum([w for w, _ in spent])
+            )
+            cpu = good + float(np.nansum([c for _, c in spent]))
+        else:
+            wasted += spent
     return {
         "ok": ok,
         "cause": run.get("cause", ""),
@@ -419,6 +448,10 @@ def resource_row(run):
         # attempts whose cost nobody recorded (in NO wasted total)
         "wasted_from_scheduler": from_scheduler,
         "wasted_unknown": unknown,
+        # stage attempts that ended without a recorded duration (a job the scheduler
+        # ended at its time limit): every time and CPU figure of the row is then a
+        # LOWER BOUND. Blank for a run that is one job
+        "unmeasured_attempts": unmeasured if staged else "",
         # the transform existed when this row failed: its writer, or the job around
         # the writer, failed. The registration is then no wasted attempt
         "registered": bool(run.get("registered")),
@@ -1911,6 +1944,7 @@ def summarise_resources(res_rows):
             "n_tiles",
             "n_job_retries",
             "write_cpu_h_allocated",
+            "unmeasured_attempts",
         ):
             rec[key] = _stat(_values(split, key), np.sum) if split else ""
         for key in ("peak_cpus_at_once", "write_peak_gb"):
@@ -2760,13 +2794,23 @@ def summary_markdown(
             "wasted_attempts",
             "wasted_from_scheduler",
             "wasted_unknown",
+            "unmeasured_attempts",
         ]
         parts += [
             "## Resources (per patient; registration only)\n",
             "`peak_rss_gb` is the process tree's peak up to that result. Nothing a "
             "paused stretch allocates and frees is in it, but what an earlier result's "
             "writer left resident is (VALIS and ASHLAR write between results). "
-            "`cgroup_peak_gb` is the whole job, writers included. No single column is "
+            "`cgroup_peak_gb` is the whole job, writers included. For a result whose "
+            "registration ran as several scheduler jobs per round (the header line "
+            "below names it) `peak_rss_gb` is instead the peak of its largest single "
+            "stage job, and `cgroup_peak_gb`, `attempt`, `mem_requested_gb` and "
+            "`cpus_requested` are those of the round's LAST job, which holds the "
+            "benchmark's own work and the writer and none of the registration. "
+            "`write_s` is the method's own writer; the benchmark's own copying of a "
+            "written image is in no column. `unmeasured_attempts` counts stage "
+            "attempts with no recorded duration: where it is not 0, that row's times "
+            "and CPU-hours are lower bounds. No single column is "
             "the cost. `wasted_from_scheduler` attempts are billed by the scheduler's "
             "elapsed time of the whole task (an upper bound); `wasted_unknown` "
             "attempts are in no wasted total, because nobody recorded their cost.\n",

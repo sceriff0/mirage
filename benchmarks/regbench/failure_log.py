@@ -263,6 +263,7 @@ def run_events(run, dataset="", case_id="", variant=""):
                 climbed_to=NONE,
             )
         )
+    out += stage_events(run, head)
     check = run.get("realcheck") if isinstance(run.get("realcheck"), dict) else {}
     if ok and check.get("flag"):
         out.append(
@@ -281,6 +282,70 @@ def run_events(run, dataset="", case_id="", variant=""):
                 climbed_to=NONE,
             )
         )
+    return out
+
+
+# a stage of a registration that runs as several scheduler jobs -> the table's stage
+STAGE_OF_JOB = {"stitch": "writer", "prep": "benchmark_points"}
+
+
+def stage_events(run, head):
+    """One row per stage attempt that did not end its job ok, for a registration that
+    ran as several scheduler jobs per round (``run.json: info.jobs.failed_attempts``,
+    ``native.stitch_job.failed_attempts``): a retried attempt of a round that ended
+    ok is there too. A failed ``prep`` job is the benchmark's own (``benchmark``,
+    ``benchmark_oom``); a job that never recorded its end is ``timeout`` where the
+    next attempt's start shows it ran to its limit, else ``killed``
+    (``stages.attempt_cause``). The rows carry ``retry`` = ``stage`` so that they are
+    told from the rungs of the memory ladder, and are listed once per round."""
+    info = run.get("info") if isinstance(run.get("info"), dict) else {}
+    jobs = info.get("jobs") if isinstance(info.get("jobs"), dict) else {}
+    native = run.get("native") if isinstance(run.get("native"), dict) else {}
+    stitch = native.get("stitch_job") if isinstance(native, dict) else None
+    listed = list(jobs.get("failed_attempts") or [])
+    for a in (stitch or {}).get("failed_attempts") or []:
+        listed.append({**a, "stage": "stitch", "cause_from": "its own record"})
+    out = []
+    for a in listed:
+        job, cause = str(a.get("stage") or ""), str(a.get("cause") or "exception")
+        if job == "prep":
+            cause = "benchmark_oom" if cause == "oom" else "benchmark"
+        elif job == "stitch":
+            cause = "writer_oom" if cause == "oom" else "writer"
+        where = job.upper() + (f" row {a['row']}" if a.get("row") is not None else "")
+        out.append(
+            _row(
+                **head,
+                attempt=_blank(a.get("attempt")),
+                rung_gb=_blank(a.get("mem_gb")),
+                retry="stage",
+                submission=run.get("submission", ""),
+                launch_id=_blank(a.get("launch_id")),
+                stage=STAGE_OF_JOB.get(job, "register"),
+                cause=cause,
+                cause_from=a.get("cause_from") or "its own record",
+                exit_code=_blank(a.get("exit")),
+                elapsed_s=_blank(a.get("wall_s")),
+                peak_rss_gb=_gb(a.get("peak_rss_mb")),
+                message=f"stage job {where}: " + first_line(a.get("error") or cause),
+                log_path=a.get("log_path") or "",
+                climbed_to="the next attempt of that job" if a.get("retried") else NONE,
+            )
+        )
+    return out
+
+
+def once_per_round(rows):
+    """A round's stage attempts are in the record of each of its result names: keep the
+    first of each."""
+    seen, out = set(), []
+    for r in rows:
+        if r.get("retry") == "stage":
+            key = (r["dataset"], r["run"], r["case_id"], r["message"], r["attempt"])
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(r)
     return out
 
 
@@ -515,7 +580,7 @@ def build(out, jobs, launch=(), run_variants=None, tissue_missing=(), mine=None)
         # a result a gate kept from starting: the gate's row says why, this one whose
         if r["cause"] == "not_run" and r["variant"] in blocked:
             r["final_outcome_of_unit"] = "blocked"
-    rows = _fold_not_run(collapse(rows))
+    rows = _fold_not_run(collapse(once_per_round(rows)))
     rows += gate_events(launch, run_variants)
     rows += selfcheck_events(Path(out) / "logs" / "selfcheck", mine)
     rows += tissue_events(tissue_missing)

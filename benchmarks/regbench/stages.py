@@ -38,19 +38,30 @@ SOLVE, every attempt of each (STITCH is the writer and is timed apart):
 
 ``elapsed_with_queue_s``        from the start of the first COARSE attempt to the end
                                 of SOLVE, on the wall clock: queue waits between jobs
-                                and the array's concurrency cap are in it
-``wall_unlimited_parallel_s``   COARSE + the LONGEST tile + SOLVE, each the sum of its
-                                attempts: the wall time with every tile running at
-                                once and no queue. This is the round's ``register_s``
-``cpu_h_allocated``             sum over every attempt of allocated CPUs x its duration
-``cpu_h_measured``              sum over every attempt of its measured CPU time
-``largest_job_peak_mb``, ``largest_job``  the peak memory of the largest single job, and
-                                which stage it was (the round's ``peak_rss_mb``)
+                                and the submitter's ceiling are in it
+``wall_unlimited_parallel_s``   COARSE + the LONGEST tile + SOLVE, each the attempt its
+                                job ended ok with: the wall time with every tile
+                                running at once and no queue. This is the round's
+                                ``register_s``
+``cpu_h_allocated``             sum over those attempts of allocated CPUs x duration
+``cpu_h_measured``              sum over those attempts of measured CPU time
+``wasted_attempts``, ``wasted_wall_s``, ``wasted_cpu_h_allocated``,
+``wasted_cpu_h_measured``       every attempt that did not end its job ok (a retried
+                                one, and the last one of a job that failed): the same
+                                rule as for a method that is one job, whose failed
+                                attempt is ``wasted_*`` and in no cost
+``largest_job_peak_mb``, ``largest_job``  the peak memory of the largest single attempt,
+                                failed ones included, and which stage it was (the
+                                round's ``peak_rss_mb``)
 ``n_jobs``, ``n_tiles``, ``n_retries``  attempts run, tiles, attempts beyond the first
 ``peak_cpus_at_once``           the most allocated CPUs in jobs of this round that
                                 overlapped in time
 ``unmeasured_attempts``         attempts that were killed before they could record a
-                                duration: counted, in no sum
+                                duration (a job ended at its time limit): counted, in
+                                no sum, so every sum of that round is a LOWER BOUND
+``elapsed_with_queue_s``        blank when COARSE and SOLVE are of two submissions (a
+                                reused stage is not a queue wait)
+``complete``                    COARSE, every tile and SOLVE each ended ok
 """
 
 from __future__ import annotations
@@ -320,8 +331,12 @@ def _summary(rec):
         "mem_gb",
         "launch_id",
         "log_path",
+        "time_limit",
+        "error",
     )
-    return {k: rec.get(k) for k in keys}
+    out = {k: rec.get(k) for k in keys}
+    out["error"] = str(out["error"] or "")[-300:]
+    return out
 
 
 def run_command(
@@ -429,31 +444,95 @@ def _number(value):
     return isinstance(value, (int, float)) and math.isfinite(value)
 
 
+FAILED_LISTED = (
+    500  # failed stage attempts kept per round in run.json (the rest counted)
+)
+
+
+def attempt_cause(attempt, after=None):
+    """``(cause, where it is from)`` of a stage attempt that did not end its job ok.
+
+    An attempt that recorded its exit says so itself (``cause_of``). One that recorded
+    none still holds the placeholder ``killed``: the scheduler ended the job. It is
+    ``timeout`` when the evidence allows: the NEXT attempt of the same job started no
+    earlier than this one's start plus its time limit (attempts are chained, so the
+    next one starts when this one ends). Without a next attempt, or when the next
+    one started sooner, it stays ``killed``."""
+    cause = str(attempt.get("cause") or "exception")
+    if cause != KILLED or attempt.get("exit") is not None:
+        return cause, "its own record"
+    limit = ladder._seconds(attempt.get("time_limit"))
+    began, then = attempt.get("started"), (after or {}).get("started")
+    if limit and _number(began) and _number(then) and then - began >= limit:
+        return "timeout", (
+            "no end recorded, and the next attempt started after this one's time "
+            f"limit ({attempt.get('time_limit')})"
+        )
+    return KILLED, "no end recorded (the scheduler ended the job)"
+
+
 def summarise(coarse, tiles, solve):
-    """The cost of one round from its job records (module docstring)."""
+    """The cost of one round from its job records (module docstring). A record that is
+    missing (None: the job never ran) contributes nothing; ``complete`` says whether
+    COARSE, every tile and SOLVE each ended ok."""
     stages = [(COARSE, None, coarse), *((TILE, i, t) for i, t in enumerate(tiles))]
     stages.append((SOLVE, None, solve))
-    every, spent, unmeasured = [], {COARSE: 0.0, SOLVE: 0.0}, 0
+    good, bad, spent, unmeasured = [], [], {COARSE: 0.0, SOLVE: 0.0}, 0
+    failed = []  # every attempt that did not end its job ok, for the failure log
     longest_tile = 0.0
     largest = {"mb": math.nan, "stage": "", "row": None}
     for stage, row, rec in stages:
-        own = 0.0
-        for a in attempts_of(rec):
+        if rec is None:
+            continue
+        runs = attempts_of(rec)
+        for i, a in enumerate(runs):
+            last_ok = i == len(runs) - 1 and bool(a.get("ok"))
+            if not last_ok:
+                after = runs[i + 1] if i + 1 < len(runs) else None
+                cause, how = attempt_cause(a, after)
+                failed.append(
+                    {
+                        "stage": stage,
+                        "row": row,
+                        "attempt": a.get("attempt"),
+                        "exit": a.get("exit"),
+                        "cause": cause,
+                        "cause_from": how,
+                        "wall_s": a.get("wall_s"),
+                        "peak_rss_mb": a.get("peak_rss_mb"),
+                        "mem_gb": a.get("mem_gb"),
+                        "launch_id": a.get("launch_id"),
+                        "log_path": a.get("log_path"),
+                        "error": a.get("error") or "",
+                        "retried": after is not None,
+                    }
+                )
             if not _number(a.get("wall_s")):
                 unmeasured += 1
                 continue
-            every.append((stage, a))
-            own += a["wall_s"]
+            # the attempt a job ended ok with is its cost; every other one is wasted
+            ok = i == len(runs) - 1 and bool(a.get("ok"))
+            (good if ok else bad).append((stage, a))
             peak = a.get("peak_rss_mb")
             if _number(peak) and not peak <= largest["mb"]:
                 largest = {"mb": float(peak), "stage": stage, "row": row}
-        if stage == TILE:
-            longest_tile = max(longest_tile, own)
-        else:
-            spent[stage] += own
-    starts = [a["started"] for a in attempts_of(coarse) if _number(a.get("started"))]
+            if not ok:
+                continue
+            if stage == TILE:
+                longest_tile = max(longest_tile, a["wall_s"])
+            else:
+                spent[stage] += a["wall_s"]
+    every = [*good, *bad]
+    first = coarse or {}
+    starts = [a["started"] for a in attempts_of(first) if _number(a.get("started"))]
+    last = solve or {}
+    # within ONE submission: a COARSE an earlier submission ran and this one reused
+    # started before this submission's queue, and the difference is not a queue wait
+    same = (first.get("submission") or "") == (last.get("submission") or "")
     elapsed = (
-        solve["ended"] - min(starts) if starts and _number(solve.get("ended")) else None
+        last["ended"] - min(starts)
+        if starts and same and _number(last.get("ended")) and last.get("ok")
+        else None
     )
     # the most CPUs allocated to jobs of this round at one moment
     edges = []
@@ -465,20 +544,35 @@ def summarise(coarse, tiles, solve):
         now += step
         at_once = max(at_once, now)
     n_jobs = len(every) + unmeasured
+    ran = sum(rec is not None for _, _, rec in stages)
+
+    def cpu_h(rows, measured=False):
+        if measured:
+            return sum(a.get("cpu_s") or 0.0 for _, a in rows) / 3600.0
+        return sum(a["cpus"] * a["wall_s"] for _, a in rows) / 3600.0
+
     return {
+        "failed_attempts": failed[:FAILED_LISTED],
+        "failed_attempts_not_listed": max(0, len(failed) - FAILED_LISTED),
+        "complete": all(rec is not None and rec.get("ok") for _, _, rec in stages),
         "elapsed_with_queue_s": elapsed,
         "wall_unlimited_parallel_s": spent[COARSE] + longest_tile + spent[SOLVE],
         "coarse_s": spent[COARSE],
         "longest_tile_s": longest_tile,
         "solve_s": spent[SOLVE],
-        "cpu_h_allocated": sum(a["cpus"] * a["wall_s"] for _, a in every) / 3600.0,
-        "cpu_h_measured": sum(a.get("cpu_s") or 0.0 for _, a in every) / 3600.0,
+        "cpu_h_allocated": cpu_h(good),
+        "cpu_h_measured": cpu_h(good, True),
+        # every attempt that did not end its job ok: in no cost above
+        "wasted_attempts": len(bad),
+        "wasted_wall_s": sum(a["wall_s"] for _, a in bad),
+        "wasted_cpu_h_allocated": cpu_h(bad),
+        "wasted_cpu_h_measured": cpu_h(bad, True),
         "largest_job_peak_mb": largest["mb"],
         "largest_job": largest["stage"],
         "largest_job_row": largest["row"],
         "n_jobs": n_jobs,
         "n_tiles": len(tiles),
-        "n_retries": n_jobs - len(stages),
+        "n_retries": max(0, n_jobs - ran),
         "peak_cpus_at_once": at_once,
         "unmeasured_attempts": unmeasured,
         "allocation": {s: allocation(s) for s in (*TO_TRANSFORM, STITCH)},

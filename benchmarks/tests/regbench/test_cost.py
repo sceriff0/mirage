@@ -165,8 +165,9 @@ def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total():
     """Where an adapter times its write step in parts, the writer column is the package's
     writer alone; a conversion that writer needed is conversion; the benchmark's own
     copy (ASHLAR's split, DeeperHistReg's stacking) is beside them and never summed."""
+    # `write_s` of a row is already the package's writer alone (score.resource_row)
     row = res(
-        "d", "P1", "deeperhistreg", method_convert_s=7.0, write_s=60.0,
+        "d", "P1", "deeperhistreg", method_convert_s=7.0, write_s=40.0,
         write_writer_s=40.0, write_convert_s=5.0, write_benchmark_s=15.0,
     )  # fmt: skip
     r = _row(cost.end_to_end([row]), "d")
@@ -178,6 +179,65 @@ def test_the_benchmarks_own_copying_is_shown_and_is_in_no_total():
     assert r["measured_here_s"] == 12.0 + 100.0 + 40.0
     plain = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
     assert plain["write_s"] == 10.0 and math.isnan(plain["benchmark_copy_s"])
+
+
+def test_the_headline_write_time_and_the_by_step_one_are_the_same_number():
+    """A writer timed in parts (the package's writer 152 s, the benchmark's own copy
+    8 s, 160 s in all): the headline `write_s` and `total_to_image_s`, the patient's
+    row and the by-step column all take 152, and the copy is in none of them."""
+    run = {
+        "ok": True,
+        "method": "ashlar",
+        "unit": "patient",
+        "launch_id": "5_0",
+        "register_s": 1000.0,
+        "write_s": 160.0,
+        "resources": {"wall_s": 1000.0, "cpu_s": 3000.0, "peak_rss_mb": 2048.0},
+        "native": {
+            "files": ["/x/a.ome.tif"],
+            "write_parts_s": {"writer": 152.0, "benchmark": 8.0},
+        },
+    }
+    row = score.resource_row(run)
+    assert row["write_s"] == 152.0 and row["write_benchmark_s"] == 8.0
+    assert row["total_to_image_s"] == 1152.0
+    base = {"dataset": "multiplex", "group": "P1", "method": "ashlar"}
+    full = {**row, **base, "written_file": "/x/a.ome.tif"}
+    (patient,) = score.summarise_resources([full])
+    (step,) = cost.end_to_end([full])
+    assert patient["write_s"] == step["write_s"] == 152.0
+    assert patient["total_to_image_s"] == 1152.0
+    assert step["benchmark_copy_s"] == 8.0
+    assert step["measured_here_s"] == step["estimate_s"] + step["write_s"] == 1152.0
+    (line,) = cost.summarise([step])
+    (head,) = score.summarise_cost([patient])
+    assert head["write_s_med"] == line["write_s"] == 152.0
+    assert head["total_to_image_s_med"] == line["measured_here_s"] == 1152.0
+    # a writer that is not timed in parts: its write step, as recorded
+    plain = score.resource_row({**run, "native": {"files": ["/x/a.ome.tif"]}})
+    assert plain["write_s"] == 160.0
+
+
+def test_cost_by_step_reads_complete_patients_only():
+    """A patient two of whose nine rounds wrote an image is in no median, as in the
+    per-method block: the sum over two rounds is not the patient's cost."""
+    whole = [res("stare", "P1", "stare"), res("stare", "P3", "stare", register_s=300.0)]
+    partial = [
+        {**res("stare", "P2", "stare", register_s=1.0, write_s=1.0), "ok": i < 2}
+        for i in range(9)
+    ]
+    rows = cost.end_to_end([*whole, *partial])
+    by = {r["group"]: r for r in rows}
+    assert by["P1"]["complete"] and by["P3"]["complete"] and not by["P2"]["complete"]
+    assert by["P2"]["n_rounds"] == 2
+    (line,) = cost.summarise(rows)
+    assert (line["n_patients"], line["n_patients_partial"]) == (2, 1)
+    assert line["estimate_s"] == (100.0 + 300.0) / 2  # P2's 2 s is not in it
+    # the same rule as the headline block
+    per = score.summarise_resources([*whole, *partial])
+    (head,) = score.summarise_cost(per)
+    assert head["n_patients_complete"] == 2 and head["n_patients_partial"] == 1
+    assert head["register_s_med"] == line["estimate_s"]
 
 
 def test_the_preprocessing_of_stare_prep_is_its_own_column_and_in_its_total():
@@ -246,6 +306,7 @@ def test_the_summary_has_the_total_measured_time_and_the_peak_memory_per_method(
     )
     assert (line["estimate_peak_gb_max"], line["job_peak_gb_max"]) == (7.0, 9.0)
     assert (line["n_patients"], line["n_patients_common"]) == (3, 2)
+    assert line["n_patients_partial"] == 0
     assert line["measured_here_s_common"] == (110.0 + 330.0) / 2
     assert line["merged_image"] == "no"
 
@@ -448,6 +509,19 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
     head = text[text.index("### Cost per method") : text.index("## Cost by step")]
     for column in ("register_s", "total_to_image_s", "peak_rss_gb", "cgroup_peak_gb"):
         assert f"| {column}: complete / common |" in head, column
+    # ... with VALUES for a method that completed every patient, not only the cells
+    names = [c.strip() for c in head.splitlines()[4].strip("|").split("|")]
+    for method in ("flat", "deep", "round"):
+        (line,) = [ln for ln in head.splitlines() if f"| {method} |" in ln]
+        cells = dict(zip(names, (c.strip() for c in line.strip("|").split("|"))))
+        assert cells["patients complete / all"] == "2/2"
+        for column in ("register_s", "write_s", "total_to_image_s", "peak_rss_gb"):
+            both = cells[f"{column}: complete / common"].split(" / ")
+            assert len(both) == 2 and all(float(v) >= 0 for v in both), (method, column)
+        written = float(cells["write_s: complete / common"].split(" / ")[0])
+        total = float(cells["total_to_image_s: complete / common"].split(" / ")[0])
+        estimate = float(cells["register_s: complete / common"].split(" / ")[0])
+        assert written == 2.0 and total == pytest.approx(estimate + written, rel=1e-3)
     for word in ("pipeline_", "trace", "total_s", "not available"):
         assert word not in text[text.index("## Resources") :], word
 

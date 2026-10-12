@@ -526,3 +526,115 @@ def test_every_batch_script_ends_with_an_end_line(name):
     # every fallback line written in shell uses a cause and an owner of the table
     for cause, whose in re.findall(r"cause=([a-z_]+) whose=([a-z]+)", code):
         assert fl.WHOSE[cause] == whose, (name, cause, whose)
+
+
+# ── a registration in several scheduler jobs: every failed stage attempt ──────
+def stage_job(start, wall, **more):
+    rec = {"started": start, "ended": start + wall, "wall_s": wall, "cpu_s": wall}
+    return {**rec, "peak_rss_mb": 500.0, "cpus": 2, "attempt": 1, "ok": True, **more}
+
+
+def staged_run(ok=True):
+    """A round whose tile 1 was killed for memory and retried, whose tile 2 hit its
+    time limit without recording an end and was retried, whose `prep` failed once."""
+    from benchmarks.regbench import stages
+
+    oom = stage_job(
+        100.0, 20.0, ok=False, exit=137, cause="oom", mem_gb=4, launch_id="50_1",
+        log_path="/logs/tile-50_1.log", error="Killed",
+    )  # fmt: skip
+    cut = {
+        "attempt": 1, "ok": False, "cause": "killed", "exit": None, "started": 100.0,
+        "cpus": 2, "mem_gb": 4, "time_limit": "0-02:00:00", "launch_id": "50_2",
+    }  # fmt: skip
+    tiles = [
+        stage_job(100.0, 40.0),
+        {**stage_job(200.0, 50.0), "attempt": 2, "history": [oom]},
+        {**stage_job(100.0 + 7200.0, 60.0), "attempt": 2, "history": [cut]},
+    ]
+    jobs = stages.summarise(stage_job(0.0, 60.0), tiles, stage_job(8000.0, 10.0))
+    return jobs, {
+        "ok": ok,
+        "cause": "" if ok else "exception",
+        "method": "stare",
+        "variant": "stare",
+        "dataset": "multiplex",
+        "case_id": "P1_a",
+        "unit": "pair",
+        "attempt": 1,
+        "info": {"jobs": {**jobs, "execution": "jobs"}},
+        "native": {
+            "stitch_job": {
+                "failed_attempts": [
+                    {"attempt": 1, "exit": 143, "cause": "timeout", "wall_s": 14400.0}
+                ]
+            }
+        },
+    }
+
+
+def test_every_retried_or_failed_stage_attempt_is_a_row():
+    jobs, run = staged_run()
+    assert jobs["unmeasured_attempts"] == 1 and jobs["wasted_attempts"] == 1
+    rows = fl.run_events(run)
+    assert [(r["message"].split(":")[0], r["cause"], r["whose"]) for r in rows] == [
+        ("stage job TILE row 1", "oom", "method"),
+        ("stage job TILE row 2", "timeout", "method"),
+        ("stage job STITCH", "writer", "method"),
+    ]
+    oom, cut, stitch = rows
+    assert (oom["exit_code"], oom["elapsed_s"], oom["rung_gb"]) == (137, 20.0, 4)
+    assert oom["launch_id"] == "50_1" and oom["log_path"] == "/logs/tile-50_1.log"
+    assert oom["climbed_to"] == "the next attempt of that job"
+    assert oom["final_outcome_of_unit"] == "ok at rung 1" and oom["retry"] == "stage"
+    # ended by its time limit: no end recorded, and the next attempt started 2 h later
+    assert cut["cause_from"].startswith("no end recorded, and the next attempt started")
+    assert cut["elapsed_s"] == "" and stitch["stage"] == "writer"
+    assert set(oom) == set(fl.COLUMNS)
+
+
+def test_a_stage_job_with_no_end_is_a_timeout_only_where_the_evidence_allows():
+    from benchmarks.regbench import stages
+
+    cut = {
+        "cause": "killed",
+        "exit": None,
+        "started": 100.0,
+        "time_limit": "0-02:00:00",
+    }
+    late, soon = {"started": 100.0 + 7200.0}, {"started": 100.0 + 600.0}
+    assert stages.attempt_cause(cut, late)[0] == "timeout"
+    # the next attempt started before the limit: the job was ended for another reason
+    assert stages.attempt_cause(cut, soon)[0] == "killed"
+    assert stages.attempt_cause(cut, None)[0] == "killed"  # no later attempt
+    assert stages.attempt_cause({**cut, "time_limit": None}, late)[0] == "killed"
+    # an attempt that recorded its exit speaks for itself
+    assert stages.attempt_cause({"cause": "oom", "exit": 137}, late) == (
+        "oom",
+        "its own record",
+    )
+
+
+def test_a_failed_prep_job_is_the_benchmarks(tmp_path):
+    _, run = staged_run()
+    run["info"]["jobs"]["failed_attempts"] = [
+        {"stage": "prep", "attempt": 1, "exit": 1, "cause": "exception", "error": "x"},
+        {"stage": "prep", "attempt": 2, "exit": 137, "cause": "oom", "error": "Killed"},
+    ]
+    run["native"] = None
+    rows = fl.run_events(run)
+    assert [(r["cause"], r["whose"], r["stage"]) for r in rows] == [
+        ("benchmark", "benchmark", "benchmark_points"),
+        ("benchmark_oom", "benchmark", "benchmark_points"),
+    ]
+
+
+def test_a_rounds_stage_attempts_are_listed_once_for_its_two_result_names():
+    _, run = staged_run()
+    rigid = {**run, "variant": "stare_rigid", "native": None}
+    rows = fl.once_per_round([*fl.run_events(rigid), *fl.run_events(run)])
+    assert [r["message"].split(":")[0] for r in rows] == [
+        "stage job TILE row 1",
+        "stage job TILE row 2",
+        "stage job STITCH",
+    ]
