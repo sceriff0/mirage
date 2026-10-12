@@ -559,10 +559,20 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
             ),
         }
     else:
-        # a writer inside the row's own job: its CPUs are the job's; the CPU time it
-        # used is not measured apart, and a failed one is the row's own failure
+        # a writer inside the row's own job: its CPUs are the job's, its CPU time is
+        # what the run's counter advanced by while it ran (`write_cpu_s`), and a failed
+        # one is the row's own failure
+        write_cpu = _f(run.get("write_cpu_s"))
+        beside = [k for k, v in sorted(parts.items()) if k != "writer" and _f(v) > 0]
+        if ok and write_cpu == write_cpu and not staged:
+            if run.get("write_cpu_from") == billing.WRITE_CPU_STRETCH:
+                notes.append(billing.WRITE_CPU_IS_THE_STRETCH)
+            elif beside:
+                notes.append(billing.WRITE_CPU_HOLDS.format(", ".join(beside)))
         write_bill = {
-            "write_cpu_h_used": "",
+            "write_cpu_h_used": write_cpu / 3600.0
+            if ok and write_cpu == write_cpu and not staged
+            else "",
             "write_cpu_h_reserved": cpus * write_s / 3600.0
             if ok and write_s > 0 and not staged
             else "",
@@ -662,6 +672,9 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         "oom_watch": "" if watch is None else ("yes" if watch.get("started") else "no"),
         "reused": bool(run.get("reused_by")),
         "rss_method": r.get("rss_method", ""),
+        # the counter `cpu_h` was read from (regbench.resources): the same in kind for
+        # every row unless this says "polled (may undercount)"
+        "cpu_instrument": r.get("cpu_instrument", ""),
         # for the end-to-end view (regbench.cost): the method's own conversion where it
         # is timed apart, the device, and what its writer left on disk
         "adapter": adapter,
@@ -2290,6 +2303,31 @@ def failures(res_rows):
     return out
 
 
+def cpu_instruments_line(res_summary):
+    """The CPU counters behind a cost table, for ``summary.md``; the one that can miss
+    CPU time is said to."""
+    from . import resources
+
+    seen = sorted(
+        {
+            part
+            for r in res_summary
+            for part in str(r.get("cpu_instrument") or "").split("; ")
+            if part
+        }
+    )
+    if not seen:
+        return "no row of this table recorded one"
+    line = "here: " + ", ".join(f"`{name}`" for name in seen)
+    if resources.POLLED in seen:
+        line += (
+            f"; a `{resources.POLLED}` row sampled its process tree, misses the CPU "
+            "of a child that ends between two samples, and its `cpu_h_used` is a "
+            "LOWER BOUND"
+        )
+    return line
+
+
 def summarise_resources(res_rows):
     """Per (dataset, patient, method). A patient's cost is the sum over its rounds for a
     pair method and the launch's own total for a per-patient one; the peak is the maximum
@@ -2395,6 +2433,10 @@ def summarise_resources(res_rows):
         for key in ("jvm_heap_asked_gb", "jvm_max_heap_gb"):  # blank without a JVM
             rec[key] = _blank(_stat(_values(ok, key), np.max))
         rec["gpu_model"] = "; ".join(sorted({r["gpu_model"] for r in ok} - {""}))
+        # the counter(s) the patient's CPU time was read from (regbench.resources)
+        rec["cpu_instrument"] = "; ".join(
+            sorted({str(r.get("cpu_instrument") or "") for r in ok} - {""})
+        )
         # A failed round inside a per-patient launch that otherwise finished is not a
         # wasted attempt; a launch that produced nothing is.
         lost = [
@@ -3508,14 +3550,14 @@ def summary_markdown(
             "over reserved; `wasted_*` are the same over the attempts that failed (a "
             "rung of the memory ladder, a retried stage job) and `total_*` is both. "
             "The method's writer and the benchmark's own work (moving the nuclei, "
-            "scoring) are in none of them. `cpu_h_used` of a row that registers in one "
-            "process is read by polling its process tree and is a lower bound (CPU of "
-            "a child that exits between two readings is missed); "
-            "`cpu_h_scheduler` is the scheduler's own CPU time of the row's jobs, "
-            "which for such a row also hold the benchmark's work and the writer: a "
-            "cross-check, blank when the scheduler gave nothing, and a "
-            "`cpu_h_used_vs_scheduler` far below the other rows' is what an "
-            "undercount looks like. `gpu_h` is its own column and `device` says which "
+            "scoring) are in none of them. CPU time is read from a counter the kernel "
+            "keeps, never by sampling: `cpu_instrument` in `resources.csv` names it "
+            "for every row ("
+            + cpu_instruments_line(res_summary)
+            + "). `cpu_h_scheduler` is the scheduler's own CPU time of the row's jobs, "
+            "which for a row that is one job also hold the benchmark's work and the "
+            "writer: a cross-check, blank when the scheduler gave nothing. "
+            "`gpu_h` is its own column and `device` says which "
             "rows had a GPU: a `gpu` row's CPU-hours are never read without it. "
             f"`{PARALLEL_TIMES['register_s']}` is the time of a registration in "
             "several scheduler jobs with every tile running at once and no queue "

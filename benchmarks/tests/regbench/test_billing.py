@@ -46,6 +46,53 @@ def single(**kw):
     return run
 
 
+def test_the_writers_cpu_time_of_a_single_process_row():
+    """``write_cpu_s`` is what the run's counter advanced by while the writer ran; the
+    note says when that stretch holds more than the writer."""
+    own = score.resource_row(
+        single(write_cpu_s=900.0, write_cpu_from=billing.WRITE_CPU_CALL)
+    )
+    assert own["write_cpu_h_used"] == pytest.approx(0.25)
+    assert own["billing_note"] == ""
+    # an adapter that times its writer apart from the benchmark's own copying: the
+    # CPU is the whole step's, and the row says so
+    parts = {"convert": 0.0, "writer": 500.0, "benchmark": 100.0}
+    whole = score.resource_row(
+        single(
+            write_cpu_s=900.0,
+            write_cpu_from=billing.WRITE_CPU_CALL,
+            native={"write_parts_s": parts},
+        )
+    )
+    assert whole["write_cpu_h_used"] == pytest.approx(0.25)
+    assert whole["billing_note"] == billing.WRITE_CPU_HOLDS.format("benchmark")
+    assert whole["write_cpu_h_reserved"] == pytest.approx(4 * 500 / H)
+    # a writer that ran at a yield, inside the adapter's own paused stretch
+    shared = score.resource_row(
+        single(write_cpu_s=900.0, write_cpu_from=billing.WRITE_CPU_STRETCH)
+    )
+    assert shared["billing_note"] == billing.WRITE_CPU_IS_THE_STRETCH
+    # a row that failed has no writer's cost
+    lost = score.resource_row(single(ok=False, cause="writer", write_cpu_s=900.0))
+    assert lost["write_cpu_h_used"] == "" and lost["billing_note"] == ""
+    # the counter's name is a column
+    named = single()
+    named["resources"]["cpu_instrument"] = "cgroup_v2"
+    assert score.resource_row(named)["cpu_instrument"] == "cgroup_v2"
+    assert score.resource_row(single())["cpu_instrument"] == ""
+
+
+def test_the_summary_names_the_counters_and_warns_only_of_the_sampler():
+    exact = score.cpu_instruments_line(
+        [{"cpu_instrument": "cgroup_v2"}, {"cpu_instrument": "cgroup_v2; rusage+live"}]
+    )
+    assert exact == "here: `cgroup_v2`, `rusage+live`"
+    polled = score.cpu_instruments_line([{"cpu_instrument": "polled (may undercount)"}])
+    assert "`polled (may undercount)`" in polled and "LOWER BOUND" in polled
+    assert "LOWER BOUND" not in exact
+    assert "no row" in score.cpu_instruments_line([{"cpu_instrument": ""}, {}])
+
+
 def test_a_single_process_row_with_a_failed_rung():
     row = score.resource_row(single(), moving_px=2_000_000_000)
     assert row["cpu_h_used"] == pytest.approx(3600 / H)  # 1.0
@@ -59,7 +106,8 @@ def test_a_single_process_row_with_a_failed_rung():
     assert row["total_cpu_h_used"] == pytest.approx(4800 / H)
     assert row["total_cpu_h_reserved"] == pytest.approx(3.0)
     assert row["total_gb_h_reserved"] == pytest.approx(36.0)
-    # the writer is apart: the job's CPUs for its 600 s; its CPU time is not measured
+    # the writer is apart: the job's CPUs for its 600 s; this record carries no CPU
+    # time of it, and a blank is not a zero
     assert row["write_cpu_h_reserved"] == pytest.approx(4 * 600 / H)
     assert row["write_cpu_h_used"] == "" and row["write_wasted_cpu_h_reserved"] == ""
     assert row["moving_gpx"] == 2.0 and row["cpu_h_used_per_gpx"] == pytest.approx(0.5)

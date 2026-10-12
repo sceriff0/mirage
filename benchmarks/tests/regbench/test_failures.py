@@ -594,3 +594,142 @@ def test_a_captured_error_text_names_its_cause(text, cause):
     assert resources.classify_text(text) == cause
     if text and cause != "gpu_oom":
         assert resources.classify_error(RuntimeError(text)) == cause
+
+
+# ── CPU time: the method's, the writer's and the benchmark's, each once ───────
+BUSY = (
+    "import time\n"
+    "t = time.process_time()\n"
+    "while time.process_time() - t < {cpu}: pass\n"
+    "print(time.process_time())\n"
+)
+
+
+def busy_children(n, cpu):
+    """``n`` short children one after another: the CPU time they report, summed, plus
+    what THIS process used meanwhile (starting them, and whatever its other threads
+    did): the counter is the process's, so both are in the stretch."""
+    import subprocess
+
+    total, own = 0.0, time.process_time()
+    for _ in range(n):
+        done = subprocess.run(
+            [sys.executable, "-S", "-c", BUSY.format(cpu=cpu)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        total += float(done.stdout)
+    OWN["cpu_s"] += time.process_time() - own
+    return total
+
+
+OWN = {"cpu_s": 0.0}  # this process's own CPU inside `busy_children`, by test
+
+
+@pytest.mark.parametrize("kind", ["write_native", "at_the_yield"])
+def test_the_writers_cpu_is_off_the_methods_bill_and_in_its_own_figure(toy, kind):
+    import tifffile  # noqa: F401  (its first import is CPU of whoever triggers it)
+
+    from benchmarks.regbench import billing, score
+
+    _, case, out = toy
+    used, OWN["cpu_s"] = {}, 0.0
+
+    def write(dest):
+        used["writer"] = busy_children(4, 0.15)
+        return image(dest)
+
+    def register(case, work, opts):
+        yield "m_rigid", true_map(), {}
+        used["method"] = busy_children(4, 0.05)
+        info = {"_state": {}}
+        if kind == "at_the_yield":
+            mon = opts["monitor"]
+            mon.pause()
+            try:
+                info["native"] = write(opts["native_dir"](case.case_id, "m"))
+                info["write_s"] = 1.0
+            finally:
+                mon.resume()
+        yield "m", true_map(), info
+
+    extra = {}
+    if kind == "write_native":
+        extra["write_native"] = lambda state, case_id, dest: write(dest)
+    methods.run_case(fake("m", ["m_rigid", "m"], register, **extra), case, out)
+    run = run_json(out, "m", case)
+    res = run["resources"]
+    assert res["cpu_instrument"] in resources.CPU_INSTRUMENTS
+    assert res["cpu_instrument"] != resources.POLLED
+    # the method's children in full, and none of the writer's 0.6 s
+    assert res["cpu_s"] >= 0.99 * used["method"]
+    assert res["cpu_s"] < used["method"] + OWN["cpu_s"] + 0.3
+    # the writer's, in its own figure
+    assert run["write_cpu_s"] >= 0.99 * used["writer"]
+    assert run["write_cpu_s"] < used["writer"] + OWN["cpu_s"] + 0.3
+    assert run["warp_cpu_s"] >= 0.0  # the benchmark's own point mapping, apart
+    # the whole launch holds all three
+    assert res["launch_cpu_s"] >= 0.99 * (used["method"] + used["writer"])
+    row = score.resource_row(run)
+    assert row["cpu_instrument"] == res["cpu_instrument"]
+    assert row["write_cpu_h_used"] == pytest.approx(run["write_cpu_s"] / 3600.0)
+    if kind == "write_native":
+        assert run["write_cpu_from"] == billing.WRITE_CPU_CALL
+        assert row["billing_note"] == ""
+        # the first result was yielded before any of it
+        assert "write_cpu_s" not in run_json(out, "m_rigid", case)
+    else:
+        assert run["write_cpu_from"] == billing.WRITE_CPU_STRETCH
+        assert res["paused_cpu_s"] >= 0.99 * used["writer"]
+        assert billing.WRITE_CPU_IS_THE_STRETCH in row["billing_note"]
+
+
+def test_one_writer_call_for_a_patient_is_shared_between_its_rounds(tmp_path):
+    """A per-patient writer draws every round in one stretch (VALIS, ASHLAR): its CPU
+    is shared between the rows as their ``write_s`` is, and adds up to the stretch."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    cases = [toy_case(root, "P1_r1", "P1"), toy_case(root, "P1_r2", "P1")]
+    used = {}
+
+    def register_group(cases, work, opts):
+        mon = opts["monitor"]
+        mon.pause()
+        try:
+            OWN["cpu_s"] = 0.0
+            used["writer"] = busy_children(4, 0.1)
+            used["own"] = OWN["cpu_s"]
+            ready = [
+                (
+                    c.case_id,
+                    "pp",
+                    true_map(),
+                    {
+                        "native": image(opts["native_dir"](c.case_id, "pp")),
+                        "write_s": share,
+                    },
+                )
+                for c, share in zip(cases, (1.0, 3.0))
+            ]
+        finally:
+            mon.resume()
+        yield from ready
+
+    def benchmark(case, variant, pmap, info):  # the driver's own stretch, at each yield
+        used["benchmark"] = used.get("benchmark", 0.0) + busy_children(1, 0.2)
+
+    method = fake("pp", ["pp"], register_group=register_group)
+    methods.run_group(method, cases, out, on_variant=benchmark)
+    first, second = (run_json(out, "pp", c) for c in cases)
+    assert second["write_cpu_s"] == pytest.approx(3 * first["write_cpu_s"])
+    total = first["write_cpu_s"] + second["write_cpu_s"]
+    # the writer's stretch, and none of the 0.4 s the benchmark used at the two yields
+    assert total >= 0.99 * used["writer"]
+    assert total < used["writer"] + used["own"] + 0.3
+    # neither is the method's
+    assert first["resources"]["cpu_s"] < 0.2 and second["resources"]["cpu_s"] < 0.2
+    # every stretch taken off the clock before the second result: the writer's and
+    # the benchmark's at the first yield
+    assert second["resources"]["paused_cpu_s"] >= 0.99 * (
+        used["writer"] + used["benchmark"] / 2
+    )

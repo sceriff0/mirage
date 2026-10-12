@@ -129,7 +129,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import METHODS, plugins, resources
+from .. import METHODS, billing, plugins, resources
 from ..cases import (
     load_points,
     points_fingerprint,
@@ -708,7 +708,13 @@ def _run(
                     if key not in done and key not in failed:
                         failed[key] = fail(case, variant, error, cause, cost, tb)
 
-    natives, write_s = {}, {}
+    natives, write_s, write_cpu = {}, {}, {}
+    # CPU of the stretches the METHOD took off the clock itself (a writer it ran at a
+    # yield, and whatever its adapter does beside it with the clock stopped): the
+    # monitor's paused CPU less the driver's own stretches. `at_yield` holds the rows
+    # whose image was written in such a stretch
+    own_paused = {"cpu_s": 0.0, "seen": 0.0}
+    at_yield = set()
 
     def stuck():
         """The counter rose and the main thread never came back: record, then leave."""
@@ -749,6 +755,7 @@ def _run(
             mon.pause()
             phase["now"] = "benchmark"
             cost = mon.snapshot()
+            own_paused["cpu_s"] += cost["paused_cpu_s"] - own_paused["seen"]
             if scope == "pair":
                 case_id = cases[0].case_id
                 variant, pmap, info = item
@@ -772,9 +779,11 @@ def _run(
                 # job wastes that, not the registration the other jobs ran
                 cost = {
                     **cost,
+                    "cpu_instrument": resources.STAGE_JOBS,
                     **billed,
                     "driver_wall_s": cost.get("wall_s"),
                     "driver_cpu_s": cost.get("cpu_s"),
+                    "driver_cpu_instrument": cost.get("cpu_instrument"),
                 }
             try:
                 if watch.rose():
@@ -824,7 +833,7 @@ def _run(
                 grid, grid_shape, grid_step = (
                     jacobian_grid(hw) if hw else (np.empty((0, 2)), (0, 0), 1)
                 )
-                t0 = time.perf_counter()
+                t0, cpu0 = time.perf_counter(), mon.cpu_clock()
                 arrays = {
                     "direction": np.array(pmap.direction),
                     "cells_xy": _warp_chunked(
@@ -868,7 +877,9 @@ def _run(
                     got, how = _nuclei_band(pts, where, flags, own)
                     if got is not None:
                         arrays[name_nuc], nuclei_band[where] = got, how
-                warp_s = time.perf_counter() - t0
+                warp_s, warp_cpu_s = time.perf_counter() - t0, mon.cpu_clock() - cpu0
+                if isinstance(native, dict) and native.get("files"):
+                    at_yield.add(key)
                 d = result_dir(out, names[variant], case)
                 write_npz(d / "warped.npz", **arrays)
                 rec = {
@@ -880,6 +891,8 @@ def _run(
                     "direction": pmap.direction,
                     "register_s": cost["wall_s"],
                     "warp_s": warp_s,
+                    # the benchmark's own CPU for it, in no bill of the method
+                    "warp_cpu_s": warp_cpu_s,
                     "resources": cost,
                     "native": native,
                     "write_s": float(info.get("write_s") or 0.0),
@@ -935,6 +948,7 @@ def _run(
             finally:
                 phase["now"] = "method"
                 mon.resume()
+                own_paused["seen"] = mon.paused_cpu_s
     except KeyboardInterrupt:
         if not watch.fired:
             raise
@@ -961,6 +975,7 @@ def _run(
         phase["now"] = "method"
         mon.pause()
         cost = mon.snapshot()
+        own_paused["cpu_s"] += cost["paused_cpu_s"] - own_paused["seen"]
     if watch.fired and cause not in resources.MEMORY_CAUSES:
         try:  # let a pending interrupt land here, not inside the writer below
             time.sleep(0.2)
@@ -1013,7 +1028,7 @@ def _run(
                 "phase": "writer",
             }
             write_json(d / "run.json", holding)
-            t0 = time.perf_counter()
+            t0, cpu0 = time.perf_counter(), mon.cpu_clock()
             try:
                 (d / "native").mkdir(parents=True, exist_ok=True)
                 got = write_native(state, case.case_id, d / "native")
@@ -1031,6 +1046,7 @@ def _run(
                 write_s[case.case_id] = (
                     float(own) if own is not None else time.perf_counter() - t0
                 )
+                write_cpu[case.case_id] = mon.cpu_clock() - cpu0
             except KeyboardInterrupt:
                 if not watch.fired:
                     raise
@@ -1071,6 +1087,9 @@ def _run(
         shutil.rmtree(work, ignore_errors=True)
 
     gpu = resources.gpu_info()
+    # a writer that ran at a yield: the CPU of the method's own paused stretches of the
+    # whole launch, shared between the rows written there as their `write_s` is
+    shared = sum(float(done[k].get("write_s") or 0.0) for k in at_yield if k in done)
     for case in cases:
         for variant in mod.VARIANTS:
             key = (case.case_id, variant)
@@ -1082,6 +1101,13 @@ def _run(
                 if variant == final and case.case_id in natives:
                     rec["native"] = natives[case.case_id]
                     rec["write_s"] = write_s[case.case_id]
+                    rec["write_cpu_s"] = write_cpu[case.case_id]
+                    rec["write_cpu_from"] = billing.WRITE_CPU_CALL
+                elif key in at_yield and shared > 0:
+                    rec["write_cpu_s"] = (
+                        own_paused["cpu_s"] * float(rec.get("write_s") or 0.0) / shared
+                    )
+                    rec["write_cpu_from"] = billing.WRITE_CPU_STRETCH
                 write_json(result_dir(out, names[variant], case) / "run.json", rec)
             elif key not in failed:
                 failed[key] = fail(

@@ -32,31 +32,40 @@ tile attempt that was retried, the last attempt of a registration that failed).
 ``device``                  ``gpu`` when the registration had a GPU, else ``cpu``
 ==========================  ========================================================
 
-**How CPU time is measured, and what that can miss.** A registration in one process is
-measured by ``resources.Monitor``: a thread reads the CPU time of the process and of
-every descendant five times a second and keeps each process's last reading. CPU a
-child spends between its last reading and its exit is not seen, and a child that
-starts and ends between two readings is not seen at all: measured on one laptop, 40
-children of 0.05 s CPU each, one after another, were billed 33 % of their CPU time,
-children of 0.5 s 80 %, four workers of 3 s 99 %. So ``cpu_h_used`` of such a row is a
-LOWER BOUND, close for a method whose work is in long-lived processes and threads. A
-registration in several jobs is measured by ``os.wait4`` of each stage command, which
-has no such gap. A writer's CPU time is measured only where the writer is a process of
-its own (STARE's STITCH); elsewhere ``write_cpu_h_used`` is blank.
+**How CPU time is measured.** By a counter the kernel keeps, never by sampling
+(``regbench.resources``, which says what each one is and cites it). A registration in
+one process reads, at the start and end of every stretch it bills, the CPU counter of
+its own scheduler step's cgroup (``cgroup_v2``: ``usage_usec`` of ``cpu.stat``;
+``cgroup_v1``: ``cpuacct.usage``), which counts every process of the task however
+short its life. Where there is no such counter (a laptop, a site without a cgroup per
+job) it reads ``os.times()``, this process and every child that has been waited for,
+plus the processes still alive (``rusage+live``). A registration in several jobs is
+measured by ``os.wait4`` of each stage command: the same kind of figure. The column
+``cpu_instrument`` (``run.json: resources.cpu_instrument``) says which one a row had.
+Only ``polled (may undercount)``, the last resort where neither exists, can miss CPU:
+there ``cpu_h_used`` is a LOWER BOUND. The stretches taken off the method's clock are
+read with the same counter: ``write_cpu_h_used`` is the writer's (``billing_note``
+says when the stretch holds more than the writer), and the benchmark's own point
+mapping is ``run.json: warp_cpu_s``, in no column of the method.
 
-**The scheduler's figure is the detector, not the number.** ``cpu_h_scheduler`` is
-``TotalCPU`` of ``sacct`` for the jobs concerned (``logs/accounting.psv``). For a row
-that is one job, that job also holds the benchmark's own work, the method's writer and
-every other result of the same launch, so it is larger than the registration by an
-amount that differs between methods: it cannot be the main number. What it shows is a
-``cpu_h_used_vs_scheduler`` far below the other rows', which is what an undercount by
-the reader above looks like. It is blank when the accounting has no CPU time for one
-of the jobs. Slurm's own caveat: for a step ended by a signal, ``TotalCPU`` "may not
-include CPU time of child processes", and with ``-X`` "utilization statistics for job
-allocation(s) will be reported as zero" (sacct manual, slurm.schedmd.com/sacct.html
-``[PARTIAL: the definitions of TotalCPU, UserCPU, SystemCPU, CPUTime, ElapsedRaw,
-AllocCPUS and of -X, read through a summarising fetch that quoted them; the rest of
-the page not read]``). A zero is therefore read as "nothing", never as a ratio.
+**The scheduler's figure is a cross-check, not the number.** ``cpu_h_scheduler`` is
+``TotalCPU`` of ``sacct`` for the jobs concerned (``logs/accounting.psv``), asked WITH
+the jobs' steps: "Without including steps, utilization statistics for job
+allocation(s) will be reported as zero" (``-X``), and ``TotalCPU`` is "the sum of the
+SystemCPU and UserCPU time used by the job or job step" (sacct manual,
+slurm.schedmd.com/sacct.html ``[PARTIAL: the -X / --allocations option, the entries
+of JobID, JobIDRaw, ElapsedRaw, State, SystemCPU, TotalCPU and UserCPU and the
+--allocations example read from the page itself; the other options and fields not
+read]``). A job's figure is the larger of its own line and the sum of its steps'
+lines (``ladder.parse_accounting``). For a row that is one job, that job also holds
+the benchmark's own work, the method's writer and every other result of the same
+launch, so it is larger than the registration by an amount that differs between
+methods: it cannot be the main number. ``run.json: resources.launch_cpu_s`` is the
+whole launch as the row's own counter read it, the figure to hold against it. It is
+blank when the accounting has no CPU time for one of the jobs. Slurm's own caveat:
+"For the steps interrupted by signal (e.g. scancel, job timeout) TotalCPU provides a
+measure of the task's parent process and may not include CPU time of child
+processes". A zero is therefore read as "nothing", never as a ratio.
 """
 
 from __future__ import annotations
@@ -92,6 +101,20 @@ COLUMNS = (
 NOT_IN_RECORDS = (
     "gb_h_reserved is blank: the stage jobs' records were not read (they are read by "
     "`score`, from the results folder)"
+)
+# `run.json: write_cpu_from`: what `write_cpu_s` is the CPU time of. The writer's own
+# call, alone; or the stretches the method's adapter took off the clock around a writer
+# it ran at a yield, shared between the launch's written rows in proportion to `write_s`
+WRITE_CPU_CALL = "writer_call"
+WRITE_CPU_STRETCH = "paused_stretches"
+WRITE_CPU_IS_THE_STRETCH = (
+    "write_cpu_h_used is the CPU of the stretches the method's adapter took off the "
+    "clock around its writer (the writer, and the adapter's own bookkeeping beside "
+    "it), shared between the launch's written rows as write_s is"
+)
+WRITE_CPU_HOLDS = (
+    "write_cpu_h_used is the CPU of the whole writing step, which also holds the "
+    "parts write_s leaves out ({})"
 )
 RECORDS_CHANGED = (
     "gb_h_reserved and cpu_h_scheduler are blank: the stage jobs' records on disk are "

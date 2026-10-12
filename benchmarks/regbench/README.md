@@ -1896,7 +1896,7 @@ make the registration a wasted attempt.
 | `gb_h_reserved` | requested memory (GB) x duration over the same attempts. One process: the rung's memory x `register_s`. Several jobs: each stage attempt's own memory x its duration, read from the stage jobs' records when the tables are written (blank in a row whose records are gone or are another attempt's: `billing_note`) | all three |
 | `wasted_cpu_h_used`, `wasted_cpu_h_reserved`, `wasted_gb_h_reserved` | the same three over the wasted attempts. An attempt the scheduler killed before it could bill itself is billed by the scheduler's elapsed and CPU time of the whole task (`wasted_from_scheduler`, an upper bound); one nobody recorded is in no sum (`wasted_unknown`) | `resources.csv`, `summary_resources.csv` |
 | `total_cpu_h_used`, `total_cpu_h_reserved`, `total_gb_h_reserved` | good + wasted | all three |
-| `write_cpu_h_reserved`, `write_cpu_h_used` | the method's own writer, the attempt that wrote the image: the CPUs of the job it ran in x `write_s` (STARE: STITCH's own 4 CPUs x its duration), and its measured CPU time where the writer is a process of its own (STARE's STITCH; blank elsewhere, where a writer's CPU time is not measured apart) | `resources.csv`, `summary_resources.csv` |
+| `write_cpu_h_reserved`, `write_cpu_h_used` | the method's own writer, the attempt that wrote the image: the CPUs of the job it ran in x `write_s` (STARE: STITCH's own 4 CPUs x its duration), and its measured CPU time: STITCH's own process for STARE; for a writer inside the row's own job, what the run's CPU counter advanced by while it ran (`run.json: write_cpu_s`; `billing_note` says when that stretch holds more than the writer). Blank for a row that failed | `resources.csv`, `summary_resources.csv` |
 | `write_wasted_cpu_h_reserved` | writer attempts that failed, where they are recorded (STITCH's retries; blank elsewhere: there a failed writer fails the row) | the same two |
 | `gpu_h`, `device`, `device_name`, `gpu_model` | GPU-hours are a column of their own (registration time x GPUs). `device` is `gpu` for a row whose registration had a GPU and `cpu` otherwise (`device_name` is what the run recorded, `cuda:0`). The `device` column stands beside the CPU columns in `summary.md`: a `gpu` row's CPU-hours are never read without it | all three |
 | `moving_gpx`, `cpu_h_used_per_gpx` | gigapixels of the round's moving image (one plane: height x width), and CPU-hours used per gigapixel. Per round for a method that runs per pair; a per-patient launch has one clock for all its rounds, so there it is per patient only: the launch's CPU-hours over the moving images of the rounds that registered | all three |
@@ -1926,40 +1926,49 @@ tiles against a single process's time; a `gpu` row against a `cpu` row as if the
 the same resources; totals that end at different deliverables (`merged_image`, "Cost
 by step").
 
-**The two instruments, and the undercount of one.** A registration in one process is
-measured by `resources.Monitor`: a thread reads the CPU time of the process and of
-every descendant five times a second and keeps each process's last reading. CPU a
-child spends between its last reading and its exit is not seen, and a child that
-starts and ends between two readings is not seen at all. Measured on one laptop with
-that reader: 40 children of 0.05 s CPU each, one after another, were billed 33 % of
-their CPU time; children of 0.15 s 51 %; children of 0.5 s 80 %; four workers of 3 s
-99 %. So `cpu_h_used` of such a row is a LOWER BOUND, close for a method whose work is
-in long-lived processes and threads. A registration in several jobs is measured by
-`os.wait4` of each stage command (its own process and the children it waited for),
-which has no such gap. The reader is in `resources.py`, whose bytes are part of what
-a finished unit is reused by (`reuse_key`), so it is not changed under a running
-cohort.
+**The instrument: a counter the kernel keeps, never a sample.** A registration in one
+process (`resources.Monitor`) reads the CPU counter of its own scheduler step's
+cgroup at the start and end of every stretch it bills (`cgroup_v2`: `usage_usec` of
+`cpu.stat`; `cgroup_v1`: `cpuacct.usage`); it counts every process of the task,
+however short its life. Where there is no such counter (a laptop, a site that gives a
+job no cgroup of its own) it reads `os.times()`, this process and every child that
+has been waited for, plus the processes still alive, each in exactly one of the two
+(`rusage+live`). A registration in several jobs is measured by `os.wait4` of each
+stage command, the same kind of figure. `cpu_instrument` (`resources.csv`,
+`run.json: resources.cpu_instrument`) says which one a row had, and only its last
+resort, `polled (may undercount)` (no counter and no `os.times` children figures),
+samples the process tree and makes `cpu_h_used` a LOWER BOUND. The stretches taken
+off the method's clock are read with the same counter: the writer's is
+`write_cpu_h_used` (`billing_note` says when that stretch holds more than the
+writer: an adapter that pauses the clock around its writer AND its own bookkeeping,
+or times the benchmark's copying inside its writing step), and the benchmark's own
+point mapping is `run.json: warp_cpu_s`, in no column of the method. The sources are
+cited in `resources.py`, whose bytes are part of what a finished unit is reused by
+(`reuse_key`).
 
-**The scheduler's figure is the detector, not the number** (`cpu_h_scheduler`). The
-launcher's settle step asks `sacct` for every job of the submission
-(`logs/accounting.psv`), and the scorer reads each row's jobs from it: the row's own
-launch for a method in one process, the jobs of the good stage attempts for STARE. It
-is not the main number because, for a row that is one job, that job also holds the
-benchmark's own work (moving the nuclei, the tissue reduction), the method's writer
-and every other result of the same launch (a per-patient launch: every round and
-every stage), so it exceeds the registration by an amount that differs between
-methods. What it shows is a `cpu_h_used_vs_scheduler` far below the other rows',
-which is what an undercount by the reader looks like. It is blank when the accounting
-has no CPU time for one of the row's jobs; a zero is read as nothing. Slurm's own
-limits: `TotalCPU` is "the sum of the SystemCPU and UserCPU time used by the job or
-job step"; for a step ended by a signal it "may not include CPU time of child
-processes"; and with `-X`, which the launcher uses, "utilization statistics for job
-allocation(s) will be reported as zero" (sacct manual, slurm.schedmd.com/sacct.html
-`[PARTIAL: the definitions of TotalCPU, UserCPU, SystemCPU, CPUTime, ElapsedRaw,
-AllocCPUS and of -X, read through a summarising fetch that quoted them; the rest of
-the page not read]`). Whether this site's `sacct -X` prints a `TotalCPU` for an
-allocation at all is not known: if the column is blank for every row after the first
-patient, the settle step's `sacct` call needs the steps (without `-X`).
+**The scheduler's figure is a cross-check, not the number** (`cpu_h_scheduler`). The
+launcher's settle step asks `sacct` for every job of the submission WITH its steps
+(`logs/accounting.psv`; no `-X`), and the scorer reads each row's jobs from it: the
+row's own launch for a method in one process, the jobs of the good stage attempts for
+STARE. A job's CPU time is the larger of its own line's `TotalCPU` and the sum of its
+steps' (`ladder.parse_accounting`). It is not the main number because, for a row that
+is one job, that job also holds the benchmark's own work (moving the nuclei, the
+tissue reduction), the method's writer and every other result of the same launch (a
+per-patient launch: every round and every stage), so it exceeds the registration by
+an amount that differs between methods; `run.json: resources.launch_cpu_s`, the whole
+launch as the row's own counter read it, is the figure to hold against it. It is
+blank when the accounting has no CPU time for one of the row's jobs; a zero is read
+as nothing. Slurm's own words: `TotalCPU` is "the sum of the SystemCPU and UserCPU
+time used by the job or job step"; for a step ended by a signal it "may not include
+CPU time of child processes"; and with `-X` "utilization statistics for job
+allocation(s) will be reported as zero", which is why the steps are asked for (sacct
+manual, slurm.schedmd.com/sacct.html `[PARTIAL: the -X / --allocations option, the
+entries of JobID, JobIDRaw, ElapsedRaw, State, SystemCPU, TotalCPU and UserCPU and
+the --allocations example read from the page itself; the other options and fields
+not read]`). Not known until the first patient has run: whether this site's `sacct`
+adds the steps up into the job's own line (the parser is right either way), and
+whether the site puts a job's processes in a step cgroup whose counter the container
+can read (`cpu_instrument` of the first rows says).
 
 ### The other columns
 
