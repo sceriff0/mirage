@@ -58,7 +58,8 @@ datasets/      synthetic, semisynth, multiplex: each writes cases; hyreco and an
                the external landmark sets (hyreco_a, hyreco_b; anhir, anhir_tune)
 prep.py        the stare_prep row: the preprocessing candidates, the frozen choice
                (prep_frozen.json), the check that none of them moves image content
-score.py       reads files only; writes <out>/tables
+score.py       reads files only; writes <out>/tables, and keeps what it computed for each
+               case under <out>/cache/scores ("Records: a case is scored once")
 landmarks.py   the scorer of HyReCo: <out>/tables/<dataset>/, never the cohort's tables
 challenge.py   the scorer of ANHIR's training pairs (rTRE, robustness, micrometres), its
                own tables too; and the choice of the stare_prep preprocessing
@@ -161,7 +162,14 @@ names and opens its summary on the six primary rows:
   upstream's `cdgatenbee/valis-wsi:1.2.0`; needs `--writable-tmpfs`), `DEEPERHISTREG`,
   `PALOM`. Pulled from upstream: `VALIS_MIRAGE` (`cdgatenbee/valis-wsi` 1.0.0, the
   pipeline's digest) and `ASHLAR` (`labsyspharm/ashlar:1.20.0`). `containers/README.md`
-  has what each holds.
+  has what each holds. Inside an image the harness is started with the image's own
+  `python`, or with `python3` where it has no `python`: the choice is made inside the
+  image (`slurm/env.sh: regbench_py`), never on the host. ASHLAR's image is the case
+  that needs it: Ubuntu 22.04 with `python3-dev` and `python3-pip` and nothing called
+  `python` (its Dockerfile at tag v1.20.0, `[FULL]`), and its first selfcheck on the
+  cluster ended with `"python": executable file not found in $PATH`. That Dockerfile
+  also sets `ENV OMP_NUM_THREADS 1`: the harness sets no thread variable, but this one
+  comes with the image (see "Not verified").
 - **Which rows gate a run** (`gate_variants`, the last column). A failed selfcheck blocks
   the method. For every method but one that means any of the run's rows. DeeperHistReg's
   gate reads its `_asdrawn` row alone, the row of the image its writer puts on disk: when
@@ -1269,6 +1277,92 @@ fields a B-spline mesh on a 64 px lattice can represent; the `same` variant reus
 reference's pixels, so every error is a lower bound. Any amplitude later estimated from a
 method's fields is post hoc and names that method.
 
+### Records: a case is scored once
+
+Scoring a slide is slow (measured below), so the scorer keeps what it computes, under
+`<out>/cache/scores/<dataset>/<case>/`, and no table depends on whether it did.
+
+- **A pair record** is one call of `pairs.record`: one polygon set (outlines or nuclei)
+  of one case, in the frame of one source (the unregistered pose, the true map, or one
+  variant's result), whole or without the nuclei on one owner's seams. It is nine
+  placements (the real one and the eight shifted ones of the null), each with both
+  pairings and its own per-pair IoU. `pairs/<key>.rec` holds one, written the moment it
+  is computed.
+- **A case record** (`case.rec`) is every row of the case, as the tables take them.
+  `case.json` beside it is the same key for a person to read, with the seconds it took
+  and which seam masks were found.
+- **Nothing is computed twice.** Every variant that failed, was killed or never ran is
+  scored at the unregistered pose: all of them read the ONE pair record of that pose,
+  and one more per seam owner. (Before, each such variant computed its own off-seam
+  record: with a run list of dozens of rows, most of a case's time.) The areas and
+  centroids of a polygon set are computed once per set, not once per use. No `*_null`
+  number is derived from another: each shifted placement has its own centroids,
+  pairing and IoU, as before.
+- **When a record is reused.** Only when everything it rests on is unchanged, and the
+  key is compared whole, never guessed from a file being there.
+  A pair record's key: the bytes of the case's `points.npz`, the set, the pixel size,
+  the bytes of the `warped.npz` that moved the polygons, the owner's mask itself, the
+  pipeline's `cell_pairs.py`, `pairs.py`, `cases.py` and the lines of `score.py` that
+  put the inputs together, the versions of Python, NumPy, SciPy and scikit-image, the
+  scoring constants, and `score.RECORD_VERSION`.
+  A case record's key: all of that for every result the case reads (`run.json` AND
+  `warped.npz`, by content), plus `case.json`, the list of variants in order, the seam
+  owners, each row's selfcheck, the dropped rows, the submission being scored
+  (`--submission`), and every file of the package. So a re-run of a method, a changed
+  run list, another `--drop` or another submission makes the case's ROWS again, in
+  seconds to minutes, and computes only the pair records whose inputs changed: a
+  `run.json` that says something else changes rows and no pair record.
+  A record that is cut short, damaged or made for other inputs is computed again and
+  replaced, and the log says so (`started (made for other inputs: results.stare...)`).
+  `score --fresh` reads no record at all.
+- **`score-case`** scores one case and writes no table:
+  `python -m benchmarks.regbench score-case --cases CASES --out OUT --dataset multiplex
+  --index 3 --workers 8` (or `--case-id`). `score` then reads that case's record,
+  provided it is given the same `--drop`, `--submission` and `--only-run`; it computes
+  every case that has no valid record itself, and saves each as it finishes, so an
+  interrupted `score` keeps the cases it finished and a killed `score-case` keeps the
+  pair records it finished.
+- **`--workers N`** runs at ONE level, never two: whole cases side by side when at
+  least N cases are to be computed, else one case after the other with its pair
+  records on N processes. Each process reads the case's files itself; what crosses
+  between processes is a record's name one way and its numbers the other. `--workers
+  1` starts no process. The tables are byte-identical for every N
+  (`test_score_records.py`), and were byte-identical to those of the scorer before
+  the records existed, on the test cohort.
+- **Progress** goes to stderr: each case as it starts (with the reason it had no
+  record) and ends, and its pair records as they finish, at most one line per 30 s.
+
+Measured on a laptop (Apple M-series, one synthetic case: 37,913 reference and 38,096
+moving cells over 22,000 x 22,000 px, outlines of about 18 px radius and nuclei of
+about 8 px, three results of which one is a seam owner; pair fraction 0.95, null
+0.12). The case has 16 pair records (four sources, whole and off the owner's seams, on
+two sets).
+
+| `--workers` | one case, seconds | against one worker |
+|---|---|---|
+| 1 | 912.6 | 1 |
+| 4 | 246.4 | 3.7 x |
+| 8 | 132.3 | 6.9 x |
+
+One pair record of the outlines took 65 to 121 s alone and one of the nuclei 17 to
+22 s; with 8 workers the case took as long as its longest pair record plus the
+reading. Where the time goes (profile of one outline record, 146.7 s before the
+geometry was shared): 81 % rasterising the pairs for their IoU (`cell_pairs.pair_iou`,
+two scikit-image polygons per pair, 0.77 ms each at this size), 17 % areas and
+centroids (now computed once per set: that record takes 127.8 s, the nuclei's 25.0 s
+instead of 45.6 s), about 2 % pairing. The IoU is the pipeline's code and is not
+touched; it is linear in the number of pairs (19.1 s at 4,738 cells, 146.7 s at
+37,913). **Extrapolated, not measured:** at 300,000 nuclei per slide, linear in cells
+and at this density, an outline record is about 1,000 s and a nuclei record about
+200 s on this laptop's cores. The first cohort patient ran two runs (4 sources, one
+seam owner: 16 pair records, about 2.7 h of work), so about 25 to 30 minutes per case
+on 8 cores; the whole run list (about 40 sources and 3 seam owners: about 320 pair
+records, about 53 h of work) is about 7 h per case on 8 cores. Real tissue is denser
+than this case (more pairs under the null), and the cluster's cores are not this
+laptop's: read the first case's `seconds` in `case.json` before sizing the rest. Each
+worker holds the case's polygons (hundreds of megabytes at that size) and the result
+it is scoring.
+
 ### Tables (`<out>/tables/`)
 
 | file | one row per | what |
@@ -1831,9 +1925,23 @@ script names no method.
    the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
    job reads the primary row's `realcheck.json`; everything else of that run waits for
    it.
-5. **`tissue`, then `score`**, in the scorer's image (`variants.SCORER_IMAGE`), after
-   everything, whatever failed. The score job first settles every result that still says
-   `killed` against the scheduler's accounting (`regbench settle`). `score` is given
+5. **Per-case scoring and `tissue`, then `score`**, in the scorer's image
+   (`variants.SCORER_IMAGE`), after everything, whatever failed. Per dataset ONE ARRAY
+   (`rb-score-case-<dataset>`, `score_cohort.sbatch case`), a task per case, runs
+   `score-case`: the case's rows, kept as its record ("Records: a case is scored
+   once"), its pair records computed side by side on the task's CPUs
+   (`REGBENCH_SCORE_CPUS`, 8). Each task first makes the tissue-level pieces of its
+   case's written images (`tissue --index`), so those are spread over the tasks too;
+   `rb-tissue` runs AFTER the arrays and makes the pieces of any case whose task did
+   not (two jobs never write the same pieces). `rb-score` waits for all of them with
+   `afterany`: it reads the records that are
+   valid, computes every case that has none (a task that failed, was killed or ran out
+   of time left its finished pair records), and writes the tables. The tables do not
+   depend on the array: they are the same bytes with it, with half of it, or without.
+   One thing costs a little: `score` settles every result that still says `killed`
+   against the scheduler's accounting first (`regbench settle`), which rewrites that
+   result's `run.json`, so the rows of a case with such a result are made again in the
+   score job (its pair records are not). `score` is given
    `--submission` (below), `--drop` for every row a gate said to drop, `--gates` (the
    summary's block "What the gates decided" names every blocked run and every dropped
    row) and, when `REGBENCH_PIPELINE_TRACE` is set, `--pipeline-trace`.
@@ -1883,6 +1991,7 @@ round).
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
 | `REGBENCH_ARRAY_LIMIT` | tasks of one array running at once (`%N`) | `20` |
+| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id; set it only to continue one by hand | time and process id |
@@ -1898,7 +2007,9 @@ round).
 | `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`, as the arms did); a detection threshold, only if the site's config sets one | `0`, none |
 | `REGBENCH_NUCLEI_SKIP`, `REGBENCH_NUCLEI_FALLBACK` | `1`: prepare without the nuclei step; `shrink`: the shrunk outline for a slide still without nuclei | `0`, none |
 | `REGBENCH_NUCLEI_CPUS`, `REGBENCH_NUCLEI_MEM`, `REGBENCH_NUCLEI_TIME` | the allocation of one slide's task | `8`, `128G`, `08:00:00` |
-| `REGBENCH_SCORE_MEM` | memory of the `tissue` and `score` jobs | `64G` |
+| `REGBENCH_SCORE_CPUS` | CPUs of one task of the per-case scoring arrays: a case's pair records are computed on that many processes. The `tissue` and `score` jobs keep 4 | `8` |
+| `REGBENCH_SCORE_MEM` | memory of one task of those arrays, and of the `tissue` and `score` jobs | `64G` |
+| `REGBENCH_SCORE_TIME` | time limit of one task of those arrays (never above 7 days). A task that runs out keeps the pair records it finished; `--score-only` goes on from there | `24:00:00` |
 | `REGBENCH_HEAD_IMAGE` | the image the script itself reads the run list with, on the login node | `STARE_REGBENCH` |
 | `REGBENCH_WRITABLE_TMPFS_IMAGES` | images started with `--writable-tmpfs` | `VALIS120` |
 
@@ -1939,12 +2050,26 @@ benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets mult
 #        $REGBENCH_OUT/tables/summary.md exists and its cost block opens with
 #        "cores confined: yes"
 
+# 3b. only if the scoring has to be done again (a score job that ran out of time, a
+#     changed scorer): the scoring alone, for the registrations that are there. No
+#     selfcheck, gate or registration is submitted; a case whose record is still valid
+#     is not computed again
+benchmarks/regbench/slurm/submit_cohort.sh --score-only --datasets multiplex -- <site options>
+
 # 4. the whole cohort: prepare (a NEW $REGBENCH_CASES: the known-truth cases of an older
 #    truth spec are refused), look at the dry run, submit
 REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare -- <site options>
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run -- <site options> | less
 benchmarks/regbench/slurm/submit_cohort.sh -- <site options>
 ```
+
+`--score-only` scores what the LAST submission into `$REGBENCH_OUT` ran or reused: its
+id is kept in `$REGBENCH_OUT/logs/submission`. For a folder filled before that file was
+written, the script takes the id its selfcheck records carry when they all carry the
+same one, and otherwise asks for `REGBENCH_SUBMISSION=<id>` (the id is printed by every
+submission as `# submission  -> ...` and is in every `run.json`, key `submissions`). It
+reads the gate records that submission left, and it needs `REGBENCH_SIF_STARE_REGBENCH`
+and nothing else.
 
 `rounds.csv`'s fourth column is the patient (`group`); the `awk` line keeps the first
 patient's rounds. `--runs` takes any subset of run names; the selfchecks a subset stands
@@ -2001,10 +2126,18 @@ and array sections). None of the following was observed:
   rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
   of this benchmark, and it is the owner's to rule on.
 - **`MaxSubmit`.** The default submission is 19 gates, 51 selfcheck attempts, the tissue
-  and score jobs, and eight arrays per run and dataset: with the two default datasets
-  394 jobs (the two runs with a realcheck gate have a second, one-task ladder and
-  a gate more), and array TASKS count toward a per-user limit on many sites. Submit by
-  `--datasets` or `--runs` if the limit is lower.
+  and score jobs, one per-case scoring array per dataset, and eight arrays per run and
+  dataset: with the two default datasets 396 jobs (the two runs with a realcheck gate
+  have a second, one-task ladder and a gate more; 394 before the scoring arrays), and
+  array TASKS count toward a per-user limit on many sites: the scoring arrays add one
+  task per case. Submit by `--datasets` or `--runs` if the limit is lower.
+- **The per-case scoring array** (`score_cohort.sbatch case`), `--score-only`, and the
+  `python3` fallback inside ASHLAR's image: tested through stand-ins and through the
+  real CLI on a laptop, never on a scheduler or inside that image.
+- **ASHLAR's image sets `OMP_NUM_THREADS=1`** (its Dockerfile at tag v1.20.0 `[FULL]`).
+  The harness exports no thread variable, but `--cleanenv` does not remove what an
+  image defines: read `run.json: threads_env` of the first ASHLAR patient, and decide
+  whether a 4-CPU allocation with one OpenMP thread is the comparison that is meant.
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
   into the job.
 

@@ -750,15 +750,68 @@ def opt_args(run):
     return [f"{k}={v}" for k, v in run.opts.items()]
 
 
-def runs_table(paused=False, dataset=None):
+def submission_order(order, runs=None):
+    """``(runs in the order they are to be SUBMITTED, notes)`` for a launcher.
+
+    ``order`` is a list of family names (``FAMILY``'s values: every run of the family,
+    in the order of ``RUNS``) or run names; a name that is both is the family. The runs
+    it does not name follow, in the order of ``RUNS``. An unknown name is refused with
+    the names there are.
+
+    Then the one rule the order cannot break: a run that reads another's results
+    (``after``) is put directly after that run when the order had it earlier, and a
+    note says so. A launcher submits in this order and a job can only wait for a job
+    that exists, so an anchored run placed before its anchor would start without it
+    (or, on lanes, wait for a run that waits for it).
+
+    This is the order of SUBMISSION only: ``RUNS``, ``runs_table`` without an order,
+    every table and every result are untouched."""
+    runs = list(active_runs() if runs is None else runs)
+    by_name = {run_name(r): r for r in runs}
+    families = {}
+    for r in runs:
+        families.setdefault(family(run_name(r)), []).append(run_name(r))
+    families.pop(None, None)
+    names = []
+    for token in order or []:
+        picked = families.get(token) or ([token] if token in by_name else None)
+        if picked is None:
+            raise SystemExit(
+                f"run order: no family and no run named '{token}'. Families: "
+                f"{', '.join(families)}. Runs: {', '.join(by_name)}."
+            )
+        names += [n for n in picked if n not in names]
+    names += [n for n in by_name if n not in names]
+    notes = []
+    for name in [n for n in names if by_name[n].after in by_name]:
+        anchor = by_name[name].after
+        if names.index(name) > names.index(anchor):
+            continue
+        names.remove(name)
+        at = names.index(anchor) + 1
+        # behind the anchored runs already put there: they keep their own order
+        while at < len(names) and by_name[names[at]].after == anchor:
+            at += 1
+        names.insert(at, name)
+        notes.append(
+            f"{name} reads the results of {anchor}: it is submitted directly after "
+            f"{anchor}, not before it as the order asked"
+        )
+    return [by_name[n] for n in names], notes
+
+
+def runs_table(paused=False, dataset=None, order=None):
     """One row of strings per active run, in the columns of ``RUNS_COLUMNS``; with
     ``paused``, the paused runs too, in their place in ``RUNS``. With an external
-    ``dataset``, only the runs of ``runs_for(dataset)``."""
+    ``dataset``, only the runs of ``runs_for(dataset)``. ``order`` (a list of names,
+    possibly empty) puts the rows in ``submission_order``; None leaves them as they are."""
     check()
     table = []
     listed = RUNS if paused else active_runs()
     if dataset in EXTERNAL_DATASETS:
         listed = runs_for(dataset)
+    if order is not None:
+        listed, _ = submission_order(order, listed)
     for run in listed:
         names = variants_of(run)
         primary = [v for v in names if v in PRIMARY]

@@ -10,6 +10,8 @@
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
                        ``--index``-th of them: the index counts cases for a method that runs
                        per pair and patients for one that runs per patient
+``score-case``         score one case and keep its record (``<out>/cache/scores``); ``score``
+                       reads the records that are still valid and computes the rest
 ``score``              score every variant under ``--out``; writes ``<out>/tables``. Every
                        result name of the run list is expected (a missing one is a "not
                        run" row) and the primary rows lead; ``--only-run`` scores just
@@ -556,6 +558,53 @@ def build_parser():
         action="store_true",
         help="leave out the tissue-level block of the written images (tissue*.csv)",
     )
+    sc.add_argument(
+        "--fresh",
+        action="store_true",
+        help="read no kept record (<out>/cache/scores): compute every case and every "
+        "pair record again and replace them. Never needed for correctness: a record "
+        "is reused only when everything it rests on is unchanged",
+    )
+
+    so = sub.add_parser(
+        "score-case",
+        help="score ONE case of a cohort dataset and keep its record under "
+        "<out>/cache/scores; no table is written. `score` reads the record instead "
+        "of computing the case (one array task per case on a cluster)",
+    )
+    so.add_argument("--cases", required=True)
+    so.add_argument("--out", required=True)
+    so.add_argument("--dataset", required=True, choices=DATASETS)
+    which = so.add_mutually_exclusive_group(required=True)
+    which.add_argument(
+        "--index",
+        type=int,
+        help="its place among all prepared cases of the dataset (SLURM_ARRAY_TASK_ID; "
+        "the order of `list --ids`)",
+    )
+    which.add_argument("--case-id")
+    so.add_argument(
+        "--workers",
+        type=int,
+        default=n_cpus(),
+        help="processes: the case's pair records are computed side by side",
+    )
+    so.add_argument("--dev", action="store_true", help="as `score --dev`")
+    so.add_argument("--only-run", action="store_true", help="as `score --only-run`")
+    so.add_argument(
+        "--drop",
+        action="append",
+        default=[],
+        metavar="VARIANT",
+        help="as `score --drop`; the record is reused by a `score` given the same ones",
+    )
+    so.add_argument(
+        "--submission",
+        default=None,
+        metavar="ID",
+        help="as `score --submission`; the record is reused by a `score` of that one",
+    )
+    so.add_argument("--fresh", action="store_true", help="as `score --fresh`")
 
     ts = sub.add_parser(
         "tissue",
@@ -565,6 +614,13 @@ def build_parser():
     ts.add_argument("--cases", required=True)
     ts.add_argument("--out", required=True)
     ts.add_argument("--dataset", nargs="*", default=None, choices=ALL_DATASETS)
+    ts.add_argument(
+        "--index",
+        type=int,
+        default=None,
+        help="only this case of the ONE dataset named: its place among all prepared "
+        "cases (SLURM_ARRAY_TASK_ID, as `score-case --index`)",
+    )
     ts.add_argument("--workers", type=int, default=n_cpus())
     ts.add_argument("--dev", action="store_true")
     ts.add_argument("--only-run", action="store_true")
@@ -632,6 +688,20 @@ def build_parser():
         choices=ALL_DATASETS,
         help="the runs of this dataset: for an external brightfield set, only the "
         "runs it takes; for anhir_tune, the preprocessing candidates",
+    )
+    rn.add_argument(
+        "--order",
+        default=None,
+        metavar="NAMES",
+        help="print the runs in the order a launcher is to SUBMIT them: these family "
+        "or run names first (space-separated), the rest after, and a run that reads "
+        "another's results never before it. Nothing else reads this order",
+    )
+    rn.add_argument(
+        "--order-notes",
+        action="store_true",
+        help="with --order: print instead one line per run that was moved behind the "
+        "run it reads",
     )
     rn.add_argument(
         "--prep-status",
@@ -865,7 +935,13 @@ def _runs(a):
         return 0
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))
-    for row in variants.runs_table(paused=a.all, dataset=a.dataset):
+    order = None if a.order is None else a.order.split()
+    if a.order_notes:
+        listed = [variants.run_of(r[0]) for r in variants.runs_table(a.all, a.dataset)]
+        for note in variants.submission_order(order, listed)[1]:
+            print(note)
+        return 0
+    for row in variants.runs_table(paused=a.all, dataset=a.dataset, order=order):
         print("\t".join(row))
     return 0
 
@@ -1060,6 +1136,34 @@ def _dropped(names):
     return list(names)
 
 
+def _score_one(a):
+    """One case's record (``score.score_case``), made exactly as ``score`` would."""
+    from . import failure_log, score, variants
+
+    if a.submission:
+        os.environ[score.SUBMISSION_ENV] = a.submission
+    status = score.score_case(
+        a.cases,
+        a.out,
+        a.dataset,
+        index=a.index,
+        case_id=a.case_id,
+        workers=a.workers,
+        dev=a.dev,
+        expected=None if a.only_run else variants.expected_variants(),
+        dropped=_dropped(a.drop),
+        row_checks=variants.row_checks(
+            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+        ),
+        fresh=a.fresh,
+    )
+    unit = a.case_id if a.index is None else f"index_{a.index}"
+    failure_log.emit_end(
+        "score_case", "ok", dataset=a.dataset, unit=unit, record=status
+    )
+    return 0
+
+
 def _tissue(a):
     """The pieces of every written image, left beside each reduced plane (tissue.json)."""
     from . import score, tissue, variants
@@ -1081,6 +1185,18 @@ def _tissue(a):
             c for c in list_cases(a.cases, ds) if c.case_id.startswith("dev_") == a.dev
         ]
         found = score.find_variants(a.out, ds, expected) if cases else []
+        if a.index is not None:
+            everything = list_cases(a.cases, ds)
+            if len(a.dataset or []) != 1 or not 0 <= a.index < len(everything):
+                raise SystemExit(
+                    f"tissue --index {a.index}: name ONE dataset, and an index among "
+                    f"its {len(everything)} prepared case(s)"
+                )
+            one = everything[a.index].case_id
+            cases = [c for c in cases if c.case_id == one]
+            if not cases:
+                print(f"tissue: {ds}/{one}: a dev_* case, not computed here")
+                return 0
         jobs += [(a.out, c, found) for c in cases]
     if not jobs:
         raise SystemExit(f"no prepared cases under {a.cases}")
@@ -1121,6 +1237,8 @@ def main(argv=None):
         return _realgate(a)
     if a.cmd == "tissue":
         return _tissue(a)
+    if a.cmd == "score-case":
+        return _score_one(a)
     if a.cmd == "settle":
         from . import ladder, resources
 
@@ -1183,6 +1301,7 @@ def main(argv=None):
         selfcheck_masks=variants.selfcheck_mask_rows(
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
         ),
+        fresh=a.fresh,
     )
     from . import failure_log
 

@@ -158,7 +158,11 @@ regbench_exec() (
 )
 
 # regbench_py <image> <regbench args...>: run `python -m benchmarks.regbench` in that image.
+# The interpreter is looked for INSIDE the image (or environment), never on the host:
+# `python` where there is one, else `python3`. labsyspharm/ashlar:1.20.0 is Ubuntu 22.04
+# with python3 only, and a bare `python` there is "executable file not found in $PATH".
+REGBENCH_PYTHON='if command -v python >/dev/null 2>&1; then exec python "$@"; else exec python3 "$@"; fi'
 regbench_py() {
     local method="$1"; shift
-    regbench_exec "$method" python -m "$REGBENCH_MODULE" "$@"
+    regbench_exec "$method" sh -c "$REGBENCH_PYTHON" regbench-python -m "$REGBENCH_MODULE" "$@"
 }

@@ -16,6 +16,12 @@ cannot drift from the pipeline's reg_qc=2 scorer. What is added here:
   a map that piles nuclei onto one place; the smaller of the two is not. Read it beside
   ``count_ratio``, the smaller cell count over the larger.
 
+Nothing is computed twice on the same polygons: ``Geometry`` keeps the area and centroid
+of every set a record touches (the native sets for a whole case, when the caller hands
+one in), and it keeps them by the set's identity, so a cached value is the value the
+pipeline's function returned for exactly those vertices. No ``*_null`` number is derived
+from another: each shifted placement has its own centroids, pairing and IoU.
+
 ``cell_pairs.py`` is loaded as ONE file. Putting ``bin/utils`` on ``sys.path`` would expose
 its other modules (``logger``, ``retry``, ``progress``, ...) as top-level names inside the
 method images, ahead of the methods' own.
@@ -133,10 +139,46 @@ def _area_cent(ps):
     return cp.feature_area_centroid(ps)
 
 
-def gate_px(ref_native, mov_native):
+class Geometry:
+    """``(area, centroid)`` of polygon sets, each computed once.
+
+    ``cell_pairs.feature_area_centroid`` is a Python loop over every ring, and one
+    record asked for it 58 times on a handful of sets. A set is recognised by IDENTITY
+    (the object, which is kept alive here), never by value: a shifted or warped copy is
+    another object and is computed for itself. What is kept is read, never written.
+
+    ``parent`` is looked in first and never added to: a caller keeps the native sets of
+    a case in one ``Geometry`` and hands it to every record, each of which keeps its
+    own sets in a child that dies with it."""
+
+    def __init__(self, parent=None):
+        self._kept = {}
+        self._parent = parent
+
+    def _find(self, ps):
+        hit = self._kept.get(id(ps))
+        if hit is not None and hit[0] is ps:
+            return hit[1]
+        return None if self._parent is None else self._parent._find(ps)
+
+    def area_cent(self, ps):
+        ps = as_polyset(ps)
+        got = self._find(ps)
+        if got is None:
+            got = _area_cent(ps)
+            self._kept[id(ps)] = (ps, got)
+        return got
+
+
+def area_centroid(ps, geometry=None):
+    """``_area_cent`` through a ``Geometry`` when there is one."""
+    return _area_cent(ps) if geometry is None else geometry.area_cent(ps)
+
+
+def gate_px(ref_native, mov_native, geometry=None):
     """``(match radius, median nuclear radius)`` in px, from the two NATIVE sets."""
-    area_r, _ = _area_cent(ref_native)
-    area_m, _ = _area_cent(mov_native)
+    area_r, _ = area_centroid(ref_native, geometry)
+    area_m, _ = area_centroid(mov_native, geometry)
     cell_radius = cp.median_equivalent_radius(np.concatenate([area_r, area_m]))
     return GATE_FACTOR * cell_radius, cell_radius
 
@@ -178,9 +220,10 @@ def _pair_iou(a, b, ia, ib, seen):
     return iou, scored
 
 
-def score(a, b, radius_px, pixel_size_um, pairing="lsa", seen=None):
+def score(a, b, radius_px, pixel_size_um, pairing="lsa", seen=None, geometry=None):
     """``a`` is the reference side, ``b`` the moving side, both already in ONE frame.
-    ``seen`` shares the per-pair IoU between calls on the same two sets (``_pair_iou``)."""
+    ``seen`` shares the per-pair IoU between calls on the same two sets (``_pair_iou``);
+    ``geometry`` shares their areas and centroids (``Geometry``)."""
     a, b = as_polyset(a), as_polyset(b)
     n_r, n_m = a.n_features, b.n_features
     out = {
@@ -193,8 +236,9 @@ def score(a, b, radius_px, pixel_size_um, pairing="lsa", seen=None):
     }
     if not n_r or not n_m or not radius_px > 0:
         return out
-    area_a, cent_a = cp.feature_area_centroid(a)
-    area_b, cent_b = cp.feature_area_centroid(b)
+    # both sets have cells here, so this is cell_pairs.feature_area_centroid itself
+    area_a, cent_a = area_centroid(a, geometry)
+    area_b, cent_b = area_centroid(b, geometry)
     ia, ib, dist, _ = cp.match_cells(cent_a, cent_b, radius_px, method=pairing)
     out["n_pairs"] = int(ia.size)
     out["pair_fraction"] = ia.size / min(n_r, n_m)
@@ -235,13 +279,13 @@ def _one_way(cent_from, cent_to, pixel_size_um):
     return [float((um <= t).sum() / n) for t in CURVE_UM]
 
 
-def within_curve(a, b, pixel_size_um):
+def within_curve(a, b, pixel_size_um, geometry=None):
     """The pairing-free curve; NaN without a pixel size, never zero."""
     out = {k: math.nan for k in _CURVE_KEYS}
     if not pixel_size_um or not n_cells(a):
         return out
-    _, cent_r = _area_cent(a)
-    _, cent_m = _area_cent(b)
+    _, cent_r = area_centroid(a, geometry)
+    _, cent_m = area_centroid(b, geometry)
     if not n_cells(b):
         return {k: 0.0 for k in _CURVE_KEYS}
     from_ref = _one_way(cent_r, cent_m, pixel_size_um)
@@ -258,21 +302,27 @@ def _nanmean(values):
     return float(v.mean()) if v.size else math.nan
 
 
-def _both_pairings(a, b, radius, pixel_size_um):
+def _both_pairings(a, b, radius, pixel_size_um, geometry=None):
     one, seen = {}, {}
     for pairing, mid in (("lsa", ""), ("mutual_nn", "_mnn")):
-        got = score(a, b, radius, pixel_size_um, pairing, seen)
+        got = score(a, b, radius, pixel_size_um, pairing, seen, geometry)
         one.update({f"{k}{mid}": v for k, v in got.items()})
     return one
 
 
-def record(ref_native, mov_native, ref_in_frame, mov_in_frame, pixel_size_um):
+def record(
+    ref_native, mov_native, ref_in_frame, mov_in_frame, pixel_size_um, geometry=None
+):
     """Every score of one (case, variant); the keys are ``RECORD_KEYS``.
 
     Reference frame: ``(reference native, moving warped)``. Moving frame: ``(reference
     warped, moving native)``. The gate always comes from the two native sets.
+
+    ``geometry`` is a ``Geometry`` that already holds sets this record will meet again
+    (a case's native sets); it is read, and nothing of this record is left in it.
     """
-    radius, cell_radius = gate_px(ref_native, mov_native)
+    geo = Geometry(geometry)
+    radius, cell_radius = gate_px(ref_native, mov_native, geo)
     a, b = as_polyset(ref_in_frame), as_polyset(mov_in_frame)
     n_r, n_m = a.n_features, b.n_features
     rec = {
@@ -280,13 +330,13 @@ def record(ref_native, mov_native, ref_in_frame, mov_in_frame, pixel_size_um):
         "median_cell_radius_px": cell_radius,
         "count_ratio": (min(n_r, n_m) / max(n_r, n_m)) if max(n_r, n_m) else math.nan,
     }
-    rec.update(_both_pairings(a, b, radius, pixel_size_um))
-    rec.update(within_curve(a, b, pixel_size_um))
+    rec.update(_both_pairings(a, b, radius, pixel_size_um, geo))
+    rec.update(within_curve(a, b, pixel_size_um, geo))
     # Cells the method's map sent nowhere (a non-finite centroid: outside the image it
     # wrote). They stay in every denominator as unpaired cells, in both directions; the
     # count is reported because pair fraction alone cannot show a loss on the LARGER set.
     lost = sum(
-        int((~np.isfinite(_area_cent(side)[1]).all(axis=1)).sum()) for side in (a, b)
+        int((~np.isfinite(geo.area_cent(side)[1]).all(axis=1)).sum()) for side in (a, b)
     )
     rec["n_unmapped"] = lost
     rec["unmapped_frac"] = lost / (n_r + n_m) if n_r + n_m else math.nan
@@ -296,8 +346,10 @@ def record(ref_native, mov_native, ref_in_frame, mov_in_frame, pixel_size_um):
         ang = 2.0 * math.pi * k / NULL_DIRECTIONS
         step = NULL_SHIFT_RADII * cell_radius * np.array([math.cos(ang), math.sin(ang)])
         shifted = with_xy(b, b.xy + step) if b.n_features else b
-        one = _both_pairings(a, shifted, radius, pixel_size_um)
-        one.update(within_curve(a, shifted, pixel_size_um))
+        # the shifted set is this placement's alone: its geometry is dropped with it
+        placed = Geometry(geo)
+        one = _both_pairings(a, shifted, radius, pixel_size_um, placed)
+        one.update(within_curve(a, shifted, pixel_size_um, placed))
         per_direction.append(one)
     for key in per_direction[0]:
         rec[f"{key}_null"] = _nanmean([d[key] for d in per_direction])

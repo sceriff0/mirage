@@ -7,6 +7,11 @@
 #   benchmarks/regbench/slurm/submit_cohort.sh [--dry-run] [--runs "a b"] \
 #       [--datasets "multiplex synthetic"] [-- extra sbatch args]
 #
+# and, for a results folder whose registrations are done, the scoring alone:
+#
+#   benchmarks/regbench/slurm/submit_cohort.sh --score-only [--dry-run] \
+#       [--datasets "multiplex synthetic"] [-- extra sbatch args]
+#
 # THE DEFAULT is `multiplex`, then `synthetic`: every array of a run on `synthetic` waits
 # for that run's last array on `multiplex`, so the cohort is done first. `semisynth` and
 # the HyReCo sets are DORMANT: implemented and tested, never part of the default, and
@@ -39,8 +44,19 @@
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
 #      realcheck.json; everything else of that run waits for it.
-#   5. the tissue-level pieces, then the scorer (`score --drop ...`), both in the
-#      scorer's image, after everything.
+#   5. after everything, in the scorer's image: per dataset ONE ARRAY with a task per
+#      case (the tissue-level pieces of the case, then `score-case`: the case's rows,
+#      kept as its record under $REGBENCH_OUT/cache/scores), then the tissue job (the
+#      pieces of any case whose task did not make them), then the scorer
+#      (`score --drop ...`), which reads the records, computes whatever case has none
+#      that is still valid, and writes the tables. The tables are the same whether the
+#      array ran, half of it did, or none of it.
+#
+# --score-only submits step 5 and nothing before it: no selfcheck, no gate, no
+# registration. It scores what the LAST submission into REGBENCH_OUT ran or reused
+# (its id is kept in $REGBENCH_OUT/logs/submission; REGBENCH_SUBMISSION names another),
+# with the gate records that submission left. Nothing is run again, and a case whose
+# record is still valid is not computed again.
 #
 # Nothing waits on the login node: no `sbatch --wait`, no job that submits jobs.
 #
@@ -82,6 +98,21 @@
 #   REGBENCH_SELFCHECK_TIME (24:00:00)
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N)
 #   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
+#   REGBENCH_RUN_ORDER                the order the runs are SUBMITTED in, and so dealt
+#                                     onto the lanes: family or run names, space-separated
+#                                     (`runs --order`); the runs it does not name follow
+#                                     in the run list's order. A run that reads another's
+#                                     results is never put before it (a `#` line says
+#                                     when it was moved). Default: the run list's order.
+#                                     Nothing but the order of submission changes: not
+#                                     the run list, not a table, not a result
+#   REGBENCH_SCORE_CPUS (8)           per task of the per-case scoring arrays: a case's
+#                                     pair records are computed on that many processes
+#   REGBENCH_SCORE_MEM (64G)          per task of those arrays, and of the tissue and
+#                                     score jobs (which keep 4 CPUs and one day)
+#   REGBENCH_SCORE_TIME (24:00:00)    per task of those arrays. A task that runs out of
+#                                     it keeps the pair records it finished: submit
+#                                     again with --score-only and it goes on from there
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
@@ -166,11 +197,12 @@ DRY="${REGBENCH_DRY:-0}"
 # The ANHIR sets (anhir, anhir_tune) are never part of the default either.
 DEFAULT_DATASETS="multiplex synthetic"
 DORMANT_DATASETS="semisynth hyreco_a hyreco_b"
-prepare=0 only_runs="" datasets="$DEFAULT_DATASETS"
+prepare=0 score_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --prepare) prepare=1; shift ;;
+        --score-only) score_only=1; shift ;;
         --runs) only_runs="$2"; shift 2 ;;
         --datasets) datasets="$2"; shift 2 ;;
         --) shift; break ;;
@@ -182,8 +214,24 @@ extra=("$@")
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+[ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
 
-# one id per call: every record of this submission carries it
+# one id per call: every record of this submission carries it. --score-only makes no
+# record of its own: it scores an EARLIER submission, the last one into REGBENCH_OUT
+# unless REGBENCH_SUBMISSION names another.
+if [ "$score_only" = 1 ] && [ -z "${REGBENCH_SUBMISSION:-}" ]; then
+    if [ -s "$REGBENCH_OUT/logs/submission" ]; then
+        REGBENCH_SUBMISSION="$(head -n 1 "$REGBENCH_OUT/logs/submission")"
+    else
+        # a folder filled before that file was written: the id is in its selfcheck records
+        found="$(cat "$REGBENCH_OUT"/logs/selfcheck/*/selfcheck.json 2>/dev/null \
+            | grep -o '"submission": *"[^"]*"' | sort -u | sed 's/.*: *"\(.*\)"/\1/' | grep -v '^$' || true)"
+        [ -n "$found" ] || die "--score-only: no submission to score under $REGBENCH_OUT (no logs/submission, and no selfcheck record names one). Export REGBENCH_SUBMISSION=<the id an earlier submit_cohort.sh printed as '# submission  -> ID'; it is also in every run.json, key 'submissions'>. Nothing was submitted."
+        [ "$(wc -l <<< "$found")" -eq 1 ] || die "--score-only: $REGBENCH_OUT holds records of more than one submission ($(paste -sd' ' - <<< "$found")) and no logs/submission says which was last. Export REGBENCH_SUBMISSION=<one of them>. Nothing was submitted."
+        REGBENCH_SUBMISSION="$found"
+    fi
+    echo "# --score-only: scoring submission $REGBENCH_SUBMISSION"
+fi
 : "${REGBENCH_SUBMISSION:=$(date +%Y%m%dT%H%M%S)-$$}"
 export REGBENCH_SUBMISSION
 for ds in $datasets; do
@@ -257,6 +305,8 @@ else
     mkdir -p "$REGBENCH_OUT/logs/gates" "$REGBENCH_OUT/logs/selfcheck"
     scratch="$REGBENCH_OUT/logs"
     JOBS_FILE="$REGBENCH_OUT/logs/jobs.tsv"
+    # the last submission that ran anything into this folder: what --score-only scores
+    [ "$prepare" = 1 ] || [ "$score_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
 fi
 
 # ── the run list, from the harness alone ──────────────────────────────────────────────
@@ -267,6 +317,19 @@ else
     regbench_py "$REGBENCH_HEAD_IMAGE" runs > "$table"
 fi
 [ -s "$table" ] || die "the run list is empty (python -m benchmarks.regbench runs)"
+# REGBENCH_RUN_ORDER: the same rows in the order they are to be submitted. Every loop
+# below reads the table top to bottom, and a job only ever waits for a job submitted
+# before it, so the harness never puts a run before the run whose results it reads.
+if [ -n "${REGBENCH_RUN_ORDER:-}" ]; then
+    of=()
+    [ -n "$EXTERNAL" ] && of=(--dataset "$EXTERNAL")
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs ${of[@]+"${of[@]}"} --order "$REGBENCH_RUN_ORDER" > "$table.ordered" \
+        || die "REGBENCH_RUN_ORDER='$REGBENCH_RUN_ORDER' is not an order of the run list (see the line above). Nothing was submitted."
+    mv "$table.ordered" "$table"
+    echo "# run order: $(cut -f1 "$table" | paste -sd' ' -)"
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs ${of[@]+"${of[@]}"} --order "$REGBENCH_RUN_ORDER" --order-notes \
+        | while IFS= read -r note; do echo "# run order: $note"; done
+fi
 if [ -n "$EXTERNAL" ]; then
     regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" --excluded | \
         while IFS=$'\t' read -r name why; do echo "# $EXTERNAL: $name is not run ($why)"; done
@@ -282,6 +345,11 @@ for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
 for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_UNCHECKED: no run named '$r'"; done
+# --score-only: no run is selected, so nothing of steps 1 to 4 is submitted
+if [ "$score_only" = 1 ]; then
+    [ -z "$only_runs" ] || echo "# --score-only: --runs is not used (the scorer scores every run of the submission)"
+    selected=""
+fi
 # the preprocessing row: said aloud while its preprocessing has not been selected
 IFS=$'\t' read -r prep_status prep_candidate prep_run < <(regbench_py "$REGBENCH_HEAD_IMAGE" runs --prep-status) \
     || die "cannot read the frozen preprocessing (benchmarks/regbench/prep_frozen.json)"
@@ -595,7 +663,7 @@ for ds in $sized; do
     prev_ds="$ds"
 done
 
-# ── 5. tissue, then the scorer, in the scorer's image ─────────────────────────────────
+# ── 5. per-case scoring and tissue, then the scorer, in the scorer's image ────────────
 dep=""
 for j in $finals; do dep="${dep:+$dep:}$j"; done
 while IFS=$'\t' read -r name _; do
@@ -603,19 +671,42 @@ while IFS=$'\t' read -r name _; do
     gate="GATE_$name"
     dep="${dep:+$dep:}${!gate}"
 done < "$table"
+# after everything this call submitted (--score-only submitted nothing before this)
+after_all=()
+[ -n "$dep" ] && after_all=(--dependency="afterany:$dep")
 if [ -n "$EXTERNAL" ]; then
-    # no tissue job (it is defined on nuclear channels); the set's own scorer and tables
-    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$dep" --cpus-per-task="$CPUS" \
+    # no tissue job (it is defined on nuclear channels) and no per-case array (a landmark
+    # set has no pair records: its scorer reads landmarks); the set's own scorer and tables
+    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" ${after_all[@]+"${after_all[@]}"} --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
 else
-    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$dep" --cpus-per-task="$CPUS" \
+    # one task per case: its rows, kept as a record the scorer reads. afterany: a task
+    # that fails or is killed leaves its case to the scorer, which computes what is missing
+    score_time="$(limit "$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")")"
+    scored=""
+    for ds in $sized; do
+        n_cases="CASES_$ds"
+        submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" ${after_all[@]+"${after_all[@]}"} \
+            --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="${REGBENCH_SCORE_CPUS:-8}" \
+            --mem="${REGBENCH_SCORE_MEM:-64G}" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
+        scored="$scored:$JOB_ID"
+    done
+    # each case task also made the tissue pieces of its case: this job makes those of a
+    # case whose task did not, after them (never beside them: two jobs would be writing
+    # the same pieces)
+    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}${dep:+:$dep}" --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
-    submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID" --cpus-per-task="$CPUS" \
+    submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
         --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 fi
 
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted')"
-echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "${REGBENCH_FORCE:-0}" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
+if [ "$score_only" = 1 ]; then
+    echo "# submission  -> $REGBENCH_SUBMISSION (scored as it is under $REGBENCH_OUT: nothing is run again)"
+else
+    echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "${REGBENCH_FORCE:-0}" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
+fi
+[ -n "$EXTERNAL" ] || echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
 echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
 if [ -n "$EXTERNAL" ]; then
     echo "# results     -> $REGBENCH_OUT/tables/$EXTERNAL/summary.md (this set's own tables; none of the cohort's)"

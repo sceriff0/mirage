@@ -61,7 +61,9 @@ if [ -n "$model_dir" ] && [ -z "${REGBENCH_STARDIST_MODEL_DIR:-}" ]; then
 fi
 script="$(mktemp "$REGBENCH_NUCLEI/.segment-$SLURM_ARRAY_TASK_ID-XXXXXX.sh")"
 trap 'rm -f "$script"' EXIT
-printf 'set -euo pipefail\n%s\n' "$line" > "$script"
+# the line starts with `python`: where the StarDist image has python3 only, that is it
+printf 'set -euo pipefail\n%s\n%s\n' \
+    'command -v python >/dev/null 2>&1 || python() { python3 "$@"; }' "$line" > "$script"
 # the GPU reaches the StarDist image only (REGBENCH_GPU=1 passes --nv)
 gpu=1
 [ "${REGBENCH_STARDIST_CPU:-0}" != 0 ] && gpu=0

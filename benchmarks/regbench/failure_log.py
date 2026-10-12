@@ -78,6 +78,9 @@ WHOSE = {
     # the scorer's own steps
     "tissue_missing": BENCHMARK,
     "unreadable_record": BENCHMARK,
+    # a per-case scoring task that did not finish (time, memory, an error): what it
+    # had saved is kept, and the final scorer computes the rest
+    "score_case_unfinished": BENCHMARK,
 }
 STAGES = (
     "selfcheck",

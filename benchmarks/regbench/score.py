@@ -71,14 +71,26 @@ Nextflow trace when one is given (``pipeline_trace``). ``launch.csv`` lists what
 launcher's gates decided (``gates``).
 
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
+
+**Records** (``<out>/cache/scores``, "one case" below). What is computed is kept: each
+pair record (one ``pairs.record`` call) the moment it is done, and each case's rows.
+A record is read again only when its whole key is equal (``pair_key``, ``case_key``);
+``score_case`` makes one case's record without writing a table, and ``score`` computes
+whatever has none. No table depends on which of them ran: every path writes the same
+bytes (``test_score_records.py``).
 """
 
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
+import pickle
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -93,6 +105,7 @@ from .cases import (
     polys,
     result_dir,
     stale_points,
+    write_json,
 )
 from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 
@@ -237,7 +250,7 @@ def _is_run(method):
     return method.split(NON)[0] not in PSEUDO
 
 
-def density(ps, pixel_size_um):
+def density(ps, pixel_size_um, geometry=None):
     """``coverage`` and ``nn_distance_um_p50`` of one native set of nuclei.
 
     ``coverage`` is the nuclear area over the area of the bins that hold nuclei, with bins
@@ -250,7 +263,7 @@ def density(ps, pixel_size_um):
     ps = pairs.as_polyset(ps)
     if ps.n_features < 2:
         return out
-    area, cent = pairs.cp.feature_area_centroid(ps)
+    area, cent = pairs.area_centroid(ps, geometry)
     ok = np.isfinite(cent).all(axis=1) & np.isfinite(area)
     area, cent = area[ok], cent[ok]
     radius = pairs.cp.median_equivalent_radius(area)
@@ -532,7 +545,9 @@ def _truth_rows(case, points, base, checks=None):
     return add, rows
 
 
-def _seam_masks(out, case, variants, owners, ref, mov, points, which=OUTLINES):
+def _seam_masks(
+    out, case, variants, owners, ref, mov, points, which=OUTLINES, load=None
+):
     """``({owner: (keep_ref | None, keep_mov | None, keep_truth | None)}, [owners without
     a mask])`` for the owners that have a row on this dataset. The mask is read from the
     owner's own primary run and from nothing else: no other method's result can change it.
@@ -540,13 +555,14 @@ def _seam_masks(out, case, variants, owners, ref, mov, points, which=OUTLINES):
     ``which`` is the polygon set: the mask of the bare nuclei is the owner's ``band_nuc``
     / ``band_ref_nuc`` (``methods._nuclei_band`` says how the driver got them).
     ``keep_truth`` is one bool per known-truth probe (``_truth_keep``); the probes are
-    scored once, with the outlines."""
+    scored once, with the outlines. ``load`` reads a variant's result (default
+    ``_load_run``): a caller that has read it already passes its own."""
     _, key, key_ref = WARPED_KEYS[which]
     masks, missing = {}, []
     for owner in owners:
         if owner not in variants:
             continue
-        _, warped, _, _ = _load_run(out, owner, case)
+        _, warped, _, _ = _load_run(out, owner, case) if load is None else load(owner)
         band = warped.get(key) if warped is not None else None
         band_ref = warped.get(key_ref) if warped is not None else None
         fits = (band is None or len(band) == mov.n_features) and (
@@ -597,15 +613,456 @@ def _truth_keep(points, keep_mov, band_truth):
 NEVER_CHECKED = "no_stage_image"
 
 
-def _score_case(job):
+# ── one case: what is read, what is computed, what is kept ───────────────────────────
+# Bump when anything a case's rows or a pair record depend on changes in a way the
+# hashes below cannot see. They see the code (every file of this package, the pipeline's
+# cell_pairs.py, truth_spec.json), the libraries' versions and the constants in
+# `_settings`; this number is for the rest (a changed meaning with unchanged code).
+RECORD_VERSION = 1
+# where the records are kept, under the results folder (`cache` is RESERVED)
+RECORDS = ("cache", "scores")
+# a pair record's source: the unregistered pose, the true map, or a variant's result
+INITIAL, TRUE_MAP, VARIANT = "initial", "truth", "variant"
+PROGRESS_EVERY_S = 30.0
+
+_FILE_SHA = {}
+
+
+def file_sha256(path):
+    """sha256 of a file's bytes, ``""`` when it is not there. Kept per file state (path,
+    size, modification time), so a file is read once per process."""
+    path = Path(path)
+    try:
+        st = path.stat()
+    except OSError:
+        return ""
+    state = (str(path), st.st_size, st.st_mtime_ns)
+    if state not in _FILE_SHA:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 22), b""):
+                h.update(block)
+        _FILE_SHA[state] = h.hexdigest()
+    return _FILE_SHA[state]
+
+
+def _array_sha256(a):
+    if a is None:
+        return ""
+    a = np.ascontiguousarray(a)
+    return hashlib.sha256(f"{a.dtype}:{a.shape}:".encode() + a.tobytes()).hexdigest()
+
+
+def _libraries():
+    import platform
+
+    import scipy
+    import skimage
+
+    return {
+        "python": platform.python_version(),
+        "numpy": np.__version__,
+        "scipy": scipy.__version__,
+        "scikit-image": skimage.__version__,
+    }
+
+
+def _settings():
+    """The constants a record's numbers depend on, as they are NOW (not as written in
+    the files: a constant changed in a running process is a different scorer)."""
+    return {
+        "gate_factor": pairs.GATE_FACTOR,
+        "null_shift_radii": pairs.NULL_SHIFT_RADII,
+        "null_directions": pairs.NULL_DIRECTIONS,
+        "curve_um": list(pairs.CURVE_UM),
+        "iou_thresh": pairs.IOU_THRESH,
+        "readable_margin": pairs.READABLE_MARGIN,
+        "max_component_cells": pairs.cp.DEFAULT_MAX_COMPONENT_CELLS,
+        "max_pair_window_px": pairs.cp.DEFAULT_MAX_PAIR_WINDOW_PX,
+        "coverage_bin_radii": COVERAGE_BIN_RADII,
+        "not_the_method": list(NOT_THE_METHOD),
+        "not_the_method_rounds": NOT_THE_METHOD_ROUNDS,
+        "headline_families": list(HEADLINE_FAMILIES),
+    }
+
+
+def pair_code():
+    """What turns two polygon sets into a pair record: the pipeline's ``cell_pairs.py``,
+    ``pairs.py``, ``cases.py`` (how a set is read) and the few lines of this file that
+    put a record's inputs together."""
+    import inspect
+
+    here = Path(__file__).resolve().parent
+    own = "".join(inspect.getsource(f) for f in (_Case, _keep_features))
+    return {
+        "cell_pairs.py": file_sha256(pairs.CELL_PAIRS_PATH),
+        "pairs.py": file_sha256(here / "pairs.py"),
+        "cases.py": file_sha256(here / "cases.py"),
+        "score.py:_Case,_keep_features": hashlib.sha256(own.encode()).hexdigest(),
+    }
+
+
+def case_code():
+    """Everything a case's rows could depend on: every file of this package, the
+    pipeline's ``cell_pairs.py`` and the truth spec. Deliberately wide: a case record
+    that is not reused costs minutes (its pair records are), a wrong one costs a table."""
+    here = Path(__file__).resolve().parent
+    files = [*sorted(here.glob("*.py")), here / "truth_spec.json"]
+    return {
+        "cell_pairs.py": file_sha256(pairs.CELL_PAIRS_PATH),
+        **{f.name: file_sha256(f) for f in files},
+    }
+
+
+def _key_sha256(key):
+    return hashlib.sha256(
+        json.dumps(key, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+def _differs(mine, theirs, prefix=""):
+    """The items of two keys that are not the same, as dotted names."""
+    if not isinstance(mine, dict) or not isinstance(theirs, dict):
+        return [] if mine == theirs else [prefix or "key"]
+    out = []
+    for k in sorted({*mine, *theirs}, key=str):
+        name = f"{prefix}.{k}" if prefix else str(k)
+        if k not in mine or k not in theirs:
+            out.append(name)
+        else:
+            out += _differs(mine[k], theirs[k], name)
+    return out
+
+
+def _write_record(path, key, payload):
+    """One record file, written whole or not at all: the sha256 of the body on the
+    first line, then the pickled ``{"key", "payload"}``. Pickle because the rows hold
+    NumPy scalars whose type decides how a table prints them, and the pool that scores
+    cases side by side has always moved them between processes that way."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = pickle.dumps({"key": key, "payload": payload}, protocol=4)
+    fd, tmp = tempfile.mkstemp(suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(hashlib.sha256(body).hexdigest().encode() + b"\n" + body)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _read_record(path, key):
+    """``(payload, "")`` of a record made for exactly ``key``, else ``(None, why)``. A
+    record is evidence only when it is whole and its key is this one: anything else is
+    computed again, never trusted."""
+    path = Path(path)
+    if not path.exists():
+        return None, "no record"
+    try:
+        digest, _, body = path.read_bytes().partition(b"\n")
+        if hashlib.sha256(body).hexdigest().encode() != digest:
+            return None, "unreadable record (cut short or damaged)"
+        held = pickle.loads(body)
+        theirs, payload = held["key"], held["payload"]
+    except Exception as exc:  # whatever a damaged pickle raises
+        return None, f"unreadable record ({type(exc).__name__})"
+    if theirs != key:
+        changed = _differs(key, theirs)
+        return None, "made for other inputs: " + ", ".join(changed[:6]) + (
+            f" and {len(changed) - 6} more" if len(changed) > 6 else ""
+        )
+    return payload, ""
+
+
+def records_dir(out, case):
+    """Where a case's records are: ``<out>/cache/scores/<dataset>/<case>/``, with
+    ``case.rec`` (its rows), ``case.json`` (the key, to be read by a person) and
+    ``pairs/<key>.rec`` (one per pair record)."""
+    return Path(out).joinpath(*RECORDS, case.dataset, str(case.case_id))
+
+
+def case_key(job, dropped=()):
+    """Everything that decides a case's rows. A case record is reused only when this is
+    EQUAL: the case as prepared, the variants and their order, the bytes of every
+    result the case reads (``run.json`` and ``warped.npz``; the seam masks are in the
+    owners' ``warped.npz``), the seam owners, each row's selfcheck, the dropped rows,
+    the submission being scored, the code, the libraries and the constants."""
+    out, case, variants, owners = job[:4]
+    checks = job[4] if len(job) > 4 else {}
+    results = {}
+    for v in variants:
+        if v == "initial":
+            continue
+        d = result_dir(out, v, case)
+        results[v] = {
+            "run.json": file_sha256(d / "run.json"),
+            "warped.npz": file_sha256(d / "warped.npz"),
+        }
+    return {
+        "record_version": RECORD_VERSION,
+        "code": case_code(),
+        "libraries": _libraries(),
+        "settings": _settings(),
+        "dataset": case.dataset,
+        "case_id": str(case.case_id),
+        "case.json": file_sha256(Path(case.dir) / "case.json"),
+        "points.npz": file_sha256(case.points_path),
+        "variants": list(variants),
+        "results": results,
+        "seam_owners": list(owners),
+        "checks": {v: checks.get(v, "") for v in [*variants, "truth"]},
+        "dropped": sorted(dropped),
+        "submission": os.environ.get(SUBMISSION_ENV) or "",
+    }
+
+
+class _Progress:
+    """Lines on stderr, so a log is never silent for hours: every case as it starts and
+    ends, and its pair records as they finish, at most one line per PROGRESS_EVERY_S."""
+
+    def __init__(self, case):
+        self.name = f"{case.dataset}/{case.case_id}"
+        self.started = self.last = time.monotonic()
+
+    def say(self, text):
+        print(f"score: {self.name}: {text}", file=sys.stderr, flush=True)
+        self.last = time.monotonic()
+
+    def elapsed(self):
+        return time.monotonic() - self.started
+
+    def step(self, done, total, what, seconds):
+        if done == total or time.monotonic() - self.last >= PROGRESS_EVERY_S:
+            self.say(
+                f"pair record {done}/{total} ({what}: {seconds:.1f} s), "
+                f"{self.elapsed():.0f} s so far"
+            )
+
+
+class _Case:
+    """What scoring one case reads, each thing read once: its points, its polygon sets
+    and their geometry, every variant's result, the owners' seam masks.
+
+    The arrays of the last ``KEEP_WARPED`` results are held, the rest are read again
+    when asked for: a slide has hundreds of megabytes per result and a case has dozens
+    of results. What a result SAID (its ``run.json``, problem and cause) is kept for
+    all of them."""
+
+    KEEP_WARPED = 2
+
+    def __init__(self, job):
+        self.job = job
+        self.out, self.case, self.variants, self.owners = job[:4]
+        self.checks = job[4] if len(job) > 4 else {}
+        self.points = load_points(self.case)
+        self.px = self.case.pixel_size_um
+        self._said, self._warped = {}, {}
+        self._sets, self._geometry, self._masks, self._jac = {}, {}, {}, {}
+
+    def load(self, v):
+        """``_load_run`` of one variant of this case."""
+        if v in self._warped:
+            warped = self._warped.pop(v)
+        else:
+            run, warped, problem, cause = _load_run(self.out, v, self.case)
+            self._said.setdefault(v, (run, problem, cause))
+            while len(self._warped) >= self.KEEP_WARPED:
+                del self._warped[next(iter(self._warped))]
+        self._warped[v] = warped  # the most recent last
+        run, problem, cause = self._said[v]
+        return run, warped, problem, cause
+
+    def sets(self, which):
+        """``(reference, moving)`` native polygons of one set; None where there is none."""
+        if which not in self._sets:
+            self._sets[which] = (
+                polys(self.points, "ref", which),
+                polys(self.points, "mov", which),
+            )
+        return self._sets[which]
+
+    def geometry(self, which):
+        """Areas and centroids of the native sets, kept for the whole case."""
+        return self._geometry.setdefault(which, pairs.Geometry())
+
+    def masks(self, which):
+        """``_seam_masks`` of one set: ``({owner: keeps}, [owners without a mask])``."""
+        if which not in self._masks:
+            ref, mov = self.sets(which)
+            self._masks[which] = _seam_masks(
+                self.out,
+                self.case,
+                self.variants,
+                self.owners,
+                ref,
+                mov,
+                self.points,
+                which,
+                self.load,
+            )
+        return self._masks[which]
+
+    def jacobian(self, v):
+        if v not in self._jac:
+            self._jac[v] = jacobian_stats(self.load(v)[1])
+        return self._jac[v]
+
+    def inputs(self, which, source, owner=None):
+        """The four arguments of ``pairs.record`` for one pair record: the two native
+        sets, and the two sets in the frame of ``source`` (``(INITIAL, "")``,
+        ``(TRUE_MAP, "")`` or ``(VARIANT, name)``), without the nuclei on ``owner``'s
+        seams when one is named."""
+        ref, mov = self.sets(which)
+        kind, name = source
+        ref_in, mov_in = ref, mov
+        if kind == VARIANT:
+            warped = self.load(name)[1]
+            xy = warped[WARPED_KEYS[which][0]].astype(float)
+            if str(warped["direction"]) == REF_TO_MOV:
+                ref_in = pairs.with_xy(ref, xy)
+            else:
+                mov_in = pairs.with_xy(mov, xy)
+        elif kind == TRUE_MAP:
+            mov_in = pairs.with_xy(mov, self.points[TRUTH_XY[which]].astype(float))
+        if owner is not None:
+            keep_ref, keep_mov, _ = self.masks(which)[0][owner]
+            if keep_ref is not None:
+                ref_in = _keep_features(ref_in, keep_ref)
+            if keep_mov is not None:
+                mov_in = _keep_features(mov_in, keep_mov)
+        return ref, mov, ref_in, mov_in
+
+    def record(self, which, source, owner=None):
+        """``pairs.record`` of one pair record. The gate comes from ALL native nuclei,
+        with or without an owner: one gate per case and set."""
+        ref, mov, ref_in, mov_in = self.inputs(which, source, owner)
+        geometry = self.geometry(which)
+        geometry.area_cent(ref)
+        geometry.area_cent(mov)
+        return pairs.record(ref, mov, ref_in, mov_in, self.px, geometry)
+
+    def pair_key(self, which, source, owner=None):
+        """What decides one pair record, and nothing else: the case's points, the set,
+        the pixel size, the bytes of the result that moved the polygons, the owner's
+        mask itself (not the file it came from), the code, libraries and constants.
+        What a result SAYS (status, cause, selfcheck) is in no pair record: a changed
+        ``run.json`` changes a case's rows and none of its pair records."""
+        kind, name = source
+        keep_ref = keep_mov = None
+        if owner is not None:
+            keep_ref, keep_mov, _ = self.masks(which)[0][owner]
+        return {
+            "record_version": RECORD_VERSION,
+            "code": pair_code(),
+            "libraries": _libraries(),
+            "settings": _settings(),
+            "points.npz": file_sha256(self.case.points_path),
+            "set": which,
+            "pixel_size_um": repr(self.px),
+            "source": kind,
+            "warped.npz": file_sha256(
+                result_dir(self.out, name, self.case) / "warped.npz"
+            )
+            if kind == VARIANT
+            else "",
+            "masked": owner is not None,
+            "keep_ref": _array_sha256(keep_ref),
+            "keep_mov": _array_sha256(keep_mov),
+        }
+
+
+def _spec_name(spec):
+    which, (kind, name), owner = spec
+    return f"{which} {name or kind}" + (f"{NON}{owner}" if owner else "")
+
+
+_IN_WORKER = {}
+
+
+def _pair_task(task):
+    """One pair record, in a pool worker. The worker reads the case itself (nothing but
+    the job and the record's name crosses the process boundary on the way in, and the
+    record's numbers on the way out) and keeps it for the next task of the same case."""
+    i, job, spec = task
+    name = (job[0], job[1].dataset, str(job[1].case_id))
+    if _IN_WORKER.get("name") != name:
+        _IN_WORKER.clear()
+        _IN_WORKER.update(name=name, case=_Case(job))
+    started = time.monotonic()
+    return i, _IN_WORKER["case"].record(*spec), time.monotonic() - started
+
+
+def _records(ctx, specs, pool=None, fresh=False, progress=None):
+    """``{spec: pair record}`` for the pair records a case needs, each exactly once.
+
+    A record kept from an earlier scoring of the same inputs (``pair_key``) is read;
+    the others are computed, side by side when there is a ``pool``, and each is saved
+    as it finishes, so a scoring that is killed loses the records in flight and no
+    more. The result does not depend on the order they finish in. ``fresh`` reads
+    nothing."""
+    folder = records_dir(ctx.out, ctx.case) / "pairs"
+    keys = {spec: ctx.pair_key(*spec) for spec in specs}
+    paths = {spec: folder / f"{_key_sha256(keys[spec])}.rec" for spec in specs}
+    recs, todo = {}, []
+    for spec in specs:
+        got = None if fresh else _read_record(paths[spec], keys[spec])[0]
+        if got is None:
+            todo.append(spec)
+        else:
+            recs[spec] = got
+    if progress is not None:
+        progress.say(
+            f"{len(specs)} pair record(s): {len(recs)} kept from an earlier scoring, "
+            f"{len(todo)} to compute"
+            + (", side by side" if pool is not None and len(todo) > 1 else "")
+        )
+
+    def keep(spec, rec, seconds):
+        recs[spec] = rec
+        _write_record(paths[spec], keys[spec], rec)
+        if progress is not None:
+            progress.step(
+                len(recs) - (len(specs) - len(todo)),
+                len(todo),
+                _spec_name(spec),
+                seconds,
+            )
+
+    if pool is not None and len(todo) > 1:
+        # the outlines first: their pairs are the larger windows, and the longest
+        # tasks must not be the last to start
+        order = sorted(range(len(todo)), key=lambda i: (todo[i][0] != OUTLINES, i))
+        tasks = [(i, ctx.job, todo[i]) for i in order]
+        for i, rec, seconds in pool.imap_unordered(_pair_task, tasks):
+            keep(todo[i], rec, seconds)
+    else:
+        for spec in todo:
+            started = time.monotonic()
+            rec = ctx.record(*spec)
+            keep(spec, rec, time.monotonic() - started)
+    return recs
+
+
+def _kept(ps, keep):
+    """How many features ``_keep_features(ps, keep)`` has (all of them without a mask)."""
+    return int(ps.n_features) if keep is None else int(np.asarray(keep, bool).sum())
+
+
+def _score_case(job, pool=None, fresh=False, progress=None):
     """Every row of one case: ``(cell rows, resource rows, truth rows, off-seam cell rows,
     off-seam truth rows, owners without a mask, nuclei)``. The first six are the OUTLINES'
     (and what does not depend on a polygon set); ``nuclei`` is ``{"cells", "non_cells",
-    "missing"}``: the same cell rows on the bare nuclei, and, where there are none, why."""
-    out, case, variants, owners = job[:4]
-    checks = job[4] if len(job) > 4 else {}
-    points = load_points(case)
-    px = case.pixel_size_um
+    "missing"}``: the same cell rows on the bare nuclei, and, where there are none, why.
+
+    In two steps. The rows are laid out first, each naming the pair record it reads
+    (``(set, source, owner)``); then every DISTINCT pair record is computed once
+    (``_records``) and the rows are filled. A variant that failed, was killed or never
+    ran is scored at the unregistered pose: all of them read the one pair record of
+    that pose, and one more per seam owner."""
+    ctx = _Case(job)
+    case, variants, checks = ctx.case, ctx.variants, ctx.checks
+    points, px = ctx.points, ctx.px
     base = {
         "dataset": case.dataset,
         "tier": tier_of(case),
@@ -619,91 +1076,83 @@ def _score_case(job):
     add_truth, truth_rows = _truth_rows(case, points, base, checks)
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
     nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
-    loaded = {}
-
-    def load(v):
-        if v not in loaded:
-            loaded[v] = _load_run(out, v, case)
-        return loaded[v]
+    wanted = {}  # the pair records the rows read, in the order they are first named
+    initial, true_map = (INITIAL, ""), (TRUE_MAP, "")
 
     def one_set(which):
-        """The cell rows of one polygon set. The resource rows and the known-truth rows
-        do not depend on the set: they are made once, with the outlines."""
+        """The cell rows of one polygon set, each a function of the pair records. The
+        resource rows and the known-truth rows do not depend on the set: they are made
+        once, with the outlines."""
         first = which == OUTLINES
         xy_key = WARPED_KEYS[which][0]
-        ref, mov = polys(points, "ref", which), polys(points, "mov", which)
+        ref, mov = ctx.sets(which)
         scorable = bool(ref is not None and mov is not None and ref.n_features)
         scorable = scorable and bool(mov.n_features)
-        dens = density(ref, px) if scorable else {}
+        dens = density(ref, px, ctx.geometry(which)) if scorable else {}
         cell_rows, non_cells, absent = [], [], []
-        masks, missing = (
-            _seam_masks(out, case, variants, owners, ref, mov, points, which)
-            if scorable
-            else ({}, [])
-        )
-        unregistered = {}
+        masks, missing = ctx.masks(which) if scorable else ({}, [])
 
-        def at_initial():
-            if not unregistered:
-                unregistered.update(pairs.record(ref, mov, ref, mov, px))
-            return unregistered
+        def row(method, frame, status, spec, jac, imputed, problem, cause):
+            wanted.setdefault(spec)
 
-        def row(method, frame, status, rec, jac, imputed, problem, cause):
-            return {
-                **base,
-                "set": which,
-                "method": method,
-                "frame": frame,
-                "selfcheck_status": status,
-                # THIS row's own check (variants.row_checks); selfcheck_status above is
-                # its run's gate, which a row that was never checked shares with its run
-                "selfcheck_row": checks.get(method.split(NON)[0], ""),
-                **{k: rec[k] for k in pairs.RECORD_KEYS},
-                **dens,
-                **jac,
-                "imputed_initial": imputed,
-                "problem": problem[:200],
-                "cause": cause,
-                # the row stays; no summary of this method reads it
-                # (NOT_THE_METHOD_ROUNDS)
-                "excluded_from_summaries": _excluded(
-                    {"imputed_initial": imputed, "cause": cause}
-                ),
-            }
+            def fill(recs):
+                rec = recs[spec]
+                return {
+                    **base,
+                    "set": which,
+                    "method": method,
+                    "frame": frame,
+                    "selfcheck_status": status,
+                    # THIS row's own check (variants.row_checks); selfcheck_status
+                    # above is its run's gate, which a row that was never checked
+                    # shares with its run
+                    "selfcheck_row": checks.get(method.split(NON)[0], ""),
+                    **{k: rec[k] for k in pairs.RECORD_KEYS},
+                    **dens,
+                    **jac,
+                    "imputed_initial": imputed,
+                    "problem": problem[:200],
+                    "cause": cause,
+                    # the row stays; no summary of this method reads it
+                    # (NOT_THE_METHOD_ROUNDS)
+                    "excluded_from_summaries": _excluded(
+                        {"imputed_initial": imputed, "cause": cause}
+                    ),
+                }
 
-        def off_seams(v, frame, status, ref_in, mov_in, jac, imputed, problem, cause):
+            return fill
+
+        def off_seams(v, frame, status, source, jac, imputed, problem, cause):
             """The same variant on the nuclei each owner's mask leaves, one row per owner."""
             for owner, (keep_ref, keep_mov, _) in masks.items():
-                r_in = ref_in if keep_ref is None else _keep_features(ref_in, keep_ref)
-                m_in = mov_in if keep_mov is None else _keep_features(mov_in, keep_mov)
                 # the gate still comes from ALL native nuclei: one gate per case and set
-                rec = pairs.record(ref, mov, r_in, m_in, px)
+                fill = row(
+                    f"{v}{NON}{owner}",
+                    frame,
+                    status,
+                    (which, source, owner),
+                    jac,
+                    imputed,
+                    problem,
+                    cause,
+                )
+                more = {
+                    "variant": v,
+                    "owner": owner,
+                    "n_mov_all": int(mov.n_features),
+                    "n_mov_kept": _kept(mov, keep_mov),
+                    "n_ref_all": int(ref.n_features),
+                    "n_ref_kept": _kept(ref, keep_ref),
+                }
                 non_cells.append(
-                    {
-                        **row(
-                            f"{v}{NON}{owner}",
-                            frame,
-                            status,
-                            rec,
-                            jac,
-                            imputed,
-                            problem,
-                            cause,
-                        ),
-                        "variant": v,
-                        "owner": owner,
-                        "n_mov_all": int(mov.n_features),
-                        "n_mov_kept": int(m_in.n_features),
-                        "n_ref_all": int(ref.n_features),
-                        "n_ref_kept": int(r_in.n_features),
-                    }
+                    lambda recs, fill=fill, more=more: {**fill(recs), **more}
                 )
 
         for v in variants:
             if v == "initial":
                 run, warped, problem, cause = {}, None, "", ""
             else:
-                run, warped, problem, cause = load(v)
+                run, warped, problem, cause = ctx.load(v)
                 if first:
                     res_rows.append(
                         {
@@ -727,7 +1176,7 @@ def _score_case(job):
                     mapped, direction, t_failed = None, MOV_TO_REF, True
                     t_problem = "warped.npz does not fit the case's truth probes"
                     t_cause = "exception"
-                jac = flat if mapped is None else jacobian_stats(warped)
+                jac = flat if mapped is None else ctx.jacobian(v)
                 args = (jac, t_failed, t_problem, t_cause)
                 add_truth(v, FRAME[direction], direction, mapped, *args)
                 # the same probes for every variant of the case: those the owner's seam
@@ -762,32 +1211,19 @@ def _score_case(job):
             imputed = v != "initial" and warped is None
             status = run.get("selfcheck_status", "") if run else ""
             if warped is None:
+                # the unregistered pose: ONE pair record for every such variant of the
+                # case (and one per owner), whatever the reason it has no result
+                said = (flat, imputed, problem, cause)
                 cell_rows.append(
-                    row(
-                        v,
-                        "reference",
-                        status,
-                        at_initial(),
-                        flat,
-                        imputed,
-                        problem,
-                        cause,
-                    )
+                    row(v, "reference", status, (which, initial, None), *said)
                 )
-                off_seams(
-                    v, "reference", status, ref, mov, flat, imputed, problem, cause
-                )
+                off_seams(v, "reference", status, initial, *said)
                 continue
-            xy = warped[xy_key].astype(float)
-            if direction == REF_TO_MOV:
-                ref_in, mov_in = pairs.with_xy(ref, xy), mov
-            else:
-                ref_in, mov_in = ref, pairs.with_xy(mov, xy)
-            jac = jacobian_stats(warped)
-            rec = pairs.record(ref, mov, ref_in, mov_in, px)
+            jac = ctx.jacobian(v)
             frame = FRAME[direction]
-            cell_rows.append(row(v, frame, status, rec, jac, False, problem, cause))
-            off_seams(v, frame, status, ref_in, mov_in, jac, False, problem, cause)
+            said = (jac, False, problem, cause)
+            cell_rows.append(row(v, frame, status, (which, (VARIANT, v), None), *said))
+            off_seams(v, frame, status, (VARIANT, v), *said)
         if first and add_truth is not None:
             # the true map itself: zero by construction, shown so the table has its floor
             add_truth(
@@ -801,25 +1237,23 @@ def _score_case(job):
                 "",
             )
         if scorable and TRUTH_XY[which] in points:
-            moved = pairs.with_xy(mov, points[TRUTH_XY[which]].astype(float))
-            rec = pairs.record(ref, mov, ref, moved, px)
-            cell_rows.append(row("truth", "reference", "", rec, nan, False, "", ""))
-            off_seams("truth", "reference", "", ref, moved, nan, False, "", "")
+            said = (nan, False, "", "")
+            cell_rows.append(
+                row("truth", "reference", "", (which, true_map, None), *said)
+            )
+            off_seams("truth", "reference", "", true_map, *said)
         lost = [{**base, "owner": owner} for owner in missing]
         return cell_rows, non_cells, lost, absent, scorable
 
     cell_rows, non_cells, lost, _, scorable = one_set(OUTLINES)
     why = nuclei_reason(case, points)
+    nuc_rows, nuc_non, absent = [], [], []
     if not scorable:
         # no outlines either (a landmark set): there is nothing the nuclei are missing from
-        nuclei = {"cells": [], "non_cells": [], "missing": []}
+        pass
     elif why:
         # a case without bare nuclei is scored on its outlines; nothing is imputed
-        nuclei = {
-            "cells": [],
-            "non_cells": [],
-            "missing": [{**base, "method": "", "reason": why}],
-        }
+        absent = [{**base, "method": "", "reason": why}]
     else:
         nuc_rows, nuc_non, nuc_lost, absent, _ = one_set(NUCLEI)
         # an owner without a seam mask on the bare nuclei of this case: no off-seam
@@ -833,8 +1267,201 @@ def _score_case(job):
             }
             for r in nuc_lost
         ]
-        nuclei = {"cells": nuc_rows, "non_cells": nuc_non, "missing": absent}
-    return cell_rows, res_rows, truth_rows, non_cells, non_truth, lost, nuclei
+    recs = _records(ctx, list(wanted), pool, fresh, progress)
+
+    def filled(rows):
+        return [fill(recs) for fill in rows]
+
+    nuclei = {
+        "cells": filled(nuc_rows),
+        "non_cells": filled(nuc_non),
+        "missing": absent,
+    }
+    return (
+        filled(cell_rows),
+        res_rows,
+        truth_rows,
+        filled(non_cells),
+        non_truth,
+        lost,
+        nuclei,
+    )
+
+
+def _case_record(job, key, why, pool=None, fresh=False):
+    """The rows of one case, computed now and saved at once as its record (``why`` is
+    the reason there was none to read). Progress goes to stderr."""
+    out, case = job[0], job[1]
+    folder = records_dir(out, case)
+    progress = _Progress(case)
+    progress.say(f"started ({why})")
+    got = _score_case(job, pool, fresh, progress)
+    _write_record(folder / "case.rec", key, got)
+    # the same key where a person can read it; `case.rec` is what the scorer trusts
+    write_json(
+        folder / "case.json",
+        {
+            "key_sha256": _key_sha256(key),
+            "seconds": round(progress.elapsed(), 3),
+            "rows": {
+                "cells": len(got[0]),
+                "nonband_cells": len(got[3]),
+                "truth": len(got[2]),
+                "cells_nuclei": len(got[6]["cells"]),
+                "nonband_cells_nuclei": len(got[6]["non_cells"]),
+            },
+            "seam_masks": {
+                OUTLINES: sorted({r["owner"] for r in got[3]}),
+                NUCLEI: sorted({r["owner"] for r in got[6]["non_cells"]}),
+            },
+            "key": key,
+        },
+    )
+    progress.say(f"finished in {progress.elapsed():.1f} s; record saved")
+    return got
+
+
+def _case_task(task):
+    """One whole case in a pool worker (serial inside): ``(index, rows)``."""
+    i, job, key, why, fresh = task
+    return i, _case_record(job, key, why, None, fresh)
+
+
+def score_jobs(jobs, workers=1, dropped=(), fresh=False):
+    """The rows of every job (``_score_case``), in the order of ``jobs``.
+
+    A case whose record is valid (``case_key``) is read. The others are computed and
+    saved as each finishes, so nothing depends on anything having scored a case
+    before, and an interrupted scoring keeps what it finished. With ``workers`` above
+    one the work runs at ONE level, never both: whole cases side by side when at least
+    ``workers`` of them are to be computed, else one case after the other with its
+    pair records side by side. One worker is purely serial: no process is started.
+    ``fresh`` reads no record, of a case or of a pair, and replaces them all."""
+    done = [None] * len(jobs)
+    keys, todo = [], []
+    for i, job in enumerate(jobs):
+        keys.append(case_key(job, dropped))
+        got, why = (
+            (None, "asked to compute it again")
+            if fresh
+            else _read_record(records_dir(job[0], job[1]) / "case.rec", keys[i])
+        )
+        if got is None:
+            todo.append((i, why))
+        else:
+            done[i] = got
+            _Progress(job[1]).say(
+                "rows read from its record (nothing it rests on has changed)"
+            )
+    if not todo:
+        return done
+    if workers <= 1:
+        for i, why in todo:
+            done[i] = _case_record(jobs[i], keys[i], why, None, fresh)
+        return done
+    import multiprocessing
+
+    spawn = multiprocessing.get_context("spawn")
+    if len(todo) >= workers:
+        print(
+            f"score: {len(todo)} case(s) to compute, {workers} at once",
+            file=sys.stderr,
+            flush=True,
+        )
+        tasks = [(i, jobs[i], keys[i], why, fresh) for i, why in todo]
+        with spawn.Pool(workers) as pool:
+            for i, got in pool.imap_unordered(_case_task, tasks):
+                done[i] = got
+        return done
+    print(
+        f"score: {len(todo)} case(s) to compute, one after the other, the pair "
+        f"records of each in {workers} processes",
+        file=sys.stderr,
+        flush=True,
+    )
+    with spawn.Pool(workers) as pool:
+        for i, why in todo:
+            done[i] = _case_record(jobs[i], keys[i], why, pool, fresh)
+    return done
+
+
+def case_jobs(
+    cases_root,
+    out,
+    dataset,
+    dev=False,
+    expected=None,
+    dropped=(),
+    owners=None,
+    row_checks=None,
+):
+    """One job per case of a dataset, as ``score`` and ``score_case`` both make them
+    (the two must agree, or a case's record would never be reused)."""
+    owners = tuple(SEAM_OWNERS if owners is None else owners)
+    cs = [
+        c
+        for c in list_cases(cases_root, dataset)
+        if c.case_id.startswith("dev_") == dev
+    ]
+    if not cs:
+        return []
+    variants = find_variants(out, dataset, expected, dropped)
+    return [(str(out), c, variants, owners, dict(row_checks or {})) for c in cs]
+
+
+def score_case(
+    cases_root,
+    out,
+    dataset,
+    index=None,
+    case_id=None,
+    workers=1,
+    dev=False,
+    expected=None,
+    seam_owners=None,
+    dropped=None,
+    row_checks=None,
+    fresh=False,
+):
+    """Score ONE case and leave its record under ``<out>/cache/scores``; no table is
+    written. ``score`` then reads the record instead of computing the case, provided
+    it is called with the same ``expected``, ``seam_owners``, ``dropped``,
+    ``row_checks`` and submission (``case_key``).
+
+    The case is named by ``case_id`` or by its ``index`` among ALL prepared cases of
+    the dataset (``list_cases``: the order every array of the launcher uses). Returns
+    ``"scored"``, ``"kept"`` (its record was valid already) or ``"skipped"`` (a
+    ``dev_*`` case when ``dev`` is not given, and the reverse)."""
+    dropped = list(dict.fromkeys(dropped or []))
+    everything = list_cases(cases_root, dataset)
+    if case_id is None:
+        if index is None or not 0 <= index < len(everything):
+            raise SystemExit(
+                f"score-case: --index {index} is not one of the {len(everything)} "
+                f"prepared {dataset} case(s) under {cases_root}"
+            )
+        case_id = everything[index].case_id
+    jobs = [
+        j
+        for j in case_jobs(
+            cases_root, out, dataset, dev, expected, dropped, seam_owners, row_checks
+        )
+        if str(j[1].case_id) == str(case_id)
+    ]
+    if not jobs:
+        if any(str(c.case_id) == str(case_id) for c in everything):
+            print(
+                f"score: {dataset}/{case_id}: not scored here (a dev_* case is scored "
+                "with --dev only, and only those are then)",
+                file=sys.stderr,
+            )
+            return "skipped"
+        raise SystemExit(f"score-case: no prepared {dataset} case named {case_id}")
+    (job,) = jobs
+    key = case_key(job, dropped)
+    valid = _read_record(records_dir(out, job[1]) / "case.rec", key)[0] is not None
+    score_jobs(jobs, workers, dropped, fresh)
+    return "kept" if valid and not fresh else "scored"
 
 
 def _in_set(rows, which):
@@ -2129,8 +2756,14 @@ def score(
     row_checks=None,
     mask_flags=None,
     selfcheck_masks=None,
+    fresh=False,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    A case whose record is valid is read, not computed (``score_jobs``, ``case_key``;
+    ``score_case`` makes one case's record on its own, which is how the cohort launcher
+    scores a case per job). ``fresh`` computes everything again. ``workers`` is how
+    many processes compute what is missing.
 
     ``row_checks`` maps a result name to what the selfcheck says of THAT row
     (``variants.row_checks``): column ``selfcheck_row`` of every table, so a row whose
@@ -2174,16 +2807,13 @@ def score(
     variants_of = {}
     jobs, hashes, lists, prepared, folded, reseeded = [], {}, {}, set(), [], []
     for ds in datasets or DATASETS:
-        cs = [
-            c for c in list_cases(cases_root, ds) if c.case_id.startswith("dev_") == dev
-        ]
-        if cs:
-            variants = find_variants(out, ds, expected, dropped)
-            variants_of[ds] = variants
-            jobs += [
-                (str(out), c, variants, owners, dict(row_checks or {})) for c in cs
-            ]
-            for c in cs:
+        made = case_jobs(
+            cases_root, out, ds, dev, expected, dropped, owners, row_checks
+        )
+        if made:
+            variants_of[ds] = made[0][2]
+            jobs += made
+            for c in (j[1] for j in made):
                 if c.extra.get("truth_spec_sha256"):
                     hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
                 if (c.extra.get("field") or {}).get("fold_pct", 0) > 0:
@@ -2222,13 +2852,7 @@ def score(
                 f"does not match the list the cases were built from ({sha[:12]}, "
                 f"e.g. {lists[(ds, sha)]})."
             )
-    if workers > 1 and len(jobs) > 1:
-        import multiprocessing
-
-        with multiprocessing.get_context("spawn").Pool(min(workers, len(jobs))) as pool:
-            done = pool.map(_score_case, jobs)
-    else:
-        done = [_score_case(j) for j in jobs]
+    done = score_jobs(jobs, workers, dropped, fresh)
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
     truth_rows = [r for rows in done for r in rows[2]]

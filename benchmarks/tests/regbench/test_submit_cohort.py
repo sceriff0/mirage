@@ -532,7 +532,11 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     jobs, _, _ = dry
     tissue, scorer = jobs["rb-tissue"], jobs["rb-score"]
     assert tissue.args == ["tissue"] and scorer.args == ["score"]
-    assert scorer.deps == {("afterany", "<rb-tissue>")}
+    assert scorer.deps == {
+        ("afterany", "<rb-tissue>"),
+        ("afterany", "<rb-score-case-multiplex>"),
+        ("afterany", "<rb-score-case-synthetic>"),
+    }
     waited = {n.strip("<>") for k, n in tissue.deps if k == "afterany"}
     assert {k for k, _ in tissue.deps} == {"afterany"}
     for run in RUNS:
@@ -540,15 +544,349 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
         for dataset in ("multiplex", "synthetic"):
             assert f"rb-{run}-{dataset}-512g-again" in waited, (run, dataset)
     code = code_of(SLURM / "score_cohort.sbatch")
-    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 3
+    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 5
     # killed records are settled against the scheduler BEFORE the tables are made, and
     # only what this submission ran or reused is scored
     assert code.index("settle --out") < code.index(
         'regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"'
     )
-    assert 'args+=(--submission "$REGBENCH_SUBMISSION")' in code
-    assert 'args+=(--drop "$v")' in code and '--gates "$gates"' in code
+    assert 'shared+=(--submission "$REGBENCH_SUBMISSION")' in code
+    assert 'shared+=(--drop "$v")' in code and '--gates "$gates"' in code
     assert '--pipeline-trace "$REGBENCH_PIPELINE_TRACE"' in code
+
+
+# ── one scoring task per case, then the tables ────────────────────────────────
+def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
+    """One array per dataset, a task per case; it waits for everything the scorer used
+    to wait for, and the scorer waits for it whatever becomes of it."""
+    jobs, _, _ = dry
+    tissue, scorer = jobs["rb-tissue"], jobs["rb-score"]
+    sizes = {"multiplex": 4, "synthetic": 1}
+    arrays = {n: j for n, j in jobs.items() if n.startswith("rb-score-case-")}
+    assert set(arrays) == {f"rb-score-case-{ds}" for ds in sizes}
+    for ds, n in sizes.items():
+        job = arrays[f"rb-score-case-{ds}"]
+        assert job.script == "score_cohort.sbatch" and job.args == ["case", ds]
+        assert job.opt("--array") == f"0-{n - 1}%20"
+        assert (job.opt("--cpus-per-task"), job.opt("--mem")) == ("8", "64G")
+        assert job.opt("--time") == "1-00:00:00"
+        assert {k for k, _ in job.deps} == {"afterany"}
+        # the tissue job comes after the arrays (each task makes its case's pieces; two
+        # jobs never write the same ones) and waits for nothing else they do not
+        assert tissue.deps == job.deps | {("afterany", f"<{n}>") for n in arrays}
+        assert "%A_%a.log" in job.opt("--output")
+        assert ("afterany", f"<{job.name}>") in scorer.deps
+    # the tables keep their allocation: the cases were scored before them
+    assert (scorer.opt("--cpus-per-task"), scorer.opt("--time")) == ("4", "1-00:00:00")
+    # the default submission: two more jobs than before the arrays, and nothing else
+    assert len(jobs) == 19 + 51 + 19 * 2 * 8 + 2 * (8 + 1) + 2 + len(sizes) == 396
+
+
+def test_the_case_arrays_have_their_own_allocation_and_are_throttled(site):
+    env = {
+        "REGBENCH_SCORE_CPUS": "16",
+        "REGBENCH_SCORE_MEM": "128G",
+        "REGBENCH_SCORE_TIME": "9-00:00:00",  # above the site's longest job
+        "REGBENCH_ARRAY_LIMIT": "3",
+    }
+    jobs = jobs_of(launch(site, "--runs", "stare", env=env, log="score-alloc")[0])
+    job = jobs["rb-score-case-multiplex"]
+    assert job.opt("--array") == "0-3%3" and job.opt("--cpus-per-task") == "16"
+    assert job.opt("--mem") == "128G" and job.opt("--time") == "7-00:00:00"
+    # the memory is the tissue and score jobs' too; their CPUs and day are not touched
+    for name in ("rb-tissue", "rb-score"):
+        assert jobs[name].opt("--mem") == "128G"
+        assert jobs[name].opt("--cpus-per-task") == "4"
+        assert jobs[name].opt("--time") == "1-00:00:00"
+
+
+def test_the_case_task_and_the_scorer_are_told_the_same_things():
+    """A case's record is reused only by a scorer given the same submission and the same
+    dropped rows: both read them from ONE place in the batch script."""
+    code = code_of(SLURM / "score_cohort.sbatch")
+    assert code.count("shared_args\n") == 2  # the case task, and the scorer
+    case = code[code.index('if [ "$kind" = case ]') : code.index("jobs=")]
+    assert "score-case" in case and '--index "$SLURM_ARRAY_TASK_ID"' in case
+    assert '--dataset "$external"' in case and '--workers "$workers"' in case
+    assert '${shared[@]+"${shared[@]}"}' in case
+    scorer = code[code.index("args=(score ") :]
+    assert '${shared[@]+"${shared[@]}"}' in scorer.split("\n\n")[0]
+    # the task says how it ended, and a task that died says whose that is
+    assert "cause=score_case_unfinished whose=benchmark" in case
+    assert 'exit "$code"' in case
+    # the case's tissue pieces first, and a failure there never stops its scoring
+    tissue = case.index('tissue --cases "$REGBENCH_CASES"')
+    assert tissue < case.index("|| echo") < case.index("score-case")
+    assert '--index "$SLURM_ARRAY_TASK_ID"' in case[tissue : case.index("|| echo")]
+
+
+def _records_site(site, tmp_path, name, ids=("20261011T220000-77",), last=None):
+    """A results folder as an earlier submission left it: selfcheck records carrying
+    its id, and (from this version on) logs/submission."""
+    out = site[0] / f"out-{name}"
+    for i, sub in enumerate(ids):
+        d = out / "logs" / "selfcheck" / f"run{i}"
+        d.mkdir(parents=True)
+        write_json(d / "selfcheck.json", {"status": "ok", "submission": sub})
+    if last:
+        (out / "logs" / "submission").write_text(last + "\n")
+    return out
+
+
+def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
+    """For a folder whose registrations are done: the case arrays, tissue, the scorer.
+    No selfcheck, no gate, no ladder, and nothing waits for a job that is not there."""
+    _records_site(site, tmp_path, "so", last="20261012T010203-9")
+    done, log, out = launch(site, "--score-only", log="so")
+    jobs = jobs_of(done)
+    assert list(jobs) == [
+        "rb-score-case-multiplex",
+        "rb-score-case-synthetic",
+        "rb-tissue",
+        "rb-score",
+    ]
+    for name in list(jobs)[:2]:
+        assert jobs[name].deps == set(), name
+    assert jobs["rb-tissue"].deps == {
+        ("afterany", "<rb-score-case-multiplex>"),
+        ("afterany", "<rb-score-case-synthetic>"),
+    }
+    assert jobs["rb-score"].deps == {
+        ("afterany", "<rb-tissue>"),
+        ("afterany", "<rb-score-case-multiplex>"),
+        ("afterany", "<rb-score-case-synthetic>"),
+    }
+    assert "# 4 job(s) would be submitted; nothing was" in done.stdout
+    # it scores the LAST submission into the folder, and says which
+    assert "# --score-only: scoring submission 20261012T010203-9" in done.stdout
+    assert "nothing is run again" in done.stdout
+    # only the scorer's image is asked for, and no GPU
+    assert "REGBENCH_SIF_STARE_REGBENCH" in done.stdout
+    assert "REGBENCH_SIF_ASHLAR" not in done.stdout + done.stderr
+    no_gpu, _, _ = launch(
+        site, "--score-only", env={"REGBENCH_SBATCH_GPU": None}, log="so"
+    )
+    assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 4
+    # one dataset, when named
+    one = jobs_of(launch(site, "--score-only", "--datasets", "multiplex", log="so")[0])
+    assert list(one) == ["rb-score-case-multiplex", "rb-tissue", "rb-score"]
+    # --runs changes nothing (the scorer scores every run), and that is said
+    runs, _, _ = launch(site, "--score-only", "--runs", "stare", log="so")
+    assert list(jobs_of(runs)) == list(jobs) and "--runs is not used" in runs.stdout
+    both, _, _ = launch(site, "--score-only", "--prepare", log="so")
+    assert both.returncode == 2 and "two different steps" in both.stderr
+
+
+def test_score_only_finds_the_submission_or_refuses(site, tmp_path):
+    # a folder filled before logs/submission existed: the one id its records carry
+    _records_site(site, tmp_path, "so1")
+    done, _, _ = launch(site, "--score-only", log="so1")
+    assert done.returncode == 0
+    assert "# --score-only: scoring submission 20261011T220000-77" in done.stdout
+    # an exported id wins over both
+    named, _, _ = launch(
+        site, "--score-only", env={"REGBENCH_SUBMISSION": "mine-1"}, log="so1"
+    )
+    assert "# submission  -> mine-1 (scored as it is" in named.stdout
+    assert "scoring submission" not in named.stdout
+    # two ids and nothing that says which was last: refused, both named
+    _records_site(site, tmp_path, "so2", ids=("A-1", "B-2"))
+    two, log, _ = launch(site, "--score-only", log="so2")
+    assert two.returncode == 2 and "A-1 B-2" in two.stderr and not log.exists()
+    assert "Nothing was submitted" in two.stderr and not _sbatch_lines(two.stdout)
+    # nothing at all: refused, with where the id is to be found
+    none, _, _ = launch(site, "--score-only", log="so3")
+    assert none.returncode == 2 and "REGBENCH_SUBMISSION=" in none.stderr
+    assert not _sbatch_lines(none.stdout)
+
+
+def test_a_submission_leaves_its_id_for_score_only_which_never_replaces_it(site):
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1", "REGBENCH_SUBMISSION": "first-1"}
+    done, _, out = launch(
+        site, "--runs", "stare", "--datasets", "multiplex", env=env, dry=False, log="id"
+    )
+    assert done.returncode == 0, done.stderr
+    assert (out / "logs" / "submission").read_text() == "first-1\n"
+    # score-only reads it, passes it to its jobs' environment, and submits three jobs
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1"}
+    again, log, _ = launch(
+        site, "--score-only", "--datasets", "multiplex", env=env, dry=False, log="id"
+    )
+    assert again.returncode == 0, again.stderr
+    assert "# --score-only: scoring submission first-1" in again.stdout
+    assert "# 3 job(s) submitted" in again.stdout
+    names = [
+        Job("sbatch " + ln.split("\t", 1)[1]).name
+        for ln in log.read_text().splitlines()
+    ]
+    assert names[-3:] == ["rb-score-case-multiplex", "rb-tissue", "rb-score"]
+    # ... and another id given by hand does not become "the last submission"
+    env["REGBENCH_SUBMISSION"] = "other-2"
+    launch(
+        site, "--score-only", "--datasets", "multiplex", env=env, dry=False, log="id"
+    )
+    assert (out / "logs" / "submission").read_text() == "first-1\n"
+
+
+# ── the order the runs are submitted in ───────────────────────────────────────
+USER_ORDER = "ashlar palom deeperhistreg valis120 stare valis_mirage"
+ORDERS = (
+    USER_ORDER,
+    "affine_ashlar ashlar stare",  # an anchored family named BEFORE its anchor
+    "affine_ashlar_clean palom_b1024",  # run names; one anchored row alone
+)
+
+
+def _sorted_topologically(deps):
+    """The jobs of ``{job: {jobs it waits for}}`` in an order in which each comes after
+    all it waits for; raises when there is none (a cycle, or a job that does not exist)."""
+    waiting = {job: set(needs) for job, needs in deps.items()}
+    unknown = {n for needs in waiting.values() for n in needs} - set(waiting)
+    assert not unknown, f"jobs waited for that were never submitted: {sorted(unknown)}"
+    done = []
+    while waiting:
+        ready = sorted(job for job, needs in waiting.items() if not needs)
+        assert ready, f"a cycle: nothing can start among {sorted(waiting)}"
+        for job in ready:
+            del waiting[job]
+        for needs in waiting.values():
+            needs.difference_update(ready)
+        done += ready
+    return done
+
+
+def _ladder_order(jobs):
+    """The runs in the order their ladders were submitted (multiplex)."""
+    first = [j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"]
+    return list(dict.fromkeys(first))
+
+
+def test_the_default_order_is_the_run_lists(dry):
+    jobs, done, _ = dry
+    assert _ladder_order(jobs) == list(RUNS) and "# run order" not in done.stdout
+
+
+@pytest.mark.parametrize("order", ORDERS)
+@pytest.mark.parametrize("lanes", [0, 1, 2, 3, 4])
+def test_an_order_changes_the_order_of_submission_and_nothing_else(
+    site, dry, order, lanes
+):
+    """REGBENCH_RUN_ORDER on 0 to 4 lanes: the same jobs, submitted in that order; a
+    run that reads another's results still comes after it and waits for it; and the
+    graph of what waits for what can be run (it has no cycle)."""
+    env = {"REGBENCH_RUN_ORDER": order, "REGBENCH_RUN_LANES": str(lanes)}
+    done, _, _ = launch(site, env=env, log=f"order-{lanes}")
+    jobs = jobs_of(done)
+    wanted = [variants.run_name(r) for r in variants.submission_order(order.split())[0]]
+    assert sorted(jobs) == sorted(dry[0])  # the same jobs as without an order
+    assert _ladder_order(jobs) == wanted != list(RUNS)
+    assert f"# run order: {' '.join(wanted)}" in done.stdout
+    # the selfchecks and the gates are submitted in that order too
+    checks = [j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"]
+    assert list(dict.fromkeys(checks)) == [n for n in wanted if n in GATING]
+    # every job waits only for jobs submitted before it: nothing can wait for ever
+    seen = set()
+    for job in jobs.values():
+        assert {n.strip("<>") for _, n in job.deps} <= seen, job.name
+        seen.add(job.name)
+    _sorted_topologically(
+        {j.name: {n.strip("<>") for _, n in j.deps} for j in jobs.values()}
+    )
+    # the anchored rows: after their anchor in the order, waiting for its last array
+    # and (the one with a selfcheck of its own) for its last selfcheck attempt
+    for run in ("affine_ashlar", "affine_ashlar_clean"):
+        assert wanted.index(run) > wanted.index("stare")
+        for dataset in ("multiplex", "synthetic"):
+            first = rungs(jobs, run, dataset)[0]
+            assert ("afterany", f"<rb-stare-{dataset}-512g-again>") in first.deps
+    anchored = jobs["rb-sc-affine_ashlar-64g"]
+    assert ("afterok", "<rb-sc-stare-512g>") in anchored.deps
+    # on lanes, each run starts behind the run dealt onto its lane before it
+    if lanes:
+        for i, run in enumerate(wanted):
+            waits = {n.strip("<>") for _, n in rungs(jobs, run)[0].deps}
+            suffix = "-first" if variants.realcheck_gate(run) else ""
+            if suffix:
+                waits = {
+                    n.strip("<>") for _, n in rungs(jobs, run, suffix=suffix)[0].deps
+                }
+            before = wanted[i - lanes] if i >= lanes else None
+            ends = {
+                w for w in waits if before and w.startswith(f"rb-{before}-multiplex")
+            }
+            ends |= {w for w in waits if before and w == f"rb-realgate-{before}"}
+            assert bool(ends) is (before is not None), (run, before, waits)
+
+
+def test_an_anchored_run_named_first_is_moved_and_that_is_said(site):
+    done, _, _ = launch(site, env={"REGBENCH_RUN_ORDER": ORDERS[1]}, log="order-moved")
+    for run in ("affine_ashlar", "affine_ashlar_clean"):
+        said = f"# run order: {run} reads the results of stare: it is submitted directly after stare"
+        assert said in done.stdout
+    order = _ladder_order(jobs_of(done))
+    at = order.index("stare")
+    assert order[at : at + 3] == ["stare", "affine_ashlar", "affine_ashlar_clean"]
+    assert order[0] == "ashlar"  # the rest of what was named keeps its place
+    # the user's order moves nothing, and says nothing of the kind
+    plain, _, _ = launch(site, env={"REGBENCH_RUN_ORDER": USER_ORDER}, log="order-user")
+    assert "reads the results of" not in plain.stdout
+    assert _ladder_order(jobs_of(plain))[:4] == [
+        "ashlar", "ashlar_clean", "palom", "palom_b1024",
+    ]  # fmt: skip
+
+
+def test_an_order_with_an_unknown_name_is_refused(site):
+    done, log, _ = launch(
+        site, env={"REGBENCH_RUN_ORDER": "ashlar valis"}, log="order-bad"
+    )
+    assert done.returncode == 2 and not _sbatch_lines(done.stdout) and not log.exists()
+    assert "no family and no run named 'valis'" in done.stderr
+    assert "Families: stare, valis_mirage, valis120" in done.stderr
+    assert "Nothing was submitted" in done.stderr
+
+
+def test_the_order_is_of_submission_only():
+    """`runs`, the expected names and the primaries are what they were: no table and no
+    result can depend on REGBENCH_RUN_ORDER."""
+    before = variants.runs_table(), variants.expected_variants(), variants.PRIMARY
+    ordered = variants.runs_table(order=USER_ORDER.split())
+    assert sorted(ordered) == sorted(before[0]) and ordered != before[0]
+    assert variants.runs_table(order=[]) == before[0]  # no name: the run list's order
+    assert (
+        variants.runs_table(),
+        variants.expected_variants(),
+        variants.PRIMARY,
+    ) == before
+    code = code_of(SLURM / "score_cohort.sbatch") + code_of(SLURM / "run_rung.sbatch")
+    assert "REGBENCH_RUN_ORDER" not in code and "--order" not in code
+
+
+@pytest.mark.parametrize("lanes", [1, 2, 3, 4])
+def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
+    """The real path: what the stand-in sbatch was GIVEN as --dependency, by job id."""
+    env = {
+        "REGBENCH_RUN_ORDER": USER_ORDER,
+        "REGBENCH_RUN_LANES": str(lanes),
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+    }
+    done, log, _ = launch(site, env=env, dry=False, log=f"order-real-{lanes}")
+    assert done.returncode == 0, done.stderr
+    deps, names = {}, {}
+    for line in log.read_text().splitlines():
+        job_id, argv = line.split("\t", 1)
+        job = Job("sbatch " + argv)
+        names[job_id] = job.name
+        deps[job_id] = {n for _, n in job.deps}
+    order = _sorted_topologically(deps)
+    assert len(order) == len(deps) == 396
+    # a cycle would be found: the check is not vacuous
+    a, b = list(deps)[:2]
+    with pytest.raises(AssertionError, match="a cycle"):
+        _sorted_topologically({**deps, a: {b}, b: {a}})
+    # an anchored run and its anchor on ONE lane: the anchor's ladder comes first
+    by_name = {n: i for i, n in names.items()}
+    anchored = deps[by_name["rb-affine_ashlar-multiplex-16g"]]
+    assert by_name["rb-stare-multiplex-512g-again"] in anchored
 
 
 # ── the realcheck as a gate ───────────────────────────────────────────────────
@@ -636,8 +974,88 @@ def test_valis_120_is_started_with_a_writable_tmpfs_and_no_other_image(tmp_path)
     assert "VALIS120" in images
     for image in sorted(images):
         line = _exec_line(tmp_path, image)
-        assert f"/images/{image}.sif python -m benchmarks.regbench runs" in line
+        # the interpreter is chosen inside the image (`sh -c`), never named from outside
+        assert f"/images/{image}.sif sh -c " in line
+        assert line.rstrip().endswith("regbench-python -m benchmarks.regbench runs")
         assert ("--writable-tmpfs" in line) is (image == "VALIS120"), image
+
+
+def _image_runtime(tmp_path, commands):
+    """A stand-in container runtime whose "image" has exactly these commands: what
+    follows the image path is run with PATH set to the image's bin and nothing else."""
+    fake, image = tmp_path / "bin", tmp_path / "image-bin"
+    fake.mkdir(exist_ok=True)
+    image.mkdir(exist_ok=True)
+    (image / "sh").symlink_to("/bin/sh")
+    for name in commands:
+        tool = image / name
+        tool.write_text(f'#!/bin/sh\necho "{name} $*"\n')
+        tool.chmod(0o755)
+    runtime = fake / "apptainer"
+    runtime.write_text(
+        "#!/bin/bash\n"
+        'while [ $# -gt 0 ]; do a="$1"; shift; case "$a" in *.sif) break ;; esac; done\n'
+        f'PATH="{image}" exec "$@"\n'
+    )
+    runtime.chmod(0o755)
+    return fake
+
+
+@pytest.mark.parametrize(
+    "commands, wanted",
+    [
+        (("python3",), "python3"),  # labsyspharm/ashlar:1.20.0: Ubuntu, python3 only
+        (("python", "python3"), "python"),
+        (("python",), "python"),
+    ],
+)
+def test_the_interpreter_is_the_images_own_python_or_python3(
+    tmp_path, commands, wanted
+):
+    """`regbench_py` must not ask an image for a `python` it does not have: ASHLAR's
+    official image has `python3` alone, and its selfcheck died on exactly that."""
+    fake = _image_runtime(tmp_path, commands)
+    base = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
+    base.update(
+        PATH=f"{fake}:{base['PATH']}",
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES="/c",
+        REGBENCH_OUT="/o",
+        REGBENCH_SIF_ASHLAR="/images/ASHLAR.sif",
+    )
+    done = subprocess.run(
+        ["bash", "-c", f'source "{SLURM}/env.sh" && regbench_py ASHLAR selfcheck --x "a b"'],
+        env=base, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == f"{wanted} -m benchmarks.regbench selfcheck --x a b\n"
+
+
+def test_an_image_with_no_interpreter_fails_and_says_so(tmp_path):
+    fake = _image_runtime(tmp_path, ())
+    base = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
+    base.update(
+        PATH=f"{fake}:{base['PATH']}", REGBENCH_REPO=str(REPO), REGBENCH_CASES="/c",
+        REGBENCH_OUT="/o", REGBENCH_SIF_ASHLAR="/images/ASHLAR.sif",
+    )  # fmt: skip
+    done = subprocess.run(
+        ["bash", "-c", f'source "{SLURM}/env.sh" && regbench_py ASHLAR runs'],
+        env=base, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode != 0 and "python3" in done.stderr
+
+
+def test_the_stardist_command_also_falls_back_to_python3():
+    """nuclei.sbatch runs the pipeline's `python segment.py ...` line inside the
+    StarDist image through a script: the same rule, as a shell function there."""
+    code = code_of(SLURM / "nuclei.sbatch")
+    assert 'command -v python >/dev/null 2>&1 || python() { python3 "$@"; }' in code
+    script = 'command -v python >/dev/null 2>&1 || python() { python3 "$@"; }\npython x.py 1\n'
+    done = subprocess.run(
+        ["/bin/sh", "-c", script], capture_output=True, text=True,
+        env={"PATH": "/nonexistent"},
+    )  # fmt: skip
+    assert "python3" in done.stderr and done.returncode != 0  # it asked for python3
 
 
 def test_a_gpu_reaches_an_image_only_when_the_run_asked_for_one(tmp_path):

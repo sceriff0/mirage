@@ -1,25 +1,76 @@
 #!/bin/bash
 #SBATCH --job-name=regbench-score
-# The end of a cohort submission, in the scorer's image. Two forms:
+# The end of a cohort submission, in the scorer's image. Three forms:
 #
 #   score_cohort.sbatch tissue   the tissue-level pieces of every written image (OpenCV)
+#   score_cohort.sbatch case <dataset>
+#                                ONE case of a cohort dataset, the SLURM_ARRAY_TASK_ID-th
+#                                (`tissue --index`, then `score-case`): the tissue
+#                                pieces of its written images, then its rows, its pair
+#                                records side by side on the task's CPUs, kept under
+#                                $REGBENCH_OUT/cache/scores. No table is written. A task
+#                                that is killed keeps the pair records it finished
 #   score_cohort.sbatch score    the tables: every row the gates dropped is left out
 #                                (`score --drop`), every blocked run and dropped row is
 #                                named in the summary (`score --gates`), and the
 #                                pipeline's own steps are read from a trace when
-#                                REGBENCH_PIPELINE_TRACE names one
+#                                REGBENCH_PIPELINE_TRACE names one. A case whose record
+#                                is still valid is read; every other case is computed
+#                                here, so the tables never depend on the array above
 #
 #   score_cohort.sbatch score <external dataset>
 #                                an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir), alone:
 #                                its own tables under $REGBENCH_OUT/tables/<dataset>/,
 #                                never the cohort's
 #
-# Both read the gates' verdicts from $REGBENCH_OUT/logs/gates. A row is dropped when its
-# own selfcheck failed and it does not gate its method.
+# `case` and `score` read the gates' verdicts from $REGBENCH_OUT/logs/gates. A row is
+# dropped when its own selfcheck failed and it does not gate its method. Both are given
+# the same submission and the same dropped rows: a case's record is reused only by a
+# scorer that was (benchmarks/regbench/score.py: case_key).
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 kind="$1" external="${2:-}"
 workers="${SLURM_CPUS_PER_TASK:-1}"
+gates="$REGBENCH_OUT/logs/gates"
+
+# what `score-case` and `score` are both told: the submission, and the dropped rows
+shared=()
+shared_args() {
+    local f dropped rows v
+    # only what THIS submission ran or reused: a blocked run's older folders are not scored
+    [ -n "${REGBENCH_SUBMISSION:-}" ] && shared+=(--submission "$REGBENCH_SUBMISSION")
+    for f in "$gates"/*.tsv; do
+        [ -s "$f" ] || continue
+        IFS=$'\t' read -r _ _ dropped _ _ < "$f"
+        [ "${dropped:--}" = - ] && continue
+        IFS=, read -ra rows <<< "$dropped"
+        for v in "${rows[@]}"; do shared+=(--drop "$v"); done
+    done
+    return 0
+}
+
+if [ "$kind" = case ]; then
+    : "${SLURM_ARRAY_TASK_ID:?this task is one case of an array: submit with --array}"
+    shared_args
+    # the tissue-level pieces of this case's written images first (kept beside each
+    # image; the tissue job and the scorer read them and compute only what is missing).
+    # A failure here costs the case nothing: its rows are scored all the same
+    regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
+        --out "$REGBENCH_OUT" --dataset "$external" --index "$SLURM_ARRAY_TASK_ID" \
+        --workers "$workers" \
+        || echo "tissue $external index $SLURM_ARRAY_TASK_ID: not computed here (the tissue job and the scorer compute whatever is missing)"
+    regbench_py "$REGBENCH_SCORER_IMAGE" score-case --cases "$REGBENCH_CASES" \
+        --out "$REGBENCH_OUT" --dataset "$external" --index "$SLURM_ARRAY_TASK_ID" \
+        --workers "$workers" ${shared[@]+"${shared[@]}"}
+    code=$?
+    echo "score-case $external index $SLURM_ARRAY_TASK_ID: python exited $code (the scorer computes whatever is missing)"
+    if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+        cat "$REGBENCH_END_FILE"
+    else
+        echo "REGBENCH_END kind=score_case dataset=$external unit=index_$SLURM_ARRAY_TASK_ID status=no_end_line cause=score_case_unfinished whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+    fi
+    exit "$code"
+fi
 if [ "$kind" = tissue ]; then
     regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
         --out "$REGBENCH_OUT" --workers "$workers"
@@ -43,21 +94,13 @@ if [ -s "$jobs" ] && command -v sacct >/dev/null; then
     fi
 fi
 
-gates="$REGBENCH_OUT/logs/gates"
-args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers")
-# only what THIS submission ran or reused: a blocked run's older folders are not scored
-[ -n "${REGBENCH_SUBMISSION:-}" ] && args+=(--submission "$REGBENCH_SUBMISSION")
+shared_args
+args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers"
+      ${shared[@]+"${shared[@]}"})
 # the gates' verdicts, for the cohort and for an external set alike: a run a gate
 # blocked is not a method failure (ANHIR's scorer lists it apart; HyReCo's ignores it)
 args+=(--gates "$gates")
 [ -n "$external" ] && args+=(--dataset "$external")
-for f in "$gates"/*.tsv; do
-    [ -s "$f" ] || continue
-    IFS=$'\t' read -r _ _ dropped _ _ < "$f"
-    [ "${dropped:--}" = - ] && continue
-    IFS=, read -ra rows <<< "$dropped"
-    for v in "${rows[@]}"; do args+=(--drop "$v"); done
-done
 if [ -z "$external" ] && [ -n "${REGBENCH_PIPELINE_TRACE:-}" ]; then
     args+=(--pipeline-trace "$REGBENCH_PIPELINE_TRACE")
     [ -n "${REGBENCH_PIPELINE_TRACE_LABEL:-}" ] && \
