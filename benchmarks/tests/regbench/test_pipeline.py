@@ -906,16 +906,23 @@ def test_each_variant_has_its_own_clock_and_peak(toy):
     neither the later stage's 0.4 s nor its 600 MB), and the second variant's bill, read
     by the DRIVER's own monitor, has both. The test only makes sure the 600 MB are there
     to be seen: it waits, with an independent reading, until the worker really is
-    resident, instead of trusting that it still is after a fixed sleep."""
+    resident, instead of trusting that it still is after a fixed sleep.
+
+    Each bill is compared with this process's OWN resident size at the same yield, not
+    with the other bill: a peak is a sum over the process tree, and a large test process
+    is pushed out of memory by the very 600 MB the worker takes (measured with a 12 GB
+    test process on a 16 GB machine: 460 MB at the first yield, 661 MB at the second,
+    a difference of 200 MB with all 600 MB resident in the worker)."""
     import subprocess
     import sys
 
     _, case, out = toy
+    own = {}
 
     def register(case, work, opts):
+        own["a"] = _resident_mb(os.getpid())
         yield "fake_a", true_map(), {}
-        # the later stage: 600 MB in a worker, and some time. (Large on purpose: the
-        # parent's own resident size drifts by tens of MB between the two yields.)
+        # the later stage: 600 MB in a worker, and some time
         worker = subprocess.Popen([sys.executable, "-c", HOLD], stdout=subprocess.PIPE)
         try:
             assert worker.stdout.readline().strip() == b"ready"
@@ -931,6 +938,7 @@ def test_each_variant_has_its_own_clock_and_peak(toy):
                     "after 60 s: this machine cannot keep it in memory"
                 )
             time.sleep(0.4)
+            own["b"] = _resident_mb(os.getpid())
             yield "fake_b", true_map(), {}
         finally:
             worker.kill()
@@ -940,7 +948,9 @@ def test_each_variant_has_its_own_clock_and_peak(toy):
     a, b = run_json(out, "fake_a", case), run_json(out, "fake_b", case)
     assert b["register_s"] - a["register_s"] >= 0.4
     if a["resources"]["rss_method"] != "rusage":
-        assert b["resources"]["peak_rss_mb"] - a["resources"]["peak_rss_mb"] > 300
+        # the first bill is this process alone, the second has the worker on top
+        assert a["resources"]["peak_rss_mb"] - own["a"] < 300
+        assert b["resources"]["peak_rss_mb"] - own["b"] > 300
 
 
 def test_pause_freezes_the_memory_peak():
