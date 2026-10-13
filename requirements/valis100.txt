@@ -1,0 +1,26 @@
+-c constraints.txt
+
+# What the registration benchmark adds to upstream's VALIS 1.0.0 image
+# (containers/valis100, the `valis_mirage` row). NOTHING of upstream's stack is named
+# here: the install is constrained by a freeze of the base image, so it can add and
+# cannot move, and smoke.sh fails the build if a line of that freeze is gone afterwards.
+#
+# UPSTREAM WINS: the Dockerfile drops, before the install, every line here and in
+# constraints.txt that names a distribution the base already holds (its versions were
+# not read where this was written). What is left is installed at these pins.
+#
+# WHAT IS ADDED. The harness reads every slide through stare.slide_io.open_lazy
+# (tifffile's zarr view), and tifffile decodes the cohort's compressed tiles with
+# imagecodecs. Upstream's image has neither zarr nor imagecodecs (`regbench preflight`,
+# 2026-10-13: "cannot import zarr", "cannot import imagecodecs").
+zarr==2.18.3            # stare.slide_io's lazy region reads
+numcodecs==0.13.1       # zarr 2.18 imports blosc.cbuffer_sizes, gone from newer releases
+imagecodecs==2025.3.30  # the codecs tifffile decodes the cohort's tiles with
+pytest==9.1.1           # test_external_methods.py is run INSIDE the image first
+
+iniconfig==2.3.1        # pytest
+pluggy==1.6.0           # pytest
+pygments==2.21.0        # pytest
+
+asciitree==0.3.3        # zarr
+fasteners==0.20         # zarr

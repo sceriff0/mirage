@@ -1,0 +1,21 @@
+-c constraints.txt
+
+# What the registration benchmark adds to the official ASHLAR 1.20.0 image
+# (containers/ashlar120, the `ashlar*` and `affine_ashlar*` rows). NOTHING of the
+# official stack is named here: the install is constrained by a freeze of the base
+# image, so it can add and cannot move, and smoke.sh fails the build if a line of that
+# freeze is gone afterwards.
+#
+# UPSTREAM WINS: the Dockerfile drops, before the install, every line here and in
+# constraints.txt that names a distribution the base already holds (its versions were
+# not read where this was written). What is left is installed at these pins.
+#
+# WHAT IS ADDED. tifffile decodes the cohort's compressed tiles with imagecodecs, and the
+# official image has zarr and no imagecodecs (`regbench preflight`, 2026-10-13: "cannot
+# import imagecodecs").
+imagecodecs==2025.3.30  # the codecs tifffile decodes the cohort's tiles with
+pytest==9.1.1           # test_external_methods.py is run INSIDE the image first
+
+iniconfig==2.3.1        # pytest
+pluggy==1.6.0           # pytest
+pygments==2.21.0        # pytest

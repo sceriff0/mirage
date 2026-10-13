@@ -140,6 +140,14 @@ BASE_IMAGE_MODULES: dict[str, tuple[str, set[str]]] = {
             "packaging",
         },
     ),
+    # containers/valis100 and containers/ashlar120: the benchmark's other two competitors,
+    # built FROM their authors' images for the same reason, with only the slide reader's
+    # codecs added (requirements/valis100.txt, requirements/ashlar120.txt).
+    "valis100": ("cdgatenbee/valis-wsi:1.0.0", {"valis", "numpy", "tifffile"}),
+    "ashlar120": (
+        "labsyspharm/ashlar:1.20.0",
+        {"ashlar", "numpy", "tifffile", "zarr", "numcodecs"},
+    ),
 }
 
 

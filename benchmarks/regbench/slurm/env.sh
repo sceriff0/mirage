@@ -13,10 +13,10 @@
 #
 #   REGBENCH_SIF_STARE_REGBENCH   containers/stare-regbench: STARE, and where `prepare`,
 #                                 `gate`, `tissue` and `score` run (variants.SCORER_IMAGE)
-#   REGBENCH_SIF_VALIS_MIRAGE     the pipeline's VALIS 1.0.0 image
+#   REGBENCH_SIF_VALIS_MIRAGE     containers/valis100 (the pipeline's VALIS 1.0.0 image + codecs)
 #   REGBENCH_SIF_VALIS120         containers/valis120 (VALIS 1.2.0)
 #   REGBENCH_SIF_DEEPERHISTREG    containers/deeperhistreg
-#   REGBENCH_SIF_ASHLAR           labsyspharm/ashlar:1.20.0
+#   REGBENCH_SIF_ASHLAR           containers/ashlar120 (labsyspharm/ashlar:1.20.0 + imagecodecs)
 #   REGBENCH_SIF_PALOM            containers/palom
 #   REGBENCH_SIF_STARDIST         the pipeline's StarDist image (bolt3x/mirage-stardist:1.0.0):
 #                                 only for the re-run of the bare nuclei (nuclei.sbatch)

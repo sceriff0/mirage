@@ -181,8 +181,9 @@ names and opens its summary on the six primary rows:
   under `containers/` in capitals with `-` written `_`: `STARE_REGBENCH` (the `stare`
   run, and `tissue` and `score`: `variants.SCORER_IMAGE`), `VALIS120` (built FROM
   upstream's `cdgatenbee/valis-wsi:1.2.0`; needs `--writable-tmpfs`), `DEEPERHISTREG`,
-  `PALOM`. Pulled from upstream: `VALIS_MIRAGE` (`cdgatenbee/valis-wsi` 1.0.0, the
-  pipeline's digest) and `ASHLAR` (`labsyspharm/ashlar:1.20.0`). `containers/README.md`
+  `PALOM`. Upstream's published image plus the slide reader's codecs: `VALIS_MIRAGE`
+  (`containers/valis100`: `cdgatenbee/valis-wsi` 1.0.0, the pipeline's digest) and
+  `ASHLAR` (`containers/ashlar120`: `labsyspharm/ashlar:1.20.0`). `containers/README.md`
   has what each holds. Inside an image the harness is started with the image's own
   `python`, or with `python3` where it has no `python`: the choice is made inside the
   image (`slurm/env.sh: regbench_py`), never on the host. ASHLAR's image is the case
@@ -2678,8 +2679,8 @@ reports.
   apptainer pull valis120.sif       docker://bolt3x/mirage-valis120:1.0.0
   apptainer pull deeperhistreg.sif  docker://bolt3x/mirage-deeperhistreg:1.0.0
   apptainer pull palom.sif          docker://bolt3x/mirage-palom:1.0.0
-  apptainer pull ashlar.sif         docker://labsyspharm/ashlar:1.20.0
-  apptainer pull valis-mirage.sif   docker://cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+  apptainer pull ashlar.sif         docker://bolt3x/mirage-ashlar120:1.0.0
+  apptainer pull valis-mirage.sif   docker://bolt3x/mirage-valis100:1.0.0
   apptainer pull stardist.sif       docker://bolt3x/mirage-stardist:1.0.0
   export REGBENCH_SIF_STARE_REGBENCH=$PWD/stare-regbench.sif
   export REGBENCH_SIF_VALIS120=$PWD/valis120.sif
@@ -2844,8 +2845,11 @@ stops the launch with nothing submitted.
   image must already hold what it imports that is compiled or third-party, `numpy`,
   `tifffile`, `zarr` (with `numcodecs`) and `imagecodecs`; `psutil` where the memory
   monitor is to use it (without it the monitor reads `/proc`, `rss_method: proc`).
-  Whether those two images hold them was not checked from here: the preflight is
-  where it shows.
+  Neither published image holds all of them (the preflight, 2026-10-13: the official
+  ASHLAR image has no `imagecodecs`, upstream's VALIS 1.0.0 image has neither `zarr`
+  nor `imagecodecs`), so the two are run from `containers/ashlar120` and
+  `containers/valis100`: the published image by digest, plus those packages, with a
+  freeze of the base as the install's constraint.
 - **Inside every image** (`slurm/env.sh`, through `APPTAINERENV_<name>`, which sets a
   variable under `--cleanenv`): `PYTHONNOUSERSITE=1`, so the packages in the host
   user's `~/.local` (the home folder is mounted) cannot shadow a pinned one;

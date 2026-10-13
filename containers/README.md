@@ -6,7 +6,7 @@ This directory vendors the Dockerfiles for every image the Mirage pipeline runs.
 `.github/workflows/containers.yml` passes `context: .` with
 `file: containers/<name>/Dockerfile`, because every image takes its Python pins from
 [`requirements/`](../requirements) — `constraints.txt` is the one version authority shared
-by all fifteen images AND by the CI workflows, and a per-directory context cannot reach
+by all seventeen images AND by the CI workflows, and a per-directory context cannot reach
 outside itself. A local build must therefore be run from the repository root:
 
 ```sh
@@ -104,23 +104,25 @@ gh workflow run containers.yml --ref <branch> -f version=<tag> -f only=segeval
 | `deeperhistreg` | `bolt3x/mirage-deeperhistreg:1.0.0` | none — the registration benchmark's eight `deeperhistreg_*` rows, GPU and CPU (`benchmarks/regbench/methods/deeperhistreg.py`) | `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` (the digest `cellsam` uses; torch and torchvision come from the base) + `procps` + the PyPI release `deeperhistreg` 1.0.1 and the whole stack its repository's `requirements.txt` lists, because the package declares no dependencies (`requirements/deeperhistreg.txt`: `-c constraints.txt`, `-r stare.txt`, every resolved distribution pinned; `opencv-contrib-python-headless`, `openslide-bin` and `pyvips-binary` stand in for system libraries). `smoke.sh` asserts the torch imported is still the base's CUDA build. |
 | `palom` | `bolt3x/mirage-palom:1.0.0` | none — the registration benchmark's `palom` and `palom_b1024` rows (`benchmarks/regbench/methods/palom.py`) | `python:3.10-slim` + `procps` + the PyPI release `palom` 2026.4.1 — CPU only, no JVM, no GPU. **Takes no `constraints.txt`**: PALOM requires `scikit-image<0.20` and `tifffile<=2024.7.2`, so `requirements/palom.txt` is a complete pin file (62 distributions) and the four divergences are `PINNED_EXCEPTIONS`. `stare-registration` is installed with `--no-deps` from the one line of `requirements/stare.txt` (its `scikit-image>=0.24` cannot be met here; the benchmark uses only `stare.slide_io` and `stare.ome`). |
 | `stare-regbench` | `bolt3x/mirage-stare-regbench:1.0.0` | none — the registration benchmark's `stare` run and its `tissue` and `score` steps (`benchmarks/regbench/methods/stare.py`, `tissue.py`, `score.py`) | `python:3.11-slim` (the digest `stare` uses) + `procps` + everything `requirements/stare.txt` installs, by `-r` (the same pinned `stare` release and numeric stack as the pipeline's image, `-c constraints.txt`), plus `psutil` (so STARE's memory is read by the same instrument as every other method's), `pytest`, and `opencv-python-headless` 4.10.0.82 for the tissue-level block: `tissue` and `score` run here, so one OpenCV stands behind a whole result. Every resolved distribution pinned (`requirements/stare-regbench.txt`). `containers/stare` and `requirements/stare.txt` are untouched. Still no torch (`smoke.sh` asserts it). |
+| `valis100` | `bolt3x/mirage-valis100:1.0.0` | none — the registration benchmark's `valis_mirage` row (`benchmarks/regbench/methods/valis_mirage.py`) | **upstream's own image** `cdgatenbee/valis-wsi:1.0.0`, by the digest `REGISTER` runs + `procps`. **Nothing of that stack is reinstalled.** Added on top (`requirements/valis100.txt`, constrained by a freeze of the base): `zarr` 2 / `numcodecs` / `imagecodecs`, which the harness's slide reader needs and upstream's image lacks (the benchmark's preflight refused the bare image on 2026-10-13). `smoke.sh` fails the build if a line of upstream's freeze changed. The base's Python, numpy and tifffile versions were not read where the Dockerfile was written; the build is the first check. |
+| `ashlar120` | `bolt3x/mirage-ashlar120:1.0.0` | none — the registration benchmark's `ashlar`, `ashlar_clean`, `affine_ashlar` and `affine_ashlar_clean` rows (`benchmarks/regbench/methods/ashlar.py`) | **the official image** `labsyspharm/ashlar:1.20.0`, by digest + `procps`. **Nothing of that stack is reinstalled.** Added on top (`requirements/ashlar120.txt`, constrained by a freeze of the base): `imagecodecs`, which tifffile needs for the cohort's compressed tiles and the official image lacks (same preflight). `smoke.sh` fails the build if a line of the official freeze changed. |
 | VALIS (not vendored) | `cdgatenbee/valis-wsi:1.0.0` (upstream) | `REGISTER`, and `WARP_SEG_QC`'s VALIS backend | upstream maintained image — **not rebuilt or published by us** (see the note below). Referenced by content digest, not by tag. |
 
-> **Four of the fifteen are not pipeline images.** `valis120`, `deeperhistreg`, `palom` and
-> `stare-regbench` run no `modules/local` process: they belong to the registration benchmark
-> (`benchmarks/regbench`, run with the repository bind-mounted). The first three each hold
-> one competitor, as its authors publish it: `deeperhistreg` and `palom` are the PyPI
-> releases on the stack their metadata asks for, and `valis120` is built FROM the image
-> VALIS's authors publish, with nothing of their stack reinstalled. `stare-regbench` is the
-> benchmark's own STARE image (the pipeline's `stare` plus `psutil`, `pytest` and OpenCV),
-> where its scorer also runs. All four are built, smoke-tested and published by the same
-> workflow, and obey the same rules (digest-pinned base, pins in `requirements/<name>.txt`,
-> `procps`, a `smoke.sh` run at build time). Two guards that derive an image's needs from
-> the pipeline scripts it runs do not apply to them;
-> `tests/test_container_harmonisation.py`'s `BENCHMARK_IMAGES` is that list and says why.
-> The benchmark's other two competitors use upstream images that are not built here:
-> `cdgatenbee/valis-wsi` 1.0.0 (the pipeline's own digest) for the `valis_mirage` row and
-> `labsyspharm/ashlar:1.20.0` for ASHLAR.
+> **Six of the seventeen are not pipeline images.** `valis120`, `valis100`, `ashlar120`,
+> `deeperhistreg`, `palom` and `stare-regbench` run no `modules/local` process: they belong
+> to the registration benchmark (`benchmarks/regbench`, run with the repository
+> bind-mounted). The first five each hold one competitor, as its authors publish it:
+> `deeperhistreg` and `palom` are the PyPI releases on the stack their metadata asks for,
+> and `valis120`, `valis100` and `ashlar120` are built FROM the images their authors
+> publish, with nothing of their stack reinstalled (`valis100` is the digest the pipeline's
+> `REGISTER` runs; it and `ashlar120` add only the codecs the benchmark's slide reader
+> needs). `stare-regbench` is the benchmark's own STARE image (the pipeline's `stare` plus
+> `psutil`, `pytest` and OpenCV), where its scorer also runs. All six are built,
+> smoke-tested and published by the same workflow, and obey the same rules (digest-pinned
+> base, pins in `requirements/<name>.txt`, `procps`, a `smoke.sh` run at build time). Two
+> guards that derive an image's needs from the pipeline scripts it runs do not apply to
+> them; `tests/test_container_harmonisation.py`'s `BENCHMARK_IMAGES` is that list and says
+> why.
 
 > **zarr major versions differ on purpose.** `spatialdata` pins `zarr>=3.0.0`
 > (required by `spatialdata>=0.8.0`, which writes NGFF `"0.5-dev-spatialdata"`),
@@ -163,7 +165,7 @@ It runs **before** the process's `script:` block, so a missing `ps` fails the ta
 crashed silently, not like a missing system package. Debian/Ubuntu bases do **not** ship
 `procps`: `python:*-slim` and `ubuntu:22.04` both lack it. Rather than reason about which
 bases happen to have it — a claim nothing checked, and one this file previously got wrong
-— **all fifteen install it explicitly**, and every `containers/<name>/smoke.sh` ends with a
+— **all seventeen install it explicitly**, and every `containers/<name>/smoke.sh` ends with a
 `ps -e` assertion that runs at build time and again through `containers.yml`'s `docker
 run`. `apt-get install procps` is a no-op where the base already provides it. Guarded by
 `tests/test_container_smoke_tests.py::test_every_smoke_script_proves_ps_exists`.
@@ -182,7 +184,7 @@ RUN ps -e -o pid= -o ppid= > /dev/null && echo "procps OK"
 
 ## Contexts that are NOT vendored
 
-Only the fifteen directories above are built and published. Two images the pipeline pulls are
+Only the seventeen directories above are built and published. Two images the pipeline pulls are
 not built here at all:
 
 | Image | Why it is not vendored |

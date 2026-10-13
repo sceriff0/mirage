@@ -85,8 +85,8 @@ are the one line to change for each.
 cluster: ``REGBENCH_SIF_<image>``. For an image this repository builds, the suffix is its
 directory under ``containers/`` in capitals with ``-`` written ``_`` (``BUILT_HERE``):
 ``REGBENCH_SIF_STARE_REGBENCH``, ``REGBENCH_SIF_VALIS120``, ``REGBENCH_SIF_DEEPERHISTREG``,
-``REGBENCH_SIF_PALOM``; the two pulled from upstream are ``REGBENCH_SIF_VALIS_MIRAGE`` and
-``REGBENCH_SIF_ASHLAR`` (``PULLED``). ``SCORER_IMAGE`` names the one ``tissue`` and
+``REGBENCH_SIF_PALOM``; the two that are their authors' published images plus the slide reader's
+codecs are ``REGBENCH_SIF_VALIS_MIRAGE`` and ``REGBENCH_SIF_ASHLAR`` (``PULLED``). ``SCORER_IMAGE`` names the one ``tissue`` and
 ``score`` run in.
 """
 
@@ -328,8 +328,9 @@ BUILT_HERE = {
     "PALOM": "palom",
 }
 PULLED = {
-    "VALIS_MIRAGE": "cdgatenbee/valis-wsi 1.0.0 (the digest of modules/local/register.nf)",
-    "ASHLAR": "labsyspharm/ashlar:1.20.0",
+    "VALIS_MIRAGE": "cdgatenbee/valis-wsi 1.0.0 (the digest of modules/local/register.nf), "
+    "with the slide reader's codecs added: containers/valis100",
+    "ASHLAR": "labsyspharm/ashlar:1.20.0, with imagecodecs added: containers/ashlar120",
 }
 
 # Where `tissue` and `score` run: the one image with the pinned OpenCV the tissue-level

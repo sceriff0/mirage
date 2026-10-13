@@ -62,9 +62,9 @@ def _from_ref(container):
 
 def _container_dirs():
     found = sorted(p.name for p in CONTAINERS.iterdir() if (p / "Dockerfile").is_file())
-    # Fifteen since 2026-10-11: the eleven pipeline images plus the registration
-    # benchmark's four (valis120, deeperhistreg, palom, stare-regbench).
-    assert len(found) == 15, f"expected fifteen build contexts, found {found}"
+    # Seventeen since 2026-10-13: the eleven pipeline images plus the registration
+    # benchmark's six (valis120, deeperhistreg, palom, stare-regbench, valis100, ashlar120).
+    assert len(found) == 17, f"expected seventeen build contexts, found {found}"
     return found
 
 
@@ -135,10 +135,10 @@ def test_the_readme_does_not_claim_the_retired_descriptive_tag_scheme():
 
 
 def test_the_readme_says_every_image_installs_procps():
-    """It used to name three. After 2026-09-02 every image does (eleven then, fifteen
-    with the benchmark's four), and every smoke.sh asserts it."""
+    """It used to name three. After 2026-09-02 every image does (eleven then, seventeen
+    with the benchmark's six), and every smoke.sh asserts it."""
     text = README.read_text()
-    assert "all fifteen install it explicitly" in text, (
+    assert "all seventeen install it explicitly" in text, (
         "containers/README.md's procps section still names a subset of images. Every image "
         "installs procps now and every containers/<dir>/smoke.sh asserts `ps -e` -- see "
         "tests/test_container_smoke_tests.py::test_every_smoke_script_proves_ps_exists."

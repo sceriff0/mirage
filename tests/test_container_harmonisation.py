@@ -176,6 +176,10 @@ BENCHMARK_IMAGES = {
     # the `stare` run, `tissue` and `score`. The pipeline's TILED_* run in containers/stare.
     "stare-regbench": "benchmarks/regbench/methods/stare.py",
     "valis120": "benchmarks/regbench/methods/valis.py",
+    # upstream's VALIS 1.0.0 and the official ASHLAR 1.20.0, each plus the slide reader's
+    # codecs: the `valis_mirage` row and the four ASHLAR rows.
+    "valis100": "benchmarks/regbench/methods/valis_mirage.py",
+    "ashlar120": "benchmarks/regbench/methods/ashlar.py",
 }
 
 # Packages a container's FROM base image bakes in, so no `pip install` line for them ever

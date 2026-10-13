@@ -13,5 +13,7 @@
   { "dir": "valis120",      "tag": "valis120" },
   { "dir": "deeperhistreg", "tag": "deeperhistreg" },
   { "dir": "palom",         "tag": "palom" },
-  { "dir": "stare-regbench", "tag": "stare-regbench" }
+  { "dir": "stare-regbench", "tag": "stare-regbench" },
+  { "dir": "valis100",      "tag": "valis100" },
+  { "dir": "ashlar120",     "tag": "ashlar120" }
 ]
