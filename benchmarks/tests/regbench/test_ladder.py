@@ -858,6 +858,28 @@ def test_an_attempt_the_accounting_names_late_is_retried_by_the_next_rung(tmp_pa
         assert not ladder.unit_decision([path], ladder.CLIMB, 2, submission="s1")[0]
 
 
+def test_a_slide_that_is_not_there_is_not_the_methods_failure(tmp_path, capsys):
+    """A fluorescence case whose slide cannot be read from here (its folder is not
+    bound into the image): refused before the method starts, as `infrastructure`."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    case = a_case(root, "P1_r1", "P1")
+    record_path = Path(case.dir) / "case.json"
+    stored = json.loads(record_path.read_text())
+    stored["mov_image"] = "/not/bound/slides/P1_r2.ome.tif"
+    record_path.write_text(json.dumps(stored))
+    _run(root, out)
+    run = json.loads((result_dir(out, "initial", case) / "run.json").read_text())
+    assert run["ok"] is False and run["cause"] == "infrastructure"
+    assert "/not/bound/slides/P1_r2.ome.tif cannot be read from where" in run["error"]
+    assert "REGBENCH_BIND" in run["error"]
+    # a stage job of a registration in several jobs says the same before it starts
+    with pytest.raises(SystemExit, match="stage coarse: multiplex/P1_r1: /not/bound"):
+        cli.main(
+            ["stage", "--cases", str(root), "--out", str(out), "--dataset", "multiplex",
+             "--method", "stare", "--stage", "coarse", "--index", "0"]
+        )  # fmt: skip
+
+
 def test_the_last_rung_is_settled_from_the_accounting(tmp_path):
     """The last rung has no later task: `settle` gives every result that still says
     killed the scheduler's cause and its elapsed time."""

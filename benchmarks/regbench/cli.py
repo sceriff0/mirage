@@ -770,6 +770,13 @@ def build_parser():
     what.add_argument("--scorer", action="store_true", help="the scorer's image")
     pf.add_argument("--image", default="", help="the image's name, for the lines")
     pf.add_argument("--writable", action="append", default=[], metavar="DIR")
+    pf.add_argument(
+        "--cases",
+        default=None,
+        help="with --dataset: the slides of one prepared case of each dataset must be "
+        "readable from inside the image",
+    )
+    pf.add_argument("--dataset", action="append", default=[], choices=ALL_DATASETS)
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1039,9 +1046,9 @@ def _stage(a):
     record says, and the round's last job reads it."""
     import os
 
-    from . import failure_log, stages
+    from . import failure_log, resources, stages
     from .cases import list_cases
-    from .methods import load
+    from .methods import check_inputs, load
 
     mod, opts = load(a.method), _stage_opts(a)
     cases = list_cases(a.cases, a.dataset)
@@ -1064,6 +1071,12 @@ def _stage(a):
         print(f"index {index}: only {len(cases)} {a.dataset} cases; nothing to do")
         return 0
     case = cases[index]
+    # a slide that cannot be read from here is the launch's failure, said before the
+    # stage starts (the round's last job records it as `infrastructure`)
+    try:
+        check_inputs([case])
+    except resources.InputUnreadable as exc:
+        raise SystemExit(f"stage {a.stage}: {exc}") from exc
     force = a.force or os.environ.get("REGBENCH_FORCE") == "1"
     stage_dir = mod.stage_dir_of(a.out, a.label, case)
     done = mod.run_stage(case, stage_dir, opts, a.stage, row, a.attempt, "jobs", force)

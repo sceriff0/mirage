@@ -109,6 +109,45 @@ def test_a_folder_that_cannot_be_written_is_a_failure(tmp_path):
     assert f"writable: {tmp_path / 'fine'}" in notes
 
 
+def test_slides_that_cannot_be_read_inside_the_image_are_a_failure(tmp_path, capsys):
+    """One prepared case per dataset: a slide folder that is not bound into the image
+    would fail every unit of every run, and is said before anything is submitted."""
+    import json
+    from dataclasses import asdict
+
+    from benchmarks.regbench.cases import Case
+
+    there = tmp_path / "slide.ome.tif"
+    there.write_bytes(b"x")
+    for dataset, mov in (
+        ("multiplex", "/not/bound/slides/r2.ome.tif"),
+        ("synthetic", str(there)),
+    ):
+        d = tmp_path / "cases" / dataset / "c1"
+        d.mkdir(parents=True)
+        case = Case(
+            dataset=dataset, case_id="c1", group="g", ref_nuclear="", mov_nuclear="",
+            ref_image=str(there), mov_image=mov, modality="fluorescence", diagonal=1.0,
+        )  # fmt: skip
+        (d / "case.json").write_text(json.dumps({**asdict(case), "dir": str(d)}))
+    notes, failures = preflight.unreadable_slides(
+        tmp_path / "cases", ["multiplex", "synthetic", "semisynth"]
+    )
+    assert notes == ["readable: the 2 image file(s) of synthetic/c1"]
+    (failure,) = failures
+    assert failure.startswith("multiplex/c1: its image file(s) cannot be read from")
+    assert "/not/bound/slides/r2.ome.tif" in failure and "REGBENCH_BIND" in failure
+    assert str(there) not in failure
+    argv = ["preflight", "--method", "stare", "--image", "STARE", "--cases",
+            str(tmp_path / "cases"), "--dataset", "multiplex"]  # fmt: skip
+    assert cli.main(argv) == 1
+    said = capsys.readouterr()
+    assert "preflight FAIL [STARE stare] multiplex/c1: its image file(s)" in said.err
+    assert cli.main([*argv[:-1], "synthetic"]) == 0
+    # no cases named: nothing of the kind is asked
+    assert not [n for n in preflight.check("stare")[0] if n.startswith("readable")]
+
+
 def test_the_scorers_image_is_checked_for_what_the_scorer_imports(monkeypatch, capsys):
     """`--scorer` asks for the scorer's list and for nothing of a method: a module of
     that list that does not import is one FAIL line naming it and exit 1; a list that

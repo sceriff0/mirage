@@ -765,7 +765,7 @@ fetch_stare_source() {
     done
 }
 preflight() {
-    local seen="" failed=0 name method image out code key where=()
+    local seen="" failed=0 name method image out code key where=() slides=() ds
     if [ "${REGBENCH_PREFLIGHT:-1}" = 0 ]; then
         echo "# WARNING preflight SKIPPED (REGBENCH_PREFLIGHT=0): nothing checked that the images hold what their runs import"
         return 0
@@ -777,12 +777,15 @@ preflight() {
     else
         echo "# preflight: REGBENCH_WORK is not set: a job's work folder is its own TMPDIR, which cannot be checked from here"
     fi
+    # one prepared case of each dataset: its slides must be readable inside the image
+    slides=(--cases "$REGBENCH_CASES")
+    for ds in $sized; do slides+=(--dataset "$ds"); done
     while IFS=$'\t' read -r name method _ _ image _; do
         has "$selected" "$name" || continue
         key="$image:$method"
         has "$seen" "$key" && continue
         seen="$seen $key"
-        out="$(regbench_py "$image" preflight --method "$method" --image "$image" "${where[@]}" 2>&1)" && code=0 || code=$?
+        out="$(regbench_py "$image" preflight --method "$method" --image "$image" "${where[@]}" "${slides[@]}" 2>&1)" && code=0 || code=$?
         grep -E '^preflight( FAIL)? \[' <<< "$out" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$' || true
         if [ "$code" != 0 ]; then
             failed=1

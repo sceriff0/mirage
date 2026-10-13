@@ -88,9 +88,53 @@ def installed_version(method, package):
     return str(getattr(package, "__version__", "?")), adapter
 
 
-def check(method=None, writable=(), scorer=False):
+def unreadable_slides(cases_root, datasets):
+    """``(notes, failures)`` for the first prepared case of each dataset: can the
+    image files it names be read from here. A folder that is not bound into the image
+    fails every unit of every run; one case is enough to see it."""
+    from .cases import list_cases
+
+    notes, failures = [], []
+    for dataset in datasets:
+        try:
+            cases = list_cases(cases_root, dataset)
+        except Exception as exc:
+            failures.append(
+                f"the {dataset} cases under {cases_root} cannot be listed from "
+                f"inside the image: {type(exc).__name__}: {exc} (REGBENCH_BIND?)"
+            )
+            continue
+        if not cases:
+            continue
+        case = cases[0]
+        paths = [
+            p
+            for p in (
+                case.ref_image,
+                case.mov_image,
+                case.ref_nuclear,
+                case.mov_nuclear,
+            )
+            if p
+        ]
+        missing = [str(p) for p in paths if not os.access(str(p), os.R_OK)]
+        if missing:
+            failures.append(
+                f"{dataset}/{case.case_id}: its image file(s) cannot be read from "
+                f"inside the image: {', '.join(missing)}. Name the slides' folder in "
+                "REGBENCH_BIND, with the path the cases were prepared with"
+            )
+        else:
+            notes.append(
+                f"readable: the {len(paths)} image file(s) of {dataset}/{case.case_id}"
+            )
+    return notes, failures
+
+
+def check(method=None, writable=(), scorer=False, cases=None, datasets=()):
     """``(notes, failures)``: each a list of lines. ``method`` is an adapter's name
-    (``METHODS``); ``scorer`` checks the scorer's image instead."""
+    (``METHODS``); ``scorer`` checks the scorer's image instead. ``cases`` and
+    ``datasets``: :func:`unreadable_slides`."""
     notes, failures = [], []
     wanted = list(SCORER if scorer else COMMON)
     package_name = None if scorer else PACKAGE.get(method)
@@ -152,6 +196,10 @@ def check(method=None, writable=(), scorer=False):
                 f"{folder} is not visible or not writable from inside the image: "
                 f"{type(exc).__name__}: {exc} (REGBENCH_BIND?)"
             )
+    if cases and datasets:
+        seen, unread = unreadable_slides(cases, datasets)
+        notes += seen
+        failures += unread
     notes.append(f"python {sys.version.split()[0]} at {sys.executable}")
     return notes, failures
 
@@ -159,7 +207,13 @@ def check(method=None, writable=(), scorer=False):
 def main(a):
     what = "the scorer" if a.scorer else a.method
     tag = f"[{a.image or 'no image'} {what}]"
-    notes, failures = check(a.method, a.writable or (), a.scorer)
+    notes, failures = check(
+        a.method,
+        a.writable or (),
+        a.scorer,
+        getattr(a, "cases", None),
+        getattr(a, "dataset", None) or (),
+    )
     for line in notes:
         print(f"preflight {tag} {line}")
     for line in failures:

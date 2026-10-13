@@ -225,15 +225,13 @@ def require_fluorescence(case, method):
 
 
 def check_inputs(cases):
-    """Refuse a brightfield case whose image files cannot be read from here, before the
-    method starts. Such a case names its ORIGINAL images inside the dataset's own folder
-    (ANHIR: ``REGBENCH_ANHIR``); when that folder is not bound into the method's
-    container, every method that reads the originals would fail on every pair while one
-    that reads the cached one-channel copies would not. That is the launch's fault, not
-    a method's: ``resources.InputUnreadable``, cause ``infrastructure``."""
+    """Refuse a case whose image files cannot be read from here, before the method
+    starts. A case names its ORIGINAL slides where they were when it was prepared (the
+    cohort's own folders; ANHIR: ``REGBENCH_ANHIR``); when such a folder is not bound
+    into the method's container, every unit of every method that reads them would fail
+    there and be counted as the method's failure. It is the launch's fault, not a
+    method's: ``resources.InputUnreadable``, cause ``infrastructure``."""
     for case in cases:
-        if case.modality != "brightfield":
-            continue
         for path in (
             case.ref_image,
             case.mov_image,
@@ -244,9 +242,9 @@ def check_inputs(cases):
                 raise resources.InputUnreadable(
                     f"{case.dataset}/{case.case_id}: {path} cannot be read from where "
                     "this run is. Its folder is not bound into the image, or the cases "
-                    "were prepared on another machine: export the dataset's folder "
-                    "(REGBENCH_ANHIR for ANHIR) or name it in REGBENCH_BIND, with the "
-                    "path the cases were prepared with."
+                    "were prepared on another machine: name the slides' folder in "
+                    "REGBENCH_BIND (for ANHIR export REGBENCH_ANHIR), with the path "
+                    "the cases were prepared with."
                 )
 
 
