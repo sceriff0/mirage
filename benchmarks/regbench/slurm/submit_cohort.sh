@@ -616,6 +616,12 @@ if [ "$prepare" = 1 ]; then
         case "$ds" in
             multiplex)
                 what=(multiplex --manifest "$REGBENCH_MANIFEST" ${more[@]+"${more[@]}"})
+                # kept beside the cases it made: the score job reads it from there for
+                # attrition.csv, in a later call that no longer has REGBENCH_MANIFEST
+                if [ "$DRY" != 1 ]; then
+                    { mkdir -p "$REGBENCH_CASES" && cp "$REGBENCH_MANIFEST" "$REGBENCH_CASES/manifest.csv"; } \
+                        || die "--prepare: cannot copy the manifest $REGBENCH_MANIFEST to $REGBENCH_CASES/manifest.csv. Nothing was submitted."
+                fi
                 # the bare nuclei of every native slide first: what exists is checked,
                 # StarDist runs again only for a slide that has none (nuclei.sbatch)
                 if [ "${REGBENCH_NUCLEI_SKIP:-0}" != 1 ]; then

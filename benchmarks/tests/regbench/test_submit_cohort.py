@@ -2498,6 +2498,48 @@ def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
     assert jobs["rb-prepare-multiplex"].args[-2:] == ["--nuclei-fallback", "shrink"]
 
 
+def test_prepare_leaves_the_manifest_where_the_score_job_finds_it(site, tmp_path):
+    """`attrition.csv: manifest_rounds` needs the manifest in the score job, which is
+    submitted by a later call that has no REGBENCH_MANIFEST."""
+    cases = tmp_path / "cases"
+    manifest = _manifest(tmp_path)
+    env = {
+        "REGBENCH_MANIFEST": str(manifest),
+        "REGBENCH_CASES": str(cases),
+        "REGBENCH_NUCLEI_SKIP": "1",
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+    }
+    done, _, _ = launch(
+        site, "--prepare", "--datasets", "multiplex", env=env, dry=False, log="keep"
+    )
+    assert done.returncode == 0, done.stderr
+    assert (cases / "manifest.csv").read_text() == manifest.read_text()
+    # the score step: the variable when it is there, else that copy
+    out = tmp_path / "out"
+    (out / "logs").mkdir(parents=True)
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "python").write_text('#!/bin/bash\necho "$*" >> "$FAKE/python.log"\n')
+    (fake / "python").chmod(0o755)
+    base = {
+        k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
+    }
+    base.update(
+        PATH=f"{fake}:/usr/bin:/bin", FAKE=str(fake), REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES=str(cases), REGBENCH_OUT=str(out),
+        REGBENCH_SCORER_IMAGE="STARE_REGBENCH", REGBENCH_ALLOW_PATH_PYTHON="1",
+    )  # fmt: skip
+    subprocess.run(
+        ["bash", str(SLURM / "score_cohort.sbatch"), "score"],
+        env=base, capture_output=True, text=True, cwd=REPO, timeout=120,
+    )  # fmt: skip
+    (call,) = [
+        ln for ln in (fake / "python.log").read_text().splitlines() if " score " in ln
+    ]
+    assert f"--manifest {out}/logs/manifest.csv" in call
+    assert (out / "logs" / "manifest.csv").read_text() == manifest.read_text()
+
+
 def test_the_nuclei_step_is_refused_without_its_model_or_its_gpu(site, tmp_path):
     env = {"REGBENCH_MANIFEST": str(_manifest(tmp_path))}
     none, _, _ = launch(site, "--prepare", "--datasets", "multiplex", env=env, log="n3")

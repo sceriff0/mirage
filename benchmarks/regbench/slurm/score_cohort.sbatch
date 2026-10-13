@@ -152,10 +152,13 @@ args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers"
 # the gates' verdicts, for the cohort and for an external set alike: a run a gate
 # blocked is not a method failure (ANHIR's scorer lists it apart; HyReCo's ignores it)
 args+=(--gates "$gates")
-# the cohort's manifest, for the first column of attrition.csv: copied under the
-# results (which every image can read) when this job knows where it is
-if [ -z "$external" ] && [ -n "${REGBENCH_MANIFEST:-}" ] && [ -r "$REGBENCH_MANIFEST" ]; then
-    cp "$REGBENCH_MANIFEST" "$REGBENCH_OUT/logs/manifest.csv" \
+# the cohort's manifest, for the first column of attrition.csv: REGBENCH_MANIFEST when
+# this job has it, else the copy `submit_cohort.sh --prepare` left beside the cases;
+# copied under the results (which every image can read)
+manifest="${REGBENCH_MANIFEST:-}"
+[ -n "$manifest" ] && [ -r "$manifest" ] || manifest="$REGBENCH_CASES/manifest.csv"
+if [ -z "$external" ] && [ -r "$manifest" ]; then
+    cp "$manifest" "$REGBENCH_OUT/logs/manifest.csv" \
         && args+=(--manifest "$REGBENCH_OUT/logs/manifest.csv")
 fi
 [ -n "$external" ] && args+=(--dataset "$external")
