@@ -104,7 +104,9 @@ points, AND was computed the same way from the same bytes (``reuse_key``, kept i
 ``run.json: reuse_key``), nothing runs and no placeholder is written; the records gain
 this submission's id (``submissions``, ``reused_by``). ``REGBENCH_FORCE=1``
 (``run --force``) runs it anyway. ``reuse_key`` holds, for every method: ``execution``
-(one process, or the scheduler jobs of ``REGBENCH_STAGES``), ``code`` (a sha256 of the
+(``one process`` for a method that registers in one; for a method that declares
+``STAGES``, STARE, who starts its stage processes as ``REGBENCH_STAGES`` states it:
+``jobs`` or ``local``), ``code`` (a sha256 of the
 driver, the adapter module, the sibling modules it imports and the ``regbench`` modules
 it imports directly: ``code_files``), ``inputs`` (``cases.inputs_fingerprint`` of every
 case: size, time and sampled bytes of its image files) and ``method`` (what the adapter
@@ -318,7 +320,14 @@ def reuse_key(method, cases, out, opts, label):
     hook = getattr(mod, "REUSE_KEY", None)
     return _jsonable(
         {
-            "execution": os.environ.get("REGBENCH_STAGES") or "one process",
+            # who starts the stage processes, for a method that has stages (it
+            # declares STAGES); any other method is one process whatever a stray
+            # REGBENCH_STAGES of the caller's shell says
+            "execution": (
+                os.environ.get("REGBENCH_STAGES") or "one process"
+                if getattr(mod, "STAGES", None)
+                else "one process"
+            ),
             "code": code_fingerprint(method),
             "inputs": {c.case_id: inputs_fingerprint(c) for c in cases},
             "method": hook(cases, out, opts, label) if hook else None,

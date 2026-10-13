@@ -2543,7 +2543,8 @@ folder; these rules keep one from answering for the other:
 
 - *A unit* (`run.json: reuse_key`, `methods.reuse_key`) is reused only when, besides
   the method, label, options, cases and points, four things are equal: `execution`
-  (one process, or the scheduler jobs of a staged run), `code` (a sha256 of the driver,
+  (`one process`; for STARE, whose registration is several stage processes, who
+  starts them: `jobs` or `local`, as `REGBENCH_STAGES` states it), `code` (a sha256 of the driver,
   the adapter module, the modules of `methods/` it imports and the `regbench` modules
   it imports directly), `inputs` (for every case, the fingerprint of each image file it
   names) and `method` (what the adapter adds: STARE's version and the identity of its

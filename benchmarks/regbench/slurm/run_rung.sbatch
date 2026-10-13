@@ -37,6 +37,8 @@ source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" gpu="$6" dataset="$7"
 attempt="$8" mem_gb="$9" realcheck="${10}" previous="${11:--}" task="${12:-first}"
 limit="${13:-}" stages="${14:--}"
+# stated here and nowhere else: a run that is one job per unit states nothing
+unset REGBENCH_STAGES
 [ "$stages" = - ] || export REGBENCH_STAGES="$stages"
 retry=0
 [ "$task" = again ] && retry=1

@@ -1658,6 +1658,23 @@ def test_a_signal_in_the_middle_of_a_submission_says_what_is_queued(site, signum
     assert (out / "logs" / "submission").read_text() == f"S-sig{signum}\n"
 
 
+def test_a_stray_statement_of_the_stage_launcher_reaches_no_job():
+    """`--export=ALL` carries the caller's shell into every job: the launcher drops
+    REGBENCH_STAGES, and the one script that states it starts from nothing."""
+    code = code_of(SCRIPT)
+    assert "unset REGBENCH_STAGES\n" in code[: code.index("RUNGS_GB=")]
+    rung = code_of(SLURM / "run_rung.sbatch")
+    stated = rung.index('export REGBENCH_STAGES="$stages"')
+    assert "unset REGBENCH_STAGES\n" in rung[:stated]
+    done = subprocess.run(
+        ["bash", "-c", f'set -- n m - - I 0 d 1 16 0 - first t -; {rung[: stated].split("retry=0")[0]}'
+         '[ "$stages" = - ] || export REGBENCH_STAGES="$stages"; echo "[${REGBENCH_STAGES-unset}]"'],
+        env={**os.environ, "REGBENCH_STAGES": "local", "REGBENCH_REPO": str(REPO)},
+        capture_output=True, text=True, cwd=REPO,
+    )  # fmt: skip
+    assert done.stdout.strip().endswith("[unset]"), done.stdout + done.stderr
+
+
 def test_a_first_sbatch_that_is_refused_leaves_no_submission(site):
     env = {
         "REGBENCH_ALLOW_PATH_PYTHON": "1",

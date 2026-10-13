@@ -263,6 +263,9 @@
 # No thread variable is exported anywhere.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# who starts a run's stage processes is stated per run by its own job script; a value
+# left in the caller's shell would reach every job (--export=ALL) and every image
+unset REGBENCH_STAGES
 # shellcheck source=benchmarks/regbench/slurm/env.sh
 source "$HERE/env.sh"
 
