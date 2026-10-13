@@ -148,6 +148,9 @@ def _launch_command(site, args, env, dry, log):
         REGBENCH_CASES=str(cases),
         REGBENCH_OUT=str(out),
         REGBENCH_SBATCH_GPU=GPU,
+        # the run list's own order, which these tests are written against: the
+        # launcher's default order has tests of its own
+        REGBENCH_RUN_ORDER="",
         REGBENCH_SITE_CONFIG="none",  # never the real site overlay of a checkout
         # the stand-in "images" are this machine's python, which has not the methods'
         # packages: the preflight has its own tests
@@ -876,7 +879,7 @@ def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
     assert "REGBENCH_SIF_STARE_REGBENCH" in done.stdout
     assert "REGBENCH_SIF_ASHLAR" not in done.stdout + done.stderr
     no_gpu, _, _ = launch(
-        site, "--score-only", env={"REGBENCH_SBATCH_GPU": None}, log="so"
+        site, "--score-only", env={"REGBENCH_SBATCH_GPU": ""}, log="so"
     )
     assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 5
     # one dataset, when named
@@ -1104,6 +1107,34 @@ def _ladder_order(jobs):
 def test_the_default_order_is_the_run_lists(dry):
     jobs, done, _ = dry
     assert _ladder_order(jobs) == list(RUNS) and "# run order" not in done.stdout
+
+
+def test_unset_the_order_is_ashlar_first_and_a_gpu_task_asks_for_one_gpu(site):
+    """The launcher's own defaults: what a launch with neither variable set does."""
+    done, _, _ = launch(
+        site,
+        env={"REGBENCH_RUN_ORDER": None, "REGBENCH_SBATCH_GPU": None},
+        log="defaults",
+    )
+    assert done.returncode == 0, done.stderr
+    jobs = jobs_of(done)
+    order = _ladder_order(jobs)
+    assert order[:5] == [
+        "ashlar", "ashlar_clean", "stare", "affine_ashlar", "affine_ashlar_clean",
+    ]  # fmt: skip
+    assert sorted(order) == sorted(RUNS)
+    asked = same = 0
+    for job in jobs.values():
+        if job.script == "run_rung.sbatch":
+            assert ("--gres=gpu:1" in job.words) is RUNS[job.args[0]].gpu, job.name
+            asked += RUNS[job.args[0]].gpu
+            same += 1
+    assert asked and same > asked
+    # the same as naming it
+    named, _, _ = launch(
+        site, env={"REGBENCH_RUN_ORDER": "ashlar affine_ashlar"}, log="named"
+    )
+    assert _ladder_order(jobs_of(named)) == order
 
 
 @pytest.mark.parametrize("order", ORDERS)
@@ -1997,19 +2028,21 @@ def test_a_gpu_is_asked_for_only_where_the_run_list_says(dry):
 
 
 def test_gpu_runs_are_refused_without_a_request_string(site):
-    done, log, _ = launch(site, env={"REGBENCH_SBATCH_GPU": None}, log="nogpu")
+    done, log, _ = launch(site, env={"REGBENCH_SBATCH_GPU": ""}, log="nogpu")
     assert done.returncode == 2 and not _sbatch_lines(done.stdout) and not log.exists()
-    assert "REGBENCH_SBATCH_GPU is not set" in done.stderr
+    assert "REGBENCH_SBATCH_GPU is empty" in done.stderr
     for run, spec in RUNS.items():
-        assert (f" {run}" in done.stderr.split("not set:")[1].split(".")[0]) is spec.gpu
+        assert (
+            f" {run}" in done.stderr.split("is empty:")[1].split(".")[0]
+        ) is spec.gpu
     assert "Nothing was submitted" in done.stderr
     # the same refusal on the real path, and the runs that need none can still go
     real, log, _ = launch(
-        site, env={"REGBENCH_SBATCH_GPU": None}, dry=False, log="nogpu2"
+        site, env={"REGBENCH_SBATCH_GPU": ""}, dry=False, log="nogpu2"
     )
     assert real.returncode == 2 and not log.exists()
     cpu = " ".join(n for n, r in RUNS.items() if not r.gpu)
-    ok, _, _ = launch(site, "--runs", cpu, env={"REGBENCH_SBATCH_GPU": None}, log="cpu")
+    ok, _, _ = launch(site, "--runs", cpu, env={"REGBENCH_SBATCH_GPU": ""}, log="cpu")
     assert ok.returncode == 0 and GPU not in ok.stdout
 
 
@@ -2551,7 +2584,7 @@ def test_the_nuclei_step_is_refused_without_its_model_or_its_gpu(site, tmp_path)
         "--prepare",
         "--datasets",
         "multiplex",
-        env={**env, "REGBENCH_SBATCH_GPU": None},
+        env={**env, "REGBENCH_SBATCH_GPU": ""},
         log="n4",
     )
     assert no_gpu.returncode == 2 and "REGBENCH_STARDIST_CPU=1" in no_gpu.stderr

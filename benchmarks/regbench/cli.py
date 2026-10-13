@@ -805,7 +805,7 @@ def build_parser():
         metavar="NAMES",
         help="print the runs in the order a launcher is to SUBMIT them: these family "
         "or run names first (space-separated), the rest after, and a run that reads "
-        "another's results never before it. Nothing else reads this order",
+        "another's results never before it; `default` is the cohort's default order. Nothing else reads this order",
     )
     rn.add_argument(
         "--order-notes",
@@ -1280,6 +1280,8 @@ def _runs(a):
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))
     order = None if a.order is None else a.order.split()
+    if order == ["default"]:
+        order = list(variants.DEFAULT_ORDER)
     if a.order_notes:
         listed = [variants.run_of(r[0]) for r in variants.runs_table(a.all, a.dataset)]
         for note in variants.submission_order(order, listed)[1]:

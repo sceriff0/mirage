@@ -777,6 +777,11 @@ def opt_args(run):
     return [f"{k}={v}" for k, v in run.opts.items()]
 
 
+# What a cohort launch submits first when no order is asked for (`runs --order default`):
+# ASHLAR, then the affine ASHLAR runs, which are moved behind the run they read.
+DEFAULT_ORDER = ("ashlar", "affine_ashlar")
+
+
 def submission_order(order, runs=None):
     """``(runs in the order they are to be SUBMITTED, notes)`` for a launcher.
 

@@ -139,8 +139,10 @@
 # ENVIRONMENT (env.sh has the paths and the images)
 #   REGBENCH_CASES, REGBENCH_OUT      prepared cases; results
 #   REGBENCH_SIF_<image>              one per image of the run list (column `image`)
-#   REGBENCH_SBATCH_GPU               REQUIRED for the runs that need a GPU, no default:
-#                                     the site's request, e.g. "--gres=gpu:nvidia_h200:1"
+#   REGBENCH_SBATCH_GPU (--gres=gpu:1)  what a task that needs a GPU asks for: one GPU.
+#                                     Export the site's own form where it names the
+#                                     card, e.g. "--gres=gpu:nvidia_h200:1". Set EMPTY,
+#                                     the runs that need a GPU are refused.
 #   REGBENCH_TIME (24:00:00)          per round, every rung. A run that works per patient
 #                                     gets it times the rounds of the largest patient,
 #                                     never above the site's longest job (7 days)
@@ -178,7 +180,11 @@
 #                                     (`runs --order`); the runs it does not name follow
 #                                     in the run list's order. A run that reads another's
 #                                     results is never put before it (a `#` line says
-#                                     when it was moved). Default: the run list's order.
+#                                     when it was moved). Default: `default`, the run
+#                                     list's own first runs (`runs --order default`
+#                                     prints the order), on the cohort
+#                                     and the synthetic set; set EMPTY, and on an
+#                                     external set, the run list's order.
 #                                     Nothing but the order of submission changes: not
 #                                     the run list, not a table, not a result
 #   REGBENCH_SCORE_CPUS (8)           per task of the per-case scoring arrays: a case's
@@ -277,6 +283,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 : "${REGBENCH_RUN_LANES:=0}"
+: "${REGBENCH_SBATCH_GPU=--gres=gpu:1}"
 : "${REGBENCH_STAGE_ARRAY_MAX:=100}"
 : "${REGBENCH_STAGE_QUEUE_MAX:=100}"
 : "${REGBENCH_STAGE_FEED_MIN:=25}"
@@ -558,6 +565,8 @@ fi
 # REGBENCH_RUN_ORDER: the same rows in the order they are to be submitted. Every loop
 # below reads the table top to bottom, and a job only ever waits for a job submitted
 # before it, so the harness never puts a run before the run whose results it reads.
+# Unset, the cohort's default: ASHLAR first. An external set has other runs (no ASHLAR).
+[ -n "$EXTERNAL" ] || : "${REGBENCH_RUN_ORDER=default}"
 if [ -n "${REGBENCH_RUN_ORDER:-}" ]; then
     of=()
     [ -n "$EXTERNAL" ] && of=(--dataset "$EXTERNAL")
@@ -711,7 +720,7 @@ while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$images" "$image" || images="$images $image"
 done < "$table"
 if [ -n "$gpu_runs" ] && [ -z "${REGBENCH_SBATCH_GPU:-}" ]; then
-    die "these runs need a GPU and REGBENCH_SBATCH_GPU is not set:$gpu_runs. Export the site's request (e.g. REGBENCH_SBATCH_GPU=\"--gres=gpu:nvidia_h200:1\"), or leave them out with --runs. Nothing was submitted."
+    die "these runs need a GPU and REGBENCH_SBATCH_GPU is empty:$gpu_runs. Export the site's request (e.g. REGBENCH_SBATCH_GPU=\"--gres=gpu:nvidia_h200:1\"), or leave them out with --runs. Nothing was submitted."
 fi
 missing=""
 for image in $images $REGBENCH_SCORER_IMAGE; do
