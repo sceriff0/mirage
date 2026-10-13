@@ -52,7 +52,7 @@ This package is being ported in steps. What exists now:
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
 | the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
-| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost), `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
+| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate; for a run that is one job per unit, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost); for a run whose registration is several jobs per round (STARE), four arrays per stage, its tile submitters, and the same eight arrays for each round's last job; `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
 
@@ -2014,7 +2014,7 @@ can read (`cpu_instrument` of the first rows says).
   ASHLAR also records `peak_rss_after_register_gb`, read before its writer starts.
   `cgroup_peak_gb` is the whole job's high-water mark, writers included, for every
   method: it cannot be paused.
-- **The ladder.** Every method runs at 4 CPUs; the two DeeperHistReg `_gpu` runs (one of
+- **The ladder.** Every method runs at 4 CPUs; the four DeeperHistReg `_gpu` runs (one of
   them a primary row) have one GPU as well, which no other method has (`device` and
   `gpu_model` are columns of the cost tables, and their `_cpu` twins are shown beside
   them). Memory starts at 16 GB and moves up one rung
