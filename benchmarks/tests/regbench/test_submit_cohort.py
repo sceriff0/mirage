@@ -291,6 +291,8 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
         "REGBENCH_CASES": None,
         "REGBENCH_OUT": None,
         "REGBENCH_SITE_CONFIG": str(config),
+        # the stand-in "images" are this machine's python (the images have a test below)
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
     }
     argv, base, _ = _launch_command(site, (), env, True, "viajob")
     argv[1] = str(copy)
@@ -339,6 +341,68 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
     assert not _sbatch_lines(lost.stdout)
     head = (SLURM / "launch.sbatch").read_text()
     assert "\n#SBATCH --export=ALL\n" in head
+
+
+def test_the_launch_job_finds_or_pulls_every_image_and_never_uses_path_python(
+    site, tmp_path
+):
+    """The image folder is the site config's cacheDir. An image that is there is taken,
+    one that is not is pulled into it under Nextflow's name, and a pull that fails
+    stops the job before the launcher is started."""
+    import shutil
+
+    copy = tmp_path / "slurm_script"
+    shutil.copy(SLURM / "launch.sbatch", copy)
+    images = tmp_path / "site images"
+    (images / "regbench").mkdir(parents=True)
+    (images / "bolt3x-mirage-palom-1.0.0.img").write_text("x")
+    (images / "regbench" / "ashlar.sif").write_text("x")
+    config = tmp_path / "site.config"
+    config.write_text(f"singularity {{\n    cacheDir = '{images}'\n}}\n")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    pulls = tmp_path / "pulls.txt"
+    runtime = bin_ / "apptainer"
+    runtime.write_text(
+        f'#!/bin/bash\n[ "$1" = pull ] || exit 0\necho "$3" >> "{pulls}"\n'
+        '[ -z "${PULL_FAILS:-}" ] || exit 1\necho x > "$2"\n'
+    )
+    runtime.chmod(0o755)
+    env = {"REGBENCH_SITE_CONFIG": str(config), "REGBENCH_CASES": None}
+    argv, base, _ = _launch_command(site, ("--no-such-option",), env, True, "img")
+    argv[1] = str(copy)
+    argv.remove("--dry-run")
+    base = {
+        **base,
+        "PATH": f"{bin_}:{base['PATH']}",
+        "SLURM_SUBMIT_DIR": str(REPO),
+        "REGBENCH_ROOT": str(tmp_path / "root"),
+    }
+    failed = subprocess.run(
+        argv, env={**base, "PULL_FAILS": "1"}, capture_output=True, text=True
+    )
+    assert failed.returncode == 2 and "could not be pulled" in failed.stderr
+    assert "unknown option" not in failed.stdout + failed.stderr  # never started
+    assert not list(images.glob("*.part"))
+    pulls.unlink()
+    done = subprocess.run(argv, env=base, capture_output=True, text=True)
+    assert "unknown option --no-such-option" in done.stdout + done.stderr  # started
+    pulled = pulls.read_text().split()
+    assert len(pulled) == 4 and not any("palom" in r or "ashlar" in r for r in pulled)
+    assert not any("stardist" in r for r in pulled)  # --prepare only
+    assert f"PALOM -> {images}/bolt3x-mirage-palom-1.0.0.img" in done.stdout
+    assert f"ASHLAR -> {images}/regbench/ashlar.sif" in done.stdout
+    assert (images / "bolt3x-mirage-stare-regbench-1.0.0.img").exists()
+    assert any(
+        p.name.startswith("cdgatenbee-valis-wsi@sha256-") for p in images.iterdir()
+    )
+    # no runtime at all: said, and nothing started
+    if not (shutil.which("apptainer") or shutil.which("singularity")):
+        bare = {**base, "PATH": base["PATH"].split(":", 1)[1]}
+        none = subprocess.run(argv, env=bare, capture_output=True, text=True)
+        assert (
+            none.returncode == 2 and "neither apptainer nor singularity" in none.stderr
+        )
 
 
 def test_an_image_without_a_container_runtime_is_said(site):

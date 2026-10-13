@@ -12,8 +12,12 @@
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --dry-run   (prints, submits nothing)
 #
 # FROM ANY FOLDER: the folder it is submitted from is where the benchmark lives
-# (regbench/ under it: cases, results, images, rounds.csv) and where the arms' results
-# are looked for (arm_results/); the repository is found from the path given to sbatch.
+# (regbench/ under it: cases, results, rounds.csv) and where the arms' results are
+# looked for (arm_results/); the repository is found from the path given to sbatch.
+#
+# THE IMAGES are looked for where the site keeps its own (the cacheDir of the site
+# config), under the name Nextflow gives a pulled image; one that is not there is pulled
+# into that folder first. No image, no launch: the python on PATH is never used.
 #
 # It runs submit_cohort.sh on a compute node; every argument is the launcher's. The
 # SETTINGS below are the only thing to edit. A variable already exported when sbatch is
@@ -21,7 +25,7 @@
 # edit.
 #
 # THE SITE is the site config (conf/ieo.config of the checkout, which is not in the
-# repository): the GPU request and the folders bound into the images are READ from it
+# repository): the GPU request, the image folder and the folders bound into the images are READ from it
 # when this job runs, never written down here. A site whose config names no partition
 # and no account needs no sbatch option; one that does names them after `--`, and before
 # the script for this job itself.
@@ -55,7 +59,7 @@ launcher="$repo/benchmarks/regbench/slurm/submit_cohort.sh"
 export REGBENCH_REPO="$repo"
 
 # ------------------------------- SETTINGS: edit here -------------------------------
-# one folder for everything of the benchmark: cases/, out/, images/ and rounds.csv.
+# one folder for everything of the benchmark: cases/, out/ and rounds.csv.
 # Default: regbench/ in the folder the job is submitted from
 : "${REGBENCH_ROOT:=$here/regbench}"
 # the arms' results the cohort is made of (rounds.csv is written from them by
@@ -65,25 +69,24 @@ export REGBENCH_REPO="$repo"
 : "${REGBENCH_OUT:=$REGBENCH_ROOT/out}"
 # the cohort's rounds.csv (python -m benchmarks.regbench.arms_manifest)
 : "${REGBENCH_MANIFEST:=$REGBENCH_ROOT/rounds.csv}"
-# the images, pulled once into one folder under the names the README pulls them as
-: "${REGBENCH_IMAGES:=$REGBENCH_ROOT/images}"
-if [ -d "$REGBENCH_IMAGES" ]; then
-    : "${REGBENCH_SIF_STARE_REGBENCH:=$REGBENCH_IMAGES/stare-regbench.sif}"
-    : "${REGBENCH_SIF_VALIS120:=$REGBENCH_IMAGES/valis120.sif}"
-    : "${REGBENCH_SIF_DEEPERHISTREG:=$REGBENCH_IMAGES/deeperhistreg.sif}"
-    : "${REGBENCH_SIF_PALOM:=$REGBENCH_IMAGES/palom.sif}"
-    : "${REGBENCH_SIF_ASHLAR:=$REGBENCH_IMAGES/ashlar.sif}"
-    : "${REGBENCH_SIF_VALIS_MIRAGE:=$REGBENCH_IMAGES/valis-mirage.sif}"
-    : "${REGBENCH_SIF_STARDIST:=$REGBENCH_IMAGES/stardist.sif}"
-else
-    echo "regbench-launch: no image folder $REGBENCH_IMAGES: only the REGBENCH_SIF_* exported by the caller are used"
-fi
 # how much runs at once
 : "${REGBENCH_RUN_LANES:=4}"          # runs in flight (0: all of them)
 : "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
 : "${REGBENCH_STAGE_QUEUE_MAX:=50}"   # tile tasks pending or running, per run that has tiles
 # the site
 : "${REGBENCH_SITE_CONFIG:=$repo/conf/ieo.config}"
+# the images: REGBENCH_IMAGES is where the site keeps its images (default: the
+# cacheDir of the site config, else images/ under REGBENCH_ROOT). One that is not
+# there yet is pulled into it, under the name Nextflow gives a pulled image
+IMAGES="
+STARE_REGBENCH docker://bolt3x/mirage-stare-regbench:1.0.0
+VALIS120       docker://bolt3x/mirage-valis120:1.0.0
+DEEPERHISTREG  docker://bolt3x/mirage-deeperhistreg:1.0.0
+PALOM          docker://bolt3x/mirage-palom:1.0.0
+ASHLAR         docker://labsyspharm/ashlar:1.20.0
+VALIS_MIRAGE   docker://cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+STARDIST       docker://bolt3x/mirage-stardist:1.0.0
+"
 # -----------------------------------------------------------------------------------
 
 # site_value KEY: the quoted value the site config gives KEY (comment lines are not read)
@@ -92,6 +95,7 @@ site_value() {
         | sed -nE "s/^[[:space:]]*(params\.)?$1[[:space:]]*=[[:space:]]*['\"]([^'\"]*)['\"].*/\2/p" \
         | head -n 1
 }
+site_images=""
 case "$REGBENCH_SITE_CONFIG" in
     none|-) ;;
     *)
@@ -107,14 +111,53 @@ case "$REGBENCH_SITE_CONFIG" in
         binds="$(site_value runOptions | grep -oE -- '--bind[= ]+[^[:space:]]+' \
             | sed -E 's/^--bind[= ]+//' | paste -sd, -)"
         [ -z "$binds" ] || : "${REGBENCH_BIND:=$binds}"
+        # where the pipeline keeps its pulled images on this site
+        site_images="$(site_value cacheDir)"
         ;;
 esac
 mkdir -p "$REGBENCH_ROOT" || exit 2
+: "${REGBENCH_IMAGES:=${site_images:-$REGBENCH_ROOT/images}}"
+
+# Every image has a file before anything is asked of it: the launcher would otherwise
+# start with the python on PATH, which has not what the harness imports.
+# REGBENCH_ALLOW_PATH_PYTHON=1 (the launcher's own switch) leaves the images alone.
+if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ]; then
+    runtime="$(command -v apptainer || command -v singularity || true)"
+    if [ -z "$runtime" ]; then
+        echo "regbench-launch: neither apptainer nor singularity is on PATH here ($(hostname)). Load the site's container module before sbatch (--export=ALL carries the PATH into the job). Nothing was submitted." >&2
+        exit 2
+    fi
+    while read -r image ref; do
+        [ -n "$image" ] || continue
+        var="REGBENCH_SIF_$image"
+        [ -z "${!var:-}" ] || { export "${var?}"; continue; }
+        # only --prepare runs StarDist
+        if [ "$image" = STARDIST ]; then
+            case " $* " in *" --prepare "*) ;; *) continue ;; esac
+        fi
+        name="${ref#docker://}"; name="${name//\//-}"; name="${name//:/-}.img"
+        file=""
+        short="$(tr '[:upper:]_' '[:lower:]-' <<< "$image").sif"
+        for at in "$REGBENCH_IMAGES/$name" "$REGBENCH_IMAGES/regbench/$name" \
+                  "$REGBENCH_IMAGES/$short" "$REGBENCH_IMAGES/regbench/$short"; do
+            [ -s "$at" ] && { file="$at"; break; }
+        done
+        if [ -z "$file" ]; then
+            file="$REGBENCH_IMAGES/$name"
+            echo "regbench-launch: pulling $ref to $file"
+            mkdir -p "$REGBENCH_IMAGES" || exit 2
+            if ! "$runtime" pull "$file.part" "$ref" || ! mv "$file.part" "$file"; then
+                rm -f "$file.part"
+                echo "regbench-launch: $ref could not be pulled on $(hostname) (a node may have no network). From a node that has one:  $runtime pull $file $ref  ; then submit again. Nothing was submitted." >&2
+                exit 2
+            fi
+        fi
+        printf -v "$var" '%s' "$file"
+        export "${var?}"
+        echo "regbench-launch: $image -> $file"
+    done <<< "$IMAGES"
+fi
 export REGBENCH_ROOT REGBENCH_CASES REGBENCH_OUT REGBENCH_MANIFEST REGBENCH_SITE_CONFIG
-for v in STARE_REGBENCH VALIS120 DEEPERHISTREG PALOM ASHLAR VALIS_MIRAGE STARDIST; do
-    v="REGBENCH_SIF_$v"
-    [ -z "${!v:-}" ] || export "${v?}"
-done
 export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
 # the arms' results and the benchmark's own folder are read inside the images too
@@ -122,7 +165,7 @@ for more in "$REGBENCH_ARMS" "$REGBENCH_ROOT"; do
     [ -d "$more" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$more"
 done
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
-echo "regbench-launch: cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
+echo "regbench-launch: repository $repo, cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
 n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c . || true)"
 echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
