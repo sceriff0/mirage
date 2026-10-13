@@ -467,7 +467,13 @@ submit() {
         IN_SBATCH=0
         refused "$name" "$got"
     fi
-    JOB_ID="${got%%;*}"
+    # sbatch went through: the job id is the LAST line it printed. A site's submit
+    # plugin may print lines of its own before it ("sbatch: slurm_job_submit: Job
+    # assigned to GPU nodes"), and the job is in the queue all the same: reading that as
+    # a refusal left a queued job that no list named.
+    JOB_ID="$(awk 'NF { last = $0 } END { print last }' <<< "$got")"
+    [ "$JOB_ID" = "$got" ] || awk -v id="$JOB_ID" '$0 != id && NF { print "# sbatch said: " $0 }' <<< "$got" >&2
+    JOB_ID="${JOB_ID%%;*}"
     case "$JOB_ID" in ''|*[!0-9_]*) IN_SBATCH=0; refused "$name" "sbatch printed no job id: $got" ;; esac
     # the id first: whatever fails after this line, the job is in the file the
     # closing notice (on_exit) names

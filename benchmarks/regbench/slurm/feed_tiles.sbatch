@@ -372,7 +372,10 @@ feed() {
             [ "$try" -ge "$REGBENCH_STAGE_SUBMIT_TRIES" ] && refused "$attempt" "$jobname, $size task(s), --array=$spec" "$got"
             sleep "$REGBENCH_STAGE_POLL_S"
         done
-        id="${got%%;*}"
+        # the id is the LAST line: a site's submit plugin may print lines before it
+        id="$(awk 'NF { last = $0 } END { print last }' <<< "$got")"
+        [ "$id" = "$got" ] || awk -v id="$id" '$0 != id && NF { print "sbatch said: " $0 }' <<< "$got"
+        id="${id%%;*}"
         # no job id is no job: nothing of it is written down as submitted
         case "$id" in ''|*[!0-9_]*) refused "$attempt" "$jobname, $size task(s), --array=$spec" "sbatch printed no job id: $got" ;; esac
         printf '%s\t%s\t%s\t%s\t%s\n' "$attempt" "$next" "$size" "$base" "$id" >> "$fed"

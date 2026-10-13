@@ -108,6 +108,9 @@ def site(tmp_path_factory):
         # written (something other than the scheduler stops the launch)
         'if [ -n "${SBATCH_BREAK_AT:-}" ] && [ "$n" -ge "$SBATCH_BREAK_AT" ]; then\n'
         '  chmod a-w "$SBATCH_BREAK_FILE"\nfi\n'
+        # SBATCH_NOTICE: the site's submit plugin says something before the id
+        'if [ -n "${SBATCH_NOTICE:-}" ]; then\n'
+        '  echo "sbatch: slurm_job_submit: Job assigned to GPU nodes: gpu" >&2\nfi\n'
         'echo "$n;cluster"\n'
     )
     sbatch.chmod(0o755)
@@ -1851,6 +1854,29 @@ def test_a_stray_statement_of_the_stage_launcher_reaches_no_job():
         capture_output=True, text=True, cwd=REPO,
     )  # fmt: skip
     assert done.stdout.strip().endswith("[unset]"), done.stdout + done.stderr
+
+
+def test_a_notice_of_the_sites_submit_plugin_is_not_a_refusal(site):
+    """sbatch prints a line of the site's own before the job id (seen on the cluster,
+    for every job that asks for a GPU): the job is queued, and the launch goes on."""
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1"}
+    plain, plain_log, _ = launch(site, env=env, dry=False, log="quiet")
+    said, log, _ = launch(
+        site, env={**env, "SBATCH_NOTICE": "1"}, dry=False, log="said"
+    )
+    assert plain.returncode == 0 and said.returncode == 0, said.stderr
+    assert "REFUSED" not in said.stderr
+    assert (
+        "# sbatch said: sbatch: slurm_job_submit: Job assigned to GPU nodes"
+        in said.stderr
+    )
+    rows = [line.split("\t")[0] for line in log.read_text().splitlines()]
+    assert rows and len(rows) == len(plain_log.read_text().splitlines())
+    # every job the launch printed has a plain id, and waits on plain ids
+    for line in said.stdout.splitlines():
+        if line.startswith("rb-"):
+            assert line.split("\t")[1].isdigit(), line
+    assert "slurm_job_submit" not in log.read_text()
 
 
 def test_a_first_sbatch_that_is_refused_leaves_no_submission(site):
