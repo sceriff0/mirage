@@ -685,6 +685,13 @@ def build_parser():
         "(not_checked); every other verdict still blocks (REGBENCH_ALLOW_UNCHECKED)",
     )
     gt.add_argument(
+        "--advisory",
+        action="store_true",
+        help="the selfcheck is advice, not a gate: the run starts whatever the verdict "
+        "(inconsistent, crashed, not_checked, no record), and the verdict is recorded "
+        "as it is (REGBENCH_SELFCHECK_ADVISORY=1)",
+    )
+    gt.add_argument(
         "--allow-inconsistent",
         action="store_true",
         help="let the run start although its selfcheck MEASURED a disagreement "
@@ -1408,6 +1415,8 @@ def _gate(a):
         and bool(record)
     )
     allowed = allowed or overridden
+    advisory = getattr(a, "advisory", False) and status in selfcheck.BLOCKING
+    allowed = allowed or advisory
     blocked = status in selfcheck.BLOCKING and not allowed
     print(f"{status}\t{','.join(dropped) or variants.NONE}")
     _write_gate(a.record, run, status, dropped, blocked, reference)
@@ -1422,6 +1431,12 @@ def _gate(a):
         verdict=status,
         dropped=",".join(dropped) or "-",
     )
+    if advisory:
+        print(
+            f"gate: the selfcheck is ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): {run} "
+            f"starts although its verdict is {status}. The record keeps the verdict"
+        )
+        return 0
     if overridden:
         print(
             f"gate: {run} is named in REGBENCH_ALLOW_INCONSISTENT: it starts ALTHOUGH "

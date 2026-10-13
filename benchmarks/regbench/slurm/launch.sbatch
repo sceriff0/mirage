@@ -71,6 +71,8 @@ export REGBENCH_REPO="$repo"
 : "${REGBENCH_MANIFEST:=$REGBENCH_ROOT/rounds.csv}"
 # how much runs at once
 : "${REGBENCH_RUN_LANES:=4}"          # runs in flight (0: all of them)
+# the selfchecks say what they found and block nothing (0: one that is not ok blocks)
+: "${REGBENCH_SELFCHECK_ADVISORY:=1}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
 : "${REGBENCH_STAGE_QUEUE_MAX:=50}"   # tile tasks pending or running, per run that has tiles
 # the site
@@ -158,7 +160,7 @@ if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ]; then
     done <<< "$IMAGES"
 fi
 export REGBENCH_ROOT REGBENCH_CASES REGBENCH_OUT REGBENCH_MANIFEST REGBENCH_SITE_CONFIG
-export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
+export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX REGBENCH_SELFCHECK_ADVISORY
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
 # the arms' results and the benchmark's own folder are read inside the images too
 for more in "$REGBENCH_ARMS" "$REGBENCH_ROOT"; do

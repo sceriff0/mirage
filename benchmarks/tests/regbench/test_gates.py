@@ -60,6 +60,19 @@ def test_a_selfcheck_that_left_no_record_blocks_the_run(tmp_path, capsys):
     assert out.read_text().split("\t")[:4] == ["palom", "not_checked", "-", "1"]
 
 
+def test_an_advisory_selfcheck_blocks_nothing_and_keeps_its_verdict(tmp_path, capsys):
+    """REGBENCH_SELFCHECK_ADVISORY=1 (launch.sbatch sets it): the run starts whatever
+    the selfcheck says, and the record says what it said."""
+    for verdict in ("inconsistent", "crashed", "not_checked"):
+        code, line = _gate(
+            tmp_path, "palom", "--advisory", palom_affine="ok", palom=verdict
+        )
+        assert code == 0 and line[:4] == ["palom", verdict, "-", "0"]
+        assert f"starts although its verdict is {verdict}" in capsys.readouterr().out
+    code, line = _gate(tmp_path, "palom", "--advisory", palom_affine="ok", palom="ok")
+    assert code == 0 and line[:4] == ["palom", "ok", "-", "0"]
+
+
 def test_an_inconsistent_run_starts_only_when_the_owner_named_it(tmp_path, capsys):
     """REGBENCH_ALLOW_INCONSISTENT is the owner's override of a MEASURED disagreement:
     the run may start, the verdict is recorded as it is, and nothing else is let

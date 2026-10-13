@@ -207,6 +207,11 @@
 #                                     is refused for another one
 #   REGBENCH_SCORE_WHILE_QUEUED=1     --score-only although jobs of an earlier call
 #                                     into REGBENCH_OUT are still pending or running
+#   REGBENCH_SELFCHECK_ADVISORY=1     the selfcheck is advice, not a gate: EVERY run
+#                                     starts whatever its selfcheck says, and the gate
+#                                     record, the end line and the summary keep the
+#                                     verdict. launch.sbatch sets it; unset, a
+#                                     selfcheck that is not ok blocks its run
 #   REGBENCH_ALLOW_INCONSISTENT       run names that start although their selfcheck
 #                                     MEASURED a disagreement (`inconsistent`): the
 #                                     owner's override. The verdict is recorded as it
@@ -1022,6 +1027,7 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
     allowed=0
     has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
     has "${REGBENCH_ALLOW_INCONSISTENT:-}" "$name" && allowed=2
+    [ "${REGBENCH_SELFCHECK_ADVISORY:-0}" = 1 ] && allowed=3
     # an earlier submission's verdict must not be what a task of this one finds
     [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
     last="SC_LAST_$gated_by"
@@ -1313,6 +1319,7 @@ else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
+[ "${REGBENCH_SELFCHECK_ADVISORY:-0}" = 1 ] && echo "# the selfchecks are ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): no run is blocked by one; each verdict is in $REGBENCH_OUT/logs/gates/<run>.tsv and in the summary"
 [ -n "${REGBENCH_ALLOW_INCONSISTENT:-}" ] && echo "# OVERRIDE: allowed to start although the selfcheck is inconsistent: $REGBENCH_ALLOW_INCONSISTENT (the gate record and the summary keep the verdict)"
 FINISHED=1
 exit 0
