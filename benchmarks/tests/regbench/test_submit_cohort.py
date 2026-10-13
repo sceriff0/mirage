@@ -272,6 +272,32 @@ def test_a_dry_run_submits_nothing(dry):
     }
 
 
+def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
+    """launch.sbatch, run as a scheduler runs it (a COPY, somewhere else), submits the
+    same jobs as the launcher called directly; and says so where it finds no launcher."""
+    import shutil
+
+    copy = tmp_path / "slurm_script"
+    shutil.copy(SLURM / "launch.sbatch", copy)
+    argv, base, _ = _launch_command(site, (), None, True, "viajob")
+    argv[1] = str(copy)
+    base = {**base, "SLURM_SUBMIT_DIR": str(REPO)}
+    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert sorted(jobs_of(done)) == sorted(dry[0])
+    lost = subprocess.run(
+        argv,
+        env={**base, "SLURM_SUBMIT_DIR": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert lost.returncode == 2 and "Nothing was submitted" in lost.stderr
+    assert not _sbatch_lines(lost.stdout)
+    head = (SLURM / "launch.sbatch").read_text()
+    assert "\n#SBATCH --export=ALL\n" in head
+
+
 def test_the_environment_switch_is_the_same_dry_run(site, dry):
     done, log, _ = launch(site, env={"REGBENCH_DRY": "1"}, dry=False, log="envdry")
     same = [ln.replace("out-envdry", "out-calls") for ln in _sbatch_lines(done.stdout)]

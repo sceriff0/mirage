@@ -2698,6 +2698,7 @@ reports.
   is how `REGBENCH_*` reaches it, and the caller's own options come after it on the
   `sbatch` line: an `--export=NONE` or `--export=VAR=...` there replaces it, and the
   jobs start without their paths and images.
+- **Or as one job.** `sbatch [site options] benchmarks/regbench/slurm/launch.sbatch [the launcher's arguments]` runs the launcher on a compute node with the caller's whole environment (`--export=ALL`); its log is `regbench-launch-<job id>.log`. The site options are named twice: before the script for this job, after `--` for the jobs it submits. The node needs the scheduler's commands and the container runtime, and the pinned STARE source must already be there (one `--preflight` from a login node fetches it). Never run on a cluster.
 - **Inside `tmux` (or `screen`).** A real submission starts every image once (the
   preflight) and then makes several hundred `sbatch` calls, one after the other; it
   takes minutes. A login session that drops in the middle ends the script with part of
