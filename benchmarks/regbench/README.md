@@ -2459,7 +2459,12 @@ script names no method.
      `JobLaunchFailure`) it gives up at once; if none has, it waits on, says so, and
      prints the list again after the next stretch, until
      `REGBENCH_STAGE_STALL_MAX_S` (172800: two days) have passed without one task
-     leaving, and then gives up whatever the reasons.
+     leaving, and then gives up. A stretch in which EVERY task still there is only
+     waiting its turn (`REGBENCH_STAGE_WAIT_REASONS`: `Priority`, `Resources`,
+     `QOSMaxJobsPerUserLimit`, `AssocMaxJobsLimit`, `BeginTime`, `Dependency`, `None`)
+     is not counted in those two days: a busy cluster is no stall, and the submitter
+     says each stretch what is waiting. On such a queue it waits until its own time
+     limit, and the next link goes on.
 
    Giving up is the safer of the two ways out, and the one chosen: going on would list
    the next attempt, or write `.done`, over tiles that are still in the queue, and
@@ -2599,6 +2604,7 @@ round).
 | `REGBENCH_STAGE_SUBMIT_TRIES`, `REGBENCH_STAGE_ARRAY_SPAN` | read by the tile submitter: tries of a refused `sbatch`; the widest span of indices in one tile array (below the site's `MaxArraySize`) | `5`, `1000` |
 | `REGBENCH_STAGE_SQUEUE_TRIES` | read by the tile submitter: looks in a row at a queue that cannot be read before it gives up | `30` |
 | `REGBENCH_STAGE_STALL_S`, `REGBENCH_STAGE_STALL_MAX_S` | read by the tile submitter: seconds without a tile task leaving the queue before it lists what is left (and gives up on a held one); and before it gives up whatever the reasons | `3600`, `172800` |
+| `REGBENCH_STAGE_WAIT_REASONS` | the scheduler's reasons the tile submitter takes for "only waiting its turn": while every tile task left has one of them the time is not counted towards `REGBENCH_STAGE_STALL_MAX_S`; empty counts every stretch | `Priority Resources QOSMaxJobsPerUserLimit AssocMaxJobsLimit BeginTime Dependency None` |
 | `REGBENCH_STAGE_HELD_REASONS` | the scheduler's reasons the tile submitter takes for "does not leave the queue by itself", space-separated | `JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure` |
 | `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |

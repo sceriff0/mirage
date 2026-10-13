@@ -779,9 +779,12 @@ def _failed(rnd, stage, row, jobs):
             stages.NOT_SUBMITTED,
         )
     elif never:
-        # the launcher's tile submitter never put this job into the queue
+        # the launcher's tile submitter did not see this job through: it was never put
+        # into the queue, or was still waiting there when the round's last job ran
         err = stages.StageFailed(
-            f"{what}: this job was never submitted ({never})", stages.NOT_SUBMITTED
+            f"{what}: this job never ran: it was not submitted, or was still waiting "
+            f"in the queue when the round's last job ran ({never})",
+            stages.NOT_SUBMITTED,
         )
     elif not mine:
         # no job of this submission wrote a record: none of them started

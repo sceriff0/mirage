@@ -1334,7 +1334,10 @@ def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monke
         assert methods.run_case("stare", case, out, opts={"stage_images": True}) == []
     run = run_json(out, "stare", case)
     assert run["cause"] == stages.NOT_SUBMITTED and run["no_rerun"] is True
-    assert "TILE (tile row 1): this job was never submitted" in run["error"]
+    assert (
+        "TILE (tile row 1): this job never ran: it was not submitted, or was"
+        in (run["error"])
+    )
     assert "the tile submitter did not finish" in run["error"]
     from benchmarks.regbench import failure_log, resources, score
 

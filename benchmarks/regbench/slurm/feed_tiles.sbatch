@@ -27,7 +27,7 @@
 # REGBENCH_STAGE_FEED_MIN slots are free (or fewer tiles are left), so that it does not
 # submit one-task arrays. Between looks it sleeps REGBENCH_STAGE_POLL_S seconds.
 #
-# IT NEVER WAITS IN SILENCE, AND NEVER FOR EVER.
+# IT NEVER WAITS IN SILENCE, AND FOR EVER ONLY ON A QUEUE THAT IS MERELY BUSY.
 #   A queue it cannot read (`squeue` fails) is never taken for an empty one: nothing is
 #   submitted, every such look is a line of the log, and after
 #   REGBENCH_STAGE_SQUEUE_TRIES (30) of them in a row it GIVES UP.
@@ -36,8 +36,10 @@
 #   every tile task still there with its state and the scheduler's reason. A task whose
 #   reason is one it never leaves by itself (REGBENCH_STAGE_HELD_REASONS: a hold, a
 #   dependency that can never be met, a failed launch) makes it GIVE UP at once; so does
-#   REGBENCH_STAGE_STALL_MAX_S (172800: two days) without one task leaving, whatever the
-#   reasons. Otherwise it goes on waiting and says so again after the next stretch.
+#   REGBENCH_STAGE_STALL_MAX_S (172800: two days) without one task leaving; the time in
+#   which EVERY task left is only waiting its turn (REGBENCH_STAGE_WAIT_REASONS:
+#   Priority, Resources, ...) is not counted in those two days, and is said each
+#   stretch. Otherwise it goes on waiting and says so again after the next stretch.
 #   GIVING UP is the safer of the two ways out: going on would count tiles that are
 #   still in the queue as done. It writes <layout>.refused with the reason and what is
 #   still queued, ends with exit 1, and the rounds whose tiles are not done fail as
@@ -84,6 +86,15 @@ ALLOC=("" "${11}" "${12}" "${13}" "${14}")
 # and Priority, Resources, Dependency, BeginTime, None, the QOS* and Assoc* families;
 # missing the rest of the list]`)
 : "${REGBENCH_STAGE_HELD_REASONS:=JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure}"
+# squeue's reasons of a job that is only waiting its turn: while EVERY tile task left has
+# one of them, the time is not counted towards REGBENCH_STAGE_STALL_MAX_S (a busy cluster
+# is no stall). Same page: Priority "One of more higher priority jobs exist for the
+# partition", Resources "The resources requested by the job are not available (e.g.,
+# already used by other jobs)", QOSMaxJobsPerUserLimit and AssocMaxJobsLimit (the limit
+# on jobs running at a given time), BeginTime, Dependency "has not been satisfied", None
+# "has not been considered yet in the current backfill cycle" `[PARTIAL: these seven
+# entries, as quoted by a summarising fetch of the page; the rest of the list not read]`
+: "${REGBENCH_STAGE_WAIT_REASONS=Priority Resources QOSMaxJobsPerUserLimit AssocMaxJobsLimit BeginTime Dependency None}"
 HERE="$REGBENCH_REPO/benchmarks/regbench/slurm"
 state="${layout%.tsv}"
 fed="$state.fed.tsv"
@@ -166,18 +177,20 @@ look() {
     return 0
 }
 # moved <count>: a tile task left the queue, or one was just put in: the wait starts anew
-low=-1 since=$SECONDS first=$SECONDS
-moved() { low="$1"; since=$SECONDS; first=$SECONDS; }
+# (`turn`: the seconds of the wait in which every task left was only waiting its turn)
+low=-1 since=$SECONDS first=$SECONDS turn=0
+moved() { low="$1"; since=$SECONDS; first=$SECONDS; turn=0; }
 # waiting <what for>: called with Q at every look of a wait. Nothing for
 # REGBENCH_STAGE_STALL_S seconds: say what is still in the queue and why, give up on a
 # task that does not leave by itself or after REGBENCH_STAGE_STALL_MAX_S, else wait on.
 waiting() {
-    local what="$1" left held="" reason
+    local what="$1" left held="" reason stretch others
     if [ "$low" -lt 0 ] || [ "$Q" -lt "$low" ]; then
         moved "$Q"
         return 0
     fi
     [ $((SECONDS - since)) -ge "$REGBENCH_STAGE_STALL_S" ] || return 0
+    stretch=$((SECONDS - since))
     since=$SECONDS
     if ! left="$(squeue -h -r -u "$me" -o '%i|%j|%T|%r' 2>/dev/null)"; then
         echo "$(date +%FT%T) $what: no tile task has left the queue for $((SECONDS - first))s, and what is left could not be listed (squeue failed)"
@@ -190,9 +203,16 @@ waiting() {
         grep -q "|$reason\$" <<< "$left" && held="$held $reason"
     done
     [ -n "$held" ] && gave_up "$what: $Q tile task(s) have not left the queue for $((SECONDS - first))s and at least one does not leave by itself (reason:$held); see the log for the list" "$Q"
-    [ $((SECONDS - first)) -ge "$REGBENCH_STAGE_STALL_MAX_S" ] \
-        && gave_up "$what: no tile task has left the queue for $((SECONDS - first))s (REGBENCH_STAGE_STALL_MAX_S=$REGBENCH_STAGE_STALL_MAX_S); see the log for the list" "$Q"
-    echo "$(date +%FT%T) $what: none of them is held; waiting on (at most $REGBENCH_STAGE_STALL_MAX_S s without one leaving)"
+    # the reasons that are not "waiting its turn", among the tasks listed
+    others="$(awk -F'|' -v ok=" $REGBENCH_STAGE_WAIT_REASONS " 'index(ok, " " $4 " ") == 0 { print $4 }' <<< "$left" | sort -u | paste -sd' ' -)"
+    if [ -n "$left" ] && [ -z "$others" ]; then
+        turn=$((turn + stretch))
+        echo "$(date +%FT%T) $what: every one of them is waiting its turn (REGBENCH_STAGE_WAIT_REASONS: $REGBENCH_STAGE_WAIT_REASONS); these ${stretch}s are not counted, waiting on (${turn}s of the $((SECONDS - first))s so far were such)"
+        return 0
+    fi
+    [ $((SECONDS - first - turn)) -ge "$REGBENCH_STAGE_STALL_MAX_S" ] \
+        && gave_up "$what: no tile task has left the queue for $((SECONDS - first))s, $((SECONDS - first - turn))s of them not merely waiting its turn (REGBENCH_STAGE_STALL_MAX_S=$REGBENCH_STAGE_STALL_MAX_S; reasons: ${others:-none listed}); see the log for the list" "$Q"
+    echo "$(date +%FT%T) $what: none of them is held; waiting on (at most $REGBENCH_STAGE_STALL_MAX_S s without one leaving, the time in which all only wait their turn not counted)"
     return 0
 }
 # drain <what for>: wait until none is left
@@ -353,6 +373,8 @@ feed() {
             sleep "$REGBENCH_STAGE_POLL_S"
         done
         id="${got%%;*}"
+        # no job id is no job: nothing of it is written down as submitted
+        case "$id" in ''|*[!0-9_]*) refused "$attempt" "$jobname, $size task(s), --array=$spec" "sbatch printed no job id: $got" ;; esac
         printf '%s\t%s\t%s\t%s\t%s\n' "$attempt" "$next" "$size" "$base" "$id" >> "$fed"
         printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$jobname" "$id" >> "$REGBENCH_OUT/logs/jobs.tsv"
         echo "$id" >> "$ids_file"

@@ -540,8 +540,13 @@ def test_one_unreadable_look_is_said_and_then_forgotten(tmp_path):
             "does not leave by itself (reason: DependencyNeverSatisfied)",
         ),
         (
-            "PENDING|Priority",
+            "PENDING|ReqNodeNotAvail",
             {"REGBENCH_STAGE_STALL_MAX_S": 3},
+            "REGBENCH_STAGE_STALL_MAX_S=3",
+        ),
+        (  # with no reason called "waiting its turn", Priority is counted too
+            "PENDING|Priority",
+            {"REGBENCH_STAGE_STALL_MAX_S": 3, "REGBENCH_STAGE_WAIT_REASONS": ""},
             "REGBENCH_STAGE_STALL_MAX_S=3",
         ),
     ],
@@ -576,6 +581,43 @@ def test_tile_tasks_that_do_not_leave_the_queue_end_the_wait_loudly(
     assert stages.feed_problem(site.out, "S-1", "stare", "multiplex").startswith(
         "the tile submitter gave up: "
     )
+
+
+@pytest.mark.parametrize("reason", ["PENDING|Priority", "PENDING|Resources"])
+def test_tasks_that_only_wait_their_turn_are_never_given_up_on(tmp_path, reason):
+    """Four tile tasks pend for 7 looks, one second apart, on a busy cluster; the
+    longest wait without one leaving is 2 s. The time is not counted: the submitter
+    says each stretch what is waiting, and ends ok once they have run."""
+    site = Site(tmp_path, {1: range(4), 2: []})
+    (site.fake / "ends").write_text("0")
+    (site.fake / "reason").write_text(reason)
+    (site.fake / "squeue").write_text(
+        SQUEUE.replace(
+            'ends="$(cat',
+            '[ "$(wc -l < "$FAKE/looks")" -ge 7 ] && echo 1000000 > "$FAKE/ends"\n'
+            'ends="$(cat',
+        )
+    )
+    done = site.run(
+        REGBENCH_STAGE_POLL_S=1, REGBENCH_STAGE_STALL_S=1, REGBENCH_STAGE_STALL_MAX_S=2
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.count("every one of them is waiting its turn") >= 3
+    assert "these 1s are not counted" in done.stdout
+    assert not Path(f"{site.state}.refused").exists()
+    assert Path(f"{site.state}.done").exists() and "status=ok" in last(done)
+
+
+def test_an_sbatch_that_prints_no_job_id_is_a_refusal(tmp_path):
+    site = Site(tmp_path, {1: range(4), 2: []})
+    (site.fake / "sbatch").write_text('#!/bin/bash\necho "Submitted batch job"\n')
+    done = site.run()
+    assert done.returncode == 1, done.stdout + done.stderr
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "scheduler: sbatch printed no job id: Submitted batch job" in marker
+    fed = Path(f"{site.state}.fed.tsv").read_text().splitlines()
+    assert fed == ["1\t0\t4\t0\t-"]  # nothing written down as submitted
+    assert "status=refused cause=not_submitted whose=launcher" in last(done)
 
 
 def test_a_wait_for_room_is_ended_the_same_way(tmp_path):
