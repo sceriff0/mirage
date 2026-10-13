@@ -628,6 +628,51 @@ def test_a_staged_row_with_a_retry(tmp_path):
     assert billing.stage_attempts(tmp_path / "nothing") is None
 
 
+@pytest.mark.parametrize(
+    "cause, column, other",
+    [("killed", "wasted", "lost"), ("not_submitted", "lost", "wasted")],
+)
+def test_a_staged_round_without_its_summary_is_billed_from_its_stage_records(
+    tmp_path, cause, column, other
+):
+    """The round's last job was killed (or the run was refused) before it wrote what
+    its stage jobs cost: `info.jobs` is missing. The stage records are on disk: 310
+    good and 40 retried allocated CPU seconds, none of which registered anything."""
+    out = tmp_path / "out"
+    folder = out / "stare" / "multiplex" / "P1_r1"
+    run = staged_round(folder)
+    run.update(ok=False, cause=cause, resources=None, register_s=None, info={})
+    run.pop("native")
+    (folder / "run.json").write_text(json.dumps(run))
+    case = types.SimpleNamespace(dataset="multiplex", case_id="P1_r1", mov_hw=None)
+    base = {"dataset": "multiplex", "group": "P1", "case_id": "P1_r1"}
+    row = {**score.resource_row(run), **base, "method": "stare"}
+    assert row["n_jobs"] == "" and row["adapter"] == "stare"
+    assert row[f"{column}_cpu_h_reserved"] == 0.0  # as one process: nothing of them
+    assert other in ("wasted", "lost")
+    score.bill_from_disk([row], out, [case], {})
+    assert math.isnan(row["cpu_h_used"])
+    if cause == "killed":  # the method's: every attempt of its stage jobs is wasted
+        assert row["wasted_cpu_h_reserved"] == pytest.approx(GOOD_RESERVED + 40 / H)
+        assert row["wasted_gb_h_reserved"] == pytest.approx(GOOD_GB + 80 / H)
+        assert row["wasted_cpu_h_used"] == pytest.approx(GOOD_USED + 30 / H)
+        assert row["total_cpu_h_reserved"] == pytest.approx(GOOD_RESERVED + 40 / H)
+        assert row["lost_cpu_h_reserved"] == 0.0
+    else:
+        # not the method's: what ended ok is lost; the tile attempt that was retried
+        # (2 CPUs, 4 GB, 20 s) stays the method's own
+        assert row["lost_cpu_h_reserved"] == pytest.approx(GOOD_RESERVED)
+        assert row["lost_gb_h_reserved"] == pytest.approx(GOOD_GB)
+        assert row["lost_cpu_h_used"] == pytest.approx(GOOD_USED)
+        assert row["wasted_cpu_h_reserved"] == pytest.approx(40 / H)
+        assert row["total_cpu_h_reserved"] == pytest.approx(40 / H)
+    # a method that is one process is never looked up
+    plain = {**score.resource_row(single(ok=False, cause="killed")), **base}
+    before = dict(plain)
+    score.bill_from_disk([{**plain, "method": "palom"}], out, [case], {})
+    assert plain == before
+
+
 def test_the_tables_read_the_stage_records_and_name_the_parallel_time(tmp_path):
     out = tmp_path / "out"
     folder = out / "stare" / "multiplex" / "P1_r1"

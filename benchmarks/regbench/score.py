@@ -384,6 +384,8 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     (``cpu_h_used_per_gpx``). ``stage`` is ``billing.stage_attempts`` of the round's
     stage records, for a registration that ran as several scheduler jobs: without it
     such a row has its CPU-hours from what its run recorded and no ``gb_h_reserved``.
+    For a failed row whose record has no summary of its stage jobs (``info.jobs``),
+    ``stage`` is the only source of what they cost.
     ``accounting`` is the scheduler's (``ladder.read_accounting``), for
     ``cpu_h_scheduler``; without it that column is blank."""
     r = run.get("resources") or {}
@@ -554,6 +556,14 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         attempts.append(
             billing.attempt(own_kind, cpus, mem, wall, cpu, run.get("launch_id"))
         )
+    if not staged and stage is not None and not registered:
+        # a round of a registration in several jobs whose record holds no summary of
+        # them (its last job was killed, or the run was refused before it read them):
+        # what its stage jobs did is spent all the same, and none of it registered
+        attempts += [
+            {**a, "kind": own_kind if a["kind"] == billing.GOOD else a["kind"]}
+            for a in stage[0]
+        ]
     bill = billing.sums(attempts)
     patient_unit = run.get("unit") == "patient"
     gpx = _f(moving_px) / 1e9 if moving_px else math.nan
@@ -758,13 +768,30 @@ def moving_pixels(case):
     return int(hw[0]) * int(hw[1]) if hw and len(hw) == 2 else None
 
 
+def _in_stages(row):
+    """Is the row of a method whose registration is several stage jobs per round (its
+    adapter declares ``STAGES``)?"""
+    from . import methods
+
+    adapter = str(row.get("adapter") or "")
+    if adapter not in methods.METHODS:
+        return False
+    try:
+        return bool(getattr(methods.load(adapter), "STAGES", None))
+    except Exception:  # an adapter that does not import here has no stage records
+        return False
+
+
 def bill_from_disk(res_rows, out, cases, accounting=None):
     """Complete the billing columns of the resource rows with what is not in a
     ``run.json``, in place:
 
     * a registration in several scheduler jobs gets its attempts from its stage jobs'
       records (``billing.stage_attempts``): each attempt's own memory and job, hence
-      ``gb_h_reserved`` and the jobs the scheduler is asked about;
+      ``gb_h_reserved`` and the jobs the scheduler is asked about. Also a failed round
+      whose ``run.json`` has no ``info.jobs`` (its last job was killed, or the run was
+      refused before it read them): the stage jobs ran, and their cost is its wasted
+      (or lost) cost;
     * every row that registered gets ``cpu_h_scheduler`` from ``accounting``
       (``ladder.read_accounting`` of ``<out>/logs/accounting.psv``), when there is one.
 
@@ -781,7 +808,10 @@ def bill_from_disk(res_rows, out, cases, accounting=None):
                 if h == h:
                     row["cpu_h_scheduler"], row["scheduler_jobs"] = h, n
                     row["cpu_h_used_vs_scheduler"] = billing.ratio(row["cpu_h_used"], h)
-            continue
+            # ... unless it is a failed round of a registration in several jobs whose
+            # record never got their summary: its stage records are read below
+            if row["ok"] or row.get("registered") or not _in_stages(row):
+                continue
         folder = billing.find_stage_dir(
             out, row["dataset"], row["case_id"], row["method"], row.get("launch_id")
         )
