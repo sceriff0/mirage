@@ -1106,11 +1106,20 @@ def write_native(state, case_id, dest_dir):
     ended at the pipeline's time limit for its attempt, and run again as the pipeline
     retries it (``stages.RETRY_EXIT``, the time limit included), up to four attempts.
     The job is not STITCH's cgroup, so the pipeline's MEMORY for an attempt is not
-    enforced: ``stitch_job.over_allocation`` says when STITCH's peak was above it. A
-    STITCH killed for memory while its allocation plus this process's own memory was
-    more than the job had is the job's limit, not STITCH's: ``benchmark_oom``, and the
-    job goes up a rung. A STITCH that fails after its attempts fails the row as the
-    writer's (``writer`` / ``writer_oom``), and no rung runs it again."""
+    enforced: ``stitch_job.over_allocation`` says when STITCH's peak was above it.
+
+    What a STITCH killed for memory becomes depends on who sees it first. Where the
+    driver's out-of-memory watcher can read the job's cgroup counter (a scheduler step's
+    cgroup: the cohort), it interrupts this call during the attempt the kernel killed,
+    usually the first: no later attempt runs, the STITCH process still running is
+    terminated (``stages.run_command``), the row is ``writer_oom`` (the kill was inside
+    the writer's stretch), and the job goes up a rung like any memory cause. Where
+    there is no such counter the loop below decides: a STITCH killed for memory while
+    its allocation plus this process's own memory was more than the job had is the
+    job's limit, not STITCH's (``benchmark_oom``, and the job goes up a rung); else it
+    is run again as the pipeline retries it, and a STITCH that fails after its attempts
+    fails the row as the writer's (``writer`` / ``writer_oom``) with no rung running
+    it again."""
     from stare.slide_io import open_lazy
 
     out = Path(dest_dir) / "registered.ome.tif"

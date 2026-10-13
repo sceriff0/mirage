@@ -3783,8 +3783,8 @@ def score(
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
 
-    ``accounting`` is the scheduler's accounting of the jobs (the file ``sacct -n -X
-    -P -o JobID,State,ElapsedRaw,TotalCPU`` wrote; default ``<out>/logs/
+    ``accounting`` is the scheduler's accounting of the jobs (the file ``sacct -n -P
+    -o JobID,State,ElapsedRaw,TotalCPU`` wrote, with the jobs' steps; default ``<out>/logs/
     accounting.psv``, which the launcher's settle step leaves): the cross-check column
     ``cpu_h_scheduler``. Without one that column is blank.
 

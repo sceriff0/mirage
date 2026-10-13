@@ -1967,6 +1967,43 @@ def test_a_stitch_killed_for_the_jobs_memory_is_the_benchmarks_and_climbs(
     )
 
 
+def test_a_command_does_not_outlive_a_call_that_is_interrupted(tmp_path):
+    """The driver interrupts the call (its out-of-memory watcher does) while the stage
+    command runs: the command is terminated and waited for, and its record still says
+    killed."""
+    import threading
+    import time
+
+    pid_file = tmp_path / "pid"
+    code = (
+        "import os, time, pathlib; "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+        "print('started', flush=True); time.sleep(120)"
+    )
+
+    def interrupt():
+        while not pid_file.exists() or not pid_file.read_text():
+            time.sleep(0.02)
+        # as the driver's watcher does it (methods.__init__): a real signal to the
+        # main thread of this process, which is blocked reading the command's output
+        signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+
+    threading.Thread(target=interrupt, daemon=True).start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            stages.run_command(tmp_path, stages.STITCH, [PY, "-c", code])
+        pid = int(pid_file.read_text())
+        with pytest.raises(ProcessLookupError):  # gone, and reaped
+            os.kill(pid, 0)
+    finally:
+        try:  # this test's own child, by the pid it wrote, should the fix be undone
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+    rec = stages.read_record(tmp_path, stages.STITCH)
+    assert rec["ok"] is False and rec["cause"] == "killed" and rec["exit"] is None
+
+
 def test_a_command_is_ended_at_its_time_limit_with_a_retried_status(tmp_path):
     marker = tmp_path / "quick"
     code = f"import os, time; time.sleep(0 if os.path.exists({str(marker)!r}) else 30)"

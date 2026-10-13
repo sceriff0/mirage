@@ -365,7 +365,9 @@ def run_command(
     process: ``jobs`` (the scheduler) or ``local`` (the run itself). ``identity`` is
     kept in the record (``decide``). ``timeout_s`` ends the command with SIGTERM (exit
     143, a retried status) when it runs longer: the time limit of a process that
-    shares its job with other work."""
+    shares its job with other work. When the call itself is interrupted before the
+    command ends, the command is terminated and waited for before the interruption
+    goes on: no stage process is left running behind its caller."""
     path = record_path(stage_dir, stage, row)
     old = read_record(stage_dir, stage, row)
     host = resources.host_info()
@@ -412,16 +414,29 @@ def run_command(
         timer = threading.Timer(float(timeout_s), proc.terminate)
         timer.daemon = True
         timer.start()
-    tail = []
-    for line in proc.stdout:
-        text = line.decode(errors="replace")
-        if execution == "jobs":
-            sys.stdout.write(text)
-        tail = [*tail[-39:], text]
-    proc.stdout.close()
-    _, status, usage = os.wait4(proc.pid, 0)
-    if timer is not None:
-        timer.cancel()
+    tail, reaped = [], False
+    try:
+        for line in proc.stdout:
+            text = line.decode(errors="replace")
+            if execution == "jobs":
+                sys.stdout.write(text)
+            tail = [*tail[-39:], text]
+        proc.stdout.close()
+        _, status, usage = os.wait4(proc.pid, 0)
+        reaped = True
+    finally:
+        if timer is not None:
+            timer.cancel()
+        if not reaped:
+            # this call was interrupted (the driver's out-of-memory watcher, a
+            # signal): the command it started must not outlive it. Ended by the
+            # process this call holds, and waited for; its record stays `killed`
+            proc.terminate()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
     proc.returncode = code = os.waitstatus_to_exitcode(status)
     if code < 0:  # ended by a signal: the status a shell (and Nextflow) reports
         code = 128 - code
