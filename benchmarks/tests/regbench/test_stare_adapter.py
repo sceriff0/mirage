@@ -150,7 +150,13 @@ def test_a_reference_with_another_nuclear_index_fails_the_case(
     synthetic_cases, tmp_path, no_stage
 ):
     called = no_stage
-    case = multichannel(synthetic_cases["rigid"], ref_channel=0, mov_channel=2)
+    plain = synthetic_cases["rigid"]
+    # the slides are read before the method starts, so the case keeps files that exist
+    case = dataclasses.replace(
+        multichannel(plain, ref_channel=0, mov_channel=2),
+        ref_image=plain.ref_image,
+        mov_image=plain.mov_image,
+    )
     assert methods.run_case("stare", case, tmp_path) == []
     run = run_json(tmp_path, "stare", case)
     assert run["ok"] is False and run["cause"] == "exception"

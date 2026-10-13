@@ -551,8 +551,10 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
             billing.attempt(billing.GOOD, cpus, mem, wall, cpu, run.get("launch_id"))
         )
         good_jobs = [run.get("launch_id") or ""]
-    elif run.get("cause") != "not_run" and wall == wall:
-        # this row's own last attempt, which registered nothing
+    elif run.get("cause") != "not_run" and wall == wall and not (stage and stage[0]):
+        # this row's own last attempt, which registered nothing (a round billed from its
+        # stage records below is not also billed its last job's clock, as a round that
+        # holds their summary is not)
         attempts.append(
             billing.attempt(own_kind, cpus, mem, wall, cpu, run.get("launch_id"))
         )

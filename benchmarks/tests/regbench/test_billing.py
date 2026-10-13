@@ -667,9 +667,13 @@ def test_a_staged_round_without_its_summary_is_billed_from_its_stage_records(
         assert row["wasted_cpu_h_reserved"] == pytest.approx(40 / H)
         assert row["total_cpu_h_reserved"] == pytest.approx(40 / H)
     # a method that is one process is never looked up
-    plain = {**score.resource_row(single(ok=False, cause="killed")), **base}
+    plain = {
+        **score.resource_row(single(ok=False, cause="killed")),
+        **base,
+        "method": "palom",
+    }
     before = dict(plain)
-    score.bill_from_disk([{**plain, "method": "palom"}], out, [case], {})
+    score.bill_from_disk([plain], out, [case], {})
     assert plain == before
 
 

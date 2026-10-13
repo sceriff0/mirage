@@ -473,9 +473,9 @@ submit() {
     if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$score_only" != 1 ]; then
         echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
     fi
-    [ -z "$PENDING_EXIT" ] || exit "$PENDING_EXIT"
     printf '%s\t%s\n' "$name" "$JOB_ID"
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$name" "$JOB_ID" >> "$JOBS_FILE"
+    [ -z "$PENDING_EXIT" ] || exit "$PENDING_EXIT"
 }
 # refused <job name> <the scheduler's words>: an sbatch that did not go through. The
 # jobs before it, if any, ARE queued, and some of them wait for jobs that will never
@@ -619,7 +619,7 @@ if [ "$prepare" = 1 ]; then
                 # kept beside the cases it made: the score job reads it from there for
                 # attrition.csv, in a later call that no longer has REGBENCH_MANIFEST
                 if [ "$DRY" != 1 ]; then
-                    { mkdir -p "$REGBENCH_CASES" && cp "$REGBENCH_MANIFEST" "$REGBENCH_CASES/manifest.csv"; } \
+                    { mkdir -p "$REGBENCH_CASES" && { [ "$REGBENCH_MANIFEST" -ef "$REGBENCH_CASES/manifest.csv" ] || cp "$REGBENCH_MANIFEST" "$REGBENCH_CASES/manifest.csv"; }; } \
                         || die "--prepare: cannot copy the manifest $REGBENCH_MANIFEST to $REGBENCH_CASES/manifest.csv. Nothing was submitted."
                 fi
                 # the bare nuclei of every native slide first: what exists is checked,
