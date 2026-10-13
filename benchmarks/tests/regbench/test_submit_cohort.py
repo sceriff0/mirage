@@ -279,12 +279,40 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
 
     copy = tmp_path / "slurm_script"
     shutil.copy(SLURM / "launch.sbatch", copy)
-    argv, base, _ = _launch_command(site, (), None, True, "viajob")
+    # a site config of made-up values: the GPU request and the bound folders are READ
+    # from it; comment lines are not
+    config = tmp_path / "site.config"
+    config.write_text(
+        "params {\n    // gpu_type = 'never:9'\n    gpu_type   = 'card_x:1'\n}\n"
+        "singularity {\n    runOptions = '--writable-tmpfs --bind /a/b --bind /c/d'\n}\n"
+    )
+    env = {
+        "REGBENCH_SBATCH_GPU": None,
+        "REGBENCH_CASES": None,
+        "REGBENCH_OUT": None,
+        "REGBENCH_SITE_CONFIG": str(config),
+    }
+    argv, base, _ = _launch_command(site, (), env, True, "viajob")
     argv[1] = str(copy)
-    base = {**base, "SLURM_SUBMIT_DIR": str(REPO)}
+    root = tmp_path / "root"
+    shutil.copytree(site[1], root / "cases")
+    base = {**base, "SLURM_SUBMIT_DIR": str(REPO), "REGBENCH_ROOT": str(root)}
+    base.pop("REGBENCH_RUN_ORDER")
     done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=tmp_path)
     assert done.returncode == 0, done.stderr
-    assert sorted(jobs_of(done)) == sorted(dry[0])
+    jobs = jobs_of(done)
+    assert sorted(jobs) == sorted(dry[0])
+    # the settings inside the script reached the launcher: lanes, the site's GPU
+    # request, the results under the one folder, the default order
+    assert "GPU request --gres=gpu:card_x:1, 2 folder(s) bound" in done.stdout
+    assert f"results {root}/out" in done.stdout
+    assert any("--gres=gpu:card_x:1" in j.words for j in jobs.values())
+    assert not any("never" in w for j in jobs.values() for w in j.words)
+    assert _ladder_order(jobs)[0] != list(RUNS)[0]
+    laned = [j for j in jobs.values() if j.script == "run_rung.sbatch"]
+    assert max(len(j.deps) for j in laned) > max(
+        len(j.deps) for j in dry[0].values() if j.script == "run_rung.sbatch"
+    )
     lost = subprocess.run(
         argv,
         env={**base, "SLURM_SUBMIT_DIR": str(tmp_path)},
@@ -296,6 +324,20 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
     assert not _sbatch_lines(lost.stdout)
     head = (SLURM / "launch.sbatch").read_text()
     assert "\n#SBATCH --export=ALL\n" in head
+
+
+def test_an_image_without_a_container_runtime_is_said(site):
+    """An image is named and neither runtime is on PATH: the launch stops WITH a line
+    (it stopped without one: the lookup failed under `set -e`)."""
+    import shutil
+
+    if shutil.which("apptainer") or shutil.which("singularity"):
+        pytest.skip("a container runtime is on PATH here")
+    done, log, _ = launch(
+        site, env={"REGBENCH_SIF_STARE_REGBENCH": "/images/x.sif"}, log="noruntime"
+    )
+    assert done.returncode != 0 and not _sbatch_lines(done.stdout) and not log.exists()
+    assert "neither apptainer nor singularity is on PATH" in done.stderr
 
 
 def test_the_environment_switch_is_the_same_dry_run(site, dry):

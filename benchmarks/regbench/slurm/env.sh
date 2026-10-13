@@ -178,7 +178,13 @@ regbench_exec() (
     cd "$REGBENCH_REPO" || return 1
     if [ -n "$sif" ]; then
         local runtime bind v nv=() tmpfs=()
-        runtime="$(command -v apptainer || command -v singularity)"
+        # no runtime is said, never a bare exit: a caller under `set -e` would stop
+        # here without a word (the modules of a login shell are not a job's)
+        runtime="$(command -v apptainer || command -v singularity || true)"
+        if [ -z "$runtime" ]; then
+            echo "regbench: neither apptainer nor singularity is on PATH here ($(hostname)), and $method runs in the image $sif. Load the site's container module before the call (a job has not the modules of a login shell)." >&2
+            return 127
+        fi
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # the StarDist re-run of the bare nuclei reads the site's model and writes here
         bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"
