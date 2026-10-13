@@ -198,8 +198,18 @@ def jobs_of(done):
     return {j.name: j for j in map(Job, _sbatch_lines(done.stdout))}
 
 
+LATER = "# later, only after a failure: "
+
+
 def _sbatch_lines(text):
     return [ln for ln in text.splitlines() if ln.startswith("sbatch ")]
+
+
+def later_of(done):
+    """The retry steps a dry run prints and does NOT submit: the plans of the chains'
+    watchers (retry.sbatch), by job name."""
+    lines = [ln[len(LATER) :] for ln in done.stdout.splitlines() if ln.startswith(LATER)]
+    return {j.name: j for j in map(Job, lines)}
 
 
 @pytest.fixture(scope="module")
@@ -274,6 +284,7 @@ def test_a_dry_run_submits_nothing(dry):
     assert {p.name for p in SLURM.glob("*.sbatch") if "sbatch " in code_of(p)} == {
         "feed_tiles.sbatch",
         "launch.sbatch",
+        "retry.sbatch",  # a chain's watcher: the retries, after a failure
     }
     launch_code = code_of(SLURM / "launch.sbatch")
     assert not re.search(r"(^|[;&|(]\s*)sbatch\s", launch_code, re.M)

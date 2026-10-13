@@ -97,6 +97,12 @@ KILLED = "killed"
 INFRASTRUCTURE = "infrastructure"
 FIRST, CLIMB, AGAIN = "first", "climb", "again"
 TASKS = (FIRST, CLIMB, AGAIN)
+# What the chain's watcher (slurm/retry.sbatch) reads off a unit's last end line before it
+# SUBMITS a step for it: a filter, never the decision (the task decides, unit_decision).
+# A unit whose last cause is in neither list is not put in the queue again; a unit with
+# no end line at all (its task died or never started) is taken by every step.
+AGAIN_CAUSES = (KILLED, INFRASTRUCTURE)
+CLIMB_CAUSES = (OOM, "writer_oom", "benchmark_oom", KILLED, INFRASTRUCTURE)
 # sacct's State, matched by its first word ("CANCELLED by 123", "OUT_OF_MEMORY+" are
 # seen: the manual says a state too long for its column is followed by "+"). The names
 # are those of the SLURM `sacct` manual's JOB STATE CODES `[PARTIAL: read the JOB STATE

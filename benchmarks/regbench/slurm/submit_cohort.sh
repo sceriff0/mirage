@@ -45,12 +45,15 @@
 #   2. per run: a gate job (`regbench gate`). It fails when the selfcheck that gates the
 #      run is anything but ok, and then THAT run alone never starts. The rows it says to
 #      drop are collected for the scorer.
-#   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 GB at 4 CPUs, as
-#      EIGHT job arrays, two per rung, each waiting for the one before (`afterany`): the
-#      attempt at that rung, then `-again`, the same rung once more, which runs a unit
-#      only when its attempt was lost to the scheduler (node failure, preemption, a
-#      cancelled job, a task that never started). A task of a rung above the first
-#      exits at once unless its unit's last run.json names a memory cause. One task is
+#   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 GB at 4 CPUs. ONE
+#      array is submitted here, the 16 GB attempt, and one small job after it, the
+#      ladder's watcher (retry.sbatch). A RETRY IS SUBMITTED ONLY AFTER A FAILURE: the
+#      watcher submits the same rung once more for a unit the scheduler lost (node
+#      failure, preemption, a cancelled job, a task that never started) and the next
+#      rung for a unit that ran out of memory, as an array of those units alone, one
+#      step after the other. A ladder whose units are all ok puts nothing more in the
+#      queue. A task of a later step still decides for itself and exits at once unless
+#      its unit's last run.json names the cause that step retries. One task is
 #      one case for a run that works per pair and one patient for a run that works per
 #      patient. A run that reads another's results waits for that run's last array on
 #      the same dataset. A unit whose results are all ok already (an earlier
@@ -959,11 +962,52 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
 done < "$table"
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
-# ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: two arrays per
-# rung (the attempt, then the same rung again for a unit the scheduler lost), each after
-# the one before; sets LADDER_LAST. Reads the current row's variables. Every task is
-# given the ids of all the ladder's earlier jobs: it asks the scheduler what became of
-# its unit in each.
+# RETRIES ARE SUBMITTED AFTER A FAILURE, NEVER BEFORE IT. Of a chain (a memory ladder, the
+# attempts of a stage) only the FIRST array is submitted here, with one small job after
+# it, the chain's watcher (retry.sbatch). The other steps are written down as a plan
+# (plan_step: $REGBENCH_OUT/logs/retry/<submission>/<job prefix>/step-<k>), and the
+# watcher submits a step only for the units whose last task failed in a way that step
+# retries, then waits for it. A chain whose units are all ok puts nothing more in the
+# queue. Everything that waited for a chain's last array waits for its watcher.
+N_LATER=0 PLAN="" PLAN_SHOWN="" PLAN_N=0
+plan_open() {  # plan_open <job prefix>
+    PLAN_N=0
+    PLAN_SHOWN="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION/$1"
+    PLAN="$PLAN_SHOWN"
+    if [ "$DRY" = 1 ]; then
+        PLAN="$scratch/retry/$1"
+        PLAN_SHOWN="$REGBENCH_OUT/logs/retry/<submission>/$1"
+    fi
+    rm -rf "$PLAN"
+    mkdir -p "$PLAN" || die "cannot write the retry plan $PLAN. Nothing more is submitted."
+}
+plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
+    local kind="$1" jobname="$2"; shift 2
+    PLAN_N=$((PLAN_N + 1))
+    N_LATER=$((N_LATER + 1))
+    printf '%s\n' "$kind" "$jobname" "$@" > "$PLAN/step-$PLAN_N"
+    if [ "$DRY" = 1 ]; then
+        printf '# later, only after a failure: sbatch --parsable --job-name=%s' "$jobname"
+        printf ' %s' "$@"
+        printf '\n'
+    fi
+}
+# plan_watch <job prefix> <first job id> <first job name> <array range> <dependencies of
+# the first array>: the chain's watcher; sets JOB_ID. It has the first array's own
+# dependencies too, so a chain a gate stops has no watcher either.
+plan_watch() {
+    local dep="afterany:$2"
+    [ -z "$5" ] || dep="$5,$dep"
+    submit "$1-retry" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
+        --cpus-per-task=1 --mem=1G --time="$(limit "$MAX_SECONDS")" \
+        "$HERE/retry.sbatch" "$name" "$PLAN_SHOWN" "$2" "$3" "$4"
+}
+
+# ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: the first
+# rung's array, then the plan of the others (per rung the attempt, then the same rung
+# again for a unit the scheduler lost) and the watcher; sets LADDER_LAST to the watcher.
+# Reads the current row's variables. Every later task is given the ids of all the
+# ladder's earlier jobs: it asks the scheduler what became of its unit in each.
 # With a sixth argument `jobs` (a run whose registration is several jobs per round) this
 # is each round's LAST job: it holds the benchmark's own work (the points, the tissue
 # reduction), so it has the benchmark's allocation, the same ladder, and inside it the
@@ -972,9 +1016,10 @@ done < "$table"
 # four attempts.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
-    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB"
+    local attempt=0 gb task jobname cpus="$CPUS" rungs="$RUNGS_GB" first_id="" first_name=""
     # STITCH_S: the writer's four attempts, summed before the first sbatch
     [ "$staged" = - ] || time="$(limit $((round_s + STITCH_S)))"
+    plan_open "$prefix"
     for gb in $rungs; do
         attempt=$((attempt + 1))
         for task in attempt again; do
@@ -986,17 +1031,27 @@ ladder() {
             else
                 task=climb
             fi
-            dep="$base"
-            [ -z "$earlier" ] || dep="$dep,afterany:${earlier##*,}"
-            submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-                --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
+            if [ "$task" = first ]; then
+                # the one array of the chain that is submitted here
+                submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$base" \
+                    --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
+                    --time="$time" ${gres[@]+"${gres[@]}"} \
+                    "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
+                    "$ds" "$attempt" "$gb" "$real" - "$task" "$time" "$staged"
+                first_id="$JOB_ID" first_name="$jobname"
+                continue
+            fi
+            # every other one is a step of the plan: submitted by the chain's watcher,
+            # after a failure, for the units that failed
+            plan_step "$task" "$jobname" "${COMMON[@]}" "$LOG_ARRAY" \
+                --cpus-per-task="$cpus" --mem="${gb}G" \
                 --time="$time" ${gres[@]+"${gres[@]}"} \
                 "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
-                "$ds" "$attempt" "$gb" "$real" "${earlier:--}" "$task" "$time" "$staged"
-            earlier="${earlier:+$earlier,}$JOB_ID"
+                "$ds" "$attempt" "$gb" "$real" "@EARLIER@" "$task" "$time" "$staged"
         done
     done
-    LADDER_LAST="${earlier##*,}"
+    plan_watch "$prefix" "$first_id" "$first_name" "$range" "$base"
+    LADDER_LAST="$JOB_ID"
 }
 
 # staged <dependencies>: the jobs of a run whose registration is several scheduler jobs
@@ -1004,8 +1059,10 @@ ladder() {
 # (`regbench stages --allocation`, benchmarks/regbench/stages.py), every job after the one
 # before it (`afterany`); sets LADDER_LAST to the last job of the last stage. Reads the
 # current row's variables.
-#   prep, coarse, solve   four arrays over the rounds, one per attempt: attempt 1 runs
-#                         the stage; 2 to 4 exit at once unless the attempt before ended
+#   prep, coarse, solve   attempt 1 as an array over the rounds, and the stage's
+#                         watcher (retry.sbatch): attempts 2 to 4 are submitted by it,
+#                         only for the rounds whose attempt before was not ok, and
+#                         such a task still exits at once unless that attempt ended
 #                         the way the pipeline retries
 #   tile                  NOT submitted here: REGBENCH_STAGE_FEEDERS tile submitters
 #                         (feed_tiles.sbatch), one after the other. The first submits
@@ -1020,15 +1077,24 @@ ladder() {
 #                         benchmark's memory ladder: it collects the stage records, moves
 #                         the benchmark's points, and runs the writer as its own process
 stage_chain() {
-    local stage="$1" range="$2" dep="$3" attempt alloc cpus gb time
+    local stage="$1" range="$2" dep="$3" attempt alloc cpus gb time first_id="" first_name=""
+    plan_open "rb-$name-$ds-$stage"
     for attempt in 1 2 3 4; do
         alloc="ALLOC_${stage}_$attempt"; read -r cpus gb time <<< "${!alloc}"
-        submit "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
-            --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
+        if [ "$attempt" = 1 ]; then
+            submit "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+                --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
+                "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" "$ds" "$stage" \
+                "$attempt" "$gb" "$time"
+            first_id="$JOB_ID" first_name="rb-$name-$ds-$stage-a$attempt"
+            continue
+        fi
+        plan_step stage "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" \
+            --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
             "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" "$ds" "$stage" \
             "$attempt" "$gb" "$time"
-        dep="$base,afterany:$JOB_ID"
     done
+    plan_watch "rb-$name-$ds-$stage" "$first_id" "$first_name" "$range" "$dep"
 }
 staged() {
     local base="$1" layout n_rounds n_tiles stage dep alloc cpus gb time
@@ -1195,6 +1261,7 @@ else
         --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 fi
 
+[ "$N_LATER" = 0 ] || echo "# retries: none is in the queue. Up to $N_LATER retry array(s) are written down as plans ($REGBENCH_OUT/logs/retry/) and submitted by the chains' watchers (retry.sbatch) only after a failure, for the units that failed"
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
 if [ "$N_FED" -gt 0 ]; then
     n_fed_runs="$(wc -w <<< "$FED_RUNS" | tr -d ' ')"
