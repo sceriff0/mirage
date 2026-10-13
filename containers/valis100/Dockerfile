@@ -12,9 +12,8 @@
 # of the base, and smoke.sh fails the build if any line of that freeze is different
 # afterwards.
 #
-# WHAT WAS NOT CHECKED. No Docker daemon ran where this file was written: the base's
-# Python, numpy and tifffile versions were not read. The build is where the pins are
-# first shown to install on them, and smoke.sh where they are first shown to work.
+# UPSTREAM'S STACK, as its first build here showed it (2026-10-13): Python 3.10, numpy
+# 1.23.5. That numpy is why zarr is 2.17.2 and not the repository's 2.18.3.
 #
 # DIGEST-PINNED: the digest modules/local/register.nf runs.
 FROM cdgatenbee/valis-wsi:1.0.0@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
@@ -26,22 +25,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # The build context is the REPOSITORY ROOT. requirements/stare.txt is copied for ONE line,
 # STARE's pin, so that its version is still written exactly once in this repository.
-COPY requirements/constraints.txt requirements/stare.txt requirements/valis100.txt /tmp/requirements/
+COPY requirements/stare.txt requirements/valis100.txt /tmp/requirements/
 
 # The freeze of upstream's stack, taken BEFORE anything is added and kept in the image
 # (/opt/mirage/upstream-freeze.txt): the first constraint of the install, and what
 # smoke.sh compares the final stack with.
 #
 # UPSTREAM WINS. The base's versions were not read where this was written, so a line of
-# requirements/constraints.txt or of requirements/valis100.txt that names a distribution
+# requirements/valis100.txt that names a distribution
 # the base ALREADY HOLDS is dropped before the install (the awk below, on normalised
-# names): the harmonised pins apply to what is added and never ask upstream's stack to
-# move. /opt/mirage/dropped-pins.txt keeps what was dropped, and the build prints it.
+# names): the pins apply to what is added and never ask upstream's stack to move
+# (requirements/constraints.txt is not read here: valis100.txt says why). /opt/mirage/dropped-pins.txt keeps what was dropped, and the build prints it.
 RUN PY="$(command -v python || command -v python3)" \
     && mkdir -p /opt/mirage \
     && "$PY" -m pip freeze --all | grep -E '^[A-Za-z0-9._-]+==[^ ]+$' | LC_ALL=C sort > /opt/mirage/upstream-freeze.txt \
     && test -s /opt/mirage/upstream-freeze.txt \
-    && for f in constraints valis100; do \
+    && for f in valis100; do \
          awk -F'==' -v dropped=/opt/mirage/dropped-pins.txt \
            'NR==FNR { n=tolower($1); gsub(/[._]/,"-",n); held[n]=1; next } \
             /^[A-Za-z0-9]/ { n=tolower($1); gsub(/[._]/,"-",n); if (n in held) { print FILENAME ": " $0 >> dropped; next } } \

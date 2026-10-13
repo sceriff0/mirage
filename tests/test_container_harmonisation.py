@@ -140,6 +140,13 @@ PINNED_EXCEPTIONS = {
     # containers/palom, the registration benchmark's PALOM image (Python 3.10, a complete
     # pin file, no constraints.txt). The first two are PALOM's own caps (PyPI
     # palom==2026.4.1, requires_dist); the last two follow from them and say how.
+    # containers/valis100: upstream's VALIS 1.0.0 image holds numpy 1.23.5, which this image
+    # does not move, and zarr 2.18.3 requires numpy>=1.24 (pip's own message in the image's
+    # first build, 2026-10-13). 2.17.2 requires numpy>=1.23.
+    ("valis100", "zarr"): (
+        "2.17.2",
+        "zarr 2.18.3 requires numpy>=1.24; upstream's VALIS 1.0.0 image holds numpy 1.23.5",
+    ),
     ("palom", "scikit-image"): (
         "0.19.3",
         "palom 2026.4.1 requires scikit-image>=0.18,<0.20",
