@@ -129,6 +129,8 @@ from ..mapping import REF_TO_MOV, PointMap
 SCOPE = "pair"
 VARIANTS = ("deeperhistreg", "deeperhistreg_asdrawn")
 VERSION = "1.0.1"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = ("config", "device", "fluo")
 DIRECTION = REF_TO_MOV
 METHOD = "RegWSI (Wodzinski et al. 2024, doi:10.1016/j.cmpb.2024.108187)"
 # factory -> the resolution (short side, px) of the RegWSI paper's ablation it stands at

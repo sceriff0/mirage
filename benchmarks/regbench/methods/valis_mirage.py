@@ -109,6 +109,8 @@ VARIANTS = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
 RIGID, NONRIGID, FINAL = VARIANTS
 SELFCHECK_SUBPROCESS = True  # valis_registration kills the JVM, which cannot restart
 VERSION = "1.0.0"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = ("points", "crop_round", "any_version", "jvm_heap_gb")
 # The shipped call (module docstring). tests/regbench/test_valis_adapters.py checks that
 # ARGS and RUN_ARGS together are exactly the parameters of valis_registration.
 ARGS = {

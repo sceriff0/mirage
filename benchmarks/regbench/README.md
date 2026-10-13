@@ -140,6 +140,10 @@ runs per patient). `--label NAME` renames a method's variants
 `python -m benchmarks.regbench runs [--header] [--all]` prints what the cohort is
 registered with: one tab-separated line per run, in a documented column order that only
 ever grows at the end (the module's docstring; `-` for "none", never an empty field).
+A run's options are `--opt key=value` items, and a key its method does not read is
+refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
+does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
+`stage_images`): a mistyped option is never a default run under another name.
 18 runs, 35 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
 names and opens its summary on the six primary rows:
 

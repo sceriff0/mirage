@@ -91,6 +91,8 @@ VARIANT_LABELS = {
 }
 SELFCHECK_SUBPROCESS = True  # VALIS kills its JVM, which cannot restart in a process
 VERSION = "1.2.0"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = ("hires", "points", "crop_round", "any_version", "jvm_heap_gb")
 MICRO_REG_FRACTION = 0.25  # docs/examples.rst:134 at v1.2.0
 CHANNEL = "dapi"  # registration.DEFAULT_FLOURESCENCE_PROCESSING_ARGS
 WRITER = "valis.registration.Valis.warp_and_save_slides"

@@ -102,6 +102,17 @@ from . import require_fluorescence
 SCOPE = "group"
 VARIANTS = ("ashlar",)
 VERSION = "1.20.0"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = (
+    "noise",
+    "affine",
+    "affine_from",
+    "m0_from",
+    "out",
+    "tiles_cache",
+    "keep_mosaic",
+    "any_version",
+)
 SELFCHECK_REF_DOTS = True
 
 # Frozen: changing one after a cohort run is a post hoc change.

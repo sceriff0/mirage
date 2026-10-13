@@ -126,6 +126,8 @@ from .. import imageio, ladder, prep, resources, stages
 from ..mapping import MOV_TO_REF, PointMap
 
 SCOPE = "pair"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = ("prep", "stride", "tile", "halo", "out_tile", "max_dim", "model", "max_disp")
 VARIANTS = ("stare_rigid", "stare")
 REF_NAME, MOV_NAME = "reference", "moving"
 # STITCH needs a pixel size for the header of the image it writes and uses it for nothing

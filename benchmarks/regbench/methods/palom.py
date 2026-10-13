@@ -110,6 +110,8 @@ from . import require_fluorescence
 SCOPE = "pair"
 VARIANTS = ("palom_affine", "palom")
 VERSION = "2026.4.1"
+# the `--opt` keys this adapter reads (methods.known_options): any other is refused
+OPTIONS = ("preread",)
 DIRECTION = REF_TO_MOV
 SOURCE = "labsyspharm/palom v2026.4.1 (PyPI palom==2026.4.1)"
 LEVEL = 0

@@ -361,13 +361,39 @@ def variant_names(method, label=None):
     return [v.replace(name, label, 1) for v in names] if label else list(names)
 
 
-def parse_opts(pairs):
+# `--opt` keys every method takes: the driver's own
+COMMON_OPTIONS = ("workers", "stage_images")
+
+
+def known_options(method):
+    """The ``--opt`` keys ``method`` reads: the driver's own and the adapter's
+    ``OPTIONS`` (a module constant; a public adapter without one has no option of its
+    own). None for a private plug-in that declares none: its keys are not known here,
+    and are not checked."""
+    mod = load(method)
+    own = getattr(mod, "OPTIONS", None)
+    if own is None and isinstance(method, str) and method not in METHODS:
+        return None
+    return tuple(dict.fromkeys((*COMMON_OPTIONS, *(own or ()))))
+
+
+def parse_opts(pairs, method=None):
+    """``{key: value}`` of ``--opt key=value`` items. With ``method``: a key that the
+    method does not read is refused here, before any work (it would otherwise be
+    ignored, and the run would be the default one under another name)."""
     out = {}
     for p in pairs or []:
         if "=" not in p:
             raise SystemExit(f"--opt wants key=value, got {p!r}")
         k, v = p.split("=", 1)
         out[k.strip()] = v.strip()
+    known = known_options(method) if method is not None else None
+    unknown = sorted(set(out) - set(known)) if known is not None else []
+    if unknown:
+        raise SystemExit(
+            f"--opt {', '.join(unknown)}: not an option of {method_name(method)}, "
+            f"which reads: {', '.join(known)}. Nothing was run."
+        )
     return out
 
 

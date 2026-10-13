@@ -781,3 +781,44 @@ def test_the_realcheck_gates_the_primary_rows_of_the_two_valis_adapters(capsys):
 def test_runs_names_the_image_the_scorer_runs_in(capsys):
     assert cli.main(["runs", "--scorer-image"]) == 0
     assert capsys.readouterr().out.split() == [variants.SCORER_IMAGE]
+
+
+# ── an option no method reads is refused ──────────────────────────────────────
+def test_every_run_passes_only_options_its_adapter_reads():
+    import re
+    from pathlib import Path
+
+    runs = [*variants.RUNS, *getattr(variants, "TUNING_RUNS", ())]
+    assert runs
+    for run in runs:
+        items = [f"{k}={v}" for k, v in (run.opts or {}).items()]
+        assert methods.parse_opts(items, run.method) == dict(run.opts or {})
+    # the constant is what the adapter's own code reads (the driver's keys aside)
+    folder = Path(methods.__file__).parent
+    internal = {"label", "monitor", "native_dir", *methods.COMMON_OPTIONS}
+    shared = {"valis": "_valis_points.py", "valis_mirage": "_valis_points.py"}
+    for name in ("stare", "valis", "valis_mirage", "deeperhistreg", "ashlar", "palom"):
+        code = (folder / f"{name}.py").read_text()
+        code += (folder / shared[name]).read_text() if name in shared else ""
+        read = set(re.findall(r"opts(?:\.get\(|\[)\s*[\"'](\w+)[\"']", code)) - internal
+        assert read <= set(methods.known_options(name)), (name, read)
+    assert methods.known_options("initial") == methods.COMMON_OPTIONS
+    assert set(methods.load("stare")._FLAGS) <= set(methods.known_options("stare"))
+
+
+def test_an_option_the_method_does_not_read_is_refused_before_any_work(tmp_path):
+    with pytest.raises(SystemExit) as stop:
+        methods.parse_opts(["blok=1024", "preread=1"], "palom")
+    assert (
+        "--opt blok: not an option of palom, which reads: workers, stage_images, "
+        in (str(stop.value))
+    )
+    assert "preread" in str(stop.value) and "Nothing was run." in str(stop.value)
+    assert methods.parse_opts(["workers=2"], "initial") == {"workers": "2"}
+    assert methods.parse_opts(["anything=1"]) == {"anything": "1"}  # no method named
+    with pytest.raises(SystemExit, match="--opt stirde: not an option of stare"):
+        cli.main(
+            ["run", "--cases", str(tmp_path), "--out", str(tmp_path / "o"), "--dataset",
+             "multiplex", "--method", "stare", "--index", "0", "--opt", "stirde=128"]
+        )  # fmt: skip
+    assert not (tmp_path / "o").exists()

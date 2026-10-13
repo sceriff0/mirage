@@ -897,6 +897,8 @@ def _run(a):
     from .cases import groups, list_cases
     from .methods import parse_opts, run_case, run_group, scope_of
 
+    # an option the method does not read: refused before anything is looked at
+    opts = parse_opts(a.opt, a.method)
     cases = list_cases(a.cases, a.dataset)
     by_group = groups(cases)
     per_patient = scope_of(a.method) == "group"
@@ -971,7 +973,6 @@ def _run(a):
         if not go:
             _unit_end(a, picked)
             return 0
-    opts = parse_opts(a.opt)
     rest = (opts, a.label, a.work, a.keep_work)
     more = {"realcheck": a.realcheck, "resume": not a.force}
     if per_patient or a.group is not None:
@@ -998,7 +999,7 @@ def _run(a):
 def _stage_opts(a):
     from .methods import parse_opts
 
-    opts = parse_opts(a.opt)
+    opts = parse_opts(a.opt, a.method)
     opts["label"] = a.label or ""
     return opts
 
@@ -1200,7 +1201,7 @@ def _selfcheck(a):
     record = selfcheck.run(
         a.method,
         a.work,
-        parse_opts(a.opt),
+        parse_opts(a.opt, a.method),
         a.label,
         a.mask,
         a.m0_from,
