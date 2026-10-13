@@ -91,8 +91,8 @@ def probe(tmp_path, switch, with_plugin=True):
 
 
 def public(got):
-    assert got["counts"] == [19, 4, 7] and got["expected"] == 37
-    assert got["table_rows"] == 19 and not got["loaded"]
+    assert got["counts"] == [18, 4, 7] and got["expected"] == 35
+    assert got["table_rows"] == 18 and not got["loaded"]
     assert "fakeprivate" not in got["cli_methods"] + got["seam_owners"] + got["names"]
     assert not got["sizes"] and got["family"] is None and not got["cost_columns"]
 
@@ -109,9 +109,9 @@ def test_with_the_switch_and_no_plugin_nothing_changes(tmp_path):
 def test_an_enabled_plugin_is_picked_up_everywhere(tmp_path):
     got = probe(tmp_path, "1")
     assert got["loaded"]
-    assert got["counts"] == [21, 4, 7] and got["expected"] == 39
+    assert got["counts"] == [20, 4, 7] and got["expected"] == 37
     assert got["names"][-2:] == ["fakeprivate", "fakeprivate_r2"]
-    assert got["table_rows"] == 21
+    assert got["table_rows"] == 20
     assert got["cli_methods"][-1] == "fakeprivate"
     assert got["seam_owners"][-1] == "fakeprivate" and got["sizes"]
     assert got["family"] == "fakeprivate" and got["gated_by"] == "fakeprivate"
@@ -139,12 +139,12 @@ def test_the_runs_command_lists_a_plugin_run_only_when_enabled(tmp_path):
 
     off = runs({"REGBENCH_PRIVATE_DIR": str(folder)})
     on = runs({"REGBENCH_PRIVATE_DIR": str(folder), "REGBENCH_PRIVATE": "1"})
-    assert len(off) == 19 and on[:19] == off
-    assert [r[0] for r in on[19:]] == ["fakeprivate", "fakeprivate_r2"]
+    assert len(off) == 18 and on[:18] == off
+    assert [r[0] for r in on[18:]] == ["fakeprivate", "fakeprivate_r2"]
     assert (
-        on[19][4] == "FAKE_IMAGE"
-        and on[19][9] == "seams"
-        and on[20][8] == "fakeprivate"
+        on[18][4] == "FAKE_IMAGE"
+        and on[18][9] == "seams"
+        and on[19][8] == "fakeprivate"
     )
 
 
