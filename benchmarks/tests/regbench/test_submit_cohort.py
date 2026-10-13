@@ -269,10 +269,15 @@ def test_a_dry_run_submits_nothing(dry):
     assert all("--wait" not in j.words for j in jobs.values())
     for path in [SCRIPT, *SLURM.glob("*.sbatch")]:
         assert "--wait" not in code_of(path), path.name
-    # ONE kind of job submits jobs: the tile submitter
+    # ONE kind of job submits jobs on its own: the tile submitter. launch.sbatch is the
+    # launcher itself run as a job (it names sbatch in what it prints, and calls none)
     assert {p.name for p in SLURM.glob("*.sbatch") if "sbatch " in code_of(p)} == {
-        "feed_tiles.sbatch"
+        "feed_tiles.sbatch",
+        "launch.sbatch",
     }
+    launch_code = code_of(SLURM / "launch.sbatch")
+    assert not re.search(r"(^|[;&|(]\s*)sbatch\s", launch_code, re.M)
+    assert 'exec bash "$launcher" "$@"' in launch_code
 
 
 def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
