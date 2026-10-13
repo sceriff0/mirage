@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.regbench import ladder, stages, variants
+from benchmarks.regbench import ladder, resources, stages, variants
 from benchmarks.regbench.cases import Case, write_json
 
 REPO = Path(__file__).resolve().parents[3]
@@ -36,7 +36,7 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
-N_JOBS = 425  # sbatch calls of the default submission on the fixture
+N_JOBS = 177  # sbatch calls of the default submission on the fixture
 # the last job of a staged round has the benchmark's ladder (its own work is in it)
 STITCH_GB = ladder.RUNGS_GB
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
@@ -193,9 +193,23 @@ class Job:
         return out
 
 
+class Jobs(dict):
+    """The jobs a dry run would submit, by name. ``later``: the retry steps it prints
+    and does not submit (the plans of the chains' watchers)."""
+
+    later: dict
+
+
 def jobs_of(done):
     assert done.returncode == 0, done.stderr + done.stdout
-    return {j.name: j for j in map(Job, _sbatch_lines(done.stdout))}
+    jobs = Jobs({j.name: j for j in map(Job, _sbatch_lines(done.stdout))})
+    jobs.later = later_of(done)
+    return jobs
+
+
+def _any(jobs, name):
+    """A job by name, submitted or planned for later."""
+    return jobs[name] if name in jobs else getattr(jobs, "later", {})[name]
 
 
 LATER = "# later, only after a failure: "
@@ -208,7 +222,9 @@ def _sbatch_lines(text):
 def later_of(done):
     """The retry steps a dry run prints and does NOT submit: the plans of the chains'
     watchers (retry.sbatch), by job name."""
-    lines = [ln[len(LATER) :] for ln in done.stdout.splitlines() if ln.startswith(LATER)]
+    lines = [
+        ln[len(LATER) :] for ln in done.stdout.splitlines() if ln.startswith(LATER)
+    ]
     return {j.name: j for j in map(Job, lines)}
 
 
@@ -227,33 +243,35 @@ def _last(run, suffix):
 
 
 def rungs(jobs, run, dataset="multiplex", suffix=""):
-    """The attempt of each rung (the `-again` arrays are `agains`). For a run that is
-    several jobs per round: the rungs of its last job."""
+    """The attempt of each rung (the `-again` arrays are `agains`): the first is
+    submitted, the others are steps of the watcher's plan. For a run that is several
+    jobs per round: the rungs of its last job."""
     tail = _last(run, suffix)
-    return [jobs[f"rb-{run}-{dataset}{tail}-{gb}g"] for gb in rung_gb(run)]
+    return [_any(jobs, f"rb-{run}-{dataset}{tail}-{gb}g") for gb in rung_gb(run)]
 
 
 def agains(jobs, run, dataset="multiplex", suffix=""):
     tail = _last(run, suffix)
-    return [jobs[f"rb-{run}-{dataset}{tail}-{gb}g-again"] for gb in rung_gb(run)]
+    return [_any(jobs, f"rb-{run}-{dataset}{tail}-{gb}g-again") for gb in rung_gb(run)]
 
 
 def last_job(run, dataset="multiplex"):
     """The name of the last job a run submits on a dataset: what a run that reads its
     results, the next dataset, the next run of its lane and the settle job wait for."""
-    return f"rb-{run}-{dataset}{_last(run, '')}-{rung_gb(run)[-1]}g-again"
+    return f"rb-{run}-{dataset}{_last(run, '')}-retry"
 
 
 def launch_jobs(spec):
     """How many jobs the launcher submits for one run on one dataset, after its gate:
-    the ladder's eight, or for a run in several jobs per round four attempts of each
-    stage that is an array over the rounds, its tile submitters, and the last job's
-    eight."""
+    the ladder's first array and its watcher, or for a run in several jobs per round
+    the first attempt and the watcher of each stage that is an array over the rounds,
+    its tile submitters, and the last job's first array and watcher. No retry is
+    among them."""
     names = variants.stages_of(spec)
     if not names:
-        return 2 * len(ladder.RUNGS_GB)
+        return 2
     arrays = sum(st in names for st in ("prep", "coarse", "solve"))
-    return 4 * arrays + FEEDERS + 2 * len(STITCH_GB)
+    return 2 * arrays + FEEDERS + 2
 
 
 def first_rung(spec, dataset):
@@ -542,14 +560,30 @@ def test_every_rung_is_tried_again_once_at_the_same_memory(dry):
         first, again = rungs(jobs, run), agains(jobs, run)
         for a, b in zip(first, again):
             assert b.opt("--mem") == a.opt("--mem") and b.args[7:9] == a.args[7:9]
-            assert b.opt("--array") == a.opt("--array") and b.args[11] == "again"
+            assert b.args[11] == "again"
             assert b.opt("--time") == a.opt("--time") == a.args[12] == b.args[12]
         seq = chain(jobs, run)
-        for i, (lower, upper) in enumerate(zip(seq, seq[1:]), 1):
-            assert ("afterany", f"<{lower.name}>") in upper.deps
-            # every earlier job of the ladder, in order: the task asks the scheduler
-            # what became of its unit in each
-            assert upper.args[10] == ",".join(f"<{j.name}>" for j in seq[:i])
+        # ONE array of the ladder is submitted. Every other one is a step of the plan:
+        # no array (the watcher names the units that failed), no dependency (the
+        # watcher waits for the step before), and the ids of the ladder's earlier
+        # jobs are filled in by the watcher when it submits the step
+        assert seq[0].name in jobs and seq[0].opt("--array")
+        for step in seq[1:]:
+            assert step.name in jobs.later and step.name not in jobs
+            assert step.opt("--array") is None and step.opt("--dependency") is None
+            assert step.args[10] == "@EARLIER@"
+            assert "--no-requeue" in step.words
+        watcher = jobs[last_job(run)]
+        assert watcher.script == "retry.sbatch" and watcher.opt("--array") is None
+        assert ("afterany", f"<{seq[0].name}>") in watcher.deps
+        # a chain a gate stops has no watcher either
+        assert {d for d in seq[0].deps} <= watcher.deps
+        assert (watcher.opt("--cpus-per-task"), watcher.opt("--mem")) == ("1", "1G")
+        assert watcher.args[0] == run and watcher.args[2:4] == [
+            f"<{seq[0].name}>",
+            seq[0].name,
+        ]
+        assert watcher.args[4] == seq[0].opt("--array").split("%")[0]
 
 
 def test_the_rung_task_passes_the_rule_and_the_allocation_on():
@@ -575,10 +609,10 @@ def test_the_default_is_multiplex_first_then_synthetic_and_nothing_dormant(dry):
     assert datasets == {"multiplex", "synthetic"}
     assert not [n for n in jobs if "semisynth" in n or "hyreco" in n]
     for run in RUNS:
-        last = agains(jobs, run)[-1].name
-        for job in chain(jobs, run, "synthetic"):
+        last = last_job(run)
+        for job in chain(jobs, run, "synthetic")[:1]:
             assert ("afterany", f"<{last}>") in job.deps, (run, job.name)
-        waits = {n for j in chain(jobs, run) for _, n in j.deps}
+        waits = {n for j in chain(jobs, run)[:1] for _, n in j.deps}
         assert not [n for n in waits if "synthetic" in n], run
     order = [Job(ln).args[6] for ln in _sbatch_lines(done.stdout) if "run_rung" in ln]
     assert order.index("synthetic") > max(
@@ -669,7 +703,7 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
     jobs = jobs_of(done)
     runs = [r for r in variants.RUNS if r.active]
     names = [variants.run_name(r) for r in runs]
-    last = {n: chain(jobs, n)[-1].name for n in names}
+    last = {n: last_job(n) for n in names}
     for k, name in enumerate(names):
         if k >= lanes:
             assert last[names[k - lanes]] in waits(head(jobs, name)), name
@@ -678,10 +712,11 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
     assert last[on_first_lane[-1]] in waits(head(jobs, names[0], "synthetic"))
     # off: a run that reads no other run's results waits for no other run's arrays
     plain, _, _ = dry
-    arrays = {j.name for n in names for j in chain(plain, n)}
+    arrays = {x for n in names for x in (chain(plain, n)[0].name, last_job(n))}
     for r in runs:
         if r.after is None:
-            own = {j.name for j in chain(plain, variants.run_name(r))}
+            own = {chain(plain, variants.run_name(r))[0].name}
+            own.add(last_job(variants.run_name(r)))
             assert not (waits(head(plain, variants.run_name(r))) & (arrays - own)), r
 
 
@@ -738,8 +773,8 @@ def test_every_run_waits_for_its_own_gate_and_the_gate_for_the_selfcheck(dry):
             for j in jobs.values()
             if j.script == "run_rung.sbatch" and j.args[0] == run
         ]
-        assert len(mine) >= 8  # two datasets, four rungs
-        for job in mine:  # every rung, so a blocked run is blocked at each of them
+        assert len(mine) >= 2  # two datasets, the first rung of each
+        for job in mine:  # every submitted array (a later rung is the watcher's)
             assert ("afterok", f"<rb-gate-{run}>") in job.deps, job.name
             others = {n for k, n in job.deps if "gate" in n and k == "afterok"}
             assert others <= {f"<rb-gate-{run}>", f"<rb-realgate-{run}>"}, job.name
@@ -944,14 +979,15 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     # the tables keep their allocation: the cases were scored before them
     assert (scorer.opt("--cpus-per-task"), scorer.opt("--time")) == ("4", "1-00:00:00")
     # the default submission: the settle job, an array per dataset, tissue, the scorer
-    # a run in several jobs per round has, per dataset, 4 attempts of COARSE and of SOLVE,
-    # its two tile submitters (the tile jobs are theirs to submit), and the last job's 8
-    # (and 4 of its preprocessing) where another run has the ladder's 8
-    more = sum(4 + FEEDERS + 4 + (4 if "prep" in st else 0) for st in STAGED.values())
-    assert more == 10 + 14 and len(STAGED) == 2
+    # a run in several jobs per round has, per dataset, the first attempt and the
+    # watcher of COARSE and of SOLVE, its two tile submitters (the tile jobs are theirs
+    # to submit), and the last job's first array and watcher (and 2 of its
+    # preprocessing) where another run has the ladder's 2. No retry is submitted.
+    more = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
+    assert more == 6 + 8 and len(STAGED) == 2
     assert (
         len(jobs)
-        == 18 + 48 + 18 * 2 * 8 + 2 * (8 + 1) + 1 + len(sizes) + 2 + 2 * more
+        == 18 + 48 + 18 * 2 * 2 + 2 * (2 + 1) + 1 + len(sizes) + 2 + 2 * more
         == N_JOBS
     )
 
@@ -1432,7 +1468,7 @@ def test_the_submitted_graph_of_the_users_order_has_no_cycle(site, lanes):
 
 # ── a run whose registration is several jobs per round ────────────────────────
 def attempts(jobs, run, stage, dataset="multiplex"):
-    return [jobs[f"rb-{run}-{dataset}-{stage}-a{a}"] for a in (1, 2, 3, 4)]
+    return [_any(jobs, f"rb-{run}-{dataset}-{stage}-a{a}") for a in (1, 2, 3, 4)]
 
 
 def feeders(jobs, run, dataset="multiplex"):
@@ -1488,10 +1524,13 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
                     before = job.name
                 continue
             chained = attempts(jobs, run, stage)
-            assert [j.opt("--array") for j in chained] == ["0-3%20"] * 4, stage
+            # attempt 1 is submitted; 2 to 4 are steps of the stage's watcher
+            assert [j.opt("--array") for j in chained] == ["0-3%20", None, None, None]
+            assert [j.name in jobs for j in chained] == [True, False, False, False]
             for attempt, job in enumerate(chained, 1):
                 want = stages.allocation(stage, attempt)
-                assert job.script == "stage.sbatch" and gate in job.deps
+                assert job.script == "stage.sbatch"
+                assert (gate in job.deps) == (attempt == 1)
                 assert job.opt("--cpus-per-task") == str(want["cpus"]), (stage, attempt)
                 assert job.opt("--mem") == f"{want['mem_gb']}G", (stage, attempt)
                 assert job.opt("--time") == want["time"], (stage, attempt)
@@ -1508,9 +1547,13 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
                     want["time"],
                 ]
                 assert "--wait" not in job.words and GPU not in job.words
-                # each job after the one before it, whatever became of that one
-                assert after(job) == ({before} if before else set()), job.name
-                before = job.name
+            # the first attempt after the stage before, whatever became of that one;
+            # the watcher after the first attempt, and the next stage after the watcher
+            assert after(chained[0]) == ({before} if before else set()), stage
+            watcher = jobs[f"rb-{run}-multiplex-{stage}-retry"]
+            assert watcher.script == "retry.sbatch" and gate in watcher.deps
+            assert after(watcher) == after(chained[0]) | {chained[0].name}
+            before = watcher.name
         # the writer: the round's last job, after SOLVE's last attempt
         last = rungs(jobs, run)[0]
         assert last.script == "run_rung.sbatch" and after(last) == {before}
@@ -2185,18 +2228,21 @@ def test_a_realcheck_gated_run_sends_one_unit_ahead(dry):
     assert gated == {"valis_mirage": "valis_mirage", "valis120_hires": "valis120_hires"}
     for run, variant in gated.items():
         first = rungs(jobs, run, suffix="-first")
-        assert [j.opt("--array") for j in first] == ["0-0%20"] * 4
+        assert [j.opt("--array") for j in first] == ["0-0%20", None, None, None]
         assert all(j.args[9] == "1" for j in first)  # --realcheck
         gate = jobs[f"rb-realgate-{run}"]
         assert gate.args[:2] == ["realcheck", run] and gate.args[4:6] == [
             "multiplex",
             variant,
         ]
-        assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-512g-again>")}
+        assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-retry>")}
         for dataset in ("multiplex", "synthetic"):
-            for job in rungs(jobs, run, dataset):
+            ladder_of = rungs(jobs, run, dataset)
+            # the submitted array and its watcher wait for the realcheck's gate; a
+            # later rung is the watcher's to submit
+            for job in (ladder_of[0], jobs[last_job(run, dataset)]):
                 assert ("afterok", f"<rb-realgate-{run}>") in job.deps
-                assert job.args[9] == "0"
+            assert all(job.args[9] == "0" for job in ladder_of)
     others = [
         j
         for j in jobs.values()
@@ -2823,3 +2869,98 @@ def test_extra_sbatch_arguments_reach_every_job(site):
     jobs = jobs_of(done)
     assert all(j.opt("--partition") == "cpu" for j in jobs.values())
     assert all(j.opt("--constraint") == "icelake" for j in jobs.values())
+
+
+# ── the watcher: a retry is submitted after a failure, for the units that failed ──
+def _watch(tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0"):
+    """Run retry.sbatch against stand-in sbatch and squeue. ``ends``: {index: end line
+    of the unit's task in the first array, or None for no end line}."""
+    out, bin_, plan = tmp_path / "out", tmp_path / "bin", tmp_path / "plan"
+    for d in (out / "logs" / "end", out / "logs" / "gates", bin_, plan):
+        d.mkdir(parents=True)
+    (out / "logs" / "gates" / "stare.tsv").write_text(f"stare\t{gate}\t-\n")
+    for idx, line in ends.items():
+        if line is not None:
+            (out / "logs" / "end" / f"rb-x-16g-50_{idx}.end").write_text(line + "\n")
+    for k, items in enumerate(steps, 1):
+        (plan / f"step-{k}").write_text("".join(f"{i}\n" for i in items))
+    calls = tmp_path / "sbatch.log"
+    (bin_ / "sbatch").write_text(
+        "#!/bin/bash\n"
+        f'n=$(( $(cat "{tmp_path}/n" 2>/dev/null || echo 100) + 1 ))\n'
+        f'echo $n > "{tmp_path}/n"; echo "$*" >> "{calls}"\n'
+        'echo "sbatch: slurm_job_submit: a notice"; echo $n\n'
+    )
+    (bin_ / "squeue").write_text("#!/bin/bash\nexit 0\n")
+    for f in bin_.iterdir():
+        f.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_}:{os.environ['PATH']}",
+        "REGBENCH_REPO": str(REPO),
+        "REGBENCH_OUT": str(out),
+        "REGBENCH_RETRY_POLL_S": "0",
+        "REGBENCH_SUBMISSION": "t",
+    }
+    argv = ["bash", str(SLURM / "retry.sbatch"), "stare", str(plan), "50", "rb-x-16g"]
+    done = subprocess.run(argv + [range_], env=env, capture_output=True, text=True)
+    sent = calls.read_text().splitlines() if calls.exists() else []
+    return done, sent, out
+
+
+STEPS = [
+    ["again", "rb-x-16g-again", "--mem=16G", "run_rung.sbatch", "@EARLIER@", "again"],
+    ["climb", "rb-x-64g", "--mem=64G", "run_rung.sbatch", "@EARLIER@", "climb"],
+    ["again", "rb-x-64g-again", "--mem=64G", "run_rung.sbatch", "@EARLIER@", "again"],
+]
+
+
+def test_the_watcher_submits_nothing_when_every_unit_is_ok(tmp_path):
+    ends = {i: "REGBENCH_END kind=run status=ok cause= whose=" for i in range(5)}
+    done, sent, _ = _watch(tmp_path, ends, STEPS)
+    assert done.returncode == 0 and sent == [], done.stdout + done.stderr
+    assert "0 of 3 retry step(s) were needed" in done.stdout
+    assert done.stdout.splitlines()[-1].startswith("REGBENCH_END kind=retry")
+
+
+def test_the_watcher_submits_a_step_only_for_the_units_that_failed_that_way(tmp_path):
+    ends = {
+        0: "REGBENCH_END kind=run status=ok cause= whose=",
+        1: "REGBENCH_END kind=run status=failed cause=oom whose=method",
+        2: "REGBENCH_END kind=run status=failed cause=exception whose=method",
+        3: None,  # the task died or never started
+        4: "REGBENCH_END kind=run status=ok cause= whose=",
+    }
+    done, sent, out = _watch(tmp_path, ends, STEPS)
+    assert done.returncode == 0, done.stdout + done.stderr
+    # the same rung again for the lost unit alone; the next rung for the unit that ran
+    # out of memory and the one still without an end line; nothing for the unit that
+    # failed for another reason, and nothing for the ones that are ok
+    assert sent == [
+        "--parsable --job-name=rb-x-16g-again --array=3%20 --mem=16G run_rung.sbatch "
+        "50 again",
+        "--parsable --job-name=rb-x-64g --array=1,3%20 --mem=64G run_rung.sbatch "
+        "50,101 climb",
+        "--parsable --job-name=rb-x-64g-again --array=1,3%20 --mem=64G "
+        "run_rung.sbatch 50,101,102 again",
+    ]
+    # its jobs are in the list `scancel` is given
+    assert (out / "logs" / "submitted" / "t.ids").read_text().split() == [
+        "101",
+        "102",
+        "103",
+    ]
+
+
+def test_the_watcher_of_a_blocked_run_submits_nothing(tmp_path):
+    done, sent, _ = _watch(tmp_path, {}, STEPS, gate="inconsistent\t0\t1")
+    assert done.returncode == 0 and sent == []
+    assert "status=blocked cause=gate_blocked" in done.stdout
+
+
+def test_the_watchers_cause_lists_are_the_ladders():
+    code = code_of(SLURM / "retry.sbatch")
+    assert f'AGAIN_CAUSES="{" ".join(ladder.AGAIN_CAUSES)}"' in code
+    assert f'CLIMB_CAUSES="{" ".join(ladder.CLIMB_CAUSES)}"' in code
+    assert set(resources.MEMORY_CAUSES) < set(ladder.CLIMB_CAUSES)
+    assert not set(resources.MEMORY_CAUSES) & set(ladder.AGAIN_CAUSES)

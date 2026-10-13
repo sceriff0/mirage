@@ -920,6 +920,13 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
 done < "$table"
 
+# The chains' retry plans (plan_open, below) are written while the jobs are submitted.
+# Their folder is made HERE, where one that cannot be written still stops the launch
+# with nothing in the queue.
+retry_root="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION"
+[ "$DRY" = 1 ] && retry_root="$scratch/retry"
+mkdir -p "$retry_root" 2>/dev/null && [ -w "$retry_root" ] \
+    || die "cannot write the retry plans to $retry_root. Nothing was submitted."
 sc_time="$(limit "$sc_s")"
 while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     has "$needed" "$name" || continue
@@ -978,8 +985,9 @@ plan_open() {  # plan_open <job prefix>
         PLAN="$scratch/retry/$1"
         PLAN_SHOWN="$REGBENCH_OUT/logs/retry/<submission>/$1"
     fi
+    # the folder above it was made, and shown to be writable, before the first sbatch
     rm -rf "$PLAN"
-    mkdir -p "$PLAN" || die "cannot write the retry plan $PLAN. Nothing more is submitted."
+    mkdir -p "$PLAN"
 }
 plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
     local kind="$1" jobname="$2"; shift 2

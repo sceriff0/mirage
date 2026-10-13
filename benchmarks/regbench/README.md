@@ -2305,11 +2305,28 @@ script names no method.
    site's `ForceRequeueOnFail` prolog flag overrides it). The task itself reads the gate's record again
    before it runs. `<out>/logs/gates/<run>.tsv`: run, status, rows to drop, blocked,
    the reference comparison.
-3. **The ladder**: per run and dataset, EIGHT job arrays, two per rung (16, 64, 256 and
-   512 GB, 4 CPUs each), each waiting for the one before with `afterany`: the attempt at
-   that rung (`run --ladder first` at 16 GB, `climb` above), then `-again`, the same
-   rung once more (`run --ladder again`). One task is one case for a run that works per
-   pair and one patient for a run that works per patient.
+3. **The ladder**: per run and dataset, the rungs are 16, 64, 256 and 512 GB at 4 CPUs,
+   each with an attempt (`run --ladder first` at 16 GB, `climb` above) and `-again`, the
+   same rung once more (`run --ladder again`). One task is one case for a run that works
+   per pair and one patient for a run that works per patient.
+   **A retry is submitted after a failure, never queued before it** (since 2026-10-13).
+   The launcher submits ONE array, the 16 GB attempt, and one small job after it, the
+   ladder's watcher (`rb-<run>-<ds>-retry`, `slurm/retry.sbatch`, 1 CPU, 1 GB, on a
+   compute node, calling `sbatch` itself as the tile submitter does). The seven other
+   steps are written down as a plan (`<out>/logs/retry/<submission>/<job prefix>/`).
+   When the first array has ended, the watcher reads each unit's last end line
+   (`<out>/logs/end/`) and submits a step only for the units that step can retry, as
+   `--array=<those units>`, waits for it to leave the queue, and goes on: `again` for a
+   unit whose last cause is `killed` or `infrastructure`, `climb` for those and for a
+   memory cause, every step for a unit that left no end line (`ladder.AGAIN_CAUSES`,
+   `CLIMB_CAUSES`). A ladder whose units are all ok puts nothing more in the queue.
+   That reading is a filter and not the decision: the task that is submitted decides
+   for itself by the two rules below, as before. Everything that waited for a ladder's
+   last array waits for its watcher. The attempts 2 to 4 of a stage job (PREP, COARSE,
+   SOLVE) are submitted the same way, by that stage's watcher. The selfchecks' three
+   rungs are still three chained jobs. A watcher that is refused by `sbatch`, or cannot
+   read the queue 30 times in a row, stops (exit 1): the steps after it are not
+   submitted and what is downstream goes on.
    - A `climb` task exits at once unless its unit's last `run.json` names a memory cause
      (`oom`, `writer_oom`, `benchmark_oom`).
    - An `again` task exits at once unless the attempt before it was lost to the

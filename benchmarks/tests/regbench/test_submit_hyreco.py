@@ -58,11 +58,12 @@ def dry(site):
 def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     jobs, done, log, out = dry
     assert not log.exists()
-    # per run: three selfcheck attempts, a gate, and its own jobs (the ladder's eight;
-    # for STARE its stage arrays, tile submitters and last job); then the settle job
-    # and the set's scorer
+    # per run: three selfcheck attempts, a gate, and its own jobs (the ladder's first
+    # array and its watcher; for STARE its stages' first attempts and watchers, its
+    # tile submitters and its last job's); then the settle job and the set's scorer.
+    # No retry is submitted: a watcher submits one after a failure
     own = [launch_jobs(variants.run_of(r)) for r in RUNS]
-    assert own == [18, 8, 8] and len(jobs) == sum(3 + 1 + n for n in own) + 2 == 48
+    assert own == [8, 2, 2] and len(jobs) == sum(3 + 1 + n for n in own) + 2 == 26
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout
@@ -88,12 +89,15 @@ def test_each_run_has_the_existing_ladder_on_the_set(dry):
             f"{gb}G" for gb in ladder.RUNGS_GB
         ]
         assert all(j.opt("--cpus-per-task") == "4" for j in ladder_of)
-        # three pairs, one task each: a pair is its own patient for the VALIS rows too
-        assert all(j.opt("--array") == "0-2%20" for j in ladder_of)
+        # three pairs, one task each: a pair is its own patient for the VALIS rows too.
+        # The first rung is submitted; the others are the watcher's, after a failure
+        assert [j.opt("--array") for j in ladder_of] == ["0-2%20", None, None, None]
         assert all(j.args[6] == "hyreco_b" for j in ladder_of)
         assert ("afterok", f"<rb-gate-{run}>") in ladder_of[0].deps
-        for below, above in zip(ladder_of, ladder_of[1:]):
-            assert ("afterany", f"<{below.name}-again>") in above.deps
+        assert [j.name in jobs for j in ladder_of] == [True, False, False, False]
+        assert ("afterany", f"<{ladder_of[0].name}>") in jobs[
+            last_job(run, "hyreco_b")
+        ].deps
     # no run of the set needs a GPU
     assert all(j.args[5] == "0" for j in jobs.values() if j.script == "run_rung.sbatch")
     assert not any(w.startswith("--gres") for j in jobs.values() for w in j.words)
