@@ -185,6 +185,10 @@ regbench_exec() (
             echo "regbench: neither apptainer nor singularity is on PATH here ($(hostname)), and $method runs in the image $sif. Load the site's container module before the call (a job has not the modules of a login shell)." >&2
             return 127
         fi
+        # a folder that is bound must exist: the runtime refuses to start the image
+        # otherwise ("mount source ... doesn't exist"), also for the first call of all,
+        # which is the one that fills the cases folder
+        mkdir -p "$REGBENCH_CASES" "$REGBENCH_OUT" ${REGBENCH_WORK:+"$REGBENCH_WORK"} 2>/dev/null || true
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # the StarDist re-run of the bare nuclei reads the site's model and writes here
         bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"

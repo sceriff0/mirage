@@ -115,7 +115,7 @@ case "$REGBENCH_SITE_CONFIG" in
         site_images="$(site_value cacheDir)"
         ;;
 esac
-mkdir -p "$REGBENCH_ROOT" || exit 2
+mkdir -p "$REGBENCH_ROOT" "$REGBENCH_CASES" "$REGBENCH_OUT" || exit 2
 : "${REGBENCH_IMAGES:=${site_images:-$REGBENCH_ROOT/images}}"
 
 # Every image has a file before anything is asked of it: the launcher would otherwise
@@ -167,6 +167,8 @@ done
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
 echo "regbench-launch: repository $repo, cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
 n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c . || true)"
+echo "regbench-launch: bound: ${REGBENCH_BIND:-nothing}"
+echo "regbench-launch: arms $REGBENCH_ARMS ($([ -d "$REGBENCH_ARMS" ] && echo found || echo NOT THERE)), rounds file $REGBENCH_MANIFEST ($([ -s "$REGBENCH_MANIFEST" ] && echo there || echo not written yet))"
 echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
 cd "$repo" || exit 2
@@ -174,6 +176,10 @@ cd "$repo" || exit 2
 # launcher itself runs its Python in
 case " $* " in
     *" --prepare "*)
+        if [ ! -s "$REGBENCH_MANIFEST" ] && [ ! -d "$REGBENCH_ARMS" ]; then
+            echo "regbench-launch: --prepare needs the cohort's rounds file and there is none at $REGBENCH_MANIFEST, nor an arms' results folder at $REGBENCH_ARMS to write it from. Export REGBENCH_ARMS (the arm results folder) or REGBENCH_MANIFEST. Nothing was submitted." >&2
+            exit 2
+        fi
         if [ ! -s "$REGBENCH_MANIFEST" ] && [ -d "$REGBENCH_ARMS" ]; then
             # shellcheck disable=SC1091
             source "$repo/benchmarks/regbench/slurm/env.sh"
