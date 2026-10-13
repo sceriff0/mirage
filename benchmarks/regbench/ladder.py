@@ -46,7 +46,14 @@ no end state  the accounting does not have the task yet, or shows it in a state 
              counted as a memory cause nor left as the method's last word.
 ``infrastructure``  the ``again`` task of the same rung runs the unit once more. ONE
              retry per rung: an attempt lost twice stays ``infrastructure``, which the
-             tables count apart from the method's failures.
+             tables count apart from the method's failures. When the accounting names
+             the lost attempt only after that ``again`` task has decided, the retry is
+             the next rung's ``climb`` task: it runs the unit once, at its own rung's
+             memory (a task has one allocation), and the record it replaces says that
+             this is the retry of a lost attempt and not a climb for memory
+             (``cause_from``, carried into ``previous_attempts``). Memory stays the
+             only CAUSE that sends a unit up. After the last rung there is no such
+             task.
 no record of this submission   the task that should have written it never started. At
              rung 1 the ``again`` task runs the unit; at a higher rung it does when the
              unit's last record is a memory cause of the rung below (the ``climb`` task
@@ -378,6 +385,40 @@ def mark_unsettled(paths, mem_gb=None):
         write_json(p, rec)
 
 
+LATE_LOST = "the retry of an attempt lost to the scheduler, not a climb for memory"
+
+
+def mark_late_lost(paths, attempt, mem_gb=None, submission=None):
+    """Say in each record lost to the scheduler why the next rung's ``climb`` task runs
+    its unit: the accounting named the lost attempt after the rung's own retry had
+    decided. The cause stays ``infrastructure``."""
+    from .cases import write_json
+
+    for p in paths:
+        rec = _read(p)
+        if rec is None or not mine(rec, submission) or not _late_lost(rec, attempt):
+            continue
+        rec["cause_from"] = (
+            f"{rec.get('cause_from') or INFRASTRUCTURE}; found after this rung's retry "
+            f"had decided, so the next rung's task runs the unit once more"
+            + (f" at {mem_gb:g} GB" if mem_gb else "")
+            + f": {LATE_LOST}"
+        )
+        write_json(p, rec)
+
+
+def _late_lost(rec, attempt):
+    """A failed record of an attempt below ``attempt`` that the scheduler lost and that
+    was not tried again at its own rung."""
+    return (
+        not rec.get("ok")
+        and not rec.get("no_rerun")
+        and rec.get("cause") == INFRASTRUCTURE
+        and int(rec.get("attempt") or 1) < attempt
+        and int(rec.get("retry") or 0) < RETRIES_PER_RUNG
+    )
+
+
 def _records(paths, submission):
     """The records of this submission among ``paths``, read after settling."""
     out = []
@@ -398,8 +439,13 @@ def unit_decision(
     exits=None,
     waited=False,
     mem_gb=None,
+    late=True,
 ):
     """``(run the unit now?, why, lost?)`` for one array task of the chain.
+
+    ``late``: a ``climb`` task also runs a unit whose attempt at the rung below the
+    accounting named as lost only after that rung's retry had decided (module
+    docstring). False asks about memory alone (:func:`unit_retry`).
 
     ``lost`` is True when this is a ``climb`` task and the unit has NO record of this
     submission: both tries of the rung below were lost before they could write one
@@ -465,6 +511,16 @@ def unit_decision(
             f"({', '.join(causes)})",
             False,
         )
+    late = [r for r in again if _late_lost(r, attempt)] if late else []
+    if late:
+        mark_late_lost(paths, attempt, mem_gb, submission)
+        return (
+            True,
+            f"{len(late)} result(s) of the rung below were lost to the scheduler "
+            f"({late[0].get('cause_from') or INFRASTRUCTURE}) and its retry had "
+            f"decided before the accounting said so: run once at this rung, {LATE_LOST}",
+            False,
+        )
     if unknown and waited:
         mark_unsettled(unknown, mem_gb)
         return (
@@ -497,6 +553,7 @@ def unit_retry(
         submission,
         exits,
         waited,
+        late=False,
     )
     return go, why
 

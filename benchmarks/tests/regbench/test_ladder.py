@@ -394,6 +394,9 @@ def test_killed_with_an_end_state_that_names_no_cause_stays_final(tmp_path, stat
 def test_memory_is_the_only_known_cause_that_climbs(tmp_path):
     for cause in ("timeout", "exception", "gpu_oom", "writer", "infrastructure"):
         path = record(tmp_path / cause / "run.json", cause=cause, launch_id="1_0")
+        assert not ladder.unit_retry([path], waited=True)[0], cause
+        if cause == "infrastructure":
+            continue  # run once more by the next rung's task: a retry, not a climb
         assert not ladder.unit_decision([path], ladder.CLIMB, 2, waited=True)[0], cause
 
 
@@ -813,6 +816,46 @@ def test_a_unit_lost_twice_is_written_down_as_infrastructure(tmp_path):
     # written down, it is not tried at a higher rung
     assert not ladder.unit_decision(list(heads), ladder.AGAIN, 2, submission="new")[0]
     assert not ladder.unit_decision(list(heads), ladder.CLIMB, 3, submission="new")[0]
+
+
+def test_an_attempt_the_accounting_names_late_is_retried_by_the_next_rung(tmp_path):
+    """Rung 1 is lost to a node failure the accounting does not have yet when rung 1's
+    `again` task decides. Rung 2's `climb` task finds it and runs the unit once; lost
+    there too, rung 2's own retry runs it; lost a third time, it stays lost."""
+    path = record(
+        tmp_path / "v" / "run.json",
+        cause="killed", launch_id="900_3", submissions=["s1"], attempt=1,
+    )  # fmt: skip
+    running = ladder.parse_accounting("900_3|RUNNING|10|00:00:09\n")
+    go, why, lost = ladder.unit_decision(
+        [path], ladder.AGAIN, 1, "", running, "s1", waited=True
+    )
+    assert (go, lost) == (False, False) and "not lost to the scheduler" in why
+    assert json.loads(path.read_text())["cause"] == "killed"
+    ended = ladder.parse_accounting("900_3|NODE_FAIL|10|00:00:09\n")
+    go, why, lost = ladder.unit_decision(
+        [path], ladder.CLIMB, 2, "", ended, "s1", waited=True, mem_gb=64
+    )
+    assert (go, lost) == (True, False) and ladder.LATE_LOST in why
+    rec = json.loads(path.read_text())
+    # the record says what it is: still the scheduler's loss, and no climb for memory
+    assert rec["cause"] == "infrastructure" and rec["attempt"] == 1
+    assert "NODE_FAIL" in rec["cause_from"] and "at 64 GB" in rec["cause_from"]
+    assert rec["cause_from"].endswith(ladder.LATE_LOST)
+    assert rec["cause"] not in ladder.resources.MEMORY_CAUSES
+    # the run at rung 2, lost as well: rung 2's own retry, then nothing more
+    record(path, cause="infrastructure", submissions=["s1"], attempt=2, retry=0)
+    assert ladder.unit_decision([path], ladder.AGAIN, 2, submission="s1")[0]
+    record(path, cause="infrastructure", submissions=["s1"], attempt=2, retry=1)
+    assert not ladder.unit_decision([path], ladder.CLIMB, 3, submission="s1")[0]
+    # an attempt already tried again at its own rung is not tried a third time
+    record(path, cause="infrastructure", submissions=["s1"], attempt=1, retry=1)
+    go, why, _ = ladder.unit_decision([path], ladder.CLIMB, 2, submission="s1")
+    assert not go and "failed for another reason (infrastructure)" in why
+    # and a failure that is the method's is never run again by this rule
+    for cause in ("exception", "timeout", "writer"):
+        record(path, cause=cause, submissions=["s1"], attempt=1, retry=0)
+        assert not ladder.unit_decision([path], ladder.CLIMB, 2, submission="s1")[0]
 
 
 def test_the_last_rung_is_settled_from_the_accounting(tmp_path):
