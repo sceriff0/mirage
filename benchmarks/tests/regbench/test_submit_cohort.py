@@ -304,7 +304,7 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
     assert sorted(jobs) == sorted(dry[0])
     # the settings inside the script reached the launcher: lanes, the site's GPU
     # request, the results under the one folder, the default order
-    assert "GPU request --gres=gpu:card_x:1, 2 folder(s) bound" in done.stdout
+    assert "GPU request --gres=gpu:card_x:1, 3 folder(s) bound" in done.stdout
     assert f"results {root}/out" in done.stdout
     assert any("--gres=gpu:card_x:1" in j.words for j in jobs.values())
     assert not any("never" in w for j in jobs.values() for w in j.words)
@@ -313,6 +313,21 @@ def test_the_launch_job_is_the_launcher_run_from_a_copy(site, dry, tmp_path):
     assert max(len(j.deps) for j in laned) > max(
         len(j.deps) for j in dry[0].values() if j.script == "run_rung.sbatch"
     )
+    # submitted from ANOTHER folder: the repository is found from the path given to
+    # the scheduler, and the benchmark lives where the job was submitted from
+    away = tmp_path / "away"
+    shutil.copytree(site[1], away / "regbench" / "cases")
+    (site[2] / "scontrol").write_text(
+        f'#!/bin/bash\necho "   Command={SLURM / "launch.sbatch"} --prepare"\n'
+    )
+    (site[2] / "scontrol").chmod(0o755)
+    far = {**base, "SLURM_SUBMIT_DIR": str(away), "SLURM_JOB_ID": "7"}
+    far.pop("REGBENCH_ROOT")
+    there = subprocess.run(argv, env=far, capture_output=True, text=True, cwd=away)
+    (site[2] / "scontrol").unlink()
+    assert there.returncode == 0, there.stderr
+    assert f"results {away}/regbench/out" in there.stdout
+    assert sorted(jobs_of(there)) == sorted(dry[0])
     lost = subprocess.run(
         argv,
         env={**base, "SLURM_SUBMIT_DIR": str(tmp_path)},

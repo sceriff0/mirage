@@ -7,9 +7,13 @@
 #SBATCH --output=regbench-launch-%j.log
 # The launch as ONE job, everything set in here. From the repository:
 #
-#   sbatch benchmarks/regbench/slurm/launch.sbatch --prepare     (once; wait for its jobs)
-#   sbatch benchmarks/regbench/slurm/launch.sbatch               (the launch)
-#   sbatch benchmarks/regbench/slurm/launch.sbatch --dry-run     (prints, submits nothing)
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --prepare   (once; wait for its jobs)
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch             (the launch)
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --dry-run   (prints, submits nothing)
+#
+# FROM ANY FOLDER: the folder it is submitted from is where the benchmark lives
+# (regbench/ under it: cases, results, images, rounds.csv) and where the arms' results
+# are looked for (arm_results/); the repository is found from the path given to sbatch.
 #
 # It runs submit_cohort.sh on a compute node; every argument is the launcher's. The
 # SETTINGS below are the only thing to edit. A variable already exported when sbatch is
@@ -29,20 +33,34 @@
 # the pinned STARE source is downloaded once by a launch, so the first call (--preflight
 # is enough) is made from a login node, and this job finds it there.
 #
-# The scheduler runs a COPY of this file, so the repository is not where the file is:
-# it is REGBENCH_REPO, else the folder the job was submitted from.
 set -uo pipefail
-repo="${REGBENCH_REPO:-${SLURM_SUBMIT_DIR:-$PWD}}"
-launcher="$repo/benchmarks/regbench/slurm/submit_cohort.sh"
-if [ ! -f "$launcher" ]; then
-    echo "regbench-launch: $launcher is not there. Submit from the repository, or export REGBENCH_REPO. Nothing was submitted." >&2
+here="${SLURM_SUBMIT_DIR:-$PWD}"
+# the repository: REGBENCH_REPO; else where the file given to sbatch is (the scheduler
+# knows its path: Command= of `scontrol show job`); else the folder submitted from
+asked=""
+if [ -n "${SLURM_JOB_ID:-}" ] && command -v scontrol >/dev/null 2>&1; then
+    asked="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null | sed -nE 's/^[[:space:]]*Command=([^[:space:]]+).*/\1/p' | head -n 1)"
+fi
+repo=""
+for found in "${REGBENCH_REPO:-}" "${asked:+$(dirname "$asked")/../../..}" "$here" "$(dirname "$0")/../../.."; do
+    [ -n "$found" ] && [ -f "$found/benchmarks/regbench/slurm/submit_cohort.sh" ] || continue
+    repo="$(cd "$found" && pwd)"
+    break
+done
+if [ -z "$repo" ]; then
+    echo "regbench-launch: the repository was not found (looked at REGBENCH_REPO, at the script given to sbatch${asked:+ ($asked)} and at $here). Export REGBENCH_REPO. Nothing was submitted." >&2
     exit 2
 fi
+launcher="$repo/benchmarks/regbench/slurm/submit_cohort.sh"
 export REGBENCH_REPO="$repo"
 
 # ------------------------------- SETTINGS: edit here -------------------------------
-# one folder for everything of the benchmark: cases/, out/, images/ and rounds.csv
-: "${REGBENCH_ROOT:=$HOME/regbench}"
+# one folder for everything of the benchmark: cases/, out/, images/ and rounds.csv.
+# Default: regbench/ in the folder the job is submitted from
+: "${REGBENCH_ROOT:=$here/regbench}"
+# the arms' results the cohort is made of (rounds.csv is written from them by
+# --prepare when it is not there yet). Default: arm_results/ where submitted from
+: "${REGBENCH_ARMS:=$here/arm_results}"
 : "${REGBENCH_CASES:=$REGBENCH_ROOT/cases}"
 : "${REGBENCH_OUT:=$REGBENCH_ROOT/out}"
 # the cohort's rounds.csv (python -m benchmarks.regbench.arms_manifest)
@@ -91,6 +109,7 @@ case "$REGBENCH_SITE_CONFIG" in
         [ -z "$binds" ] || : "${REGBENCH_BIND:=$binds}"
         ;;
 esac
+mkdir -p "$REGBENCH_ROOT" || exit 2
 export REGBENCH_ROOT REGBENCH_CASES REGBENCH_OUT REGBENCH_MANIFEST REGBENCH_SITE_CONFIG
 for v in STARE_REGBENCH VALIS120 DEEPERHISTREG PALOM ASHLAR VALIS_MIRAGE STARDIST; do
     v="REGBENCH_SIF_$v"
@@ -98,10 +117,31 @@ for v in STARE_REGBENCH VALIS120 DEEPERHISTREG PALOM ASHLAR VALIS_MIRAGE STARDIS
 done
 export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
+# the arms' results and the benchmark's own folder are read inside the images too
+for more in "$REGBENCH_ARMS" "$REGBENCH_ROOT"; do
+    [ -d "$more" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$more"
+done
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
 echo "regbench-launch: cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
 n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c . || true)"
 echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
 cd "$repo" || exit 2
+# --prepare with no rounds.csv yet: write it from the arms' results, in the image the
+# launcher itself runs its Python in
+case " $* " in
+    *" --prepare "*)
+        if [ ! -s "$REGBENCH_MANIFEST" ] && [ -d "$REGBENCH_ARMS" ]; then
+            # shellcheck disable=SC1091
+            source "$repo/benchmarks/regbench/slurm/env.sh"
+            echo "regbench-launch: writing $REGBENCH_MANIFEST from $REGBENCH_ARMS"
+            if ! regbench_exec STARE_REGBENCH sh -c "$REGBENCH_PYTHON" regbench-python \
+                -m benchmarks.regbench.arms_manifest --root "$REGBENCH_ARMS" --out "$REGBENCH_MANIFEST"; then
+                echo "regbench-launch: the manifest could not be written from $REGBENCH_ARMS (see above). Nothing was submitted." >&2
+                rm -f "$REGBENCH_MANIFEST"
+                exit 2
+            fi
+        fi
+        ;;
+esac
 exec bash "$launcher" "$@"
