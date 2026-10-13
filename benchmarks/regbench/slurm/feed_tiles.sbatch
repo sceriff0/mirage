@@ -228,7 +228,7 @@ refused() {  # refused <attempt> <what> <the scheduler's words>
 # the_due <attempt>: writes $state.due.a<attempt> once (tile indices over every round's
 # tiles laid end to end for attempt 1, round indices above it)
 the_due() {
-    local attempt="$1" file="$state.due.a$1" args items o
+    local attempt="$1" file="$state.due.a$1" args items o dropped
     [ -e "$file" ] && return 0
     args=(stages --cases "$REGBENCH_CASES" --dataset "$dataset" --method "$method"
           --layout "$layout" --out "$REGBENCH_OUT" --due "$attempt")
@@ -238,7 +238,13 @@ the_due() {
         for o in "${items[@]}"; do args+=(--opt "$o"); done
     fi
     if regbench_py "$image" "${args[@]}" > "$file.tmp"; then
-        mv "$file.tmp" "$file"
+        # an index per line and nothing else: a line that is not one (a warning some
+        # library wrote among them) is no tile, and would be an array no scheduler takes
+        grep -E '^[0-9]+$' "$file.tmp" > "$file.clean" || true
+        dropped=$(( $(wc -l < "$file.tmp") - $(wc -l < "$file.clean") ))
+        [ "$dropped" = 0 ] || echo "attempt $attempt: $dropped line(s) of the list of what is due were not an index and were dropped (the first: $(grep -vE '^[0-9]+$' "$file.tmp" | head -n 1))" >&2
+        mv "$file.clean" "$file"
+        rm -f "$file.tmp"
     else
         # the records could not be read: everything is submitted, and a task with
         # nothing to do exits at once
@@ -312,13 +318,23 @@ feed() {
         base=0
         [ "$attempt" = 1 ] && base="$(sed -n "$((next + 1))p" "$file")"
         read -r size spec < <(sed -n "$((next + 1)),$((next + size))p" "$file" | awk -v b="$base" -v span="$REGBENCH_STAGE_ARRAY_SPAN" '
-            { v = $1 - b; if (v >= span) exit
+            !/^[0-9]+$/ { bad = 1; exit }
+            { v = $1 - b; if (v < 0) { bad = 1; exit }
+              if (v >= span) exit
               n++
               if (n == 1) { s = v; p = v; next }
               if (v == p + 1) { p = v; next }
               out = out (s == p ? s : s "-" p) ","; s = v; p = v }
-            END { print n, out (s == p ? s : s "-" p) }')
+            END { if (bad) print "none", "none"; else print n, out (s == p ? s : s "-" p) }')
         jobname="$prefix""a$attempt-o$next"
+        # an array that is none (a line of the list that is no index) is never
+        # submitted, and never tried again: without a size the loop would not advance
+        case "$size:$base" in *[!0-9:]*|:*|*:|0:*)
+            gave_up "attempt $attempt: line $((next + 1)) of $file gives no array (size '${size:-}', first index '${base:-}'): the list of what is due is not a list of indices" "$q" ;;
+        esac
+        case "$spec" in ''|*[!0-9,-]*)
+            gave_up "attempt $attempt: lines $((next + 1)) to $((next + size)) of $file give the array '--array=${spec:-}', which is none: the list of what is due is not a list of indices" "$q" ;;
+        esac
         tail=()
         [ "$attempt" = 1 ] && tail=("$layout" "$base")
         printf '%s\t%s\t%s\t%s\t-\n' "$attempt" "$next" "$size" "$base" >> "$fed"

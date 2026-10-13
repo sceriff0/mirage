@@ -301,6 +301,95 @@ def test_what_is_due_is_asked_of_the_harness_and_everything_is_fed_when_it_canno
     assert [site.tiles(a) for a in (2, 3, 4)] == [[0, 1]] * 3
 
 
+def test_a_line_that_is_no_index_never_reaches_the_list_of_what_is_due(tmp_path):
+    """A library that writes a warning among the indices (on the harness's standard
+    output) must not become an array: the line is dropped, and said."""
+    site = Site(tmp_path, {}, rounds=2)
+    site.n_tiles = 6
+    python = site.fake / "python"
+    python.write_text(
+        "#!/bin/bash\n"
+        'case " $* " in *" --due 1 "*)\n'
+        '  echo 0; echo "-2024 UserWarning: the file is not what it says"; echo 1; echo 4 ;;\n'
+        "esac\nexit 0\n"
+    )
+    python.chmod(0o755)
+    done = site.run()
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert Path(f"{site.state}.due.a1").read_text() == "0\n1\n4\n"
+    assert "attempt 1: 1 line(s) of the list of what is due were not an index" in (
+        done.stderr
+    )
+    assert "-2024 UserWarning" in done.stderr
+    assert site.tiles(1) == [0, 1, 4] and len(site.calls()) == 1
+
+
+@pytest.mark.parametrize(
+    "lines, n_calls",
+    [
+        (["a warning", "0", "1"], 0),  # no index at all on the first line
+        (["0", "1", "-2024 a warning", "3"], 0),
+        (["5", "2"], 0),  # an index below the first of its array
+    ],
+)
+def test_a_list_that_is_not_one_is_a_refusal_and_never_a_loop(tmp_path, lines, n_calls):
+    """A list of what is due that an earlier link left with a line that is no index:
+    the submitter gives up through the path a round reads, after no sbatch call."""
+    site = Site(tmp_path, {1: lines, 2: []})
+    done = site.run()
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert len(site.calls()) == n_calls
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "gave up: attempt 1: line" in marker
+    assert "the list of what is due is not a list of indices" in marker
+    assert "status=refused cause=not_submitted whose=launcher" in last(done)
+    assert not Path(f"{site.state}.done").exists()
+
+
+@pytest.mark.parametrize(
+    "argv, answer",
+    [
+        (["list", "--dataset", "multiplex", "--sizes"], "0 0 0\n"),
+        (["list", "--dataset", "multiplex"], "0\n"),
+        (["runs", "--scorer-image"], "STARE_REGBENCH\n"),
+    ],
+)
+def test_only_the_answer_of_a_command_a_script_reads_is_on_stdout(
+    tmp_path, monkeypatch, capsys, argv, answer
+):
+    """A library that logs to "stdout" while the command works (STARE's root handler
+    does, from its first logger on) writes to the standard error."""
+    import logging
+
+    from benchmarks.regbench import cases, cli, variants
+
+    def noisy(*args, **kwargs):
+        handler = logging.StreamHandler(sys.stdout)  # as stare.log installs it
+        log = logging.getLogger("regbench-test-noise")
+        log.addHandler(handler)
+        log.warning("UserWarning: the file is not what it says")
+        log.removeHandler(handler)
+        print("a line some library printed")
+        return []
+
+    monkeypatch.setattr(cases, "list_cases", noisy)
+    real = variants.SCORER_IMAGE
+    monkeypatch.setattr(
+        variants,
+        "SCORER_IMAGE",
+        type("S", (str,), {"__str__": lambda s: noisy() or real})(real),
+    )
+    if argv[0] == "list":
+        argv = [*argv, "--cases", str(tmp_path)]
+    assert cli.main(argv) == 0
+    said = capsys.readouterr()
+    assert said.out == answer
+    assert "a line some library printed" in said.err
+    assert "UserWarning: the file is not what it says" in said.err
+    assert cli.ANSWERS == ("list", "runs", "stages", "submissions")
+    assert sys.stdout is not sys.stderr  # put back
+
+
 # ── a blocked run, a refusal, a restart ───────────────────────────────────────
 def test_a_blocked_run_submits_no_tile(tmp_path):
     site = Site(tmp_path, {1: range(4), 2: []})

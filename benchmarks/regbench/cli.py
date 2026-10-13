@@ -57,6 +57,7 @@ Run from the repository root.
 from __future__ import annotations
 
 import argparse
+import builtins
 import contextlib
 import os
 
@@ -1551,8 +1552,38 @@ def _tissue(a):
     return 0
 
 
+# The commands a shell script reads the standard output of (a table, a count, a list of
+# array indices). While one of them runs, `sys.stdout` IS the standard error: a library
+# that logs or warns on "stdout" (STARE installs a root handler on it at its first
+# logger) writes there, and only this module's own `print` reaches the real one.
+ANSWERS = ("list", "runs", "stages", "submissions")
+_ANSWER = None
+
+
+def print(*args, **kwargs):  # noqa: A001  (this module's answers, see ANSWERS)
+    if _ANSWER is not None and "file" not in kwargs:
+        kwargs["file"] = _ANSWER
+    builtins.print(*args, **kwargs)
+
+
 def main(argv=None):
+    """Run one command. For a command in ``ANSWERS`` everything but its answer goes to
+    the standard error."""
+    global _ANSWER
     a = build_parser().parse_args(argv)
+    if a.cmd not in ANSWERS:
+        return _main(a)
+    import sys
+
+    _ANSWER, sys.stdout = sys.stdout, sys.stderr
+    try:
+        return _main(a)
+    finally:
+        sys.stdout.flush()
+        sys.stdout, _ANSWER = _ANSWER, None
+
+
+def _main(a):
     if a.cmd == "nuclei":
         from . import nuclei
 
