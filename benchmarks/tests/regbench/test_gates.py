@@ -60,6 +60,23 @@ def test_a_selfcheck_that_left_no_record_blocks_the_run(tmp_path, capsys):
     assert out.read_text().split("\t")[:4] == ["palom", "not_checked", "-", "1"]
 
 
+def test_an_inconsistent_run_starts_only_when_the_owner_named_it(tmp_path, capsys):
+    """REGBENCH_ALLOW_INCONSISTENT is the owner's override of a MEASURED disagreement:
+    the run may start, the verdict is recorded as it is, and nothing else is let
+    through by it."""
+    flag = "--allow-inconsistent"
+    code, line = _gate(tmp_path, "palom", flag, palom_affine="ok", palom="inconsistent")
+    assert code == 0 and line == ["palom", "inconsistent", "-", "0", "-", "-"]
+    assert "ALTHOUGH its selfcheck measured a disagreement" in capsys.readouterr().out
+    for verdict in ("not_checked", "crashed"):
+        code, line = _gate(tmp_path, "palom", flag, palom_affine="ok", palom=verdict)
+        assert code == selfcheck.EXIT_CODE[verdict]
+        assert line == ["palom", verdict, "-", "1", "-", "-"]
+    # without the flag an inconsistent selfcheck blocks, as it always did
+    code, line = _gate(tmp_path, "palom", palom_affine="ok", palom="inconsistent")
+    assert code == selfcheck.EXIT_CODE["inconsistent"] and line[3] == "1"
+
+
 def test_an_allowed_run_starts_only_when_its_selfcheck_could_not_decide(
     tmp_path, capsys
 ):

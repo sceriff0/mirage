@@ -684,6 +684,13 @@ def build_parser():
         help="let the run start when its selfcheck ran and could not decide "
         "(not_checked); every other verdict still blocks (REGBENCH_ALLOW_UNCHECKED)",
     )
+    gt.add_argument(
+        "--allow-inconsistent",
+        action="store_true",
+        help="let the run start although its selfcheck MEASURED a disagreement "
+        "(inconsistent): the owner's override, per run (REGBENCH_ALLOW_INCONSISTENT). "
+        "The verdict is recorded as it is; a crash or a missing record still blocks",
+    )
 
     rg = sub.add_parser(
         "realgate",
@@ -1393,6 +1400,14 @@ def _gate(a):
     dropped = variants.dropped_variants(a.name, record) if run == a.name else []
     reference = _reference_status(record, variants.gate_variants(a.name))
     allowed = a.allow_unchecked and status == selfcheck.NOT_CHECKED and bool(record)
+    # the owner's override of a MEASURED disagreement, named per run: the verdict stays
+    # `inconsistent` in the record, in the end line and in the summary
+    overridden = (
+        getattr(a, "allow_inconsistent", False)
+        and status == selfcheck.INCONSISTENT
+        and bool(record)
+    )
+    allowed = allowed or overridden
     blocked = status in selfcheck.BLOCKING and not allowed
     print(f"{status}\t{','.join(dropped) or variants.NONE}")
     _write_gate(a.record, run, status, dropped, blocked, reference)
@@ -1407,6 +1422,13 @@ def _gate(a):
         verdict=status,
         dropped=",".join(dropped) or "-",
     )
+    if overridden:
+        print(
+            f"gate: {run} is named in REGBENCH_ALLOW_INCONSISTENT: it starts ALTHOUGH "
+            f"its selfcheck measured a disagreement ({status}). Its point mapping does "
+            "not follow the image its writer draws on the selfcheck's pairs"
+        )
+        return 0
     if allowed:
         print(f"gate: {run} is allowed to start unchecked ({status})")
         return 0

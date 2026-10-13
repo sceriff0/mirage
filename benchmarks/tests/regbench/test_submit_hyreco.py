@@ -58,12 +58,12 @@ def dry(site):
 def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     jobs, done, log, out = dry
     assert not log.exists()
-    # per run: three selfcheck attempts, a gate, and its own jobs (the ladder's first
+    # per run: its selfcheck and the selfcheck's watcher, a gate, and its own jobs (the ladder's first
     # array and its watcher; for STARE its stages' first attempts and watchers, its
     # tile submitters and its last job's); then the settle job and the set's scorer.
     # No retry is submitted: a watcher submits one after a failure
     own = [launch_jobs(variants.run_of(r)) for r in RUNS]
-    assert own == [8, 2, 2] and len(jobs) == sum(3 + 1 + n for n in own) + 2 == 26
+    assert own == [8, 2, 2] and len(jobs) == sum(2 + 1 + n for n in own) + 2 == 23
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout

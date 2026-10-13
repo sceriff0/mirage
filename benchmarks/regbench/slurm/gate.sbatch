@@ -33,6 +33,9 @@ else
     [ "$label" != - ] && args+=(--label "$label")
 fi
 [ "$allowed" = 1 ] && args+=(--allow-unchecked)
+# 2: the owner's override of a measured disagreement (REGBENCH_ALLOW_INCONSISTENT);
+# the selfcheck gate alone knows it
+[ "$allowed" = 2 ] && [ "$kind" = selfcheck ] && args+=(--allow-inconsistent)
 regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
 code=$?
 # a gate that could not run is the benchmark's failure, and the run stays blocked

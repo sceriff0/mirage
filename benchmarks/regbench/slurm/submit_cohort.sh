@@ -38,8 +38,9 @@
 # THE RUN LIST is read from `python -m benchmarks.regbench runs` and from nowhere else:
 # this script names no method. What it submits, in order:
 #
-#   1. per run that gates a run: its selfcheck, at 64, then 256, then 512 GB. An attempt
-#      above the first runs only when the one before ended for memory. A run whose
+#   1. per run that gates a run: its selfcheck at 64 GB and its watcher (retry.sbatch),
+#      which submits it at 256 and then 512 GB only when the attempt before did not
+#      end ok. An attempt above the first runs only when the one before ended for memory. A run whose
 #      results another reads (column `after`) hands its selfcheck's work to that one
 #      (`--m0-from`), which waits for it.
 #   2. per run: a gate job (`regbench gate`). It fails when the selfcheck that gates the
@@ -206,6 +207,10 @@
 #                                     is refused for another one
 #   REGBENCH_SCORE_WHILE_QUEUED=1     --score-only although jobs of an earlier call
 #                                     into REGBENCH_OUT are still pending or running
+#   REGBENCH_ALLOW_INCONSISTENT       run names that start although their selfcheck
+#                                     MEASURED a disagreement (`inconsistent`): the
+#                                     owner's override. The verdict is recorded as it
+#                                     is; a crash or a missing record still blocks
 #   REGBENCH_ALLOW_UNCHECKED          run names that start although their selfcheck ran
 #                                     and could not decide (`not_checked`). Nothing
 #                                     else is let through: not `inconsistent`, not
@@ -601,6 +606,7 @@ for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
 for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_UNCHECKED: no run named '$r'"; done
+for r in ${REGBENCH_ALLOW_INCONSISTENT:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_INCONSISTENT: no run named '$r'"; done
 # --score-only: no run is selected, so nothing of steps 1 to 4 is submitted
 if [ "$score_only" = 1 ]; then
     [ -z "$only_runs" ] || echo "# --score-only: --runs is not used (the scorer scores every run of the submission)"
@@ -920,55 +926,6 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
 done < "$table"
 
-# The chains' retry plans (plan_open, below) are written while the jobs are submitted.
-# Their folder is made HERE, where one that cannot be written still stops the launch
-# with nothing in the queue.
-retry_root="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION"
-[ "$DRY" = 1 ] && retry_root="$scratch/retry"
-mkdir -p "$retry_root" 2>/dev/null && [ -w "$retry_root" ] \
-    || die "cannot write the retry plans to $retry_root. Nothing was submitted."
-sc_time="$(limit "$sc_s")"
-while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
-    has "$needed" "$name" || continue
-    gres=()
-    [ "$gpu" = 1 ] && gres=(${GPU_ARGS[@]+"${GPU_ARGS[@]}"})
-    base="" anchor=-
-    if [ "$after" != - ]; then
-        anchor="$after"
-        last="SC_LAST_$after"
-        base="afterok:${!last}"
-    fi
-    previous=- attempt=0
-    for gb in $SELFCHECK_RUNGS_GB; do
-        attempt=$((attempt + 1))
-        dep="$base"
-        [ "$previous" = - ] || dep="${dep:+$dep,}afterany:$previous"
-        deps=()
-        [ -n "$dep" ] && deps=(--dependency="$dep")
-        submit "rb-sc-$name-${gb}g" "${COMMON[@]}" "$LOG_ONE" ${deps[@]+"${deps[@]}"} \
-            --cpus-per-task="$CPUS" --mem="${gb}G" --time="$sc_time" ${gres[@]+"${gres[@]}"} \
-            "$HERE/selfcheck.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
-            "$mask" "$anchor" "$attempt" "$gb" "$previous"
-        previous="$JOB_ID"
-    done
-    printf -v "SC_LAST_$name" '%s' "$previous"
-done < "$table"
-
-# ── 2. one gate per run ───────────────────────────────────────────────────────────────
-small=(--cpus-per-task=1 --mem=4G --time=0-01:00:00)
-while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
-    has "$selected" "$name" || continue
-    allowed=0
-    has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
-    # an earlier submission's verdict must not be what a task of this one finds
-    [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
-    last="SC_LAST_$gated_by"
-    submit "rb-gate-$name" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:${!last}" "${small[@]}" \
-        "$HERE/gate.sbatch" selfcheck "$name" "$gated_by" "$allowed"
-    printf -v "GATE_$name" '%s' "$JOB_ID"
-done < "$table"
-
-# ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
 # RETRIES ARE SUBMITTED AFTER A FAILURE, NEVER BEFORE IT. Of a chain (a memory ladder, the
 # attempts of a stage) only the FIRST array is submitted here, with one small job after
 # it, the chain's watcher (retry.sbatch). The other steps are written down as a plan
@@ -1000,17 +957,80 @@ plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
         printf '\n'
     fi
 }
-# plan_watch <job prefix> <first job id> <first job name> <array range> <dependencies of
-# the first array>: the chain's watcher; sets JOB_ID. It has the first array's own
-# dependencies too, so a chain a gate stops has no watcher either.
+# plan_watch <job prefix> <first job id> <first job name> <array range|-> <dependencies
+# of the first job> [<run whose gate it obeys|->]: the chain's watcher; sets JOB_ID. It
+# has the first job's own dependencies too, so a chain a gate stops has no watcher
+# either. A range of `-` is a chain of single jobs (a selfcheck), and a run of `-` a
+# chain that runs BEFORE its run's gate.
 plan_watch() {
     local dep="afterany:$2"
     [ -z "$5" ] || dep="$5,$dep"
     submit "$1-retry" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
         --cpus-per-task=1 --mem=1G --time="$(limit "$MAX_SECONDS")" \
-        "$HERE/retry.sbatch" "$name" "$PLAN_SHOWN" "$2" "$3" "$4"
+        "$HERE/retry.sbatch" "${6:-$name}" "$PLAN_SHOWN" "$2" "$3" "$4"
 }
 
+# The chains' retry plans (plan_open, above) are written while the jobs are submitted.
+# Their folder is made HERE, where one that cannot be written still stops the launch
+# with nothing in the queue.
+retry_root="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION"
+[ "$DRY" = 1 ] && retry_root="$scratch/retry"
+mkdir -p "$retry_root" 2>/dev/null && [ -w "$retry_root" ] \
+    || die "cannot write the retry plans to $retry_root. Nothing was submitted."
+sc_time="$(limit "$sc_s")"
+while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
+    has "$needed" "$name" || continue
+    gres=()
+    [ "$gpu" = 1 ] && gres=(${GPU_ARGS[@]+"${GPU_ARGS[@]}"})
+    base="" anchor=-
+    if [ "$after" != - ]; then
+        anchor="$after"
+        last="SC_LAST_$after"
+        base="afterok:${!last}"
+    fi
+    # the first rung is submitted; the others are steps of the selfcheck's watcher,
+    # submitted only when the attempt before did not end ok (and such a job still runs
+    # the selfcheck only when that attempt ended for memory). The watcher ends ok only
+    # when the selfcheck did: a run anchored on this one waits for it with `afterok`.
+    attempt=0 first_id="" first_name=""
+    plan_open "rb-sc-$name"
+    for gb in $SELFCHECK_RUNGS_GB; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" = 1 ]; then
+            deps=()
+            [ -n "$base" ] && deps=(--dependency="$base")
+            submit "rb-sc-$name-${gb}g" "${COMMON[@]}" "$LOG_ONE" ${deps[@]+"${deps[@]}"} \
+                --cpus-per-task="$CPUS" --mem="${gb}G" --time="$sc_time" ${gres[@]+"${gres[@]}"} \
+                "$HERE/selfcheck.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
+                "$mask" "$anchor" "$attempt" "$gb" -
+            first_id="$JOB_ID" first_name="rb-sc-$name-${gb}g"
+            continue
+        fi
+        plan_step notok "rb-sc-$name-${gb}g" "${COMMON[@]}" "$LOG_ONE" \
+            --cpus-per-task="$CPUS" --mem="${gb}G" --time="$sc_time" ${gres[@]+"${gres[@]}"} \
+            "$HERE/selfcheck.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
+            "$mask" "$anchor" "$attempt" "$gb" "@PREVIOUS@"
+    done
+    plan_watch "rb-sc-$name" "$first_id" "$first_name" - "$base" -
+    printf -v "SC_LAST_$name" '%s' "$JOB_ID"
+done < "$table"
+
+# ── 2. one gate per run ───────────────────────────────────────────────────────────────
+small=(--cpus-per-task=1 --mem=4G --time=0-01:00:00)
+while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
+    has "$selected" "$name" || continue
+    allowed=0
+    has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
+    has "${REGBENCH_ALLOW_INCONSISTENT:-}" "$name" && allowed=2
+    # an earlier submission's verdict must not be what a task of this one finds
+    [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
+    last="SC_LAST_$gated_by"
+    submit "rb-gate-$name" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:${!last}" "${small[@]}" \
+        "$HERE/gate.sbatch" selfcheck "$name" "$gated_by" "$allowed"
+    printf -v "GATE_$name" '%s' "$JOB_ID"
+done < "$table"
+
+# ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
 # ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: the first
 # rung's array, then the plan of the others (per rung the attempt, then the same rung
 # again for a unit the scheduler lost) and the watcher; sets LADDER_LAST to the watcher.
@@ -1293,5 +1313,6 @@ else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
+[ -n "${REGBENCH_ALLOW_INCONSISTENT:-}" ] && echo "# OVERRIDE: allowed to start although the selfcheck is inconsistent: $REGBENCH_ALLOW_INCONSISTENT (the gate record and the summary keep the verdict)"
 FINISHED=1
 exit 0

@@ -11,17 +11,24 @@
 # this job ends at once. It runs on a compute node, OUTSIDE any image, and calls
 # `sbatch` and `squeue` itself, as the tile submitter (feed_tiles.sbatch) does.
 #
-#   retry.sbatch <run> <plan folder> <first job id> <first job name> <array range a-b>
+#   retry.sbatch <run|-> <plan folder> <first job id> <first job name> <array range a-b|->
+#
+# A range of `-`: the chain is of SINGLE jobs, not arrays (a selfcheck). Then a step is
+# submitted without --array, the end line is <job name>-<job id>.end, and this job
+# exits 0 only when the chain's last job ended ok (what waits for a selfcheck with
+# `afterok` waits for this job). A run of `-`: the chain runs before its run's gate
+# (a selfcheck), so there is no verdict to obey yet.
 #
 # THE PLAN is written by submit_cohort.sh: <plan folder>/step-<k>, one per step in the
 # order the chain runs, one item per line:
-#   line 1    the step's kind: `again` (the same rung once more), `climb` (the next rung)
-#             or `stage` (the next attempt of a stage job)
+#   line 1    the step's kind: `again` (the same rung once more), `climb` (the next rung),
+#             or anything else (`stage`, `notok`: the next attempt of a stage job or of
+#             a selfcheck)
 #   line 2    the job name
 #   line 3..  the sbatch arguments (no --array, no --dependency), then the job script
 #             and its arguments. The item `@EARLIER@` is replaced by the ids of every
 #             job of this chain submitted so far (run_rung.sbatch asks the scheduler's
-#             accounting about them).
+#             accounting about them), and `@PREVIOUS@` by the id of the last one.
 #
 # WHICH UNITS A STEP IS SUBMITTED FOR. Each task leaves an end line in
 # $REGBENCH_OUT/logs/end/<job name>-<job id>_<index>.end (env.sh). The unit's LAST task
@@ -30,7 +37,7 @@
 #   status=ok       nothing more, ever
 #   `again`         cause killed or infrastructure
 #   `climb`         a memory cause, killed or infrastructure
-#   `stage`         anything that is not ok
+#   any other kind  anything that is not ok
 # (ladder.py: AGAIN_CAUSES, CLIMB_CAUSES; a test keeps the lists below equal to them.)
 # This is a FILTER, not the decision: the task that is submitted still decides for
 # itself, exactly as before (run_rung.sbatch, stage.sbatch), and exits at once when its
@@ -63,6 +70,7 @@ status=not_checked blocked=1
 if [ -s "$gate" ]; then
     IFS=$'\t' read -r _ status _ blocked _ < "$gate"
 fi
+[ "$name" = - ] && blocked=0
 if [ "$blocked" != 0 ]; then
     echo "$name: the gate says $status and the run is not allowed to start unchecked; no retry is submitted"
     end blocked gate_blocked
@@ -71,19 +79,26 @@ fi
 
 # last: "<index> <job name>-<job id>" per unit, the last job that held the unit
 last="$plan/last"
+single=0
+[ "$range" = - ] && single=1
 lo="${range%%-*}" hi="${range#*-}"
 if [ ! -s "$last" ]; then
-    seq "$lo" "$hi" | awk -v j="$first_name-$first_id" '{ print $1, j }' > "$last" \
+    { if [ "$single" = 1 ]; then echo -; else seq "$lo" "$hi"; fi; } \
+        | awk -v j="$first_name-$first_id" '{ print $1, j }' > "$last" \
         || { echo "cannot write $last"; end failed not_submitted; exit 1; }
 fi
-earlier="$first_id"
+earlier="$first_id" previous="$first_id"
+# end_file <index> <job name>-<job id>: where that task left its end line
+end_file() {
+    if [ "$single" = 1 ]; then echo "$ends/$2.end"; else echo "$ends/${2}_$1.end"; fi
+}
 
 # wanted <kind>: the indices the step is submitted for, one per line
 wanted() {
     local kind="$1" idx job file st cause causes
     case "$kind" in again) causes=" $AGAIN_CAUSES " ;; climb) causes=" $CLIMB_CAUSES " ;; *) causes="" ;; esac
     while read -r idx job; do
-        file="$ends/${job}_$idx.end"
+        file="$(end_file "$idx" "$job")"
         if [ ! -s "$file" ]; then echo "$idx"; continue; fi
         st="$(sed -nE 's/.* status=([^ ]+).*/\1/p' "$file" | tail -n 1)"
         cause="$(sed -nE 's/.* cause=([^ ]+).*/\1/p' "$file" | tail -n 1)"
@@ -134,13 +149,17 @@ while [ -s "$plan/step-$k" ]; do
         k=$((k + 1))
         continue
     fi
-    array="$(spec <<< "$due")"
-    args=()
+    args=() array="-"
+    if [ "$single" != 1 ]; then
+        array="$(spec <<< "$due")"
+        args+=(--array="$array%$REGBENCH_ARRAY_LIMIT")
+    fi
     for item in "${items[@]:2}"; do
         [ "$item" = "@EARLIER@" ] && item="$earlier"
+        [ "$item" = "@PREVIOUS@" ] && item="$previous"
         args+=("$item")
     done
-    if ! got="$(sbatch --parsable --job-name="$jobname" --array="$array%$REGBENCH_ARRAY_LIMIT" "${args[@]}" < /dev/null 2>&1)"; then
+    if ! got="$(sbatch --parsable --job-name="$jobname" "${args[@]}" < /dev/null 2>&1)"; then
         echo "sbatch REFUSED $jobname (--array=$array): $got"
         end failed not_submitted
         exit 1
@@ -153,7 +172,7 @@ while [ -s "$plan/step-$k" ]; do
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$jobname" "$id" >> "$REGBENCH_OUT/logs/jobs.tsv"
     n_sent=$((n_sent + 1))
     echo "step $k ($jobname, $kind): submitted as $id for $(wc -l <<< "$due" | tr -d ' ') unit(s): --array=$array"
-    earlier="$earlier,$id"
+    earlier="$earlier,$id" previous="$id"
     # these units' last job is now this one
     awk -v j="$jobname-$id" 'NR == FNR { due[$1] = 1; next } ($1 in due) { print $1, j; next } { print }' \
         <(echo "$due") "$last" > "$last.new" && mv "$last.new" "$last"
@@ -165,5 +184,17 @@ while [ -s "$plan/step-$k" ]; do
     k=$((k + 1))
 done
 echo "$first_name: $n_sent of $n_steps retry step(s) were needed and submitted"
+if [ "$single" = 1 ]; then
+    # a chain of single jobs: this job ends as the chain's last job did
+    read -r idx job < "$last"
+    file="$(end_file "$idx" "$job")"
+    st=""
+    [ -s "$file" ] && st="$(sed -nE 's/.* status=([^ ]+).*/\1/p' "$file" | tail -n 1)"
+    if [ "$st" != ok ]; then
+        echo "$first_name: the chain's last job ($job) ended ${st:-without an end line}, not ok"
+        end failed -
+        exit 1
+    fi
+fi
 end ok -
 exit 0

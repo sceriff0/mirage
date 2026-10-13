@@ -36,7 +36,7 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
-N_JOBS = 177  # sbatch calls of the default submission on the fixture
+N_JOBS = 161  # sbatch calls of the default submission on the fixture
 # the last job of a staged round has the benchmark's ladder (its own work is in it)
 STITCH_GB = ladder.RUNGS_GB
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
@@ -725,12 +725,20 @@ def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
     assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 16
     for run in GATING:
-        got = [jobs[f"rb-sc-{run}-{gb}g"] for gb in ladder.SELFCHECK_RUNGS_GB]
+        got = [_any(jobs, f"rb-sc-{run}-{gb}g") for gb in ladder.SELFCHECK_RUNGS_GB]
+        # the first is submitted; the others are steps of the selfcheck's watcher
+        assert [j.name in jobs for j in got] == [True, False, False], run
+        assert got[1].args[10] == got[2].args[10] == "@PREVIOUS@"
+        watcher = jobs[f"rb-sc-{run}-retry"]
+        assert watcher.script == "retry.sbatch"
+        assert ("afterany", f"<{got[0].name}>") in watcher.deps
+        # no run's gate to obey yet, and a chain of single jobs, not arrays
+        assert watcher.args[0] == "-" and watcher.args[4] == "-"
         assert [j.opt("--mem") for j in got] == ["64G", "256G", "512G"], run
         assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 3, run
         assert [j.args[8:10] for j in got] == [["1", "64"], ["2", "256"], ["3", "512"]]
-        for lower, upper in zip(got, got[1:]):
-            assert ("afterany", f"<{lower.name}>") in upper.deps
+        # a later rung has no dependency: the watcher waits for the one before it
+        assert all(j.opt("--dependency") is None for j in got[1:])
     code = code_of(SLURM / "selfcheck.sbatch")
     assert re.search(
         r'if \[ "\$attempt" -gt 1 \]; then\s+args\+=\(--retry-memory\)', code
@@ -755,7 +763,7 @@ def test_an_anchored_selfcheck_waits_for_the_anchors_and_reads_its_work(dry):
     jobs, _, _ = dry
     job = jobs["rb-sc-affine_ashlar-64g"]
     assert job.args[7] == "stare"
-    assert ("afterok", "<rb-sc-stare-512g>") in job.deps
+    assert ("afterok", "<rb-sc-stare-retry>") in job.deps
     code = code_of(SLURM / "selfcheck.sbatch")
     assert '[ "$anchor" != - ] && args+=(--m0-from "$root/$anchor")' in code
 
@@ -767,7 +775,7 @@ def test_every_run_waits_for_its_own_gate_and_the_gate_for_the_selfcheck(dry):
         gating = variants.gated_by(run)
         assert gate.script == "gate.sbatch"
         assert gate.args == ["selfcheck", run, gating, "0"]
-        assert gate.deps == {("afterany", f"<rb-sc-{gating}-512g>")}
+        assert gate.deps == {("afterany", f"<rb-sc-{gating}-retry>")}
         mine = [
             j
             for j in jobs.values()
@@ -987,7 +995,7 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     assert more == 6 + 8 and len(STAGED) == 2
     assert (
         len(jobs)
-        == 18 + 48 + 18 * 2 * 2 + 2 * (2 + 1) + 1 + len(sizes) + 2 + 2 * more
+        == 18 + 32 + 18 * 2 * 2 + 2 * (2 + 1) + 1 + len(sizes) + 2 + 2 * more
         == N_JOBS
     )
 
@@ -1373,7 +1381,7 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
             first = rungs(jobs, run, dataset)[0]
             assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps
     anchored = jobs["rb-sc-affine_ashlar-64g"]
-    assert ("afterok", "<rb-sc-stare-512g>") in anchored.deps
+    assert ("afterok", "<rb-sc-stare-retry>") in anchored.deps
     # on lanes, each run starts behind the run dealt onto its lane before it
     if lanes:
         for i, run in enumerate(wanted):
@@ -2872,7 +2880,9 @@ def test_extra_sbatch_arguments_reach_every_job(site):
 
 
 # ── the watcher: a retry is submitted after a failure, for the units that failed ──
-def _watch(tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0"):
+def _watch(
+    tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0", run="stare", single=None
+):
     """Run retry.sbatch against stand-in sbatch and squeue. ``ends``: {index: end line
     of the unit's task in the first array, or None for no end line}."""
     out, bin_, plan = tmp_path / "out", tmp_path / "bin", tmp_path / "plan"
@@ -2882,6 +2892,8 @@ def _watch(tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0"):
     for idx, line in ends.items():
         if line is not None:
             (out / "logs" / "end" / f"rb-x-16g-50_{idx}.end").write_text(line + "\n")
+    if single is not None:  # a chain of single jobs: the first job's end line
+        (out / "logs" / "end" / "rb-x-16g-50.end").write_text(single + "\n")
     for k, items in enumerate(steps, 1):
         (plan / f"step-{k}").write_text("".join(f"{i}\n" for i in items))
     calls = tmp_path / "sbatch.log"
@@ -2902,7 +2914,7 @@ def _watch(tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0"):
         "REGBENCH_RETRY_POLL_S": "0",
         "REGBENCH_SUBMISSION": "t",
     }
-    argv = ["bash", str(SLURM / "retry.sbatch"), "stare", str(plan), "50", "rb-x-16g"]
+    argv = ["bash", str(SLURM / "retry.sbatch"), run, str(plan), "50", "rb-x-16g"]
     done = subprocess.run(argv + [range_], env=env, capture_output=True, text=True)
     sent = calls.read_text().splitlines() if calls.exists() else []
     return done, sent, out
@@ -2956,6 +2968,31 @@ def test_the_watcher_of_a_blocked_run_submits_nothing(tmp_path):
     done, sent, _ = _watch(tmp_path, {}, STEPS, gate="inconsistent\t0\t1")
     assert done.returncode == 0 and sent == []
     assert "status=blocked cause=gate_blocked" in done.stdout
+
+
+def test_the_watcher_of_single_jobs_ends_as_the_chains_last_job_did(tmp_path):
+    """A selfcheck's chain: jobs, not arrays. Nothing is submitted when the first ended
+    ok; otherwise the next rung is, without --array and with the id of the job before
+    it, and the watcher ends ok only when the chain's last job did (a selfcheck anchored
+    on this one waits for the watcher with `afterok`)."""
+    steps = [
+        ["notok", "rb-sc-x-256g", "--mem=256G", "selfcheck.sbatch", "2", "@PREVIOUS@"],
+        ["notok", "rb-sc-x-512g", "--mem=512G", "selfcheck.sbatch", "3", "@PREVIOUS@"],
+    ]
+    kw = {"range_": "-", "run": "-"}
+    ok = "REGBENCH_END kind=selfcheck status=ok cause= whose="
+    done, sent, _ = _watch(tmp_path / "ok", {}, steps, single=ok, **kw)
+    assert done.returncode == 0 and sent == [], done.stdout + done.stderr
+    # a selfcheck that ended inconsistent stands: nothing reads the gate (there is none
+    # yet), the next rungs are submitted and decide for themselves
+    bad = "REGBENCH_END kind=selfcheck status=not_checked cause=selfcheck_not_checked"
+    done, sent, _ = _watch(tmp_path / "bad", {}, steps, single=bad, **kw)
+    assert sent == [
+        "--parsable --job-name=rb-sc-x-256g --mem=256G selfcheck.sbatch 2 50",
+        "--parsable --job-name=rb-sc-x-512g --mem=512G selfcheck.sbatch 3 101",
+    ]
+    # the last job left no end line here: the chain did not end ok
+    assert done.returncode == 1 and "not ok" in done.stdout
 
 
 def test_the_watchers_cause_lists_are_the_ladders():
