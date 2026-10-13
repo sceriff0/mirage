@@ -16,6 +16,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -100,6 +101,9 @@ def site(tmp_path_factory):
         '  echo "sbatch: error: QOSMaxSubmitJobPerUserLimit" >&2; exit 1\nfi\n'
         'echo "$n" > "$SBATCH_LOG.n"\n'
         'printf "%s\\t%s\\n" "$n" "$*" >> "$SBATCH_LOG"\n'
+        # SBATCH_SLEEP_AT: the scheduler takes that job only after a while
+        'if [ -n "${SBATCH_SLEEP_AT:-}" ] && [ "$n" -eq "$SBATCH_SLEEP_AT" ]; then\n'
+        "  sleep 3\nfi\n"
         # SBATCH_BREAK_AT: from that id on the launcher's own job list cannot be
         # written (something other than the scheduler stops the launch)
         'if [ -n "${SBATCH_BREAK_AT:-}" ] && [ "$n" -ge "$SBATCH_BREAK_AT" ]; then\n'
@@ -126,6 +130,12 @@ def site(tmp_path_factory):
 
 
 def launch(site, *args, env=None, dry=True, log="calls"):
+    argv, base, out = _launch_command(site, args, env, dry, log)
+    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
+    return done, Path(base["SBATCH_LOG"]), out
+
+
+def _launch_command(site, args, env, dry, log):
     tmp, cases, fake = site
     out = tmp / f"out-{log}"
     base = {
@@ -148,8 +158,7 @@ def launch(site, *args, env=None, dry=True, log="calls"):
     for key in [k for k, v in base.items() if v is None]:
         del base[key]
     argv = ["bash", str(SCRIPT), *(["--dry-run"] if dry else []), *args]
-    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
-    return done, Path(base["SBATCH_LOG"]), out
+    return argv, base, out
 
 
 class Job:
@@ -1537,7 +1546,8 @@ def test_a_read_that_fails_stops_the_launch_before_anything_is_queued(
 
 def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
     """In the script itself: after the selfchecks start, nothing asks the harness for
-    anything and nothing refuses."""
+    anything, nothing refuses, no time is parsed and no variable of the caller is
+    read for the first time."""
     code = code_of(SCRIPT)
     start = code.index("sc_time=")
     tail = code[start:]
@@ -1545,6 +1555,155 @@ def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
     assert "regbench_py" not in tail
     assert not re.search(r"(^|[;&|]\s*|\s)die\s", tail)
     assert "fetch_stare_source\n    preflight\n" in code[:start]
+    # a time that is not one must stop the script, which only a plain assignment
+    # before the first sbatch does: none is nested in another substitution anywhere
+    assert not re.search(r"\$\(\s*seconds\s", tail)
+    assert not re.search(r"\$\([^()]*\$\(\s*seconds\s", code)
+    for call in re.findall(r"^.*\$\(\s*seconds\s.*$", code, re.M):
+        assert re.match(r"^\s*\w+=\"\$\(seconds [^()]*\)\"$", call), call
+    later = set(re.findall(r"\$\{?!?(REGBENCH_[A-Z0-9_]+)", tail))
+    earlier = set(re.findall(r"REGBENCH_[A-Z0-9_]+", code[:start]))
+    assert later <= earlier, sorted(later - earlier)
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("REGBENCH_SCORE_TIME", "tomorrow"),
+        ("REGBENCH_SCORE_TIME", "24:00"),
+        ("REGBENCH_STAGE_FEED_TIME", "7d"),
+        ("REGBENCH_STAGE_FEED_TIME", "1-xx:00:00"),
+        ("REGBENCH_NUCLEI_TIME", "8h"),
+    ],
+)
+def test_a_time_that_is_not_one_stops_the_launch_before_anything_is_queued(
+    site, name, value
+):
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1", name: value}
+    done, log, out = launch(site, env=env, dry=False, log=f"time-{name}")
+    assert done.returncode == 2 and not log.exists(), done.stderr
+    assert f"a time must be [D-]HH:MM:SS, got '{value}'" in done.stderr
+    assert "Nothing was submitted." in done.stderr
+    assert "already queued" not in done.stderr
+    assert not (out / "logs" / "submission").exists()
+
+
+@pytest.mark.parametrize(
+    "name, value, least",
+    [
+        ("REGBENCH_STAGE_STALL_S", "1h", 1),
+        ("REGBENCH_STAGE_STALL_MAX_S", "0", 1),
+        ("REGBENCH_STAGE_SQUEUE_TRIES", "", 1),
+        ("REGBENCH_ACCT_WAIT_S", "ten", 0),
+        ("REGBENCH_ACCT_POLL_S", "0", 1),
+    ],
+)
+def test_a_number_the_jobs_read_is_checked_by_the_launcher(site, name, value, least):
+    env = {"REGBENCH_ALLOW_PATH_PYTHON": "1", name: value}
+    done, log, _ = launch(site, env=env, dry=False, log=f"number-{name}")
+    assert done.returncode == 2 and not log.exists(), done.stderr
+    assert f"{name}='{value}': a whole number of at least {least}" in done.stderr
+
+
+def test_the_stitch_time_is_summed_before_the_first_sbatch(dry):
+    """The last job of a staged round has one round's time plus the writer's four
+    attempts (4 + 8 + 12 + 16 h), each parsed before anything is submitted."""
+    code = code_of(SCRIPT)
+    assert "STITCH_S=$((STITCH_S + stage_s))" in code[: code.index("sc_time=")]
+    jobs, _, _ = dry
+    for run in STAGED:
+        assert rungs(jobs, run)[0].opt("--time") == "2-16:00:00"
+
+
+@pytest.mark.parametrize("signum, code", [(15, 143), (1, 129), (2, 130)])
+def test_a_signal_in_the_middle_of_a_submission_says_what_is_queued(site, signum, code):
+    """The launcher is signalled while the scheduler is taking its fifth job: that job
+    is in the ids file, and the script's last words name what is queued."""
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_SUBMISSION": f"S-sig{signum}",
+        "SBATCH_SLEEP_AT": "1005",
+    }
+    argv, base, out = _launch_command(site, (), env, False, f"signal{signum}")
+    log = Path(base["SBATCH_LOG"])
+    own = subprocess.Popen(
+        argv, env=base, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=REPO,
+    )  # fmt: skip
+    try:
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline and own.poll() is None:
+            if log.exists() and len(log.read_text().splitlines()) >= 5:
+                break
+            time.sleep(0.05)
+        assert own.poll() is None, own.communicate()
+        own.send_signal(signum)  # this test's own launcher, by the pid it started
+        stdout, said = own.communicate(timeout=120)
+    finally:
+        if own.poll() is None:
+            own.kill()
+            own.communicate()
+    assert own.returncode == code, said
+    assert len(log.read_text().splitlines()) == 5
+    ids = out / "logs" / "submitted" / f"S-sig{signum}.ids"
+    assert ids.read_text().split() == [str(i) for i in range(1001, 1006)]
+    name = {15: "TERM", 1: "HUP", 2: "INT"}[signum]
+    assert f"stopped with exit {code} after the first sbatch (signal {name})" in said
+    assert (
+        f"5 job(s) of this call are already queued (submission S-sig{signum})" in said
+    )
+    assert "the rest was NOT submitted, so the graph is incomplete" in said
+    assert f'scancel $(cat "{ids}")' in said
+    assert "job(s) submitted" not in stdout
+    assert (out / "logs" / "submission").read_text() == f"S-sig{signum}\n"
+
+
+def test_a_first_sbatch_that_is_refused_leaves_no_submission(site):
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_SUBMISSION": "S-none",
+        "SBATCH_REFUSE_AT": "1001",
+    }
+    done, log, out = launch(site, env=env, dry=False, log="refused-first")
+    assert done.returncode == 2 and not log.exists()
+    assert "sbatch REFUSED the job 'rb-" in done.stderr
+    # nothing is queued: nothing to cancel, and no submission for --score-only to find
+    assert "after cancelling what is queued" not in done.stderr
+    assert done.stderr.rstrip().endswith("Nothing was submitted.")
+    assert "already queued" not in done.stderr
+    assert not (out / "logs" / "submission").exists()
+
+
+@pytest.mark.parametrize("how", [(), ("--score-only",)])
+def test_synthetic_cases_of_another_truth_spec_are_refused_at_the_launch(
+    site, tmp_path, how
+):
+    """The scorer refuses such cases, and then writes no table for any dataset: the
+    launcher asks the same question before its first job."""
+    cases = tmp_path / "cases"
+    _case(cases, "multiplex", "P1_a", "P1")
+    _case(cases, "synthetic", "blob_grid_p0", "blob_grid")
+    record = cases / "synthetic" / "blob_grid_p0" / "case.json"
+    case = json.loads(record.read_text())
+    case["extra"] = {"truth_spec_sha256": "0" * 64}
+    record.write_text(json.dumps(case))
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "REGBENCH_CASES": str(cases),
+        "REGBENCH_SUBMISSION": "S-spec",
+    }
+    name = "spec" + "-".join(how)
+    done, log, out = launch(site, *how, env=env, dry=False, log=name)
+    assert done.returncode == 2 and not log.exists(), done.stderr
+    assert "this case was prepared from truth_spec.json 000000000000" in done.stderr
+    assert "Nothing was prepared" not in done.stderr
+    assert done.stderr.rstrip().endswith("Nothing was submitted.")
+    assert not (out / "logs" / "submission").exists()
+    # the cohort alone is not stopped by cases it does not submit
+    done, log, _ = launch(
+        site, *how, "--datasets", "multiplex", "--runs", "palom", env=env, log=name
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_whatever_stops_the_launch_after_the_first_sbatch_says_what_is_queued(site):

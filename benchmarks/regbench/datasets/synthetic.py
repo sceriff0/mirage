@@ -819,11 +819,13 @@ def prepare_one(cases_root, name, spec, workers=1, force=False):
     )
 
 
-def refuse_other_spec(cases_root):
+def refuse_other_spec(cases_root, nothing="Nothing was prepared."):
     """Stop when a synthetic case that is already prepared carries the hash of a
     ``truth_spec.json`` other than the current one. Such a case is neither kept (its
     maps, probes and seeds are another spec's) nor rewritten in place (the results
-    registered on it would then rest on images that are gone)."""
+    registered on it would then rest on images that are gone). ``nothing`` is the
+    message's last sentence: what the caller had not done yet (``prepare``, and the
+    launcher before its first job)."""
     current = truth.load_spec()[truth.HASH_KEY]
     for path in sorted((Path(cases_root) / "synthetic").glob("*/case.json")):
         try:
@@ -838,7 +840,7 @@ def refuse_other_spec(cases_root):
                 "specs are never in one folder, and an existing case is not replaced. "
                 "Prepare into a new, empty cases folder: export REGBENCH_CASES=<a "
                 "folder that does not exist yet> (or --cases) and prepare again. "
-                "Nothing was prepared."
+                f"{nothing}"
             )
 
 

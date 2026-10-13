@@ -279,6 +279,9 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_STAGE_POLL_S:=60}"
 : "${REGBENCH_STAGE_FEEDERS:=2}"
 : "${REGBENCH_STAGE_FEED_TIME:=7-00:00:00}"
+: "${REGBENCH_SCORE_CPUS:=8}"
+: "${REGBENCH_SCORE_MEM:=64G}"
+: "${REGBENCH_FORCE:=0}"
 export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_QUEUE_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
@@ -303,17 +306,23 @@ extra=("$@")
 [ "$DRY" = 0 ] || DRY=1
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
-# However this script ends once a job of this call is queued, short of its last line:
-# say what is queued and how to remove it (and, in a dry run, remove the scratch folder).
+# However this script ends once a job of this call is queued, short of its last line
+# (FINISHED is set just before it): say what is queued and how to remove it (and, in a
+# dry run, remove the scratch folder). The exit code is not what decides: a signal
+# reaches the EXIT trap with the code of the last command, which may be 0.
 N_QUEUED=0
+FINISHED=0
+STOPPED_BY=""
+IN_SBATCH=0
+PENDING_EXIT=""
 scratch_is_temporary=0
 # shellcheck disable=SC2329  # called by the EXIT trap below
 on_exit() {
     local code=$?
     [ "$scratch_is_temporary" = 1 ] && rm -rf "$scratch"
-    if [ "$code" != 0 ] && [ "$N_QUEUED" -gt 0 ]; then
+    if [ "$FINISHED" != 1 ] && [ "$N_QUEUED" -gt 0 ]; then
         {
-            echo "submit_cohort: stopped with exit $code after the first sbatch (the reason is above)."
+            echo "submit_cohort: stopped with exit $code after the first sbatch (${STOPPED_BY:-the reason is above})."
             echo "submit_cohort: $N_QUEUED job(s) of this call are already queued (submission $REGBENCH_SUBMISSION); the rest was NOT submitted, so the graph is incomplete."
             echo "submit_cohort: their ids, one per line: $IDS_FILE (with names: $JOBS_FILE)"
             echo "submit_cohort: cancel them:  scancel \$(cat \"$IDS_FILE\")"
@@ -321,6 +330,18 @@ on_exit() {
     fi
 }
 trap on_exit EXIT
+# A signal ends the script with the shell's code for it (128 + the signal), through the
+# EXIT trap. One that arrives while an sbatch is on its way is kept until that job's id
+# is in the ids file: a job the scheduler took is never missing from the notice.
+# shellcheck disable=SC2329  # called by the signal traps below
+on_signal() {
+    STOPPED_BY="signal $1"
+    [ "$IN_SBATCH" = 1 ] || exit "$2"
+    PENDING_EXIT="$2"
+}
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 # whole numbers of at least <least>: a zero here is an array of no task, or a loop
 # that never ends
@@ -337,6 +358,14 @@ need_int REGBENCH_STAGE_FEED_MIN 1
 need_int REGBENCH_STAGE_POLL_S 1
 need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
+need_int REGBENCH_SCORE_CPUS 1
+# read by the jobs, not here (feed_tiles.sbatch and run_rung.sbatch have the defaults):
+# a value that is no whole number stops the launch, not a job days later
+for pair in REGBENCH_STAGE_STALL_S:1 REGBENCH_STAGE_STALL_MAX_S:1 REGBENCH_STAGE_SQUEUE_TRIES:1 \
+            REGBENCH_ACCT_WAIT_S:0 REGBENCH_ACCT_POLL_S:1; do
+    var="${pair%%:*}"
+    [ -z "${!var+set}" ] || need_int "$var" "${pair##*:}"
+done
 [ "$preflight_only" = 1 ] && DRY=0   # it starts the images; it submits nothing
 [ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
 
@@ -381,11 +410,16 @@ if [ -n "$EXTERNAL" ] && [ "$n_named" -ne 1 ]; then
 fi
 
 # seconds <[D-]HH:MM:SS> ; limit <seconds> -> D-HH:MM:SS, never above the site's maximum
+# Every call is a plain assignment made before the first sbatch (`x="$(seconds ...)"`):
+# there a time that is not one stops the script. Nested in another substitution, or in
+# an argument of sbatch, the `die` would end a subshell only.
 seconds() {
-    local t="$1" d=0 h m s
+    local t="$1" d=0 h m s part
     case "$t" in *-*) d="${t%%-*}"; t="${t#*-}" ;; esac
     IFS=: read -r h m s <<< "$t"
-    [ -n "${s:-}" ] || die "a time must be [D-]HH:MM:SS, got '$1'"
+    for part in "$d" "${h:-}" "${m:-}" "${s:-}"; do
+        case "$part" in ''|*[!0-9]*) die "a time must be [D-]HH:MM:SS, got '$1'. Nothing was submitted." ;; esac
+    done
     echo $(( ((10#$d * 24 + 10#$h) * 60 + 10#$m) * 60 + 10#$s ))
 }
 limit() {
@@ -417,25 +451,39 @@ submit() {
         return 0
     fi
     local got
+    IN_SBATCH=1
     if ! got="$(sbatch --parsable --job-name="$name" "$@" < /dev/null 2>&1)"; then
+        IN_SBATCH=0
         refused "$name" "$got"
     fi
     JOB_ID="${got%%;*}"
-    case "$JOB_ID" in ''|*[!0-9_]*) refused "$name" "sbatch printed no job id: $got" ;; esac
+    case "$JOB_ID" in ''|*[!0-9_]*) IN_SBATCH=0; refused "$name" "sbatch printed no job id: $got" ;; esac
     # the id first: whatever fails after this line, the job is in the file the
     # closing notice (on_exit) names
     echo "$JOB_ID" >> "$IDS_FILE"
     N_QUEUED=$((N_QUEUED + 1))
+    IN_SBATCH=0
+    # the last submission that ran anything into this folder: what --score-only scores.
+    # Written with the first job the scheduler took: a call that queued nothing (stopped
+    # by the preflight, a check, or a refused first sbatch) is not a submission.
+    if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$score_only" != 1 ]; then
+        echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
+    fi
+    [ -z "$PENDING_EXIT" ] || exit "$PENDING_EXIT"
     printf '%s\t%s\n' "$name" "$JOB_ID"
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$name" "$JOB_ID" >> "$JOBS_FILE"
 }
 # refused <job name> <the scheduler's words>: an sbatch that did not go through. The
-# jobs before it ARE queued, and some of them wait for jobs that will never exist:
-# on_exit says how many, where their ids are and how to cancel them.
+# jobs before it, if any, ARE queued, and some of them wait for jobs that will never
+# exist: on_exit says how many, where their ids are and how to cancel them.
 refused() {
     {
         echo "submit_cohort: sbatch REFUSED the job '$1': $2"
-        echo "submit_cohort: submit again once that reason is gone (a limit on queued jobs: see README, \"What the site must allow\"), after cancelling what is queued:"
+        if [ "$N_QUEUED" -gt 0 ]; then
+            echo "submit_cohort: submit again once that reason is gone (a limit on queued jobs: see README, \"What the site must allow\"), after cancelling what is queued:"
+        else
+            echo "submit_cohort: submit again once that reason is gone (a limit on queued jobs: see README, \"What the site must allow\"). Nothing was submitted."
+        fi
     } >&2
     exit 2
 }
@@ -455,6 +503,9 @@ LOG_ARRAY="--output=$REGBENCH_OUT/logs/%x-%A_%a.log"
 round_s="$(seconds "$REGBENCH_TIME")"
 sc_s="$(seconds "$REGBENCH_SELFCHECK_TIME")"
 prep_s="$(seconds "${REGBENCH_PREPARE_TIME:-24:00:00}")"
+feed_s="$(seconds "$REGBENCH_STAGE_FEED_TIME")"
+score_s="$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")"
+nuclei_s="$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")"
 # shellcheck disable=SC2206  # the site's GPU request is several words on purpose
 GPU_ARGS=(${REGBENCH_SBATCH_GPU:-})
 
@@ -588,7 +639,7 @@ if [ "$prepare" = 1 ]; then
                     [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && echo "# REGBENCH_NUCLEI_FORCE=1: every slide is checked and segmented again (--export=ALL carries it to the array)"
                     submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
                         --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
-                        --time="$(limit "$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")")" \
+                        --time="$(limit "$nuclei_s")" \
                         ${nuc_gpu[@]+"${nuc_gpu[@]}"} \
                         --array="0-$((n_slides - 1))%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
                     # afterany: a slide whose re-run failed leaves its cases without
@@ -635,6 +686,7 @@ if [ "$prepare" = 1 ]; then
             ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
     done
     echo "prepare: $N_JOBS job(s). When they are done, run this script again without --prepare."
+    FINISHED=1
     exit 0
 fi
 
@@ -665,6 +717,12 @@ if [ -n "$missing" ]; then
 fi
 
 # ── the cases: every array is sized from what is prepared ─────────────────────────────
+# A synthetic case prepared from another truth_spec.json is refused by the scorer, which
+# then writes no table for any dataset: refused here, by the same rule, before a job runs
+if has "$datasets" synthetic; then
+    regbench_py "$REGBENCH_HEAD_IMAGE" list --cases "$REGBENCH_CASES" --dataset synthetic --current-spec > /dev/null \
+        || die "the synthetic cases under $REGBENCH_CASES are not all of the current truth_spec.json (line above): the scorer would refuse the whole result at the end. Nothing was submitted."
+fi
 sized=""
 for ds in $datasets; do
     read -r n_cases n_groups max_rounds < <(regbench_py "$REGBENCH_HEAD_IMAGE" list \
@@ -757,6 +815,7 @@ fi
 # the pipeline's allocation per stage and attempt, for the runs that are several jobs
 # per round: ALLOC_<stage>_<attempt>="<cpus> <GB> <time>"
 any_staged=0
+STITCH_S=0
 while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
     has "$selected" "$name" || continue
     [ "${stages:--}" = - ] && continue
@@ -777,6 +836,10 @@ if [ "$any_staged" = 1 ]; then
         for attempt in 1 2 3 4; do
             row="ALLOC_${stage}_$attempt"
             [ -n "${!row:-}" ] || die "the pipeline's allocation has no line for $stage, attempt $attempt (python -m benchmarks.regbench runs --stage-allocation printed: $(tr '\n\t' '; ' <<< "$alloc_rows")). Nothing was submitted."
+            # every time of the table is a time, and the writer's four are summed here
+            read -r _ _ stage_time <<< "${!row}"
+            stage_s="$(seconds "$stage_time")"
+            [ "$stage" != stitch ] || STITCH_S=$((STITCH_S + stage_s))
         done
     done
 fi
@@ -814,10 +877,6 @@ for ds in $sized; do
         printf -v "TILES_OF_${ds}_$name" '%s' "$n_tiles"
     done < "$table"
 done
-# the last submission that ran anything into this folder: what --score-only scores.
-# Written here: a call the preflight or a check above stopped is not a submission.
-[ "$DRY" = 1 ] || [ "$score_only" = 1 ] || echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
-
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
 needed=""
 while IFS=$'\t' read -r name _ _ _ _ _ _ after gated_by _; do
@@ -885,15 +944,9 @@ done < "$table"
 # four attempts.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
-    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB" alloc extra_s=0 t
-    if [ "$staged" != - ]; then
-        for attempt in 1 2 3 4; do
-            alloc="ALLOC_stitch_$attempt"; read -r _ _ t <<< "${!alloc}"
-            extra_s=$((extra_s + $(seconds "$t")))
-        done
-        attempt=0
-        time="$(limit $((round_s + extra_s)))"
-    fi
+    local earlier="" attempt=0 gb dep task jobname cpus="$CPUS" rungs="$RUNGS_GB"
+    # STITCH_S: the writer's four attempts, summed before the first sbatch
+    [ "$staged" = - ] || time="$(limit $((round_s + STITCH_S)))"
     for gb in $rungs; do
         attempt=$((attempt + 1))
         for task in attempt again; do
@@ -985,7 +1038,7 @@ staged() {
 }
 
 N_FED=0 FED_RUNS=""
-feed_time="$(limit "$(seconds "$REGBENCH_STAGE_FEED_TIME")")"
+feed_time="$(limit "$feed_s")"
 finals="" prev_ds="" n_laned=0
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
@@ -1092,26 +1145,26 @@ if [ -n "$EXTERNAL" ]; then
     # no tissue job (it is defined on nuclear channels) and no per-case array (a landmark
     # set has no pair records: its scorer reads landmarks); the set's own scorer and tables
     submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$settle_job" --cpus-per-task="$CPUS" \
-        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
+        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
 else
     # one task per case: its rows, kept as a record the scorer reads. afterany: a task
     # that fails or is killed leaves its case to the scorer, which computes what is missing
-    score_time="$(limit "$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")")"
+    score_time="$(limit "$score_s")"
     scored=""
     for ds in $sized; do
         n_cases="CASES_$ds"
         submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
-            --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="${REGBENCH_SCORE_CPUS:-8}" \
-            --mem="${REGBENCH_SCORE_MEM:-64G}" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
+            --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$REGBENCH_SCORE_CPUS" \
+            --mem="$REGBENCH_SCORE_MEM" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
         scored="$scored:$JOB_ID"
     done
     # each case task also made the tissue pieces of its case: this job makes those of a
     # case whose task did not, after them (never beside them: two jobs would be writing
     # the same pieces)
     submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
-        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
+        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
     submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
-        --mem="${REGBENCH_SCORE_MEM:-64G}" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
+        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 fi
 
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
@@ -1124,7 +1177,7 @@ fi
 if [ "$score_only" = 1 ]; then
     echo "# submission  -> $REGBENCH_SUBMISSION (scored as it is under $REGBENCH_OUT: nothing is run again)"
 else
-    echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "${REGBENCH_FORCE:-0}" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
+    echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "$REGBENCH_FORCE" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
 fi
 [ -n "$EXTERNAL" ] || echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
 echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
@@ -1137,4 +1190,5 @@ else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
+FINISHED=1
 exit 0

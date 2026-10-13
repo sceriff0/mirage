@@ -355,6 +355,13 @@ def build_parser():
         help="print three numbers on one line: cases, patients, and the rounds of the "
         "largest patient (what the launcher sizes its arrays and time limits from)",
     )
+    what.add_argument(
+        "--current-spec",
+        action="store_true",
+        help="--dataset synthetic: print nothing, and exit non-zero when a prepared "
+        "case is of a truth_spec.json other than the current one (the launcher asks "
+        "before its first job: the scorer refuses such a result as a whole)",
+    )
 
     r = sub.add_parser("run")
     r.add_argument("--cases", required=True)
@@ -1209,6 +1216,13 @@ def _selfcheck_end(a, status):
 def _list(a):
     from .cases import groups, list_cases
 
+    if a.current_spec:
+        from .datasets import synthetic
+
+        if a.dataset != "synthetic":
+            raise SystemExit("--current-spec is the synthetic dataset's check")
+        synthetic.refuse_other_spec(a.cases, nothing="Nothing was submitted.")
+        return 0
     cases = list_cases(a.cases, a.dataset)
     if a.ids:
         print("\n".join(c.case_id for c in cases))
