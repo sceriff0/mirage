@@ -663,15 +663,60 @@ def test_a_record_is_of_the_image_it_was_computed_from(cohort, monkeypatch, caps
     assert new["image_fingerprint"] == cases_mod.file_fingerprint(ref["image"])
 
 
-def test_a_record_that_names_no_image_is_not_used(cohort, monkeypatch, capsys):
+def test_a_record_that_names_no_image_is_checked_again_and_not_recomputed(
+    cohort, monkeypatch, capsys
+):
+    """A store filled before records carried a fingerprint: the record is not used as
+    it is (prepare refuses it), and the nuclei step checks the kept re-run against the
+    slide without StarDist and stamps it. Nothing is set aside."""
     tmp, lab, _ = cohort
     base, ref, store = _one_slide(cohort, monkeypatch, lab)
     rec = nuclei.load(store)
+    full = dict(rec)
     rec.pop("image_fingerprint")
     (store / "nuclei.json").write_text(json.dumps(rec))
+    assert "does not say which image" in nuclei.other_image(rec, ref)
+    capsys.readouterr()
     again = nuclei.resolve(ref, tmp / "nuc", args())
-    assert "does not say which image it was computed from" in capsys.readouterr().out
-    assert not again["usable"] and again["needs_rerun"]
+    said = capsys.readouterr().out
+    assert "RECHECK P1/P1.r1" in said and "STALE" not in said
+    assert again["usable"] and not again["needs_rerun"]
+    assert again["image_fingerprint"] == full["image_fingerprint"]
+    assert nuclei.load(store) == again and nuclei.other_image(again, ref) == ""
+    assert (store / "rerun").is_dir() and not (store / "rerun_stale").exists()
+    assert (store / "nuclei.npz").is_file()
+    # a kept re-run that is NOT this slide's (another size): a real mismatch, set aside
+    (store / "nuclei.json").write_text(json.dumps(rec))
+    monkeypatch.setattr(
+        nuclei, "_shape", lambda path: (1, 1) if "rerun" in str(path) else (2, 2)
+    )
+    stale = nuclei.resolve(ref, tmp / "nuc", args())
+    assert not stale["usable"] and stale["needs_rerun"]
+    assert "does not fit the slide: set aside" in stale["reason"]
+    assert (store / "rerun_stale").is_dir() and not (store / "rerun").exists()
+
+
+def test_setting_aside_never_leaves_a_usable_record_over_missing_polygons(
+    cohort, monkeypatch
+):
+    """The task is ended inside `set_aside`, wherever: the slide then has no record
+    (decided again), never a record that says usable without its polygons."""
+    tmp, lab, _ = cohort
+    base, ref, store = _one_slide(cohort, monkeypatch, lab)
+    assert nuclei.load(store)["usable"]
+    real = Path.rename
+
+    def ended(self, target):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "rename", ended)
+    with pytest.raises(KeyboardInterrupt):
+        nuclei.set_aside(store)
+    monkeypatch.setattr(Path, "rename", real)
+    assert nuclei.load(store) is None  # the record went first
+    assert (store / "nuclei.stale.json").is_file()
+    nuclei.set_aside(store)
+    assert not (store / "nuclei.npz").exists() and (store / "rerun_stale").is_dir()
 
 
 def test_a_label_image_that_was_replaced_is_checked_again(cohort, capsys):

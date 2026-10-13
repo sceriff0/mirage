@@ -635,11 +635,17 @@ def settings_changed(rec):
 
 def set_aside(store):
     """Move a re-run that is no longer the one to use out of the way (``rerun_stale/``,
-    the one before it removed) and drop its polygons."""
+    the one before it removed) and drop its polygons. The record goes FIRST, in one
+    rename (``nuclei.stale.json``): a task that is ended anywhere after that leaves a
+    slide without a record, which is decided again, never a record that says "usable"
+    over polygons that are gone."""
+    import os
     import shutil
 
     store = Path(store)
     stale = store / "rerun_stale"
+    if (store / "nuclei.json").is_file():
+        os.replace(store / "nuclei.json", store / "nuclei.stale.json")
     if (store / "rerun").is_dir():
         shutil.rmtree(stale, ignore_errors=True)
         (store / "rerun").rename(stale)
@@ -681,7 +687,13 @@ def resolve(slide, out, a):
     (:func:`other_image`) and its re-run was made with the settings that resolve now.
     ``a.force`` decides the slide again whatever is kept. In all three cases nothing
     kept answers: a re-run is set aside (``rerun_stale/``), so the slide needs its
-    re-run again unless a label image of the manifest is usable."""
+    re-run again unless a label image of the manifest is usable.
+
+    A record that does not say which image it was computed from is neither used as it
+    is nor thrown away: the label image or the re-run's masks kept for it are checked
+    again against the slide that is there now (no GPU: they are read and compared with
+    the published outlines), and a record that passes carries the fingerprint from
+    then on. Only what fails that check is set aside."""
     store = store_of(out, slide)
     old = load(store)
     force = getattr(a, "force", False)
@@ -690,6 +702,15 @@ def resolve(slide, out, a):
     # said aloud, set aside, and the slide needs its re-run again.
     changed = [] if force else settings_changed(old)
     moved = "" if force else other_image(old, slide)
+    unstamped = bool(moved and old and not old.get("image_fingerprint") and not changed)
+    if unstamped:
+        moved = ""
+        print(
+            f"RECHECK {slide['key']}: its record does not say which image it was "
+            "computed from. What is kept for it is checked again against the slide "
+            "(StarDist is not run for that).",
+            flush=True,
+        )
     if changed:
         print(
             f"STALE {slide['key']}: its StarDist re-run was made with other settings "
@@ -711,6 +732,8 @@ def resolve(slide, out, a):
         )
     if changed or moved or force:
         set_aside(store)
+        old = None
+    if unstamped:
         old = None
     if old and old.get("usable"):
         return old
@@ -735,6 +758,13 @@ def resolve(slide, out, a):
     elif moved and rec.get("needs_rerun"):
         rec["stale_image"] = moved
         rec["reason"] = f"{moved}: what was kept for it is set aside; {rec['reason']}"
+    elif unstamped and rec.get("needs_rerun") and (Path(store) / "rerun").is_dir():
+        # checked again, and it is not this slide's: a real mismatch
+        set_aside(store)
+        rec["reason"] = (
+            "the record kept for this slide did not say which image it was computed "
+            f"from, and what was kept does not fit the slide: set aside; {rec['reason']}"
+        )
     write_json(store / "nuclei.json", rec)
     return rec
 
