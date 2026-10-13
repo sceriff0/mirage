@@ -83,8 +83,8 @@ STARE_REGBENCH docker://bolt3x/mirage-stare-regbench:1.0.0
 VALIS120       docker://bolt3x/mirage-valis120:1.0.0
 DEEPERHISTREG  docker://bolt3x/mirage-deeperhistreg:1.0.0
 PALOM          docker://bolt3x/mirage-palom:1.0.0
-ASHLAR         docker://labsyspharm/ashlar:1.20.0
-VALIS_MIRAGE   docker://cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+ASHLAR         docker://bolt3x/mirage-ashlar120:1.0.0
+VALIS_MIRAGE   docker://bolt3x/mirage-valis100:1.0.0
 STARDIST       docker://bolt3x/mirage-stardist:1.0.0
 "
 # -----------------------------------------------------------------------------------

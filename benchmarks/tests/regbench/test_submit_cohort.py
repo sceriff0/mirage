@@ -401,9 +401,9 @@ def test_the_launch_job_finds_or_pulls_every_image_and_never_uses_path_python(
     assert f"PALOM -> {images}/bolt3x-mirage-palom-1.0.0.img" in done.stdout
     assert f"ASHLAR -> {images}/regbench/ashlar.sif" in done.stdout
     assert (images / "bolt3x-mirage-stare-regbench-1.0.0.img").exists()
-    assert any(
-        p.name.startswith("cdgatenbee-valis-wsi@sha256-") for p in images.iterdir()
-    )
+    # containers/valis100, never the pipeline's bare upstream image (no zarr inside)
+    assert (images / "bolt3x-mirage-valis100-1.0.0.img").exists()
+    assert not any(p.name.startswith("cdgatenbee-valis-wsi") for p in images.iterdir())
     # no runtime at all: said, and nothing started
     if not (shutil.which("apptainer") or shutil.which("singularity")):
         bare = {**base, "PATH": base["PATH"].split(":", 1)[1]}
