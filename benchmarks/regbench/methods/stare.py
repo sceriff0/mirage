@@ -404,7 +404,9 @@ def stage_commands(ns):
     """The argument list of each stage, from the parsed ``stare register`` namespace:
     what ``stare.cli.register`` hands ``coarse.main``, ``reg_tile.main``, ``solve.main``
     and ``stitch.main`` (stare/cli.py:79-178; stare-registration 1.2.1, installed
-    package ``[FULL: cli.py]``), and what the pipeline's four modules render
+    package ``[FULL: cli.py]``; the ``--prep`` and ``--pixel-size`` arguments added below
+    exist from 1.3.0, the pinned version, and are checked against its source by
+    ``tests/regbench/test_stages.py``), and what the pipeline's four modules render
     (modules/local/tiled_*.nf, with SOLVE's ``--max-disp`` from conf/modules.config).
     ``tests/regbench/test_stages.py`` evaluates the four lists in the source of
     ``stare.cli.register`` and fails when one differs. ``tile`` and ``stitch`` are

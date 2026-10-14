@@ -291,6 +291,7 @@ def test_default_grey_proxy_is_not_written_again_but_haem_is(synthetic_cases, tm
     assert adapter.slides(case)[0] == case.ref_nuclear
     haem = adapter.Round(case, tmp_path / "h", {"proxy": "haem"})
     assert haem.candidate == "haem" and haem.row is None
+    assert haem.inputs is not None
     assert str(haem.inputs[0]).endswith("reference.haem.ome.tif")
     assert flag(haem.argv["coarse"], "--reference") == str(haem.inputs[0])
 
@@ -298,11 +299,11 @@ def test_default_grey_proxy_is_not_written_again_but_haem_is(synthetic_cases, tm
 def test_proxy_recorded_as_benchmark_side(synthetic_cases, tmp_path):
     case = rgb_case(synthetic_cases["crop"], tmp_path)
     info = {}
-    for opts in ({"proxy": "haem", "sprep": "clahe"}, {}):
-        out = tmp_path / ("o_" + str(len(opts)))
+    for key, opts in (("haem", {"proxy": "haem", "sprep": "clahe"}), ("plain", {})):
+        out = tmp_path / f"o_{key}"
         methods.run_case("stare", case, out, opts={**OPTS, **opts}, keep_work=True)
-        info[len(opts)] = run_json(out, "stare", case)["info"]
-    haem, plain = info[2], info[0]
+        info[key] = run_json(out, "stare", case)["info"]
+    haem, plain = info["haem"], info["plain"]
     assert any("proxy `haem`" in x for x in haem["implementation"]["benchmark_side"])
     assert haem["input"]["sprep"] == "clahe" and haem["input"]["proxy_option"] == "haem"
     # sprep is STARE's own option: not a departure; the default proxy is not either
