@@ -28,7 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`reg_tiled_prep` (STARE only): `none` (default, unchanged), `clahe`, `percentile`; STARE 1.3.0.** Registration-channel preprocessing passed as `--prep` to `TILED_COARSE` and `TILED_REG_TILE`; `--pixel-size` stays at STARE's `auto` (OME header). VALIS is not affected.
+- **`reg_tiled_prep` (STARE only): `none` (default, unchanged), `clahe`, `percentile`; STARE 1.3.0.**
+  Registration-channel preprocessing passed as `--prep` to `TILED_COARSE` and `TILED_REG_TILE`;
+  `--pixel-size` stays at STARE's `auto` (OME header). VALIS is not affected. **Needs the
+  `bolt3x/mirage-stare:1.0.0` image republished with STARE 1.3.0:** every STARE run now passes
+  `--prep`, also at the default `none`, so a cached or stale image (STARE 1.2.1) fails with
+  "unrecognized arguments". Delete a cached Singularity `.img` after the republish so it is
+  pulled again (same note as the STARE image republish under `### Changed` above).
 
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
   now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
