@@ -122,6 +122,49 @@ nextflow_process {
         }
     }
 
+    test("Should render --prep none by default - rendered command") {
+
+        tag "stub"
+
+        when {
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--prep none') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --prep clahe when set - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                reg_tiled_prep = 'clahe'
+            }
+            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--prep clahe') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should let reg_tiled_nuclear_index override the marker lookup - rendered command") {
 
         tag "stub"

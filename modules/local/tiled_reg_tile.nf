@@ -43,12 +43,14 @@ process TILED_REG_TILE {
     // NOT tier-owned: the lattice resolution is its own axis (crossed with the tiers in the
     // arms). An itemised params.reg_tiled_stride reference, so only its value enters the hash.
     def stride     = params.reg_tiled_stride
+    def prep       = params.reg_tiled_prep
     """
     tiled_reg_tile.py \\
         --reference ${reference} \\
         --moving ${moving} \\
         --m0 ${m0} \\
         --nuclear-index ${nuclear_index} \\
+        --prep ${prep} \\
         --ix ${row.ix} --iy ${row.iy} --cx ${row.cx} --cy ${row.cy} \\
         --rx0 ${row.rx0} --ry0 ${row.ry0} --rx1 ${row.rx1} --ry1 ${row.ry1} \\
         --x0 ${row.x0} --y0 ${row.y0} --x1 ${row.x1} --y1 ${row.y1} \\

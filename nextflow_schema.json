@@ -296,6 +296,16 @@
                     "default": 64,
                     "minimum": 16
                 },
+                "reg_tiled_prep": {
+                    "type": "string",
+                    "default": "none",
+                    "description": "STARE only: registration-channel preprocessing. none (default, unchanged); clahe = CLAHE with a 60 um region, needs PhysicalSizeX in the OME header (STARE refuses otherwise); percentile = 1-99.9 % rescale, which STARE's coarse step already applies and its tile matcher is gain-invariant to, so it only clips tails. VALIS is not affected.",
+                    "enum": [
+                        "none",
+                        "clahe",
+                        "percentile"
+                    ]
+                },
                 "reg_tiled_out_tile": {
                     "type": [
                         "integer",

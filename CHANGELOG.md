@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`reg_tiled_prep` (STARE only): `none` (default, unchanged), `clahe`, `percentile`; STARE 1.3.0.** Registration-channel preprocessing passed as `--prep` to `TILED_COARSE` and `TILED_REG_TILE`; `--pixel-size` stays at STARE's `auto` (OME header). VALIS is not affected.
+
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
   now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
   samplesheet validator, called from `workflows/mirage.nf` before any process is

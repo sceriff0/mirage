@@ -171,6 +171,65 @@ nextflow_process {
         }
     }
 
+    test("Should render --prep none by default - rendered command") {
+
+        tag "stub"
+
+        when {
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', channels: ['DAPI', 'CD3'], is_reference: false ],
+                    file('${projectDir}/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('${projectDir}/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_coarse.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--prep none') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should render --prep clahe when set - rendered command") {
+
+        tag "stub"
+
+        when {
+            params {
+                reg_tiled_prep = 'clahe'
+            }
+            process {
+                """
+                input[0] = [
+                    [ patient_id: 'P001', channels: ['DAPI', 'CD3'], is_reference: false ],
+                    file('${projectDir}/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    file('${projectDir}/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('tiled_coarse.py')) { rendered << f.text }
+            }
+            assertAll(
+                { assert rendered.size() >= 1 },
+                { assert rendered.every { it.contains('--prep clahe') }, rendered.join(' --- ') }
+            )
+        }
+    }
+
     test("Should render the tier's values when reg_tiled_mode is not high - rendered command") {
 
         // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so a stub

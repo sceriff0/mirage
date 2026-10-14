@@ -43,11 +43,14 @@ process TILED_COARSE {
     def tile       = RegPresets.stare(params.reg_tiled_mode, 'tile', params.reg_tiled_tile)
     def halo       = RegPresets.stare(params.reg_tiled_mode, 'halo', params.reg_tiled_halo)
     def max_dim    = RegPresets.stare(params.reg_tiled_mode, 'coarse_max_dim', params.reg_tiled_coarse_max_dim)
+    // NOT tier-owned; an itemised params reference. --pixel-size is left at STARE's `auto` (OME header).
+    def prep       = params.reg_tiled_prep
     """
     tiled_coarse.py \\
         --reference ${reference} \\
         --moving ${moving} \\
         --nuclear-index ${nuclear_index} \\
+        --prep ${prep} \\
         --tile ${tile} \\
         --halo ${halo} \\
         --max-dim ${max_dim} \\
