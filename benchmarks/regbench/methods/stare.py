@@ -124,10 +124,11 @@ import numpy as np
 
 from .. import imageio, ladder, prep, resources, stages
 from ..mapping import MOV_TO_REF, PointMap
+from ..regimes import PROXIES, SPREPS
 
 SCOPE = "pair"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
-OPTIONS = ("prep", "stride", "tile", "halo", "out_tile", "max_dim", "model", "max_disp")
+OPTIONS = ("prep", "proxy", "sprep", "stride", "tile", "halo", "out_tile", "max_dim", "model", "max_disp")
 VARIANTS = ("stare_rigid", "stare")
 REF_NAME, MOV_NAME = "reference", "moving"
 # STITCH needs a pixel size for the header of the image it writes and uses it for nothing
@@ -198,6 +199,54 @@ def prep_of(opts):
             "would be stored under another row's name"
         )
     return name
+
+
+def settings(opts, case):
+    """``(proxy, sprep)`` of a run (module docstring, "Proxy and --prep"). ``proxy`` is the
+    benchmark-side one-channel image STARE reads: ``channel`` on a fluorescence case (the
+    channel itself), ``grey`` on an RGB one (the case's own proxy: today's input) when
+    unset. ``sprep`` is STARE's own ``--prep``, ``none`` when unset. Refused: a value
+    outside ``regimes.PROXIES`` / ``SPREPS``; ``channel`` on an RGB case and any other
+    proxy on a fluorescence case; either option together with ``prep`` (the label-bound
+    preprocessing row); ``sprep=clahe`` where the pixel size is not established (CLAHE's
+    region is in micrometres)."""
+    rgb = case.modality == "brightfield"
+    default = "grey" if rgb else "channel"
+    proxy = str(opts.get("proxy", default)).strip()
+    sprep = str(opts.get("sprep", "none")).strip()
+    if proxy not in PROXIES:
+        raise ValueError(f"proxy={proxy!r}: expected one of {', '.join(PROXIES)}")
+    if sprep not in SPREPS:
+        raise ValueError(f"sprep={sprep!r}: expected one of {', '.join(SPREPS)}")
+    if opts.get("prep") and ("proxy" in opts or "sprep" in opts):
+        raise ValueError(
+            "prep is the label-bound preprocessing row; it cannot be combined with "
+            "proxy or sprep"
+        )
+    if not rgb and proxy != "channel":
+        raise ValueError(
+            f"proxy={proxy}: {case.case_id} is a fluorescence case, whose proxy is the "
+            "channel itself (proxy=channel)"
+        )
+    if rgb and proxy == "channel":
+        raise ValueError(
+            f"proxy=channel: {case.case_id} is an RGB case and needs a proxy "
+            f"({', '.join(p for p in PROXIES if p != 'channel')})"
+        )
+    if sprep == "clahe" and not case.pixel_size_um:
+        raise ValueError(
+            f"sprep=clahe: {case.case_id} has no established pixel size, and CLAHE's "
+            "region is in micrometres"
+        )
+    return proxy, sprep
+
+
+def proxy_candidate(opts, case):
+    """The proxy image STARE reads when the dataset module did not write it (``haem``,
+    ``grey_smooth`` on an RGB case: ``prep.write_inputs`` writes it), else None (``grey``
+    is the case's own default input; ``channel`` is the slide)."""
+    proxy, _ = settings(opts, case)
+    return proxy if proxy not in ("channel", "grey") else None
 
 
 def stride_of(opts):
@@ -307,6 +356,7 @@ def command(case, stage_dir, opts, inputs=None):
     ]
     for key, value in values.items():
         argv += [_FLAGS[key], str(value)]
+    argv += ["--prep", settings(opts, case)[1]]
     if case.pixel_size_um:  # none in the case: the command's own default, `auto`
         argv += ["--pixel-size", repr(float(case.pixel_size_um) * reduce)]
     elif case.modality == "brightfield":
@@ -380,6 +430,10 @@ def stage_commands(ns):
         str(m0),
         "--out-tiles",
         str(plan),
+        "--prep",
+        ns.prep,
+        "--pixel-size",
+        str(ns.pixel_size),
     ]
 
     def tile(row, ix, iy):
@@ -398,6 +452,10 @@ def stage_commands(ns):
             str(row),
             "--stride",
             str(ns.stride),
+            "--prep",
+            ns.prep,
+            "--pixel-size",
+            str(ns.pixel_size),
             "--out",
             str(work / f"{ns.moving_name}_{ix}_{iy}_ctrl.json"),
         ]
@@ -476,6 +534,18 @@ def tile_count(case, opts):
     return len(tile_grid(int(w), int(h), int(values["tile"]), int(values["halo"])))
 
 
+def stage_argv(case, opts, stage_dir="."):
+    """The argument list of COARSE and of the first REG-TILE job of a run, from the same
+    parsing a round makes (``Round``): ``{"coarse": [...], "reg-tile": [...]}``. Nothing
+    is run or written."""
+    rnd = Round(case, stage_dir, dict(opts))
+    return {
+        "coarse": rnd.argv["coarse"],
+        "reg-tile": rnd.argv["tile"](0, 0, 0),
+        "solve": rnd.argv["solve"],
+    }
+
+
 def stage_dir_of(out, label, case):
     """Where a round's stage jobs keep their files: beside its written image."""
     from ..cases import result_dir
@@ -490,7 +560,11 @@ class Round:
     def __init__(self, case, stage_dir, opts):
         self.case, self.dir, self.opts = case, Path(stage_dir), opts
         self._identity = {}
-        self.candidate = prep_of(opts)
+        self.proxy, self.sprep = settings(opts, case)
+        # the label-bound preprocessing row, or a proxy the dataset module did not
+        # write: both are `prep.write_inputs` before COARSE (the stage `prep`)
+        self.row = prep_of(opts)
+        self.candidate = self.row or proxy_candidate(opts, case)
         self.inputs = None
         if self.candidate:
             if slides(case)[3] != 1:
@@ -968,7 +1042,9 @@ def register(case, work, opts):
             "reference": ref_in,
             "moving": mov_in,
             "kind": (
-                f"benchmark-side preprocessing `{candidate}` of the image the plain "
+                f"benchmark-side proxy `{candidate}` (regbench.prep) of each RGB slide"
+                if made and not rnd.row
+                else f"benchmark-side preprocessing `{candidate}` of the image the plain "
                 "row registers on"
                 if made
                 else "one-channel proxy of an RGB slide"
@@ -977,6 +1053,8 @@ def register(case, work, opts):
             ),
             "proxy": (case.extra.get("settings") or {}).get("proxy") if proxy else None,
             "reduced_by": reduce,
+            "proxy_option": rnd.proxy,
+            "sprep": rnd.sprep,
         },
         **(
             {
@@ -988,9 +1066,10 @@ def register(case, work, opts):
                     "frozen_sha256": prep.load_frozen()["sha256"],
                 }
             }
-            if made
+            if made and rnd.row
             else {}
         ),
+        **({"proxy_prep": made["record"]} if made and not rnd.row else {}),
         "workers": int(ns.workers),
         "cpu_count": os.cpu_count(),  # what COARSE's FFTs use, whatever the allocation
         "stride": int(ns.stride),
@@ -1048,6 +1127,18 @@ def register(case, work, opts):
                 ),
                 *(
                     [
+                        f"proxy `{candidate}` (regbench.prep; here: "
+                        f"{'identity' if made['record']['identity_here'] else made['record']['base'] + ', ' + made['record']['operation']}) "
+                        "instead of the case's own grey proxy: both images rewritten "
+                        f"as one-channel files before COARSE (prep_s = "
+                        f"{made['record']['prep_s']:.1f}); STITCH draws the case's own "
+                        "proxy, with this run's transform"
+                    ]
+                    if made and not rnd.row
+                    else []
+                ),
+                *(
+                    [
                         f"preprocessing `{candidate}` (regbench.prep; here: "
                         f"{'identity' if made['record']['identity_here'] else made['record']['base'] + ', ' + made['record']['operation']}): "
                         "both images rewritten as one-channel files before COARSE "
@@ -1055,7 +1146,7 @@ def register(case, work, opts):
                         "its parameters are unchanged; STITCH draws the image the "
                         "plain row draws, with this row's transform"
                     ]
-                    if made
+                    if made and rnd.row
                     else []
                 ),
             ],

@@ -28,6 +28,12 @@ from stare.ome import read_ome_pixel_size
 print('stare package OK:', stare.__version__)
 "
 
+# STARE 1.3.0 or later: the stage commands take --prep (the benchmark's `sprep` run option
+# passes it to `stare coarse` and `stare reg-tile`).
+"$PY" -m stare.cli coarse --help | grep -q -- --prep \
+  || { echo "stare coarse has no --prep: the image carries a STARE older than 1.3.0" >&2; exit 1; }
+"$PY" -m stare.cli reg-tile --help | grep -q -- --prep
+
 # psutil, doing what resources.Monitor asks of it: the resident set of this process and
 # of its children, and the CPU affinity mask.
 "$PY" -c "

@@ -188,6 +188,129 @@ def test_an_argument_error_is_reported_as_an_exception(synthetic_cases, tmp_path
     assert "invalid int value: 'big'" in run["error"]
 
 
+# ── run options: proxy (benchmark-side) and sprep (STARE's own --prep) ────────
+def rgb_case(case, tmp_path, **extra):
+    """The case as an RGB one: PNG slides, with the case's own one-channel files standing
+    in for the dataset module's grey proxy."""
+    from PIL import Image
+
+    paths = {}
+    for side in ("ref", "mov"):
+        plane = _plane(getattr(case, f"{side}_image"))
+        top = float(plane.max()) or 1.0
+        # haematoxylin-stained: optical density along the stain's own colour vector, so
+        # the colour deconvolution of the `haem` proxy finds the nuclei
+        od = 1.5 * plane.astype(float) / top
+        rgb = 255 * np.exp(-od[..., None] * np.array([0.65, 0.70, 0.29]))
+        paths[side] = tmp_path / f"{side}.png"
+        Image.fromarray(rgb.astype("uint8")).save(paths[side])
+    return dataclasses.replace(
+        case,
+        modality="brightfield",
+        ref_image=str(paths["ref"]),
+        mov_image=str(paths["mov"]),
+        ref_nuclear=case.ref_image,
+        mov_nuclear=case.mov_image,
+        extra={**case.extra, "settings": {"proxy": "grey", "reduce": 1}, **extra},
+    )
+
+
+def _plane(path):
+    from stare.slide_io import open_lazy
+
+    arr, _, close = open_lazy(str(path))
+    try:
+        return np.asarray(arr[0, :, :])
+    finally:
+        close()
+
+
+def flag(argv, name):
+    return argv[argv.index(name) + 1]
+
+
+def test_sprep_reaches_coarse_and_reg_tile_argv(synthetic_cases, tmp_path):
+    argv = adapter.stage_argv(synthetic_cases["rigid"], {"sprep": "percentile"}, tmp_path)
+    for stage in ("coarse", "reg-tile"):
+        assert flag(argv[stage], "--prep") == "percentile", stage
+
+
+def test_default_run_passes_prep_none_and_the_pixel_size(synthetic_cases, tmp_path):
+    case = multichannel(synthetic_cases["rigid"])
+    argv = adapter.stage_argv(case, {}, tmp_path)
+    for stage in ("coarse", "reg-tile"):
+        assert flag(argv[stage], "--prep") == "none"
+        assert flag(argv[stage], "--pixel-size") == str(case.pixel_size_um)
+    unknown = dataclasses.replace(synthetic_cases["rigid"], pixel_size_um=None)
+    assert flag(adapter.stage_argv(unknown, {}, tmp_path)["coarse"], "--pixel-size") == "auto"
+
+
+def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(
+    synthetic_cases, tmp_path
+):
+    case = synthetic_cases["rigid"]
+    assert adapter.stage_argv(case, {}, tmp_path) == adapter.stage_argv(
+        case, {"sprep": "none", "proxy": "channel"}, tmp_path
+    )
+
+
+@pytest.mark.parametrize(
+    "opts, match",
+    [
+        ({"proxy": "haem"}, "proxy"),
+        ({"proxy": "nope"}, "proxy"),
+        ({"sprep": "nope"}, "sprep"),
+        ({"prep": "grey", "sprep": "clahe"}, "prep"),
+        ({"prep": "grey", "proxy": "channel"}, "prep"),
+    ],
+)
+def test_refused_option_combinations_on_fluorescence(synthetic_cases, opts, match):
+    with pytest.raises(ValueError, match=match):
+        adapter.settings(opts, synthetic_cases["rigid"])
+
+
+def test_proxy_on_an_rgb_case(synthetic_cases, tmp_path):
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    assert adapter.settings({}, case) == ("grey", "none")
+    assert adapter.settings({"proxy": "haem", "sprep": "clahe"}, case) == (
+        "haem",
+        "clahe",
+    )
+    with pytest.raises(ValueError, match="proxy=channel"):
+        adapter.settings({"proxy": "channel"}, case)
+    unknown = dataclasses.replace(case, pixel_size_um=None)
+    with pytest.raises(ValueError, match="pixel size"):
+        adapter.settings({"sprep": "clahe"}, unknown)
+    assert adapter.settings({"sprep": "percentile"}, unknown) == ("grey", "percentile")
+
+
+def test_default_grey_proxy_is_not_written_again_but_haem_is(synthetic_cases, tmp_path):
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    grey = adapter.Round(case, tmp_path / "g", {})
+    assert grey.candidate is None and grey.inputs is None
+    assert adapter.slides(case)[0] == case.ref_nuclear
+    haem = adapter.Round(case, tmp_path / "h", {"proxy": "haem"})
+    assert haem.candidate == "haem" and haem.row is None
+    assert str(haem.inputs[0]).endswith("reference.haem.ome.tif")
+    assert flag(haem.argv["coarse"], "--reference") == str(haem.inputs[0])
+
+
+def test_proxy_recorded_as_benchmark_side(synthetic_cases, tmp_path):
+    case = rgb_case(synthetic_cases["crop"], tmp_path)
+    info = {}
+    for opts in ({"proxy": "haem", "sprep": "clahe"}, {}):
+        out = tmp_path / ("o_" + str(len(opts)))
+        methods.run_case("stare", case, out, opts={**OPTS, **opts}, keep_work=True)
+        info[len(opts)] = run_json(out, "stare", case)["info"]
+    haem, plain = info[2], info[0]
+    assert any("proxy `haem`" in x for x in haem["implementation"]["benchmark_side"])
+    assert haem["input"]["sprep"] == "clahe" and haem["input"]["proxy_option"] == "haem"
+    # sprep is STARE's own option: not a departure; the default proxy is not either
+    assert not any("clahe" in x for x in haem["implementation"]["benchmark_side"])
+    assert not any("proxy `" in x for x in plain["implementation"]["benchmark_side"])
+    assert plain["input"]["sprep"] == "none" and plain["input"]["proxy_option"] == "grey"
+
+
 # ── real runs ─────────────────────────────────────────────────────────────────
 OPTS = {"workers": 2}
 

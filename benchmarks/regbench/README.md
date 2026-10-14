@@ -170,6 +170,20 @@ names and opens its summary on the six primary rows:
   as for `stare`. **Today the frozen candidate is PROVISIONAL (`grey_clahe`, chosen by no
   evidence): the selection has not been run.** The launcher and every summary say so;
   see "ANHIR: the challenge's training pairs".
+- **STARE's run options `proxy` and `sprep`** (STARE 1.3.0; levels named in
+  `regimes.py`). `sprep=<none|clahe|percentile>` is STARE's OWN `--prep`, passed to
+  `stare coarse` and `stare reg-tile` (default `none`; `--pixel-size` goes with it, as
+  the case's size, else `auto`). It is the package's option, so it is NOT a benchmark-side
+  departure and is not listed in `benchmark_side`; it is recorded in `info.input.sprep`.
+  `proxy=<channel|grey|haem|grey_smooth>` is the benchmark-side one-channel image STARE
+  reads: `channel` on a fluorescence case, `grey` (the case's own inverted luminance) on
+  an RGB one when unset, i.e. today's input. A non-default proxy (`haem`, `grey_smooth`)
+  is written by `prep.write_inputs` before COARSE (the `prep` job) and IS a departure,
+  listed in `info.implementation.benchmark_side`; its STITCH image is still the case's
+  own proxy. Refused: `channel` on an RGB case, any other proxy on a fluorescence one,
+  values outside `PROXIES`/`SPREPS`, `sprep=clahe` where the pixel size is unknown, and
+  `prep` (the label-bound row above) together with either. A run with neither option
+  differs from the earlier ones only by `--prep none` in the two stage commands.
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
   `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the

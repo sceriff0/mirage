@@ -329,6 +329,8 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
     assert [ln for ln in lines if ln.startswith("pytest==")]
     smoke = (root / "containers" / "stare-regbench" / "smoke.sh").read_text()
     assert "psutil" in smoke and "__import__('cv2')" in smoke
+    # STARE 1.3.0: the image's stage commands take --prep (the `sprep` run option)
+    assert "coarse --help | grep -q -- --prep" in smoke
 
 
 def test_images_built_here_have_a_build_context():
