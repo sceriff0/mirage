@@ -13,11 +13,27 @@ from benchmarks.regbench import METHODS, cli, methods, prep, variants
 from benchmarks.regbench.methods import ashlar, palom, valis
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
-EXPECTED = [
-    "stare_rigid",
-    "stare",
-    "stare_prep_rigid",
-    "stare_prep",
+
+def _stare_names():
+    """The STARE runs, from the tables: every stride x level of every regime, by name."""
+    from benchmarks.regbench import regimes as rg_
+
+    out = {}
+    for reg in rg_.REGIMES:
+        for key, level in rg_.stare_levels(reg):
+            for s_ in variants.STARE_STRIDES:
+                out.setdefault(variants.stare_cell(s_, key, level)[0], None)
+    return list(out)
+
+
+def _stare_variants(name):
+    """The result names of one STARE run: the label replaces the method's name in both."""
+    return [f"{name}_rigid", name]
+
+
+# what the run list holds apart from STARE and ASHLAR: three VALIS runs, eight
+# DeeperHistReg runs and PALOM (written out: nothing is generated for them)
+OTHER_FIRST = [
     "valis_mirage_rigid",
     "valis_mirage_nonrigid",
     "valis_mirage",
@@ -43,10 +59,13 @@ EXPECTED = [
     "deeperhistreg_hr_fluo_gpu_asdrawn",
     "deeperhistreg_hr_fluo_cpu",
     "deeperhistreg_hr_fluo_cpu_asdrawn",
-    "ashlar",
-    "ashlar_clean",
-    "affine_ashlar",
-    "affine_ashlar_clean",
+]
+N_OTHER_RUNS = 12  # 3 VALIS + 8 DeeperHistReg + PALOM
+# `stare_prep` is paused: it writes nothing and is not expected
+EXPECTED = [
+    *[v for n in _stare_names() for v in _stare_variants(n)],
+    *OTHER_FIRST,
+    *ashlar.ASHLAR_CELLS,
     "palom_affine",
     "palom",
 ]
@@ -54,10 +73,7 @@ PER_PATIENT = {
     "valis_mirage",
     "valis120",
     "valis120_hires",
-    "ashlar",
-    "ashlar_clean",
-    "affine_ashlar",
-    "affine_ashlar_clean",
+    *ashlar.ASHLAR_CELLS,
 }
 GPU = {
     "deeperhistreg_gpu",
@@ -72,7 +88,7 @@ def by_name():
 
 
 def test_runs_produce_exactly_the_designs_variants():
-    assert len(EXPECTED) == 35 and len(set(EXPECTED)) == 35
+    assert len(set(EXPECTED)) == len(EXPECTED)
     assert variants.expected_variants() == EXPECTED
 
 
@@ -89,7 +105,9 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 
 
 def test_counts():
-    assert variants.counts() == (18, 4, 7)
+    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
+    assert len(variants.active_runs()) == n_runs == len(variants.RUNS) - 1  # stare_prep
     assert {variants.run_name(r) for r in variants.RUNS if r.gpu} == GPU
     per_patient = {
         variants.run_name(r)
@@ -99,15 +117,20 @@ def test_counts():
     assert per_patient == PER_PATIENT
 
 
-def test_run_names_are_unique_and_no_stride_run_is_listed():
+def test_run_names_are_unique_and_the_stride_runs_are_exactly_the_generated_set():
     names = [variants.run_name(r) for r in variants.RUNS]
-    assert len(names) == len(set(names)) == 18
-    assert not [n for n in names if n.startswith("stare_s")]
-    # STARE itself has ONE configuration; the second row only changes its input
-    assert [r.opts for r in variants.RUNS if r.method == "stare"] == [
-        {},
-        {"prep": prep.selected()},
+    assert len(names) == len(set(names)) == len(variants.RUNS)
+    stare = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
+    assert sorted(stare) == sorted([*_stare_names(), prep.ROW])
+    stride = {n for n in names if n.startswith("stare_s")}
+    # stare_s<stride>_<level>: one per non-default stride and level, no more
+    levels = {n.split("_", 2)[2] for n in stride}
+    assert len(stride) == (len(variants.STARE_STRIDES) - 1) * len(levels)
+    # the preprocessing row is paused, the plain row (and every other) is not
+    assert [r.opts for r in variants.RUNS if variants.run_name(r) == prep.ROW] == [
+        {"prep": prep.selected()}
     ]
+    assert [r.opts for r in variants.RUNS if variants.run_name(r) == "stare"] == [{}]
 
 
 def test_every_run_names_a_known_method_and_a_run_it_waits_for():
@@ -120,7 +143,9 @@ def test_every_run_names_a_known_method_and_a_run_it_waits_for():
             # a run waits for one listed BEFORE it, so the launcher can submit in order
             assert run.after in names[:i]
     waiting = {variants.run_name(r): r.after for r in variants.RUNS if r.after}
-    assert waiting == {"affine_ashlar": "stare", "affine_ashlar_clean": "stare"}
+    assert waiting == {
+        n: "stare" for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "stare"
+    }
 
 
 def test_scopes():
@@ -152,13 +177,16 @@ def test_every_label_agrees_with_its_options_as_the_adapter_checks_them():
             assert (device != "cpu") == run.gpu == name.endswith("_gpu")
             assert fluo == ("_fluo_" in name)
         elif run.method == "ashlar":
-            assert ashlar.settings(opts) == ashlar.LABELS[name]
+            affine, frac, shift = ashlar.ASHLAR_CELLS[name]
+            assert ashlar.settings(opts) == (float(frac), affine, float(shift))
         elif run.method == "palom":
             assert run.opts == {} and palom.settings(opts) == "auto"
         elif run.method == "valis":
             hires = str(run.opts.get("hires", "0")) == "1"
             assert hires == (name == valis.HIRES_LABEL)
-    assert {n for n, r in runs.items() if r.method == "ashlar"} == set(ashlar.LABELS)
+    assert {n for n, r in runs.items() if r.method == "ashlar"} == set(
+        ashlar.ASHLAR_CELLS
+    )
     assert [n for n, r in runs.items() if r.method == "palom"] == ["palom"]
     assert variants.HR_CONFIG == dhr.HR_CONFIG
 
@@ -243,26 +271,32 @@ def test_every_variant_has_a_family_and_the_longest_prefix_wins():
     assert variants.family("initial") is None
 
 
-def test_both_anchored_rows_share_a_family_that_is_not_ashlars():
-    assert variants.family("affine_ashlar") == "affine_ashlar"
-    assert variants.family("affine_ashlar_clean") == "affine_ashlar"
+def test_the_anchored_rows_share_a_family_that_is_not_ashlars():
+    anchored = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "stare"]
+    plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
+    assert "affine_ashlar" in anchored and "affine_ashlar_clean" in anchored
+    for n in anchored:
+        assert variants.family(n) == "affine_ashlar"
+    for n in plain:
+        assert variants.family(n) == "ashlar"
     assert variants.family("ashlar") == "ashlar" != variants.family("affine_ashlar")
-    assert "affine_ashlar" not in variants.members("ashlar")
-    assert variants.members("ashlar") == ["ashlar", "ashlar_clean"]
-    assert variants.members("affine_ashlar") == ["affine_ashlar", "affine_ashlar_clean"]
+    assert variants.members("ashlar") == plain
+    assert variants.members("affine_ashlar") == anchored
 
 
-def test_clean_rows_are_gated_by_their_noisy_rows():
-    assert variants.GATED_BY == {
-        "ashlar_clean": "ashlar",
-        "affine_ashlar_clean": "affine_ashlar",
-    }
+def test_ashlar_rows_are_gated_by_the_row_of_their_affine_level_and_stare_cells_by_stare():
+    gated = variants.GATED_BY
+    for name, (affine, _, _) in ashlar.ASHLAR_CELLS.items():
+        gate = "affine_ashlar" if affine == "stare" else "ashlar"
+        assert variants.gated_by(name) == gate
+        if name != gate:
+            assert gated[name] == gate
+    for name in _stare_names():
+        assert variants.gated_by(name) == "stare"
     names = set(by_name())
-    assert set(variants.GATED_BY) <= names and set(variants.GATED_BY.values()) <= names
-    assert variants.gated_by("ashlar_clean") == "ashlar"
-    assert variants.gated_by("affine_ashlar_clean") == "affine_ashlar"
+    assert set(gated) <= names and set(gated.values()) <= names
     # every other run stands behind its own selfcheck
-    for name in names - set(variants.GATED_BY):
+    for name in names - set(gated):
         assert variants.gated_by(name) == name
 
 
@@ -311,7 +345,7 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
     from pathlib import Path
 
     both = [r for r in variants.RUNS if r.method == "stare"]
-    assert [variants.run_name(r) for r in both] == ["stare", prep.ROW]
+    assert {variants.run_name(r) for r in both} == {*_stare_names(), prep.ROW}
     for stare in both:
         assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
     assert "STARE" not in variants.BUILT_HERE  # the pipeline's image runs no row here
@@ -387,15 +421,20 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert COLUMNS[:12] == FIRST_TWELVE == variants.RUNS_COLUMNS[:12]
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
-    assert len(got) == 18
+    assert len(got) == len(variants.active_runs())
     assert all(len(r) == len(COLUMNS) == 16 for r in got)
-    # the two runs whose registration is several scheduler jobs per round
+    # the runs whose registration is several scheduler jobs per round: every STARE run,
+    # with a prep job before the rest for the proxies the adapter writes itself
     staged = {r[0]: r[15] for r in got if r[15] != "-"}
-    assert staged == {
-        "stare": "coarse,tile,solve,stitch",
-        "stare_prep": "prep,coarse,tile,solve,stitch",
-    }
-    assert [r[0] for r in got] == [variants.run_name(r) for r in variants.RUNS]
+    assert set(staged) == set(_stare_names())
+    for run in variants.active_runs():
+        if run.method != "stare":
+            continue
+        want = "coarse,tile,solve,stitch"
+        if run.opts.get("proxy") in variants.PREP_PROXIES:
+            want = "prep," + want
+        assert staged[variants.run_name(run)] == want
+    assert [r[0] for r in got] == [variants.run_name(r) for r in variants.active_runs()]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
     assert all(field for r in got for field in r)
 
@@ -424,7 +463,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "name": "affine_ashlar_clean",
         "method": "ashlar",
         "label": "affine_ashlar_clean",
-        "opts": "affine=stare,noise=none",
+        "opts": "affine=stare,noise_frac=0,max_shift_um=15",
         "image": "ASHLAR",
         "gpu": "0",
         "scope": "group",
@@ -477,7 +516,7 @@ def test_a_runs_line_round_trips_into_a_run_command(capsys):
 
 def test_runs_header_names_the_columns(capsys):
     got = rows(capsys, "--header")
-    assert tuple(got[0]) == COLUMNS and len(got) == 19
+    assert tuple(got[0]) == COLUMNS and len(got) == len(variants.active_runs()) + 1
 
 
 # ── `score` on the command line expects the whole list ────────────────────────
@@ -511,19 +550,19 @@ def pause(monkeypatch, *names):
     monkeypatch.setattr(variants, "RUNS", paused)
 
 
-def test_every_run_is_active_today_and_the_flag_is_the_last_field():
-    assert variants.Run._fields[-1] == "active"
-    assert variants.Run._field_defaults == {"active": True}
-    assert all(r.active is True for r in variants.RUNS)
-    assert variants.active_runs() == variants.RUNS
-    assert variants.paused_names() == []
+def test_every_run_is_active_but_the_paused_preprocessing_row():
+    assert variants.Run._fields[-2:] == ("active", "regimes")
+    assert variants.Run._field_defaults == {"active": True, "regimes": None}
+    assert [variants.run_name(r) for r in variants.RUNS if not r.active] == [prep.ROW]
+    assert variants.paused_names() == [prep.ROW]
+    assert variants.active_runs() == tuple(r for r in variants.RUNS if r.active)
     variants.check()
 
 
 def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, capsys):
     pause(monkeypatch, "valis120", "deeperhistreg_fluo_gpu")
     variants.check()
-    assert variants.paused_names() == ["valis120", "deeperhistreg_fluo_gpu"]
+    assert variants.paused_names() == [prep.ROW, "valis120", "deeperhistreg_fluo_gpu"]
     gone = {
         "valis120_rigid",
         "valis120",
@@ -532,7 +571,8 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
         "deeperhistreg_fluo_gpu_asdrawn",
     }
     assert variants.expected_variants() == [v for v in EXPECTED if v not in gone]
-    assert variants.counts() == (16, 3, 6)
+    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    assert variants.counts() == (n_runs - 2, len(GPU) - 1, len(PER_PATIENT) - 1)
     # the family keeps its primary, and its members are the runs that run
     assert variants.members("valis120") == ["valis120_hires"]
     assert variants.members("valis120", paused=True) == ["valis120", "valis120_hires"]
@@ -543,14 +583,14 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert variants.family("valis120_micro") == "valis120"
 
     got = rows(capsys)
-    assert len(got) == 16
+    assert len(got) == n_runs - 2
     assert "valis120" not in [r[0] for r in got]
     assert {r[12] for r in got} == {"1"}
     everything = rows(capsys, "--all")
     assert [r[0] for r in everything] == [variants.run_name(r) for r in variants.RUNS]
     flags = {r[0]: r[12] for r in everything}
     assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
-    assert sum(v == "1" for v in flags.values()) == 16
+    assert sum(v == "1" for v in flags.values()) == n_runs - 2
     # the same line, flag apart, as when it ran
     (line,) = [r for r in everything if r[0] == "valis120"]
     assert line[:12] == [
@@ -587,10 +627,15 @@ def test_reactivating_is_one_field(monkeypatch):
     pause(monkeypatch, "valis120")
     assert len(variants.expected_variants()) == len(EXPECTED) - 3
     monkeypatch.setattr(
-        variants, "RUNS", tuple(r._replace(active=True) for r in variants.RUNS)
+        variants,
+        "RUNS",
+        tuple(
+            r._replace(active=True) if variants.run_name(r) == "valis120" else r
+            for r in variants.RUNS
+        ),
     )
     assert variants.expected_variants() == EXPECTED
-    assert variants.counts() == (18, 4, 7)
+    assert variants.counts()[0] == len(variants.RUNS) - 1  # the preprocessing row
 
 
 @pytest.mark.parametrize(
@@ -618,22 +663,31 @@ def test_a_paused_run_cannot_write_a_primary_row_or_gate_an_active_run(
 
 def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
-    pause(monkeypatch, "stare")
+    # every STARE cell is gated by `stare`, so they are paused with it
+    stare_cells = [n for n in _stare_names()]
+    pause(monkeypatch, *stare_cells)
     monkeypatch.setattr(
         variants, "PRIMARY", tuple(v for v in variants.PRIMARY if v != "stare")
     )
     with pytest.raises(ValueError, match="waits for"):
         variants.check()
     # pausing the runs that wait as well is a consistent list
-    pause(monkeypatch, "affine_ashlar", "affine_ashlar_clean")
+    anchored = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "stare"]
+    pause(monkeypatch, *stare_cells, *anchored)
     variants.check()
-    assert variants.counts() == (15, 4, 5)
+    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    assert variants.counts() == (
+        n_runs - len(stare_cells) - len(anchored),
+        len(GPU),
+        len(PER_PATIENT) - len(anchored),
+    )
 
 
 def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):
     pause(monkeypatch, "ashlar_clean", "affine_ashlar_clean")
     variants.check()
-    assert variants.members("ashlar") == ["ashlar"]
+    plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
+    assert variants.members("ashlar") == [n for n in plain if n != "ashlar_clean"]
 
 
 # ── which rows a run's selfcheck gate reads (R3.12 b) ─────────────────────────
@@ -768,7 +822,7 @@ def test_the_realcheck_gates_the_primary_rows_of_the_two_valis_adapters(capsys):
     rest of a run. Only a run with a primary row has one."""
     gated = {
         variants.run_name(r): variants.realcheck_gate(variants.run_name(r))
-        for r in variants.RUNS
+        for r in variants.active_runs()
     }
     assert {k: v for k, v in gated.items() if v} == {
         "valis_mirage": "valis_mirage",
@@ -824,3 +878,161 @@ def test_an_option_the_method_does_not_read_is_refused_before_any_work(tmp_path)
              "multiplex", "--method", "stare", "--index", "0", "--opt", "stirde=128"]
         )  # fmt: skip
     assert not (tmp_path / "o").exists()
+
+
+# ── generated STARE and ASHLAR runs (Task C3) ─────────────────────────────────
+from benchmarks.regbench import regimes as rg  # noqa: E402
+from benchmarks.regbench.methods import ashlar as ashlar_adapter  # noqa: E402
+
+
+def _generated_stare():
+    return [
+        r
+        for r in variants.RUNS
+        if r.method == "stare" and r.active and r.label != "stare_prep"
+    ]
+
+
+def test_stare_runs_are_strides_times_levels_per_regime():
+    for reg in rg.REGIMES:
+        names = {
+            variants.run_name(r)
+            for r in _generated_stare()
+            if r.regimes is None or reg in r.regimes
+        }
+        assert len(names) == len(variants.STARE_STRIDES) * len(rg.stare_levels(reg)), (
+            reg
+        )
+        assert "stare" in names  # the default cell is always present (R4)
+
+
+def test_every_regime_has_the_baseline_at_every_stride():
+    """The defaults are in every cross: STARE unchanged at each stride, on every dataset."""
+    for reg in rg.REGIMES:
+        have = {
+            (r.opts or {}).get("stride", "64")
+            for r in _generated_stare()
+            if (r.regimes is None or reg in r.regimes)
+            and "proxy" not in r.opts
+            and "sprep" not in r.opts
+        }
+        assert have == {str(s) for s in variants.STARE_STRIDES}, reg
+
+
+def test_a_baseline_run_carries_no_proxy_and_applies_everywhere():
+    for r in _generated_stare():
+        if "proxy" not in r.opts:
+            assert set(r.opts) <= {"stride"} and r.regimes is None
+            assert (
+                variants.run_name(r).endswith("none") or variants.run_name(r) == "stare"
+            )
+
+
+def test_a_generated_name_maps_to_exactly_one_opts_dict():
+    """Two regimes producing the same name must produce the same options."""
+    seen = {}
+    for reg in rg.REGIMES:
+        for key, level in rg.stare_levels(reg):
+            for s in variants.STARE_STRIDES:
+                name, opts = variants.stare_cell(s, key, level)
+                assert seen.setdefault(name, opts) == opts, (reg, name)
+    assert seen.keys() == {variants.run_name(r) for r in _generated_stare()}
+
+
+def test_level_key_is_injective_over_non_baseline_levels():
+    levels = {
+        lv
+        for reg in rg.REGIMES
+        for key, lv in rg.stare_levels(reg)
+        if key != "baseline"
+    }
+    keys = {rg.level_key(lv) for lv in levels}
+    assert len(keys) == len(levels)
+    assert (
+        "none" not in keys
+    )  # "none" names the two baselines, which are not in the set
+
+
+def test_stare_runs_carry_the_regimes_that_produced_them():
+    for r in _generated_stare():
+        if r.regimes is None:
+            continue
+        for reg in r.regimes:
+            names = {
+                variants.stare_cell(s, k, lv)[0]
+                for k, lv in rg.stare_levels(reg)
+                for s in variants.STARE_STRIDES
+            }
+            assert variants.run_name(r) in names
+        assert tuple(r.regimes) == tuple(sorted(r.regimes))
+
+
+def test_ashlar_is_the_full_factorial():
+    cells = {
+        (r.opts["affine"], r.opts["noise_frac"], r.opts["max_shift_um"])
+        for r in variants.RUNS
+        if r.method == "ashlar"
+    }
+    want = (
+        len(variants.ASHLAR_AFFINES)
+        * len(variants.ASHLAR_NOISES)
+        * len(variants.ASHLAR_SHIFTS)
+    )
+    assert len(cells) == want == len([r for r in variants.RUNS if r.method == "ashlar"])
+    assert ("none", "0", "15") in cells  # ASHLAR as published
+
+
+def test_existing_ashlar_names_keep_their_cells():
+    by = {
+        variants.run_name(r): (
+            r.opts["affine"],
+            r.opts["noise_frac"],
+            r.opts["max_shift_um"],
+        )
+        for r in variants.RUNS
+        if r.method == "ashlar"
+    }
+    assert by["ashlar"] == ("none", "0.002", "15")
+    assert by["ashlar_clean"] == ("none", "0", "15")
+    assert by["affine_ashlar"] == ("stare", "0.002", "15")
+    assert by["affine_ashlar_clean"] == ("stare", "0", "15")
+    assert by["ashlar_anone_n01_s60"] == ("none", "0.01", "60")
+    assert by["ashlar_astare_n05_s240"] == ("stare", "0.05", "240")
+
+
+def test_ashlar_cells_tell_the_adapter_what_a_label_means():
+    for r in variants.RUNS:
+        if r.method != "ashlar":
+            continue
+        cell = (r.opts["affine"], r.opts["noise_frac"], r.opts["max_shift_um"])
+        assert ashlar_adapter.ASHLAR_CELLS[variants.run_name(r)] == cell
+        got = ashlar_adapter.settings({**r.opts, "label": variants.run_name(r)})
+        assert got == (float(cell[1]), cell[0], float(cell[2]))
+
+
+def test_ashlar_gates_and_families_follow_the_affine_factor():
+    for r in variants.RUNS:
+        if r.method != "ashlar":
+            continue
+        name = variants.run_name(r)
+        anchored = r.opts["affine"] == "stare"
+        assert variants.gated_by(name) in (
+            "affine_ashlar" if anchored else "ashlar",
+            name,
+        )
+        assert variants.family(name) == ("affine_ashlar" if anchored else "ashlar")
+        assert r.after == ("stare" if anchored else None)
+
+
+def test_stare_prep_row_is_paused_not_gone():
+    r = [r for r in variants.RUNS if r.label == "stare_prep"]
+    assert len(r) == 1 and r[0].active is False
+    assert "stare_prep" not in {variants.run_name(x) for x in variants.active_runs()}
+
+
+def test_runs_for_honours_regimes():
+    names = {variants.run_name(r) for r in variants.runs_for("hyreco_b")}
+    assert "stare_haem_clahe" in names and "stare_percentile" not in names
+    assert "stare_clahe" not in names  # cyclic_if's alternative, not bf_same's
+    cyc = {variants.run_name(r) for r in variants.runs_for("synthetic")}
+    assert "stare_clahe" in cyc and "stare_haem_clahe" not in cyc

@@ -6,14 +6,17 @@ whether it needs a GPU, and the run that must have finished first. The launcher 
 list (``python -m benchmarks.regbench runs``); the scorer is told which result names to
 expect (``expected_variants()``) and which are the primary rows (``PRIMARY``).
 
-Totals (``counts()``, ``expected_variants()``; nothing here is a second copy to keep in
-step): 18 runs, 35 result names, 4 runs on a GPU, 7 runs per patient (the rest per pair).
+Totals are ``counts()`` and ``expected_variants()``; nothing here is a second copy to keep in
+step. The STARE and ASHLAR runs are GENERATED from tables (``regimes.REGIMES`` x
+``STARE_STRIDES``; ``methods.ashlar.ASHLAR_CELLS``), so a total moves with a table. A run
+may carry ``Run.regimes``: ``runs_for(dataset)`` then keeps it only on a dataset of one of
+those regimes (``regimes.DATASET_REGIME``).
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
 launched, not expected by ``score``, not counted and not printed by ``runs`` (``runs
 --all`` prints it, with ``0`` in column 13). Taking the flag off again is the whole
-re-activation. Nothing is paused today. ``check()`` refuses a list in which a paused run
+re-activation. Only ``stare_prep`` is paused today. ``check()`` refuses a list in which a paused run
 writes a primary row, gates an active run's selfcheck, or is what an active run waits
 for; it runs at import and before every list this module hands out.
 
@@ -102,7 +105,9 @@ from . import (
     methods,
     plugins,
     prep,
+    regimes,
 )
+from .methods import ashlar as _ashlar
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
 # list starts no adapter; the tests hold the two equal.
@@ -119,12 +124,103 @@ class Run(NamedTuple):
     active: bool = (
         True  # False pauses the run: kept and tested, not launched or expected
     )
+    # the regimes (regimes.REGIMES) whose datasets take the run; None = every dataset
+    regimes: tuple[str, ...] | None = None
+
+
+STARE_STRIDES = (64, 128, 256)
+
+
+# the proxies of an RGB slide that `prep.write_inputs` writes (a job of their own); `grey`
+# is the case's own input and `channel` the slide (methods.stare.proxy_candidate)
+PREP_PROXIES = ("haem", "grey_smooth")
+
+
+def stare_cell(stride, key, level):
+    """``(run name, opts)`` of one STARE cell: a stride and a preprocessing level.
+
+    The baseline level carries the stride alone (no proxy, no ``--prep``): the adapter's
+    own default picks the modality's proxy, so ONE name (``stare``, ``stare_s128_none``,
+    ``stare_s256_none``) is right in every regime. Any other level names its proxy and
+    ``--prep``. Stride 64 is STARE's default and is left out of the name (and of the
+    options of the plain row)."""
+    lk = regimes.level_key(level)
+    name = f"stare_{lk}" if stride == 64 else f"stare_s{stride}_{lk}"
+    if key == "baseline":
+        return ("stare", {}) if stride == 64 else (name, {"stride": str(stride)})
+    opts = {"proxy": level.proxy, "sprep": level.sprep}
+    if stride != 64:
+        opts = {"stride": str(stride), **opts}
+    return name, opts
+
+
+def _stare_runs():
+    """The STARE runs: every stride x every level of every regime, deduplicated by name.
+    A baseline run applies to every dataset (``regimes=None``); another level's run lists
+    the regimes whose levels produced it. Two regimes producing one name with different
+    options is a bug and is refused."""
+    found = {}
+    for reg in regimes.REGIMES:
+        for key, level in regimes.stare_levels(reg):
+            for s in STARE_STRIDES:
+                name, opts = stare_cell(s, key, level)
+                seen_opts, seen_regs = found.setdefault(name, (opts, set()))
+                if seen_opts != opts:
+                    raise ValueError(
+                        f"{name}: {seen_opts} in one regime, {opts} in {reg}"
+                    )
+                seen_regs.add(reg)
+    return tuple(
+        Run(
+            "stare",
+            None if name == "stare" else name,
+            opts,
+            "STARE_REGBENCH",
+            False,
+            None,
+            True,
+            None if "proxy" not in opts else tuple(sorted(regs)),
+        )
+        for name, (opts, regs) in found.items()
+    )
+
+
+ASHLAR_AFFINES = _ashlar.AFFINES
+ASHLAR_NOISES = _ashlar.NOISE_FRACS
+ASHLAR_SHIFTS = _ashlar.MAX_SHIFTS_UM
+
+
+def _ashlar_runs():
+    """The 24 ASHLAR runs, built FROM the adapter's cell table (``ASHLAR_CELLS``), so a
+    label and its options cannot come apart. ``ashlar`` is stored under the method's own
+    name (label None)."""
+    return tuple(
+        Run(
+            "ashlar",
+            None if label == "ashlar" else label,
+            {"affine": a, "noise_frac": f, "max_shift_um": s},
+            "ASHLAR",
+            False,
+            "stare" if a == "stare" else None,
+        )
+        for label, (a, f, s) in _ashlar.ASHLAR_CELLS.items()
+    )
 
 
 RUNS = (
-    Run("stare", None, {}, "STARE_REGBENCH", False, None),
-    # STARE unchanged, on the frozen benchmark-side preprocessing of its input
-    Run("stare", prep.ROW, {"prep": prep.selected()}, "STARE_REGBENCH", False, None),
+    *_stare_runs(),
+    # STARE unchanged, on the frozen benchmark-side preprocessing of its input. PAUSED
+    # (2026-10-14): the regimes' `sprep` levels replace it; kept and tested, and
+    # `TUNING_RUNS` / `anhir_tune` still use it.
+    Run(
+        "stare",
+        prep.ROW,
+        {"prep": prep.selected()},
+        "STARE_REGBENCH",
+        False,
+        None,
+        active=False,
+    ),
     Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
@@ -192,31 +288,7 @@ RUNS = (
         False,
         None,
     ),
-    Run("ashlar", None, {"affine": "none", "noise": "ref"}, "ASHLAR", False, None),
-    Run(
-        "ashlar",
-        "ashlar_clean",
-        {"affine": "none", "noise": "none"},
-        "ASHLAR",
-        False,
-        None,
-    ),
-    Run(
-        "ashlar",
-        "affine_ashlar",
-        {"affine": "stare", "noise": "ref"},
-        "ASHLAR",
-        False,
-        "stare",
-    ),
-    Run(
-        "ashlar",
-        "affine_ashlar_clean",
-        {"affine": "stare", "noise": "none"},
-        "ASHLAR",
-        False,
-        "stare",
-    ),
+    *_ashlar_runs(),
     Run("palom", None, {}, "PALOM", False, None),
 )
 
@@ -253,6 +325,7 @@ PRIMARY = (
 # own, which has no primary row and is never offered as ASHLAR's best.
 FAMILY = {
     "stare": "stare",
+    "ashlar_astare": "affine_ashlar",
     "valis_mirage": "valis_mirage",
     "valis120": "valis120",
     "deeperhistreg": "deeperhistreg",
@@ -264,7 +337,16 @@ FAMILY = {
 FAMILY.update(plugins.get("FAMILY", {}) or {})
 
 # Which run's selfcheck gates a run, when it is not its own.
-GATED_BY = {"ashlar_clean": "ashlar", "affine_ashlar_clean": "affine_ashlar"}
+GATED_BY = {
+    # every ASHLAR cell is gated by the selfcheck of the cell that matches it in `affine`;
+    # every generated STARE cell by `stare`'s (one adapter, one pointing path)
+    **{
+        n: ("affine_ashlar" if c[0] == "stare" else "ashlar")
+        for n, c in _ashlar.ASHLAR_CELLS.items()
+        if n not in ("ashlar", "affine_ashlar")
+    },
+    **{run_label: "stare" for r in _stare_runs() if (run_label := r.label) is not None},
+}
 
 GATED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
 
@@ -401,7 +483,7 @@ def row_checks(selfcheck_dir, mine=None):
 
     out = {}
     root = Path(selfcheck_dir) if selfcheck_dir else None
-    for run in RUNS:
+    for run in active_runs():  # a paused run writes no results
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -431,7 +513,7 @@ def _gate_records(selfcheck_dir, mine=None):
 
     root = Path(selfcheck_dir) if selfcheck_dir else None
     out = []
-    for run in RUNS:
+    for run in active_runs():  # a paused run writes no results
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -581,14 +663,28 @@ def _not_on(dataset, run):
 
 
 def runs_for(dataset=None):
-    """The active runs of a dataset: all of them for the cohort's datasets (and for
-    None); for an external brightfield set, those not left out (``excluded_for``); for
+    """The active runs of a dataset: those whose ``regimes`` take it (``Run.regimes``),
+    all of them for None; for an external brightfield set, those not left out (``excluded_for``); for
     ANHIR's tuning side, the preprocessing candidates and nothing else."""
     if dataset == ANHIR_TUNE:
         return TUNING_RUNS
+    runs = active_runs()
+    if dataset is not None:
+        runs = tuple(r for r in runs if _in_regime(dataset, r))
     if dataset not in EXTERNAL_DATASETS:
-        return active_runs()
-    return tuple(r for r in active_runs() if _not_on(dataset, r) is None)
+        return runs
+    return tuple(r for r in runs if _not_on(dataset, r) is None)
+
+
+def _in_regime(dataset, run):
+    """Whether the run's ``regimes`` take this dataset (None takes every dataset). A
+    dataset with no regime (``regimes.DATASET_REGIME``) takes only the runs that name none."""
+    if run.regimes is None:
+        return True
+    try:
+        return regimes.regime_of(dataset) in run.regimes
+    except KeyError:
+        return False
 
 
 def excluded_for(dataset):
@@ -611,7 +707,7 @@ def primary_for(dataset=None):
 
 def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs (35 with nothing paused). For an external dataset, the names of
+    the active runs. For an external dataset, the names of
     ``runs_for(dataset)``."""
     check()
     return [v for run in runs_for(dataset) for v in variants_of(run)]
@@ -625,9 +721,11 @@ def scope(method):
 def stages_of(run):
     """The scheduler jobs one round of this run is registered in, in order, or ``()``
     for a run that is one job per unit: the method's ``STAGES``, behind ``prep`` when
-    the run has a benchmark-side preprocessing (``regbench.stages``)."""
+    the run has a benchmark-side preprocessing: the label-bound ``prep`` row, or a proxy
+    the adapter writes itself (``PREP_PROXIES``; ``regbench.stages``)."""
     names = tuple(getattr(methods.load(run.method), "STAGES", ()) or ())
-    if names and (run.opts or {}).get("prep"):
+    opts = run.opts or {}
+    if names and (opts.get("prep") or opts.get("proxy") in PREP_PROXIES):
         names = ("prep", *names)
     return names
 

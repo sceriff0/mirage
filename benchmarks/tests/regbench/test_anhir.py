@@ -386,10 +386,19 @@ def test_a_landmark_file_of_another_shape_is_refused(tmp_path):
 
 # ── which runs ────────────────────────────────────────────────────────────────
 def test_the_run_list_of_anhir_and_the_reasons_of_the_rest():
+    from benchmarks.regbench import regimes
+
     names = [variants.run_name(r) for r in variants.runs_for(ANHIR)]
-    assert names == [
-        "stare",
-        "stare_prep",
+    reg = regimes.regime_of(ANHIR)
+    stare_here = {
+        variants.stare_cell(s, k, lv)[0]
+        for k, lv in regimes.stare_levels(reg)
+        for s in variants.STARE_STRIDES
+    }
+    # STARE: every stride x level of ANHIR's regime, and the paused preprocessing row is not
+    assert {n for n in names if n.startswith("stare")} == stare_here
+    assert "stare_prep" not in names and "stare" in names
+    assert [n for n in names if not n.startswith("stare")] == [
         "valis120",
         "valis120_hires",
         "deeperhistreg_gpu",
@@ -397,17 +406,25 @@ def test_the_run_list_of_anhir_and_the_reasons_of_the_rest():
         "deeperhistreg_hr_gpu",
         "deeperhistreg_hr_cpu",
     ]
-    assert len(variants.expected_variants(ANHIR)) == 18
+    assert len(variants.expected_variants(ANHIR)) == 2 * len(stare_here) + (
+        3 + 3 + 4 * 2
+    )
     assert variants.primary_for(ANHIR) == [
         "stare",
         "valis120_hires",
         "deeperhistreg_hr_gpu_asdrawn",
     ]
     left = dict(variants.excluded_for(ANHIR))
-    assert set(left) | set(names) == {
+    # the rest is either left out for a reason or belongs to another regime's datasets
+    other_regime = {
+        variants.run_name(r)
+        for r in variants.active_runs()
+        if r.regimes is not None and reg not in r.regimes
+    }
+    assert set(left) | set(names) | other_regime == {
         variants.run_name(r) for r in variants.active_runs()
     }
-    assert not set(left) & set(names)
+    assert not set(left) & set(names) and not other_regime & set(names)
     for name in (
         "ashlar",
         "affine_ashlar_clean",

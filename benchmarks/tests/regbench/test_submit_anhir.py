@@ -73,25 +73,21 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     assert not jobs[first_rung(SPECS["stare_prep"], "anhir")].opt("--gres")
 
 
-def test_the_provisional_preprocessing_is_said_aloud(site):
-    done, _, _ = launch(site, "--datasets", "anhir", env=SOURCE, log="warn")
-    warned = [ln for ln in done.stdout.splitlines() if ln.startswith("# WARNING")]
-    record = prep.load_frozen()
-    if record["status"] == "provisional":
-        assert len(warned) == 1 and "PROVISIONAL" in warned[0]
-        assert f"'{record['selected']}'" in warned[0] and prep.ROW in warned[0]
-    else:
-        assert not warned and "selected on ANHIR's tuning side" in done.stdout
-    # a submission without that row says nothing about it
-    done, _, _ = launch(
-        site, "--datasets", "anhir", "--runs", "stare", env=SOURCE, log="quiet"
-    )
-    assert done.returncode == 0 and "WARNING" not in done.stdout
-    # and the cohort's default, which holds the row, says it too
+def test_the_paused_preprocessing_row_is_not_submitted_and_so_not_warned_about(site):
+    """`stare_prep` is paused (2026-10-14): no launch holds it, so the provisional-candidate
+    warning, which is printed for a SELECTED run only, has nothing to say; the row cannot be
+    asked for by name either (a paused run is not in `runs`). The tuning side still runs
+    its candidates, and still ends in the frozen record the row would read."""
+    assert not variants.run_of(prep.ROW).active
+    for args in (("--datasets", "anhir"), ("--runs", "stare")):
+        done, _, _ = launch(site, *args, env=SOURCE, log="warn")
+        assert done.returncode == 0, done.stderr
+        assert "WARNING" not in done.stdout
     done, _, _ = launch(site, "--runs", f"stare {prep.ROW}", log="cohort")
-    assert done.returncode == 0, done.stderr
-    assert ("# WARNING" in done.stdout) == (record["status"] == "provisional")
-    assert first_rung(variants.run_of(prep.ROW), "multiplex") in jobs_of(done)
+    assert (
+        done.returncode != 0
+        and f"no run named '{prep.ROW}'" in done.stderr + done.stdout
+    )
 
 
 def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):

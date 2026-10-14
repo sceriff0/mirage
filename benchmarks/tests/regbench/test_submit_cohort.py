@@ -36,7 +36,25 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
-N_JOBS = 161  # sbatch calls of the default submission on the fixture
+# the default submission on the fixture (two cohort datasets, `multiplex` and `synthetic`),
+# derived from the run list: per run its gate and, per dataset, the ladder's first array and
+# its watcher; per distinct gate a selfcheck and its watcher; per run with a realcheck its
+# unit sent ahead (3 jobs); the settle job, an array per dataset, tissue and the scorer; and
+# per staged run the stages' extra jobs per dataset (two feeders, the last job's pair, and
+# the preprocessing's pair where it has one)
+COHORT_DATASETS = ("multiplex", "synthetic")
+MORE = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
+N_REALCHECKED = len([n for n in RUNS if variants.realcheck_gate(n)])
+N_JOBS = (
+    len(RUNS)
+    + 2 * len(GATING)
+    + len(RUNS) * 2 * len(COHORT_DATASETS)
+    + 3 * N_REALCHECKED
+    + 1
+    + len(COHORT_DATASETS)
+    + 2
+    + len(COHORT_DATASETS) * MORE
+)
 # the last job of a staged round has the benchmark's ladder (its own work is in it)
 STITCH_GB = ladder.RUNGS_GB
 # the repository's one quote-aware "where does the comment start" (CLAUDE.md, rule 7): a
@@ -483,7 +501,7 @@ def test_the_script_names_no_method():
 def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     jobs, _, _ = dry
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert laddered == set(RUNS) and len(RUNS) == 18
+    assert laddered == set(RUNS) and len(RUNS) == len(variants.active_runs())
     gated = {j.args[1] for j in jobs.values() if j.args[:1] == ["selfcheck"]}
     assert gated == set(RUNS)
 
@@ -723,7 +741,9 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
 def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
     jobs, _, _ = dry
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
-    assert {j.args[0] for j in checks} == set(GATING) and len(GATING) == 16
+    assert {j.args[0] for j in checks} == set(GATING) and set(GATING) <= set(RUNS)
+    # one selfcheck per distinct gate, and a gate stands behind its own selfcheck
+    assert all(variants.gated_by(g) == g for g in GATING)
     for run in GATING:
         got = [_any(jobs, f"rb-sc-{run}-{gb}g") for gb in ladder.SELFCHECK_RUNGS_GB]
         # the first is submitted; the others are steps of the selfcheck's watcher
@@ -786,9 +806,16 @@ def test_every_run_waits_for_its_own_gate_and_the_gate_for_the_selfcheck(dry):
             assert ("afterok", f"<rb-gate-{run}>") in job.deps, job.name
             others = {n for k, n in job.deps if "gate" in n and k == "afterok"}
             assert others <= {f"<rb-gate-{run}>", f"<rb-realgate-{run}>"}, job.name
-    # the two clean ASHLAR rows stand behind the noisy rows' selfchecks
-    assert jobs["rb-gate-ashlar_clean"].args[2] == "ashlar"
-    assert jobs["rb-gate-affine_ashlar_clean"].args[2] == "affine_ashlar"
+    # every other ASHLAR cell stands behind the selfcheck of the run named for its affine
+    # level, and every generated STARE cell behind `stare`'s
+    from benchmarks.regbench.methods import ashlar as ashlar_adapter
+
+    for name, (affine, _, _) in ashlar_adapter.ASHLAR_CELLS.items():
+        want = "affine_ashlar" if affine == "stare" else "ashlar"
+        assert jobs[f"rb-gate-{name}"].args[2] == want
+    for name in RUNS:
+        if RUNS[name].method == "stare":
+            assert jobs[f"rb-gate-{name}"].args[2] == "stare"
 
 
 def test_a_failed_gate_blocks_that_run_only(dry):
@@ -844,7 +871,7 @@ def test_no_job_is_ever_requeued(dry):
 # ── order ─────────────────────────────────────────────────────────────────────
 def test_both_anchored_rows_wait_for_the_run_they_read(dry):
     jobs, _, _ = dry
-    for run in ("affine_ashlar", "affine_ashlar_clean"):
+    for run in variants.members("affine_ashlar"):
         assert RUNS[run].after == "stare"
         for dataset in ("multiplex", "synthetic"):
             first = rungs(jobs, run, dataset)[0]
@@ -991,12 +1018,21 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     # watcher of COARSE and of SOLVE, its two tile submitters (the tile jobs are theirs
     # to submit), and the last job's first array and watcher (and 2 of its
     # preprocessing) where another run has the ladder's 2. No retry is submitted.
-    more = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
-    assert more == 6 + 8 and len(STAGED) == 2
+    assert set(STAGED) == {n for n, r in RUNS.items() if r.method == "stare"}
+    assert len(sizes) == len(COHORT_DATASETS)
     assert (
         len(jobs)
-        == 18 + 32 + 18 * 2 * 2 + 2 * (2 + 1) + 1 + len(sizes) + 2 + 2 * more
         == N_JOBS
+        == (
+            len(RUNS)
+            + 2 * len(GATING)
+            + len(RUNS) * 2 * len(sizes)
+            + 3 * N_REALCHECKED
+            + 1
+            + len(sizes)
+            + 2
+            + len(sizes) * MORE
+        )
     )
 
 
@@ -1329,9 +1365,13 @@ def test_unset_the_order_is_ashlar_first_and_a_gpu_task_asks_for_one_gpu(site):
     assert done.returncode == 0, done.stderr
     jobs = jobs_of(done)
     order = _ladder_order(jobs)
-    assert order[:5] == [
-        "ashlar", "ashlar_clean", "stare", "affine_ashlar", "affine_ashlar_clean",
-    ]  # fmt: skip
+    plain = variants.members("ashlar")
+    anchored = variants.members("affine_ashlar")
+    # the plain ASHLAR cells (the primary row first), then STARE, then the anchored cells
+    # that read it, directly after it
+    assert order[: len(plain)] == plain and plain[0] == "ashlar"
+    assert order[len(plain)] == "stare"
+    assert order[len(plain) + 1 : len(plain) + 1 + len(anchored)] == anchored
     assert sorted(order) == sorted(RUNS)
     asked = same = 0
     for job in jobs.values():
@@ -1375,7 +1415,7 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
     )
     # the anchored rows: after their anchor in the order, waiting for its last array
     # and (the one with a selfcheck of its own) for its last selfcheck attempt
-    for run in ("affine_ashlar", "affine_ashlar_clean"):
+    for run in variants.members("affine_ashlar"):
         assert wanted.index(run) > wanted.index("stare")
         for dataset in ("multiplex", "synthetic"):
             first = rungs(jobs, run, dataset)[0]
@@ -1401,18 +1441,19 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
 
 def test_an_anchored_run_named_first_is_moved_and_that_is_said(site):
     done, _, _ = launch(site, env={"REGBENCH_RUN_ORDER": ORDERS[1]}, log="order-moved")
-    for run in ("affine_ashlar", "affine_ashlar_clean"):
+    anchored = variants.members("affine_ashlar")
+    for run in anchored:
         said = f"# run order: {run} reads the results of stare: it is submitted directly after stare"
         assert said in done.stdout
     order = _ladder_order(jobs_of(done))
     at = order.index("stare")
-    assert order[at : at + 3] == ["stare", "affine_ashlar", "affine_ashlar_clean"]
+    assert order[at : at + 1 + len(anchored)] == ["stare", *anchored]
     assert order[0] == "ashlar"  # the rest of what was named keeps its place
     # the user's order moves nothing, and says nothing of the kind
     plain, _, _ = launch(site, env={"REGBENCH_RUN_ORDER": USER_ORDER}, log="order-user")
     assert "reads the results of" not in plain.stdout
-    assert _ladder_order(jobs_of(plain))[:4] == [
-        "ashlar", "ashlar_clean", "palom", "deeperhistreg_gpu",
+    assert _ladder_order(jobs_of(plain))[: len(variants.members("ashlar")) + 2] == [
+        *variants.members("ashlar"), "palom", "deeperhistreg_gpu",
     ]  # fmt: skip
 
 
@@ -1492,9 +1533,12 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     """COARSE, one REG-TILE task per tile, SOLVE, then the writer: each with the
     allocation the pipeline gives that process, each attempt after the one before."""
     jobs, _, _ = dry
+    # every STARE run, with a prep job in front for the proxies the adapter writes itself
     assert STAGED == {
-        "stare": ("coarse", "tile", "solve", "stitch"),
-        "stare_prep": ("prep", "coarse", "tile", "solve", "stitch"),
+        n: (("prep",) if r.opts.get("proxy") in variants.PREP_PROXIES else ())
+        + ("coarse", "tile", "solve", "stitch")
+        for n, r in RUNS.items()
+        if r.method == "stare"
     }
     for run, names in STAGED.items():
         spec = RUNS[run]
@@ -1587,7 +1631,8 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
         f"rb-stare-multiplex-feed-{FEEDERS}"
     }
     # the preprocessing is the benchmark's own step, with the benchmark's allocation
-    prep = attempts(jobs, "stare_prep", "prep")
+    # (a proxy the adapter writes itself, `haem`, has it; the plain run does not)
+    prep = attempts(jobs, "stare_haem_clahe", "prep")
     assert [(j.opt("--cpus-per-task"), j.opt("--mem")) for j in prep] == [
         ("4", "16G"), ("4", "32G"), ("4", "48G"), ("4", "64G")
     ]  # fmt: skip
@@ -1612,7 +1657,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
         "REGBENCH_STAGE_ARRAY_MAX": "7",
         "REGBENCH_STAGE_QUEUE_MAX": "30",
     }
-    done, _, _ = launch(site, "--runs", "stare stare_prep", env=env, log="totals")
+    done, _, _ = launch(site, "--runs", "stare stare_haem_clahe", env=env, log="totals")
     jobs = jobs_of(done)
     tasks = sum(
         int(r.split("-")[1]) - int(r.split("-")[0]) + 1
@@ -1639,7 +1684,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
     assert (
         f"# the most in the queue at once: the {tasks} task(s) above plus at most 30 "
         f"tile task(s) for each of the 2 run(s) with a tile submitter (stare "
-        f"stare_prep): {tasks + 2 * 30} task(s)" in said
+        f"stare_haem_clahe): {tasks + 2 * 30} task(s)" in said
     )
     # no tile task is among what is submitted now
     assert not [n for n in jobs if "-tile-" in n]

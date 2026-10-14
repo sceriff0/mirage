@@ -51,7 +51,7 @@ This package is being ported in steps. What exists now:
 | adapter `palom` (PALOM 2026.4.1 by its README recipe, one run: `palom`) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 18 runs, 35 result names, six primary rows, a flag that pauses a run (nothing is paused) |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 60 runs (STARE strides x preprocessing levels generated per modality regime, ASHLAR's 24-cell factorial, one paused row), six primary rows, a flag that pauses a run, a `regimes` filter that gives a dataset only the runs of its modality |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate; for a run that is one job per unit, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost); for a run whose registration is several jobs per round (STARE), four arrays per stage, its tile submitters, and the same eight arrays for each round's last job; `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
@@ -144,8 +144,10 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-18 runs, 35 result names, 4 runs on a GPU, 7 per patient. `score` expects exactly those
-names and opens its summary on the six primary rows:
+60 active runs, 4 on a GPU, 27 per patient (the totals are `variants.counts()`; the
+list is generated from tables, so they move with the tables and no test pins a literal).
+`score` expects exactly the active runs' result names and opens its summary on the six
+primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
 
@@ -157,19 +159,29 @@ names and opens its summary on the six primary rows:
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
-- **STARE has two rows, and one STARE.** `stare` is the method as the pipeline runs it.
-  `stare_prep` (ruling R3.21) is the SAME package, version and parameters on a
-  benchmark-side preprocessing of the one image STARE registers on (`prep.py`: a small
-  closed candidate list; the candidate in force is frozen in `prep_frozen.json` and is
-  the run's one option, `prep=<candidate>`). It is an active, NON-primary row of STARE's
-  family on `multiplex`, on `synthetic` and on ANHIR. The candidate is chosen on ANHIR's
-  tuning-side pairs and on nothing else, never on the cohort; on the cohort it is applied
-  to the nuclear channel STARE reads, where each candidate has a stated meaning (two of
-  the five are the identity there). The image it writes is the ORIGINAL moving slide
-  moved by the transform estimated on the preprocessed copy, so every score is defined
-  as for `stare`. **Today the frozen candidate is PROVISIONAL (`grey_clahe`, chosen by no
-  evidence): the selection has not been run.** The launcher and every summary say so;
-  see "ANHIR: the challenge's training pairs".
+- **STARE runs are generated: stride x preprocessing level, per modality regime**
+  (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. Every regime
+  has up to four levels, `baseline` (STARE unchanged), `default`, `alt` and `pct`
+  (percentile), deduplicated within a regime (`regimes.stare_levels`); a dataset takes the
+  regime `regimes.DATASET_REGIME` names. A run is named `stare` (stride 64, baseline),
+  `stare_<level>` (stride 64) or `stare_s<stride>_<level>`, where the level key
+  (`regimes.level_key`) is `none` for BOTH baselines, so a baseline run is the same run
+  in every regime: it carries `{"stride": s}` alone (no proxy, no `--prep`; the adapter's
+  own default picks the proxy for the modality) and has `regimes=None`, i.e. every
+  dataset. Another level carries `proxy` and `sprep` and a `regimes` tuple naming the
+  regimes whose levels produced it; `runs_for(dataset)` keeps it only when
+  `regimes.regime_of(dataset)` is in that tuple. Two regimes producing one name with
+  different options is refused at import. So each regime runs strides x levels runs and
+  the plain `stare` is in every one (the defaults are in every cross). A STARE run is
+  gated by `stare`'s selfcheck (one adapter, one pointing path); the runs that use a
+  `haem` or `grey_smooth` proxy have a `prep` job before the four stages.
+- **`stare_prep` is PAUSED** (2026-10-14; `active=False`). Its ruling (R3.21) and the
+  tuning side of ANHIR (`TUNING_RUNS`, `anhir_tune`) are unchanged and tested: the
+  regimes' `sprep` levels replace it in the cohort. It is the same package, version and
+  parameters on a benchmark-side preprocessing of STARE's input (`prep.py`: a closed
+  candidate list; the candidate in force is frozen in `prep_frozen.json`, the run's one
+  option `prep=<candidate>`), chosen on ANHIR's tuning pairs and nothing else. **The
+  frozen candidate is PROVISIONAL (`grey_clahe`, chosen by no evidence).**
 - **STARE's run options `proxy` and `sprep`** (STARE 1.3.0; levels named in
   `regimes.py`). `sprep=<none|clahe|percentile>` is STARE's OWN `--prep`, passed to
   `stare coarse` and `stare reg-tile` (default `none`; `--pixel-size` goes with it, as
@@ -187,7 +199,7 @@ names and opens its summary on the six primary rows:
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
   `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the
-  `active` column. Nothing is paused. A list in which a paused run writes a primary row,
+  `active` column. Only `stare_prep` is paused. A list in which a paused run writes a primary row,
   gates an active run's selfcheck or is what an active run waits for is refused
   (`variants.check`, at import).
 - **Images** (the `image` column is the suffix of `REGBENCH_SIF_<image>`, the variable
@@ -3943,10 +3955,25 @@ Because it is one process writing one file, a patient's rounds fail together.
 
 | run it as | options | what it is |
 |---|---|---|
-| `--method ashlar` | (none) | slight noise on the reference tiles. **ASHLAR's primary row** |
-| `--method ashlar --label ashlar_clean` | `--opt noise=none` | no noise |
-| `--method ashlar --label affine_ashlar` | `--opt affine=stare` | moving tiles placed by STARE's anchor, slight noise. A hybrid, never ranked as ASHLAR |
-| `--method ashlar --label affine_ashlar_clean` | `--opt affine=stare --opt noise=none` | the same hybrid, no noise |
+| `--method ashlar` | `affine=none noise_frac=0.002 max_shift_um=15` | slight noise on the reference tiles. **ASHLAR's primary row** (rule R3.12) |
+| `--method ashlar --label ashlar_clean` | `noise_frac=0` | no noise: **ASHLAR AS PUBLISHED, the default cell** (`-m 15`, no benchmark-side noise) |
+| `--method ashlar --label affine_ashlar` | `affine=stare` | moving tiles placed by STARE's anchor, slight noise. A hybrid, never ranked as ASHLAR |
+| `--method ashlar --label affine_ashlar_clean` | `affine=stare noise_frac=0` | the same hybrid, no noise |
+| `--method ashlar --label ashlar_a<affine>_n<0\|002\|01\|05>_s<shift>` | the other 20 cells | the rest of the factorial |
+
+**The factorial** (ruling R5; `ashlar.ASHLAR_CELLS`, `variants._ashlar_runs`): `affine`
+{none, stare} x `noise_frac` {0, 0.002, 0.01, 0.05} x `max_shift_um` {15, 60, 240} =
+2 x 4 x 3 = 24 runs, every cell run (the as-published cell is in it, so every cross contains
+each factor's default). The four names above keep their cells; every other cell is
+`ashlar_a<affine>_n<tag>_s<shift>`. Why these factors, and no others: `noise_frac` decides
+whether ASHLAR's error metric can raise on pixel-identical overlaps (`identical_overlap`,
+`utils.py:74-86`); `max_shift_um` decides when ASHLAR silently falls back to its linear model
+for a tile whose shift is over the limit (`-m` is in micrometres, converted by the reader's
+pixel size); `affine` decides whether a rotation reaches the shift budget at all (the
+anchored rows place the moving tiles where STARE's matrix puts them). `filter_sigma` causes
+no error and is not crossed. The older `--opt noise=ref|none` is still accepted (0.002 | 0).
+`ashlar_a*` rows whose `affine` is `stare` form the family `affine_ashlar` and wait for
+`stare`; the others form `ashlar`; the primary stays `ashlar`.
 
 A label and its options come together; a mismatch is refused.
 

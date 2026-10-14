@@ -8,20 +8,25 @@ unmodified): the reference cycle is stitched by ``EdgeAligner``, every later cyc
 to it by ``LayerAligner``, and ONE mosaic written by ``PyramidWriter``. Nothing but the two
 documented flags above is set.
 
-**Four rows, one module.** ``noise`` (``ref`` | ``none``) x ``affine`` (``none`` |
-``stare``), run with these labels (a label and its options must come together):
+**24 rows, one module.** ``affine`` (``none`` | ``stare``) x ``noise_frac`` (0, 0.002, 0.01,
+0.05: the reference tiles' noise s.d. as a fraction of the channel's range) x ``max_shift_um``
+(15, 60, 240: ``-m``), run with the labels of ``ASHLAR_CELLS`` (a label and its options must
+come together). The four names that predate the factorial keep their cells:
 
-``ashlar``               noise=ref, affine=none. ASHLAR's primary row
-``ashlar_clean``         noise=none, affine=none
-``affine_ashlar``        noise=ref, affine=stare. A hybrid, never ranked as ASHLAR
-``affine_ashlar_clean``  noise=none, affine=stare
+``ashlar``               affine=none,  noise_frac=0.002, max_shift_um=15. The primary row
+``ashlar_clean``         affine=none,  noise_frac=0,     max_shift_um=15. ASHLAR AS PUBLISHED
+``affine_ashlar``        affine=stare, noise_frac=0.002, max_shift_um=15. A hybrid, never ranked as ASHLAR
+``affine_ashlar_clean``  affine=stare, noise_frac=0,     max_shift_um=15
+
+every other cell is ``ashlar_a<affine>_n<0|002|01|05>_s<shift>``. ``noise=ref`` / ``noise=none``
+are still accepted for 0.002 / 0.
 
 **What is not ASHLAR's, and cannot be: the tiles.** The slides exist only stitched, and
 ASHLAR "requires unstitched individual tile images as input" (README at v1.20.0
 ``[PARTIAL: lines 1-60]``). ``benchmarks.ashlar.retile.write_tiles`` cuts every slide of the
 patient on one regular grid (1950 px tiles, 1755 px pitch, all channels, whole pixels, no
 stage error; 1950 px is the tile of the scanner the cohort was acquired on, and the 10 %
-overlap is the owner's ruling: ``TILE``, ``OVERLAP`` below). ``noise=ref`` adds per-tile Gaussian noise to the REFERENCE cycle's tiles
+overlap is the owner's ruling: ``TILE``, ``OVERLAP`` below). ``noise_frac>0`` adds per-tile Gaussian noise to the REFERENCE cycle's tiles
 only, s.d. = max(0.2 % of the channel's 1st-99th percentile range, 3 counts): on
 pixel-identical overlaps ASHLAR's error metric can raise (``utils.py:74-86``), which its
 command does not catch (``scripts/ashlar.py:231`` catches ``ProcessingError`` only), and
@@ -105,6 +110,8 @@ VERSION = "1.20.0"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
 OPTIONS = (
     "noise",
+    "noise_frac",
+    "max_shift_um",
     "affine",
     "affine_from",
     "m0_from",
@@ -123,20 +130,44 @@ SELFCHECK_REF_DOTS = True
 # (`reference_tiles`) all read these two.
 TILE = 1950
 OVERLAP = 0.1
-MAX_SHIFT_UM = 15.0  # ASHLAR's own default (scripts/ashlar.py:63)
-NOISE_FRAC = 0.002
+MAX_SHIFT_UM = (
+    15.0  # ASHLAR's own default (scripts/ashlar.py:63); the factor's default level
+)
+NOISE_FRAC = 0.002  # the reference row's level (`noise=ref`)
 NOISE_MIN_COUNTS = 3.0  # assumes 16-bit data
 SEED = 0
 NUCLEUS_MARGIN_PX = 1.0  # a vertex this close to a second tile is on the seam
 DOT_MARGIN_PX = 8.0  # the selfcheck's dots are 7 px across
 
-NOISES, AFFINES = ("ref", "none"), ("none", "stare")
-# label -> (noise, affine)
-LABELS = {
-    "ashlar": ("ref", "none"),
-    "ashlar_clean": ("none", "none"),
-    "affine_ashlar": ("ref", "stare"),
-    "affine_ashlar_clean": ("none", "stare"),
+# The three factors that cause errors (ruling R5), each with its default level first-class:
+# affine {none, stare}, noise (s.d. as a fraction of the channel's range) {0, 0.002, 0.01,
+# 0.05}, max shift in um {15 = ASHLAR's own, 60, 240}. The full cross is 2 x 4 x 3 = 24 runs,
+# so the as-published cell (none, 0, 15) is in it.
+AFFINES = ("none", "stare")
+NOISE_FRACS = ("0", "0.002", "0.01", "0.05")
+NOISE_TAGS = {"0": "0", "0.002": "002", "0.01": "01", "0.05": "05"}
+MAX_SHIFTS_UM = ("15", "60", "240")
+# the older `noise` option, still accepted: ref = 0.002, none = 0
+_NOISE_ALIAS = {"ref": "0.002", "none": "0"}
+# the four names that existed before the factorial keep their cells
+_KEPT = {
+    ("none", "0.002", "15"): "ashlar",
+    ("none", "0", "15"): "ashlar_clean",
+    ("stare", "0.002", "15"): "affine_ashlar",
+    ("stare", "0", "15"): "affine_ashlar_clean",
+}
+
+
+# label -> (affine, noise_frac, max_shift_um), in the order the run list has them: the four
+# names that predate the factorial first (the primary row leads, and a cohort launch gets the
+# rows that were always run before the 20 new ones), then the rest of the cross
+def _label(a, f, s):
+    return _KEPT.get((a, f, s), f"ashlar_a{a}_n{NOISE_TAGS[f]}_s{s}")
+
+
+_ALL = [(a, f, s) for a in AFFINES for f in NOISE_FRACS for s in MAX_SHIFTS_UM]
+ASHLAR_CELLS = {
+    _label(*cell): cell for cell in [*_KEPT, *[c for c in _ALL if c not in _KEPT]]
 }
 MASKS = ("overlap",)
 WRITER = (
@@ -166,22 +197,37 @@ def _error(exc):
 
 
 def settings(opts):
-    """``(noise, affine)`` of this run, checked against its label."""
-    noise = str(opts.get("noise", "ref"))
-    affine = str(opts.get("affine", "none"))
-    if noise not in NOISES or affine not in AFFINES:
+    """``(noise_frac, affine, max_shift_um)`` of this run, checked against its label.
+
+    ``noise_frac`` is a float (the reference tiles' noise s.d. as a fraction of the channel's
+    range, 0 for none); the older ``noise=ref|none`` is accepted as 0.002 | 0."""
+    noise = opts.get("noise")
+    if noise is not None and str(noise) not in _NOISE_ALIAS:
         raise ValueError(
-            f"noise={noise!r} (one of {NOISES}), affine={affine!r} (one of {AFFINES})"
+            f"noise={noise!r} (one of {tuple(_NOISE_ALIAS)}; or noise_frac)"
+        )
+    frac = _NOISE_ALIAS[str(noise)] if noise is not None else None
+    if "noise_frac" in opts:
+        if frac is not None and frac != str(opts["noise_frac"]):
+            raise ValueError("noise and noise_frac disagree; give one")
+        frac = str(opts["noise_frac"])
+    frac = frac if frac is not None else "0.002"
+    affine = str(opts.get("affine", "none"))
+    shift = str(opts.get("max_shift_um", "15"))
+    if frac not in NOISE_FRACS or affine not in AFFINES or shift not in MAX_SHIFTS_UM:
+        raise ValueError(
+            f"noise_frac={frac!r} (one of {NOISE_FRACS}), affine={affine!r} (one of "
+            f"{AFFINES}), max_shift_um={shift!r} (one of {MAX_SHIFTS_UM})"
         )
     label = opts.get("label") or "ashlar"
-    if label in LABELS and LABELS[label] != (noise, affine):
-        want = LABELS[label]
+    if label in ASHLAR_CELLS and ASHLAR_CELLS[label] != (affine, frac, shift):
+        want = ASHLAR_CELLS[label]
         raise ValueError(
-            f"the label {label!r} names the run noise={want[0]}, affine={want[1]}; "
-            f"this one has noise={noise}, affine={affine}. A label and its options "
-            "come together"
+            f"the label {label!r} names the run affine={want[0]}, noise_frac={want[1]}, "
+            f"max_shift_um={want[2]}; this one has affine={affine}, noise_frac={frac}, "
+            f"max_shift_um={shift}. A label and its options come together"
         )
-    return noise, affine
+    return float(frac), affine, float(shift)
 
 
 def out_root(opts, case):
@@ -241,7 +287,7 @@ def _file_key(path):
     return [str(Path(path).resolve()), int(st.st_size), int(st.st_mtime_ns)]
 
 
-def reference_tiles(ref, slides, px, noise, cache, work):
+def reference_tiles(ref, slides, px, frac, cache, work):
     """The reference cycle's tiles, cut once per noise level: ``(dir, seconds, reused)``.
 
     The plain and the anchored row of a patient read the same reference tiles (the noise
@@ -255,13 +301,14 @@ def reference_tiles(ref, slides, px, noise, cache, work):
     """
     from benchmarks.ashlar import retile
 
-    frac, floor = (NOISE_FRAC, NOISE_MIN_COUNTS) if noise == "ref" else (0.0, 0.0)
+    frac = float(frac)
+    floor = NOISE_MIN_COUNTS if frac > 0 else 0.0
     key = [
         _file_key(ref),
         sorted(retile._yx_shape(p) for p in slides),
         [TILE, OVERLAP, float(px), frac, floor, SEED],
     ]
-    name = f"ref_{noise}_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
+    name = f"ref_n{frac:g}_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
     home = Path(cache) if cache is not None else Path(work) / "tiles"
     final = home / name
     if (final / "grid.json").exists():
@@ -570,7 +617,7 @@ def _edge_identity(cache_dir, tiles_name, base, edge):
 
 def register_group(cases, work, opts):
     work = Path(work)
-    noise, affine = settings(opts)
+    frac, affine, shift = settings(opts)
     for case in cases:
         require_fluorescence(case, "ashlar")
     label = opts.get("label") or "ashlar"
@@ -610,13 +657,13 @@ def register_group(cases, work, opts):
         "version": version,
         "source": str(Path(getattr(ashlar, "__file__", "?")).parent),
         "label": label,
-        "noise": noise,
+        "noise": "none" if frac == 0 else ("ref" if frac == NOISE_FRAC else "other"),
         "affine": affine,
         "tile": TILE,
         "overlap": OVERLAP,
-        "max_shift_um": MAX_SHIFT_UM,
-        "noise_frac": NOISE_FRAC if noise == "ref" else 0.0,
-        "noise_min_counts": NOISE_MIN_COUNTS if noise == "ref" else 0.0,
+        "max_shift_um": shift,
+        "noise_frac": frac,
+        "noise_min_counts": NOISE_MIN_COUNTS if frac > 0 else 0.0,
         "seed": SEED,
         "align_channel": int(channel),
         "pixel_size_um": px,
@@ -624,7 +671,7 @@ def register_group(cases, work, opts):
         "implementation": {
             "package": "ashlar",
             "registration": "ashlar.scripts.ashlar.main([... one filepattern reader "
-            "per cycle ..., '-o', mosaic, '-c', channel, '-m', '15.0'])",
+            "per cycle ..., '-o', mosaic, '-c', channel, '-m', '<max_shift_um>'])",
             "parameters": "ASHLAR's defaults",
             "point_warp": "one translation per tile, from the positions ASHLAR's own "
             "aligners hold when its writer pastes the tiles (regbench.tilemap)",
@@ -633,9 +680,9 @@ def register_group(cases, work, opts):
                 f"{TILE} px tiles at a {retile._stride(TILE, OVERLAP)} px pitch, all "
                 "channels, whole pixels, read by ASHLAR's own filepattern reader "
                 "(the slides exist only stitched)",
-                "noise on the reference cycle's tiles only: s.d. = max(0.2 % of the "
-                "channel's 1st-99th percentile range, 3 counts), one draw per tile"
-                if noise == "ref"
+                f"noise on the reference cycle's tiles only: s.d. = max({frac * 100:g} % "
+                "of the channel's 1st-99th percentile range, 3 counts), one draw per tile"
+                if frac > 0
                 else "no noise on any tile",
                 "the align channel index (-c) and the pixel size of the reader "
                 "(ASHLAR converts --maximum-shift with it)",
@@ -661,7 +708,7 @@ def register_group(cases, work, opts):
     # ── tiles: the clock is paused, this is the benchmark making ASHLAR's input ──
     mon.pause()
     try:
-        ref_dir, ref_s, reused = reference_tiles(ref, slides, px, noise, cache, work)
+        ref_dir, ref_s, reused = reference_tiles(ref, slides, px, frac, cache, work)
         t0 = time.perf_counter()  # the moving cycles' tiles, cut by every row
         ref_grid = json.loads((ref_dir / "grid.json").read_text())
         nominal = nominal_origins(slides)
@@ -721,9 +768,7 @@ def register_group(cases, work, opts):
     mosaic = work / original.OUTPUT_NAME
     work.mkdir(parents=True, exist_ok=True)
     grids = [ref_grid, *mov_grids]
-    argv = original.ashlar_argv(
-        [ref_dir, *mov_dirs], grids, mosaic, channel, MAX_SHIFT_UM
-    )
+    argv = original.ashlar_argv([ref_dir, *mov_dirs], grids, mosaic, channel, shift)
     base["command"] = argv
     n_cycles = len(grids)
     seen = {}
@@ -897,7 +942,7 @@ def _results(
                 "register_s_round": layer_s[k] + edge_s / rounds,
                 "cycle": k + 1,
                 "cycle_offset_yx": layer["cycle_offset_yx"],
-                **discards(layer, edge, MAX_SHIFT_UM / px),
+                **discards(layer, edge, float(base["max_shift_um"]) / px),
                 "band_fraction": float(band.mean()) if band is not None else None,
                 "jump_px_p50": float(np.median(jumps)) if len(jumps) else None,
                 "jump_px_p95": float(np.percentile(jumps, 95)) if len(jumps) else None,

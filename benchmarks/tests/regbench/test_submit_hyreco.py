@@ -23,7 +23,16 @@ from .test_submit_cohort import (
     rungs,
 )
 
-RUNS = ["stare", "valis120", "valis120_hires"]
+# STARE: every stride x level of the regime HyReCo's subsets are in; VALIS 1.2.0's two settings
+RUNS = [
+    *[
+        variants.run_name(r)
+        for r in variants.runs_for("hyreco_b")
+        if r.method == "stare"
+    ],
+    "valis120",
+    "valis120_hires",
+]
 DATA = {
     "REGBENCH_HYRECO_A": "/data/HyReCo",
     "REGBENCH_HYRECO_B_HE": "/data/HyReCo-Additional/HE",
@@ -63,7 +72,9 @@ def test_the_dry_run_submits_nothing_and_says_where_the_results_go(dry):
     # tile submitters and its last job's); then the settle job and the set's scorer.
     # No retry is submitted: a watcher submits one after a failure
     own = [launch_jobs(variants.run_of(r)) for r in RUNS]
-    assert own == [8, 2, 2] and len(jobs) == sum(2 + 1 + n for n in own) + 2 == 23
+    # a selfcheck (with its watcher) per distinct gate, a gate per run, then own jobs
+    gates = {variants.gated_by(r) for r in RUNS}
+    assert len(jobs) == 2 * len(gates) + sum(1 + n for n in own) + 2
     assert f"# {len(jobs)} job(s) would be submitted; nothing was" in done.stdout
     assert "# hyreco_b: 3 case(s), 3 patient(s), at most 1 round(s)" in done.stdout
     assert f"{out}/tables/hyreco_b/summary.md" in done.stdout
@@ -74,10 +85,15 @@ def test_only_the_runs_with_a_brightfield_rule_are_submitted(dry):
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
     assert laddered == set(RUNS)
     checked = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
-    assert checked == set(RUNS)
+    assert checked == {variants.gated_by(r) for r in RUNS}
     # every other run of the cohort's list is named with its reason, not submitted
     left = [ln for ln in done.stdout.splitlines() if " is not run (" in ln]
-    assert len(left) == len(variants.active_runs()) - len(RUNS) == 15
+    other_regime = [
+        r
+        for r in variants.active_runs()
+        if r.regimes is not None and "bf_same" not in r.regimes
+    ]
+    assert len(left) == len(variants.active_runs()) - len(RUNS) - len(other_regime)
     assert any(ln.startswith("# hyreco_b: ashlar is not run (") for ln in left)
 
 

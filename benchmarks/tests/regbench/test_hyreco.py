@@ -733,9 +733,13 @@ def test_the_tables_are_the_sets_own(tmp_path):
     for name in ("valis_mirage", "deeperhistreg_hr_gpu", "ashlar", "palom"):
         assert f"`{name}`" in left
     # one line per reason: a method without a rule, or a run HyReCo does not take
-    assert left.count("\n- ") == len(methods.NO_BRIGHTFIELD) + len(
-        variants.NOT_ON["hyreco_a"]
-    )
+    # (a NOT_ON rule that matches no ACTIVE run, as the paused preprocessing row's, says nothing)
+    live = [
+        rule
+        for rule in variants.NOT_ON["hyreco_a"]
+        if any(rule[0](r) for r in variants.active_runs())
+    ]
+    assert left.count("\n- ") == len(methods.NO_BRIGHTFIELD) + len(live)
 
 
 def test_the_published_number_is_quoted_with_its_source_and_core_is_not():
@@ -879,26 +883,60 @@ def test_prepare_through_the_command_line(tmp_path, data, capsys):
 
 
 # ── which methods run on it ───────────────────────────────────────────────────
+def _stare_of(ds):
+    """The STARE runs of a dataset's regime, from the tables (stride x level), in RUNS order."""
+    from benchmarks.regbench import regimes
+
+    reg = regimes.regime_of(ds)
+    here = {
+        variants.stare_cell(s, k, lv)[0]
+        for k, lv in regimes.stare_levels(reg)
+        for s in variants.STARE_STRIDES
+    }
+    return [
+        n for n in (variants.run_name(r) for r in variants.active_runs()) if n in here
+    ]
+
+
+def _left_out_of_hyreco():
+    """The active runs HyReCo does not take: a method without a brightfield rule,
+    DeeperHistReg (named), and not the regimes' own filtering."""
+    return {
+        variants.run_name(r)
+        for r in variants.active_runs()
+        if r.method in methods.NO_BRIGHTFIELD or r.method == "deeperhistreg"
+    }
+
+
 def test_the_run_list_of_an_external_set():
     for ds in HYRECO_DATASETS:
         names = [variants.run_name(r) for r in variants.runs_for(ds)]
-        assert names == ["stare", "valis120", "valis120_hires"]
+        stare = _stare_of(ds)
+        assert stare and "stare" in stare
+        assert names == [*stare, "valis120", "valis120_hires"]
         assert variants.primary_for(ds) == ["stare", "valis120_hires"]
         assert variants.expected_variants(ds) == [
-            *methods.variant_names("stare"),
+            *[v for n in stare for v in (f"{n}_rigid", n)],
             *methods.variant_names("valis", "valis120"),
             *methods.variant_names("valis", "valis120_hires"),
         ]
         left = dict(variants.excluded_for(ds))
-        assert len(left) == 15 and not set(left) & set(names)
+        assert set(left) == _left_out_of_hyreco() and not set(left) & set(names)
         assert all(len(why) > 40 for why in left.values())
         table = variants.runs_table(dataset=ds)
         assert [r[0] for r in table] == names
         assert all(len(r) == len(variants.RUNS_COLUMNS) for r in table)
-    # the cohort's list is untouched
-    assert variants.runs_for("multiplex") == variants.active_runs()
+    # the cohort's list is the regime's: a fluorescence dataset takes no RGB-proxy STARE run
     assert variants.excluded_for("multiplex") == []
-    assert len(variants.runs_table()) == 18 and len(variants.expected_variants()) == 35
+    assert variants.runs_for("multiplex") == tuple(
+        r
+        for r in variants.active_runs()
+        if r.regimes is None or "cyclic_if" in r.regimes
+    )
+    assert len(variants.runs_table()) == len(variants.active_runs())
+    assert len(variants.expected_variants()) == sum(
+        len(variants.variants_of(r)) for r in variants.active_runs()
+    )
     assert variants.primary_for() == list(variants.PRIMARY)
 
 
@@ -917,15 +955,15 @@ def test_runs_prints_an_external_sets_list(capsys):
     assert cli.main(["runs", "--dataset", "hyreco_b"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert [ln.split("\t")[0] for ln in lines] == [
-        "stare",
+        *_stare_of("hyreco_b"),
         "valis120",
         "valis120_hires",
     ]
     assert cli.main(["runs", "--dataset", "hyreco_b", "--excluded"]) == 0
     left = capsys.readouterr().out.splitlines()
-    assert len(left) == 15 and left[0].startswith("stare_prep\t")
+    assert {ln.split("\t")[0] for ln in left} == _left_out_of_hyreco()
     assert cli.main(["runs"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == 18
+    assert len(capsys.readouterr().out.splitlines()) == len(variants.active_runs())
 
 
 def brightfield(tmp_path, **kw):

@@ -144,14 +144,46 @@ def test_registered_and_named():
 
 
 def test_the_primary_row_is_slight_noise_and_no_anchor():
-    assert am.settings({}) == ("ref", "none")
-    assert am.settings({"label": ""}) == ("ref", "none")
-    assert am.LABELS == {
-        "ashlar": ("ref", "none"),
-        "ashlar_clean": ("none", "none"),
-        "affine_ashlar": ("ref", "stare"),
-        "affine_ashlar_clean": ("none", "stare"),
+    assert am.settings({}) == (0.002, "none", 15.0)
+    assert am.settings({"label": ""}) == (0.002, "none", 15.0)
+    # the four names that predate the factorial keep their cells
+    old = ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean")
+    kept = {n: am.ASHLAR_CELLS[n] for n in old}
+    assert kept == {
+        "ashlar": ("none", "0.002", "15"),
+        "ashlar_clean": ("none", "0", "15"),
+        "affine_ashlar": ("stare", "0.002", "15"),
+        "affine_ashlar_clean": ("stare", "0", "15"),
     }
+    # the factorial is every combination of the three factor tables
+    assert len(am.ASHLAR_CELLS) == len(am.AFFINES) * len(am.NOISE_FRACS) * len(
+        am.MAX_SHIFTS_UM
+    )
+    assert set(am.ASHLAR_CELLS.values()) == {
+        (a, f, s_)
+        for a in am.AFFINES
+        for f in am.NOISE_FRACS
+        for s_ in am.MAX_SHIFTS_UM
+    }
+
+
+def test_the_noise_option_is_still_accepted_as_an_alias_of_noise_frac():
+    free = {"label": "mine"}
+    assert am.settings({"noise": "ref", **free}) == am.settings(
+        {"noise_frac": "0.002", **free}
+    )
+    assert am.settings({"noise": "none", **free}) == am.settings(
+        {"noise_frac": "0", **free}
+    )
+    with pytest.raises(ValueError, match="disagree"):
+        am.settings({"noise": "none", "noise_frac": "0.01", **free})
+    assert am.settings(
+        {"noise_frac": "0.05", "max_shift_um": "240", "label": "mine"}
+    ) == (
+        0.05,
+        "none",
+        240.0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -172,9 +204,14 @@ def test_a_label_and_its_options_come_together(opts):
 def test_an_unknown_setting_is_refused():
     with pytest.raises(ValueError, match="noise="):
         am.settings({"noise": "lots", "label": "mine"})
+    with pytest.raises(ValueError, match="max_shift_um="):
+        am.settings({"max_shift_um": "30", "label": "mine"})
+    with pytest.raises(ValueError, match="noise_frac="):
+        am.settings({"noise_frac": "0.5", "label": "mine"})
     assert am.settings({"noise": "none", "affine": "stare", "label": "mine"}) == (
-        "none",
+        0.0,
         "stare",
+        15.0,
     )
 
 
