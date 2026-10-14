@@ -1,0 +1,44 @@
+import pytest
+
+from benchmarks.regbench import regimes as rg
+
+
+def test_every_regime_has_its_four_levels():
+    for name, r in rg.REGIMES.items():
+        assert set(r) == {"baseline", "default", "alt", "pct"}, name
+
+
+def test_baseline_is_stare_unchanged():
+    for name, r in rg.REGIMES.items():
+        assert r["baseline"].sprep == "none", name   # R4: STARE's plain row always runs
+
+
+def test_cyclic_if_default_is_the_baseline_so_two_levels():
+    keys = [k for k, _ in rg.stare_levels("cyclic_if")]
+    assert keys == ["baseline", "alt", "pct"]
+
+
+def test_cyclic_if_alt_is_clahe_on_the_channel():
+    assert rg.level_key(rg.REGIMES["cyclic_if"]["alt"]) == "clahe"
+
+
+def test_percentile_level_keys():
+    assert rg.level_key(rg.Level("channel", "percentile")) == "percentile"
+    assert rg.level_key(rg.Level("haem", "percentile")) == "haem_percentile"
+    assert rg.level_key(rg.Level("grey", "percentile")) == "grey_percentile"
+
+
+def test_brightfield_regimes_have_three_levels():
+    for r in ("bf_same", "bf_consecutive", "dapi_he", "cytassist"):
+        assert [k for k, _ in rg.stare_levels(r)] == ["baseline", "default", "alt", "pct"]
+
+
+def test_each_dataset_maps_to_a_regime():
+    from benchmarks.regbench import ALL_DATASETS
+    for d in ALL_DATASETS:
+        assert rg.regime_of(d) in rg.REGIMES
+
+
+def test_unknown_dataset_names_itself():
+    with pytest.raises(KeyError, match="no_such"):
+        rg.regime_of("no_such")
