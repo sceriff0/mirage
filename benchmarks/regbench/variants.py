@@ -116,6 +116,7 @@ from . import (
     HYRECO_DATASETS,
     RAW,
     RAW_TILE_CASE_SETS,
+    RAW_TILE_DATASETS,
     case_set,
     methods,
     plugins,
@@ -707,9 +708,18 @@ def check():
             name = run_name(run)
             for needs in (gated_by(name, dataset), run.after):
                 if needs is not None and needs not in kept:
+                    also = ""
+                    if _is_raw(dataset) and needs in RAW_GATED_BY.values():
+                        also = (
+                            f"; on {dataset} it gates "
+                            + ", ".join(
+                                n for n, g in RAW_GATED_BY.items() if g == needs and n != needs
+                            )
+                            + ": pause those too"
+                        )
                     raise ValueError(
                         f"on {dataset} the run {name!r} needs {needs!r}, which has "
-                        "no brightfield input rule"
+                        f"no input rule there or is paused{also}"
                     )
 
 
@@ -774,11 +784,31 @@ def excluded_for(dataset):
     ]
 
 
+def fluo_twin(variant):
+    """The result name of the run that is ``variant``'s run with ``fluo=1`` added (the
+    benchmark's fluorescence configuration of DeeperHistReg), same suffix: derived from
+    ``RUNS``, never written out (``deeperhistreg_hr_gpu_asdrawn`` ->
+    ``deeperhistreg_hr_fluo_gpu_asdrawn`` today)."""
+    run = next(r for r in RUNS if variant in variants_of(r))
+    want = {**run.opts, "fluo": "1"}
+    twin = next(r for r in RUNS if r.method == run.method and r.opts == want)
+    name = run_name(twin) + variant[len(run_name(run)) :]
+    if name not in variants_of(twin):
+        raise ValueError(f"{variant}: its fluo twin {run_name(twin)} writes no {name}")
+    return name
+
+
 def primary_for(dataset=None):
-    """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``. On a
-    ``<name>@raw`` case set ASHLAR's is its as-published cell (``RAW_PRIMARY``)."""
+    """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``. On every
+    raw-tile case set DeeperHistReg's is the fluorescence twin of its primary (``RAW_DHR``
+    leaves the RGB one out: controller ruling, the as-drawn row); on a ``<name>@raw``
+    case set ASHLAR's is its as-published cell (``RAW_PRIMARY``)."""
     written = {v for run in runs_for(dataset) for v in variants_of(run)}
-    names = [RAW_PRIMARY.get(v, v) for v in PRIMARY] if _is_raw(dataset) else PRIMARY
+    names = list(PRIMARY)
+    if dataset is not None and case_set(dataset)[0] in RAW_TILE_DATASETS:
+        names = [fluo_twin(v) if v == PRIMARY_DEEPERHISTREG else v for v in names]
+    if _is_raw(dataset):
+        names = [RAW_PRIMARY.get(v, v) for v in names]
     return [v for v in names if v in written]
 
 

@@ -713,8 +713,9 @@ def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):
 
 def test_the_raw_tiles_primary_cannot_be_paused(monkeypatch):
     pause(monkeypatch, "ashlar_clean")
-    with pytest.raises(ValueError, match="@raw .*needs 'ashlar_clean'"):
+    with pytest.raises(ValueError, match="@raw .*needs 'ashlar_clean'") as got:
         variants.check()
+    assert "ashlar_anone_n0_s60, ashlar_anone_n0_s240: pause those too" in str(got.value)
 
 
 # ── which rows a run's selfcheck gate reads (R3.12 b) ─────────────────────────

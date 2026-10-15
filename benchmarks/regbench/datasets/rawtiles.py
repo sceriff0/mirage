@@ -542,4 +542,8 @@ def prepare(a):
             print(f"{dataset}/{unit}: FAILED {type(exc).__name__}: {exc}")
     if not a.export_only and a.front_end != RAW:
         write_stitching_csv(a.cases, case_set_name(dataset, a.front_end))
-    return 1 if bad == len(names) else 0
+    what = "exported" if a.export_only else f"prepared as {case_set_name(dataset, a.front_end)}"
+    print(f"{dataset}: {len(names) - bad}/{len(names)} unit(s) {what} under {a.cases}")
+    # as the other external sets (hyreco.py, anhir.py): any unit that failed fails the
+    # command; the others are prepared all the same
+    return 1 if bad else 0

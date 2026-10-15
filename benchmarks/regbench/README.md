@@ -1603,6 +1603,23 @@ laptop's: read the first case's `seconds` in `case.json` before sizing the rest.
 worker holds the case's polygons (hundreds of megabytes at that size) and the result
 it is scoring.
 
+### Raw-tile datasets: what `@raw` does not have
+
+(`datasets/rawtiles.py`; the full section on raw-tile datasets is D7's.) Two things the
+`<name>@raw` case set (ASHLAR as published on the raw tiles, primary `ashlar_clean`)
+lacks, said here and in its `summary.md`:
+
+* its gate is the selfcheck of `ashlar_clean`, and `selfcheck` builds whole-slide pairs:
+  it exercises ASHLAR's GRID mode (tiles cut from a slide), not the raw-tile reader and
+  point path (`methods/ashlar.py::_register_raw`), which unit tests check against
+  `fake_ashlar` only;
+* it has no `paired_vs_primary` rows: those are paired against `stare`, which does not
+  run on tiles.
+
+Its off-seam rows are owned by `ashlar_clean` (`score.rawtiles_owners`), its primaries are
+`variants.primary_for("<name>@raw")`, and every mosaic case set's DeeperHistReg primary is
+the `fluo` twin of `PRIMARY_DEEPERHISTREG` (`variants.fluo_twin`).
+
 ### Tables (`<out>/tables/`)
 
 | file | one row per | what |

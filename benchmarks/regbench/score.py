@@ -2052,6 +2052,15 @@ NOT_LAUNCHED = "not launched by this submission (it has no result on this datase
 NO_ROW = "it has no row on this dataset (dropped, or not expected here)"
 
 
+def primary_of(primary, dataset):
+    """The primary rows of ONE dataset: ``primary`` is a list (every dataset the same)
+    or ``{dataset: [names]}`` (each case set its own: the raw-tile case sets, where
+    ``@raw``'s ASHLAR primary is ``ashlar_clean``); None for a dataset it does not name."""
+    if isinstance(primary, dict):
+        return primary.get(dataset)
+    return primary
+
+
 def compared_rows(rows, primary=None, blocked=None):
     """``(inside, outside)`` for the rows of ONE dataset: the rows the common block and
     the shared subsets are computed among, and ``{row: why it is not one of them}``.
@@ -2063,6 +2072,7 @@ def compared_rows(rows, primary=None, blocked=None):
     the runs) or that a gate stopped has every case ``not run``; counting it would
     empty the block for everyone."""
     blocked = blocked or {}
+    primary = primary_of(primary, rows[0]["dataset"] if rows else None)
     names = list(primary) if primary else [m for m in _methods(rows) if _is_run(m)]
     inside, outside = [], {}
     for name in names:
@@ -2693,7 +2703,8 @@ def common_patients(res_summary, primary=None):
     out = {}
     for ds in dict.fromkeys(r["dataset"] for r in res_summary):
         of_ds = [r for r in res_summary if r["dataset"] == ds]
-        names = list(primary) if primary else _methods(of_ds)
+        mine = primary_of(primary, ds)
+        names = list(mine) if mine else _methods(of_ds)
         inside = [
             m for m in names if any(r["method"] == m and r["launched"] for r in of_ds)
         ]
@@ -3171,7 +3182,10 @@ def summarise_nonband(rows, primary=None, blocked=None):
     out = []
     for owner in dict.fromkeys(r["owner"] for r in rows):
         mine = [r for r in rows if r["owner"] == owner]
-        names = [f"{p}{NON}{owner}" for p in primary] if primary else None
+        if isinstance(primary, dict):
+            names = {d: [f"{p}{NON}{owner}" for p in v] for d, v in primary.items()}
+        else:
+            names = [f"{p}{NON}{owner}" for p in primary] if primary else None
         gone = {f"{k}{NON}{owner}": v for k, v in (blocked or {}).items()}
         for rec in summarise_cells(mine, names, gone):
             if rec["subset"] != "all":
@@ -3191,13 +3205,21 @@ def summarise_nonband(rows, primary=None, blocked=None):
     return out
 
 
+def owners_of(owners, dataset):
+    """The seam owners of ONE dataset: ``owners`` is a tuple, or ``{dataset: owners}``
+    (a dataset it does not name has ``SEAM_OWNERS``)."""
+    if isinstance(owners, dict):
+        return tuple(owners.get(dataset, SEAM_OWNERS))
+    return tuple(owners)
+
+
 def nonband_missing(lost, jobs, owners, variants_of):
     """Per (dataset, owner) with a row on that dataset: the cases, and how many of them
     have no off-seam rows because the owner's primary run left no mask there."""
     out = []
     for ds in dict.fromkeys(job[1].dataset for job in jobs):
         n_cases = sum(job[1].dataset == ds for job in jobs)
-        for owner in owners:
+        for owner in owners_of(owners, ds):
             if owner not in variants_of.get(ds, ()):
                 continue
             n = sum(r["dataset"] == ds and r["owner"] == owner for r in lost)
@@ -3622,7 +3644,9 @@ def summary_markdown(
             + (f"; and {len(excluded) - 50} more" if len(excluded) > 50 else "")
             + ".\n"
         )
+    all_primary = primary
     for ds in sorted({r["dataset"] for r in summary}):
+        primary = primary_of(all_primary, ds)
         of_ds = [r for r in summary if r["dataset"] == ds]
         n_units = max(r["n_patients"] for r in of_ds)
         parts.append(f"## {ds}\n")
@@ -3961,9 +3985,14 @@ def score(
     ``expected`` lists variants that must appear even with no directory. ``primary`` lists
     the primary variants: they come first in the summary and define the ``common`` block.
     ``seam_owners`` (default ``SEAM_OWNERS``) names the variants whose seam mask gives
-    every variant a second, off-seam row (``nonband_*``).
+    every variant a second, off-seam row (``nonband_*``); like ``primary`` it may be
+    ``{dataset: (names)}`` (``score_rawtiles``: ``ashlar_clean`` on ``@raw``).
     """
-    owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
+    owners = (
+        dict(seam_owners)
+        if isinstance(seam_owners, dict)
+        else tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
+    )
     dropped = list(dict.fromkeys(dropped or []))
     dropped_rows = [
         {
@@ -3984,7 +4013,7 @@ def score(
             dev,
             expected.get(ds) if isinstance(expected, dict) else expected,
             dropped,
-            owners,
+            owners_of(owners, ds),
             row_checks,
         )
         if made:
@@ -4340,6 +4369,16 @@ def summarise_stitching(rows):
     return out
 
 
+RAW_NOTES = (
+    "\n## `@raw`: what it does not have\n\n"
+    "* Its gate is the selfcheck of `ashlar_clean`, which builds whole-slide pairs: it "
+    "exercises ASHLAR's GRID mode, not the raw-tile reader and point path "
+    "(`methods/ashlar.py::_register_raw`, unit-tested against a fake ASHLAR only).\n"
+    "* No `paired_vs_primary` rows: they are paired against `stare`, which does not run "
+    "on tiles.\n"
+)
+
+
 def stitching_markdown(summary):
     """The ``summary.md`` block "Stitching error by front-end"."""
     lines = [
@@ -4366,14 +4405,28 @@ def stitching_markdown(summary):
     return "\n".join(lines)
 
 
+def rawtiles_owners(case_set):
+    """The seam owners of a raw-tile case set: on ``<name>@raw`` each owner is its
+    primary row there (``variants.RAW_PRIMARY``: ``ashlar`` -> ``ashlar_clean``, the row
+    that runs and writes the band); the mosaic case sets keep ``SEAM_OWNERS``."""
+    from . import RAW
+    from . import case_set as split
+    from .variants import RAW_PRIMARY
+
+    if split(case_set)[1] == RAW:
+        return tuple(RAW_PRIMARY.get(o, o) for o in SEAM_OWNERS)
+    return tuple(SEAM_OWNERS)
+
+
 def score_rawtiles(cases_root, out, name, workers=1, expected=None, primary=None,
                    only=None, **kw):
     """Score every case set ``<name>@<front end>`` present under ``cases_root`` (or the
     one front-end ``only``) into ``<out>/tables/<name>/``: the tables of ``score`` with a
     ``front_end`` column, ``stitching.csv`` (per front-end x cycle, from each case set's
     own) and ``stitching_summary.csv``, and the block "Stitching error by front-end"
-    in ``summary.md``. Never pooled with the cohort. ``expected`` is ``{case set:
-    [names]}``; ``primary`` the union of the case sets' primary rows."""
+    in ``summary.md``. Never pooled with the cohort. ``expected`` and ``primary`` are
+    ``{case set: [names]}`` (``variants.expected_variants`` / ``primary_for`` of each);
+    the seam owners are resolved per case set (``rawtiles_owners``)."""
     from . import RAW_FRONT_ENDS
     from .datasets import rawtiles
 
@@ -4395,6 +4448,7 @@ def score_rawtiles(cases_root, out, name, workers=1, expected=None, primary=None
         (tables / f).unlink(missing_ok=True)
     write_csv(tables / "stitching.csv", rows)
     write_csv(tables / "stitching_summary.csv", summary)
+
     got = score(
         cases_root,
         out,
@@ -4402,10 +4456,12 @@ def score_rawtiles(cases_root, out, name, workers=1, expected=None, primary=None
         workers,
         expected=expected,
         primary=primary,
+        seam_owners={ds: rawtiles_owners(ds) for ds in sets},
         with_tissue=False,
         tables_dir=tables,
         tag=front_end_tag,
-        extra_markdown=stitching_markdown(summary),
+        extra_markdown=stitching_markdown(summary)
+        + (RAW_NOTES if any(ds.endswith("@raw") for ds in sets) else ""),
         **kw,
     )
     got["stitching"] = rows

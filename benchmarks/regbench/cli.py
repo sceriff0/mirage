@@ -1697,7 +1697,23 @@ def main(argv=None):
         sys.stdout, _ANSWER = _ANSWER, None
 
 
+def refuse_raw_base(a):
+    """A raw-tile dataset's bare name (``phenocycler``) is a dataset only to ``score``,
+    which scores every case set of it. Every other command takes a case set."""
+    if a.cmd in ("score", "prepare"):
+        return
+    given = getattr(a, "dataset", None)
+    for name in given if isinstance(given, list) else [given]:
+        if name in RAW_TILE_DATASETS:
+            raise SystemExit(
+                f"--dataset {name}: name a case set <name>@<fe> (e.g. {name}@stage; "
+                f"front ends: {', '.join(RAW_FRONT_ENDS)}). Only `score` takes the bare "
+                "name, and scores every case set of it"
+            )
+
+
 def _main(a):
+    refuse_raw_base(a)
     if a.cmd == "nuclei":
         from . import nuclei
 
@@ -1775,9 +1791,6 @@ def _main(a):
 
         base, only = case_set(external)
         sets = [f"{base}@{fe}" for fe in RAW_FRONT_ENDS if only in (None, fe)]
-        primary = []
-        for ds in sets:
-            primary += [v for v in variants.primary_for(ds) if v not in primary]
         score.score_rawtiles(
             a.cases,
             a.out,
@@ -1786,7 +1799,9 @@ def _main(a):
             expected=None
             if a.only_run
             else {ds: variants.expected_variants(ds) for ds in sets},
-            primary=None if a.only_run else primary,
+            primary=None
+            if a.only_run
+            else {ds: variants.primary_for(ds) for ds in sets},
             only=only,
             dropped=_dropped(a.drop),
             gates=a.gates,

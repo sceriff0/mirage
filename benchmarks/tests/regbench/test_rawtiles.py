@@ -31,6 +31,7 @@ from benchmarks.regbench import (
     frontends,
     methods,
     regimes,
+    score,
     stitching,
     tilemap,
     variants,
@@ -326,6 +327,23 @@ def test_ashlar_reads_the_tiles_as_published_and_maps_mov_onto_ref(tmp_path, sou
         before = cells.area_centroid(cells.Polys(mov.xy, mov.ring_off))[1]
         assert np.median(nearest(before, ref)) > 5  # the shift is there before
         assert np.median(nearest(moved, ref)) < 1.0  # and ASHLAR's map takes it out
+        # scored: the off-seam rows of @raw are owned by ashlar_clean, its primary there
+        for case in got:
+            methods.run_case("initial", case, out)
+        res = score.score_rawtiles(
+            cases, out, "phenocycler", 1,
+            expected={"phenocycler@raw": variants.expected_variants("phenocycler@raw")},
+            primary={"phenocycler@raw": variants.primary_for("phenocycler@raw")},
+        )
+        non = {r["method"] for r in res["nonband_cells"]}
+        assert "ashlar_clean:non_ashlar_clean" in non
+        assert "initial:non_ashlar_clean" in non
+        assert not any(m.endswith(":non_ashlar") for m in non)
+        block = [r for r in res["common_block"] if r["dataset"] == "phenocycler@raw"]
+        assert {r["method"] for r in block} == {"ashlar_clean"}  # no "no row" clutter
+        assert block[0]["in_common_block"] is True
+        text = (out / "tables" / "phenocycler" / "summary.md").read_text()
+        assert "## `@raw`: what it does not have" in text
     finally:
         fake_ashlar.configure()
 
@@ -413,3 +431,61 @@ def test_the_prepare_command(tmp_path, source, monkeypatch, capsys):
     with pytest.raises(SystemExit, match="not units"):
         cli.main([*base, "--source", str(source), "--front-end", "stage",
                   "--patients", "nobody"])
+
+
+# ── fix round 1 ───────────────────────────────────────────────────────────────
+def test_a_bare_raw_tile_name_is_a_dataset_to_score_only(capsys):
+    for args in (["runs", "--dataset", "phenocycler"],
+                 ["list", "--cases", "x", "--dataset", "codex", "--ids"]):
+        with pytest.raises(SystemExit, match="name a case set <name>@<fe>"):
+            cli.main(args)
+    assert runs_cli(capsys, "--dataset", "phenocycler@stage")  # a case set is fine
+
+
+def test_score_gets_each_case_sets_own_primaries(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(score, "score_rawtiles", lambda *a, **k: seen.update(k))
+    assert cli.main(["score", "--cases", str(tmp_path), "--out", str(tmp_path),
+                     "--dataset", "phenocycler"]) == 0
+    primary = seen["primary"]
+    assert set(primary) == {f"phenocycler@{fe}" for fe in RAW_FRONT_ENDS}
+    assert primary["phenocycler@raw"] == ["ashlar_clean"]
+    for fe in MOSAIC_FES:
+        assert "ashlar" in primary[f"phenocycler@{fe}"]
+        assert "ashlar_clean" not in primary[f"phenocycler@{fe}"]
+    assert set(seen["expected"]) == set(primary)
+
+
+def _row(ds, method, case="u__c2", ok=True):
+    return {"dataset": ds, "method": method, "case_id": case, "cause": "",
+            "imputed_initial": not ok}
+
+
+def test_the_common_block_is_per_case_set():
+    rows = [_row("p@stage", m) for m in ("initial", "ashlar", "ashlar_clean", "stare")]
+    rows += [_row("p@raw", m) for m in ("initial", "ashlar_clean")]
+    rows.append(_row("p@stage", "ashlar_clean", case="u__c3", ok=False))
+    rows += [_row("p@stage", m, case="u__c3") for m in ("initial", "ashlar", "stare")]
+    primary = {"p@stage": ["stare", "ashlar"], "p@raw": ["ashlar_clean"]}
+    block = score.common_block(rows, primary)
+    stage = {r["method"]: r for r in block if r["dataset"] == "p@stage"}
+    assert set(stage) == {"stare", "ashlar"}  # ashlar_clean is not a primary there
+    assert stage["ashlar"]["n_cases_common"] == 2  # its failure on u__c3 does not count
+    raw = [r for r in block if r["dataset"] == "p@raw"]
+    assert [(r["method"], r["why_not"]) for r in raw] == [("ashlar_clean", "")]
+    # the old union would have listed every other primary on @raw as having no row
+    union = score.common_block(rows, ["stare", "ashlar", "ashlar_clean"])
+    assert {r["method"] for r in union if r["dataset"] == "p@raw"} == {
+        "stare", "ashlar", "ashlar_clean"}
+
+
+def test_deeperhistreg_primary_on_raw_tile_mosaic_sets_is_its_fluo_twin():
+    twin = variants.fluo_twin(variants.PRIMARY_DEEPERHISTREG)
+    assert twin == "deeperhistreg_hr_fluo_gpu_asdrawn"
+    for fe in MOSAIC_FES:
+        prim = variants.primary_for(f"codex@{fe}")
+        assert twin in prim and variants.PRIMARY_DEEPERHISTREG not in prim
+    assert variants.primary_for("codex@raw") == ["ashlar_clean"]
+    assert variants.PRIMARY_DEEPERHISTREG in variants.primary_for(None)  # cohort unchanged
+    rows = {r[0]: r for r in variants.runs_table(dataset="codex@stage")}
+    assert rows["deeperhistreg_hr_fluo_gpu"][10] == twin
