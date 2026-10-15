@@ -198,7 +198,7 @@ def test_every_tile_is_submitted_once_and_the_ceiling_is_never_exceeded(
     site = Site(tmp_path, {1: range(n), 2: []})
     done = site.run(
         REGBENCH_STAGE_ARRAY_MAX=most,
-        REGBENCH_STAGE_QUEUE_MAX=ceiling,
+        REGBENCH_STAGE_QUEUE_RUN=ceiling,
         REGBENCH_STAGE_FEED_MIN=min(25, ceiling),
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -236,7 +236,7 @@ def test_it_waits_for_room_and_fills_what_is_free(tmp_path):
     (site.fake / "ends").write_text("3")
     done = site.run(
         REGBENCH_STAGE_ARRAY_MAX=10,
-        REGBENCH_STAGE_QUEUE_MAX=10,
+        REGBENCH_STAGE_QUEUE_RUN=10,
         REGBENCH_STAGE_FEED_MIN=5,
     )
     assert done.returncode == 0, done.stdout + done.stderr
@@ -449,7 +449,7 @@ def test_a_submitter_that_is_killed_is_continued_from_its_files(tmp_path, ends):
     site = Site(tmp_path, {1: range(35), 2: []})
     (site.fake / "kill_at").write_text("2")
     (site.fake / "ends").write_text("0")
-    env = dict(REGBENCH_STAGE_ARRAY_MAX=10, REGBENCH_STAGE_QUEUE_MAX=1000)
+    env = dict(REGBENCH_STAGE_ARRAY_MAX=10, REGBENCH_STAGE_QUEUE_RUN=1000)
     done = site.run(**env)
     assert done.returncode == -9
     fed = Path(f"{site.state}.fed.tsv").read_text().splitlines()
@@ -628,7 +628,7 @@ def test_a_wait_for_room_is_ended_the_same_way(tmp_path):
         REGBENCH_STAGE_POLL_S=1,
         REGBENCH_STAGE_STALL_S=1,
         REGBENCH_STAGE_ARRAY_MAX=4,
-        REGBENCH_STAGE_QUEUE_MAX=4,
+        REGBENCH_STAGE_QUEUE_RUN=4,
         REGBENCH_STAGE_FEED_MIN=2,
     )
     assert done.returncode == 1, done.stdout + done.stderr
@@ -659,7 +659,7 @@ def test_an_array_that_ended_is_found_in_the_accounting_since_the_first_start(
     sacct.chmod(0o755)
     (site.fake / "kill_at").write_text("2")
     (site.fake / "ends").write_text("0")
-    env = dict(REGBENCH_STAGE_ARRAY_MAX=10, REGBENCH_STAGE_QUEUE_MAX=1000)
+    env = dict(REGBENCH_STAGE_ARRAY_MAX=10, REGBENCH_STAGE_QUEUE_RUN=1000)
     assert site.run(**env).returncode == -9
     started = Path(f"{site.state}.started").read_text().strip()
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d", started)
@@ -679,8 +679,9 @@ def test_an_array_that_ended_is_found_in_the_accounting_since_the_first_start(
 def test_the_defaults_are_the_ruled_ones():
     text = (SLURM / "feed_tiles.sbatch").read_text()
     assert f': "${{REGBENCH_STAGE_ARRAY_MAX:={stages.ARRAY_MAX}}}"' in text
-    assert f': "${{REGBENCH_STAGE_QUEUE_MAX:={stages.QUEUE_MAX}}}"' in text
-    assert stages.ARRAY_MAX == stages.QUEUE_MAX == 100
+    assert f': "${{REGBENCH_STAGE_QUEUE_RUN:={stages.QUEUE_RUN}}}"' in text
+    assert stages.ARRAY_MAX == stages.QUEUE_RUN == 100
+    assert stages.QUEUE_MAX == 2 * stages.QUEUE_RUN  # the total the 2-run launch had
     launcher = (SLURM / "submit_cohort.sh").read_text()
     assert f': "${{REGBENCH_STAGE_ARRAY_MAX:={stages.ARRAY_MAX}}}"' in launcher
     assert f': "${{REGBENCH_STAGE_QUEUE_MAX:={stages.QUEUE_MAX}}}"' in launcher

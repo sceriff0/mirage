@@ -68,7 +68,8 @@
 #      (feed_tiles.sbatch), a small job on a compute node that calls sbatch itself, as
 #      a Nextflow head job does: still one job per tile with the pipeline's allocation,
 #      in arrays of at most REGBENCH_STAGE_ARRAY_MAX tasks, never more than
-#      REGBENCH_STAGE_QUEUE_MAX of them pending or running. SOLVE waits for it.
+#      its share of REGBENCH_STAGE_QUEUE_MAX (a total over the launch) of them pending or
+#      running. SOLVE waits for it.
 #      `stage_chain` and `staged` below.
 #   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
 #      first dataset goes alone, with `--realcheck`; a second gate job reads its
@@ -159,8 +160,10 @@
 #                                     applied to the tile arrays, whose limit is
 #                                     REGBENCH_STAGE_QUEUE_MAX
 #   REGBENCH_STAGE_ARRAY_MAX (100)    the most tasks in one tile array
-#   REGBENCH_STAGE_QUEUE_MAX (100)    the most tile tasks of ONE run pending or running
-#                                     at a time (the tile submitter's ceiling)
+#   REGBENCH_STAGE_QUEUE_MAX (200)    the most tile tasks pending or running at a time
+#                                     in the WHOLE LAUNCH: a total, split evenly over the
+#                                     runs that have a tile submitter (floor, at least 1
+#                                     each); each submitter's ceiling is its share
 #   REGBENCH_STAGE_FEED_MIN (25)      the submitter waits for that many free slots
 #                                     before it submits an array (fewer when fewer
 #                                     tiles are left)
@@ -298,7 +301,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_RUN_LANES:=0}"
 : "${REGBENCH_SBATCH_GPU=--gres=gpu:1}"
 : "${REGBENCH_STAGE_ARRAY_MAX:=100}"
-: "${REGBENCH_STAGE_QUEUE_MAX:=100}"
+: "${REGBENCH_STAGE_QUEUE_MAX:=200}"
 : "${REGBENCH_STAGE_FEED_MIN:=25}"
 : "${REGBENCH_STAGE_POLL_S:=60}"
 : "${REGBENCH_STAGE_FEEDERS:=2}"
@@ -306,7 +309,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_SCORE_CPUS:=8}"
 : "${REGBENCH_SCORE_MEM:=64G}"
 : "${REGBENCH_FORCE:=0}"
-export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_QUEUE_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
+export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
 # multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
@@ -889,10 +892,13 @@ fi
 # tiles start in the arrays. Kept per submission: the tile tasks read it, and a later
 # submission must not move it under them. Sets LAYOUT_<ds>_<run>, ROUNDS_OF_<ds>_<run>,
 # TILES_OF_<ds>_<run>.
+N_TILE_RUNS=0 TILE_RUNS=""
 for ds in $sized; do
     while IFS=$'\t' read -r name method label opts image _ _ _ _ _ _ _ _ _ _ stages; do
         has "$selected" "$name" || continue
         [ "${stages:--}" = - ] && continue
+        # a run's datasets follow one another, so it is ONE submitter's worth of queue
+        case ",$stages," in *,tile,*) has "$TILE_RUNS" "$name" || { TILE_RUNS="$TILE_RUNS $name"; N_TILE_RUNS=$((N_TILE_RUNS + 1)); } ;; esac
         layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
         made="$layout"
         if [ "$DRY" = 1 ]; then
@@ -919,6 +925,15 @@ for ds in $sized; do
         printf -v "TILES_OF_${ds}_$name" '%s' "$n_tiles"
     done < "$table"
 done
+# THE TILE QUEUE CEILING IS A TOTAL: REGBENCH_STAGE_QUEUE_MAX is divided by the number of
+# runs that have a tile submitter (floor, at least 1) and each submitter is given its
+# share, REGBENCH_STAGE_QUEUE_RUN, which feed_tiles.sbatch reads. Set before the first sbatch.
+STAGE_QUEUE_RUN="$REGBENCH_STAGE_QUEUE_MAX"
+if [ "$N_TILE_RUNS" -gt 0 ]; then
+    STAGE_QUEUE_RUN=$((REGBENCH_STAGE_QUEUE_MAX / N_TILE_RUNS))
+    [ "$STAGE_QUEUE_RUN" -ge 1 ] || STAGE_QUEUE_RUN=1
+fi
+export REGBENCH_STAGE_QUEUE_RUN="$STAGE_QUEUE_RUN"
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
 needed=""
 while IFS=$'\t' read -r name _ _ _ _ _ _ after gated_by _; do
@@ -982,6 +997,8 @@ retry_root="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION"
 [ "$DRY" = 1 ] && retry_root="$scratch/retry"
 mkdir -p "$retry_root" 2>/dev/null && [ -w "$retry_root" ] \
     || die "cannot write the retry plans to $retry_root. Nothing was submitted."
+# read here, before the first sbatch, like every other variable of the caller
+ADVISORY="${REGBENCH_SELFCHECK_ADVISORY:-0}"
 sc_time="$(limit "$sc_s")"
 while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     has "$needed" "$name" || continue
@@ -1027,7 +1044,7 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
     allowed=0
     has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
     has "${REGBENCH_ALLOW_INCONSISTENT:-}" "$name" && allowed=2
-    [ "${REGBENCH_SELFCHECK_ADVISORY:-0}" = 1 ] && allowed=3
+    [ "$ADVISORY" = 1 ] && allowed=3
     # an earlier submission's verdict must not be what a task of this one finds
     [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
     last="SC_LAST_$gated_by"
@@ -1103,7 +1120,7 @@ ladder() {
 #                         ONE TASK PER TILE (the count of a round is known from its
 #                         reference's size alone, `regbench stages`) in arrays of at
 #                         most REGBENCH_STAGE_ARRAY_MAX tasks, keeping at most
-#                         REGBENCH_STAGE_QUEUE_MAX of them pending or running, then
+#                         its share of REGBENCH_STAGE_QUEUE_MAX of them pending or running, then
 #                         per attempt 2 to 4 one task per round that has a tile to
 #                         retry; a later one goes on where the one before stopped and
 #                         exits at once when nothing is left
@@ -1162,7 +1179,7 @@ staged() {
                 ladder "rb-$name-$ds-last" "0-$((n_rounds - 1))" 0 "$dep" - jobs ;;
         esac
     done
-    echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) fed in later by its tile submitter, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX, at most $REGBENCH_STAGE_QUEUE_MAX in the queue"
+    echo "# $name on $ds: $n_rounds round(s) as separate jobs ($stages); $n_tiles tile job(s) fed in later by its tile submitter, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX, at most $STAGE_QUEUE_RUN in the queue (its share of the total $REGBENCH_STAGE_QUEUE_MAX)"
 }
 
 N_FED=0 FED_RUNS=""
@@ -1300,7 +1317,7 @@ echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was
 if [ "$N_FED" -gt 0 ]; then
     n_fed_runs="$(wc -w <<< "$FED_RUNS" | tr -d ' ')"
     echo "# later, by the tile submitters (feed_tiles.sbatch): $N_FED tile task(s), one per tile, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX; plus, per attempt 2 to 4, one retry task per round that has a tile to retry"
-    echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $REGBENCH_STAGE_QUEUE_MAX tile task(s) for each of the $n_fed_runs run(s) with a tile submitter (${FED_RUNS# }): $((N_TASKS + n_fed_runs * REGBENCH_STAGE_QUEUE_MAX)) task(s)"
+    echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $STAGE_QUEUE_RUN tile task(s) for each of the $n_fed_runs run(s) with a tile submitter (${FED_RUNS# }; REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX is the total they share): $((N_TASKS + n_fed_runs * STAGE_QUEUE_RUN)) task(s)"
 fi
 [ "$DRY" = 1 ] || echo "# job ids    -> $IDS_FILE (this call's, one per line; cancel everything: scancel \$(cat \"$IDS_FILE\"))"
 if [ "$score_only" = 1 ]; then
@@ -1319,7 +1336,7 @@ else
     echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 fi
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
-[ "${REGBENCH_SELFCHECK_ADVISORY:-0}" = 1 ] && echo "# the selfchecks are ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): no run is blocked by one; each verdict is in $REGBENCH_OUT/logs/gates/<run>.tsv and in the summary"
+[ "$ADVISORY" = 1 ] && echo "# the selfchecks are ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): no run is blocked by one; each verdict is in $REGBENCH_OUT/logs/gates/<run>.tsv and in the summary"
 [ -n "${REGBENCH_ALLOW_INCONSISTENT:-}" ] && echo "# OVERRIDE: allowed to start although the selfcheck is inconsistent: $REGBENCH_ALLOW_INCONSISTENT (the gate record and the summary keep the verdict)"
 FINISHED=1
 exit 0

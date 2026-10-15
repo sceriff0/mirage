@@ -74,7 +74,7 @@ export REGBENCH_REPO="$repo"
 # the selfchecks say what they found and block nothing (0: one that is not ok blocks)
 : "${REGBENCH_SELFCHECK_ADVISORY:=1}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
-: "${REGBENCH_STAGE_QUEUE_MAX:=50}"   # tile tasks pending or running, per run that has tiles
+: "${REGBENCH_STAGE_QUEUE_MAX:=100}"  # tile tasks pending or running, in the whole launch (a total)
 # the site
 : "${REGBENCH_SITE_CONFIG:=$repo/conf/ieo.config}"
 # the images: REGBENCH_IMAGES is where the site keeps its images (default: the

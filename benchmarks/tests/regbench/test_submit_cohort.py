@@ -1672,7 +1672,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
     assert (
         "# stare on multiplex: 3 round(s) as separate jobs (coarse,tile,solve,stitch); "
         "9 tile job(s) fed in later by its tile submitter, in arrays of at most 7, at "
-        "most 30 in the queue" in said
+        "most 15 in the queue (its share of the total 30)" in said
     )
     assert (
         f"# {len(jobs)} job(s) would be submitted; nothing was, {tasks} task(s) in them "
@@ -1685,9 +1685,10 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
         "round that has a tile to retry" in said
     )
     assert (
-        f"# the most in the queue at once: the {tasks} task(s) above plus at most 30 "
+        f"# the most in the queue at once: the {tasks} task(s) above plus at most 15 "
         f"tile task(s) for each of the 2 run(s) with a tile submitter (stare "
-        f"stare_clahe): {tasks + 2 * 30} task(s)" in said
+        f"stare_clahe; REGBENCH_STAGE_QUEUE_MAX=30 is the total they share): "
+        f"{tasks + 2 * 15} task(s)" in said
     )
     # no tile task is among what is submitted now
     assert not [n for n in jobs if "-tile-" in n]
@@ -1860,6 +1861,46 @@ def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
     later = set(re.findall(r"\$\{?!?(REGBENCH_[A-Z0-9_]+)", tail))
     earlier = set(re.findall(r"REGBENCH_[A-Z0-9_]+", code[:start]))
     assert later <= earlier, sorted(later - earlier)
+
+
+@pytest.mark.parametrize("total", [None, 100, 7, 3, 1])
+def test_the_tile_queue_ceiling_is_a_total_split_over_the_runs_with_a_submitter(
+    site, total
+):
+    """REGBENCH_STAGE_QUEUE_MAX is for the whole launch: each tile submitter gets
+    total // (runs with a tile submitter), at least 1. The count is read off the run
+    list, not written down."""
+    from benchmarks.regbench import stages
+
+    fed = [
+        variants.run_name(r)
+        for r in variants.runs_for(None)
+        if "tile" in variants.stages_of(r)
+    ]
+    assert len(fed) > 2  # more than the two the per-run ceiling was sized for
+    env = {} if total is None else {"REGBENCH_STAGE_QUEUE_MAX": str(total)}
+    done, _, _ = launch(site, env=env, log=f"share-{total}")
+    assert done.returncode == 0, done.stderr
+    whole = stages.QUEUE_MAX if total is None else total
+    share = max(1, whole // len(fed))
+    for name in fed:
+        assert (
+            f"in arrays of at most {stages.ARRAY_MAX}, at most {share} in the queue "
+            f"(its share of the total {whole})"
+        ) in next(
+            ln for ln in done.stdout.splitlines() if ln.startswith(f"# {name} on ")
+        )
+    said = next(
+        ln
+        for ln in done.stdout.splitlines()
+        if ln.startswith("# the most in the queue at once")
+    )
+    assert f"at most {share} tile task(s) for each of the {len(fed)} run(s)" in said
+    assert f"REGBENCH_STAGE_QUEUE_MAX={whole} is the total they share" in said
+    # what the submitters are told is the share (their variable), set before any sbatch
+    code = code_of(SCRIPT)
+    assert 'export REGBENCH_STAGE_QUEUE_RUN="$STAGE_QUEUE_RUN"' in code
+    assert code.index("export REGBENCH_STAGE_QUEUE_RUN") < code.index("sc_time=")
 
 
 @pytest.mark.parametrize(
@@ -2274,7 +2315,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     launcher = code_of(SCRIPT)
     assert "sbatch --wait" not in launcher
     assert ': "${REGBENCH_STAGE_ARRAY_MAX:=100}"' in launcher
-    assert ': "${REGBENCH_STAGE_QUEUE_MAX:=100}"' in launcher
+    assert ': "${REGBENCH_STAGE_QUEUE_MAX:=200}"' in launcher
 
 
 # ── the realcheck as a gate ───────────────────────────────────────────────────

@@ -127,10 +127,13 @@ ATTEMPTS = MAX_RETRIES + 1
 KILLED = "killed"
 # The tile jobs reach the queue through a throttled submitter (slurm/feed_tiles.sbatch),
 # as Nextflow's queue size does for the pipeline: arrays of at most ARRAY_MAX tasks, at
-# most QUEUE_MAX tile tasks of a run pending or running. Both are the defaults of the
-# launcher's REGBENCH_STAGE_ARRAY_MAX and REGBENCH_STAGE_QUEUE_MAX.
+# most QUEUE_RUN tile tasks of a run pending or running. ARRAY_MAX and QUEUE_RUN are the
+# submitter's own defaults (REGBENCH_STAGE_ARRAY_MAX, REGBENCH_STAGE_QUEUE_RUN); the
+# launcher's REGBENCH_STAGE_QUEUE_MAX is a TOTAL over the launch, split over the runs that
+# have a submitter (QUEUE_MAX = twice the 100 each of the two runs it was sized for).
 ARRAY_MAX = 100
-QUEUE_MAX = 100
+QUEUE_RUN = 100
+QUEUE_MAX = 200
 # a stage job that was never submitted: the launcher's failure (regbench.failure_log)
 NOT_SUBMITTED = "not_submitted"
 

@@ -23,7 +23,9 @@
 #
 # THE CEILING. Before every `sbatch` it counts the tile tasks of this run and dataset
 # that are pending or running (`squeue -r`, by job name) and submits only what keeps the
-# count at or below REGBENCH_STAGE_QUEUE_MAX. It waits until at least
+# count at or below REGBENCH_STAGE_QUEUE_RUN (this run's share of the launcher's
+# REGBENCH_STAGE_QUEUE_MAX, which is a total over the launch; submit_cohort.sh divides it
+# by the number of runs with a submitter). It waits until at least
 # REGBENCH_STAGE_FEED_MIN slots are free (or fewer tiles are left), so that it does not
 # submit one-task arrays. Between looks it sleeps REGBENCH_STAGE_POLL_S seconds.
 #
@@ -73,7 +75,7 @@ name="$1" method="$2" label="$3" opts="$4" image="$5" dataset="$6" layout="$7"
 n_rounds="$8" n_tiles="$9" link="${10}"
 ALLOC=("" "${11}" "${12}" "${13}" "${14}")
 : "${REGBENCH_STAGE_ARRAY_MAX:=100}"
-: "${REGBENCH_STAGE_QUEUE_MAX:=100}"
+: "${REGBENCH_STAGE_QUEUE_RUN:=100}"
 : "${REGBENCH_STAGE_FEED_MIN:=25}"
 : "${REGBENCH_STAGE_POLL_S:=60}"
 : "${REGBENCH_STAGE_SUBMIT_TRIES:=5}"
@@ -318,15 +320,15 @@ feed() {
             continue
         fi
         q="$Q"
-        room=$((REGBENCH_STAGE_QUEUE_MAX - q))
+        room=$((REGBENCH_STAGE_QUEUE_RUN - q))
         left=$((total - next))
         want="$REGBENCH_STAGE_ARRAY_MAX"
         [ "$want" -gt "$left" ] && want="$left"
         need="$REGBENCH_STAGE_FEED_MIN"
         [ "$need" -gt "$want" ] && need="$want"
-        [ "$need" -gt "$REGBENCH_STAGE_QUEUE_MAX" ] && need="$REGBENCH_STAGE_QUEUE_MAX"
+        [ "$need" -gt "$REGBENCH_STAGE_QUEUE_RUN" ] && need="$REGBENCH_STAGE_QUEUE_RUN"
         if [ "$room" -lt "$need" ]; then
-            waiting "attempt $attempt, waiting for $need free slot(s) of $REGBENCH_STAGE_QUEUE_MAX"
+            waiting "attempt $attempt, waiting for $need free slot(s) of $REGBENCH_STAGE_QUEUE_RUN"
             sleep "$REGBENCH_STAGE_POLL_S"
             continue
         fi

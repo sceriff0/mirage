@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from benchmarks.regbench import ladder, prep, variants
+from benchmarks.regbench import prep, variants
 
 from .test_submit_cohort import (
     SCRIPT,
@@ -22,8 +22,22 @@ SPECS = {variants.run_name(r): r for r in variants.runs_for("anhir")}
 RUNS = list(SPECS)
 TUNING = {variants.run_name(r): r for r in variants.TUNING_RUNS}
 CANDIDATES = list(TUNING)
-# three selfcheck attempts and a gate before each run's own jobs
-BEFORE = len(ladder.SELFCHECK_RUNGS_GB) + 1
+
+
+def submitted(specs):
+    """The jobs one launch of these runs submits, read off the run table and the job graph:
+    per run that gates a run (and the run it is anchored on) the selfcheck's first attempt
+    and its watcher (the later attempts are submitted only after a failure), per run its
+    gate (advisory or not, the gate job is there), the run's own jobs, and at the end the
+    settle job and the set's scorer."""
+    specs = list(specs)
+    gating = {variants.gated_by(variants.run_name(r)) for r in specs}
+    gating |= {
+        variants.run_of(g).after for g in list(gating) if variants.run_of(g).after
+    }
+    return 2 * len(gating) + len(specs) + sum(launch_jobs(r) for r in specs) + 2
+
+
 SOURCE = {"REGBENCH_ANHIR": "/data/anhir"}  # bound into every image: the cases name it
 
 
@@ -52,9 +66,9 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     jobs = jobs_of(done)
     assert not log.exists()
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert laddered == set(RUNS) and len(RUNS) == 8
+    assert laddered == set(RUNS)
     # ... the settle job and the set's own scorer
-    assert len(jobs) == sum(BEFORE + launch_jobs(r) for r in SPECS.values()) + 2
+    assert len(jobs) == submitted(SPECS.values())
     assert "# anhir: 4 case(s), 4 patient(s), at most 1 round(s)" in done.stdout
     for run in RUNS:
         first = jobs[first_rung(SPECS[run], "anhir")]
@@ -66,11 +80,15 @@ def test_anhir_runs_its_own_list_on_every_training_pair(site):
     assert f"{out}/tables/anhir/summary.md" in done.stdout
     assert "TRAINING pairs" in done.stdout and "leaderboard" in done.stdout
     left = [ln for ln in done.stdout.splitlines() if " is not run (" in ln]
-    assert len(left) == len(variants.active_runs()) - len(RUNS)
+    # one line per active run the set leaves out (`excluded_for`); a run of another regime
+    # (the cyclic-IF cells) is not on this set's list at all and is not "left out" of it
+    gone = dict(variants.excluded_for("anhir"))
+    assert {ln.split()[2] for ln in left} == set(gone) and len(left) == len(gone)
+    assert not set(gone) & set(RUNS)
     assert any(ln.startswith("# anhir: palom is not run (") for ln in left)
     # the GPU rows ask for the site's GPU, the others for none
     assert jobs["rb-deeperhistreg_hr_gpu-anhir-16g"].opt("--gres")
-    assert not jobs[first_rung(SPECS["stare_prep"], "anhir")].opt("--gres")
+    assert not jobs[first_rung(SPECS["stare"], "anhir")].opt("--gres")
 
 
 def test_the_paused_preprocessing_row_is_not_submitted_and_so_not_warned_about(site):
@@ -98,7 +116,7 @@ def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
     assert laddered == set(CANDIDATES) and len(CANDIDATES) == len(prep.CANDIDATES)
     checked = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
     assert checked == set(CANDIDATES)  # each candidate behind its own selfcheck
-    assert len(jobs) == sum(BEFORE + launch_jobs(r) for r in TUNING.values()) + 2
+    assert len(jobs) == submitted(TUNING.values())
     for name, c in zip(CANDIDATES, prep.CANDIDATES):
         first = jobs[first_rung(TUNING[name], "anhir_tune")]
         assert first.args[1:4] == ["stare", name, f"prep={c}"]
