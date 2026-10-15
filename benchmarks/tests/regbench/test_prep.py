@@ -232,10 +232,10 @@ OPTS = {"workers": 2}
 
 
 @pytest.fixture(scope="module")
-def ran(synthetic_cases, tmp_path_factory):
+def ran(toy_cases, tmp_path_factory):
     """`crop` through STARE three times: plain, the identity candidate, and CLAHE."""
     pytest.importorskip("stare")
-    case = synthetic_cases["crop"]
+    case = toy_cases["crop"]
     out = tmp_path_factory.mktemp("prep")
     assert methods.run_case("stare", case, out, opts=OPTS) == ["stare_rigid", "stare"]
     for c in ("grey", "grey_clahe"):
@@ -261,11 +261,11 @@ def test_the_identity_candidate_gives_the_plain_rows_transform(ran):
     assert run["info"]["prep"]["identity_here"] is True
     # the same pixels in another file: the same transform, to the last digits STARE's
     # worker pool reproduces (two runs of the plain row differ by about 1e-7 px)
-    assert np.abs(plain["truth_xy"] - same["truth_xy"]).max() < 1e-4
+    assert np.abs(plain["nuclei_xy"] - same["nuclei_xy"]).max() < 1e-4
     assert np.abs(plain["grid"] - same["grid"]).max() < 1e-4
     run, other = load(out, "stare_prep_grey_clahe", case)
     assert run["info"]["prep"]["identity_here"] is False
-    assert np.abs(plain["truth_xy"] - other["truth_xy"]).max() > 1e-3
+    assert np.abs(plain["nuclei_xy"] - other["nuclei_xy"]).max() > 1e-3
 
 
 def test_stare_registers_the_preprocessed_copy_and_writes_the_original(ran):

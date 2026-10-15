@@ -71,13 +71,13 @@ def high_row():
     return {k: int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)}
 
 
-def test_every_tier_owned_value_is_passed(synthetic_cases, recorded, tmp_path):
+def test_every_tier_owned_value_is_passed(toy_cases, recorded, tmp_path):
     row = high_row()
     assert set(row) == {"tile", "halo", "out_tile", "coarse_max_dim"}
     want = {("max_dim" if k == "coarse_max_dim" else k): v for k, v in row.items()}
     assert adapter.TIER_HIGH_STRIDE64 == {**want, "stride": 64}
     assert len(adapter.TIER_HIGH_STRIDE64) == len(row) + 1 == 5
-    case = synthetic_cases["rigid"]
+    case = toy_cases["rigid"]
     # every value is on the command line, not left to the command's default
     argv = adapter.command(case, tmp_path, {})
     for key, value in adapter.TIER_HIGH_STRIDE64.items():
@@ -96,13 +96,13 @@ def test_installed_stare_is_the_pinned_one():
 
 
 @pytest.mark.parametrize("opts, stride", [({}, 64), ({"stride": "64"}, 64)])
-def test_an_unset_stride_is_64(synthetic_cases, recorded, opts, stride):
-    assert recorded(synthetic_cases["rigid"], opts).stride == stride
+def test_an_unset_stride_is_64(toy_cases, recorded, opts, stride):
+    assert recorded(toy_cases["rigid"], opts).stride == stride
 
 
 @pytest.mark.parametrize("stride", [128, 256])
-def test_the_stride_option_reaches_the_command(synthetic_cases, recorded, stride):
-    case = synthetic_cases["rigid"]
+def test_the_stride_option_reaches_the_command(toy_cases, recorded, stride):
+    case = toy_cases["rigid"]
     ns = recorded(case, {"stride": str(stride)})  # as `--opt stride=N` hands it over
     assert ns.stride == stride
     # nothing else moves with it
@@ -111,9 +111,9 @@ def test_the_stride_option_reaches_the_command(synthetic_cases, recorded, stride
 
 
 @pytest.mark.parametrize("bad", ["32", "96", "512", "64.0", "abc", "", 0])
-def test_only_three_strides_are_accepted(synthetic_cases, tmp_path, no_stage, bad):
+def test_only_three_strides_are_accepted(toy_cases, tmp_path, no_stage, bad):
     called = no_stage
-    case = synthetic_cases["rigid"]
+    case = toy_cases["rigid"]
     assert methods.run_case("stare", case, tmp_path, opts={"stride": bad}) == []
     assert not called
     for variant in ("stare_rigid", "stare"):
@@ -132,25 +132,25 @@ def test_a_label_and_a_stride_name_the_stride_runs():
     assert sc.sizes_for("stare_s256") == sc.sizes_for("stare")
 
 
-def test_inputs_are_the_original_slides(synthetic_cases, recorded):
-    case = multichannel(synthetic_cases["rigid"])
+def test_inputs_are_the_original_slides(toy_cases, recorded):
+    case = multichannel(toy_cases["rigid"])
     ns = recorded(case)
     assert (ns.reference, ns.moving) == (case.ref_image, case.mov_image)
     assert ns.reference != case.ref_nuclear and ns.moving != case.mov_nuclear
     assert ns.nuclear_index == 1
 
 
-def test_the_nuclear_index_defaults_to_zero(synthetic_cases, recorded):
-    case = synthetic_cases["rigid"]
+def test_the_nuclear_index_defaults_to_zero(toy_cases, recorded):
+    case = toy_cases["rigid"]
     assert "mov_channel" not in case.extra
     assert recorded(case).nuclear_index == 0
 
 
 def test_a_reference_with_another_nuclear_index_fails_the_case(
-    synthetic_cases, tmp_path, no_stage
+    toy_cases, tmp_path, no_stage
 ):
     called = no_stage
-    plain = synthetic_cases["rigid"]
+    plain = toy_cases["rigid"]
     # the slides are read before the method starts, so the case keeps files that exist
     case = dataclasses.replace(
         multichannel(plain, ref_channel=0, mov_channel=2),
@@ -163,13 +163,13 @@ def test_a_reference_with_another_nuclear_index_fails_the_case(
     assert "one --nuclear-index" in run["error"] and not called
 
 
-def test_pixel_size_and_channel_names_are_passed(synthetic_cases, recorded):
-    case = multichannel(synthetic_cases["rigid"])
+def test_pixel_size_and_channel_names_are_passed(toy_cases, recorded):
+    case = multichannel(toy_cases["rigid"])
     ns = recorded(case)
     assert ns.pixel_size == "0.325" and float(ns.pixel_size) == case.pixel_size_um
     assert ns.channel_names == NAMES
     # a case that names no channels: the names in the moving slide's own header
-    plain = synthetic_cases["rigid"]
+    plain = toy_cases["rigid"]
     assert "channel_names" not in plain.extra
     assert recorded(plain).channel_names == imageio.channel_names(plain.mov_image)
     assert recorded(plain).channel_names == ["NUCLEAR"]
@@ -178,8 +178,8 @@ def test_pixel_size_and_channel_names_are_passed(synthetic_cases, recorded):
     assert recorded(unknown).pixel_size == "auto"
 
 
-def test_an_argument_error_is_reported_as_an_exception(synthetic_cases, tmp_path):
-    case = synthetic_cases["rigid"]
+def test_an_argument_error_is_reported_as_an_exception(toy_cases, tmp_path):
+    case = toy_cases["rigid"]
     assert methods.run_case("stare", case, tmp_path, opts={"tile": "big"}) == []
     run = run_json(tmp_path, "stare", case)
     assert run["ok"] is False and run["cause"] == "exception"
@@ -229,31 +229,27 @@ def flag(argv, name):
     return argv[argv.index(name) + 1]
 
 
-def test_sprep_reaches_coarse_and_reg_tile_argv(synthetic_cases, tmp_path):
-    argv = adapter.stage_argv(
-        synthetic_cases["rigid"], {"sprep": "percentile"}, tmp_path
-    )
+def test_sprep_reaches_coarse_and_reg_tile_argv(toy_cases, tmp_path):
+    argv = adapter.stage_argv(toy_cases["rigid"], {"sprep": "percentile"}, tmp_path)
     for stage in ("coarse", "reg-tile"):
         assert flag(argv[stage], "--prep") == "percentile", stage
 
 
-def test_default_run_passes_prep_none_and_the_pixel_size(synthetic_cases, tmp_path):
-    case = multichannel(synthetic_cases["rigid"])
+def test_default_run_passes_prep_none_and_the_pixel_size(toy_cases, tmp_path):
+    case = multichannel(toy_cases["rigid"])
     argv = adapter.stage_argv(case, {}, tmp_path)
     for stage in ("coarse", "reg-tile"):
         assert flag(argv[stage], "--prep") == "none"
         assert flag(argv[stage], "--pixel-size") == str(case.pixel_size_um)
-    unknown = dataclasses.replace(synthetic_cases["rigid"], pixel_size_um=None)
+    unknown = dataclasses.replace(toy_cases["rigid"], pixel_size_um=None)
     assert (
         flag(adapter.stage_argv(unknown, {}, tmp_path)["coarse"], "--pixel-size")
         == "auto"
     )
 
 
-def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(
-    synthetic_cases, tmp_path
-):
-    case = synthetic_cases["rigid"]
+def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(toy_cases, tmp_path):
+    case = toy_cases["rigid"]
     assert adapter.stage_argv(case, {}, tmp_path) == adapter.stage_argv(
         case, {"sprep": "none", "proxy": "channel"}, tmp_path
     )
@@ -269,13 +265,13 @@ def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(
         ({"prep": "grey", "proxy": "channel"}, "prep"),
     ],
 )
-def test_refused_option_combinations_on_fluorescence(synthetic_cases, opts, match):
+def test_refused_option_combinations_on_fluorescence(toy_cases, opts, match):
     with pytest.raises(ValueError, match=match):
-        adapter.settings(opts, synthetic_cases["rigid"])
+        adapter.settings(opts, toy_cases["rigid"])
 
 
-def test_proxy_on_an_rgb_case(synthetic_cases, tmp_path):
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+def test_proxy_on_an_rgb_case(toy_cases, tmp_path):
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     assert adapter.settings({}, case) == ("grey", "none")
     assert adapter.settings({"proxy": "haem", "sprep": "clahe"}, case) == (
         "haem",
@@ -289,8 +285,8 @@ def test_proxy_on_an_rgb_case(synthetic_cases, tmp_path):
     assert adapter.settings({"sprep": "percentile"}, unknown) == ("grey", "percentile")
 
 
-def test_default_grey_proxy_is_not_written_again_but_haem_is(synthetic_cases, tmp_path):
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+def test_default_grey_proxy_is_not_written_again_but_haem_is(toy_cases, tmp_path):
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     grey = adapter.Round(case, tmp_path / "g", {})
     assert grey.candidate is None and grey.inputs is None
     assert adapter.slides(case)[0] == case.ref_nuclear
@@ -301,8 +297,8 @@ def test_default_grey_proxy_is_not_written_again_but_haem_is(synthetic_cases, tm
     assert flag(haem.argv["coarse"], "--reference") == str(haem.inputs[0])
 
 
-def test_proxy_recorded_as_benchmark_side(synthetic_cases, tmp_path):
-    case = rgb_case(synthetic_cases["crop"], tmp_path)
+def test_proxy_recorded_as_benchmark_side(toy_cases, tmp_path):
+    case = rgb_case(toy_cases["crop"], tmp_path)
     info = {}
     for key, opts in (("haem", {"proxy": "haem", "sprep": "clahe"}), ("plain", {})):
         out = tmp_path / f"o_{key}"
@@ -324,9 +320,9 @@ OPTS = {"workers": 2}
 
 
 @pytest.fixture(scope="module")
-def ran(synthetic_cases, tmp_path_factory):
+def ran(toy_cases, tmp_path_factory):
     """`crop` (a moving slide of another shape) registered at stride 64 and 256."""
-    case = synthetic_cases["crop"]
+    case = toy_cases["crop"]
     out = tmp_path_factory.mktemp("stare")
     assert methods.run_case("stare", case, out, opts=OPTS, keep_work=True) == [
         "stare_rigid",
@@ -345,9 +341,9 @@ def test_run_json_records_the_anchor_and_the_allocation(ran):
     m0 = np.asarray(info["m0"], dtype=float)
     assert m0.shape == (3, 3) and np.allclose(m0[2], [0, 0, 1])
     # moving px -> reference px: it is the rigid row's own map
-    pts = load_points(case)["truth_mov"]
+    pts = load_points(case)["nuclei_mov_xy"]
     with np.load(result_dir(out, "stare_rigid", case) / "warped.npz") as z:
-        rigid = z["truth_xy"]
+        rigid = z["nuclei_xy"]
     assert np.allclose(pts @ m0[:2, :2].T + m0[:2, 2], rigid, atol=1e-6)
     assert run_json(out, "stare_rigid", case)["info"]["m0"] == info["m0"]
     assert info["version"] == stare.__version__
@@ -464,13 +460,13 @@ def test_selfcheck_is_ok(tmp_path, monkeypatch):
 
 
 def test_a_preprocessing_row_on_a_reduced_proxy_is_the_benchmarks_refusal(
-    synthetic_cases, tmp_path
+    toy_cases, tmp_path
 ):
     """HyReCo prepared with `--reduce 2` lists the `haem` cells; the adapter refuses them,
     and the refusal is the benchmark's (`reduced_proxy`), not a failure of STARE."""
     from benchmarks.regbench import failure_log, resources
 
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     case = dataclasses.replace(
         case, extra={**case.extra, "settings": {"proxy": "grey", "reduce": 2}}
     )
@@ -503,10 +499,10 @@ def tif_rgb_case(case, tmp_path):
 
 
 @pytest.mark.parametrize("proxy", ["haem", "grey_smooth"])
-def test_a_proxy_of_a_whole_slide_rgb_tiff_is_written(synthetic_cases, tmp_path, proxy):
+def test_a_proxy_of_a_whole_slide_rgb_tiff_is_written(toy_cases, tmp_path, proxy):
     """HyReCo: the `haem` / `grey_smooth` levels read the original RGB TIFF; the
     preprocessing job writes their proxy instead of refusing the slide."""
-    case = tif_rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = tif_rgb_case(toy_cases["rigid"], tmp_path)
     rnd = adapter.Round(case, tmp_path / "r", {"proxy": proxy})
     (done,) = adapter.run_stage(case, rnd.dir, rnd.opts, stages.PREP, rnd=rnd)
     rec = done[4]
@@ -520,13 +516,13 @@ def test_a_proxy_of_a_whole_slide_rgb_tiff_is_written(synthetic_cases, tmp_path,
     [(MemoryError(), "benchmark_oom"), (RuntimeError("a bug"), "benchmark")],
 )
 def test_a_failed_preprocessing_job_is_the_benchmarks_cause(
-    synthetic_cases, tmp_path, monkeypatch, exc, cause
+    toy_cases, tmp_path, monkeypatch, exc, cause
 ):
     """The preprocessing is the benchmark's own step: whatever ends it, the round's
     cause is the benchmark's, never STARE's `exception` / `oom`."""
     from benchmarks.regbench import failure_log, prep
 
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     rnd = adapter.Round(case, tmp_path / "r", {"proxy": "haem"})
 
     def boom(*a, **k):
@@ -538,13 +534,13 @@ def test_a_failed_preprocessing_job_is_the_benchmarks_cause(
     assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
 
 
-def test_clahe_without_a_pixel_size_is_the_benchmarks_refusal(synthetic_cases, tmp_path):
+def test_clahe_without_a_pixel_size_is_the_benchmarks_refusal(toy_cases, tmp_path):
     """ANHIR's mammary glands have no established pixel size and STARE's CLAHE region is
     in micrometres: the `clahe` level cannot exist there. That is the benchmark's
     cause (`no_pixel_size`), never STARE's `exception`."""
     from benchmarks.regbench import failure_log, resources, score
 
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     case = dataclasses.replace(case, pixel_size_um=None)
     with pytest.raises(ValueError, match="no established pixel size") as err:
         adapter.Round(case, tmp_path / "r", {"sprep": "clahe"})
@@ -561,7 +557,7 @@ def test_clahe_without_a_pixel_size_is_the_benchmarks_refusal(synthetic_cases, t
 
 
 def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
-    synthetic_cases, tmp_path, monkeypatch
+    toy_cases, tmp_path, monkeypatch
 ):
     """`stages --due` is what the tile feeder submits: one case the adapter refuses
     (its refusal is recorded by its own run) must not make the command fail, or the
@@ -573,7 +569,7 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
     from benchmarks.regbench.cases import write_case
 
     cases = tmp_path / "cases"
-    base = synthetic_cases["rigid"]
+    base = toy_cases["rigid"]
     ids = ["a_ok", "b_refused", "c_ok"]
     for cid in ids:
         write_case(cases, dataclasses.replace(base, case_id=cid, ref_hw=[4096, 5120]))
@@ -603,7 +599,7 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
             return "i"
 
     layout = tmp_path / "layout.tsv"
-    sized = ["stages", "--cases", str(cases), "--dataset", "synthetic"]
+    sized = ["stages", "--cases", str(cases), "--dataset", "multiplex"]
     sized += ["--method", "stare", "--layout", str(layout)]
     assert cli.main(sized) == 0
     n = adapter.tile_count(load_case_by_id(cases, "a_ok"), {"label": ""})
@@ -633,11 +629,11 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
 def load_case_by_id(cases, cid):
     from benchmarks.regbench.cases import list_cases
 
-    return next(c for c in list_cases(cases, "synthetic") if c.case_id == cid)
+    return next(c for c in list_cases(cases, "multiplex") if c.case_id == cid)
 
 
 def test_a_grey_cell_on_a_haematoxylin_prepared_case_is_the_benchmarks_refusal(
-    synthetic_cases, tmp_path
+    toy_cases, tmp_path
 ):
     """HyReCo prepared with `--proxy haematoxylin`: the case's own proxy is
     haematoxylin, so a `proxy=grey` cell would register on haematoxylin under a grey
@@ -646,7 +642,7 @@ def test_a_grey_cell_on_a_haematoxylin_prepared_case_is_the_benchmarks_refusal(
     runs the grey cell."""
     from benchmarks.regbench import failure_log, resources, score
 
-    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = rgb_case(toy_cases["rigid"], tmp_path)
     haem = dataclasses.replace(
         case,
         extra={**case.extra, "settings": {"proxy": "haematoxylin", "reduce": 1}},

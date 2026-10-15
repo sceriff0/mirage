@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import METHODS, cells, methods, score
+from benchmarks.regbench import METHODS, cells, methods, scene, score
 from benchmarks.regbench import selfcheck as sc
 from benchmarks.regbench.cases import load_case, load_points, polys, result_dir
 from benchmarks.regbench.datasets import synthetic
@@ -1031,7 +1031,7 @@ def _exact():
     import types
 
     def register(case, work, opts):
-        fn = synthetic.forward_map(case.extra["spec"])
+        fn = scene.forward_map(case.extra["spec"])
         yield "exact", PointMap(fn, MOV_TO_REF), {}
 
     return types.SimpleNamespace(

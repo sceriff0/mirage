@@ -521,7 +521,7 @@ def as_jobs():
 
 def stage_job(cases, out, stage, *where):
     """The arguments slurm/stage.sbatch gives `regbench stage`."""
-    argv = ["stage", "--cases", str(cases), "--out", str(out), "--dataset", "synthetic"]
+    argv = ["stage", "--cases", str(cases), "--out", str(out), "--dataset", "multiplex"]
     argv += ["--method", "stare", "--stage", stage, "--attempt", "1"]
     return [*argv, *map(str, where)]
 
@@ -539,7 +539,7 @@ def staged(tmp_path_factory):
     pair = sc.make_pair(tmp / "pair")
     # the selfcheck's pair as a case of a dataset `regbench stage` takes, the second
     # round of two: the first (one tile) is never registered
-    case = dataclasses.replace(sc.pair_case(pair, tmp / "made"), dataset="synthetic")
+    case = dataclasses.replace(sc.pair_case(pair, tmp / "made"), dataset="multiplex")
     first = dataclasses.replace(case, case_id="a_first", ref_hw=[1024, 1280])
     write_case(tmp / "cases", first)
     case = load_case(write_case(tmp / "cases", case))
@@ -547,7 +547,7 @@ def staged(tmp_path_factory):
     stage_dir = adapter.stage_dir_of(out, None, case)
     assert stage_dir == result_dir(out, "stare", case) / "stages"
     assert adapter.tile_count(case, OPTS) == 2
-    base = ["--cases", str(tmp / "cases"), "--dataset", "synthetic", "--method"]
+    base = ["--cases", str(tmp / "cases"), "--dataset", "multiplex", "--method"]
     sized = ["stages", *base, "stare", "--layout", str(layout)]
     assert cli.main(sized) == 0
     collected, real = [], adapter._collect
@@ -845,13 +845,13 @@ def test_a_cohort_unit_without_the_launcher_stated_refuses_before_any_work(
     monkeypatch.setattr(methods, "run_case", lambda *a, **k: started.append("driver"))
     out = tmp_path / "out"
     argv = ["run", "--cases", str(staged["cases"]), "--out", str(out)]
-    argv += ["--dataset", "synthetic", "--method", "stare", "--index", "1"]
+    argv += ["--dataset", "multiplex", "--method", "stare", "--index", "1"]
     capsys.readouterr()
     with stated(None):
         assert cli.main(argv) == 1
     said = capsys.readouterr().out.strip().splitlines()
     assert "REGBENCH_STAGES=unset" in said[-2] and "Nothing was started" in said[-2]
-    assert said[-1].startswith("REGBENCH_END kind=run run=stare dataset=synthetic ")
+    assert said[-1].startswith("REGBENCH_END kind=run run=stare dataset=multiplex ")
     assert f"unit={staged['case'].case_id} " in said[-1]
     assert "status=lost cause=not_submitted whose=launcher" in said[-1]
     assert started == [] and not out.exists()
@@ -1479,12 +1479,12 @@ def test_the_stage_command_of_the_cli_runs_a_round(staged, capsys):
     assert kept == {p: p.read_bytes() for p in sorted(staged["dir"].rglob("*.json"))}
 
 
-def test_the_preprocessing_row_runs_in_the_same_jobs(synthetic_cases, tmp_path):
+def test_the_preprocessing_row_runs_in_the_same_jobs(toy_cases, tmp_path):
     """`stare_prep` is the same four stages behind a `prep` job of the benchmark's own:
     STARE registers the preprocessed copies, STITCH draws the original slide."""
     from benchmarks.regbench import prep
 
-    case = synthetic_cases["crop"]
+    case = toy_cases["crop"]
     label = f"{prep.ROW}_grey_clahe"
     opts = {"prep": "grey_clahe", "label": label}
     out = tmp_path / "out"
@@ -1531,7 +1531,7 @@ def test_the_preprocessing_row_runs_in_the_same_jobs(synthetic_cases, tmp_path):
 
 # ── what the tables publish ───────────────────────────────────────────────────
 def test_the_cost_tables_say_what_a_run_in_several_jobs_cost(
-    staged, synthetic_cases, tmp_path
+    staged, toy_cases, tmp_path
 ):
     from benchmarks.regbench import cost, score
 
@@ -1608,9 +1608,7 @@ def test_the_cost_tables_say_what_a_run_in_several_jobs_cost(
 
 
 # ── the batch scripts, run as the scheduler runs them ─────────────────────────
-def test_the_batch_scripts_register_a_round_end_to_end(
-    synthetic_cases, cases_root, tmp_path
-):
+def test_the_batch_scripts_register_a_round_end_to_end(toy_cases, cases_root, tmp_path):
     """stage.sbatch for COARSE, a tile by its place in the layout and SOLVE, then
     run_rung.sbatch as the round's last job: the scripts' own argument handling, with
     the python on PATH standing in for the image."""
@@ -1619,11 +1617,11 @@ def test_the_batch_scripts_register_a_round_end_to_end(
     from benchmarks.regbench import cli
 
     slurm = REPO / "benchmarks" / "regbench" / "slurm"
-    names = sorted(synthetic_cases)
+    names = sorted(toy_cases)
     index = names.index("crop")
     out = tmp_path / "out"
-    layout = out / "logs" / "stages" / "S-1" / "stare-synthetic.tsv"
-    base = ["--cases", str(cases_root), "--dataset", "synthetic", "--method", "stare"]
+    layout = out / "logs" / "stages" / "S-1" / "stare-multiplex.tsv"
+    base = ["--cases", str(cases_root), "--dataset", "multiplex", "--method", "stare"]
     assert cli.main(["stages", *base, "--layout", str(layout)]) == 0
     (out / "logs" / "gates").mkdir(parents=True)
     (out / "logs" / "gates" / "stare.tsv").write_text("stare\tok\t-\t0\t-\t-\n")
@@ -1639,9 +1637,9 @@ def test_the_batch_scripts_register_a_round_end_to_end(
         SLURM_ARRAY_TASK_ID=str(index),
         SLURM_ARRAY_JOB_ID="900",
         SLURM_JOB_ID="901",
-        SLURM_JOB_NAME="rb-stare-synthetic",
+        SLURM_JOB_NAME="rb-stare-multiplex",
     )
-    head = ["stare", "stare", "-", "-", "STARE_REGBENCH", "synthetic"]
+    head = ["stare", "stare", "-", "-", "STARE_REGBENCH", "multiplex"]
 
     def sbatch(script, *args, task=index):
         argv = [
@@ -1677,17 +1675,17 @@ def test_the_batch_scripts_register_a_round_end_to_end(
     # a later attempt of SOLVE whose first never started runs it, with its memory
     said = sbatch("stage.sbatch", "solve", "2", "2", "0-16:00:00")
     assert "solve, attempt 2" in said and "ran, exit 0" in said
-    case = synthetic_cases["crop"]
+    case = toy_cases["crop"]
     stage_dir = adapter.stage_dir_of(out, None, case)
     solve = stages.read_record(stage_dir, "solve")
     assert solve["ok"] and solve["attempt"] == 2 and solve["mem_gb"] == 2
     assert solve["launch_id"] == f"900_{index}" and solve["submission"] == "S-1"
-    assert solve["log_path"].endswith(f"rb-stare-synthetic-900_{index}.log")
+    assert solve["log_path"].endswith(f"rb-stare-multiplex-900_{index}.log")
     # the round's last job: nothing of the registration runs in it
     said = sbatch(
         "run_rung.sbatch",
         "0",
-        "synthetic",
+        "multiplex",
         "1",
         "4",
         "0",
@@ -1696,7 +1694,7 @@ def test_the_batch_scripts_register_a_round_end_to_end(
         "0-04:00:00",
         "jobs",
     )
-    assert "synthetic/crop [stare]: stare_rigid, stare" in said
+    assert "multiplex/crop [stare]: stare_rigid, stare" in said
     run = run_json(out, "stare", case)
     assert run["ok"] and run["info"]["jobs"]["execution"] == "jobs"
     assert run["attempt"] == 1 and run["mem_requested_gb"] == 4
@@ -1704,11 +1702,11 @@ def test_the_batch_scripts_register_a_round_end_to_end(
     assert run["native"]["files"] and stages.read_record(stage_dir, "stitch")["ok"]
     # ... and a round the launcher did not say is in stage jobs (`-`) is refused
     # before anything: nothing is registered here in the stage jobs' place
-    other = synthetic_cases[names[1]]
+    other = toy_cases[names[1]]
     said = sbatch(
         "run_rung.sbatch",
         "0",
-        "synthetic",
+        "multiplex",
         "1",
         "4",
         "0",
@@ -1719,7 +1717,7 @@ def test_the_batch_scripts_register_a_round_end_to_end(
         task=1,
     )
     end = said.strip().splitlines()[-1]
-    assert end.startswith("REGBENCH_END kind=run run=stare dataset=synthetic ")
+    assert end.startswith("REGBENCH_END kind=run run=stare dataset=multiplex ")
     assert f"unit={other.case_id} " in end
     assert "status=lost cause=not_submitted whose=launcher" in end
     assert not result_dir(out, "stare", other).exists()
@@ -1742,11 +1740,11 @@ def test_a_staged_result_is_scored_end_to_end(tmp_path, monkeypatch):
     failed. One case in a cases folder of its own: scoring a case is the slow part."""
     from benchmarks.regbench import score
     from benchmarks.regbench.cases import load_case
-    from benchmarks.regbench.datasets import synthetic
+
+    from . import toy_cases
 
     root = tmp_path / "cases"
-    synthetic.prepare_one(root, "crop", synthetic.SUITES["test"]["crop"])
-    case = load_case(root / "synthetic" / "crop")
+    case = load_case(toy_cases.prepare_toy(root, "crop", toy_cases.SPECS["crop"]))
     out, lost = tmp_path / "out", tmp_path / "lost"
     assert register_as_jobs(case, out) == ["stare_rigid", "stare"]
 
@@ -1754,7 +1752,7 @@ def test_a_staged_result_is_scored_end_to_end(tmp_path, monkeypatch):
         got = score.score(
             root,
             where,
-            datasets=["synthetic"],
+            datasets=["multiplex"],
             expected=["stare_rigid", "stare"],
             primary=["stare"],
             with_tissue=False,

@@ -1,6 +1,6 @@
 """The driver and the scorer, end to end.
 
-On synthetic slides with a known map: the truth is self-consistent and STARE is really run
+On the toy cases (generated slides with a known map): the truth is self-consistent and STARE is really run
 and scored. On hand-made cases and fake methods: a failed, killed or missing run is a row,
 a map is scored in its own direction, each variant has its own cost, and an out-of-memory
 ends the run as ``oom``.
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import cells, methods, pairs, resources
+from benchmarks.regbench import cells, methods, pairs, resources, scene
 from benchmarks.regbench.cases import (
     Case,
     load_case,
@@ -28,9 +28,10 @@ from benchmarks.regbench.cases import (
     write_json,
     write_npz,
 )
-from benchmarks.regbench.datasets import synthetic
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 from benchmarks.regbench.score import DESCRIPTIVE, score
+
+from .toy_cases import true_error_px
 
 pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
 
@@ -121,13 +122,13 @@ def toy(tmp_path):
     return root, toy_case(root, "P1_r1", "P1"), tmp_path / "out"
 
 
-# ── the synthetic suite, with STARE really run ───────────────────────────────
-def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):
+# ── the toy cases, with STARE really run ─────────────────────────────────────
+def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(toy_cases):
     """Guards the truth's DIRECTION: nuclei segmented on the moving slide, pushed through the
     generator's forward map, land on the nuclei segmented on the reference."""
-    for name, case in synthetic_cases.items():
+    for name, case in toy_cases.items():
         pts = load_points(case)
-        g = synthetic.forward_map(case.extra["spec"])
+        g = scene.forward_map(case.extra["spec"])
         ref, mov = polys(pts, "ref"), polys(pts, "mov")
         radius, _ = pairs.gate_px(ref, mov)
         before = pairs.score(ref, mov, radius, None)
@@ -135,40 +136,42 @@ def test_the_true_map_puts_moving_nuclei_on_reference_nuclei(synthetic_cases):
         assert after["displacement_px_p50"] < 0.5, name
         assert after["dice_matched"] > 0.9, name
         assert after["displacement_px_p50"] < before["displacement_px_p50"], name
-        assert np.allclose(g(pts["truth_mov"]), pts["truth_ref"])
-        assert case.pixel_size_um == synthetic.PIXEL_SIZE_UM
+        assert np.allclose(
+            g(pts["nuclei_mov_xy"]), pts["nuclei_mov_xy_truth"], atol=1e-2
+        )
+        assert case.pixel_size_um == scene.PIXEL_SIZE_UM
         assert case.group == name and case.family  # the patient is not the family
 
 
 @pytest.fixture(scope="module")
-def scored(cases_root, synthetic_cases, tmp_path_factory):
+def scored(cases_root, toy_cases, tmp_path_factory):
     out = tmp_path_factory.mktemp("out")
-    for case in synthetic_cases.values():
+    for case in toy_cases.values():
         done = methods.run_case("stare", case, out, opts=WORKERS)
         assert done == ["stare_rigid", "stare"]
-    return out, score(cases_root, out, ["synthetic"])
+    return out, score(cases_root, out, ["multiplex"])
 
 
 def _tre(out, variant, case):
-    """Median distance of the warped truth points to their partners, px."""
+    """Median distance, px, of the method's warped moving nuclei to where the case's true
+    map puts them (``toy_cases.true_error_px``)."""
     pts = load_points(case)
     with np.load(result_dir(out, variant, case) / "warped.npz") as z:
         assert str(z["direction"]) == MOV_TO_REF
-        return float(np.median(np.hypot(*(z["truth_xy"] - pts["truth_ref"]).T)))
+        err = true_error_px(case, z["nuclei_xy"], pts["nuclei_mov_xy"])
+    return float(np.nanmedian(err))
 
 
 def _initial_tre(case):
-    pts = load_points(case)
-    d = pts["truth_mov"] - pts["truth_ref"]
-    return float(np.median(np.hypot(*d.T)))
+    """The same distance before any registration (the moving nuclei where they are)."""
+    mov = load_points(case)["nuclei_mov_xy"]
+    return float(np.nanmedian(true_error_px(case, mov, mov)))
 
 
-def test_stare_registers_rigid_and_smooth_cases_to_subpixel_error(
-    scored, synthetic_cases
-):
+def test_stare_registers_rigid_and_smooth_cases_to_subpixel_error(scored, toy_cases):
     out, res = scored
     for name in ("rigid", "smooth"):
-        case = synthetic_cases[name]
+        case = toy_cases[name]
         assert _initial_tre(case) > 3.0
         assert _tre(out, "stare", case) < 1.0, name
         assert not _row(res["cells"], name, "stare")["imputed_initial"]
@@ -187,10 +190,10 @@ def test_stare_registers_rigid_and_smooth_cases_to_subpixel_error(
     ),
 )
 def test_stare_refines_a_moving_slide_that_does_not_cover_the_reference(
-    scored, synthetic_cases
+    scored, toy_cases
 ):
     out, _ = scored
-    assert _tre(out, "stare", synthetic_cases["crop"]) < 1.0
+    assert _tre(out, "stare", toy_cases["crop"]) < 1.0
 
 
 @pytest.mark.xfail(
@@ -204,20 +207,20 @@ def test_stare_refines_a_moving_slide_that_does_not_cover_the_reference(
         "the selection is fixed."
     ),
 )
-def test_stare_refines_a_small_slide_whatever_the_seed(scored, synthetic_cases):
+def test_stare_refines_a_small_slide_whatever_the_seed(scored, toy_cases):
     out, _ = scored
-    assert _tre(out, "stare", synthetic_cases["smooth_border"]) < 1.0
+    assert _tre(out, "stare", toy_cases["smooth_border"]) < 1.0
 
 
-def test_stare_still_anchors_a_moving_slide_of_another_shape(scored, synthetic_cases):
+def test_stare_still_anchors_a_moving_slide_of_another_shape(scored, toy_cases):
     out, _ = scored
-    case = synthetic_cases["crop"]
+    case = toy_cases["crop"]
     assert _tre(out, "stare_rigid", case) < 3.0 < _initial_tre(case)
 
 
-def test_the_mesh_is_what_fixes_a_smooth_deformation(scored, synthetic_cases):
+def test_the_mesh_is_what_fixes_a_smooth_deformation(scored, toy_cases):
     out, _ = scored
-    case = synthetic_cases["smooth"]
+    case = toy_cases["smooth"]
     assert _tre(out, "stare_rigid", case) > 2.0
     assert _tre(out, "stare", case) < 1.0
 
@@ -247,7 +250,7 @@ def test_cell_scores_agree_with_the_known_map(scored):
         assert 0.0 < full["coverage"] < 1.0 and full["nn_distance_um_p50"] > 0
 
 
-def test_resources_are_measured_for_the_whole_run(scored, synthetic_cases):
+def test_resources_are_measured_for_the_whole_run(scored, toy_cases):
     out, res = scored
     r = _row(res["resources"], "smooth", "stare")
     assert r["ok"] and r["register_s"] > 0 and r["cpu_h"] > 0
@@ -259,7 +262,7 @@ def test_resources_are_measured_for_the_whole_run(scored, synthetic_cases):
     # the anchor is yielded first: its own, smaller bill
     rigid = _row(res["resources"], "smooth", "stare_rigid")
     assert rigid["register_s"] <= r["register_s"]
-    run = run_json(out, "stare", synthetic_cases["smooth"])
+    run = run_json(out, "stare", toy_cases["smooth"])
     for key in (
         "attempt",
         "mem_requested_gb",
@@ -306,7 +309,8 @@ def test_the_image_stare_wrote_has_a_tissue_row_beside_initial_and_truth(scored)
         assert stare[key] == pytest.approx(truth[key], abs=0.05), key
     assert stare["qcs"] >= initial["qcs"]
     assert {r["shift_um"] for r in tables["tissue_dose"]} == {0, 1, 3, 10, 30, 100}
-    for name in ("cells", "summary_cells", "paired_vs_primary", "truth"):
+    # (the known-truth "truth" table was the synthetic dataset's: a toy case has no probes)
+    for name in ("cells", "summary_cells", "paired_vs_primary"):
         assert not any("qcs" in k or "tissue" in k for k in tables[name][0]), name
 
 
@@ -320,20 +324,20 @@ def test_paired_differences_are_against_stare(scored):
 
 @pytest.mark.slow
 def test_a_failed_method_is_scored_at_the_initial_pose(
-    cases_root, synthetic_cases, tmp_path, monkeypatch
+    cases_root, toy_cases, tmp_path, monkeypatch
 ):
     def boom(case, work, opts):
         raise RuntimeError("no transform")
         yield  # pragma: no cover
 
     monkeypatch.setattr(methods.load("stare"), "register", boom)
-    case = synthetic_cases["rigid"]
+    case = toy_cases["rigid"]
     assert methods.run_case("stare", case, tmp_path) == []
     run = run_json(tmp_path, "stare", case)
     assert run["ok"] is False and "no transform" in run["error"]
     assert run["cause"] == "exception"
 
-    res = score(cases_root, tmp_path, ["synthetic"])
+    res = score(cases_root, tmp_path, ["multiplex"])
     init = _row(res["cells"], "rigid", "initial")
     failed = _row(res["cells"], "rigid", "stare")
     assert failed["imputed_initial"] and failed["cause"] == "exception"
@@ -341,7 +345,7 @@ def test_a_failed_method_is_scored_at_the_initial_pose(
     # the three cases it was never run on are rows too
     never = _row(res["cells"], "smooth", "stare")
     assert never["problem"] == "not run" and never["cause"] == "not_run"
-    # synthetic cells are summarised per family, never pooled: one row per family
+    # the toy cases are cohort (multiplex) cases: one summary row per stratum, no family
     agg = [
         a
         for a in res["summary_cells"]
@@ -495,7 +499,7 @@ def test_an_earlier_attempt_of_the_ladder_is_kept_as_wasted(toy, monkeypatch):
 
 
 # ── direction, and what is warped when ───────────────────────────────────────
-def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_path):
+def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(toy_cases, tmp_path):
     """A backward method with the TRUE map, by exact lookup: no inverse is approximated.
 
     The reference nuclei of this case are the moving nuclei under the generator's map, so
@@ -503,9 +507,9 @@ def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_
     undefined and says so (NaN)."""
     from scipy.spatial import cKDTree
 
-    src = synthetic_cases["rigid"]
+    src = toy_cases["rigid"]
     root = tmp_path / "cases"
-    dst = root / "synthetic" / "rigid"
+    dst = root / "multiplex" / "rigid"
     dst.mkdir(parents=True)
     shutil.copy(src.points_path.parent / "case.json", dst / "case.json")
     pts = load_points(src)
@@ -515,14 +519,14 @@ def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_
     write_npz(dst / "points.npz", **pts)
     case = load_case(dst)
 
-    known_ref = np.concatenate([pts["cells_ref_xy"], pts["truth_ref"]]).astype(float)
-    known_mov = np.concatenate([pts["cells_mov_xy"], pts["truth_mov"]]).astype(float)
+    known_ref = np.asarray(pts["cells_ref_xy"], dtype=float)
+    known_mov = np.asarray(pts["cells_mov_xy"], dtype=float)
     tree = cKDTree(known_ref)
 
     def lookup(xy):
         dist, idx = tree.query(np.asarray(xy, dtype=float))
         back = known_mov[idx].copy()
-        back[dist > 0] = np.nan  # not a probe: the truth is not known here
+        back[dist > 0] = np.nan  # not a vertex: the truth is not known here
         return back
 
     def register(case, work, opts):
@@ -536,7 +540,7 @@ def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(synthetic_cases, tmp_
         assert len(z["cells_xy"]) == len(
             pts["cells_ref_xy"]
         )  # the REFERENCE nuclei moved
-    res = score(root, out, ["synthetic"])
+    res = score(root, out, ["multiplex"])
     row, init = (
         _row(res["cells"], "rigid", "backward"),
         _row(res["cells"], "rigid", "initial"),

@@ -248,14 +248,14 @@ def overlap_share(hw, rnd, offset=(0.0, 0.0), follow=True, seed=0, anchored=Fals
     moving tiles cut where an anchor (the rigid part of the round's map) puts them, as
     the anchored rows cut them by STARE's matrix; otherwise cut on the grid."""
     from benchmarks.ashlar import retile
+    from benchmarks.regbench import scene
     from benchmarks.regbench import tilemap as tm
-    from benchmarks.regbench.datasets import synthetic
     from benchmarks.regbench.methods import ashlar as am
 
     h, w = hw
     grid = retile.tile_grid(w, h, am.TILE, am.OVERLAP)
     origins = np.array([[t.y, t.x] for t in grid], dtype=float)
-    g = synthetic.forward_map(sc.round_spec(hw, None, seed, rnd))
+    g = scene.forward_map(sc.round_spec(hw, None, seed, rnd))
     cut = origins
     if anchored:
         cut = tm.anchor_tile_origins(rigid_part(g, hw), origins, am.TILE).astype(float)

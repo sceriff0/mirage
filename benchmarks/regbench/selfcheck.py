@@ -108,7 +108,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import cells, imageio, pairs, plugins, resources
+from . import cells, imageio, pairs, plugins, resources, scene
 from .cases import (
     Case,
     load_case,
@@ -118,7 +118,6 @@ from .cases import (
     write_case,
     write_json,
 )
-from .datasets import synthetic
 from .mapping import MOV_TO_REF
 
 # ── the synthetic pair ────────────────────────────────────────────────────────
@@ -127,7 +126,7 @@ DOT_PEAK = 20000.0  # counts, on a zero background
 LATTICE = 96  # px between dots
 JITTER = 24.0  # px, uniform, each axis: an offset of one lattice period cannot match
 DOT_MARGIN = 32  # every dot at least this far inside the moving frame
-PIXEL_SIZE_UM = synthetic.PIXEL_SIZE_UM
+PIXEL_SIZE_UM = scene.PIXEL_SIZE_UM
 NUCLEAR_CHANNEL, DOTS_CHANNEL = 0, 1
 CHANNEL_NAMES = ("DAPI", "dots")
 DEFAULT_HW = (2048, 2560)
@@ -434,7 +433,7 @@ def pair_spec(ref_hw=DEFAULT_HW, mov_hw=None, seed=0):
     field, on a canvas that is not square and whose tissue does not start at the origin."""
     h, w = (int(v) for v in ref_hw)
     return {
-        **synthetic._BASE,
+        **scene._BASE,
         "family": "selfcheck",
         "n": max(h, w),
         "ref_hw": (h, w),
@@ -489,7 +488,7 @@ def inverse_of(spec, tol=1e-4, max_iter=60):
     """reference -> moving: the fixed-point inverse of the GENERATOR's forward map, to
     ``tol`` px. This is the benchmark's own truth, used to build test renders; no method's
     transform is ever inverted."""
-    g = synthetic.forward_map(spec)
+    g = scene.forward_map(spec)
     th = math.radians(spec["theta"])
     rinv = np.array([[math.cos(th), math.sin(th)], [-math.sin(th), math.cos(th)]])
 
@@ -546,15 +545,15 @@ def make_group(
     group, ids = case_names(size)
     specs = [round_spec(ref_hw, m, seed, i + 1) for i, m in enumerate(movs)]
     dots_ref = lattice_dots(ref_hw, seed + 1) if ref_dots else np.empty((0, 2))
-    tile = int(tile or synthetic.TILE)
+    tile = int(tile or scene.TILE)
 
     def dot_tiles(hw, xy):
-        for x0, y0, x1, y1 in synthetic.tile_boxes(hw, tile):
+        for x0, y0, x1, y1 in scene.tile_boxes(hw, tile):
             yield np.rint(render_dots(xy, x0, y0, x1, y1)).astype(np.uint16)
 
     def write(path, spec, which, hw, xy):
         def both():
-            yield from synthetic._tiles(spec, which, workers, tile)
+            yield from scene._tiles(spec, which, workers, tile)
             yield from dot_tiles(hw, xy)
 
         imageio.write_channel_tiles(
@@ -589,7 +588,7 @@ def make_group(
                 "dots_image": str(dots_path) if dots_path else None,
                 "dots_mov_xy": dots,
                 "dots_ref_xy": dots_ref,
-                "truth": synthetic.forward_map(spec),
+                "truth": scene.forward_map(spec),
                 "truth_inverse": inverse_of(spec),
                 "spec": spec,
                 "ref_hw": tuple(ref_hw),

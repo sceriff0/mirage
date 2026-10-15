@@ -780,8 +780,8 @@ def test_the_cli_computes_the_pieces_for_score_to_read(scored, capsys):
 
 
 # ── known-truth cases: the truth plane and what the block resolves ────────────
-def test_the_truth_plane_and_its_shifted_copies(synthetic_cases, tmp_path):
-    case = synthetic_cases["rigid"]
+def test_the_truth_plane_and_its_shifted_copies(toy_cases, tmp_path):
+    case = toy_cases["rigid"]
     assert tissue.has_known_map(case)
     rows, missing, dose = tissue.score_case((str(tmp_path), case, ["initial"], True))
     assert not missing, missing

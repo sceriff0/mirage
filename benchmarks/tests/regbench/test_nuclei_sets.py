@@ -316,10 +316,10 @@ def test_the_summary_prints_the_nuclei_beside_the_outlines(tmp_path):
 
 
 # ── known-truth datasets: both sets from one segmentation ────────────────────
-def test_a_synthetic_case_has_nuclei_and_outlines_grown_as_the_pipeline_does(
-    synthetic_cases,
+def test_a_toy_case_has_nuclei_and_outlines_grown_as_the_pipeline_does(
+    toy_cases,
 ):
-    case = next(iter(synthetic_cases.values()))
+    case = next(iter(toy_cases.values()))
     points = load_points(case)
     for side in ("ref", "mov"):
         nuc, outl = polys(points, side, "nuclei"), polys(points, side)
@@ -338,9 +338,6 @@ def test_a_synthetic_case_has_nuclei_and_outlines_grown_as_the_pipeline_does(
             "source": "builtin",
             "expand_px": cells.EXPAND_PX,
         }
-    # the probes are the NUCLEI's centroids, as before the outlines were grown
-    _, cent = pairs.cp.feature_area_centroid(polys(points, "mov", "nuclei"))
-    assert np.allclose(points["truth_mov"], cent[points["truth_cell"]], atol=1e-3)
     assert len(points["nuclei_mov_xy_truth"]) == len(points["nuclei_mov_xy"])
 
 

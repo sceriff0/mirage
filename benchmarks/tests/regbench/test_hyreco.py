@@ -824,24 +824,23 @@ def test_a_report_set_that_does_not_follow_its_tuning_set_is_refused(tmp_path, d
 
 
 # ── never in the cohort's tables ──────────────────────────────────────────────
-def test_the_cohorts_score_never_reads_an_external_set(
-    tmp_path, cases_root, synthetic_cases
-):
+def test_the_cohorts_score_never_reads_an_external_set(tmp_path, cases_root, toy_cases):
     """With HyReCo cases and results beside the cohort's, the cohort's default score
     has no row of them, and writes nothing of theirs."""
     import shutil
 
     root = tmp_path / "cases"
-    shutil.copytree(cases_root / "synthetic" / "rigid", root / "synthetic" / "rigid")
+    shutil.copytree(cases_root / "multiplex" / "rigid", root / "multiplex" / "rigid")
     crafted(tmp_path)  # writes <tmp>/cases/hyreco_a/{29,108}
     out = tmp_path / "out"
     m = shifter(1.0, name="m")
-    for ds in ("synthetic", "hyreco_a"):
+    for ds in ("multiplex", "hyreco_a"):
         for case in list_cases(root, ds):
             assert methods.run_case(m, case, out) == ["m"]
     got = cohort.score(root, out, with_tissue=False)
-    for key in ("cells", "truth", "resources", "failures", "summary_cells"):
-        assert {r["dataset"] for r in got[key]} == {"synthetic"}, key
+    for key in ("cells", "resources", "failures", "summary_cells"):
+        assert {r["dataset"] for r in got[key]} == {"multiplex"}, key
+    assert got["truth"] == []  # a toy case has no known-truth probes
     assert not (out / "tables" / "hyreco_a").exists()
     assert "hyreco" not in (out / "tables" / "summary.md").read_text().lower()
 
@@ -1029,10 +1028,8 @@ def test_stare_on_a_reduced_proxy_works_in_the_reduced_frame(tmp_path):
     assert stare_adapter.slides(case) == ("/c/r.tif", "/c/m.tif", 0, 2)
 
 
-def test_a_fluorescence_case_is_still_given_its_original_slides(
-    synthetic_cases, tmp_path
-):
-    case = synthetic_cases["rigid"]
+def test_a_fluorescence_case_is_still_given_its_original_slides(toy_cases, tmp_path):
+    case = toy_cases["rigid"]
     assert stare_adapter.slides(case) == (case.ref_image, case.mov_image, 0, 1)
     argv = stare_adapter.command(case, tmp_path, {})
     assert argv[argv.index("--reference") + 1] == case.ref_image
@@ -1068,16 +1065,46 @@ def stained(nuclear):
     return (255.0 - v * np.array([150.0, 200.0, 100.0])).round().astype(np.uint8)
 
 
+def toy_probes(case, pts):
+    """``{"truth_mov", "truth_ref"}`` of a toy case: the centres of its moving nuclei and
+    where its true map puts them, those at least ``toy_cases.MARGIN_PX`` inside the
+    reference, in segmentation order (what the known-truth probes were)."""
+    from benchmarks.regbench import scene
+    from benchmarks.regbench.cases import polys
+
+    from .toy_cases import MARGIN_PX
+
+    ps = polys(pts, "mov", "nuclei")
+    ring = np.searchsorted(ps.ring_off, np.arange(len(ps.xy)), side="right") - 1
+    feat = np.asarray(ps.ring_feat)[ring]
+    n = np.bincount(feat, minlength=ps.n_features)
+    mov = (
+        np.stack(
+            [np.bincount(feat, ps.xy[:, i], ps.n_features) for i in (0, 1)], axis=1
+        )
+        / np.maximum(n, 1)[:, None]
+    )
+    ref = scene.forward_map(case.extra["spec"])(mov)
+    h, w = case.ref_hw
+    ok = (
+        (n > 0)
+        & (ref >= MARGIN_PX).all(axis=1)
+        & (ref[:, 0] <= w - 1 - MARGIN_PX)
+        & (ref[:, 1] <= h - 1 - MARGIN_PX)
+    )
+    return {"truth_mov": mov[ok], "truth_ref": ref[ok]}
+
+
 @pytest.fixture(scope="module")
-def stare_ran(tmp_path_factory, synthetic_cases):
-    """The synthetic `rigid` pair re-drawn as an RGB brightfield pair with its truth
-    probes as millimetre landmark files, prepared as HyReCo case 29 and registered by
+def stare_ran(tmp_path_factory, toy_cases):
+    """The toy `rigid` pair re-drawn as an RGB brightfield pair with its true nucleus
+    centres as millimetre landmark files, prepared as HyReCo case 29 and registered by
     the installed STARE at full resolution and on a 2 x reduced proxy."""
     pytest.importorskip("stare")
-    src = synthetic_cases["rigid"]
+    src = toy_cases["rigid"]
     tmp = tmp_path_factory.mktemp("hyreco_stare")
     root = tmp / "HyReCo"
-    pts = load_points(src)
+    pts = toy_probes(src, load_points(src))
     keep = slice(0, 40)
     for stain, image, key in (
         ("HE", src.ref_nuclear, "truth_ref"),

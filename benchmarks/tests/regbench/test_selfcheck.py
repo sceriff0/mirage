@@ -113,9 +113,9 @@ def test_the_inverse_of_the_generators_map_is_good_to_a_ten_thousandth_of_a_pixe
 
 
 def test_the_generator_is_unchanged_for_square_specs():
-    from benchmarks.regbench.datasets import synthetic
+    from benchmarks.regbench import scene as generator
 
-    scene = synthetic.Scene({**synthetic._BASE, "family": "t", "n": 256, "seed": 3})
+    scene = generator.Scene({**generator._BASE, "family": "t", "n": 256, "seed": 3})
     assert scene.shape("ref") == (256, 256) and scene.shape("mov") == (256, 256)
     assert len(scene.ref[0]) == 55  # the same nuclei as before `ref_hw` existed
 
@@ -498,9 +498,9 @@ def _round(case):
 
 def _truths(case):
     spec = sc.round_spec(case.ref_hw, case.mov_hw, 0, _round(case))
-    from benchmarks.regbench.datasets import synthetic
+    from benchmarks.regbench import scene
 
-    return synthetic.forward_map(spec), sc.inverse_of(spec)
+    return scene.forward_map(spec), sc.inverse_of(spec)
 
 
 def _draw(case, src_path, dest, inverse, shift=(0.0, 0.0), channels=None, stem="out"):
@@ -957,13 +957,13 @@ class Real:
     and about 1 px of centroid jitter, and the image a writer draws through the truth."""
 
     def __init__(self, pair, root):
-        from benchmarks.regbench.datasets import synthetic
+        from benchmarks.regbench import scene
 
         self.pair = pair
         rng = np.random.default_rng(11)
         sets = {}
         for side, path in (("ref", pair.d["reference"]), ("mov", pair.d["moving"])):
-            ps = cells.segment_slide(path, 0, synthetic.NUCLEUS_DIAMETER)
+            ps = cells.segment_slide(path, 0, scene.NUCLEUS_DIAMETER)
             ps = ps.take(np.flatnonzero(rng.random(len(ps)) >= 0.10))
             jitter = rng.normal(0.0, 0.7, (len(ps), 2))
             sets[side] = ps.with_xy(ps.xy + np.repeat(jitter, np.diff(ps.off), axis=0))

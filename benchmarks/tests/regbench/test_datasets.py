@@ -9,17 +9,17 @@ import numpy as np
 import pytest
 import tifffile
 
-from benchmarks.regbench import arms_manifest, methods, pairs
+from benchmarks.regbench import arms_manifest, methods, pairs, scene
 from benchmarks.regbench.cases import list_cases, load_points, polys
-from benchmarks.regbench.datasets import multiplex, synthetic
+from benchmarks.regbench.datasets import multiplex
 from benchmarks.regbench.score import score
 
 pytestmark = pytest.mark.usefixtures("local_stages")  # STARE runs in-process
 
 
 def _two_rounds(tmp_path, names=None):
-    spec = {**synthetic._BASE, "family": "t", "n": 768, "shift": (6.0, -4.0), "seed": 5}
-    ref, mov, _ = synthetic.make_pair(spec)
+    spec = {**scene._BASE, "family": "t", "n": 768, "shift": (6.0, -4.0), "seed": 5}
+    ref, mov, _ = scene.make_pair(spec)
     paths = []
     for name, plane in (("round1", ref), ("round2", mov)):
         p = tmp_path / f"{name}.ome.tif"
@@ -38,14 +38,14 @@ def _two_rounds(tmp_path, names=None):
             },
         )
         paths.append(p)
-    return paths, synthetic.forward_map(spec)
+    return paths, scene.forward_map(spec)
 
 
 def _mx_args(cases_root, manifest, **kw):
     base = dict(
         cases=cases_root,
         manifest=manifest,
-        diameter=synthetic.NUCLEUS_DIAMETER,
+        diameter=scene.NUCLEUS_DIAMETER,
         tile=512,
         max_cells=0,
         index=None,
