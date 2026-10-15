@@ -1353,3 +1353,88 @@ def test_a_cycle_with_some_tiles_kept_is_not_fully_modelled(tmp_path, pair, smal
     methods.run_group("ashlar", cases, tmp_path / "out")
     info = run_json(tmp_path / "out", "ashlar", cases[0])["info"]
     assert info["discard_frac"] < 1.0 and info["cycle_fully_modelled"] is False
+
+
+# ── the final review's minors: the cause of a raise, the shared tile caches ───
+def test_a_raise_with_noisy_reference_tiles_is_not_identical_overlap(
+    tmp_path, pair, small
+):
+    """Pixel-identical overlaps exist only on noise-free tiles: with noise on the
+    reference the same text is ASHLAR's own failure (`exception`), not the benchmark's
+    `identical_overlap`."""
+    fa.configure(raise_in="edge")
+    cases = patient(tmp_path, pair)
+    out = tmp_path / "out"
+    assert methods.run_group("ashlar", cases, out) == {"P1_r1": [], "P1_r2": []}
+    for case in cases:
+        run = run_json(out, "ashlar", case)
+        assert not run["ok"] and run["cause"] == "exception"
+        assert run["info"]["noise_frac"] > 0
+        assert run["error"] == f"RuntimeError: {fa.RAISE_TEXT}"
+
+
+def test_moving_tiles_are_cut_once_and_shared_by_every_cell(
+    tmp_path, pair, small, monkeypatch
+):
+    """The moving cycles are noise-free in every cell: two cells of the same affine
+    find the first one's tiles (content-keyed, in the patient's tile cache); an
+    anchored cell cuts its own (its tiles sit where STARE's matrix puts them)."""
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    stare_run(out, cases[0], M0)
+    cut = []
+    real = retile.write_tiles
+
+    def counting(image, outdir, *a, **kw):
+        if kw.get("cycle", 0) > 0:
+            cut.append((kw["cycle"], kw.get("tile_origins_yx") is not None))
+        return real(image, outdir, *a, **kw)
+
+    monkeypatch.setattr(retile, "write_tiles", counting)
+    methods.run_group("ashlar", cases, out)
+    methods.run_group("ashlar", cases, out, {"noise": "none"}, label="ashlar_clean")
+    assert cut == [(1, False)]  # the clean cell found the plain cell's moving tiles
+    plain = run_json(out, "ashlar", cases[0])["info"]
+    clean = run_json(out, "ashlar_clean", cases[0])["info"]
+    assert plain["moving_tiles"] == clean["moving_tiles"]
+    assert (plain["moving_tiles_reused"], clean["moving_tiles_reused"]) == (
+        [False],
+        [True],
+    )
+    (where,) = plain["moving_tiles"]
+    assert Path(where).name == "cycle_1"
+    assert Path(where).parent.parent == out / "cache" / "ashlar_tiles" / "selfcheck__P1"
+    # what cutting them cost is the same number for both cells
+    assert plain["retile_moving_s"] == clean["retile_moving_s"] > 0
+    methods.run_group("ashlar", cases, out, {"affine": "stare"}, label="affine_ashlar")
+    assert cut == [(1, False), (1, True)]
+    anchored = run_json(out, "affine_ashlar", cases[0])["info"]
+    assert anchored["moving_tiles"] != plain["moving_tiles"]
+
+
+def test_two_jobs_cutting_the_same_tiles_at_once_cannot_clobber_each_other(
+    tmp_path, pair, small, monkeypatch
+):
+    """Two jobs (on two nodes, whose process ids can be equal) cut the same reference
+    tiles at once: each writes its own temporary folder and one rename wins. Here the
+    second job runs to the end between the first one's cut and its rename."""
+    monkeypatch.setattr(am.os, "getpid", lambda: 4242)
+    real = retile.write_tiles
+    calls = []
+    slides = [str(pair["reference"]), str(pair["moving"])]
+    cache = tmp_path / "cache"
+
+    def racing(image, outdir, *a, **kw):
+        got = real(image, outdir, *a, **kw)
+        calls.append(Path(outdir).name)
+        if len(calls) == 1:  # the other job, start to finish
+            am.reference_tiles(slides[0], slides, 0.5, 0.0, cache, tmp_path / "w2")
+        return got
+
+    monkeypatch.setattr(retile, "write_tiles", racing)
+    final, seconds, reused = am.reference_tiles(
+        slides[0], slides, 0.5, 0.0, cache, tmp_path / "w1"
+    )
+    assert len(calls) == 2 and calls[0] != calls[1]  # two temporary folders
+    assert (final / "grid.json").exists() and seconds is not None and not reused
+    assert sorted(p.name for p in cache.iterdir()) == [final.name]  # nothing left over

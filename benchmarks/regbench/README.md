@@ -346,7 +346,7 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 | `gpu_oom`, `timeout` | as named | no | the method's |
 | `killed` | the process died, and the scheduler's end state for its task names no cause (`FAILED`, `COMPLETED`) | no | the method's |
 | `killed`, no end state | the process died and the scheduler's accounting named no end state for its task within the wait (`REGBENCH_ACCT_WAIT_S`) | not as a memory cause: the `climb` task runs the unit once more at its own rung, and `cause_from` says so | the method's while it stands |
-| `identical_overlap` | ASHLAR's error metric raised `correlation > total_amplitude` on pixel-identical overlaps, which exist only because the benchmark cuts tiles from a stitched slide | no | NOT the method's |
+| `identical_overlap` | ASHLAR's error metric raised `correlation > total_amplitude` on pixel-identical overlaps, which exist only because the benchmark cuts tiles from a stitched slide (a cell without noise only; with noise the same raise is `exception`) | no | NOT the method's |
 | `reduced_proxy` | the STARE adapter refused a preprocessing row on a reduced proxy (HyReCo prepared with `--reduce 2`): a prepare-time choice of the benchmark | no | NOT the method's |
 | `no_pixel_size` | the STARE adapter refused a level that needs a pixel size (`sprep=clahe`: STARE's CLAHE region is in micrometres) on a case without one (ANHIR's mammary glands): the dataset's gap. Its round contributes no tile to `stages --due`, so the feeder still submits the other cases' tiles | no | NOT the method's |
 | `benchmark_oom` | the BENCHMARK's own lines ran out of memory with the clock stopped (the lattice, the arrays and the files around the method's point mapping; never the mapping itself) | yes | NOT the method's |
@@ -4042,7 +4042,9 @@ per pixel, and the overlap is the owner's ruling (`ashlar.TILE`, `ashlar.OVERLAP
   edge alignment can raise (`:261-262`). So the two clean rows fail together, per patient,
   where they fail; the adapter catches the exception and the patient's rows carry its
   message (`info["ashlar_raise"]`) and the cause `identical_overlap` (the benchmark's: the
-  identical overlaps exist only because it cuts tiles from a stitched slide). Any other
+  identical overlaps exist only because it cuts tiles from a stitched slide). That cause
+  is given only on a cell without noise (`noise_frac` 0): with noise on the reference the
+  overlaps are not identical, and the same raise is ASHLAR's own, `exception`. Any other
   `RuntimeError` stays `exception`; a memory error is not caught: it stays `oom`.
 - *Silent fallbacks* are flagged, never blocking. `info["ashlar_warnings"]` holds ASHLAR's
   `DataWarning`s; `fallback_stage_positions` is true when the reference stitch printed
@@ -4059,7 +4061,13 @@ per pixel, and the overlap is the owner's ruling (`ashlar.TILE`, `ashlar.OVERLAP
   <path>`, and the patient's other rounds proceed.
 - Reference tiles are cut once per noise level and shared by the plain and the anchored
   row, under `<out>/cache/ashlar_tiles/<dataset>__<patient>/` (delete it when both rows
-  have run; it is large). ASHLAR's reference STITCH is not shared: each command does its
+  have run; it is large). The moving cycles' tiles (noise-free in every cell) are cut once
+  the same way, keyed by the slide, its cycle, the canvas and, for an anchored cell, the
+  tile origins STARE's matrix gives (`mov_<hash>/cycle_<k>`): the 12 cells of one affine
+  share them (`info["moving_tiles"]`, `moving_tiles_reused`), and `retile_moving_s` is what
+  cutting them cost whoever cut them. A cut is written into a temporary folder of the
+  job's own (`tempfile.mkdtemp`, never the process id, which two nodes can share) and
+  published by one rename. ASHLAR's reference STITCH is not shared: each command does its
   own, and `info["edge_positions_identical"]` says whether the two came out equal. The
   reference tiles depend on the noise level only, so they are shared by every cell of one
   `noise_frac` (six cells: 2 affine x 3 `max_shift_um`); the stitch comparison is made only

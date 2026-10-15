@@ -35,8 +35,10 @@ moving tile, unrotated and uninterpolated, where STARE's rigid matrix (``info["m
 the ``stare`` run of that round) puts the matching reference tile's centre; ASHLAR is told
 the regular grid. A round whose ``stare`` result is missing fails alone ("anchor
 unavailable"). Reference tiles are cut once per noise level and shared on disk by the plain
-and the anchored row (``<out>/cache/ashlar_tiles``); ASHLAR's reference stitch is not
-shared, each command does its own.
+and the anchored row (``<out>/cache/ashlar_tiles``), the moving cycles' tiles (noise-free in
+every cell) once per slide, cycle and tile origins (``moving_tiles``); ASHLAR's reference
+stitch is not shared, each command does its own. The cause ``identical_overlap`` is given
+only on a cell without noise: with noise the same raise is ASHLAR's own (``exception``).
 
 **Points: exactly where ASHLAR drew each tile.** ``Mosaic.assemble_channel`` pastes tile
 ``i`` at ``aligner.positions[i]`` (``reg.py:1147-1153``) and ``utils.paste`` puts tile
@@ -94,6 +96,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -323,17 +326,11 @@ def reference_tiles(ref, slides, px, frac, cache, work):
     ]
     name = f"ref_n{frac:g}_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
     home = Path(cache) if cache is not None else Path(work) / "tiles"
-    final = home / name
-    if (final / "grid.json").exists():
-        return final, _cut_seconds(final), True
-    home.mkdir(parents=True, exist_ok=True)
-    tmp = home / f"tmp{os.getpid()}_{name}"
-    shutil.rmtree(tmp, ignore_errors=True)
-    t0 = time.perf_counter()
-    try:
-        retile.write_tiles(
+    return _cached_tiles(
+        home / name,
+        lambda out: retile.write_tiles(
             ref,
-            tmp,
+            out,
             TILE,
             OVERLAP,
             cycle=0,
@@ -343,7 +340,59 @@ def reference_tiles(ref, slides, px, frac, cache, work):
             noise_min_counts=floor,
             seed=SEED,
             exact_overlap=True,
-        )
+        ),
+    )
+
+
+def moving_tiles(mov, k, slides, px, origins, cache, work):
+    """One moving cycle's tiles, cut once and shared by every cell that cuts the same
+    ones: ``(dir, seconds, reused)``. The moving cycles get no noise in any cell, so
+    what makes them is the slide, its place ``k`` in the command, the patient's canvas,
+    the pixel size and, for an anchored cell, the tile origins STARE's matrix gives
+    (``origins``; None: the regular grid). The folder is ``<cache>/mov_<hash>/cycle_<k>``
+    (ASHLAR's reader names the cycle by its folder)."""
+    from benchmarks.ashlar import retile
+
+    key = [
+        _file_key(mov),
+        sorted(retile._yx_shape(p) for p in slides),
+        [TILE, OVERLAP, float(px), SEED, int(k)],
+        None if origins is None else np.asarray(origins, float).tolist(),
+    ]
+    name = "mov_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
+    home = Path(cache) if cache is not None else Path(work) / "tiles"
+    return _cached_tiles(
+        home / name / f"cycle_{k}",
+        lambda out: retile.write_tiles(
+            mov,
+            out,
+            TILE,
+            OVERLAP,
+            cycle=k,
+            canvas_like=slides,
+            pixel_size_um=px,
+            seed=SEED,
+            exact_overlap=True,
+            tile_origins_yx=origins,
+        ),
+    )
+
+
+def _cached_tiles(final, cut):
+    """``(final, seconds, reused)``: the tiles in ``final`` when a job cut them already,
+    else cut by ``cut(folder)`` into a temporary folder of this job's own and published
+    by one rename. Two jobs cutting at once (on two nodes, whose process ids can be
+    equal: ``tempfile.mkdtemp``, never the pid) each write their own folder; the first
+    rename wins and the other's folder is dropped, its tiles being the same tiles.
+    ``seconds`` is what cutting them cost, whoever cut them (``RETILE_SECONDS``)."""
+    final = Path(final)
+    if (final / "grid.json").exists():
+        return final, _cut_seconds(final), True
+    final.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".tmp_{final.name}_", dir=final.parent))
+    t0 = time.perf_counter()
+    try:
+        cut(tmp)
         (tmp / RETILE_SECONDS).write_text(
             json.dumps({"seconds": time.perf_counter() - t0})
         )
@@ -735,7 +784,6 @@ def register_group(cases, work, opts):
     mon.pause()
     try:
         ref_dir, ref_s, reused = reference_tiles(ref, slides, px, frac, cache, work)
-        t0 = time.perf_counter()  # the moving cycles' tiles, cut by every row
         ref_grid = json.loads((ref_dir / "grid.json").read_text())
         nominal = nominal_origins(slides)
         included, anchors, dropped = [], {}, []
@@ -747,33 +795,28 @@ def register_group(cases, work, opts):
                     continue
                 anchors[case.case_id] = (m0, where)
             included.append(case)
-        mov_dirs, mov_grids = [], []
+        mov_dirs, mov_grids, mov_s, mov_reused = [], [], [], []
         for k, case in enumerate(included, 1):
             origins = None
             if affine == "stare":
                 origins = tilemap.anchor_tile_origins(
                     anchors[case.case_id][0], nominal, TILE
                 )
-            d = work / "tiles" / f"cycle_{k}"
-            # moving cycles get no noise in any row
-            retile.write_tiles(
-                case.mov_image,
-                d,
-                TILE,
-                OVERLAP,
-                cycle=k,
-                canvas_like=slides,
-                pixel_size_um=px,
-                seed=SEED,
-                exact_overlap=True,
-                tile_origins_yx=origins,
+            # moving cycles get no noise in any row: cut once, shared by every cell
+            d, s, again = moving_tiles(
+                str(case.mov_image), k, slides, px, origins, cache, work
             )
             mov_dirs.append(d)
+            mov_s.append(s)
+            mov_reused.append(again)
             mov_grids.append(json.loads((d / "grid.json").read_text()))
-        moving_s = time.perf_counter() - t0
+        # what cutting them cost, whoever cut them (as for the reference)
+        moving_s = None if None in mov_s else float(sum(mov_s))
         # the reference's share is what cutting it cost, cache hit or not: the row
         # would have paid it had it run first (or alone)
-        retile_s = moving_s + ref_s if ref_s is not None else None
+        retile_s = (
+            moving_s + ref_s if ref_s is not None and moving_s is not None else None
+        )
     finally:
         mon.resume()
     base.update(
@@ -782,6 +825,8 @@ def register_group(cases, work, opts):
         retile_reference_s=ref_s,
         reference_tiles_reused=reused,
         reference_tiles=str(ref_dir),
+        moving_tiles=[str(d) for d in mov_dirs],
+        moving_tiles_reused=mov_reused,
         reference_noise_sd=ref_grid.get("noise_sd"),
         rounds_in_command=[c.case_id for c in included],
     )
@@ -826,7 +871,13 @@ def register_group(cases, work, opts):
             ready = failed(
                 _error(exc),
                 ashlar_raise=_error(exc),
-                **({"cause": "identical_overlap"} if _identical_overlap(exc) else {}),
+                # pixel-identical overlaps exist only on noise-free tiles: with noise
+                # on the reference the same raise is ASHLAR's own (`exception`)
+                **(
+                    {"cause": "identical_overlap"}
+                    if _identical_overlap(exc) and frac == 0
+                    else {}
+                ),
             )
         else:
             mon.pause()
