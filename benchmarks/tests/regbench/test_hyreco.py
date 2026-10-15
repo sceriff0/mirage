@@ -840,17 +840,13 @@ def test_the_cohorts_score_never_reads_an_external_set(tmp_path, cases_root, toy
     got = cohort.score(root, out, with_tissue=False)
     for key in ("cells", "resources", "failures", "summary_cells"):
         assert {r["dataset"] for r in got[key]} == {"multiplex"}, key
-    assert got["truth"] == []  # a toy case has no known-truth probes
     assert not (out / "tables" / "hyreco_a").exists()
     assert "hyreco" not in (out / "tables" / "summary.md").read_text().lower()
 
 
 def test_score_takes_an_external_set_alone(tmp_path):
     assert cli.split_datasets(None) == (None, None)
-    assert cli.split_datasets(["multiplex", "synthetic"]) == (
-        ["multiplex", "synthetic"],
-        None,
-    )
+    assert cli.split_datasets(["multiplex"]) == (["multiplex"], None)
     assert cli.split_datasets(["hyreco_b"]) == (None, "hyreco_b")
     for mixed in (["hyreco_b", "multiplex"], ["hyreco_a", "hyreco_b"]):
         with pytest.raises(SystemExit, match="scored alone"):

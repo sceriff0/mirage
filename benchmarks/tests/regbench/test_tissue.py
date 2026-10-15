@@ -679,17 +679,17 @@ def test_without_opencv_a_row_is_read_from_disk_or_listed_as_missing(
     root, case, out, tables = scored
     monkeypatch.setattr(tissue, "have_cv2", lambda: False)
     job = (str(out), case, ["initial", "drawn", "lazy"], True)
-    rows, missing, _ = tissue.score_case(job)  # computed before: read back
+    rows, missing = tissue.score_case(job)  # computed before: read back
     assert {r["variant"]: r["qcs"] for r in rows} == {
         r["variant"]: r["qcs"] for r in tables["tissue"] if r["variant"] != "mosaic"
     }
     assert not missing
     (result_dir(out, "lazy", case) / "tissue" / tissue.RESULT).unlink()
-    rows, missing, _ = tissue.score_case(job)
+    rows, missing = tissue.score_case(job)
     assert [m["variant"] for m in missing] == ["lazy"]
     assert "OpenCV (cv2) is not importable" in missing[0]["reason"]
     monkeypatch.undo()
-    rows, missing, _ = tissue.score_case(job)  # and computed again where it is
+    rows, missing = tissue.score_case(job)  # and computed again where it is
     assert len(rows) == 3 and not missing
 
 
@@ -698,7 +698,7 @@ def test_a_stale_result_is_computed_again(scored):
     path = result_dir(out, "drawn", case) / "tissue" / tissue.RESULT
     rec = json.loads(path.read_text())
     path.write_text(json.dumps({**rec, "definition": "older", "qcs": 0.123}))
-    rows, _, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    rows, _ = tissue.score_case((str(out), case, ["drawn"], True))
     assert _one(rows, "drawn")["qcs"] == 1.0
 
 
@@ -751,11 +751,11 @@ def test_a_result_computed_by_other_code_is_computed_again(scored, monkeypatch):
     rec = json.loads(path.read_text())
     assert rec["code_sha256"] == tissue.code_sha256()
     path.write_text(json.dumps({**rec, "qcs": 0.123}))
-    rows, _, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    rows, _ = tissue.score_case((str(out), case, ["drawn"], True))
     assert _one(rows, "drawn")["qcs"] == 0.123  # same code, same planes: it is read
     assert "code_sha256" not in _one(rows, "drawn")
     path.write_text(json.dumps({**rec, "qcs": 0.123, "code_sha256": "other code"}))
-    rows, _, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    rows, _ = tissue.score_case((str(out), case, ["drawn"], True))
     assert _one(rows, "drawn")["qcs"] == 1.0
 
 
@@ -764,7 +764,7 @@ def test_a_plane_the_driver_did_not_reduce_is_filled_in_from_the_written_image(s
     d = result_dir(out, "drawn", case) / "tissue"
     for f in d.iterdir():
         f.unlink()
-    rows, missing, _ = tissue.score_case((str(out), case, ["drawn"], True))
+    rows, missing = tissue.score_case((str(out), case, ["drawn"], True))
     assert _one(rows, "drawn")["qcs"] == 1.0 and not missing
     assert (d / tissue.MOVING_PLANE).exists()
 
@@ -777,24 +777,3 @@ def test_the_cli_computes_the_pieces_for_score_to_read(scored, capsys):
     assert cli.main([*argv, "--only-run", "--workers", "1"]) == 0
     assert "tissue: 4 row(s), 2 without one" in capsys.readouterr().out
     assert json.loads(path.read_text())["qcs"] == 1.0
-
-
-# ── known-truth cases: the truth plane and what the block resolves ────────────
-def test_the_truth_plane_and_its_shifted_copies(toy_cases, tmp_path):
-    case = toy_cases["rigid"]
-    assert tissue.has_known_map(case)
-    rows, missing, dose = tissue.score_case((str(tmp_path), case, ["initial"], True))
-    assert not missing, missing
-    truth, initial = _one(rows, "truth"), _one(rows, "initial")
-    assert truth["source"] == "benchmark"
-    assert (
-        truth["tissue_dice"] > 0.97 and truth["tissue_dice"] >= initial["tissue_dice"]
-    )
-    assert truth["boundary_dice"] > initial["boundary_dice"]
-    assert [r["shift_um"] for r in dose] == [0.0, *tissue.DOSE_UM]
-    assert dose[0]["boundary_dice"] == pytest.approx(truth["boundary_dice"], abs=0.02)
-    bd = [r["boundary_dice"] for r in dose]
-    assert bd[-1] < bd[0] - 0.2  # 100 um is seen
-    assert all(r["variant"] == "truth" and r["family"] == case.family for r in dose)
-    summary = tissue.summarise(dose, [], by=("dataset", "shift_um"))
-    assert [r["shift_um"] for r in summary] == [0.0, *tissue.DOSE_UM]

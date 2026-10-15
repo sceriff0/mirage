@@ -5,18 +5,16 @@
 #   benchmarks/regbench/slurm/submit_cohort.sh --prepare [-- extra sbatch args]
 #   (wait for the prepare jobs; look at their logs)
 #   benchmarks/regbench/slurm/submit_cohort.sh [--dry-run] [--runs "a b"] \
-#       [--datasets "multiplex synthetic"] [-- extra sbatch args]
+#       [--datasets "multiplex"] [-- extra sbatch args]
 #
 # and, for a results folder whose registrations are done, the scoring alone:
 #
 #   benchmarks/regbench/slurm/submit_cohort.sh --score-only [--dry-run] \
-#       [--datasets "multiplex synthetic"] [-- extra sbatch args]
+#       [--datasets "multiplex"] [-- extra sbatch args]
 #
-# THE DEFAULT is `multiplex`, then `synthetic`: every array of a run on `synthetic` waits
-# for that run's last array on `multiplex`, so the cohort is done first. `semisynth` and
-# the HyReCo sets are DORMANT: implemented and tested, never part of the default, and
-# submitted only when --datasets names them (the README lists what is known to be wrong
-# with each before any use).
+# THE DEFAULT is `multiplex`, the cohort. The HyReCo sets are DORMANT: implemented and
+# tested, never part of the default, and submitted only when --datasets names them (the
+# README lists what is known to be wrong with each before any use).
 #
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
@@ -193,9 +191,8 @@
 #                                     results is never put before it (a `#` line says
 #                                     when it was moved). Default: `default`, the run
 #                                     list's own first runs (`runs --order default`
-#                                     prints the order), on the cohort
-#                                     and the synthetic set; set EMPTY, and on an
-#                                     external set, the run list's order.
+#                                     prints the order), on the cohort;
+#                                     set EMPTY, and on an external set, the run list's order.
 #                                     Nothing but the order of submission changes: not
 #                                     the run list, not a table, not a result
 #   REGBENCH_SCORE_CPUS (8)           per task of the per-case scoring arrays: a case's
@@ -229,8 +226,6 @@
 #                                     `crashed`, not a flagged realcheck, not a
 #                                     selfcheck that left no record
 #   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv
-#   REGBENCH_TRUTH_PATIENTS           with --prepare: the patients of the known-truth
-#                                     cases, comma-separated (default: all)
 #   REGBENCH_PREPARE_ARGS             with --prepare: more `prepare multiplex` options
 #   REGBENCH_PREPARE_FORCE=1          with --prepare: redo cases that exist
 #   REGBENCH_NUCLEI                   with --prepare: where each slide's BARE nuclei are
@@ -316,10 +311,10 @@ MAX_SECONDS=$((7 * 24 * 3600))
 export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
-# multiplex first, then synthetic. semisynth and hyreco_* are dormant: only when named.
+# The cohort (multiplex) is the default. hyreco_* are dormant: only when named.
 # The ANHIR sets (anhir, anhir_tune) are never part of the default either.
-DEFAULT_DATASETS="multiplex synthetic"
-DORMANT_DATASETS="semisynth hyreco_a hyreco_b"
+DEFAULT_DATASETS="multiplex"
+DORMANT_DATASETS="hyreco_a hyreco_b"
 prepare=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -648,8 +643,6 @@ if [ "$prepare" = 1 ]; then
     alloc=(--cpus-per-task="$CPUS" --mem="${REGBENCH_PREPARE_MEM:-64G}"
            --time="$(limit "$prep_s")")
     export REGBENCH_PREPARE_IMAGE="$REGBENCH_SCORER_IMAGE"
-    patients=()
-    [ -n "${REGBENCH_TRUTH_PATIENTS:-}" ] && patients=(--patients "$REGBENCH_TRUTH_PATIENTS")
     # shellcheck disable=SC2206  # extra `prepare multiplex` options, several words
     more=(${REGBENCH_PREPARE_ARGS:-})
     for ds in $datasets; do
@@ -700,8 +693,6 @@ if [ "$prepare" = 1 ]; then
                 fi
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
-            semisynth) what=(semisynth --truth --manifest "$REGBENCH_MANIFEST" ${patients[@]+"${patients[@]}"}) ;;
-            synthetic) what=(synthetic --suite truth) ;;
             hyreco_a)
                 [ -n "${REGBENCH_HYRECO_A:-}" ] || die "--prepare --datasets hyreco_a needs REGBENCH_HYRECO_A (the unpacked HyReCo/ folder, holding HE/ and PHH3/). Nothing was submitted."
                 # shellcheck disable=SC2206  # the settings being tried, several words
@@ -719,7 +710,7 @@ if [ "$prepare" = 1 ]; then
                 # shellcheck disable=SC2206  # several words
                 given=(${REGBENCH_ANHIR_ARGS:-})
                 what=(anhir --source "$REGBENCH_ANHIR" ${given[@]+"${given[@]}"}) ;;
-            *) die "--datasets: '$ds' is not one of multiplex, semisynth, synthetic, hyreco_a, hyreco_b, anhir, anhir_tune" ;;
+            *) die "--datasets: '$ds' is not one of multiplex, hyreco_a, hyreco_b, anhir, anhir_tune" ;;
         esac
         if [ -n "$EXTERNAL" ]; then
             # one pair per task: a HyReCo slide is about 21 gigapixels, and a proxy of
@@ -768,12 +759,6 @@ if [ -n "$missing" ]; then
 fi
 
 # ── the cases: every array is sized from what is prepared ─────────────────────────────
-# A synthetic case prepared from another truth_spec.json is refused by the scorer, which
-# then writes no table for any dataset: refused here, by the same rule, before a job runs
-if has "$datasets" synthetic; then
-    regbench_py "$REGBENCH_HEAD_IMAGE" list --cases "$REGBENCH_CASES" --dataset synthetic --current-spec > /dev/null \
-        || die "the synthetic cases under $REGBENCH_CASES are not all of the current truth_spec.json (line above): the scorer would refuse the whole result at the end. Nothing was submitted."
-fi
 sized=""
 for ds in $datasets; do
     read -r n_cases n_groups max_rounds < <(regbench_py "$REGBENCH_HEAD_IMAGE" list \

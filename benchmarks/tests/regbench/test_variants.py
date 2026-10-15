@@ -1052,7 +1052,7 @@ def test_runs_for_honours_regimes():
     names = {variants.run_name(r) for r in variants.runs_for("hyreco_b")}
     assert "stare_haem_clahe" in names and "stare_percentile" not in names
     assert "stare_clahe" not in names  # cyclic_if's alternative, not bf_same's
-    cyc = {variants.run_name(r) for r in variants.runs_for("synthetic")}
+    cyc = {variants.run_name(r) for r in variants.runs_for("multiplex")}
     assert "stare_clahe" in cyc and "stare_haem_clahe" not in cyc
 
 

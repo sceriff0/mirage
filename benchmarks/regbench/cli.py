@@ -1,6 +1,6 @@
 """``python -m benchmarks.regbench``: prepare cases, run a method, score everything.
 
-``prepare <dataset>``  write the cases of ``synthetic`` / ``semisynth`` / ``multiplex`` (idempotent);
+``prepare <dataset>``  write the cases of ``multiplex`` (idempotent);
                        ``prepare hyreco --subset a|b`` writes the external landmark set
                        ``hyreco_a`` (tuning) or ``hyreco_b`` (report); ``prepare anhir
                        --source DIR`` writes ANHIR's training pairs (``anhir``, and its
@@ -37,7 +37,7 @@ The two kinds cannot be named in one call.
 ``realgate``           from the realcheck of a run's first unit: may the rest of the run
                        start. Exit 1 when the gating row is flagged
 ``selfcheck``          check that a method's points follow the image its own writer produced,
-                       on a synthetic pair; exit 0 ``ok``, 1 ``inconsistent``, 2
+                       on a generated pair; exit 0 ``ok``, 1 ``inconsistent``, 2
                        ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
 
 ``run --realcheck`` does the same kind of check on the real case it has just registered
@@ -89,15 +89,6 @@ def build_parser():
         p.add_argument(
             "--force", action="store_true", help="redo cases that already exist"
         )
-
-    s = prep.add_parser("synthetic")
-    common(s)
-    s.add_argument(
-        "--suite",
-        default="full",
-        choices=("test", "ci", "full", "scale", "dev", "truth"),
-        help="`truth` is the frozen known-truth suite of truth_spec.json",
-    )
 
     m = prep.add_parser("multiplex")
     common(m)
@@ -175,68 +166,6 @@ def build_parser():
         action="store_true",
         help="print the StarDist model and settings of the re-run and where each is "
         "from (REGBENCH_STARDIST_*, a site config, the repository's defaults)",
-    )
-
-    ss = prep.add_parser("semisynth")
-    common(ss)
-    ss.add_argument(
-        "--image",
-        default=None,
-        help="OME-TIFF with a real nuclear channel (required without --manifest)",
-    )
-    ss.add_argument("--channel", type=int, default=0)
-    ss.add_argument(
-        "--mov-image",
-        default=None,
-        help="another round of the same section, already registered to --image",
-    )
-    ss.add_argument("--mov-channel", type=int, default=0)
-    ss.add_argument(
-        "--name", default=None, help="prefix of the case ids (default: the file name)"
-    )
-    ss.add_argument("--n", type=int, default=4096, help="window side, px")
-    ss.add_argument(
-        "--windows", type=int, default=8, help="test windows (one more is dev)"
-    )
-    ss.add_argument(
-        "--residual-um",
-        type=float,
-        default=2.0,
-        help="RMS displacement of the multiscale family, micrometres",
-    )
-    ss.add_argument("--diameter", type=float, default=20.0, help="nuclear diameter, px")
-    ss.add_argument(
-        "--noise",
-        type=float,
-        default=1.0,
-        help="added noise, in units of the image's background noise (same-image variant)",
-    )
-    ss.add_argument("--pixel-size-um", type=float, default=None)
-    ss.add_argument(
-        "--truth",
-        action="store_true",
-        help="the frozen known-truth cases of truth_spec.json: window side, windows, "
-        "noise and amplitudes come from the spec. With --manifest for every patient "
-        "of the cohort; with --name --image --channel for one patient",
-    )
-    ss.add_argument(
-        "--manifest",
-        default=None,
-        help="with --truth: the cohort's list, either the rounds.csv of "
-        "`python -m benchmarks.regbench.arms_manifest` or the arms' input.csv; each "
-        "patient's reference round and nuclear channel are read from it",
-    )
-    ss.add_argument(
-        "--patients",
-        default=None,
-        metavar="ID,ID,...",
-        help="with --manifest: only these patients (an id not in the manifest is an "
-        "error)",
-    )
-    ss.add_argument(
-        "--patients-file",
-        default=None,
-        help="with --manifest: the same subset, one id per line (# starts a comment)",
     )
 
     hy = prep.add_parser(
@@ -355,13 +284,6 @@ def build_parser():
         action="store_true",
         help="print three numbers on one line: cases, patients, and the rounds of the "
         "largest patient (what the launcher sizes its arrays and time limits from)",
-    )
-    what.add_argument(
-        "--current-spec",
-        action="store_true",
-        help="--dataset synthetic: print nothing, and exit non-zero when a prepared "
-        "case is of a truth_spec.json other than the current one (the launcher asks "
-        "before its first job: the scorer refuses such a result as a whole)",
     )
 
     r = sub.add_parser("run")
@@ -1245,13 +1167,6 @@ def _selfcheck_end(a, status):
 def _list(a):
     from .cases import groups, list_cases
 
-    if a.current_spec:
-        from .datasets import synthetic
-
-        if a.dataset != "synthetic":
-            raise SystemExit("--current-spec is the synthetic dataset's check")
-        synthetic.refuse_other_spec(a.cases, nothing="Nothing was submitted.")
-        return 0
     cases = list_cases(a.cases, a.dataset)
     if a.ids:
         print("\n".join(c.case_id for c in cases))
@@ -1600,7 +1515,7 @@ def _tissue(a):
     got = tissue.score_all(jobs, a.workers)
     print(
         f"tissue: {len(got['tissue'])} row(s), {len(got['tissue_missing'])} without "
-        f"one, {len(got['tissue_dose'])} dose row(s); `score` writes the tables"
+        "one; `score` writes the tables"
     )
     return 0
 

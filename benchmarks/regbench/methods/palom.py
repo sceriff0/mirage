@@ -52,15 +52,12 @@ at ``M^-1`` of each output pixel centre is OpenCV's documented behaviour ``[MEMO
 ``test_palom_adapter.py`` measures it on the OpenCV installed where the suite runs, and
 ``test_external_methods.py`` on PALOM's own function in its image.
 
-**Seams** (``band_ref``, ``band_truth``; ``SELFCHECK_MASK``). The map jumps by
+**Seams** (``band_ref``; ``SELFCHECK_MASK``). The map jumps by
 ``A^-1 (s_b - s_b')`` at an edge between two blocks whose shifts differ, and the image is
 torn there. A reference nucleus is on a seam when the blocks its outline's bounding box
-touches, grown by ``SEAM_MARGIN_PX``, do not all carry the same shift. A known-truth probe
-is on a seam by the same rule applied to its own nucleus: the bounding box of the moving
-nucleus the probe is the centroid of, carried to where the truth puts that centroid on
-the reference (``truth_ref``). Only the block grid and the accepted shifts enter. The
-scorer scores every method a second time without those nuclei and probes
-(``<variant>:non_palom``).
+touches, grown by ``SEAM_MARGIN_PX``, do not all carry the same shift. Only the block
+grid and the accepted shifts enter. The scorer scores every method a second time without
+those nuclei (``<variant>:non_palom``).
 
 **Written image.** ``palom.align.block_affine_transformed_moving_img(ref_img=
 aligner.ref_img, moving_img=mov_reader.pyramid[0], mxs=aligner.block_affine_matrices_da)``
@@ -309,29 +306,6 @@ def nucleus_band(geo, points, which="outlines"):
     if ps is None or not ps.n_features:
         return None
     return on_seam(geo, *_boxes(ps))
-
-
-def probe_band(geo, points):
-    """One bool per known-truth probe, or None for a case without probes.
-
-    A probe is the pair (``truth_mov``, ``truth_ref``): the centroid of moving nucleus
-    ``truth_cell`` and where the truth puts it on the reference. It is on a seam when
-    that nucleus's bounding box, moved so that its centroid sits at ``truth_ref``, is on a
-    seam by the rule of ``nucleus_band``. Without ``truth_cell`` or moving nuclei the
-    probe is judged as the point ``truth_ref``.
-    """
-    if "truth_ref" not in points or not len(points["truth_ref"]):
-        return None
-    t_ref = np.asarray(points["truth_ref"], dtype=float).reshape(-1, 2)
-    lo = hi = t_ref
-    ps = polys(points, "mov")
-    if ps is not None and ps.n_features and "truth_cell" in points:
-        cell = np.asarray(points["truth_cell"], dtype=np.int64)
-        t_mov = np.asarray(points["truth_mov"], dtype=float).reshape(-1, 2)
-        box_lo, box_hi = _boxes(ps)
-        lo = t_ref + np.nan_to_num(box_lo[cell] - t_mov)
-        hi = t_ref + np.nan_to_num(box_hi[cell] - t_mov)
-    return on_seam(geo, lo, hi)
 
 
 def seam_jumps(geo):
@@ -679,7 +653,7 @@ def register(case, work, opts):
         ).reshape(-1, 2)
         info.update(describe(geo, original))
         points = load_points(case)
-        band_ref, band_truth = nucleus_band(geo, points), probe_band(geo, points)
+        band_ref = nucleus_band(geo, points)
         band_ref_nuc = nucleus_band(geo, points, "nuclei")
         info["band_fraction"] = None if band_ref is None else float(band_ref.mean())
         info["closed_file"] = reads.describe()
@@ -714,8 +688,6 @@ def register(case, work, opts):
     final = {**info, "_state": state}
     if band_ref is not None:
         final["band_ref"] = band_ref
-    if band_truth is not None:
-        final["band_truth"] = band_truth
     if band_ref_nuc is not None:  # the same rule on the bare nuclei
         final["band_ref_nuc"] = band_ref_nuc
     yield VARIANTS[1], PointMap(fn, DIRECTION), final

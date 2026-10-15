@@ -1,10 +1,9 @@
 """A small cohort with every kind of row the scorer makes, for the tests of the per-case
 score records (``test_score_records.py``).
 
-Five cases: four ``multiplex`` rounds of three patients (one prepared before the bare
-nuclei existed) and one hand-made known-truth ``synthetic`` case. Results: a map in each
-direction, two seam owners (a mask on moving nuclei, a mask on reference nuclei with its
-own probe mask), a method that raises, a method that never ran, a dropped row, and a
+Four ``multiplex`` rounds of three patients (one prepared before the bare nuclei
+existed). Results: a map in each direction, two seam owners (a mask on moving nuclei, a
+mask on reference nuclei), a method that raises, a method that never ran, a dropped row, and a
 case one method was not run on.
 
 Nothing here reads the clock: the same call builds the same cases. The results carry
@@ -101,35 +100,6 @@ def multiplex_case(root, case_id, group, seed, nuclei=True, parents=False):
     return load_case(Path(root) / "multiplex" / case_id)
 
 
-def truth_case(root, case_id="blob_grid_p0", seed=7):
-    """A known-truth case made by hand: the true map is ``+ SHIFT`` exactly."""
-    ref, _ = _centres(seed)
-    mov = ref - SHIFT
-    probes = np.arange(0, len(GRID), 2)
-    cells_mov, nuclei_mov = squares(mov, OUTLINE_HALF), squares(mov, NUCLEUS_HALF)
-    write_case(
-        root,
-        _case(
-            "synthetic",
-            case_id,
-            "blob_grid",
-            family="grid",
-            pose="p0",
-            extra={"in_stare_model": True, "truth_spec_sha256": ""},
-        ),
-        truth_mov=mov[probes],
-        truth_ref=ref[probes],
-        cells_mov=cells_mov,
-        cells_ref=squares(ref, OUTLINE_HALF),
-        nuclei_mov=nuclei_mov,
-        nuclei_ref=squares(ref, NUCLEUS_HALF),
-        truth_cell=probes,
-        cells_mov_xy_truth=np.asarray(cells_mov.xy, dtype=float) + SHIFT,
-        nuclei_mov_xy_truth=np.asarray(nuclei_mov.xy, dtype=float) + SHIFT,
-    )
-    return load_case(Path(root) / "synthetic" / case_id)
-
-
 def fake(name, register):
     return types.SimpleNamespace(
         NAME=name, SCOPE="pair", VARIANTS=(name,), register=register
@@ -188,10 +158,7 @@ def _moving_mask(case):
 
 def _reference_mask(case):
     n = len(GRID)
-    info = {"band_ref": _band(n, 3), "band_ref_nuc": _band(n, 6)}
-    if case.dataset == "synthetic":
-        info["band_truth"] = _band(len(np.arange(0, n, 2)), 3)
-    return info
+    return {"band_ref": _band(n, 3), "band_ref_nuc": _band(n, 6)}
 
 
 def build(tmp):
@@ -203,7 +170,6 @@ def build(tmp):
         multiplex_case(root, "P1_r2", "P1", 2, parents=True),
         multiplex_case(root, "P2_r1", "P2", 3),
         multiplex_case(root, "P3_r1", "P3", 4, nuclei=False),
-        truth_case(root),
     ]
     for case in made:
         methods.run_case(forward("stare", 0.4), case, out)

@@ -120,10 +120,10 @@ class Spy:
 def test_every_way_of_scoring_writes_the_same_tables(cohort, tmp_path, monkeypatch):
     root, out = copy_of(cohort, tmp_path)
     serial = scored(root, out, workers=1, fresh=True)
-    assert len(list_cases(root, "multiplex")) == 4  # five cases with the synthetic one
-    # four workers, five cases to compute: whole cases side by side
+    assert len(list_cases(root, "multiplex")) == 4
+    # four workers, four cases to compute: whole cases side by side
     same(serial, scored(root, out, workers=4, fresh=True))
-    # eight workers, five cases: one case after the other, its pair records side by side
+    # eight workers, four cases: one case after the other, its pair records side by side
     same(serial, scored(root, out, workers=8, fresh=True))
 
     # one case at a time (the cluster's array), then the merge
@@ -135,10 +135,6 @@ def test_every_way_of_scoring_writes_the_same_tables(cohort, tmp_path, monkeypat
         )
         assert did == "scored" and not (out / "tables").exists()
         assert (score_mod.records_dir(out, case) / "case.rec").exists()
-    assert (
-        score_mod.score_case(root, out, "synthetic", case_id="blob_grid_p0", **CASE_KW)
-        == "scored"
-    )
     assert score_mod.score_case(root, out, "multiplex", index=0, **CASE_KW) == "kept"
     spy = Spy(monkeypatch)
     same(serial, scored(root, out, workers=1))
@@ -183,7 +179,7 @@ def test_an_interrupted_scoring_keeps_what_it_finished(cohort, tmp_path, monkeyp
     monkeypatch.undo()
     spy = Spy(monkeypatch)
     same(whole, scored(root, out, workers=1))
-    assert len(spy.cases) == 3 and not set(spy.cases) & set(seen[:2])
+    assert len(spy.cases) == 2 and not set(spy.cases) & set(seen[:2])
 
 
 def test_a_pair_record_is_saved_as_it_finishes(cohort, tmp_path, monkeypatch):
@@ -222,9 +218,7 @@ def _plain_record(root, out, row):
     ref, mov = polys(points, "ref", which), polys(points, "mov", which)
     variant, _, owner = row["method"].partition(NON)
     ref_in, mov_in = ref, mov
-    if variant == "truth":
-        mov_in = pairs.with_xy(mov, points[score_mod.TRUTH_XY[which]].astype(float))
-    elif variant != "initial" and row["imputed_initial"] == "False":
+    if variant != "initial" and row["imputed_initial"] == "False":
         with np.load(result_dir(out, variant, case) / "warped.npz") as z:
             xy, direction = z[xy_key].astype(float), str(z["direction"])
         if direction == REF_TO_MOV:
@@ -245,7 +239,7 @@ def test_every_cell_number_is_a_plain_record_of_its_own_row(cohort, tmp_path):
     them; a row's numbers must still be exactly what computing that row alone gives."""
     root, out = copy_of(cohort, tmp_path)
     scored(root, out, workers=2, fresh=True)
-    seen = {"imputed": 0, "owner": 0, "moving": 0, "truth": 0}
+    seen = {"imputed": 0, "owner": 0, "moving": 0}
     n = 0
     for name in ("cells", "nonband_cells", "cells_nuclei", "nonband_cells_nuclei"):
         with open(out / "tables" / f"{name}.csv", newline="") as fh:
@@ -259,8 +253,7 @@ def test_every_cell_number_is_a_plain_record_of_its_own_row(cohort, tmp_path):
             seen["imputed"] += row["imputed_initial"] == "True"
             seen["owner"] += NON in row["method"]
             seen["moving"] += row["frame"] == "moving"
-            seen["truth"] += row["method"].startswith("truth")
-    assert n > 150 and all(seen.values()), seen
+    assert n > 100 and all(seen.values()), seen
 
 
 def test_geometry_is_kept_by_identity_and_changes_no_number():
@@ -291,7 +284,7 @@ def test_geometry_is_kept_by_identity_and_changes_no_number():
 
 
 # ── a record is reused only when nothing it rests on has changed ──────────────
-SMALL = ("P1_r1", "blob_grid_p0")
+SMALL = ("P1_r1", "P2_r1")
 
 
 @pytest.fixture
@@ -391,7 +384,7 @@ def test_another_list_of_variants_is_another_record(small):
     case = load_case(root / "multiplex" / "P1_r1")
     # (on the dataset that has it; and its bytes are `stare`'s, so are its pair records)
     shutil.copytree(result_dir(out, "stare", case), result_dir(out, "newer", case))
-    check(small, cases=["P1_r1"], records=0, expected=["ghost2", "ghost"])
+    check(small, cases=SMALL, records=0, expected=["ghost2", "ghost"])
 
 
 def test_other_seam_owners_other_checks_other_drops_are_other_records(small):
@@ -476,7 +469,7 @@ def test_a_changed_constant_or_code_is_another_scorer(small, monkeypatch):
     monkeypatch.setattr(score_mod, "_libraries", lambda: libraries)
     scored(root, out, workers=1)
     assert sorted(spy3.cases) == sorted(SMALL) and spy3.records >= n
-    assert {"score.py", "truth.py", "truth_spec.json"} <= set(score_mod.case_code())
+    assert {"score.py", "pairs.py", "cases.py"} <= set(score_mod.case_code())
 
 
 def test_the_keys_cover_every_module_that_decides_a_number(tmp_path, monkeypatch):
@@ -554,7 +547,7 @@ def test_a_record_that_cannot_be_read_is_computed_again(small, capsys):
         rec.write_bytes(junk)
         check(small, cases=["P1_r1"], records=0)
     # a whole, well-formed record of ANOTHER case in its place: its key is not this one
-    other = folder.parent.parent / "synthetic" / "blob_grid_p0" / "case.rec"
+    other = folder.parent / "P2_r1" / "case.rec"
     rec.write_bytes(other.read_bytes())
     capsys.readouterr()
     check(small, cases=["P1_r1"], records=0)
@@ -582,7 +575,7 @@ def test_the_key_is_written_where_a_person_can_read_it(small):
     assert key["results"]["ghost"] == {"run.json": "", "warped.npz": ""}
     crash = key["results"]["crash"]
     assert crash["run.json"] and not crash["warped.npz"]
-    assert key["checks"]["rtm"] == "no_stage_image" and key["checks"]["truth"] == ""
+    assert key["checks"]["rtm"] == "no_stage_image" and "truth" not in key["checks"]
     assert len(key["points.npz"]) == len(key["case.json"]) == 64
     assert {"numpy", "scipy", "scikit-image", "python"} <= set(key["libraries"])
     assert key["settings"]["null_directions"] == pairs.NULL_DIRECTIONS
@@ -654,7 +647,7 @@ def test_the_two_levels_are_never_nested(small, monkeypatch):
 
 def test_score_case_names_its_case_and_leaves_dev_cases_alone(small):
     root, out, spy, _ = small
-    with pytest.raises(SystemExit, match="--index 7 is not one of the 1 prepared"):
+    with pytest.raises(SystemExit, match="--index 7 is not one of the 2 prepared"):
         score_mod.score_case(root, out, "multiplex", index=7, **CASE_KW)
     with pytest.raises(SystemExit, match="no prepared multiplex case named nope"):
         score_mod.score_case(root, out, "multiplex", case_id="nope", **CASE_KW)
@@ -662,12 +655,12 @@ def test_score_case_names_its_case_and_leaves_dev_cases_alone(small):
     path = root / "multiplex" / "dev_x" / "case.json"
     write_json(path, {**json.loads(path.read_text()), "case_id": "dev_x"})
     ids = [c.case_id for c in list_cases(root, "multiplex")]
-    assert ids == ["P1_r1", "dev_x"]  # the index counts every prepared case
-    assert score_mod.score_case(root, out, "multiplex", index=1, **CASE_KW) == "skipped"
+    assert ids == ["P1_r1", "P2_r1", "dev_x"]  # the index counts every prepared case
+    assert score_mod.score_case(root, out, "multiplex", index=2, **CASE_KW) == "skipped"
     assert score_mod.score_case(root, out, "multiplex", index=0, **CASE_KW) == "kept"
     assert spy.cases == []
     assert score_mod.score_case(
-        root, out, "multiplex", index=1, dev=True, **CASE_KW
+        root, out, "multiplex", index=2, dev=True, **CASE_KW
     ) == ("scored")
 
 
@@ -744,20 +737,20 @@ def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path)
             "status=no_end_line cause=score_case_unfinished whose=benchmark"
         )
     )
-    # the scorer: the four multiplex cases are read, the synthetic one (no task ran
-    # for it) is computed, and the tables are those of one scoring from nothing
+    # the scorer: the four multiplex cases are read, none is computed, and the tables
+    # are those of one scoring from nothing
     done = _batch("score", root=root, out=out, **env)
     assert done.returncode == 0, done.stderr
     read = [ln for ln in done.stderr.splitlines() if "rows read from its record" in ln]
     assert len(read) == 4 and all("multiplex/" in ln for ln in read)
     started = [ln for ln in done.stderr.splitlines() if ": started (" in ln]
-    assert len(started) == 1 and "synthetic/blob_grid_p0" in started[0]
+    assert started == []
     assert done.stdout.strip().splitlines()[-1].startswith("REGBENCH_END kind=score ")
     merged = tables(out)
     assert b"not run by this submission" in merged["cells.csv"]
     shutil.rmtree(out / "cache" / "scores")
     whole = _batch("score", root=root, out=out, **env)
-    assert whole.returncode == 0 and whole.stderr.count(": started (no record)") == 5
+    assert whole.returncode == 0 and whole.stderr.count(": started (no record)") == 4
     same(merged, tables(out))
 
 

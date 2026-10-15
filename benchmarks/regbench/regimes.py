@@ -74,8 +74,6 @@ REGIMES = {
 }
 
 DATASET_REGIME = {
-    "synthetic": "cyclic_if",
-    "semisynth": "cyclic_if",
     "multiplex": "cyclic_if",
     "hyreco_a": "bf_same",
     "hyreco_b": "bf_same",

@@ -4,9 +4,7 @@ For each variant that has an image on disk, the nuclear channel of that image is
 with the nuclear channel of the reference slide at 4000 px (longest edge of the reference),
 with the pieces and the composite of ACCREDIT's quality score (Zhou et al. 2026, bioRxiv,
 doi 10.64898/2026.08.08.743602). An ``initial`` row (the unregistered moving slide placed on
-the reference canvas by the identity) gives the scale; on known-truth cases a ``truth`` row
-(the moving slide resampled by the generating map, drawn by the benchmark) and the same
-plane shifted by known amounts say what the block can resolve.
+the reference canvas by the identity) gives the scale.
 
 **This block is never ranked and never enters the primary tables.** ACCREDIT's score was
 designed and reported for an H&E reference and a fluorescence moving image; here both are
@@ -140,10 +138,6 @@ FROZEN = {
 }
 # The count under this is printed; the source's good / acceptable / poor classes are not.
 FAILED_BELOW = 0.25
-DOSE_UM = (1.0, 3.0, 10.0, 30.0, 100.0)  # shifts of the truth plane, along x
-TRUTH_STEP = (
-    4  # the true map is inverted on every 4th evaluation pixel, then interpolated
-)
 BAND_ROWS = 1024  # native rows held at once while reducing
 SUM_ROWS = 64  # of which this many are summed at a time
 MOVING_PLANE = "moving_eval.tif"
@@ -152,8 +146,6 @@ TABLES = (
     "tissue",
     "tissue_summary",
     "tissue_missing",
-    "tissue_dose",
-    "tissue_dose_summary",
 )
 PIECES = (
     "qcs",
@@ -607,7 +599,7 @@ def score_planes(ref_plane, mov_plane, eval_um=None):
     return Reference(ref_plane, eval_um).score(mov_plane)
 
 
-# ── benchmark-side planes: the reference, the unregistered slide, the truth ───
+# ── benchmark-side planes: the reference, the unregistered slide ───
 def eval_um(case, eval_px=None):
     """Micrometres per evaluation pixel (mean of the two axes), or None."""
     if not case.pixel_size_um or not case.ref_hw:
@@ -693,87 +685,6 @@ def initial_plane(out, case, eval_px=None):
         cache_dir(out, case) / "initial_eval.tif",
         lambda: reduce(path, channel, case.ref_hw, eval_px=eval_px),
         plane_key(case, "mov", eval_px),
-    )
-
-
-def has_known_map(case):
-    spec = case.extra.get("spec")
-    return isinstance(spec, dict) and all(k in spec for k in ("theta", "shift", "n"))
-
-
-def truth_plane(out, case, eval_px=None):
-    """The moving slide resampled onto the reference by the GENERATING map: drawn by the
-    benchmark (bilinear, at the evaluation size), not by any method. The inverse of the
-    generator's map is taken on every ``TRUTH_STEP``-th evaluation pixel and interpolated
-    between them, so a discontinuous family is smoothed over that step."""
-
-    def make():
-        import cv2
-        from stare.slide_io import open_lazy
-
-        from . import selfcheck
-
-        (eh, ew), fx, fy = _factors(case.ref_hw, eval_px or EVAL_PX)
-        path, channel = _side_channel(case, "mov")
-        arr, _, close = open_lazy(path)
-        try:
-            mh, mw = (int(v) for v in arr.shape[1:])
-            small_hw = (int(math.ceil(mh / fy)), int(math.ceil(mw / fx)))
-            small = reduce_plane(arr, channel, small_hw, fx, fy).astype(np.float32)
-        finally:
-            close()
-        inverse = selfcheck.inverse_of(case.extra["spec"], tol=0.01)
-        # lattice of evaluation-pixel centres, in full-resolution reference pixels
-        jy = np.unique(np.append(np.arange(0, eh, TRUTH_STEP), eh - 1)).astype(float)
-        jx = np.unique(np.append(np.arange(0, ew, TRUTH_STEP), ew - 1)).astype(float)
-        gx, gy = np.meshgrid((jx + 0.5) * fx - 0.5, (jy + 0.5) * fy - 0.5)
-        q = np.empty((gx.size, 2))
-        pts = np.stack([gx.ravel(), gy.ravel()], axis=1)
-        for i in range(0, len(pts), 250_000):
-            q[i : i + 250_000] = inverse(pts[i : i + 250_000])
-        # moving full-resolution pixel -> index into the reduced moving plane
-        qx = ((q[:, 0] + 0.5) / fx - 0.5).reshape(gx.shape).astype(np.float32)
-        qy = ((q[:, 1] + 0.5) / fy - 0.5).reshape(gx.shape).astype(np.float32)
-        # the lattice is regular but for its last line: interpolate it per axis
-        ax, ay = np.arange(ew, dtype=float), np.arange(eh, dtype=float)
-
-        def dense(coarse):
-            rows = np.stack([np.interp(ax, jx, r) for r in coarse])
-            return np.stack(
-                [np.interp(ay, jy, rows[:, j]) for j in range(ew)], axis=1
-            ).astype(np.float32)
-
-        drawn = cv2.remap(
-            small,
-            dense(qx),
-            dense(qy),
-            cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-        return np.clip(np.rint(drawn), 0, 65535).astype(np.uint16)
-
-    return _cached_plane(
-        cache_dir(out, case) / "truth_eval.tif",
-        make,
-        # the generating map and the lattice it is inverted on decide this plane too
-        plane_key(case, "mov", eval_px, spec=case.extra["spec"], truth_step=TRUTH_STEP),
-    )
-
-
-def shifted(plane, dx_px):
-    """``plane`` moved by ``dx_px`` evaluation pixels along x (bilinear, 0 beyond)."""
-    import cv2
-
-    h, w = plane.shape
-    m = np.float32([[1, 0, dx_px], [0, 1, 0]])
-    return cv2.warpAffine(
-        np.asarray(plane, dtype=np.float32),
-        m,
-        (w, h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
     )
 
 
@@ -866,13 +777,13 @@ def _variant_plane(out, case, variant):
 
 
 def score_case(job):
-    """``(rows, missing, dose)`` of one case: a row per variant with a written image, the
-    ``initial`` row, and on a known-truth case the ``truth`` row and its shifted copies."""
+    """``(rows, missing)`` of one case: a row per variant with a written image, and the
+    ``initial`` row."""
     out, case, variants, compute = job
     compute = bool(compute) and have_cv2()
     why_not = NO_OPENCV if not have_cv2() else "not computed"
-    rows, missing, dose = [], [], []
-    names = [v for v in variants if v not in ("initial", "truth")]
+    rows, missing = [], []
+    names = [v for v in variants if v != "initial"]
     if not case.ref_nuclear or not Path(case.ref_nuclear).exists() or not case.ref_hw:
         why = "the case has no reference image"
         return [], [_missing(case, v, why) for v in ["initial", *names]], []
@@ -908,30 +819,6 @@ def score_case(job):
         add("initial", "benchmark", home / "initial_eval.tif", home / "initial.json")
     except Exception as exc:
         missing.append(_missing(case, "initial", f"{type(exc).__name__}: {exc}"))
-    if has_known_map(case):
-        try:
-            truth_path = home / "truth_eval.tif"
-            if compute or truth_path.exists():
-                plane = truth_plane(out, case)
-                add("truth", "benchmark", truth_path, home / "truth.json")
-                um = eval_um(case)
-
-                def doses():
-                    got = []
-                    for d_um in (0.0, *DOSE_UM):
-                        rec = reference().score(shifted(plane, d_um / um))
-                        got.append({"shift_um": d_um, **rec})
-                    return {"definition": DEFINITION, "rows": got}
-
-                recs = _cached(
-                    home / "dose.json", [ref_path, truth_path], doses, compute
-                )
-                for rec in (recs or {}).get("rows", []):
-                    dose.append(_row(case, "truth", "benchmark", rec))
-            else:
-                missing.append(_missing(case, "truth", why_not))
-        except Exception as exc:
-            missing.append(_missing(case, "truth", f"{type(exc).__name__}: {exc}"))
     for variant in names:
         plane_path, why = _variant_plane(out, case, variant)
         if plane_path is None:
@@ -941,7 +828,7 @@ def score_case(job):
             add(variant, "method", plane_path, plane_path.with_name(RESULT))
         except Exception as exc:
             missing.append(_missing(case, variant, f"{type(exc).__name__}: {exc}"))
-    return rows, missing, dose
+    return rows, missing
 
 
 def _num(rows, key):
@@ -981,7 +868,7 @@ def summarise(rows, missing, by=("dataset", "variant")):
 
 
 def score_all(jobs, workers=1, compute=True):
-    """``jobs``: ``(out, case, variants)`` per case. Returns the four tables' rows."""
+    """``jobs``: ``(out, case, variants)`` per case. Returns the three tables' rows."""
     jobs = [(str(out), case, list(variants), compute) for out, case, variants in jobs]
     if workers > 1 and len(jobs) > 1:
         import multiprocessing
@@ -992,13 +879,10 @@ def score_all(jobs, workers=1, compute=True):
         done = [score_case(j) for j in jobs]
     rows = [r for d in done for r in d[0]]
     missing = [r for d in done for r in d[1]]
-    dose = [r for d in done for r in d[2]]
     return {
         "tissue": rows,
         "tissue_summary": summarise(rows, missing),
         "tissue_missing": missing,
-        "tissue_dose": dose,
-        "tissue_dose_summary": summarise(dose, [], by=("dataset", "shift_um")),
     }
 
 
@@ -1020,17 +904,6 @@ SUMMARY_COLUMNS = (
     "coverage_median",
     "bg_coverage_median",
 )
-DOSE_COLUMNS = (
-    "dataset",
-    "shift_um",
-    "n_scored",
-    "qcs_median",
-    "tissue_dice_median",
-    "boundary_dice_median",
-    "hausdorff_mean_um_median",
-    "inlier_ratio_median",
-    "nmi_median",
-)
 
 
 def markdown(tables, table):
@@ -1045,21 +918,12 @@ def markdown(tables, table):
         "reference's, at 4000 px. Computed here on same-modality fluorescence, which is "
         "outside what the score was validated for; it does not measure accuracy at "
         "nuclear scale and the source reports no check of it against landmark error. "
-        "`initial` (the unregistered slide) and `truth` (known-truth cases; drawn by the "
-        "benchmark) are for scale. Median over the scored cases; `n_below_025` counts "
+        "`initial` (the unregistered slide, drawn by the benchmark) is for scale. Median over the scored cases; `n_below_025` counts "
         "composites under 0.25. A variant without a written image has no row "
         "(`tissue_missing.csv` says why).\n",
         table(tables["tissue_summary"], list(SUMMARY_COLUMNS)),
         "",
     ]
-    if tables["tissue_dose_summary"]:
-        parts += [
-            "### What the block resolves: the truth plane shifted by a known amount\n",
-            "Known-truth cases only, whose evaluation pixel is NOT the cohort's (an "
-            "8192 px window at 4000 px).\n",
-            table(tables["tissue_dose_summary"], list(DOSE_COLUMNS)),
-            "",
-        ]
     reasons = {}
     for m in tables["tissue_missing"]:
         key = (m["dataset"], m["variant"], m["reason"].split(":")[0])

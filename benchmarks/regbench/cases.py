@@ -3,7 +3,7 @@
 A dataset's ``prepare`` writes one folder per case::
 
     <cases>/<dataset>/<case_id>/case.json    the images, the pixel size, the patient
-    <cases>/<dataset>/<case_id>/points.npz   the nuclei to warp and the truth to score against
+    <cases>/<dataset>/<case_id>/points.npz   the nuclei to warp (and, on the external landmark sets, their landmarks)
 
 ``points.npz`` holds, all in X, Y full-resolution pixels (pixel centres on the integers):
 
@@ -19,11 +19,8 @@ A dataset's ``prepare`` writes one folder per case::
 ``nuclei_<side>_outline``    (optional) for each nucleus, the index of the outline it
                              belongs to; written only where that is known by construction
                              (a nucleus then inherits its outline's seam flag)
-``truth_mov`` / ``truth_ref``           (known-truth cases) paired probes: centroids of
-                                        moving nuclei and where the true map puts them;
-                                        ``truth_cell`` is each probe's moving nucleus
-``cells_mov_xy_truth``                  (known-truth cases) the moving outlines under the true map
-``nuclei_mov_xy_truth``                 the same for the moving nuclei
+``truth_mov`` / ``truth_ref``           (external landmark sets only, until they go) paired
+                                        landmarks, one per row; the cohort has none
 
 ``case.json: extra.cell_sets`` says where each set of each side came from:
 ``{"ref": {"outlines": {"source": ...}, "nuclei": {"source": ..., "exact": bool, ...}},
@@ -92,8 +89,8 @@ class Case:
     mov_hw: list | None = None
     extra: dict = field(default_factory=dict)
     dir: str = ""
-    family: str = ""  # deformation family of a known-truth case; empty on real slides
-    pose: str = ""  # rigid pose of a known-truth case; empty on real slides
+    family: str = ""  # empty on the cohort (kept so an old case.json loads)
+    pose: str = ""  # empty on the cohort (kept so an old case.json loads)
 
     @property
     def points_path(self):

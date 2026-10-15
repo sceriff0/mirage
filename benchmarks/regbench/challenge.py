@@ -58,7 +58,7 @@ not applied: every pair has all its landmarks or none.
 **Micrometres.** ``tre_um_*`` is the same error times the pair's pixel size, where the
 pixel size is established (``datasets/anhir.py``: every tissue but ``mammary-gland``,
 which is reported in pixels only and counted in ``n_pairs_um``). Unlike the official
-columns, a non-finite landmark has an INFINITE error there (``regbench.truth``).
+columns, a non-finite landmark has an INFINITE error there (``landmarks.error_stats``).
 
 **Frame.** A method whose map goes moving -> reference (STARE) moves the source landmarks
 into the target image: the challenge's own quantity. A method whose map goes reference
@@ -76,10 +76,10 @@ from pathlib import Path
 
 import numpy as np
 
-from . import ANHIR, ANHIR_DATASETS, ANHIR_TUNE, prep, truth, variants
+from . import ANHIR, ANHIR_DATASETS, ANHIR_TUNE, prep, variants
 from . import score as cohort
 from .cases import list_cases, load_points
-from .landmarks import landmark_errors
+from .landmarks import error_stats, landmark_errors
 from .mapping import FRAME, MOV_TO_REF
 from .notrun import (  # noqa: F401  (the one definition, shared with landmarks)
     NOT_RUN_CAUSES,
@@ -200,7 +200,7 @@ def _score_case(job):
         stats = pair_stats(err, init, case.diagonal)
         if failed:  # the official rule: the initial rTRE, and no landmark improved
             stats["robustness"] = 0.0
-        um = truth.error_stats(mapped, target, source, px)
+        um = error_stats(mapped, target, source, px)
         pairs.append(
             {
                 **base,
@@ -213,7 +213,7 @@ def _score_case(job):
                 "tre_um_p50": um["tre_um_p50"],
                 "tre_um_p90": um["tre_um_p90"],
                 "initial_tre_um_p50": um["initial_tre_um_p50"],
-                **truth.jacobian_stats(warped),
+                **cohort.jacobian_stats(warped),
                 "diagonal_px": float(case.diagonal),
                 "pixel_size_um": px if px is not None else math.nan,
                 "pixel_size_established": bool(

@@ -32,11 +32,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from benchmarks.regbench import METHODS, cells, methods, scene, score
+from benchmarks.regbench import METHODS, cells, methods, score
 from benchmarks.regbench import selfcheck as sc
-from benchmarks.regbench.cases import load_case, load_points, polys, result_dir
-from benchmarks.regbench.datasets import synthetic
-from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
+from benchmarks.regbench.cases import load_case, result_dir
+from benchmarks.regbench.mapping import REF_TO_MOV
 from benchmarks.regbench.methods import palom as pa
 
 from . import fake_palom as fp
@@ -746,8 +745,8 @@ def test_nonfinite_shift_fails_the_case(tmp_path, case, monkeypatch):
 def test_a_filter_that_raises_fails_the_block_row_and_keeps_the_affine(
     tmp_path, case, monkeypatch
 ):
-    """What the ``rigid`` known-truth family may do to PALOM (every shift equal): the row
-    fails with the package's own message and is reported as it is."""
+    """What a purely rigid map may do to PALOM (every shift equal): the row fails with
+    the package's own message and is reported as it is."""
     text = (
         "Found array with 0 sample(s) (shape=(0, 2)) while a minimum of 1 is required"
     )
@@ -956,37 +955,6 @@ def test_a_nucleus_is_on_a_seam_only_where_the_shifts_differ():
     assert pa.seam_jumps(flat).max() == 0 and len(pa.seam_jumps(geo)) == 7
 
 
-def test_a_probe_is_on_a_seam_when_its_own_nucleus_would_be():
-    from benchmarks.regbench.cases import polyset_arrays
-
-    geo = _seam_geometry()
-    # three moving nuclei of half-width 6, 2 and 6 px; the truth is a shift by (150, 20)
-    mov_centres = np.array([[40.0, 30.0], [47.0, 60.0], [-100.0, 100.0]])
-    mov = cells.from_rings(
-        [
-            np.array([[x - h, y - h], [x + h, y - h], [x + h, y + h], [x - h, y + h]])
-            for (x, y), h in zip(mov_centres, (6.0, 2.0, 6.0))
-        ]
-    )
-    truth_ref = mov_centres + [150.0, 20.0]  # x = 190, 197, 50
-    points = {
-        **polyset_arrays(mov, "mov"),
-        "truth_mov": mov_centres,
-        "truth_ref": truth_ref,
-        "truth_cell": np.array([0, 1, 2]),
-    }
-    # the seam is the edge at x = 199.5: 190 + 6 + 1 reaches it; 197 + 2 + 1 = 200 does
-    # too; the third probe sits in block (1, 0) at (50, 120), 20 px below the seam at
-    # y = 99.5
-    assert pa.probe_band(geo, points).tolist() == [False, True, False]
-    wide = dict(points, truth_ref=truth_ref + [3.0, 0.0])  # 193 + 6 + 1 >= 199.5
-    assert pa.probe_band(geo, wide).tolist() == [True, True, False]
-    # without the nucleus the probe is judged as a point with the same margin
-    bare = {"truth_ref": np.array([[198.4, 50.0], [198.6, 50.0]])}
-    assert pa.probe_band(geo, bare).tolist() == [False, True]
-    assert pa.probe_band(geo, {}) is None
-
-
 def test_the_dots_mask_is_rebuilt_from_the_run_record():
     geo = _seam_geometry()
     info = json.loads(json.dumps(pa.describe(geo, geo.shifts)))
@@ -1012,94 +980,3 @@ def retile(path, tile):
         for x in range(0, w, tile)
     )
     write_nuclear_tiles(path, (h, w), plane.dtype, tiles, tile)
-
-
-@pytest.fixture(scope="module")
-def truth_case(tmp_path_factory):
-    """One known-truth case at 1024 px (not a frozen one: no hash), its reference file
-    in 256 px tiles: 4 x 4 blocks for PALOM, whose blocks are that file's tiles."""
-    root = tmp_path_factory.mktemp("palom_truth")
-    suite = synthetic.truth_suite(n=1024, families=("bumps25",))
-    name = sorted(suite)[0]
-    synthetic.prepare_one(root, name, suite[name])
-    case = load_case(root / "synthetic" / name)
-    retile(case.ref_image, TILE)
-    return root, case
-
-
-def _exact():
-    import types
-
-    def register(case, work, opts):
-        fn = scene.forward_map(case.extra["spec"])
-        yield "exact", PointMap(fn, MOV_TO_REF), {}
-
-    return types.SimpleNamespace(
-        NAME="exact", SCOPE="pair", VARIANTS=("exact",), register=register
-    )
-
-
-@pytest.mark.slow
-def test_every_variant_gets_rows_off_paloms_seams_on_identical_nuclei(
-    truth_case, tmp_path
-):
-    root, case = truth_case
-    out = tmp_path / "out"
-    assert methods.run_case("palom", case, out) == ["palom_affine", "palom"]
-    methods.run_case(_exact(), case, out)
-    points = load_points(case)
-    n_ref, n_probes = polys(points, "ref").n_features, len(points["truth_ref"])
-    with np.load(result_dir(out, "palom", case) / "warped.npz") as z:
-        band_ref, band_truth = z["band_ref"], z["band_truth"]
-        assert "band" not in z.files
-    assert band_ref.shape == (n_ref,) and band_truth.shape == (n_probes,)
-    assert 0 < band_ref.sum() < n_ref and 0 < band_truth.sum() < n_probes
-    # only the block grid and the accepted shifts enter: rebuilt from the run's record
-    # of them, the mask is the same
-    info = run_json(out, "palom", case)["info"]
-    assert info["grid_shape"] == [4, 4] and info["block_px"] == {"y": [256], "x": [256]}
-    geo = pa.Geometry.from_info(info["blocks"])
-    assert np.array_equal(pa.nucleus_band(geo, points), band_ref)
-    assert np.array_equal(pa.probe_band(geo, points), band_truth)
-    assert info["band_fraction"] == pytest.approx(band_ref.mean())
-    # the affine row carries no mask: the owner is the row's final variant
-    with np.load(result_dir(out, "palom_affine", case) / "warped.npz") as z:
-        assert "band_ref" not in z.files and "band_truth" not in z.files
-
-    res = score.score(root, out, ["synthetic"], seam_owners=("palom",))
-    rows = [r for r in res["nonband_cells"] if r["case_id"] == case.case_id]
-    names = {r["method"] for r in rows}
-    assert names == {
-        v + ":non_palom" for v in ("initial", "palom_affine", "palom", "exact", "truth")
-    }
-    kept = int((~band_ref).sum())
-    assert {(r["n_ref_kept"], r["n_ref_all"]) for r in rows} == {(kept, n_ref)}
-    assert {r["n_mov_kept"] == r["n_mov_all"] for r in rows} == {True}
-    probes = [r for r in res["nonband_truth"] if r["case_id"] == case.case_id]
-    assert {r["method"] for r in probes} == {
-        v + ":non_palom" for v in ("initial", "palom_affine", "palom", "exact")
-    }
-    left = int((~band_truth).sum())
-    assert {(r["n_probes"], r["n_probes_all"]) for r in probes} == {(left, n_probes)}
-    # the exact map is still exact on the probes that are left
-    (exact,) = [r for r in probes if r["method"] == "exact:non_palom"]
-    assert exact["tre_um_max"] < 1e-6
-    assert not [r for r in res["truth"] if ":non_" in r["method"]]
-    assert not [r for r in res["cells"] if ":non_" in r["method"]]
-
-
-def test_a_failed_palom_run_gives_no_off_seam_row_to_anyone(
-    truth_case, tmp_path, monkeypatch
-):
-    root, case = truth_case
-    out = tmp_path / "out"
-    fp.install(monkeypatch.setitem, constrain_raises="the filter failed here")
-    assert methods.run_case("palom", case, out) == ["palom_affine"]
-    methods.run_case(_exact(), case, out)
-    res = score.score(root, out, ["synthetic"], seam_owners=("palom",))
-    assert res["nonband_cells"] == [] and res["nonband_truth"] == []
-    (lost,) = res["nonband_missing"]
-    assert lost["owner"] == "palom" and lost["n_cases_without_mask"] == 1
-    # the failed row itself is in the primary table, at the unregistered pose
-    (row,) = [r for r in res["cells"] if r["method"] == "palom"]
-    assert row["imputed_initial"] and "the filter failed here" in row["problem"]

@@ -10,7 +10,7 @@ cohort's ``score`` never reads an external dataset.
 landmarks of the side it starts from (``warped.npz: truth_xy``); the error of a landmark
 is the distance to its partner on the other side, times the pixel size: target
 registration error in micrometres, in the method's own direction, as in
-``regbench.truth.error_stats`` (which gives the per-pair numbers here). A point a method
+``error_stats`` below (which gives the per-pair numbers here). A point a method
 could not map has an infinite error. A run that failed or never ran is scored at the
 unregistered pose (``imputed_initial``), so a failure is a row and counts in every
 pooled number.
@@ -46,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import HYRECO_DATASETS, truth, variants
+from . import HYRECO_DATASETS, variants
 from . import score as cohort
 from .cases import list_cases, load_points
 from .mapping import FRAME, MOV_TO_REF
@@ -144,6 +144,66 @@ TABLES = (
 )
 
 
+# ── the point error (moved here from the removed known-truth scorer; goes with HyReCo) ──
+ERROR_KEYS = (
+    "n_probes",
+    "n_nonfinite",
+    "tre_um_p50",
+    "tre_um_p90",
+    "tre_um_max",
+    "frac_under_1um",
+    "frac_under_2um",
+    "initial_tre_um_p50",
+    "frac_improved",
+)
+
+
+def _percentile(sorted_values, q):
+    """Linear percentile of an ascending array that may end in ``inf``."""
+    n = len(sorted_values)
+    pos = q / 100.0 * (n - 1)
+    lo, hi = int(math.floor(pos)), int(math.ceil(pos))
+    a, b = float(sorted_values[lo]), float(sorted_values[hi])
+    if lo == hi or a == b:
+        return a
+    if math.isinf(b):
+        return math.inf
+    return a + (b - a) * (pos - lo)
+
+
+def error_stats(mapped, target, source, pixel_size_um):
+    """Error of ``mapped = fn(source)`` against ``target``, in micrometres.
+
+    A point the method returned as NaN or infinite counts AGAINST it: its error is
+    infinite, so it is under no threshold, it is not improved, and it pulls the percentiles
+    up. Without a pixel size the micrometre numbers are NaN, never zero.
+    """
+    out = dict.fromkeys(ERROR_KEYS, math.nan)
+    mapped = np.asarray(mapped, dtype=float).reshape(-1, 2)
+    target = np.asarray(target, dtype=float).reshape(-1, 2)
+    source = np.asarray(source, dtype=float).reshape(-1, 2)
+    out["n_probes"], out["n_nonfinite"] = len(target), 0
+    if not len(target) or len(mapped) != len(target):
+        return out
+    bad = ~np.isfinite(mapped).all(axis=1)
+    err = np.full(len(target), math.inf)
+    err[~bad] = np.hypot(*(mapped[~bad] - target[~bad]).T)
+    init = np.hypot(*(source - target).T)
+    out["n_nonfinite"] = int(bad.sum())
+    out["frac_improved"] = float(np.mean(err < init))
+    if not pixel_size_um:
+        return out
+    px = float(pixel_size_um)
+    err_um, init_um = np.sort(err * px), np.sort(init * px)
+    out["tre_um_p50"] = _percentile(err_um, 50)
+    out["tre_um_p90"] = _percentile(err_um, 90)
+    out["tre_um_max"] = float(err_um[-1])
+    out["frac_under_1um"] = float(np.mean(err_um < 1.0))
+    out["frac_under_2um"] = float(np.mean(err_um < 2.0))
+    out["initial_tre_um_p50"] = _percentile(init_um, 50)
+    return out
+
+
 def landmark_errors(case, points, warped):
     """``(error px, initial px, mapped, source, target, direction)`` of one run on one
     case; ``warped`` None scores the unregistered pose. Raises ValueError when the
@@ -211,7 +271,7 @@ def _score_case(job):
             # other pairs; never a default
             declared = str((run or {}).get("direction") or "")
             direction = declared if declared in FRAME else ""
-        jac = truth.jacobian_stats(warped)
+        jac = cohort.jacobian_stats(warped)
         pairs.append(
             {
                 **base,
@@ -219,7 +279,7 @@ def _score_case(job):
                 "frame": FRAME.get(direction, ""),
                 "failed": imputed,
                 "not_run": imputed and cause in NOT_RUN_CAUSES,
-                **truth.error_stats(mapped, target, source, px),
+                **error_stats(mapped, target, source, px),
                 **jac,
                 "pixel_size_um": px,
                 "pixel_size_source": case.extra.get("pixel_size_source", ""),
@@ -245,12 +305,12 @@ def _score_case(job):
 def _median(values):
     """The median of errors that may hold ``inf`` (a lost point is not hidden)."""
     v = np.sort(np.asarray(values, dtype=float))
-    return truth._percentile(v, 50) if len(v) else math.nan
+    return _percentile(v, 50) if len(v) else math.nan
 
 
 def _p90(values):
     v = np.sort(np.asarray(values, dtype=float))
-    return truth._percentile(v, 90) if len(v) else math.nan
+    return _percentile(v, 90) if len(v) else math.nan
 
 
 def sets_of(dataset):

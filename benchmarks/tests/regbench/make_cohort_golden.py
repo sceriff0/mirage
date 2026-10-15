@@ -28,10 +28,8 @@ cohort to the next (measured: two builds, compared) or from one machine to the n
 
 The ``selfcheck_*`` columns of the score tables are not in VALUE_COLUMNS either.
 
-``synthetic``: ``scored_cohort.build`` makes one ``synthetic`` case and the scoring runs
-it. ``test_the_golden_does_not_need_the_synthetic_case`` builds the cohort WITHOUT it
-and shows the multiplex golden is the same (measured when this was written), so a task that removes
-the ``synthetic`` dataset may drop that case freely."""
+Removing the ``synthetic`` dataset (T2 of the official-harness plan) did not move a
+multiplex number: the golden was shown unchanged without its hand-made case first."""
 
 from __future__ import annotations
 

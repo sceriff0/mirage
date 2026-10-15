@@ -323,8 +323,8 @@ def test_palom_points_follow_its_written_image(tmp_path):
 
 
 def test_palom_on_equal_shifts_everywhere():
-    """What PALOM's filter does when every block has the same shift (the ``rigid``
-    known-truth family; expected to raise from the reading, never run). Reported, not
+    """What PALOM's filter does when every block has the same shift (a purely
+    rigid map; expected to raise from the reading, never run). Reported, not
     judged: the row is published as it comes out either way."""
     package, _ = need_palom()
     import warnings

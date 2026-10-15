@@ -1,8 +1,8 @@
 """Registration benchmark: each method run natively and judged with the transform it
-estimated, on synthetic, semi-synthetic and multiplex-IF cases under one contract."""
+estimated, on the multiplex-IF cohort (and, until they go, two external landmark sets)."""
 
 # The cohort's datasets: what `score`, `tissue` and the launcher take when none is named.
-DATASETS = ("synthetic", "semisynth", "multiplex")
+DATASETS = ("multiplex",)
 # External landmark sets (brightfield). Never scored with the cohort: each has its own
 # run list (`variants.runs_for`), its own scorer and its own tables, and none is part of
 # the default submission.

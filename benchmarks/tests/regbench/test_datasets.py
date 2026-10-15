@@ -80,7 +80,6 @@ def test_multiplex_manifest_to_dice_and_displacement(tmp_path):
     methods.run_case("stare", case, out, opts={"workers": 1})
     res = score(cases_root, out, ["multiplex"])
     by = {r["method"]: r for r in res["cells"]}
-    assert "truth" not in by  # no known map on real slides
     assert by["initial"]["displacement_px_p50"] == pytest.approx(
         math.hypot(6, 4), abs=0.5
     )

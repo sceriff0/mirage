@@ -39,9 +39,7 @@ This package is being ported in steps. What exists now:
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
-| datasets `synthetic`, `semisynth`, `multiplex` | here. The frozen known-truth cases (`--suite truth`, `--truth`) are real patients with two rounds; in the copied suites each case is still its own patient |
 | the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC outlines of one arm (StarDist nuclei on the nuclear channel, grown by 10 px: see "What the cohort's nuclei are"). Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
-| known-truth error per deformation family (`truth.py`, `truth_spec.json`) | here; the frozen 8192 px cases have not been run through any method |
 | adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
 | adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
 | adapter `initial` | here (the identity) |
@@ -49,10 +47,10 @@ This package is being ported in steps. What exists now:
 | selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
 | adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
 | adapter `palom` (PALOM 2026.4.1 by its README recipe, one run: `palom`) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
-| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`, known-truth probes through `band_truth`) |
+| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`) |
 | tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
 | the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 60 runs (STARE strides x preprocessing levels generated per modality regime, ASHLAR's 24-cell factorial, one paused row), six primary rows, a flag that pauses a run, a `regimes` filter that gives a dataset only the runs of its modality |
-| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate; for a run that is one job per unit, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost); for a run whose registration is several jobs per round (STARE), four arrays per stage, its tile submitters, and the same eight arrays for each round's last job; `multiplex` before `synthetic`, the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
+| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate; for a run that is one job per unit, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost); for a run whose registration is several jobs per round (STARE), four arrays per stage, its tile submitters, and the same eight arrays for each round's last job; the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
 | HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
 
@@ -70,7 +68,7 @@ nuclei.py      bare nuclei per native slide: check the label images that exist, 
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      synthetic, semisynth, multiplex: each writes cases; hyreco and anhir write
+datasets/      multiplex writes the cohort's cases; hyreco and anhir write
                the external landmark sets (hyreco_a, hyreco_b; anhir, anhir_tune)
 prep.py        the stare_prep row: the preprocessing candidates, the frozen choice
                (prep_frozen.json), the check that none of them moves image content
@@ -95,10 +93,10 @@ a point mapping in the method's own direction, the scorer reads files only.
 From the repository root:
 
 ```bash
-python -m benchmarks.regbench prepare synthetic --suite test --cases CASES
-python -m benchmarks.regbench list --cases CASES --dataset synthetic          # count
-python -m benchmarks.regbench list --cases CASES --dataset synthetic --groups  # patients
-python -m benchmarks.regbench run --cases CASES --out OUT --dataset synthetic \
+python -m benchmarks.tests.regbench.toy_cases CASES    # four generated test cases
+python -m benchmarks.regbench list --cases CASES --dataset multiplex          # count
+python -m benchmarks.regbench list --cases CASES --dataset multiplex --groups  # patients
+python -m benchmarks.regbench run --cases CASES --out OUT --dataset multiplex \
     --method stare --index 0
 python -m benchmarks.regbench tissue --cases CASES --out OUT   # needs OpenCV; see below
 python -m benchmarks.regbench score --cases CASES --out OUT
@@ -269,11 +267,11 @@ primary rows:
 ## The contract
 
 **A case** is `<cases>/<dataset>/<case_id>/case.json` plus `points.npz`. `case.json` names the
-two slides, the pixel size, `group` (the PATIENT, in every dataset) and, on known-truth
-cases, `family` and `pose`. `points.npz` holds the nuclei segmented on each NATIVE slide as
+two slides, the pixel size, `group` (the PATIENT, in every dataset) and, kept so an old file loads,
+`family` and `pose` (empty on the cohort). `points.npz` holds the nuclei segmented on each NATIVE slide as
 full polygon sets (`cells_<side>_xy`, `_ring_off`, `_ring_feat`, `_ring_hole`, `_n`; `side`
-is `ref` or `mov`), read back with `cases.polys(points, side)`. A known-truth case also
-holds paired probes: `truth_mov`, `truth_ref` and `truth_cell` (see "Known-truth error").
+is `ref` or `mov`), read back with `cases.polys(points, side)`. The external landmark sets (HyReCo, ANHIR) hold paired landmarks instead:
+`truth_mov` and `truth_ref`.
 
 Since 2026-10-11 a side has **two polygon sets** (`cases.SETS`). The arrays above are the
 **outlines**; the **bare nuclei** are a second set with the same five arrays under
@@ -321,9 +319,8 @@ nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.
 (`cells_xy`, and `nuclei_xy` = the bare nuclei of the same side through the same map;
 `direction`, `band` when `info["band_mov"]` is given and `band_ref` when
 `info["band_ref"]` is: a method's own seam mask, one bool per moving or per reference
-nucleus; `band_truth` when `info["band_truth"]` is: the same seams by known-truth probe,
-for a reference-side mask; `truth_xy` = the map
-applied to the truth probes of the side it starts from, and `grid`, `grid_shape`,
+nucleus; `truth_xy` = the map
+applied to the landmarks of the side it starts from (the external sets), and `grid`, `grid_shape`,
 `grid_step` = the map on a lattice for the Jacobian statistics; `band_nuc` /
 `band_ref_nuc` = the owner's seam mask on the bare nuclei, see "Off the seams"), writes
 `run.json` (`nuclei_band` says how that mask was got), and calls `on_variant`. The second
@@ -363,7 +360,7 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 `failures.csv` and the summary count the causes that are not the method's apart
 (`launches_failed_method`, `launches_lost_not_method`, `rounds_lost_not_method`). A round
 lost for a cause that is not the method's (`resources.NOT_THE_METHOD`) is LEFT OUT of that
-method's summaries, differences and known-truth rows, and is in no common block; its row
+method's summaries and differences, and is in no common block; its row
 stays in `cells.csv` with `excluded_from_summaries`, it is named in `excluded_rounds.csv`,
 and the summary says so in bold above the failure table: submit it again before reading
 those rows ("Scoring" has the rule; `score.NOT_THE_METHOD_ROUNDS` is the switch).
@@ -686,7 +683,7 @@ grid is checked only where a method redraws the reference (ASHLAR:
 selfcheck_status` is the run's gate, which `stare_rigid` shares with `stare`. The scorer
 therefore reads each ROW's own status from the selfcheck records
 (`variants.row_checks`) into a column of its own, `selfcheck_row`, in `cells.csv`,
-`truth.csv`, `summary_cells.csv`, `truth_by_family.csv` and the off-seam tables, and
+`summary_cells.csv` and the off-seam tables, and
 `summary.md` prints it beside the row's name: `ok`, `no_stage_image` (shown as **NEVER
 CHECKED**), `via <run>: <status>` for a row whose run is gated by another run's selfcheck
 (`ashlar_clean`), or `no selfcheck record`.
@@ -788,7 +785,7 @@ nuclei). The median distance is shown and not used: it measures segmentation noi
 a gate (it is the only check at cohort field scales): `slurm/submit_cohort.sh` runs the
 first unit of such a run ahead with `--realcheck`, and a gate job (`regbench realgate`)
 blocks the rest when that realcheck is flagged ("Running the cohort on a cluster", step
-4). It has only run on synthetic slides, and the gate has never run on a scheduler.
+4). It has only run on generated slides, and the gate has never run on a scheduler.
 
 ## Scoring
 
@@ -882,8 +879,8 @@ A failed, killed or never-started run is a row scored at the unregistered pose
 scheduler lost the attempt; `benchmark_oom` and `benchmark`: the benchmark's own lines
 ran out of memory or failed; `not_submitted`: the launcher never queued a stage job).
 Scoring it at the unregistered pose would charge the method for the cluster, and dropping
-it silently would hide it, so: it is left out of that method's summaries, differences and
-known-truth rows (`n_excluded_not_method`, "left out" in `summary.md`), it is in no common
+it silently would hide it, so: it is left out of that method's summaries and differences
+(`n_excluded_not_method`, "left out" in `summary.md`), it is in no common
 block for any method (it is unregistered), it is named at the top of `summary.md` and in
 `excluded_rounds.csv`, and its row stays in `cells.csv` with `excluded_from_summaries`.
 This is the coordinator's decision pending the owner's; `score.NOT_THE_METHOD_ROUNDS`
@@ -896,12 +893,6 @@ independent unit (`score.UNIT_IS`, column `unit` of `cells.csv`), not the case's
 | dataset | one unit is | so |
 |---|---|---|
 | `multiplex` | a patient | rounds of a patient are reduced to their median first |
-| `synthetic` | a generated scene: ONE per deformation family (its two poses are the same scene) | every family has one unit: always descriptive, never ranked |
-| `semisynth` (dormant) | the real patient the window was cut from | its windows, families and poses are one unit, however many cases they make |
-
-On the two known-truth datasets the cell summaries are **per deformation family** and never
-pooled over families, as the known-truth table already was: a family outside a method's
-model (and ASHLAR's `rot` rows) shows in its own row.
 
 **The common block** (`subset=common`, `common_block.csv`) is the cases every COMPARED row
 registered. A row is compared when it is a primary row (any registration row when no
@@ -925,8 +916,7 @@ the spread between units. No p-value is computed and no ranking is derived; the 
 patients does not move when a method fails on a minority of them. Each headline of
 `summary.md` is therefore printed as `median (mean over the same units) [minimum over
 cases]` on the line that carries `ok/cases` (`<headline>_mean` in `summary_cells.csv`),
-the known-truth table has `tre_um_p50_mean` beside `tre_um_p50_med` with `n_ok` and
-`n_cases`, and the cost medians have their means (`*_mean`, `*_common_mean`) and the
+and the cost medians have their means (`*_mean`, `*_common_mean`) and the
 patients completed.
 
 It is self-consistency on the registration channel: there is no held-out structure and no
@@ -971,10 +961,10 @@ bare nuclei are therefore found or made by the benchmark, slide by slide: next s
 
 **The two definitions.**
 
-| set | on the cohort | on `synthetic` (and dormant `semisynth`) |
-|---|---|---|
-| `outlines` (headline) | the arm's published QC outline of each native slide: a StarDist nucleus grown by 10 px until it meets a neighbour | the built-in segmenter's objects grown the same way: `skimage.segmentation.expand_labels(labels, distance=10)`, the call `bin/utils/segment_io.py::expand_labels_tiled` makes (`cells.grow`, `cells.EXPAND_PX`) |
-| `nuclei` | the StarDist nuclei themselves, from the first source below that applies | the built-in segmenter's objects (what these datasets scored before 2026-10-11) |
+| set | on the cohort |
+|---|---|
+| `outlines` (headline) | the arm's published QC outline of each native slide: a StarDist nucleus grown by 10 px until it meets a neighbour |
+| `nuclei` | the StarDist nuclei themselves, from the first source below that applies |
 
 **Why both.** Matched Dice on grown outlines is dominated by the rim: at a nuclear radius
 of about 12 px a 10 px rim is roughly two thirds of the outline's area, so a given
@@ -1109,7 +1099,7 @@ outlines, their nuclei numbers are absent, and `nuclei_missing.csv` and the top 
 
 **Tracing.** The published outlines are polygons the pipeline simplified to 1 px
 (`bin/mask_to_geojson.py`); nuclei read from a label image are traced by
-`cells.polys_from_label_image`, unsimplified. On the known-truth datasets the grown
+`cells.polys_from_label_image`, unsimplified. The grown
 outlines are simplified to the same 1 px (`cells.OUTLINE_TOLERANCE_PX`), as the cohort's
 are, and the nuclei are not (an unsimplified grown contour has about 125 vertices against
 about 10, and the pipeline's raster IoU, which scores every pair 18 times with the null,
@@ -1143,23 +1133,13 @@ unregistered pose.
 
 **What it costs the scorer.** The pipeline's IoU rasterises each pair in a Python loop,
 and a row scores its pairs 18 times (two pairings, once registered and in eight null
-directions). Measured on one 625-cell synthetic case on a laptop: 2.5 s per row on the
+directions). Measured on one 625-cell generated case on a laptop: 2.5 s per row on the
 bare nuclei, and on the grown outlines 25 s unsimplified, about 9 s simplified. Two
 things were done about it, neither of which changes a number: the grown outlines are
 simplified as the pipeline's are (above), and a pair that both pairings chose is
 rasterised once (`pairs._pair_iou`; a pair's IoU depends on its two cells alone;
 `test_pairs.py::test_a_pair_both_pairings_share_is_rasterised_once`), which halves the
-IoU work on the cohort too. Scoring the known-truth datasets is still slower than before
-2026-10-11, because their outline rows are now grown outlines and a nuclei row is added.
-
-**Known truth.** The probes are the centroids of the NUCLEI, as before, and the truth
-spec is unchanged by it (now version 5, `1bade785…`): the expansion distance is the pipeline's
-default, not a frozen parameter of the maps, the probes or the seeds, so it is recorded
-per case (`extra.cell_sets.<side>.outlines.expand_px`) and not in `truth_spec.json`.
-What DID change on `synthetic`: the columns that mean "outlines" (`cells.csv`,
-`summary_cells.csv`, the off-seam rows) are now the grown objects and no longer the bare
-ones; the numbers these datasets had before 2026-10-11 are the `_nuclei` tables. Cases
-must be prepared again (the launcher's `--prepare`).
+IoU work on the cohort too.
 
 **Commands on the cluster** (after exporting what "What to export" lists):
 
@@ -1199,318 +1179,6 @@ between two GPU runs for the 0.99 thresholds; that a segmentation arm's mask pas
 its reference slide; what a work directory still holds; the memory and time of tracing
 two label images of a whole slide in the scorer's image (`cells.polys_from_label_image`,
 tile by tile).
-
-## Known-truth error
-
-The one check that does not rest on the nuclei metric: on synthetic and semi-synthetic
-cases the map that made the moving slide is known, so a method's error can be measured
-against it. It is independent of that metric, not of the authors: the families, their
-amplitudes and scales were chosen by STARE's authors ("What these numbers are not"). Everything here is
-fixed by `truth_spec.json`, which carries the SHA-256 of its own content, except which
-cohort patients the semi-synthetic cases are cut from: that is the cohort's own list, or
-a subset declared before any run ("Cases" below).
-
-**Probes.** `truth_mov` are centroids of nuclei segmented on the native MOVING slide, and
-`truth_ref = g(truth_mov)` with `g` the generating map (moving -> reference, exact). A
-probe is kept when its true position lies at least 32 px inside the reference; at most
-20000 per case, by a seeded draw. `truth_cell` says which moving nucleus each probe is.
-
-**Direction, with no inverse of anything.** For a `mov_to_ref` method the error is
-`fn(truth_mov) - truth_ref`; for a `ref_to_mov` method it is `fn(truth_ref) - truth_mov`.
-The same pairs serve both. Neither the method's map nor `g` is inverted, which also keeps
-the discontinuous `seams` family well defined.
-
-**Families** (frozen; each is reported on its own, never pooled):
-
-| family | amplitude | scale | note |
-|---|---|---|---|
-| `rigid` | none | | control: the pose alone |
-| `grid` | s.d. 5 px (1.6 µm) | 9 x 9 nodes, 1024 px apart | nearly Casamitjana et al.'s generator, its pixel value carried over without rescaling ("Where the families come from") |
-| `multiscale` | RMS 2.0 µm | 333, 166, 83 µm, fixed in µm | the three-octave structure is SynthMorph's; the amplitude and the scales in µm are the benchmark's |
-| `bumps100` | 0.2 to 0.6 sigma | sigma 100 px, 120 bumps per 8192 px window | **the benchmark's own** (no published generator); inside STARE's model; 24 % of the window moves by more than 1 µm |
-| `bumps25` | 0.2 to 0.6 sigma | sigma 25 px, 4000 bumps per 8192 px window | **the benchmark's own**; **outside STARE's model** (finer than its 64 px lattice); 23 % of the window moves by more than 1 µm |
-| `seams` | s.d. 3 px (0.98 µm) per axis | 1950 px blocks, the cohort scanner's tile | **outside STARE's model** (discontinuous); no seam on any method's grid line |
-
-Spec **version 5**: six families, each with its own `index` in the spec, which the seed
-rules read (index 1 is retired); 6 synthetic scenes, 12 cases. How to read them:
-
-- **One scene per family.** On `synthetic` each family is ONE generated scene, and its
-  two poses are that same scene. A family's row is one draw of its field, with no
-  spread between scenes behind it: descriptive, never ranked.
-- **Never averaged over families.** Every table has one row per family (and pose); no
-  number pools them, because a family outside a method's model must show in its own row.
-- **`grid` is inside STARE's model by its scale.** Its 9 x 9 nodes are 1024 px apart,
-  16 times STARE's 64 px lattice, so every node lies on that lattice and a spline mesh
-  on it can represent the field (`in_stare_model`). The same holds for `multiscale`
-  and `bumps100`; `bumps25` and `seams` are the two families that are not.
-- **`rot` is outside ASHLAR's model.** ASHLAR estimates one shift per tile and no
-  rotation; a pose of 2 degrees moves the two ends of a 1950 px tile 68 px apart, so
-  its `rot` rows measure that limit, not its accuracy on what it is built for.
-- **`bumps100`**, as `truth_spec.json` has it: 120 Gaussian bumps of sigma 100 px per
-  8192 px window, each peaking at 0.2 to 0.6 sigma; 24 % of the window moves by more
-  than 1 µm (21.8 to 25.0 % over 82 seeds), and no seed folds.
-- **The nuclei of the generated cases are the built-in segmenter's** (`cells.py`), on
-  the generated images: not StarDist's, and not the cohort's QC outlines.
-
-### Where the families come from
-
-Every source below was read for the port's literature report of 2026-10-11, not again
-when this section was written; the tag after each is that report's record of how much of
-the source was read, carried over unchanged. Where a statement rests on a partial read,
-the sentence says so.
-
-**The principle: test deformations should include ones the method cannot represent.**
-Three sources state it, and it is why two of the six families (`bumps25`, `seams`) are
-outside a 64 px mesh:
-
-- Sorzano, Thévenaz, Unser, IEEE TBME 52:652, 2005 `[PARTIAL: read pp. 657 and 659
-  (§IV-A) as images plus one discussion paragraph; missing §II–III]`: "The true
-  deformations were picked from a deformation space that cannot be represented exactly by
-  B-splines. The goal is to test the algorithm performance in a challenging situation that
-  does not allow for an exact registration since this would bias our estimate of the
-  accuracy." (§IV-A.1, p. 657). Their methods sections were not read.
-- Casamitjana et al., arXiv:2104.14873 `[PARTIAL: read abstract, §3.1.1, §3.2–3.3; missing
-  §2 methods, results, supplement]`: "We explicitly avoid using velocity fields to prevent
-  imitating the deformation model used in the algorithm." (§3.3).
-- Borovec et al., ANHIR, IEEE TMI 2020, PMC7584382 `[PARTIAL: read abstract, parts of
-  intro, conclusion paragraph, reference list; keyword scan]`: "we would recommend that
-  manually obtained landmarks are combined with … synthetically generated (and therefore
-  known) deformations" (Conclusions). Only that paragraph and the abstract carry this
-  here; the body was keyword-scanned.
-
-**`grid`** nearly matches Casamitjana et al. (same tag): "normally distributed,
-low-resolution deformation fields of size 9×9×2 … Each element in the low-resolution
-field is an independent Gaussian variable with zero mean and a standard deviation which
-is constant for each slice, and which is sampled from a uniform distribution U[3, 7] (in
-pixels). Each deformation field is then resized to the original image size using B-Spline
-interpolation." (§3.3). Two differences, both stated: the paper DRAWS the s.d. per slice
-from U[3, 7] and the benchmark fixes 5, the midpoint, which is not itself a published
-value; and the pixel value is transferred WITHOUT rescaling, from brain MRI slices at 1 mm
-per pixel to 8192 px windows at 0.325 µm per pixel, so 5 px is 1.6 µm on nodes 1024 px
-apart here and 5 mm there. The paper's methods and results were not read.
-
-**`multiscale`**: three octave-spaced random fields summed is the structure of
-SynthMorph's generator, Hoffmann et al., IEEE TMI 41:543 (arXiv:2004.10282) `[PARTIAL:
-read §II-C, §II-D.1, Table I (page image), §III-G; missing the rest]`: "we sample several
-SVFs v_m ∼ N(0, σ_v²) at resolutions r_v ∈ {1:8, 1:16, 1:32}, drawing a different σ_v for
-each … The upsampled SVFs are then combined additively" (§II-C.3). Only the structure is
-taken: SynthMorph integrates velocity fields and draws σ at random, the benchmark sums
-displacements at a fixed RMS, and the 2 µm, the three scales in µm and their equal energy
-are the benchmark's.
-
-**The bump families are the benchmark's own.** No published generator was found for
-them; the count, the width and the "about a quarter of the window above 1 µm" target are
-the benchmark's. Their motivation is local damage as described, not measured, in:
-Muhlich et al. 2022, ASHLAR, Bioinformatics 38:4613, PMC9525007 `[PARTIAL: read the full
-main text; missing Supplementary Tables S1–S4 and Figs S1–S7, figures not viewed]`: "the
-few regions with high error … corresponded to parts of the tissue in which cells had
-become physically distorted or detached from the slide" (§3.4); and Krishna et al., MELBA
-2026, PMC13599393 `[PARTIAL: read abstract, parts of intro, the residual-mask method
-paragraph, one results sentence]`, where a mask of regions "exceeding 10 pixels" of
-residual "excluded 6.65 ± 4.46% of the WSI area" between the first and the last of 17 to
-19 rounds (from one results sentence of a partial read, measured by that method's own
-fields).
-
-**`seams`.** The 1950 px block is the tile size of the scanner the cohort was acquired on
-(the owner's statement, 2026-10-11; it is not derived from a file here). The shift, s.d.
-3 px = 0.98 µm per axis, sits at the low end of the stage repeatability the MIST paper
-gives, "stage repeatability, that amounts to 1 to 2 microns for good microscopes" (MIST,
-PMC5504007 `[PARTIAL: keyword scan only]`): that sentence was found by a keyword scan and
-its context was not read, so it supports the order of magnitude and no more. That seam
-error exists and changes at tile boundaries is from ASHLAR (tag above): "the field
-direction was often consistent across large regions but could change dramatically at
-tile boundaries" (§3.4). Independent shifts per block are the benchmark's simplification;
-by the same passage real seam error is correlated over large regions.
-
-**Amplitudes, against what has been measured.** Lotz, Weiss, van der Laak, Heldmann,
-arXiv:2106.13150v2 `[FULL]` (main text; the PDF has no supplement), Table 3: on re-stained
-sections "HyReCo restained (subset B) 1.60 µm [MTRE affine] 0.86 µm [MTRE deformable]",
-i.e. an affine fit leaves a median 1.60 µm, of which 0.86 µm is at the level of the
-landmarks' own noise. `grid` (1.6 µm s.d.), `multiscale` (2 µm RMS) and `seams` (0.98 µm
-per axis) are of that size. Two caveats travel with the comparison: Lotz et al. is
-BRIGHTFIELD (H&E re-stained to PHH3, coverslip removed), not cyclic immunofluorescence;
-and ASHLAR's own figure for cyclic IF after per-tile translation, "0.119 µm (∼0.2
-pixels)" median on 200 x 200 px blocks (§3.4, tag above; the authors add that it "only
-measures the consistency of a stitching/registration algorithm against itself"),
-suggests that rounds of cyclic IF move much less. So the known-truth test is probably
-HARDER than the cohort, and an error here is not a forecast of an error there.
-
-**What could not be grounded in anything read** (the report's list): the 2 degree
-rotation and the (30, -20) px shift of the poses; both bump generators (counts, widths,
-the quarter-of-the-window target); the three `multiscale` scales in µm and their equal
-energy; the scene (uniform random nucleus placement, one per 900 px², the tissue
-silhouette, amplitudes 0.5 to 1.5); any Jacobian threshold (Lotz et al. supports "no
-folds between re-stained sections", not a number such as the re-seed rule's 0.05); a
-per-round fraction of damaged area; and any synthetic-deformation protocol published by a
-microscopy registration paper (none was found). The 1950 px block is grounded in the
-owner's statement only.
-
-**Seams.** With 1950 px blocks the seams of an 8192 px window fall at 1950, 3900, 5850 and
-7800 px. None of these positions is a multiple of any grid the spec lists for a method
-(`method_grids_px`): STARE's 64 px vector lattice and 2048 px tile, ASHLAR's 1755 px
-tile pitch, PALOM's 1024 and 2048 px blocks. The test
-`test_no_seam_falls_on_a_method_grid` checks every seam position against every listed
-grid (`truth.seams_on_a_grid`), not the block size alone, and holds the spec's pitch to
-the one the adapter cuts with. "Grid" here means multiples of the listed size from the
-window's origin, where a tile or block STARTS. The first seam, at 1950 px, is where
-ASHLAR's first tile ends, because the seam block and ASHLAR's tile are both the
-scanner's 1950 px tile. A window smaller than 1950 px has no seam at all: a reduced copy
-of this family is a constant shift.
-
-**Bumps.** The counts are for the 8192 px window and were set so that about a quarter of
-it moves by more than 1 µm, measured on the generated field (the pose not counted;
-`synthetic.field_stats`, a lattice every 4 px):
-
-| family | bumps | moved by > 1 µm, the two synthetic cases | over other seeds | smallest Jacobian determinant |
-|---|---|---|---|---|
-| `bumps100` | 120 | 23.7 %, 24.6 % | 21.8 to 25.0 % (82 seeds) | 0.48, 0.46 in the synthetic cases; 0.37 over the 82 seeds |
-| `bumps25` | 4000 | 23.2 %, 22.9 % | 22.9 to 23.7 % (182 seeds) | 0.25, 0.32 in the synthetic cases; see below |
-
-Neither synthetic case folds, and the scorer's own `fold_pct` of the true map is 0 for
-both families. For `bumps25` a fold is a rare coincidence of bumps, not a matter of the
-count: 1 seed of 182 at 4000 bumps had a negative determinant at one point of a 4.2
-million point lattice, and so had 1 seed of 100 at 3400 bumps (0 of 100 at 3600 and
-3800), so a lower count inside the 20 to 30 % range does not remove it. Each known-truth
-case records what its own map does (`case.json`: `extra.field` = `moved_frac_over_1um`,
-`min_jacobian`, `fold_pct` on a lattice every 8 px). The test
-`test_bumps_move_about_a_quarter_of_the_window_without_folding` measures both families at
-the frozen size and holds them to the fraction the spec records, within 0.02.
-
-**A case whose true map folds is re-seeded** (spec version 3, the `reseed` block; the
-user's ruling of 2026-10-11). Where a map folds, two moving points have one true
-position, and no registration can be right there. The seeds of the semi-synthetic cases
-depend on the patients' ids, so such a seed cannot be ruled out in advance; it is skipped
-when the case is made:
-
-- Before anything is drawn, `prepare` measures the smallest Jacobian determinant of the
-  case's true map (pose and field) on a lattice every 4 px over the whole window
-  (`synthetic.settle`). Above 0.05 the seed its seed rule asks for is used. Otherwise it
-  is skipped for `seed + 1000000007`, then `seed + 2 x 1000000007`, up to 8 seeds; if all
-  fold the case is refused, never made folded. The step is a prime above every seed a
-  seed rule can ask for (the largest is under 1.1e8), so a re-seeded case never takes the
-  seed another case asks for.
-- The rule depends on the case's spec alone, so every array task that prepares the case
-  settles on the same seed. The seed used replaces the asked one everywhere (field, noise,
-  probe draw). `case.json` holds the seed used (`extra.spec.seed`) and the record:
-  `extra.reseed` = `seed_asked`, `seed`, `skipped` (each skipped seed with its
-  determinant), `step`, `lattice_px`, `min_jacobian`, `min_jacobian_required`. The
-  summary's known-truth header names every re-seeded case, and still lists any case whose
-  recorded `fold_pct` is above 0.
-- **Why a margin, and why 4 px.** A determinant at or below 0 is a fold; a lattice only
-  sees one where it has a point. Measured on 240 `bumps25` seeds at 8192 px (seeds
-  3000000 to 3000239, 2026-10-11): the smallest determinant fell by 0.008 to 0.046
-  (median 0.022) from an 8 px to a 4 px lattice, and on four seeds near zero by 0.006 to
-  0.010 more at 2 px. Two seeds that an 8 px lattice passes at 0.018 fold at 4 px. A
-  case kept above 0.05 at 4 px therefore has no fold between lattice points. Of the 240
-  seeds 1 was at or below 0 at 4 px and 5 (2 %) were not above 0.05, so about one
-  `bumps25` case in fifty is re-seeded.
-- **Which families.** Every continuous one: `rigid`, `grid`, `multiscale`,
-  `bumps100`, `bumps25`. Only `bumps25` has been seen to come near (the others' smallest
-  determinant, on the frozen synthetic cases at 4 px: 0.90 to 1.0, and 0.46 and 0.48 for
-  `bumps100`; 0.29 to 0.67 over 60 further `bumps100` seeds), so for them the rule is a
-  guarantee that costs one measurement. **`seams` is not under the rule**: it is
-  discontinuous on purpose, and a tile that shifts towards its neighbour overlaps it by
-  design; a lattice across a seam reads that as a negative determinant on almost every
-  seed (the two frozen cases: -0.85 and -1.0 at 4 px).
-- **None of the 12 frozen synthetic cases is re-seeded** (the 10 under the rule: 0.25 to
-  1.0); the test `test_no_frozen_synthetic_case_folds` measures all of them at 8192 px
-  and holds the list of skipped seeds (empty) written out.
-
-A reduced copy (a test, a smoke run at 1024 px) keeps the bumps' density, not their
-number: 4000 x (n / 8192)^2. A bump is summed out to 8 sigma and is exactly zero beyond
-(under 1.3e-14 of its peak there), so an 8192 px slide with 4000 bumps costs what the few
-bumps near each block cost; the rule is per point, and a point has the same value in any
-batch. Preparing one 8192 px `bumps25` case (both slides, segmentation, probes) took 49 s
-with 4 workers on the development laptop, and twice in fresh folders gave the same pixels,
-nuclei, probes and `case.json` (the files differ only in the OME header's UUID).
-
-**Poses**, one per round: `shift` is (30, -20) px with no rotation; `rot` is 2 degrees plus
-that shift. ASHLAR has no rotation, so its `rot` rows measure that limit and are read
-beside its `shift` rows.
-
-**Cases.** Windows of 8192 px for every method (4 x 4 STARE tiles). A patient is
-(window, family): one reference, kept as one file, and two rounds. A per-pair method runs
-each round; a per-patient method gets the patient and so never sees two families at once.
-
-- `synthetic`: one Gaussian-blob scene per family (6 scenes, 12 cases; a scene is the
-  independent unit, "Scoring").
-- `semisynth`: variant `same`, noise 1.0 x the background s.d., on the 2 windows with most
-  tissue of each cohort patient's reference round. **The spec names no patient.** The
-  patients are every patient of the manifest given to `prepare`, or a subset declared with
-  `--patients` / `--patients-file`; an id that is not in the manifest is an error that
-  names it. Cost, stated up front: each patient gives 2 windows x 6 families x 2 poses =
-  24 cases of 8192 px (12 per-patient launches in the sense above; ONE independent unit),
-  and every method runs each of them.
-
-```bash
-python -m benchmarks.regbench prepare synthetic --suite truth --cases CASES
-# every patient of the cohort (rounds.csv from `python -m benchmarks.regbench.arms_manifest`)
-python -m benchmarks.regbench prepare semisynth --truth --cases CASES --manifest rounds.csv
-# a declared subset
-python -m benchmarks.regbench prepare semisynth --truth --cases CASES --manifest rounds.csv \
-    --patients 046,052            # or --patients-file ids.txt (one id per line, # comments)
-# one patient by hand (tests)
-python -m benchmarks.regbench prepare semisynth --truth --cases CASES \
-    --name <patient id> --image <its reference round> --channel <nuclear index>
-```
-
-`--manifest` reads two layouts. The `rounds.csv` of `arms_manifest`: each patient's
-`reference` and `ref_channel`, one entry per `group`, pixel size from `pixel_size_um`. The
-arms' raw `input.csv` (`patient_id, path_to_file, is_reference, channels`): the row marked
-as the reference and the one channel whose name holds `DAPI` or `CELLTOX`; it has no pixel
-size, so the file's own header or `--pixel-size-um` gives it, and the raw files must be
-TIFFs this reader opens (the pipeline's preprocessed slides of `rounds.csv` always are).
-With `--index` (a SLURM array) only the patient that case belongs to is opened; the index
-runs over 24 x the number of patients, in the manifest's order.
-
-**Which patients a result rests on.** `prepare` writes `CASES/semisynth/truth_patients.json`
-(the ids, the manifest's path and SHA-256, the spec's hash, each patient's image and
-channel, and the SHA-256 of ids + manifest content + spec hash) and that list's hash into
-every case (`extra.truth_patients_sha256`, with `extra.truth_patient`). A folder that holds
-one list refuses cases of another; `score` refuses cases of two lists, or a list file that
-does not match its cases, and prints the list in the header of the known-truth table of
-`summary.md`, with how many of the listed patients have cases so far. The one-patient form
-declares a list of that one patient.
-
-**The freeze.** `prepare` refuses a `truth_spec.json` whose content does not match its
-hash and writes the hash into every `case.json` it makes from it
-(`extra.truth_spec_sha256`); `score` refuses cases of two hashes, and refuses a
-`synthetic` case whose hash is not the current `truth_spec.json`'s. `prepare synthetic`
-refuses a cases folder that already holds a case of another spec, with or without
-`--force`: such a case is neither kept as done nor written over (the results registered
-on it would rest on images that are gone), and the message names the folder and says to
-prepare into a new, empty one. The hash covers the
-parameters, not the generator's code: the commit is what fixes that, and it is to be tagged
-`regbench-truth-frozen-<date>` before any method runs. The spec has been re-hashed four
-times, each before any method was scored on it: 2026-10-10 (version 2: seam block, bump
-counts, no patient named), 2026-10-11 (version 3: the re-seed rule), 2026-10-11
-(version 4: `wave` removed, a fixed `index` per family, the sources recorded) and
-2026-10-12 (version 5: `method_grids_px` lists the pitch ASHLAR is run with and the
-`seams` note says where its first seam falls; no family, field, seed or amplitude
-changed, so every deformation is the one version 4 made). Version 5 is sha256
-`1bade785322e5472314c8d2f05934c41a93e07b0b86521b5cdceff7def16dcbf`
-(`test_version_five_changes_the_record_and_no_deformation` holds the hash, and a hash of
-everything that makes a deformation, which is version 4's;
-`test_wave_is_gone_and_no_other_case_moved` the seeds every family had in version 3). Cases prepared from an older version are
-refused beside newer ones: prepare them again.
-
-**Numbers** (`truth.error_stats`), per case and variant, in micrometres: `tre_um_p50`,
-`tre_um_p90`, `tre_um_max`, `frac_under_1um`, `frac_under_2um`, `initial_tre_um_p50` (the
-unregistered pose) and `frac_improved`, with `n_probes` and `n_nonfinite`. A point a method
-returns as NaN counts against it: its error is infinite. A failed run is scored at the
-unregistered pose. Without a pixel size the micrometre numbers are NaN. A variant with
-seam mask's owner on that case gets a second row `<variant>:non_<owner>` in
-`nonband_truth.csv`, on the probes the mask leaves (see "Off the seams": the probes of
-the moving nuclei a moving-side mask leaves; for a reference-side mask, the probes the
-owner's run did not mark).
-
-**What these numbers are not.** The amplitudes are set against published measurements
-("Where the families come from"), not STARE's output on the cohort. The bias is
-elsewhere: the families, their smoothness and the multiscale spectrum were chosen by
-STARE's authors after its design was fixed; `grid`, `multiscale` and `bumps100` are
-fields a B-spline mesh on a 64 px lattice can represent; the `same` variant reuses the
-reference's pixels, so every error is a lower bound. Any amplitude later estimated from a
-method's fields is post hoc and names that method.
 
 ### Records: a case is scored once
 
@@ -1572,7 +1240,7 @@ Scoring a slide is slow (measured below), so the scorer keeps what it computes, 
 - **Progress** goes to stderr: each case as it starts (with the reason it had no
   record) and ends, and its pair records as they finish, at most one line per 30 s.
 
-Measured on a laptop (Apple M-series, one synthetic case: 37,913 reference and 38,096
+Measured on a laptop (Apple M-series, one generated case: 37,913 reference and 38,096
 moving cells over 22,000 x 22,000 px, outlines of about 18 px radius and nuclei of
 about 8 px, three results of which one is a seam owner; pair fraction 0.95, null
 0.12). The case has 16 pair records (four sources, whole and off the owner's seams, on
@@ -1610,7 +1278,6 @@ it is scoring.
 | `cells.csv` | case x variant | `dataset, tier, case_id, group, family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`, `set` (`outlines`: this file is the outlines; the nuclei are in `cells_nuclei.csv`), and what the case records of that set: `set_source_ref`, `set_source_mov` (where each side's objects come from), `set_inexact` (either side is declared not to be, object for object, the segmentation it stands for) and `set_shrunk` (either side is the outlines with the 10 px rim taken off, the fallback for a slide without bare nuclei). Among the record keys: the pipeline pairing's own account (`n_components`, `largest_component_cells`, `n_fallback_components`, `n_fallback_cells`, `fallback_frac`, `fallback_frac_null`) and the exact assignment's extra columns (`*_exact`, `exact_status`). Every row scores ALL nuclei |
 | `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
 | `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept and `within_ceiling`: what the mask alone lets `within_*um` reach for any method |
-| `nonband_truth.csv`, `nonband_truth_by_family.csv` | as `truth.csv`, `truth_by_family.csv` | the known-truth error on the probes a moving-side mask leaves, with `owner, n_probes_all` |
 | `cells_nuclei.csv`, `summary_cells_nuclei.csv`, `common_block_nuclei.csv`, `paired_vs_primary_nuclei.csv`, `paired_summary_nuclei.csv`, `nonband_cells_nuclei.csv`, `nonband_summary_nuclei.csv` | as the table of the same name | the same columns on the BARE NUCLEI (`set = nuclei`), with their own gate, null and shared subset. Absent when no case has nuclei. See "Outlines and bare nuclei" |
 | `nuclei_missing.csv` | case, or case x variant | why there is no nuclei row: `dataset, case_id, group, …, method, reason`. `method` is empty when the CASE has no nuclei on a side (the prepared reason), and names a result that was made before its case had them |
 | `dropped.csv` | variant | written only when `score --drop` names rows: `variant, reason, had_results`. Rows whose own selfcheck failed without blocking their method; they are in no other table |
@@ -1627,13 +1294,11 @@ it is scoring.
 | `resources.csv` | case x variant | the cost recorded at that variant's yield, with the billing columns of "CPU-hours: one definition for every method" |
 | `summary_resources.csv` | patient x variant | the billing columns per patient ("CPU-hours: one definition for every method"), `jvm_heap_asked_gb` and `jvm_max_heap_gb` for a method that starts a JVM; sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
 | `cost_summary.csv` | dataset x variant | the median and the mean over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`; `*_med`, `*_mean`) and over the patients every compared row completed (`*_common_med`, `*_common_mean`, `n_patients_common`); CPU-hours first, `device`, `gpu_model`; for a row in several jobs `time_unlimited_parallel_tiles_s_*`, `to_image_unlimited_parallel_tiles_s_*` and `peak_cpus_at_once` in place of `register_s_*` and `total_to_image_s_*` |
-| `truth.csv` | known-truth case x variant | `dataset, tier, case_id, group, family, pose, in_stare_model, truth_spec, method, frame`, the numbers of "Known-truth error", `fold_pct, sd_log_jac, imputed_initial, problem, cause`; plus the pseudo-rows `initial` and `truth` (zero by construction) |
-| `truth_by_family.csv` | dataset x family x pose x variant | `n_cases, n_ok`, median and maximum of p50, median p90, maximum of max, median shares under 1 and 2 µm, median `fold_pct`. No row over families |
-| `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv`, `tissue_dose.csv`, `tissue_dose_summary.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
+| `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
 | `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `benchmark_prep_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
 | `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step and of `measured_here_s`, the largest peaks (`estimate_peak_gb_max`, `job_peak_gb_max`), `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
 | `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
-| `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the known-truth table, the failure log's section, cost on survivors and on the common patients |
+| `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the failure log's section, cost on survivors and on the common patients |
 
 ### Off the seams
 
@@ -1650,7 +1315,7 @@ on the reference nuclei (`info["band_ref"]`, `band_ref`).
 
 **The mask on the bare nuclei** (`band_nuc`, `band_ref_nuc`; rows in
 `nonband_cells_nuclei.csv`). Where the case says which outline each nucleus belongs to
-(`nuclei_<side>_outline`: the known-truth datasets, the built-in segmenter and the shrunk
+(`nuclei_<side>_outline`: the built-in segmenter and the shrunk
 fallback, where the two sets are the same objects by construction) **a nucleus inherits
 its outline's flag**, so both sets drop the same objects. Otherwise (the cohort's label
 images and re-runs, whose nuclei are not indexed like the published outlines) the mask is
@@ -1659,8 +1324,7 @@ nuclei's polygons (`info["band_mov_nuc"]` / `info["band_ref_nuc"]`; ASHLAR: any 
 the nucleus on a seam; PALOM: the nucleus's own bounding box, grown by its margin, over
 blocks with different shifts). A nucleus is smaller than its outline, so the recomputed
 mask marks fewer objects than the outlines' mask does. `run.json: nuclei_band` says which
-rule gave the mask (`inherited` | `geometry`). The known-truth probes are scored once,
-with the outlines' mask.
+rule gave the mask (`inherited` | `geometry`).
 
 **Which rows a reference-side mask removes.**
 
@@ -1668,16 +1332,6 @@ with the outlines' mask.
   before pairing (`n_ref_kept` of `n_ref_all`); every moving nucleus stays
   (`n_mov_kept == n_mov_all`). A moving nucleus whose partner was removed is then
   unpaired, for every method alike.
-- `nonband_truth.csv`: a probe is a pair, the centroid of a moving nucleus (`truth_mov`,
-  nucleus `truth_cell`) and where the truth puts it on the reference (`truth_ref`).
-  Reference nuclei carry no probe index, so the owner's run marks the probes itself
-  (`info["band_truth"]`, one bool per probe, `band_truth` in its `warped.npz`) and the
-  scorer drops exactly those (`score._truth_keep`). PALOM's rule
-  (`methods/palom.py::probe_band`) is its nucleus rule applied to the probe's own
-  nucleus: the bounding box of moving nucleus `truth_cell`, moved so that its centroid
-  sits at `truth_ref`, grown by 1 px, touches blocks that do not all carry the same
-  shift. An owner with `band_ref` and no `band_truth` gets cell rows and no truth rows.
-
 The scorer then scores **every** variant of that case a second time on the nuclei the
 mask leaves: `stare:non_ashlar`, `valis120:non_ashlar`, `ashlar:non_ashlar`, `initial:
 non_ashlar`, ... All rows of one owner use identical nuclei, and each row says how many
@@ -1700,12 +1354,8 @@ failed keeps its row, at the unregistered pose.
   within_ceiling` is that ratio per owner, and the block's header prints it: with a
   quarter of the moving nuclei removed no method can exceed about 0.75 there. Pair
   fraction is over the smaller kept set and has no such cap. Read an off-seam
-  `within_*um` against its ceiling and against the `truth` row, never against a
+  `within_*um` against its ceiling, never against a
   full-slide number.
-
-The cases of the frozen known-truth spec are left out of `resources.csv` and
-`summary_resources.csv` (cost is read on the cohort); their failures are still counted in
-`failures.csv`.
 
 ## The failure log (`failure_log.csv`): every event, and whose it is
 
@@ -1852,7 +1502,6 @@ repository (`compute_qcs_4methods.py:2`).
 |---|---|
 | every variant with a written image | the method's own file |
 | `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |
-| `truth` (known-truth cases) | the moving slide resampled by the generating map, drawn by the benchmark (bilinear, at the evaluation size; the inverse of the generator's map is taken on every 4th evaluation pixel) |
 
 A variant with no image has NO row and one line in `tissue_missing.csv` with the reason:
 `not run`, `the run failed (<cause>): no image`, `the method writes no image for this
@@ -1865,13 +1514,10 @@ the unregistered pose here, so `n_scored` of `n_cases` is printed beside every m
 | `tissue.csv` | case x variant | `dataset, case_id, group, family, pose, variant, source` (`method` or `benchmark`), `status` (`ok` or `no_tissue`), `qcs`, `tissue_dice, boundary_dice, hausdorff_mean, hausdorff_p95` (evaluation px), `hausdorff_mean_um, hausdorff_p95_um`, `inlier_ratio, n_inliers, n_matches, nmi, ncc` (stored by the source, not in the composite), `coverage, bg_coverage`, the bounded terms `s_td, s_bd, s_hd, s_ir, s_nmi, cov_factor, bg_penalty`, `eval_h, eval_w, eval_um_per_px, ref_tissue_frac, mov_tissue_frac, ref_otsu, mov_otsu, crop_box, opencv, definition` |
 | `tissue_summary.csv` | dataset x variant | `source, n_scored, n_cases, n_no_tissue, n_below_025`, and for each piece `<piece>_median` and `<piece>_worst` over the scored CASES (minimum; maximum for the two distances) |
 | `tissue_missing.csv` | case x variant without a row | `dataset, case_id, group, variant, reason` |
-| `tissue_dose.csv` | known-truth case x shift | the columns of `tissue.csv` plus `shift_um`: the `truth` plane moved by 0, 1, 3, 10, 30 and 100 µm along x |
-| `tissue_dose_summary.csv` | dataset x shift | the summary of those rows: what the block can resolve |
 
 The numeric composite and the count under 0.25 are printed; the source's good /
-acceptable / poor classes are not. The known-truth datasets are separate rows (`dataset`),
-and their evaluation pixel is not the cohort's: an 8192 px window at 4000 px is 0.67 µm per
-evaluation pixel, a 50000 px slide 4.06 µm.
+acceptable / poor classes are not. A 50000 px slide at 4000 px is 4.06 µm per
+evaluation pixel.
 
 ### Where it runs, and what it needs
 
@@ -1893,15 +1539,15 @@ evaluation pixel, a 50000 px slide 4.06 µm.
    not used by the benchmark.
    `python -m benchmarks.regbench tissue --cases C --out O` computes them in any
    environment that has `cv2`, NumPy, tifffile, zarr and `stare.slide_io`, and leaves
-   `tissue.json` beside each reduced plane (`<out>/cache/tissue/...` for the reference,
-   `initial` and `truth`). `score` reads those; what it finds neither on disk nor
+   `tissue.json` beside each reduced plane (`<out>/cache/tissue/...` for the reference
+   and `initial`). `score` reads those; what it finds neither on disk nor
    computable is listed in `tissue_missing.csv` with the reason, never left out silently.
    Use ONE OpenCV version for a whole result: the version is recorded in each row
    (`opencv`), and ORB and RANSAC are OpenCV's. That is why the pieces are computed in
    one image, whatever OpenCV a method's own image carries (upstream's VALIS 1.2.0 image
    has 4.9.0.80; the PALOM image and CI have the pinned 4.10.0.82).
-3. The benchmark's own planes under `<out>/cache/tissue` (the reference, `initial`,
-   `truth`) are kept, each with a record of what it was made from (`<plane>.json`: the
+3. The benchmark's own planes under `<out>/cache/tissue` (the reference and `initial`)
+   are kept, each with a record of what it was made from (`<plane>.json`: the
    image file's size, time and sampled bytes, the channel, the reference grid, the
    evaluation size, the sha256 of `tissue.py`). A plane is read again only while that
    record is unchanged; after a case is prepared again with another image, or after
@@ -2116,7 +1762,7 @@ can read (`cpu_instrument` of the first rows says).
   submission's id (`submissions`, `reused_by`). `REGBENCH_FORCE=1` or `run --force` runs
   it anyway. The cost tables open with `reused: N of M results`.
   A result is also made FOR its case's points: `run.json: points_sha256` holds a hash of
-  each group of arrays of the case's `points.npz` (`outlines`, `nuclei`, `truth`). A
+  each group of arrays of the case's `points.npz` (`outlines`, `nuclei`, and `truth` for the landmark sets). A
   case prepared again with other points (a forced re-prepare; outlines whose meaning
   changed) makes its earlier results stale: they are not reused, and the scorer counts
   them as `not_run` ("made for an earlier version of this case"), never as a failure of
@@ -2415,10 +2061,7 @@ script names no method.
    - The output directory is kept between rungs, so the cost of a failed attempt is
      kept (`previous_attempts`). `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
      `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
-   - **`multiplex` first.** Every array of a run on the next dataset waits for that
-     run's last array on the one before, and `multiplex` is always first: the cohort is
-     done before the known-truth cases start. The anchored ASHLAR rows also wait for
-     STARE's last array on the same dataset.
+   - The anchored ASHLAR rows wait for STARE's last array on the same dataset.
    **A run whose registration is several jobs per round** (`runs`, column `stages`:
    every STARE run: `variants.stages_of`, the generated set, 9 on the cohort and 12 per brightfield regime) has, per dataset, a chain of stage jobs in place of that
    ladder, every job after the one before it (`afterany`) and all of them behind the
@@ -2586,7 +2229,7 @@ script names no method.
    summary's block "What the gates decided" names every blocked run and every dropped
    row).
 
-**What is submitted by default: `multiplex`, then `synthetic`.** `semisynth` and the two
+**What is submitted by default: `multiplex`.** The two
 HyReCo sets are DORMANT (ruling R3.14): implemented and tested, never part of the default,
 and submitted only when `--datasets` names them, with a line saying so. Read "Dormant
 datasets: known defects before any use" first.
@@ -2679,14 +2322,13 @@ round).
 | `REGBENCH_STAGE_STALL_S`, `REGBENCH_STAGE_STALL_MAX_S` | read by the tile submitter: seconds without a tile task leaving the queue before it lists what is left (and gives up on a held one); and before it gives up whatever the reasons | `3600`, `172800` |
 | `REGBENCH_STAGE_WAIT_REASONS` | the scheduler's reasons the tile submitter takes for "only waiting its turn": while every tile task left has one of them the time is not counted towards `REGBENCH_STAGE_STALL_MAX_S`; empty counts every stretch | `Priority Resources QOSMaxJobsPerUserLimit AssocMaxJobsLimit BeginTime Dependency None` |
 | `REGBENCH_STAGE_HELD_REASONS` | the scheduler's reasons the tile submitter takes for "does not leave the queue by itself", space-separated | `JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure` |
-| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort and the synthetic set: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty, and on an external set: the run list's order |
-| `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it; the next dataset goes on down the same lanes. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
+| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty, and on an external set: the run list's order |
+| `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id. Set it only with `--score-only` (the submission to score) or to run a unit by hand under a submission's id: the launcher refuses an id the folder already holds a submission of | time and process id |
 | `REGBENCH_SCORE_WHILE_QUEUED` | `1`: `--score-only` although jobs of an earlier call into the folder are still pending or running | `0` (refused) |
 | `REGBENCH_ALLOW_UNCHECKED` | run names that start although their selfcheck RAN and could not decide (`not_checked`); the verdict is still recorded and shown. Nothing else is let through: `inconsistent`, `crashed`, a flagged realcheck and a selfcheck that left no record of this submission block the run all the same | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
-| `REGBENCH_TRUTH_PATIENTS` | with `--prepare`: the patients of the semisynthetic known-truth cases, comma-separated | all |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |
 | `REGBENCH_NUCLEI` | with `--prepare`: where each slide's bare nuclei are kept ("Outlines and bare nuclei") | `$REGBENCH_CASES/_nuclei` |
 | `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the arms ran (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | the site config's `segmentation_model` and `segmentation_model_dir`; a name is required from one of the two |
@@ -2860,8 +2502,7 @@ benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets mult
 #     is not computed again
 benchmarks/regbench/slurm/submit_cohort.sh --score-only --datasets multiplex -- <site options>
 
-# 4. the whole cohort: prepare (a NEW $REGBENCH_CASES: the known-truth cases of an older
-#    truth spec are refused), look at the dry run, submit
+# 4. the whole cohort: prepare (a NEW $REGBENCH_CASES), look at the dry run, submit
 REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare -- <site options>
 benchmarks/regbench/slurm/submit_cohort.sh --preflight
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run -- <site options> | less
@@ -3203,8 +2844,7 @@ seam owner runs).
 
 Target registration error in micrometres: a method's map moves the landmarks of the side
 it starts from (PHH3 for a moving -> reference map, H&E for a reference -> moving one)
-and each is compared with its partner, through the same code as the known-truth error
-(`truth.error_stats`). A point a method could not map has an infinite error; a run that
+and each is compared with its partner, through `landmarks.error_stats`. A point a method could not map has an infinite error; a run that
 failed or never ran is scored at the unregistered pose and counted (`n_ok`).
 
 | table | one row per | columns |
@@ -3593,7 +3233,7 @@ among all submitted methods), which needs the other methods' results on the same
 
 ## Dormant datasets: known defects before any use
 
-`semisynth`, `hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
+`hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
 and its tests are kept, the default submission never includes them, and
 `submit_cohort.sh --datasets <name>` is the only way to submit one. The independent
 review of 2026-10-11 found the defects below. **Those the subsection does not list as fixed are open.** Each must be
@@ -3628,11 +3268,8 @@ What changed:
    reference file itself, or names that still clash after the prefix. The mapping is
    `info.slides_source` in each VALIS `run.json` (`{placed name: source path}`); the
    adapters find a slide by its source path, so nothing else changed.
-   **This is general, not HyReCo's alone.** Every pose round of the `synthetic` and
-   `semisynth` known-truth suites is `<family>_<pose>/mov.ome.tif`, one basename for the
-   whole group, so before this fix every `valis120*` / `valis_mirage*` group there was
-   REFUSED and imputed as failed. They now run, as `<family>_<pose>_mov`; **any VALIS
-   result on those suites from before this fix is an imputed failure and must be re-run.**
+   **This is general, not HyReCo's alone**: a group whose rounds share one basename is
+   placed under its folders' names (`<folder>_mov`), and a result is found by the case.
    Two cases that name one moving file are still refused.
 2. **The settings hash** holds `{proxy, reduce, version, pixel_size_um,
    keep_shared_ids}`. `prepare hyreco --subset b` refuses a `--pixel-size-um` or
@@ -3647,24 +3284,6 @@ What changed:
    records (`--gates`). A pair the method itself failed on still counts at the
    unregistered pose, and its frame is the one of the row's registered pairs, else the
    run's declared direction, else "unknown", never `reference` by default.
-
-### `semisynth` (review item 9)
-
-3. **The `same` cases hand pixel-correlation methods a signal real rounds never have.**
-   The moving slide is a cubic resample of the reference's OWN pixels plus fresh noise;
-   the reference gets no noise. For the `shift` pose (an integer translation) with a
-   rigid or low-gradient field the moving slide is a pixel-exact shifted copy, so phase
-   correlation on an empty background window recovers the shift (the reviewer measured a
-   peak over s.d. of 579 there, against 4.6 for independent noise). STARE, ASHLAR and
-   PALOM can be "right" on empty tiles; VALIS and DeeperHistReg, which work on
-   downsampled features, gain nothing. "Every error is a lower bound" does not say this.
-4. **The noise can be exactly zero.** Its s.d. is a MAD and is 0 on zero-filled
-   background; the generator adds noise only `if self.noise_sd`, so every case of such a
-   patient is noise-free without a refusal or a note.
-
-In the scorer, the unit of a `semisynth` case is the real patient (not the group
-`<patient>_w<i>_<family>`), with cell summaries per family, and the paired differences
-carry a bootstrap interval over units ("Scoring").
 
 ## Caveats that travel with the results
 
@@ -3686,8 +3305,6 @@ carry a bootstrap interval over units ("Scoring").
 4. **Self-consistency, not accuracy** on real slides.
 5. **The ladder:** methods need not finish at the same rung, so they need not have had the
    same memory request; the tables show each run's rung.
-6. **Known-truth cases** are a check chosen by STARE's authors; see "What these numbers
-   are not" under "Known-truth error".
 7. **About a fifth to two fifths of ASHLAR's nuclei are scored through an interpolated
    map** (the tile overlaps; see "ASHLAR", "What the overlap bands cost"). It has no bias
    when a round needs only a translation, and it is optimistic for ASHLAR when a rotation
@@ -4492,8 +4109,7 @@ so the image is drawn on the blocks of the map.
 
 **Seams.** The map jumps at an edge between two blocks whose shifts differ, and the image
 is torn there. `band_ref` marks the reference nuclei whose outline's bounding box, grown
-by 1 px, touches blocks that do not all carry the same shift; `band_truth` the known-truth
-probes by the same rule on their own nucleus ("Off the seams"). An edge between two
+by 1 px, touches blocks that do not all carry the same shift. An edge between two
 blocks with the same shift is not a seam. Every method gets `<variant>:non_palom` rows on
 identical nuclei.
 
@@ -4530,7 +4146,7 @@ clock paused.
   scikit-image 0.24.0 and scikit-learn 1.7.2 (not PALOM, not its pinned scikit-image
   0.19.3) raises `ValueError: Found array with 0 sample(s)` when every finite block shift
   is the same, all-zero included: no block is under the threshold, so the regression has
-  nothing to fit. That is what the `rigid` known-truth family, or a pair the affine
+  nothing to fit. That is what a purely rigid map, or a pair the affine
   already aligns to the pixel, may give. The `palom` row then fails with PALOM's own
   message and `palom_affine` is kept; nothing is excluded.
 - *`seek of closed file` on a file without pyramid levels* (issue #12, 2023), which is
@@ -4632,8 +4248,7 @@ of `submit_cohort.sh --datasets hyreco_b` off its dry run.
 `test_nuclei_sets.py` checks the two polygon sets on hand-made squares (a nucleus inside
 each outline): the contract and its backward compatibility, the driver moving both, the
 nuclei's own gate, the seam mask by inheritance and by geometry, the side-by-side lines
-of `summary.md`, and that growing the outlines changes neither the nuclei nor the truth
-spec. `test_nuclei_cohort.py` checks the cohort's sources on small label images: a mask of
+of `summary.md`, and that growing the outlines changes the nuclei in no way. `test_nuclei_cohort.py` checks the cohort's sources on small label images: a mask of
 the slide is used, one of another size or another frame is refused with the reason, the
 rendered `segment.py` call against `nextflow.config` and `conf/modules.config`, and the
 re-run itself against a STAND-IN `segment.py` that writes the two masks under the real

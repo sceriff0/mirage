@@ -5,7 +5,6 @@ environment need not have them: set ``REGBENCH_TEST_CASES`` to a folder prepared
 (``python -m benchmarks.tests.regbench.toy_cases DIR``) and the fixtures use it.
 """
 
-import argparse
 import os
 from pathlib import Path
 
@@ -54,26 +53,3 @@ def real_like(tmp_path_factory):
     path = tmp_path_factory.mktemp("real") / "slide.ome.tif"
     write_nuclear(path, ref, 0.5)
     return path
-
-
-def semisynth_args(image, cases, **kw):
-    """The namespace ``prepare semisynth`` hands the dataset, for a 512 px window."""
-    base = dict(
-        image=str(image),
-        channel=0,
-        mov_image=None,
-        mov_channel=0,
-        name="slide",
-        n=512,
-        windows=2,
-        diameter=scene.NUCLEUS_DIAMETER,
-        noise=1.0,
-        pixel_size_um=0.5,
-        residual_um=2.0,
-        truth=False,
-        cases=str(cases),
-        index=None,
-        workers=1,
-        force=False,
-    )
-    return argparse.Namespace(**{**base, **kw})

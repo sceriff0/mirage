@@ -320,11 +320,8 @@ def test_the_cohorts_caption_names_the_rows_tuned_on_it():
     (line,) = score.in_sample_lines("multiplex", ["palom", "valis_mirage"])
     assert line.startswith("**In-sample: `valis_mirage`.** The settings of this row")
     assert score.in_sample_lines("multiplex", ["palom", "ashlar"]) == []
-    # a generated dataset is not the cohort the settings were chosen on
-    assert score.in_sample_lines("synthetic", ["stare"]) == []
-    synthetic = [{**r, "dataset": "synthetic"} for r in rows]
-    text = score.summary_markdown(score.summarise_cells(synthetic, ["stare"]), [], [])
-    assert "In-sample" not in text
+    # a dataset that is not the cohort the settings were chosen on has no caption
+    assert score.in_sample_lines("elsewhere", ["stare"]) == []
 
 
 def test_the_gate_block_counts_the_narrow_dots_of_each_selfcheck():
@@ -395,79 +392,15 @@ def test_the_gate_block_counts_the_narrow_dots_of_each_selfcheck():
 
 
 # ── item 8: the unit ─────────────────────────────────────────────────────────────────
-def _known_truth_rows(dataset, units, families=("grid", "seams")):
-    rows = []
-    for fam in families:
-        for unit in units:
-            for window in (0, 1):
-                for pose in ("shift", "rot"):
-                    group = (
-                        f"{unit}_w{window}_{fam}"
-                        if dataset == "semisynth"
-                        else f"blob_{fam}"
-                    )
-                    case = f"{group}_{pose}"
-                    for m in ("stare", "other"):
-                        rows.append(
-                            cell(
-                                m,
-                                case,
-                                group,
-                                dataset=dataset,
-                                family=fam,
-                                unit=unit if dataset == "semisynth" else group,
-                                within_1um=0.2
-                                if (m, fam) == ("stare", "seams")
-                                else 0.9,
-                            )
-                        )
-    return rows
-
-
-def test_a_semisynthetic_patient_is_one_unit_whatever_its_windows():
-    rows = _known_truth_rows("semisynth", ["046", "052"])
-    summary = score.summarise_cells(rows, ["stare", "other"])
-    rec = by(summary, method="stare", family="grid", subset="all")
-    # 2 patients x 2 windows x 2 poses = 8 cases of 2 real patients, not of 4 "patients"
-    assert (rec["n_cases"], rec["n_patients"]) == (8, 2)
-    assert len({r["group"] for r in rows if r["family"] == "grid"}) == 4
-    text = score.summary_markdown(summary, [], [], ["stare", "other"])
-    assert "The independent unit is the real patient" in text
-    assert f"At most 2 unit(s) per family: {score.DESCRIPTIVE}" in text
-
-
-def test_a_synthetic_family_is_one_scene_and_is_never_ranked():
-    rows = [
-        r
-        for r in _known_truth_rows("synthetic", ["scene"])
-        if "_w0_" not in r["group"] and r["case_id"].count("blob") == 1
-    ]
-    summary = score.summarise_cells(rows, ["stare", "other"])
-    assert {r["n_patients"] for r in summary} == {1}
-    text = score.summary_markdown(summary, [], [], ["stare", "other"])
-    assert "The independent unit is the generated scene" in text
-    assert score.DESCRIPTIVE in text
-
-
-def test_known_truth_cell_summaries_are_per_family_never_pooled():
-    rows = _known_truth_rows("semisynth", ["046", "052"])
-    summary = score.summarise_cells(rows, ["stare", "other"])
-    seams = by(summary, method="stare", family="seams", subset="all")
-    grid = by(summary, method="stare", family="grid", subset="all")
-    assert seams["within_1um_med"] == pytest.approx(0.2)
-    assert grid["within_1um_med"] == pytest.approx(0.9)
-    assert not [r for r in summary if r["family"] == ""]
-    # the cohort is not split: its family is empty
+def test_the_cohort_is_not_split_by_family():
     cohort = score.summarise_cells([cell("a", "P0_r1", "P0", family="x")])
     assert {r["family"] for r in cohort} == {""}
 
 
 def test_unit_of_a_case(tmp_path):
     case = toy_case(tmp_path, "P1_r1", "P1")
+    assert case.dataset == "multiplex"
     assert score.unit_of(case) == "P1"
-    case.dataset, case.group = "semisynth", "046_w1_grid"
-    case.extra["truth_patient"] = "046"
-    assert score.unit_of(case) == "046"
 
 
 # ── item 8: a paired bootstrap over units ────────────────────────────────────────────
@@ -594,34 +527,6 @@ def test_one_constant_switches_the_rule(monkeypatch):
     b = by(score.summarise_cells(rows, ["a", "b"]), method="b", subset="all")
     assert (b["n_cases"], b["n_excluded_not_method"]) == (4, 0)
     assert score.excluded_rounds(rows) == []
-
-
-def test_known_truth_rows_leave_the_lost_round_out_too():
-    base = {
-        "dataset": "synthetic",
-        "family": "grid",
-        "pose": "shift",
-        "in_stare_model": True,
-        "method": "b",
-        "tre_um_p50": 1.0,
-        "tre_um_p90": 2.0,
-        "tre_um_max": 3.0,
-        "frac_under_1um": 0.5,
-        "frac_under_2um": 0.9,
-        "initial_tre_um_p50": 9.0,
-        "fold_pct": 0.0,
-        "imputed_initial": False,
-        "cause": "",
-    }
-    lost = {**base, "imputed_initial": True, "cause": "benchmark_oom", "tre_um_p50": 9}
-    (rec,) = score.truth_by_family([base, lost])
-    assert (rec["n_cases"], rec["n_excluded_not_method"]) == (1, 1)
-    assert rec["tre_um_p50_med"] == 1.0
-    (rec,) = score.truth_by_family([base, {**base, "tre_um_p50": 4.0}, base])
-    assert (rec["tre_um_p50_med"], rec["tre_um_p50_mean"]) == (1.0, 2.0)
-    assert "tre_um_p50_mean" in score.TRUTH_COLUMNS
-    (rec,) = score.truth_by_family([lost])
-    assert (rec["n_cases"], rec["n_excluded_not_method"]) == (0, 1)
 
 
 # ── item 11: cost ────────────────────────────────────────────────────────────────────

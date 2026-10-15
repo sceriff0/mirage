@@ -379,7 +379,7 @@ def test_a_round_whose_writer_failed_is_in_its_patients_cost():
     assert not patient["complete"] and patient["n_ok"] == 1
 
 
-def test_the_cost_table_counts_what_a_median_is_over_and_names_each_dataset():
+def test_the_cost_table_counts_what_a_median_is_over_and_names_the_dataset():
     def patient(ds, g, m, gb, sched):
         return {
             "dataset": ds, "group": g, "method": m, "unit": "pair", "n_rounds": 1,
@@ -394,7 +394,6 @@ def test_the_cost_table_counts_what_a_median_is_over_and_names_each_dataset():
         patient("multiplex", "P3", "a", nan, nan),
         patient("multiplex", "P1", "b", 1.0, 1.0),
         patient("multiplex", "P2", "b", 1.0, 1.0),
-        patient("synthetic", "S1", "a", 2.0, 1.0),
     ]
     rows = score.summarise_cost(per)
     a = next(r for r in rows if (r["dataset"], r["method"]) == ("multiplex", "a"))
@@ -405,7 +404,7 @@ def test_the_cost_table_counts_what_a_median_is_over_and_names_each_dataset():
     assert (a["cpu_h_scheduler_n"], a["cpu_h_scheduler_common_n"]) == (1, 1)
     assert "cpu_h_used_n" not in a
     text = score.summary_markdown([], [], [], cost_summary=rows)
-    assert "(compared rows: multiplex: a, b; synthetic: a)" in text
+    assert "(compared rows: multiplex: a, b)" in text
     (line,) = [ln for ln in text.splitlines() if ln.startswith("| multiplex | a |")]
     assert "6 / 6 (n 2 / 2)" in line
 

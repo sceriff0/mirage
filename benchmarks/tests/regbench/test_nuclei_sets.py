@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from benchmarks.regbench import cases as cases_mod
-from benchmarks.regbench import cells, methods, pairs, truth
+from benchmarks.regbench import cells, methods, pairs
 from benchmarks.regbench.cases import (
     Case,
     load_case,
@@ -315,7 +315,7 @@ def test_the_summary_prints_the_nuclei_beside_the_outlines(tmp_path):
     assert "dice_matched: outlines / nuclei" in block
 
 
-# ── known-truth datasets: both sets from one segmentation ────────────────────
+# ── toy cases: both sets from one segmentation ────────────────────
 def test_a_toy_case_has_nuclei_and_outlines_grown_as_the_pipeline_does(
     toy_cases,
 ):
@@ -341,17 +341,11 @@ def test_a_toy_case_has_nuclei_and_outlines_grown_as_the_pipeline_does(
     assert len(points["nuclei_mov_xy_truth"]) == len(points["nuclei_mov_xy"])
 
 
-def test_growing_the_outlines_does_not_touch_the_nuclei_or_the_spec(real_like):
+def test_growing_the_outlines_does_not_touch_the_nuclei(real_like):
     alone = cells.segment_slide(real_like, 0, 12.0, tile=512)
     nuclei, outlines = cells.segment_slide_sets(real_like, 0, 12.0, tile=512)
     assert np.array_equal(alone.xy, nuclei.xy) and np.array_equal(alone.off, nuclei.off)
     assert len(outlines) == len(nuclei)
-    # the expansion distance is not a frozen parameter: the spec and its hash stand
-    spec = truth.load_spec()
-    assert spec["sha256"] == (
-        "1bade785322e5472314c8d2f05934c41a93e07b0b86521b5cdceff7def16dcbf"
-    )
-    assert "expand" not in truth.SPEC_PATH.read_text()
 
 
 def test_grown_labels_never_overlap_and_match_one_whole_image_call():

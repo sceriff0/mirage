@@ -63,7 +63,7 @@ _BUILTIN_SIDE = {
 BUILTIN_SETS = {"ref": _BUILTIN_SIDE, "mov": _BUILTIN_SIDE}
 
 # A point whose true position lies less than this far inside the reference is not
-# measured (the rule the known-truth probes had: ``truth_spec.json: probes.margin_px``).
+# measured (the rule the known-truth probes of the removed synthetic dataset had).
 MARGIN_PX = 32.0
 
 

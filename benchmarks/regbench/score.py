@@ -13,20 +13,10 @@ readable:
 ``*_null``      the same score with one set shifted four nuclear radii, averaged over eight
                 directions: what chance pairing gives in this tissue. It depends strongly on
                 density, so every case reports ``coverage`` and ``nn_distance_um_p50``.
-``truth``       (cases with a known map) a pseudo-method: the moving cells under the TRUE map.
 ``fold_pct``, ``sd_log_jac``   the share of a lattice where the method's map folds and the
                 spread of its log Jacobian (forward evaluation only). A map that snaps
                 nuclei onto their nearest neighbour is rewarded by the paired numbers; this
                 and the two-sided curve are what object.
-
-**Known-truth error** (``regbench.truth``). On cases made by a known map, ``truth.csv`` has
-the distance between where a method puts each probe and where it truly belongs, in the
-method's own direction, and ``truth_by_family.csv`` summarises it per (dataset, family,
-pose, variant). Families are never pooled. The summary's known-truth header names the
-spec's hash and the cohort patients the semi-synthetic cases were built from
-(``truth_patients.json``); cases of two patient lists are refused, like cases of two
-specs. Cases of the frozen spec are left out of the
-cost tables, and cases of two spec hashes are refused.
 
 **A failed run is a row, never a gap.** A variant that failed, was killed, or never ran is
 scored at the unregistered pose (``imputed_initial``), with ``problem`` and ``cause``
@@ -103,7 +93,6 @@ from . import (
     plugins,
     prep,
     tissue,
-    truth,
 )
 from .cases import (
     NUCLEI,
@@ -122,14 +111,11 @@ from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 # "cache": what methods share between runs (ASHLAR's reference tiles), never a variant
 RESERVED = ("tables", "tables_dev", "logs", "cache")
 TIERS = ("headline", "secondary")
-# semisynth families with parameters from papers
-HEADLINE_FAMILIES = ("grid", "multiscale")
-PSEUDO = ("initial", "truth")  # not registrations run by the driver
+PSEUDO = ("initial",)  # not registrations run by the driver
 # <variant>:non_<owner>: the variant scored without the nuclei on <owner>'s seams
 NON = ":non_"
 # Methods whose primary row carries a seam mask (``warped.npz``: ``band`` on the moving
-# nuclei, ``band_ref`` on the reference nuclei, ``band_truth`` on the known-truth probes
-# of a reference-side owner). The owner's name is its primary variant.
+# nuclei, ``band_ref`` on the reference nuclei). The owner's name is its primary variant.
 SEAM_OWNERS = ("ashlar", "palom") + tuple(
     plugins.get("SEAM_OWNERS", ())  # of a private method plug-in, when one is enabled
 )
@@ -143,7 +129,6 @@ WARPED_KEYS = {
     OUTLINES: ("cells_xy", "band", "band_ref"),
     NUCLEI: ("nuclei_xy", "band_nuc", "band_ref_nuc"),
 }
-TRUTH_XY = {OUTLINES: "cells_mov_xy_truth", NUCLEI: "nuclei_mov_xy_truth"}
 # the tables that exist once per polygon set
 NUCLEI_TABLES = (
     "cells",
@@ -220,17 +205,10 @@ NOT_THE_METHOD = (
 # scored at the unregistered pose like a failure of the method (the rule before
 # 2026-10-11). ONE switch: every summary reads `_excluded`.
 NOT_THE_METHOD_ROUNDS = "exclude"
-# Datasets made by known maps: their cell summaries are per deformation family, never
-# pooled over families (a family outside a method's model must show in its own row).
-PER_FAMILY = ("synthetic", "semisynth")
 # What one independent unit is, per dataset: `n_patients`, the "under six" line and
 # every across-unit statistic count THIS, not the case's group.
 UNIT_IS = {
     "multiplex": "patient",
-    "synthetic": "generated scene (one per family; its two poses are the same scene "
-    "and are not independent)",
-    "semisynth": "real patient (its windows, families and poses are cut from one "
-    "slide and are not independent)",
 }
 # the paired bootstrap of the differences against PAIRED_AGAINST
 BOOTSTRAP_N = 2000
@@ -241,30 +219,40 @@ BOOTSTRAP_LEVEL = 0.95
 def tier_of(case):
     if case.dataset == "multiplex":
         return "headline"
-    if case.dataset == "semisynth" and case.family in HEADLINE_FAMILIES:
-        return "headline"
     return "secondary"
 
 
-jacobian_stats = truth.jacobian_stats
+JACOBIAN_KEYS = ("fold_pct", "sd_log_jac")
+
+
+def jacobian_stats(warped):
+    """``fold_pct`` and ``sd_log_jac`` of a method's map, from the lattice the driver pushed
+    through it (``warped.npz``: ``grid``, ``grid_shape``, ``grid_step``). Forward evaluation
+    only: the map is differentiated where the method defined it."""
+    out = dict.fromkeys(JACOBIAN_KEYS, math.nan)
+    if warped is None or "grid" not in warped or min(warped["grid_shape"]) < 3:
+        return out
+    rows, cols = (int(v) for v in warped["grid_shape"])
+    step = float(warped["grid_step"])
+    g = np.asarray(warped["grid"], dtype=float).reshape(rows, cols, 2)
+    jac = np.gradient(g[..., 0], step, axis=1) * np.gradient(
+        g[..., 1], step, axis=0
+    ) - np.gradient(g[..., 0], step, axis=0) * np.gradient(g[..., 1], step, axis=1)
+    jac = jac[np.isfinite(jac)]
+    if len(jac):
+        out["fold_pct"] = float(100.0 * np.mean(jac <= 0))
+        if np.any(jac > 0):
+            out["sd_log_jac"] = float(np.std(np.log(jac[jac > 0])))
+    return out
 
 
 def unit_of(case):
-    """The independent unit a case belongs to (``UNIT_IS``). A semi-synthetic case is
-    cut from a real patient's slide: that patient, whatever its window, family or pose.
-    A synthetic case's unit is its generated scene (its group: one per family)."""
-    if case.dataset == "semisynth":
-        return str(case.extra.get("truth_patient") or case.group)
+    """The independent unit a case belongs to (``UNIT_IS``): the cohort's patient."""
     return case.group
 
 
 def _unit(row):
     return row.get("unit") or row["group"]
-
-
-def _stratum(row):
-    """The family a row is summarised in: its own on a known-truth dataset, none else."""
-    return (row.get("family") or "") if row["dataset"] in PER_FAMILY else ""
 
 
 def _excluded(row):
@@ -278,8 +266,8 @@ def _excluded(row):
 
 
 def _is_run(method):
-    """A registration the driver ran (or should have): not ``initial`` or ``truth``,
-    with or without an off-seam suffix."""
+    """A registration the driver ran (or should have): not ``initial``, with or without
+    an off-seam suffix."""
     return method.split(NON)[0] not in PSEUDO
 
 
@@ -922,71 +910,16 @@ def _load_run(out, variant, case):
     return run, warped, str(run.get("problem") or ""), ""
 
 
-def _truth_rows(case, points, base, checks=None):
-    """A function ``add(method, frame, direction, mapped, ...)`` and the rows it fills, for
-    a case with paired truth probes; ``(None, [])`` for a case without."""
-    if "truth_mov" not in points or not len(points["truth_mov"]):
-        return None, []
-    t_mov = np.asarray(points["truth_mov"], dtype=float)
-    t_ref = np.asarray(points["truth_ref"], dtype=float)
-    head = {
-        **base,
-        "in_stare_model": case.extra.get("in_stare_model", ""),
-        "truth_spec": case.extra.get("truth_spec_sha256", ""),
-    }
-    rows = []
-
-    def add(
-        method,
-        frame,
-        direction,
-        mapped,
-        jac,
-        imputed,
-        problem,
-        cause,
-        keep=None,
-        into=None,
-        owner=None,
-    ):
-        # the method's own direction: its map of the side it starts from, against the
-        # partner on the other side
-        source, target = (t_mov, t_ref) if direction == MOV_TO_REF else (t_ref, t_mov)
-        if mapped is None:  # the unregistered pose
-            mapped = source
-        n_all = len(source)
-        if keep is not None:
-            mapped, source, target = mapped[keep], source[keep], target[keep]
-        seam = {} if owner is None else {"owner": owner, "n_probes_all": n_all}
-        (rows if into is None else into).append(
-            {
-                **head,
-                **seam,
-                "method": method,
-                "frame": frame,
-                "selfcheck_row": (checks or {}).get(method.split(NON)[0], ""),
-                **truth.error_stats(mapped, target, source, case.pixel_size_um),
-                **jac,
-                "imputed_initial": imputed,
-                "problem": problem[:200],
-                "cause": cause,
-            }
-        )
-
-    return add, rows
-
-
 def _seam_masks(
     out, case, variants, owners, ref, mov, points, which=OUTLINES, load=None
 ):
-    """``({owner: (keep_ref | None, keep_mov | None, keep_truth | None)}, [owners without
+    """``({owner: (keep_ref | None, keep_mov | None)}, [owners without
     a mask])`` for the owners that have a row on this dataset. The mask is read from the
     owner's own primary run and from nothing else: no other method's result can change it.
 
     ``which`` is the polygon set: the mask of the bare nuclei is the owner's ``band_nuc``
     / ``band_ref_nuc`` (``methods._nuclei_band`` says how the driver got them).
-    ``keep_truth`` is one bool per known-truth probe (``_truth_keep``); the probes are
-    scored once, with the outlines. ``load`` reads a variant's result (default
+    ``load`` reads a variant's result (default
     ``_load_run``): a caller that has read it already passes its own."""
     _, key, key_ref = WARPED_KEYS[which]
     masks, missing = {}, []
@@ -1006,38 +939,8 @@ def _seam_masks(
         masks[owner] = (
             None if band_ref is None else ~np.asarray(band_ref, dtype=bool),
             keep_mov,
-            _truth_keep(points, keep_mov, warped.get("band_truth"))
-            if which == OUTLINES
-            else None,
         )
     return masks, missing
-
-
-def _truth_keep(points, keep_mov, band_truth):
-    """Which known-truth probes an owner's seam mask leaves: one bool per probe, or None
-    when the mask says nothing about probes (no off-seam truth row is then made).
-
-    A probe is a pair: the centroid of moving nucleus ``truth_cell`` (``truth_mov``) and
-    where the truth puts it on the reference (``truth_ref``). It is dropped when
-
-    * the owner's mask is on MOVING nuclei and marks the probe's own nucleus, or
-    * the owner's mask is on REFERENCE nuclei and its run marked the probe itself
-      (``band_truth`` in its ``warped.npz``, one bool per probe: the owner applies its
-      seam rule to the probe's nucleus at ``truth_ref``; PALOM's is in
-      ``methods/palom.py::probe_band``). Reference nuclei carry no probe index, so the
-      scorer cannot derive this from ``band_ref``.
-
-    Either way only the owner's geometry enters, never a score."""
-    if "truth_mov" not in points:
-        return None
-    n = len(points["truth_mov"])
-    keep = None
-    if keep_mov is not None and "truth_cell" in points:
-        keep = keep_mov[np.asarray(points["truth_cell"], dtype=np.int64)]
-    if band_truth is not None and len(band_truth) == n:
-        off = ~np.asarray(band_truth, dtype=bool)
-        keep = off if keep is None else keep & off
-    return keep
 
 
 # what a row's `selfcheck_row` says when its stage has no image to be checked against
@@ -1047,14 +950,14 @@ NEVER_CHECKED = "no_stage_image"
 # ── one case: what is read, what is computed, what is kept ───────────────────────────
 # Bump when anything a case's rows or a pair record depend on changes in a way the
 # hashes below cannot see. They see the code (`case_code`, `pair_code`: the files of
-# this package and the modules they import, the pipeline's cell_pairs.py,
-# truth_spec.json), the libraries' versions and the constants in `_settings`; this
+# this package and the modules they import, the pipeline's cell_pairs.py),
+# the libraries' versions and the constants in `_settings`; this
 # number is for the rest (a changed meaning with unchanged code).
 RECORD_VERSION = 1
 # where the records are kept, under the results folder (`cache` is RESERVED)
 RECORDS = ("cache", "scores")
 # a pair record's source: the unregistered pose, the true map, or a variant's result
-INITIAL, TRUE_MAP, VARIANT = "initial", "truth", "variant"
+INITIAL, VARIANT = "initial", "variant"
 PROGRESS_EVERY_S = 30.0
 
 _FILE_SHA = {}
@@ -1115,7 +1018,6 @@ def _settings():
         "coverage_bin_radii": COVERAGE_BIN_RADII,
         "not_the_method": list(NOT_THE_METHOD),
         "not_the_method_rounds": NOT_THE_METHOD_ROUNDS,
-        "headline_families": list(HEADLINE_FAMILIES),
     }
 
 
@@ -1190,13 +1092,10 @@ PAIR_CODE_MEMBERS = (
     "_load_run",
     "of_this_submission",
     "_seam_masks",
-    "_truth_keep",
 )
 PAIR_CODE_CONSTANTS = (
     "WARPED_KEYS",
-    "TRUTH_XY",
     "INITIAL",
-    "TRUE_MAP",
     "VARIANT",
     "OUTLINES",
     "NUCLEI",
@@ -1247,11 +1146,11 @@ def pair_code():
 def case_code():
     """Everything a case's rows could depend on: every file of this package's top
     level, every module this file imports inside the package, followed through
-    (``code_files``: a module in a sub-package too), the pipeline's ``cell_pairs.py``
-    and the truth spec. Deliberately wide: a case record that is not reused costs
+    (``code_files``: a module in a sub-package too) and the pipeline's
+    ``cell_pairs.py``. Deliberately wide: a case record that is not reused costs
     minutes (its pair records are), a wrong one costs a table."""
     here = Path(__file__).resolve().parent
-    files = {f.name: f for f in [*sorted(here.glob("*.py")), here / "truth_spec.json"]}
+    files = {f.name: f for f in sorted(here.glob("*.py"))}
     files.update(code_files([Path(__file__)]))
     return {
         "cell_pairs.py": file_sha256(pairs.CELL_PAIRS_PATH),
@@ -1356,7 +1255,7 @@ def case_key(job, dropped=()):
         "variants": list(variants),
         "results": results,
         "seam_owners": list(owners),
-        "checks": {v: checks.get(v, "") for v in [*variants, "truth"]},
+        "checks": {v: checks.get(v, "") for v in variants},
         "dropped": sorted(dropped),
         "submission": os.environ.get(SUBMISSION_ENV) or "",
     }
@@ -1455,8 +1354,8 @@ class _Case:
 
     def inputs(self, which, source, owner=None):
         """The four arguments of ``pairs.record`` for one pair record: the two native
-        sets, and the two sets in the frame of ``source`` (``(INITIAL, "")``,
-        ``(TRUE_MAP, "")`` or ``(VARIANT, name)``), without the nuclei on ``owner``'s
+        sets, and the two sets in the frame of ``source`` (``(INITIAL, "")`` or
+        ``(VARIANT, name)``), without the nuclei on ``owner``'s
         seams when one is named."""
         ref, mov = self.sets(which)
         kind, name = source
@@ -1468,10 +1367,8 @@ class _Case:
                 ref_in = pairs.with_xy(ref, xy)
             else:
                 mov_in = pairs.with_xy(mov, xy)
-        elif kind == TRUE_MAP:
-            mov_in = pairs.with_xy(mov, self.points[TRUTH_XY[which]].astype(float))
         if owner is not None:
-            keep_ref, keep_mov, _ = self.masks(which)[0][owner]
+            keep_ref, keep_mov = self.masks(which)[0][owner]
             if keep_ref is not None:
                 ref_in = _keep_features(ref_in, keep_ref)
             if keep_mov is not None:
@@ -1496,7 +1393,7 @@ class _Case:
         kind, name = source
         keep_ref = keep_mov = None
         if owner is not None:
-            keep_ref, keep_mov, _ = self.masks(which)[0][owner]
+            keep_ref, keep_mov = self.masks(which)[0][owner]
         return {
             "record_version": RECORD_VERSION,
             "code": pair_code(),
@@ -1595,8 +1492,8 @@ def _kept(ps, keep):
 
 
 def _score_case(job, pool=None, fresh=False, progress=None):
-    """Every row of one case: ``(cell rows, resource rows, truth rows, off-seam cell rows,
-    off-seam truth rows, owners without a mask, nuclei)``. The first six are the OUTLINES'
+    """Every row of one case: ``(cell rows, resource rows, off-seam cell rows, owners
+    without a mask, nuclei)``. The first four are the OUTLINES'
     (and what does not depend on a polygon set); ``nuclei`` is ``{"cells", "non_cells",
     "missing"}``: the same cell rows on the bare nuclei, and, where there are none, why.
 
@@ -1617,17 +1514,14 @@ def _score_case(job, pool=None, fresh=False, progress=None):
         "family": case.family,
         "pose": case.pose,
     }
-    res_rows, non_truth = [], []
-    add_truth, truth_rows = _truth_rows(case, points, base, checks)
+    res_rows = []
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
-    nan = {"fold_pct": math.nan, "sd_log_jac": math.nan}
     wanted = {}  # the pair records the rows read, in the order they are first named
-    initial, true_map = (INITIAL, ""), (TRUE_MAP, "")
+    initial = (INITIAL, "")
 
     def one_set(which):
         """The cell rows of one polygon set, each a function of the pair records. The
-        resource rows and the known-truth rows do not depend on the set: they are made
-        once, with the outlines."""
+        resource rows do not depend on the set: they are made once, with the outlines."""
         first = which == OUTLINES
         xy_key = WARPED_KEYS[which][0]
         ref, mov = ctx.sets(which)
@@ -1671,7 +1565,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
 
         def off_seams(v, frame, status, source, jac, imputed, problem, cause):
             """The same variant on the nuclei each owner's mask leaves, one row per owner."""
-            for owner, (keep_ref, keep_mov, _) in masks.items():
+            for owner, (keep_ref, keep_mov) in masks.items():
                 # the gate still comes from ALL native nuclei: one gate per case and set
                 fill = row(
                     f"{v}{NON}{owner}",
@@ -1710,39 +1604,6 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                             ),
                         }
                     )
-            failed = v != "initial" and warped is None
-            if first and add_truth is not None:
-                direction = (
-                    str(warped["direction"]) if warped is not None else MOV_TO_REF
-                )
-                mapped = warped.get("truth_xy") if warped is not None else None
-                t_problem, t_cause, t_failed = problem, cause, failed
-                if warped is not None and (
-                    direction not in FRAME
-                    or mapped is None
-                    or len(mapped) != len(points["truth_mov"])
-                ):
-                    mapped, direction, t_failed = None, MOV_TO_REF, True
-                    t_problem = "warped.npz does not fit the case's truth probes"
-                    t_cause = "exception"
-                jac = flat if mapped is None else ctx.jacobian(v)
-                args = (jac, t_failed, t_problem, t_cause)
-                add_truth(v, FRAME[direction], direction, mapped, *args)
-                # the same probes for every variant of the case: those the owner's seam
-                # mask leaves (``_truth_keep``)
-                for owner, (_, _, keep_truth) in masks.items():
-                    if keep_truth is None:
-                        continue
-                    add_truth(
-                        f"{v}{NON}{owner}",
-                        FRAME[direction],
-                        direction,
-                        mapped,
-                        *args,
-                        keep_truth,
-                        into=non_truth,
-                        owner=owner,
-                    )
             if not scorable:
                 continue
             if warped is not None and xy_key not in warped:
@@ -1773,24 +1634,6 @@ def _score_case(job, pool=None, fresh=False, progress=None):
             said = (jac, False, problem, cause)
             cell_rows.append(row(v, frame, status, (which, (VARIANT, v), None), *said))
             off_seams(v, frame, status, (VARIANT, v), *said)
-        if first and add_truth is not None:
-            # the true map itself: zero by construction, shown so the table has its floor
-            add_truth(
-                "truth",
-                "reference",
-                MOV_TO_REF,
-                points["truth_ref"],
-                nan,
-                False,
-                "",
-                "",
-            )
-        if scorable and TRUTH_XY[which] in points:
-            said = (nan, False, "", "")
-            cell_rows.append(
-                row("truth", "reference", "", (which, true_map, None), *said)
-            )
-            off_seams("truth", "reference", "", true_map, *said)
         lost = [{**base, "owner": owner} for owner in missing]
         return cell_rows, non_cells, lost, absent, scorable
 
@@ -1829,9 +1672,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
     return (
         filled(cell_rows),
         res_rows,
-        truth_rows,
         filled(non_cells),
-        non_truth,
         lost,
         nuclei,
     )
@@ -1854,14 +1695,13 @@ def _case_record(job, key, why, pool=None, fresh=False):
             "seconds": round(progress.elapsed(), 3),
             "rows": {
                 "cells": len(got[0]),
-                "nonband_cells": len(got[3]),
-                "truth": len(got[2]),
-                "cells_nuclei": len(got[6]["cells"]),
-                "nonband_cells_nuclei": len(got[6]["non_cells"]),
+                "nonband_cells": len(got[2]),
+                "cells_nuclei": len(got[4]["cells"]),
+                "nonband_cells_nuclei": len(got[4]["non_cells"]),
             },
             "seam_masks": {
-                OUTLINES: sorted({r["owner"] for r in got[3]}),
-                NUCLEI: sorted({r["owner"] for r in got[6]["non_cells"]}),
+                OUTLINES: sorted({r["owner"] for r in got[2]}),
+                NUCLEI: sorted({r["owner"] for r in got[4]["non_cells"]}),
             },
             "key": key,
         },
@@ -2136,9 +1976,8 @@ def common_block(rows, primary=None, blocked=None):
 def summarise_cells(rows, primary=None, blocked=None):
     """One row per (dataset, family, method, subset): ``all`` and ``common``.
 
-    ``family`` is empty on the cohort and one deformation family on a known-truth
-    dataset (``PER_FAMILY``): those are never pooled over families. ``n_patients``
-    counts independent units (``UNIT_IS``). A round lost for a cause that is not the
+    ``family`` is empty on the cohort (the column stays, so a table keeps its shape).
+    ``n_patients`` counts independent units (``UNIT_IS``). A round lost for a cause that is not the
     method's is left out of that method's rows and counted (``n_excluded_not_method``).
 
     Two numbers are read on a subset of cases, and each is given twice. ``*_ranked`` /
@@ -2154,8 +1993,8 @@ def summarise_cells(rows, primary=None, blocked=None):
         of_ds = [r for r in rows if r["dataset"] == ds]
         inside, _ = compared_rows(of_ds, primary, blocked)
         common = common_cases(of_ds, primary, blocked)
-        for fam in dict.fromkeys(_stratum(r) for r in of_ds):
-            of_fam = [r for r in of_ds if _stratum(r) == fam]
+        for fam in ("",):  # the cohort has one stratum; `family` stays an empty column
+            of_fam = of_ds
             for subset in ("all", "common"):
                 pool = of_fam
                 if subset == "common":
@@ -2263,8 +2102,8 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
-        for fam in dict.fromkeys(_stratum(r) for r in of_ds):
-            of_fam = [r for r in of_ds if _stratum(r) == fam]
+        for fam in ("",):  # the cohort has one stratum; `family` stays an empty column
+            of_fam = of_ds
             ref = [r for r in of_fam if r["method"] == against and not _excluded(r)]
             if not ref:
                 continue
@@ -2438,18 +2277,14 @@ def run_failure_columns(mine):
 
 def run_failures(res_rows):
     """``run_failure_columns`` per (dataset, family, method): the counts beside a
-    summary row, over exactly the cases that row summarises (the family stratum on a
-    known-truth dataset, the whole dataset elsewhere, as ``_stratum``). ``is_ashlar``
+    summary row, over exactly the cases that row summarises (the whole dataset).
+    ``is_ashlar``
     says whether the cells ``fallback`` / ``fully modelled`` apply; it is read by the
     table only and is in no CSV."""
     out = {}
-    keys = dict.fromkeys((r["dataset"], _stratum(r), r["method"]) for r in res_rows)
+    keys = dict.fromkeys((r["dataset"], "", r["method"]) for r in res_rows)
     for ds, fam, m in keys:
-        mine = [
-            r
-            for r in res_rows
-            if (r["dataset"], _stratum(r), r["method"]) == (ds, fam, m)
-        ]
+        mine = [r for r in res_rows if (r["dataset"], "", r["method"]) == (ds, fam, m)]
         out[(ds, fam, m)] = {
             **run_failure_columns(mine),
             "is_ashlar": any(
@@ -2465,8 +2300,8 @@ FAILURE_COLUMN_RULE = (
     "`failed (method)`, `failed (benchmark)` and `not run / blocked` count CASES "
     "(rounds) of the run that did not register, by whose cause it was "
     "(`failure_log.WHOSE`): the method's; the benchmark's; or the launcher's, the "
-    "infrastructure's or a result nobody ran. They count the same family's cases as "
-    "`ok/cases` beside them (per family on a known-truth dataset), including the rounds "
+    "infrastructure's or a result nobody ran. They count the same cases as "
+    "`ok/cases` beside them, including the rounds "
     "`ok/cases` leaves out as not the method's. `top cause` is the most frequent "
     "of them. `fallback` and `fully modelled` (ASHLAR runs only) count rounds whose "
     "reference stitch kept the stage positions, and whose cycle was entirely replaced "
@@ -3057,109 +2892,6 @@ def _paired_markdown(summary, ds):
     ]
 
 
-TRUTH_COLUMNS = (
-    "dataset",
-    "family",
-    "pose",
-    "in_stare_model",
-    "method",
-    "n_ok",
-    "n_cases",
-    "initial_tre_um_p50_med",
-    "tre_um_p50_med",
-    "tre_um_p50_mean",
-    "tre_um_p50_max",
-    "tre_um_p90_med",
-    "tre_um_max_max",
-    "frac_under_1um_med",
-    "frac_under_2um_med",
-    "fold_pct_med",
-    "n_excluded_not_method",
-    "selfcheck_row",
-)
-
-
-def truth_header(spec_hashes, record, prepared, folded=(), reseeded=()):
-    """The lines that say what the known-truth numbers rest on: the frozen spec, and the
-    cohort patients the semi-synthetic cases were built from."""
-    lines = []
-    for h in spec_hashes:
-        lines.append(f"Frozen spec `truth_spec.json`, sha256 `{h}`.")
-    if not spec_hashes:
-        lines.append("These cases are not the frozen ones (no spec hash).")
-    if record:
-        ids = record["patients"]
-        have = [p for p in ids if p in prepared]
-        source = (
-            f"manifest `{record['manifest']}` (sha256 "
-            f"`{record['manifest_sha256'][:12]}`)"
-            if record["manifest"]
-            else "given on the command line, no manifest"
-        )
-        lines.append(
-            f"Semi-synthetic cases: {len(ids)} cohort patient(s): {', '.join(ids)}; "
-            f"cases are prepared for {len(have)} of them ({', '.join(have) or 'none'}). "
-            f"List `{record['sha256'][:12]}` ({truth.PATIENTS_FILE}), {source}."
-        )
-    if folded:
-        lines.append(
-            f"{len(folded)} case(s) were made by a true map that folds somewhere "
-            "(`extra.field.fold_pct` > 0 in their case.json): "
-            + ", ".join(folded)
-            + "."
-        )
-    if reseeded:
-        lines.append(
-            f"{len(reseeded)} case(s) were re-seeded: the true map of the seed their "
-            "seed rule asks for folds, so the next seed that does not was used "
-            "(`extra.reseed` in their case.json has the skipped seeds): "
-            + ", ".join(reseeded)
-            + "."
-        )
-    return lines
-
-
-def truth_by_family(rows):
-    """``truth.by_family`` without the rounds lost for a cause that is not the
-    method's, each (dataset, family, pose, method) saying how many it left out. A key
-    with nothing left keeps a row (``n_cases`` 0): a row is never missing silently."""
-    kept = [r for r in rows if not _excluded(r)]
-    out = truth.by_family(kept)
-
-    def key(r):
-        return r["dataset"], r["family"], r["pose"], r["method"]
-
-    gone = {}
-    for r in rows:
-        if _excluded(r):
-            gone[key(r)] = gone.get(key(r), 0) + 1
-    have = {key(r) for r in out}
-    checks = {key(r): r.get("selfcheck_row", "") for r in rows}
-    for r in out:
-        r["n_excluded_not_method"] = gone.get(key(r), 0)
-        r["selfcheck_row"] = checks.get(key(r), "")
-        # beside the median of the cases' p50: their mean (infinite when a case has
-        # a point the method could not map)
-        mine = [_f(k.get("tre_um_p50")) for k in kept if key(k) == key(r)]
-        r["tre_um_p50_mean"] = float(np.mean(mine)) if mine else math.nan
-    for k, n in gone.items():
-        if k not in have:
-            sample = next(r for r in rows if key(r) == k)
-            out.append(
-                {
-                    "dataset": k[0],
-                    "family": k[1],
-                    "pose": k[2],
-                    "in_stare_model": sample["in_stare_model"],
-                    "method": k[3],
-                    "n_cases": 0,
-                    "n_ok": 0,
-                    "n_excluded_not_method": n,
-                }
-            )
-    return out
-
-
 def summarise_nonband(rows, primary=None, blocked=None):
     """One row per (dataset, owner, variant): the summary of ``summarise_cells`` on the
     off-seam rows, with the nuclei kept. Never merged with the primary summary.
@@ -3555,8 +3287,6 @@ def summary_markdown(
     fails,
     res_summary,
     primary=None,
-    by_family=None,
-    known_truth=None,
     nonband=None,
     nonband_lost=None,
     tissue_tables=None,
@@ -3627,16 +3357,10 @@ def summary_markdown(
         n_units = max(r["n_patients"] for r in of_ds)
         parts.append(f"## {ds}\n")
         what = UNIT_IS.get(ds, "patient")
-        per = " per family" if ds in PER_FAMILY else ""
         parts.append(
-            f"The independent unit is the {what}. At most {n_units} unit(s){per}"
+            f"The independent unit is the {what}. At most {n_units} unit(s)"
             + f": {DESCRIPTIVE}.\n"
         )
-        if ds in PER_FAMILY:
-            parts.append(
-                "One row per deformation family: families are never pooled, so a "
-                "family outside a method's model shows in its own row.\n"
-            )
         parts += in_sample_lines(ds, [r["method"] for r in of_ds])
         block = [r for r in of_ds if r["subset"] == "all"]
         if block:
@@ -3655,24 +3379,6 @@ def summary_markdown(
             parts += [_summary_table(block, primary, run_fails), ""]
             parts += _side_by_side(block, nuc_summary, primary)
         parts += _paired_markdown(paired or [], ds)
-    if by_family:
-        parts += [
-            "## Known-truth error, per deformation family\n",
-            "Distance between where a method puts a probe and where the generating map "
-            "says it belongs, in the method's own direction (micrometres). One row per "
-            "family, pose and variant; families are never pooled. `in_stare_model` is "
-            "False for the families a B-spline mesh on STARE's lattice cannot "
-            "represent. A run that did not register is scored at the unregistered "
-            "pose; a point a method could not map counts as an infinite error. The "
-            "amplitudes are set against published measurements and are probably "
-            "larger than what rounds of cyclic IF do (README, 'Where the families "
-            "come from'); the families, their smoothness and the multiscale spectrum "
-            "were chosen by STARE's authors. One generated scene per family: "
-            "descriptive, never ranked.\n",
-            *[line + "\n" for line in known_truth or []],
-            markdown(by_family, list(TRUTH_COLUMNS)),
-            "",
-        ]
     parts += _nonband_markdown(nonband or [], nonband_lost or [])
     if tissue_tables:
         parts += tissue.markdown(tissue_tables, markdown)
@@ -3965,8 +3671,7 @@ def score(
         for v in dropped
     ]
     variants_of = {}
-    jobs, hashes, lists, prepared, folded, reseeded = [], {}, {}, set(), [], []
-    current, other_spec = truth.load_spec()[truth.HASH_KEY], []
+    jobs = []
     for ds in datasets or DATASETS:
         made = case_jobs(
             cases_root, out, ds, dev, expected, dropped, owners, row_checks
@@ -3974,71 +3679,19 @@ def score(
         if made:
             variants_of[ds] = made[0][2]
             jobs += made
-            for c in (j[1] for j in made):
-                if c.extra.get("truth_spec_sha256"):
-                    hashes.setdefault(c.extra["truth_spec_sha256"], f"{ds}/{c.case_id}")
-                    if ds == "synthetic" and c.extra["truth_spec_sha256"] != current:
-                        other_spec.append(c)
-                if (c.extra.get("field") or {}).get("fold_pct", 0) > 0:
-                    folded.append(f"{ds}/{c.case_id}")
-                skipped = (c.extra.get("reseed") or {}).get("skipped") or []
-                if skipped:
-                    reseeded.append(f"{ds}/{c.case_id} ({len(skipped)} seed)")
-                if c.extra.get("truth_patients_sha256"):
-                    lists.setdefault(
-                        (ds, c.extra["truth_patients_sha256"]), f"{ds}/{c.case_id}"
-                    )
-                    prepared.add(str(c.extra.get("truth_patient", "")))
     if not jobs:
         raise SystemExit(f"no prepared cases under {cases_root}")
-    if len(hashes) > 1:
-        raise SystemExit(
-            "the known-truth cases were made from more than one truth_spec.json: "
-            + "; ".join(f"{h[:12]} (e.g. {c})" for h, c in hashes.items())
-            + ". Score them separately; a changed spec is a post hoc change."
-        )
-    if other_spec:
-        c = other_spec[0]
-        raise SystemExit(
-            f"{len(other_spec)} synthetic known-truth case(s) under "
-            f"{Path(cases_root) / 'synthetic'} were not prepared from the current "
-            f"truth_spec.json ({current[:12]}): e.g. {c.case_id} "
-            f"({c.extra['truth_spec_sha256'][:12]}). They are not scored: their maps, "
-            "probes and seeds are another spec's. Prepare the synthetic cases into a "
-            "new, empty cases folder (REGBENCH_CASES) and register them again."
-        )
-    if len(lists) > 1:
-        raise SystemExit(
-            "the semi-synthetic known-truth cases were built from more than one "
-            "patient list: "
-            + "; ".join(f"{h[:12]} (e.g. {c})" for (_, h), c in lists.items())
-            + ". A result rests on one declared list of patients; score them "
-            "separately."
-        )
-    patients = None
-    for ds, sha in lists:
-        patients = truth.load_patients(truth.patients_path(cases_root, ds))
-        if patients[truth.HASH_KEY] != sha:
-            raise SystemExit(
-                f"{truth.patients_path(cases_root, ds)} (list "
-                f"{patients[truth.HASH_KEY][:12]}: {', '.join(patients['patients'])}) "
-                f"does not match the list the cases were built from ({sha[:12]}, "
-                f"e.g. {lists[(ds, sha)]})."
-            )
     done = score_jobs(jobs, workers, dropped, fresh)
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
-    truth_rows = [r for rows in done for r in rows[2]]
     # off the seams: tables of their own, never merged into the ones above
-    non_cells = [r for rows in done for r in rows[3]]
-    non_truth = [r for rows in done for r in rows[4]]
+    non_cells = [r for rows in done for r in rows[2]]
     non_lost = nonband_missing(
-        [r for rows in done for r in rows[5]], jobs, owners, variants_of
+        [r for rows in done for r in rows[3]], jobs, owners, variants_of
     )
     launch = read_gates(gates)
     blocked = blocked_rows(launch, run_variants)
     non_summary = _in_set(summarise_nonband(non_cells, primary, blocked), OUTLINES)
-    by_family = truth_by_family(truth_rows)
     summary = _in_set(summarise_cells(cells, primary, blocked), OUTLINES)
     common = _in_set(common_block(cells, primary, blocked), OUTLINES)
     excluded = excluded_rounds(cells)
@@ -4048,10 +3701,10 @@ def score(
     # same columns, read with the nuclei's own gate, null and shared subset. A case
     # without nuclei has no row there and is listed with its reason, never imputed.
     nuc = {
-        "cells": [r for rows in done for r in rows[6]["cells"]],
-        "nonband_cells": [r for rows in done for r in rows[6]["non_cells"]],
+        "cells": [r for rows in done for r in rows[4]["cells"]],
+        "nonband_cells": [r for rows in done for r in rows[4]["non_cells"]],
     }
-    nuclei_missing = [r for rows in done for r in rows[6]["missing"]]
+    nuclei_missing = [r for rows in done for r in rows[4]["missing"]]
     nuc["summary_cells"] = _in_set(
         summarise_cells(nuc["cells"], primary, blocked), NUCLEI
     )
@@ -4061,14 +3714,11 @@ def score(
     nuc["nonband_summary"] = _in_set(
         summarise_nonband(nuc["nonband_cells"], primary, blocked), NUCLEI
     )
-    fails = failures(res)  # every run, the frozen known-truth cases included
+    fails = failures(res)  # every run
     run_fails = run_failures(res)
     lost_rounds = attrition(
         jobs, cells, nuc["cells"], nuclei_missing, res, manifest_rounds(manifest)
     )
-    # cost is read on the cohort: the frozen known-truth cases are left out of it
-    frozen = [bool(job[1].extra.get("truth_spec_sha256")) for job in jobs]
-    res = [r for rows, skip in zip(done, frozen) if not skip for r in rows[1]]
     from . import ladder
 
     booked = Path(accounting or Path(out) / "logs" / "accounting.psv")
@@ -4098,12 +3748,8 @@ def score(
         "failures",
         "resources",
         "summary_resources",
-        "truth",
-        "truth_by_family",
         "nonband_cells",
         "nonband_summary",
-        "nonband_truth",
-        "nonband_truth_by_family",
         "nonband_missing",
         "cost_end_to_end",
         "cost_end_to_end_summary",
@@ -4117,6 +3763,13 @@ def score(
         "attrition",
         *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
         *tissue.TABLES,
+        # removed tables, still cleared
+        "truth",
+        "truth_by_family",
+        "nonband_truth",
+        "nonband_truth_by_family",
+        "tissue_dose",
+        "tissue_dose_summary",
     ):
         (tables / f"{name}.csv").unlink(missing_ok=True)
     # what the selfcheck's mask hid for each row's run, on every row of every table
@@ -4127,11 +3780,8 @@ def score(
         res,
         res_summary,
         cost_summary,
-        truth_rows,
-        by_family,
         non_cells,
         non_summary,
-        non_truth,
         *(nuc[name] for name in NUCLEI_TABLES),
     ):
         if mask_flags is not None:  # a score outside the launcher has no selfcheck
@@ -4156,12 +3806,8 @@ def score(
     write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
     write_csv(tables / "cost_end_to_end_summary.csv", e2e_summary)
     write_csv(tables / "launch.csv", launch)
-    write_csv(tables / "truth.csv", truth_rows)
-    write_csv(tables / "truth_by_family.csv", by_family)
     write_csv(tables / "nonband_cells.csv", non_cells)
     write_csv(tables / "nonband_summary.csv", non_summary)
-    write_csv(tables / "nonband_truth.csv", non_truth)
-    write_csv(tables / "nonband_truth_by_family.csv", truth_by_family(non_truth))
     write_csv(tables / "nonband_missing.csv", non_lost)
     (tables / "dropped.csv").unlink(missing_ok=True)  # never a stale list
     write_csv(tables / "dropped.csv", dropped_rows)
@@ -4186,14 +3832,11 @@ def score(
         w = csv.DictWriter(fh, fieldnames=list(failure_log.COLUMNS), restval="")
         w.writeheader()
         w.writerows(events)
-    known = truth_header(list(hashes), patients, prepared, folded, reseeded)
     text = summary_markdown(
         summary,
         fails,
         res_summary,
         primary,
-        by_family,
-        known,
         non_summary,
         non_lost,
         tis,
@@ -4227,12 +3870,8 @@ def score(
         "failures": fails,
         "resources": res,
         "summary_resources": res_summary,
-        "truth": truth_rows,
-        "truth_by_family": by_family,
-        "truth_patients": patients,
         "nonband_cells": non_cells,
         "nonband_summary": non_summary,
-        "nonband_truth": non_truth,
         "nonband_missing": non_lost,
         "dropped": dropped_rows,
         "cost_end_to_end": e2e,

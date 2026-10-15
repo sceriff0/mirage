@@ -225,31 +225,6 @@ def test_the_mesh_is_what_fixes_a_smooth_deformation(scored, toy_cases):
     assert _tre(out, "stare", case) < 1.0
 
 
-def test_cell_scores_agree_with_the_known_map(scored):
-    _, res = scored
-    for name in ("rigid", "smooth"):
-        init = _row(res["cells"], name, "initial")
-        full = _row(res["cells"], name, "stare")
-        truth = _row(res["cells"], name, "truth")
-        assert full["frame"] == "reference"
-        # Dice separates the registered from the unregistered pose on the BARE nuclei;
-        # on the grown outlines the 10 px rim can keep the unregistered pose's Dice
-        # high (0.85 on `rigid`), which is why both sets are reported
-        nuc_init = _row(res["cells_nuclei"], name, "initial")
-        nuc_full = _row(res["cells_nuclei"], name, "stare")
-        assert nuc_full["dice_matched"] > 0.85 > nuc_init["dice_matched"]
-        assert (
-            full["dice_matched"] > 0.85 and full["dice_matched"] > init["dice_matched"]
-        )
-        assert init["dice_matched"] > nuc_init["dice_matched"]
-        assert full["displacement_px_p50"] < 1.0
-        assert full["pair_fraction"] > 0.9
-        assert full["within_1um"] > init["within_1um"]
-        assert abs(full["within_2um"] - truth["within_2um"]) < 0.05
-        assert full["fold_pct"] == 0.0 and full["sd_log_jac"] < 0.1
-        assert 0.0 < full["coverage"] < 1.0 and full["nn_distance_um_p50"] > 0
-
-
 def test_resources_are_measured_for_the_whole_run(scored, toy_cases):
     out, res = scored
     r = _row(res["resources"], "smooth", "stare")
@@ -293,23 +268,20 @@ def test_resources_are_measured_for_the_whole_run(scored, toy_cases):
     assert "## Resources" in text and "whole job, writers included" in text
 
 
-def test_the_image_stare_wrote_has_a_tissue_row_beside_initial_and_truth(scored):
+def test_the_image_stare_wrote_has_a_tissue_row_beside_initial(scored):
     """The tissue-level block on a REAL method's written image (STARE's own STITCH)."""
     pytest.importorskip("cv2")
     _, tables = scored
     rows = {(r["case_id"], r["variant"]): r for r in tables["tissue"]}
-    assert {v for _, v in rows} == {"initial", "truth", "stare"}
+    assert {v for _, v in rows} == {"initial", "stare"}
     assert {(m["variant"], m["reason"]) for m in tables["tissue_missing"]} == {
         ("stare_rigid", "the method writes no image for this variant")
     }
-    stare, truth, initial = (rows[("rigid", v)] for v in ("stare", "truth", "initial"))
-    assert stare["source"] == "method" and truth["source"] == "benchmark"
+    stare, initial = (rows[("rigid", v)] for v in ("stare", "initial"))
+    assert stare["source"] == "method" and initial["source"] == "benchmark"
     for key in ("tissue_dice", "boundary_dice"):
         assert stare[key] > initial[key], key
-        assert stare[key] == pytest.approx(truth[key], abs=0.05), key
     assert stare["qcs"] >= initial["qcs"]
-    assert {r["shift_um"] for r in tables["tissue_dose"]} == {0, 1, 3, 10, 30, 100}
-    # (the known-truth "truth" table was the synthetic dataset's: a toy case has no probes)
     for name in ("cells", "summary_cells", "paired_vs_primary"):
         assert not any("qcs" in k or "tissue" in k for k in tables[name][0]), name
 
@@ -545,10 +517,9 @@ def test_a_ref_to_mov_method_is_scored_in_the_moving_frame(toy_cases, tmp_path):
         _row(res["cells"], "rigid", "backward"),
         _row(res["cells"], "rigid", "initial"),
     )
-    truth = _row(res["cells"], "rigid", "truth")
     assert row["frame"] == "moving" and init["frame"] == "reference"
     assert row["pair_fraction"] > init["pair_fraction"]
-    assert abs(row["within_2um"] - truth["within_2um"]) < 0.05
+    assert row["within_2um"] > 0.95  # the exact map: every nucleus is on its partner
     assert not row["imputed_initial"]
 
 

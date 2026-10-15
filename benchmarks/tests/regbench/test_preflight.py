@@ -110,7 +110,7 @@ def test_a_folder_that_cannot_be_written_is_a_failure(tmp_path):
 
 
 def test_slides_that_cannot_be_read_inside_the_image_are_a_failure(tmp_path, capsys):
-    """One prepared case per dataset: a slide folder that is not bound into the image
+    """The prepared case of the dataset: a slide folder that is not bound into the image
     would fail every unit of every run, and is said before anything is submitted."""
     import json
     from dataclasses import asdict
@@ -119,21 +119,19 @@ def test_slides_that_cannot_be_read_inside_the_image_are_a_failure(tmp_path, cap
 
     there = tmp_path / "slide.ome.tif"
     there.write_bytes(b"x")
-    for dataset, mov in (
-        ("multiplex", "/not/bound/slides/r2.ome.tif"),
-        ("synthetic", str(there)),
-    ):
-        d = tmp_path / "cases" / dataset / "c1"
-        d.mkdir(parents=True)
+    d = tmp_path / "cases" / "multiplex" / "c1"
+    d.mkdir(parents=True)
+
+    def prepared(mov):
         case = Case(
-            dataset=dataset, case_id="c1", group="g", ref_nuclear="", mov_nuclear="",
+            dataset="multiplex", case_id="c1", group="g", ref_nuclear="", mov_nuclear="",
             ref_image=str(there), mov_image=mov, modality="fluorescence", diagonal=1.0,
         )  # fmt: skip
         (d / "case.json").write_text(json.dumps({**asdict(case), "dir": str(d)}))
-    notes, failures = preflight.unreadable_slides(
-        tmp_path / "cases", ["multiplex", "synthetic", "semisynth"]
-    )
-    assert notes == ["readable: the 2 image file(s) of synthetic/c1"]
+
+    prepared("/not/bound/slides/r2.ome.tif")
+    notes, failures = preflight.unreadable_slides(tmp_path / "cases", ["multiplex"])
+    assert notes == []
     (failure,) = failures
     assert failure.startswith("multiplex/c1: its image file(s) cannot be read from")
     assert "/not/bound/slides/r2.ome.tif" in failure and "REGBENCH_BIND" in failure
@@ -143,7 +141,11 @@ def test_slides_that_cannot_be_read_inside_the_image_are_a_failure(tmp_path, cap
     assert cli.main(argv) == 1
     said = capsys.readouterr()
     assert "preflight FAIL [STARE stare] multiplex/c1: its image file(s)" in said.err
-    assert cli.main([*argv[:-1], "synthetic"]) == 0
+    # the same case with both slides readable: a note, and the command passes
+    prepared(str(there))
+    notes, failures = preflight.unreadable_slides(tmp_path / "cases", ["multiplex"])
+    assert notes == ["readable: the 2 image file(s) of multiplex/c1"] and not failures
+    assert cli.main(argv) == 0
     # no cases named: nothing of the kind is asked
     assert not [n for n in preflight.check("stare")[0] if n.startswith("readable")]
 

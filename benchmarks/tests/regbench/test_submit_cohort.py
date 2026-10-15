@@ -43,13 +43,13 @@ STAGED_ALL = {
     if variants.stages_of(r)
 }
 FEEDERS = 2  # tile submitters chained per staged run and dataset
-# the default submission on the fixture (two cohort datasets, `multiplex` and `synthetic`),
+# the default submission on the fixture (the cohort, `multiplex`),
 # derived from the run list: per run its gate and, per dataset, the ladder's first array and
 # its watcher; per distinct gate a selfcheck and its watcher; per run with a realcheck its
 # unit sent ahead (3 jobs); the settle job, an array per dataset, tissue and the scorer; and
 # per staged run the stages' extra jobs per dataset (two feeders, the last job's pair, and
 # the preprocessing's pair where it has one)
-COHORT_DATASETS = ("multiplex", "synthetic")
+COHORT_DATASETS = ("multiplex",)
 MORE = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
 N_REALCHECKED = len([n for n in RUNS if variants.realcheck_gate(n)])
 N_JOBS = (
@@ -112,9 +112,6 @@ def site(tmp_path_factory):
         ("P2_a", "P2"),
     ):
         _case(cases, "multiplex", case_id, group)
-    _case(cases, "synthetic", "blob_grid_p0", "blob_grid")
-    # prepared, and DORMANT: the default submission must leave it alone
-    _case(cases, "semisynth", "P1_w0_grid_p0", "P1_w0_grid")
     fake = tmp / "bin"
     fake.mkdir()
     sbatch = fake / "sbatch"
@@ -627,39 +624,15 @@ def test_the_rung_task_passes_the_rule_and_the_allocation_on():
         assert name in env, f"{name} must reach the inside of an image"
 
 
-def test_the_default_is_multiplex_first_then_synthetic_and_nothing_dormant(dry):
-    """Ruling R3.14. The site has semisynth cases prepared; they are not submitted."""
+def test_the_default_is_the_multiplex_cohort_alone(dry):
+    """Ruling R3.14. The default submission is the cohort and nothing dormant."""
     jobs, done, _ = dry
     datasets = {j.args[6] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert datasets == {"multiplex", "synthetic"}
-    assert not [n for n in jobs if "semisynth" in n or "hyreco" in n]
-    for run in RUNS:
-        last = last_job(run)
-        for job in chain(jobs, run, "synthetic")[:1]:
-            assert ("afterany", f"<{last}>") in job.deps, (run, job.name)
-        waits = {n for j in chain(jobs, run)[:1] for _, n in j.deps}
-        assert not [n for n in waits if "synthetic" in n], run
-    order = [Job(ln).args[6] for ln in _sbatch_lines(done.stdout) if "run_rung" in ln]
-    assert order.index("synthetic") > max(
-        i for i, d in enumerate(order) if d == "multiplex"
-    )
-
-
-def test_a_dormant_dataset_is_submitted_only_when_named(site):
-    done, _, _ = launch(site, "--datasets", "synthetic semisynth multiplex", log="dorm")
-    jobs = jobs_of(done)
-    assert "# semisynth is DORMANT: submitted because it was named." in done.stdout
-    order = []
-    for ln in _sbatch_lines(done.stdout):
-        job = Job(ln)
-        if job.script == "run_rung.sbatch" and job.args[6] not in order:
-            order.append(job.args[6])
-    assert order == ["multiplex", "synthetic", "semisynth"]  # the cohort first
-    first = rungs(jobs, "stare", "semisynth")[0]
-    assert ("afterany", f"<{last_job('stare', 'synthetic')}>") in first.deps
+    assert datasets == {"multiplex"}
+    assert not [n for n in jobs if "hyreco" in n or "anhir" in n]
     code = code_of(SCRIPT)
-    assert 'DEFAULT_DATASETS="multiplex synthetic"' in code
-    assert 'DORMANT_DATASETS="semisynth hyreco_a hyreco_b"' in code
+    assert 'DEFAULT_DATASETS="multiplex"' in code
+    assert 'DORMANT_DATASETS="hyreco_a hyreco_b"' in code
 
 
 def test_no_job_asks_for_more_than_seven_days(site):
@@ -700,7 +673,6 @@ def test_pair_runs_are_arrays_over_cases_and_patient_runs_over_patients(dry):
         first = rungs(jobs, run)[0].opt("--array")
         want = {(True, False): "0-1", (True, True): "1-1", (False, False): "0-3"}
         assert first == want[(per_patient, gated)] + "%20", run
-    assert rungs(jobs, "stare", "synthetic")[0].opt("--array") == "0-0%20"
 
 
 def test_arrays_are_throttled(site):
@@ -732,9 +704,6 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
     for k, name in enumerate(names):
         if k >= lanes:
             assert last[names[k - lanes]] in waits(head(jobs, name)), name
-    # the next dataset goes on down the same lanes
-    on_first_lane = [n for k, n in enumerate(names) if k % lanes == 0]
-    assert last[on_first_lane[-1]] in waits(head(jobs, names[0], "synthetic"))
     # off: a run that reads no other run's results waits for no other run's arrays
     plain, _, _ = dry
     arrays = {x for n in names for x in (chain(plain, n)[0].name, last_job(n))}
@@ -808,7 +777,7 @@ def test_every_run_waits_for_its_own_gate_and_the_gate_for_the_selfcheck(dry):
             for j in jobs.values()
             if j.script == "run_rung.sbatch" and j.args[0] == run
         ]
-        assert len(mine) >= 2  # two datasets, the first rung of each
+        assert len(mine) >= 1  # the first rung of the cohort
         for job in mine:  # every submitted array (a later rung is the watcher's)
             assert ("afterok", f"<rb-gate-{run}>") in job.deps, job.name
             others = {n for k, n in job.deps if "gate" in n and k == "afterok"}
@@ -880,7 +849,7 @@ def test_both_anchored_rows_wait_for_the_run_they_read(dry):
     jobs, _, _ = dry
     for run in variants.members("affine_ashlar"):
         assert RUNS[run].after == "stare"
-        for dataset in ("multiplex", "synthetic"):
+        for dataset in COHORT_DATASETS:
             first = rungs(jobs, run, dataset)[0]
             assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps, run
             # the anchor's LAST job, the writer's last rung: none of its earlier ones
@@ -902,11 +871,7 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
     assert last_selfcheck < first_gate <= last_gate < first_array
     assert order[-2:] == ["rb-tissue", "rb-score"]
     # settle, then the case arrays, then tissue, then the tables
-    assert order[-5:-2] == [
-        "rb-settle",
-        "rb-score-case-multiplex",
-        "rb-score-case-synthetic",
-    ]
+    assert order[-4:-2] == ["rb-settle", "rb-score-case-multiplex"]
     # a job never waits for one printed after it
     seen = set()
     for line in _sbatch_lines(done.stdout):
@@ -927,11 +892,11 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     waited = {n.strip("<>") for _, n in settle.deps}
     for run in RUNS:
         assert f"rb-gate-{run}" in waited
-        for dataset in ("multiplex", "synthetic"):
+        for dataset in COHORT_DATASETS:
             assert last_job(run, dataset) in waited, (run, dataset)
     # every array of the per-case scoring waits for it, and for nothing else directly
     arrays = [j for n, j in jobs.items() if n.startswith("rb-score-case-")]
-    assert len(arrays) == 2
+    assert len(arrays) == len(COHORT_DATASETS)
     for job in arrays:
         assert job.deps == {("afterany", "<rb-settle>")}, job.name
     # ... so the tissue job and the scorer come after it too, through the arrays
@@ -983,12 +948,8 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     assert scorer.deps == {
         ("afterany", "<rb-tissue>"),
         ("afterany", "<rb-score-case-multiplex>"),
-        ("afterany", "<rb-score-case-synthetic>"),
     }
-    assert tissue.deps == {
-        ("afterany", "<rb-score-case-multiplex>"),
-        ("afterany", "<rb-score-case-synthetic>"),
-    }
+    assert tissue.deps == {("afterany", "<rb-score-case-multiplex>")}
     code = code_of(SLURM / "score_cohort.sbatch")
     assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 5
     # only what this submission ran or reused is scored
@@ -1003,7 +964,7 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     everything before it), and the scorer waits for it whatever becomes of it."""
     jobs, _, _ = dry
     tissue, scorer = jobs["rb-tissue"], jobs["rb-score"]
-    sizes = {"multiplex": 4, "synthetic": 1}
+    sizes = {"multiplex": 4}
     arrays = {n: j for n, j in jobs.items() if n.startswith("rb-score-case-")}
     assert set(arrays) == {f"rb-score-case-{ds}" for ds in sizes}
     for ds, n in sizes.items():
@@ -1107,23 +1068,17 @@ def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
     assert list(jobs) == [
         "rb-settle",
         "rb-score-case-multiplex",
-        "rb-score-case-synthetic",
         "rb-tissue",
         "rb-score",
     ]
     assert jobs["rb-settle"].deps == set()  # nothing was submitted before it
-    for name in list(jobs)[1:3]:
-        assert jobs[name].deps == {("afterany", "<rb-settle>")}, name
-    assert jobs["rb-tissue"].deps == {
-        ("afterany", "<rb-score-case-multiplex>"),
-        ("afterany", "<rb-score-case-synthetic>"),
-    }
+    assert jobs["rb-score-case-multiplex"].deps == {("afterany", "<rb-settle>")}
+    assert jobs["rb-tissue"].deps == {("afterany", "<rb-score-case-multiplex>")}
     assert jobs["rb-score"].deps == {
         ("afterany", "<rb-tissue>"),
         ("afterany", "<rb-score-case-multiplex>"),
-        ("afterany", "<rb-score-case-synthetic>"),
     }
-    assert "# 5 job(s) would be submitted; nothing was" in done.stdout
+    assert "# 4 job(s) would be submitted; nothing was" in done.stdout
     assert "WARNING" not in done.stdout
     # it scores the LAST submission into the folder, and says which
     assert "# --score-only: scoring submission 20261012T010203-9" in done.stdout
@@ -1134,7 +1089,7 @@ def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
     no_gpu, _, _ = launch(
         site, "--score-only", env={"REGBENCH_SBATCH_GPU": ""}, log="so"
     )
-    assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 5
+    assert no_gpu.returncode == 0 and len(jobs_of(no_gpu)) == 4
     # one dataset, when named
     one = jobs_of(launch(site, "--score-only", "--datasets", "multiplex", log="so")[0])
     assert list(one) == [
@@ -1424,7 +1379,7 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
     # and (the one with a selfcheck of its own) for its last selfcheck attempt
     for run in variants.members("affine_ashlar"):
         assert wanted.index(run) > wanted.index("stare")
-        for dataset in ("multiplex", "synthetic"):
+        for dataset in COHORT_DATASETS:
             first = rungs(jobs, run, dataset)[0]
             assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps
     anchored = jobs["rb-sc-affine_ashlar-64g"]
@@ -1644,13 +1599,11 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
 
 @pytest.fixture(scope="module")
 def small(tmp_path_factory):
-    """Cases of other sizes: `multiplex` three rounds of 1, 6 and 2 tiles, `synthetic`
-    one round of a single tile."""
+    """Cases of other sizes: `multiplex` three rounds of 1, 6 and 2 tiles."""
     cases = tmp_path_factory.mktemp("small")
     _case(cases, "multiplex", "P1_a", "P1", (1024, 1024))
     _case(cases, "multiplex", "P1_b", "P1")
     _case(cases, "multiplex", "P2_a", "P2", (2048, 4096))
-    _case(cases, "synthetic", "blob_grid_p0", "blob_grid", (1024, 1024))
     return cases
 
 
@@ -1668,7 +1621,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
         for r in [(j.opt("--array") or "0-0").split("%")[0]]
     )
     said = done.stdout
-    # multiplex: rounds of 1, 6 and 2 tiles; synthetic: one tile; for each of two runs
+    # multiplex: rounds of 1, 6 and 2 tiles; for each of two runs
     assert (
         "# stare on multiplex: 3 round(s) as separate jobs (coarse,tile,solve,stitch); "
         "9 tile job(s) fed in later by its tile submitter, in arrays of at most 7, at "
@@ -1680,7 +1633,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
         "call(s) would be made now" in said
     )
     assert (
-        "# later, by the tile submitters (feed_tiles.sbatch): 20 tile task(s), one per "
+        "# later, by the tile submitters (feed_tiles.sbatch): 18 tile task(s), one per "
         "tile, in arrays of at most 7; plus, per attempt 2 to 4, one retry task per "
         "round that has a tile to retry" in said
     )
@@ -2106,38 +2059,6 @@ def test_a_first_sbatch_that_is_refused_leaves_no_submission(site):
     assert not (out / "logs" / "submission").exists()
 
 
-@pytest.mark.parametrize("how", [(), ("--score-only",)])
-def test_synthetic_cases_of_another_truth_spec_are_refused_at_the_launch(
-    site, tmp_path, how
-):
-    """The scorer refuses such cases, and then writes no table for any dataset: the
-    launcher asks the same question before its first job."""
-    cases = tmp_path / "cases"
-    _case(cases, "multiplex", "P1_a", "P1")
-    _case(cases, "synthetic", "blob_grid_p0", "blob_grid")
-    record = cases / "synthetic" / "blob_grid_p0" / "case.json"
-    case = json.loads(record.read_text())
-    case["extra"] = {"truth_spec_sha256": "0" * 64}
-    record.write_text(json.dumps(case))
-    env = {
-        "REGBENCH_ALLOW_PATH_PYTHON": "1",
-        "REGBENCH_CASES": str(cases),
-        "REGBENCH_SUBMISSION": "S-spec",
-    }
-    name = "spec" + "-".join(how)
-    done, log, out = launch(site, *how, env=env, dry=False, log=name)
-    assert done.returncode == 2 and not log.exists(), done.stderr
-    assert "this case was prepared from truth_spec.json 000000000000" in done.stderr
-    assert "Nothing was prepared" not in done.stderr
-    assert done.stderr.rstrip().endswith("Nothing was submitted.")
-    assert not (out / "logs" / "submission").exists()
-    # the cohort alone is not stopped by cases it does not submit
-    done, log, _ = launch(
-        site, *how, "--datasets", "multiplex", "--runs", "palom", env=env, log=name
-    )
-    assert done.returncode == 0, done.stderr
-
-
 def test_whatever_stops_the_launch_after_the_first_sbatch_says_what_is_queued(site):
     """Not the scheduler this time: the launcher's own list of jobs cannot be written
     from the sixth job on. The script stops, and its last words are the same."""
@@ -2339,7 +2260,7 @@ def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tm
     )
     assert forced.returncode == 0, forced.stderr
     n = len(log.read_text().splitlines())
-    assert "# 5 job(s) submitted" in forced.stdout
+    assert "# 4 job(s) submitted" in forced.stdout
     # a dry run is not refused; and once the queue is empty, neither is a scoring nor
     # a second submission
     queue.write_text("999999 999999\n")
@@ -2388,7 +2309,7 @@ def test_a_realcheck_gated_run_sends_one_unit_ahead(dry):
             variant,
         ]
         assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-retry>")}
-        for dataset in ("multiplex", "synthetic"):
+        for dataset in COHORT_DATASETS:
             ladder_of = rungs(jobs, run, dataset)
             # the submitted array and its watcher wait for the realcheck's gate; a
             # later rung is the watcher's to submit
@@ -2821,31 +2742,22 @@ def test_unprepared_cases_are_refused(site, tmp_path):
 def test_prepare_is_a_step_of_its_own(site, tmp_path):
     env = {
         "REGBENCH_MANIFEST": "/data/rounds.csv",
-        "REGBENCH_TRUTH_PATIENTS": "P1,P2",
         # the bare-nuclei step has its own test below
         "REGBENCH_NUCLEI_SKIP": "1",
     }
     done, _, _ = launch(site, "--prepare", env=env, log="prepare")
     jobs = jobs_of(done)
-    assert set(jobs) == {"rb-prepare-multiplex", "rb-prepare-synthetic"}
-    named = "multiplex semisynth synthetic"
-    done, _, _ = launch(site, "--prepare", "--datasets", named, env=env, log="prep3")
-    jobs = jobs_of(done)
-    assert set(jobs) == {
-        "rb-prepare-multiplex",
-        "rb-prepare-semisynth",
-        "rb-prepare-synthetic",
-    }
+    assert set(jobs) == {"rb-prepare-multiplex"}
     assert jobs["rb-prepare-multiplex"].args == [
         "multiplex",
         "--manifest",
         "/data/rounds.csv",
     ]
-    assert jobs["rb-prepare-semisynth"].args == [
-        "semisynth", "--truth", "--manifest", "/data/rounds.csv", "--patients", "P1,P2",
-    ]  # fmt: skip
-    assert jobs["rb-prepare-synthetic"].args == ["synthetic", "--suite", "truth"]
     assert "run this script again without --prepare" in done.stdout
+    gone, _, _ = launch(
+        site, "--prepare", "--datasets", "synthetic", env=env, log="gone"
+    )
+    assert gone.returncode == 2 and "is not one of multiplex" in gone.stderr
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
     assert none.returncode == 2 and "REGBENCH_MANIFEST" in none.stderr
     assert not _sbatch_lines(none.stdout)

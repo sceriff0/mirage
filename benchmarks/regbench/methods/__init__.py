@@ -39,10 +39,7 @@ full-resolution pixels of the native slides. Optional hooks:
         nucleus, True where the nucleus straddles one of the method's own joins (ASHLAR's
         tile overlaps, PALOM's block edges). Stored in ``warped.npz`` as ``band`` /
         ``band_ref``; the scorer scores EVERY variant of the case a second time without
-        those nuclei (``<variant>:non_<owner>``). A known-truth probe is a moving
-        nucleus's centroid, so a moving-side mask drops its probes by itself; a method
-        with a reference-side mask says which probes are on its seams with
-        ``info["band_truth"]`` (one bool per probe, stored as ``band_truth``).
+        those nuclei (``<variant>:non_<owner>``).
 ``VARIANT_LABELS``  ``{label: variant names}`` for a label whose names do not follow the
         replace rule of ``variant_names`` (``valis120_hires``).
 
@@ -800,7 +797,6 @@ def _run(
                 state = info.pop("_state")
             band = info.pop("band_mov", None)
             band_ref = info.pop("band_ref", None)
-            band_truth = info.pop("band_truth", None)
             band_nuc_own = info.pop("band_mov_nuc", None)
             band_ref_nuc_own = info.pop("band_ref_nuc", None)
             native = info.pop("native", None)
@@ -894,8 +890,6 @@ def _run(
                     arrays["band"] = np.asarray(band, dtype=bool).ravel()
                 if band_ref is not None:
                     arrays["band_ref"] = np.asarray(band_ref, dtype=bool).ravel()
-                if band_truth is not None:  # the same seams, by known-truth probe
-                    arrays["band_truth"] = np.asarray(band_truth, dtype=bool).ravel()
                 # the SECOND polygon set, the bare nuclei, through the same map in the
                 # same direction; and the owner's seam mask on them (_nuclei_band)
                 nuclei_band = {}

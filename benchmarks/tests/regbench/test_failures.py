@@ -838,28 +838,6 @@ def _cells_of(table):
     return header, [[c.strip() for c in ln.strip("|").split("|")] for ln in lines[2:]]
 
 
-def test_a_failure_in_one_family_is_counted_in_that_family_only():
-    from benchmarks.tests.regbench.test_score_units import cell
-
-    rows = [
-        _res("a", "", "1", ok=True, dataset="synthetic", family="affine"),
-        _res("a", "oom", "2", dataset="synthetic", family="affine"),
-        _res("a", "", "3", ok=True, dataset="synthetic", family="warp"),
-    ]
-    cells = [
-        cell("a", f"P{k}", f"P{k}", dataset="synthetic", family=fam)
-        for k, fam in enumerate(("affine", "affine", "warp"))
-    ]
-    summary = [r for r in score.summarise_cells(cells) if r["subset"] == "all"]
-    table = score._summary_table(summary, ["a"], score.run_failures(rows))
-    header, got = _cells_of(table)
-    by_family = {c[header.index("family")]: c for c in got}
-    assert by_family["affine"][header.index("failed (method)")] == "1"
-    assert by_family["affine"][header.index("top cause")] == "oom"
-    assert by_family["warp"][header.index("failed (method)")] == "0"
-    assert by_family["warp"][header.index("top cause")] == ""
-
-
 def test_the_failure_cells_are_blank_on_the_common_subset_and_on_non_rows():
     from benchmarks.tests.regbench.test_score_units import cell
 
