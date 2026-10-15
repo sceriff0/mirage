@@ -81,6 +81,12 @@ DATASET_REGIME = {
     "hyreco_b": "bf_same",
     "anhir_tune": "bf_consecutive",
     "anhir": "bf_consecutive",
+    # raw-tile cyclic IF (`datasets/rawtiles.py`): every case set `<name>@<front end>`
+    # has its base name's regime (`regime_of`)
+    "mcmicro": "cyclic_if",
+    "rashid": "cyclic_if",
+    "phenocycler": "cyclic_if",
+    "codex": "cyclic_if",
 }
 
 
@@ -88,8 +94,10 @@ COHORT_REGIME = "cyclic_if"  # the cohort (dataset None) is cyclic IF; a non-IF 
 
 
 def regime_of(dataset):
+    """The regime of a dataset; a case set ``<name>@<front end>`` has its base name's."""
+    base = str(dataset).partition("@")[0] if dataset is not None else dataset
     try:
-        return DATASET_REGIME[dataset]
+        return DATASET_REGIME[base]
     except KeyError:
         raise KeyError(
             f"dataset {dataset!r} has no regime in regimes.DATASET_REGIME"

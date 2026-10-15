@@ -702,10 +702,19 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
 
 
 def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):
-    pause(monkeypatch, "ashlar_clean", "affine_ashlar_clean")
+    # (not `ashlar_clean`: on a raw-tile `<name>@raw` case set it is the primary row and
+    # the gate of the cells kept there, variants.RAW_GATED_BY)
+    paused = ("ashlar_anone_n01_s60", "ashlar_astare_n01_s60")
+    pause(monkeypatch, *paused)
     variants.check()
     plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
-    assert variants.members("ashlar") == [n for n in plain if n != "ashlar_clean"]
+    assert variants.members("ashlar") == [n for n in plain if n not in paused]
+
+
+def test_the_raw_tiles_primary_cannot_be_paused(monkeypatch):
+    pause(monkeypatch, "ashlar_clean")
+    with pytest.raises(ValueError, match="@raw .*needs 'ashlar_clean'"):
+        variants.check()
 
 
 # ── which rows a run's selfcheck gate reads (R3.12 b) ─────────────────────────

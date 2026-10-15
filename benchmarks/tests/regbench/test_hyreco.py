@@ -146,10 +146,14 @@ def test_the_id_lists_are_the_dataset_pages():
     assert len(hyreco.SUBSET_A_IDS) == len(set(hyreco.SUBSET_A_IDS)) == 9
     assert len(hyreco.SUBSET_B_IDS) == len(set(hyreco.SUBSET_B_IDS)) == 54
     assert hyreco.SHARED_IDS == ("29", "108", "361", "464")
-    assert EXTERNAL_DATASETS == ("hyreco_a", "hyreco_b", "anhir_tune", "anhir")
+    from benchmarks.regbench import RAW_TILE_CASE_SETS, RAW_TILE_DATASETS
+
+    assert EXTERNAL_DATASETS[:4] == ("hyreco_a", "hyreco_b", "anhir_tune", "anhir")
+    # then the raw-tile case sets (datasets/rawtiles.py), derived from their two tables
+    assert EXTERNAL_DATASETS[4:] == RAW_TILE_CASE_SETS
     assert hyreco.DATASET == {"a": "hyreco_a", "b": "hyreco_b"}
     assert not set(EXTERNAL_DATASETS) & set(DATASETS)
-    assert ALL_DATASETS == DATASETS + EXTERNAL_DATASETS
+    assert ALL_DATASETS == DATASETS + EXTERNAL_DATASETS + RAW_TILE_DATASETS
 
 
 # ── landmark files ────────────────────────────────────────────────────────────

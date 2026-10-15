@@ -114,6 +114,9 @@ from . import (
     ANHIR_TUNE,
     EXTERNAL_DATASETS,
     HYRECO_DATASETS,
+    RAW,
+    RAW_TILE_CASE_SETS,
+    case_set,
     methods,
     plugins,
     prep,
@@ -399,6 +402,49 @@ NOT_ON = {
         ),
     ),
 }
+
+# The raw-tile case sets (`datasets/rawtiles.py`; user ruling 2026-10-15). On every one:
+# DeeperHistReg in its fluorescence configuration only. On `<name>@raw` (the tiles
+# themselves, no image): ASHLAR alone, AS PUBLISHED -- primary `ashlar_clean` (none, 0,
+# 15 um), the only cross kept max_shift_um {15, 60, 240}. On the three mosaic case sets
+# ASHLAR re-cuts tiles from a stitched mosaic, as on any stitched slide: its 24 cells stay.
+RAW_NOT_ASHLAR = (
+    "a `<name>@raw` case is the dataset's raw tiles, not an image: only ASHLAR reads "
+    "unstitched tiles natively. Every method runs on the stitched case sets "
+    "(`@stage`, `@ashlar_edge`, `@stare_mosaic`)"
+)
+RAW_NOISE = (
+    "real tiles are never pixel-identical; the noise factor exists only for tiles cut "
+    "from stitched slides"
+)
+RAW_AFFINE = "ASHLAR runs as published on raw tiles (user ruling)"
+RAW_DHR = (
+    "a raw-tile dataset is fluorescence (cyclic IF): DeeperHistReg runs in the "
+    "benchmark's fluorescence configuration (`fluo=1`); its shipped RGB parameters "
+    "are compared on the cohort"
+)
+_RAW_DHR_RULE = (
+    lambda r: r.method == "deeperhistreg" and r.opts.get("fluo") != "1",
+    RAW_DHR,
+)
+_RAW_TILE_RULES = (
+    (lambda r: r.method != "ashlar", RAW_NOT_ASHLAR),
+    (lambda r: r.method == "ashlar" and r.opts.get("noise_frac") != "0", RAW_NOISE),
+    (lambda r: r.method == "ashlar" and r.opts.get("affine") != "none", RAW_AFFINE),
+)
+for _set in RAW_TILE_CASE_SETS:
+    NOT_ON[_set] = (
+        _RAW_TILE_RULES if case_set(_set)[1] == RAW else (_RAW_DHR_RULE,)
+    )
+# On `@raw` the primary row is ASHLAR as published, and the two cells kept besides it are
+# gated by its selfcheck (the noisy primary `ashlar`, their gate elsewhere, is left out)
+RAW_PRIMARY = {"ashlar": "ashlar_clean"}
+RAW_GATED_BY = {
+    n: "ashlar_clean"
+    for n, (a, f, _) in _ashlar.ASHLAR_CELLS.items()
+    if a == "none" and f == "0"
+}
+
 for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
     NOT_ON[_dataset] = tuple(NOT_ON.get(_dataset, ())) + tuple(
         (lambda r, n=_name: (r.label or r.method) == n, _why)
@@ -659,7 +705,7 @@ def check():
         kept = {run_name(r) for r in runs_for(dataset)}
         for run in runs_for(dataset):
             name = run_name(run)
-            for needs in (gated_by(name), run.after):
+            for needs in (gated_by(name, dataset), run.after):
                 if needs is not None and needs not in kept:
                     raise ValueError(
                         f"on {dataset} the run {name!r} needs {needs!r}, which has "
@@ -667,9 +713,23 @@ def check():
                     )
 
 
+def _is_raw(dataset):
+    """True for a raw-tile case set of tiles (``<name>@raw``)."""
+    return dataset is not None and case_set(dataset)[1] == RAW
+
+
+def _brightfield(dataset):
+    """Whether an external dataset is brightfield: every one but the raw-tile (cyclic
+    IF) case sets, whose regime is the cohort's."""
+    try:
+        return regimes.regime_of(dataset) != regimes.COHORT_REGIME
+    except KeyError:
+        return True
+
+
 def _not_on(dataset, run):
     """Why an active run is left out of an external dataset, or None."""
-    if run.method in methods.NO_BRIGHTFIELD:
+    if run.method in methods.NO_BRIGHTFIELD and _brightfield(dataset):
         return methods.NO_BRIGHTFIELD[run.method]
     for pick, why in NOT_ON.get(dataset, ()):
         if pick(run):
@@ -715,9 +775,11 @@ def excluded_for(dataset):
 
 
 def primary_for(dataset=None):
-    """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``."""
+    """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``. On a
+    ``<name>@raw`` case set ASHLAR's is its as-published cell (``RAW_PRIMARY``)."""
     written = {v for run in runs_for(dataset) for v in variants_of(run)}
-    return [v for v in PRIMARY if v in written]
+    names = [RAW_PRIMARY.get(v, v) for v in PRIMARY] if _is_raw(dataset) else PRIMARY
+    return [v for v in names if v in written]
 
 
 def expected_variants(dataset=None):
@@ -786,8 +848,12 @@ def primary_of(family_name):
     return None
 
 
-def gated_by(name):
-    """The name of the run whose selfcheck gates the run ``name``."""
+def gated_by(name, dataset=None):
+    """The name of the run whose selfcheck gates the run ``name`` (on ``dataset``: a
+    ``<name>@raw`` case set gates ASHLAR's kept cells by ``ashlar_clean``,
+    ``RAW_GATED_BY``)."""
+    if _is_raw(dataset) and name in RAW_GATED_BY:
+        return RAW_GATED_BY[name]
     return GATED_BY.get(name, name)
 
 
@@ -956,9 +1022,10 @@ def runs_table(paused=False, dataset=None, order=None):
     listed = RUNS if paused else runs_for(dataset)
     if order is not None:
         listed, _ = submission_order(order, listed)
+    primaries = PRIMARY if dataset is None else primary_for(dataset)
     for run in listed:
         names = variants_of(run)
-        primary = [v for v in names if v in PRIMARY]
+        primary = [v for v in names if v in primaries]
         table.append(
             (
                 run_name(run),
@@ -969,7 +1036,7 @@ def runs_table(paused=False, dataset=None, order=None):
                 "1" if run.gpu else "0",
                 scope(run.method),
                 run.after or NONE,
-                gated_by(run_name(run)),
+                gated_by(run_name(run), dataset),
                 selfcheck_mask(run.method) or NONE,
                 primary[0] if primary else NONE,
                 ",".join(names),
