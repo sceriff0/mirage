@@ -197,7 +197,7 @@ def test_mosaic_nuclei_sit_on_the_pixels_write_mosaic_pastes(tmp_path):
     cyc = tiles.write_cycle(d, planes(), pixel_size_um=PS, channels=["DAPI"], nuclear_channel=0)
     pos = {0: (0.0, 0.0), 1: (39.6, 0.4)}
     tp = {t: cells.from_rings([square(34.0, 24.0, 4.0)]) for t in pos}  # the block's outline
-    out = stitching.mosaic_nuclei(tp, pos, cyc.tiles, radius_px=1.0)
+    out = stitching.mosaic_nuclei(tp, pos, cyc.tiles)
     mosaic = frontends.write_mosaic(cyc, pos, tmp_path / "m.ome.tif")
     img = tifffile.imread(str(mosaic))
     o = frontends.placed_origins(cyc.tiles, pos)
@@ -205,6 +205,24 @@ def test_mosaic_nuclei_sit_on_the_pixels_write_mosaic_pastes(tmp_path):
     _, c = cells.area_centroid(out)
     for cx, cy in c:  # every kept nucleus sits on the block it came from
         assert img[int(cy), int(cx)] >= 9000
+
+
+def test_a_tile_placed_far_off_is_judged_by_where_its_nuclei_land():
+    tp = cut(SCENE)
+    assert len(stitching.mosaic_nuclei(tp, POS, rows())) == len(SCENE)
+    for dx, dy in ((20.0, 0.0), (0.0, 20.0), (20.0, 20.0), (-20.0, 0.0), (35.0, -20.0)):
+        moved = dict(POS)
+        moved[3] = (60.0 + dx, 60.0 + dy)
+        rs = rows(moved)
+        out = stitching.mosaic_nuclei(tp, moved, rs)
+        assert len(stitching.mosaic_nuclei(tp, moved, rs[::-1])) == len(out)
+        o = frontends.placed_origins(rs, moved)
+        _, c = cells.area_centroid(out)
+        for cx, cy in c:  # every survivor lies on some placed tile
+            assert any(o[k][0] <= cx < o[k][0] + TILE and o[k][1] <= cy < o[k][1] + TILE
+                       for k in range(4))
+        # no polygon is kept by two tiles at one spot: no two survivors share a centroid
+        assert len({(round(x, 6), round(y, 6)) for x, y in c}) == len(out)
 
 
 # ── tile_nuclei ──────────────────────────────────────────────────────────────

@@ -22,8 +22,8 @@ Neighbour rule of :func:`seam_error` (consistent with ``stare.stages.mosaic.neig
 of STARE 1.3.0 [PARTIAL: read the function, not the solver]): two placed tiles are neighbours
 when they overlap by at least ``min_overlap_px`` (32) on BOTH axes and, on one axis, over at
 least half the smaller tile -- a strip along a shared edge, not a diagonal corner square.
-De-duplication in :func:`mosaic_nuclei` is a different question (is this the same nucleus?)
-and looks at EVERY overlapping pair, corners included.
+Ownership in :func:`mosaic_nuclei` is geometric (which tile's centre is nearest) and looks
+at EVERY overlapping tile, corners included.
 """
 
 from __future__ import annotations
@@ -222,47 +222,44 @@ def _check(tile_polys, positions, tiles):
 
 
 # ── mosaic nuclei ─────────────────────────────────────────────────────────────
-def mosaic_nuclei(tile_polys, positions, tiles, radius_px=None):
+def mosaic_nuclei(tile_polys, positions, tiles):
     """The nuclei of a front-end's mosaic as one ``cells.Polys``, in mosaic pixels.
 
     Each tile's polygons move by the whole-pixel origin ``write_mosaic`` pastes the tile at
-    (``frontends.placed_origins``). Two copies of one nucleus -- polygons of two overlapping
-    tiles, paired one-to-one by ``cell_pairs.match_lsa`` between centroids no farther apart
-    than ``radius_px`` (default: the median nuclear radius) -- are reduced to the one whose
-    centroid is nearest ITS OWN tile's centre; an exact tie keeps the lower tile id. A
-    polygon with no copy is kept. Only polygons are read."""
+    (``frontends.placed_origins``). Ownership is GEOMETRIC, with no matching and no radius:
+    a polygon is kept iff, among the tiles whose placed rectangle contains its mosaic
+    centroid, its own tile's centre is the nearest; an exact tie (within 1e-9 px) goes to
+    the lower tile id. The result is a deterministic function of the positions.
+
+    Exactly placed tiles give every nucleus once. A badly placed tile never makes a
+    nucleus count twice by pairing failure: its polygons are judged by where they LAND, so
+    a misplaced nucleus may be dropped (its landing spot is owned by another tile) and, when
+    the two tiles' copies land in different tiles' cells, the two copies can both survive --
+    those are then two nuclei at two places, which is what the mosaic shows. Only
+    polygons are read."""
     tiles = tuple(tiles)
     _check(tile_polys, positions, tiles)
     origins = frontends.placed_origins(tiles, positions)
-    n = len(tiles)
-    cent, dist, keep = [], [], []
-    areas = []
-    for k, r in enumerate(tiles):
-        a, c = cells.area_centroid(tile_polys[r.tile])
-        areas.append(a)
-        c = c + origins[k]
-        cent.append(c)
-        mid = origins[k] + np.array([r.w / 2.0, r.h / 2.0])
-        dist.append(np.hypot(*(c - mid).T) if len(c) else np.empty(0))
-        keep.append(np.ones(len(c), bool))
-    if radius_px is None:
-        radius_px = cells.median_equivalent_radius(np.concatenate(areas)) if n else 0.0
     boxes = np.array([[*origins[k], origins[k, 0] + r.w, origins[k, 1] + r.h]
                       for k, r in enumerate(tiles)], dtype=float).reshape(-1, 4)
-    for a, b, rect in _overlapping(boxes, strip=False, min_overlap_px=1):
-        ia, ib = _inside(cent[a], rect), _inside(cent[b], rect)
-        if not (ia.size and ib.size and radius_px > 0):
+    mids = np.stack([(boxes[:, 0] + boxes[:, 2]) / 2.0, (boxes[:, 1] + boxes[:, 3]) / 2.0], 1)
+    cent = [cells.area_centroid(tile_polys[r.tile])[1] + origins[k] for k, r in enumerate(tiles)]
+    keep = [np.ones(len(c), bool) for c in cent]
+    neighbours = [[] for _ in tiles]
+    for a, b, _ in _overlapping(boxes, strip=False, min_overlap_px=1):
+        neighbours[a].append(b)
+        neighbours[b].append(a)
+    for k, r in enumerate(tiles):
+        if not len(cent[k]):
             continue
-        ma, mb, _, _ = pairs.cp.match_lsa(cent[a][ia], cent[b][ib], float(radius_px))
-        for u, v in zip(ia[np.asarray(ma, int)], ib[np.asarray(mb, int)], strict=True):
-            da, db = dist[a][u], dist[b][v]
-            if da < db - 1e-9:
-                keep[b][v] = False
-            elif db < da - 1e-9:
-                keep[a][u] = False
-            else:  # an exact tie: the lower tile id keeps its copy
-                lo_a = tiles[a].tile <= tiles[b].tile
-                (keep[b][v], keep[a][u]) = (False, True) if lo_a else (True, False)
+        own = np.hypot(*(cent[k] - mids[k]).T)
+        for j in neighbours[k]:
+            inside = np.zeros(len(cent[k]), bool)
+            inside[_inside(cent[k], tuple(boxes[j]))] = True
+            other = np.hypot(*(cent[k] - mids[j]).T)
+            closer = other < own - 1e-9
+            tied = (np.abs(other - own) <= 1e-9) & (tiles[j].tile < r.tile)
+            keep[k] &= ~(inside & (closer | tied))
     parts = [
         _shifted(tile_polys[r.tile].take(np.flatnonzero(keep[k])), *origins[k])
         for k, r in enumerate(tiles)
