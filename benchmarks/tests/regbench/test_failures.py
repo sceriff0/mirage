@@ -733,3 +733,98 @@ def test_one_writer_call_for_a_patient_is_shared_between_its_rounds(tmp_path):
     assert second["resources"]["paused_cpu_s"] >= 0.99 * (
         used["writer"] + used["benchmark"] / 2
     )
+
+
+# ── every run's failures beside its scores (C5) ───────────────────────────────
+def _run_summary(method, **more):
+    return {
+        "dataset": "multiplex", "method": method, "n_patients": 1, "n_cases": 7,
+        "n_ok": 3, **more,
+    }  # fmt: skip
+
+
+def test_the_failure_columns_count_rounds_by_owner_and_name_the_top_cause():
+    rows = [_res("a", "", str(i), ok=True) for i in range(3)] + [
+        _res("a", "oom", "4"),
+        _res("a", "identical_overlap", "5"),
+        _res("a", "gate_blocked", ""),
+        _res("a", "not_run", ""),
+    ]
+    (rec,) = score.failures(rows)
+    assert rec["n_failed_method"] == 1
+    assert rec["n_failed_benchmark"] == 1
+    assert rec["n_not_run_or_blocked"] == 2
+    # a tie of one each: the earlier in CAUSES
+    assert rec["top_cause"] == "oom"
+    assert (rec["n_fallback_stage_positions"], rec["n_cycle_fully_modelled"]) == (0, 0)
+
+
+def test_a_not_run_or_blocked_row_is_never_a_method_failure():
+    rows = [
+        _res("a", c, "")
+        for c in ("not_run", "gate_blocked", "dropped_row", "infrastructure")
+    ]
+    (rec,) = score.failures(rows)
+    assert rec["n_failed_method"] == 0 and rec["n_failed_benchmark"] == 0
+    assert rec["n_not_run_or_blocked"] == 4
+    assert score.failures([_res("a", "", "1", ok=True)])[0]["top_cause"] == ""
+
+
+def test_ashlar_flags_are_counted_and_a_failed_row_without_them_counts_zero():
+    rows = [
+        _res("ashlar", "", "1", ok=True, fallback_stage_positions=True,
+             cycle_fully_modelled=False),
+        _res("ashlar", "", "1", ok=True, fallback_stage_positions=True,
+             cycle_fully_modelled=True),
+        _res("ashlar", "identical_overlap", "2"),  # a failed row carries no flag key
+    ]  # fmt: skip
+    (rec,) = score.failures(rows)
+    assert rec["n_fallback_stage_positions"] == 2
+    assert rec["n_cycle_fully_modelled"] == 1
+    assert rec["n_failed_benchmark"] == 1 and rec["top_cause"] == "identical_overlap"
+
+
+def test_resource_row_carries_the_flags_and_an_absent_one_is_none():
+    got = score.resource_row(
+        {
+            "ok": True,
+            "info": {"fallback_stage_positions": True, "cycle_fully_modelled": False},
+        }
+    )
+    assert got["fallback_stage_positions"] is True
+    assert got["cycle_fully_modelled"] is False
+    assert (
+        score.resource_row({"ok": False, "cause": "identical_overlap"})[
+            "fallback_stage_positions"
+        ]
+        is None
+    )
+
+
+def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ashlar():
+    fails = score.failures(
+        [_res("a", "", "1", ok=True), _res("a", "oom", "2"),
+         _res("a", "identical_overlap", "3"), _res("a", "gate_blocked", ""),
+         _res("a", "not_run", ""),
+         _res("ashlar", "", "9", ok=True, fallback_stage_positions=True,
+              cycle_fully_modelled=True)]
+    )  # fmt: skip
+    from benchmarks.tests.regbench.test_score_units import by, cell
+
+    cells = [cell(m, f"P{k}_r1", f"P{k}") for m in ("a", "ashlar") for k in range(2)]
+    summary = score.summarise_cells(cells)
+    a = by(summary, method="a", subset="all")
+    b = by(summary, method="ashlar", subset="all")
+    lines = score._summary_table([a, b], ["a", "ashlar"], fails).splitlines()
+    header = [c.strip() for c in lines[0].strip("|").split("|")]
+    cells = [[c.strip() for c in ln.strip("|").split("|")] for ln in lines[2:]]
+    assert all(len(c) == len(header) for c in cells)
+    col = lambda row, name: row[header.index(name)]  # noqa: E731
+    got = [col(cells[0], n) for n in (
+        "failed (method)", "failed (benchmark)", "not run / blocked", "top cause",
+        "fallback", "fully modelled")]  # fmt: skip
+    assert got == ["1", "1", "2", "oom", "", ""]
+    got = [col(cells[1], n) for n in ("failed (method)", "fallback", "fully modelled")]
+    assert got == ["0", "1", "1"]
+    # without `fails` the table is the old one
+    assert "top cause" not in score._summary_table([a], ["a"])

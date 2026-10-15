@@ -639,6 +639,10 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
     return {
         "ok": ok,
         "cause": run.get("cause", ""),
+        # ASHLAR's per-round flags (methods/ashlar.py); a row that failed carries none,
+        # and an absent flag is None here, never False
+        "fallback_stage_positions": info.get("fallback_stage_positions"),
+        "cycle_fully_modelled": info.get("cycle_fully_modelled"),
         "unit": run.get("unit", ""),
         "launch_id": run.get("launch_id") or "",
         "rounds_in_launch": rounds,
@@ -2375,8 +2379,62 @@ def failures(res_rows):
             rec["rounds_lost_not_method"] = sum(
                 (not r["ok"]) and r["cause"] in NOT_THE_METHOD for r in mine
             )
+            rec.update(run_failure_columns(mine))
             out.append(rec)
     return out
+
+
+def _owner_column(cause):
+    """Which failure column a lost round is counted in, by ``failure_log.WHOSE``: the
+    method's, the benchmark's, or "not run / blocked" (the launcher's, the
+    infrastructure's, a result nobody ran). A cause the table does not know is the
+    method's, as ``failures`` already treats it."""
+    if cause == "not_run":
+        return "n_not_run_or_blocked"
+    whose = failure_log.WHOSE.get(cause, failure_log.METHOD)
+    return {
+        failure_log.METHOD: "n_failed_method",
+        failure_log.BENCHMARK: "n_failed_benchmark",
+    }.get(whose, "n_not_run_or_blocked")
+
+
+def run_failure_columns(mine):
+    """One run's failures, by owner and cause, from its result rows (one per round).
+
+    A round that did not register is counted once, by who is responsible: the method
+    (``n_failed_method``), the benchmark (``n_failed_benchmark``), or no one's result
+    (``n_not_run_or_blocked``: launcher, infrastructure, ``not_run``). ``top_cause`` is
+    the most frequent of those causes, a tie going to the earlier in ``CAUSES``.
+    ``n_fallback_stage_positions`` and ``n_cycle_fully_modelled`` count rounds whose
+    ASHLAR flag is true; a row that carries no flag (a failed one) counts 0."""
+    rec = dict.fromkeys(
+        ("n_failed_method", "n_failed_benchmark", "n_not_run_or_blocked"), 0
+    )
+    causes = {}
+    for r in mine:
+        if r["ok"]:
+            continue
+        cause = r.get("cause") or "exception"
+        rec[_owner_column(cause)] += 1
+        causes[cause] = causes.get(cause, 0) + 1
+    rank = {c: i for i, c in enumerate(CAUSES)}
+    rec["top_cause"] = (
+        min(causes, key=lambda c: (-causes[c], rank.get(c, len(rank)), c))
+        if causes
+        else ""
+    )
+    rec["n_fallback_stage_positions"] = sum(
+        bool(r.get("fallback_stage_positions")) for r in mine
+    )
+    rec["n_cycle_fully_modelled"] = sum(
+        bool(r.get("cycle_fully_modelled")) for r in mine
+    )
+    rec["is_ashlar"] = any(
+        "ashlar" in str(r.get("method", ""))
+        or r.get("fallback_stage_positions") is not None
+        for r in mine
+    )
+    return rec
 
 
 def cpu_instruments_line(res_summary):
@@ -2686,9 +2744,13 @@ def _check_text(value):
     return value or "-"
 
 
-def _summary_table(rows, primary):
+def _summary_table(rows, primary, fails=None):
     """Markdown rows: each headline as ``median (mean) [minimum over cases]`` with
-    ``ok/cases`` on the same line, its null beside it."""
+    ``ok/cases`` on the same line, its null beside it. With ``fails`` (``failures``),
+    each row also carries its run's failures beside its scores: ``failed (method)``,
+    ``failed (benchmark)``, ``not run / blocked`` (rounds), ``top cause``, and for an
+    ASHLAR run ``fallback`` and ``fully modelled`` (rounds; empty on other rows)."""
+    by_run = {(f["dataset"], f["method"]): f for f in fails or []}
     order = [p.split(NON)[0] for p in primary or []]
     families = list(dict.fromkeys(r.get("family", "") for r in rows))
     rows = sorted(
@@ -2743,6 +2805,15 @@ def _summary_table(rows, primary):
         line["cases on inexact objects (shrunk outlines)"] = (
             f"{r.get('n_inexact_cases', 0)} ({r.get('n_shrunk_cases', 0)})"
         )
+        if fails is not None:
+            f = by_run.get((r["dataset"], r["method"].split(NON)[0]), {})
+            ashlar = bool(f.get("is_ashlar"))
+            line["failed (method)"] = f.get("n_failed_method", "")
+            line["failed (benchmark)"] = f.get("n_failed_benchmark", "")
+            line["not run / blocked"] = f.get("n_not_run_or_blocked", "")
+            line["top cause"] = f.get("top_cause", "")
+            line["fallback"] = f["n_fallback_stage_positions"] if ashlar else ""
+            line["fully modelled"] = f["n_cycle_fully_modelled"] if ashlar else ""
         table.append(line)
     return markdown(table, list(table[0])) if table else ""
 
@@ -3525,13 +3596,17 @@ def summary_markdown(
         parts += in_sample_lines(ds, [r["method"] for r in of_ds])
         block = [r for r in of_ds if r["subset"] == "all"]
         if block:
-            parts += ["### All cases\n", _summary_table(block, primary), ""]
+            parts += [
+                "### All cases\n",
+                _summary_table(block, primary, fails),
+                "",
+            ]
             parts += _side_by_side(block, nuc_summary, primary)
         parts.append("### Cases every compared row registered\n")
         parts += _common_lines(common or [], ds)
         block = [r for r in of_ds if r["subset"] == "common"]
         if block:
-            parts += [_summary_table(block, primary), ""]
+            parts += [_summary_table(block, primary, fails), ""]
             parts += _side_by_side(block, nuc_summary, primary)
         parts += _paired_markdown(paired or [], ds)
     if by_family:
