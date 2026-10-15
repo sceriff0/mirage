@@ -327,6 +327,12 @@ def _ashlar_edge(cycle, max_shift_um, illum):
         warnings.simplefilter("always")
         aligner = reg.EdgeAligner(reader, channel=cycle.nuclear_channel, max_shift=max_shift_um)
         wrapped = type(aligner.reader).__name__
+        if not isinstance(aligner.reader, reg.CachingReader):
+            raise RuntimeError(
+                f"ashlar's EdgeAligner holds a {wrapped}, not reg.CachingReader: the "
+                "uncached-reader swap (the memory contract) would be a silent no-op, so "
+                "ashlar_edge refuses until it is re-checked against this ASHLAR"
+            )
         aligner.reader = reader  # no CachingReader: see the module docstring
         aligner.run()
     warned = [str(w.message) for w in caught if issubclass(w.category, reg.Warning)]
@@ -427,6 +433,10 @@ def _stare_mosaic(cycle, out, max_shift_um, illum):
             f"{json_path}: stare mosaic placed tiles {sorted(got)}, the cycle has {sorted(ids)}"
         )
     report = dict(doc.get("report") or {})
+    # STARE's own report says "mosaic": None (it was not asked to write one); here the
+    # mosaic IS written (by the shared writer), so the key would mislead
+    if "mosaic" in report:
+        report["stare_mosaic"] = report.pop("mosaic")
     report.update(
         stare=version,
         stare_positions=str(json_path),

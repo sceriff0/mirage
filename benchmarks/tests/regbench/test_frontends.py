@@ -276,6 +276,7 @@ def test_ashlar_sees_the_tiles_through_a_reader_subclass_and_no_cache(tmp_path, 
     (ran,) = fake_ashlar.calls("EdgeAligner.run")
     assert ran["reader"] == "TileSeriesReader"  # not ASHLAR's CachingReader (reg.py:502)
     assert any("CachingReader" in s for s in st.report["benchmark_side"])
+    assert st.report["thumbnail"] == {"shape": [6, 8], "bytes": 48, "scale": 0.05}
 
 
 def test_ashlar_fallback_warning_is_recorded(tmp_path, monkeypatch):
@@ -322,6 +323,7 @@ def test_stare_mosaic_is_called_with_the_brief_flags(tmp_path, monkeypatch):
     assert argv[argv.index("--pixel-size") + 1] == repr(cyc.pixel_size_um)
     assert st.positions == frontends.stage_positions(cyc)  # +5 moved back to the origin
     assert st.report["n_edges"] == 4
+    assert "mosaic" not in st.report  # STARE's "mosaic": None would say no mosaic was written
 
 
 def test_stare_mosaic_gets_corrected_tile_files_written_once(tmp_path, monkeypatch):
@@ -470,3 +472,18 @@ def test_ashlar_edge_memory_does_not_grow_with_the_grid(tmp_path, monkeypatch):
         return peak_of(lambda: frontends.stitch(cyc, "ashlar_edge", d / "o", out_tile=512))
 
     assert_flat(measure)
+
+
+def test_ashlar_edge_refuses_an_aligner_that_does_not_cache(tmp_path, monkeypatch):
+    cyc, _ = cut_cycle(tmp_path / "c", grid=(2, 2), tile=64)
+    install_fake(monkeypatch, edge_positions=lambda md: md.positions)
+    reg = fake_ashlar.modules()["ashlar.reg"]
+    orig = reg.EdgeAligner.__init__
+
+    def init(self, reader, **kw):
+        orig(self, reader, **kw)
+        self.reader = reader  # a future ASHLAR that no longer wraps
+
+    monkeypatch.setattr(reg.EdgeAligner, "__init__", init)
+    with pytest.raises(RuntimeError, match="CachingReader"):
+        frontends.stitch(cyc, "ashlar_edge", tmp_path / "o")

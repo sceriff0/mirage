@@ -331,6 +331,9 @@ class EdgeAligner:
             for _pass in range(2):  # make_thumbnail, then register_all (reg.py:517-524)
                 for i in range(m.num_images):
                     reader.read(series=i, c=self.channel)
+            # make_thumbnail leaves a small whole-slide image on the reader (thumbnail.py)
+            reader.thumbnail = np.zeros((6, 8), np.uint8)
+            reader.thumbnail_scale = 0.05
             self.positions = np.array(CONFIG["edge_positions"](m), dtype=float)
             # reg.py:713-716
             self.origin = self.positions.min(axis=0)
