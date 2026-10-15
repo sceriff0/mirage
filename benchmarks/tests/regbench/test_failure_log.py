@@ -114,6 +114,7 @@ EXPECTED = {
     "identical_overlap": ("register", "benchmark", "lost"),
     "reduced_proxy": ("register", "benchmark", "lost"),
     "no_pixel_size": ("register", "benchmark", "lost"),
+    "proxy_mismatch": ("register", "benchmark", "lost"),
 }
 
 

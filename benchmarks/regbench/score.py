@@ -201,6 +201,7 @@ CAUSES = (
     "identical_overlap",
     "reduced_proxy",
     "no_pixel_size",
+    "proxy_mismatch",
     "not_run",  # last: `CAUSES[:-1]` below names the causes of a launch that ran
 )
 NOT_THE_METHOD = (
@@ -211,6 +212,7 @@ NOT_THE_METHOD = (
     "identical_overlap",
     "reduced_proxy",
     "no_pixel_size",
+    "proxy_mismatch",
 )
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every

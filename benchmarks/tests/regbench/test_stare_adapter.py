@@ -634,3 +634,37 @@ def load_case_by_id(cases, cid):
     from benchmarks.regbench.cases import list_cases
 
     return next(c for c in list_cases(cases, "synthetic") if c.case_id == cid)
+
+
+def test_a_grey_cell_on_a_haematoxylin_prepared_case_is_the_benchmarks_refusal(
+    synthetic_cases, tmp_path
+):
+    """HyReCo prepared with `--proxy haematoxylin`: the case's own proxy is
+    haematoxylin, so a `proxy=grey` cell would register on haematoxylin under a grey
+    name. It is refused, the benchmark's cause (`proxy_mismatch`); the baseline `stare`
+    (no proxy option) still runs on the case's own proxy, and a luminance-prepared case
+    runs the grey cell."""
+    from benchmarks.regbench import failure_log, resources, score
+
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    haem = dataclasses.replace(
+        case,
+        extra={**case.extra, "settings": {"proxy": "haematoxylin", "reduce": 1}},
+    )
+    opts = {"proxy": "grey", "sprep": "clahe"}
+    with pytest.raises(ValueError, match="haematoxylin") as err:
+        adapter.Round(haem, tmp_path / "r", opts)
+    assert resources.classify_error(err.value) == "proxy_mismatch"
+    assert adapter.settings({}, haem) == ("grey", "none")  # the baseline: no refusal
+    lum = dataclasses.replace(
+        case, extra={**case.extra, "settings": {"proxy": "luminance", "reduce": 1}}
+    )
+    assert adapter.settings(opts, lum) == ("grey", "clahe")
+    out = tmp_path / "out"
+    methods.run_group("stare", [haem], out, opts, label="stare_grey_clahe")
+    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
+    assert runs and {r["cause"] for r in runs} == {"proxy_mismatch"}
+    assert failure_log.WHOSE["proxy_mismatch"] == failure_log.BENCHMARK
+    assert "proxy_mismatch" in resources.NOT_THE_METHOD
+    assert "proxy_mismatch" in score.NOT_THE_METHOD
+    assert score.CAUSES[-1] == "not_run"

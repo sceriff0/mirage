@@ -74,6 +74,8 @@ WHOSE = {
     # a level that needs a pixel size, on a case without one (STARE's CLAHE on
     # ANHIR's mammary glands)
     "no_pixel_size": BENCHMARK,
+    # a `proxy=grey` run on a case prepared with another proxy: its name would lie
+    "proxy_mismatch": BENCHMARK,
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended

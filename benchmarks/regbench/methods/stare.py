@@ -220,7 +220,11 @@ def settings(opts, case):
     outside ``regimes.PROXIES`` / ``SPREPS``; ``channel`` on an RGB case and any other
     proxy on a fluorescence case; either option together with ``prep`` (the label-bound
     preprocessing row); ``sprep=clahe`` where the pixel size is not established (CLAHE's
-    region is in micrometres)."""
+    region is in micrometres: ``NoPixelSize``); a named ``proxy=grey`` on an RGB case
+    whose own proxy is not inverted luminance (HyReCo prepared with ``--proxy
+    haematoxylin``: ``ProxyMismatch``), since ``grey`` IS the case's own proxy and the run
+    would carry a name its image is not. The baseline (no ``proxy`` option) runs on the
+    case's own proxy whatever it is."""
     rgb = case.modality == "brightfield"
     default = "grey" if rgb else "channel"
     proxy = str(opts.get("proxy", default)).strip()
@@ -243,6 +247,13 @@ def settings(opts, case):
         raise ValueError(
             f"proxy=channel: {case.case_id} is an RGB case and needs a proxy "
             f"({', '.join(p for p in PROXIES if p != 'channel')})"
+        )
+    prepared = (case.extra.get("settings") or {}).get("proxy")
+    if rgb and "proxy" in opts and proxy == "grey" and not _is_luminance(prepared):
+        raise ProxyMismatch(
+            f"proxy=grey: {case.case_id} was prepared with the proxy {prepared!r}, and "
+            "`grey` is the case's own proxy: this run would register on that image "
+            "under a grey name. Prepare the dataset with the luminance proxy to run it"
         )
     if sprep == "clahe" and not case.pixel_size_um:
         raise NoPixelSize(
@@ -565,6 +576,21 @@ def stage_dir_of(out, label, case):
     from . import variant_names
 
     return result_dir(out, variant_names("stare", label)[-1], case) / "stages"
+
+
+def _is_luminance(prepared):
+    """Is a case's own proxy (``extra["settings"]["proxy"]``) inverted luminance?
+    HyReCo says ``luminance``, ANHIR ``grey (inverted luminance)``; a case that names
+    none is taken as the plain row's grey."""
+    name = str(prepared or "grey")
+    return name in ("luminance", "grey") or name.startswith("grey ")
+
+
+class ProxyMismatch(ValueError):
+    """A ``proxy=grey`` run on a case whose own proxy is not inverted luminance: its
+    name would say grey of an image that is not. The benchmark's cause."""
+
+    regbench_cause = "proxy_mismatch"
 
 
 class NoPixelSize(ValueError):

@@ -444,6 +444,9 @@ GPU_MEMORY_ERRORS = ("CUDA out of memory",)
 #   no_pixel_size  the adapter refused a level that needs a pixel size (STARE's CLAHE,
 #                  whose region is in micrometres) on a case without one: the dataset's
 #                  gap, not a method failure
+#   proxy_mismatch the adapter refused a `proxy=grey` run on a case prepared with
+#                  another proxy (HyReCo with `--proxy haematoxylin`): its name would
+#                  lie about its input; a prepare-time choice, not a method failure
 CAUSES = (
     "exception",
     "killed",
@@ -464,6 +467,7 @@ CAUSES = (
     "identical_overlap",
     "reduced_proxy",
     "no_pixel_size",
+    "proxy_mismatch",
 )
 # more memory is the remedy: the unit goes up a rung (regbench.ladder)
 MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
@@ -476,6 +480,7 @@ NOT_THE_METHOD = (
     "identical_overlap",
     "reduced_proxy",
     "no_pixel_size",
+    "proxy_mismatch",
 )
 
 
