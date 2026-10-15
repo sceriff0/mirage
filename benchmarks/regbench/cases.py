@@ -19,8 +19,6 @@ A dataset's ``prepare`` writes one folder per case::
 ``nuclei_<side>_outline``    (optional) for each nucleus, the index of the outline it
                              belongs to; written only where that is known by construction
                              (a nucleus then inherits its outline's seam flag)
-``truth_mov`` / ``truth_ref``           (external landmark sets only, until they go) paired
-                                        landmarks, one per row; the cohort has none
 
 ``case.json: extra.cell_sets`` says where each set of each side came from:
 ``{"ref": {"outlines": {"source": ...}, "nuclei": {"source": ..., "exact": bool, ...}},
@@ -33,7 +31,7 @@ A method reads the two images and returns a point mapping in its own direction
 (``mapping.PointMap``). The driver moves the nuclei that direction and writes::
 
     <out>/<variant>/<dataset>/<case_id>/warped.npz   ``cells_xy``, ``nuclei_xy``, ``direction``,
-                                                     ``truth_xy``, ``grid`` (+ ``band``,
+                                                     ``grid`` (+ ``band``,
                                                      ``band_nuc``)
     <out>/<variant>/<dataset>/<case_id>/run.json     ok, cause, seconds, resources, info
 
@@ -151,8 +149,6 @@ def polyset_arrays(ps, side, which=OUTLINES):
 def write_case(
     cases_root,
     case,
-    truth_mov=None,
-    truth_ref=None,
     cells_mov=None,
     cells_ref=None,
     nuclei_mov=None,
@@ -165,10 +161,6 @@ def write_case(
     d = case_dir(cases_root, case.dataset, case.case_id)
     case.dir = str(d)
     arrays = {}
-    if truth_mov is not None:
-        arrays["truth_mov"] = np.asarray(truth_mov, dtype=float).reshape(-1, 2)
-    if truth_ref is not None:
-        arrays["truth_ref"] = np.asarray(truth_ref, dtype=float).reshape(-1, 2)
     for side, ps in (("mov", cells_mov), ("ref", cells_ref)):
         if ps is not None:
             arrays.update(polyset_arrays(ps, side))
@@ -256,11 +248,11 @@ def inputs_fingerprint(case):
 
 
 _FINGERPRINTS = {}
-POINT_GROUPS = {"cells_": "outlines", "nuclei_": "nuclei", "truth_": "truth"}
+POINT_GROUPS = {"cells_": "outlines", "nuclei_": "nuclei"}
 
 
 def points_fingerprint(case):
-    """``{"outlines", "nuclei", "truth"}`` -> sha256 of that group of arrays of the
+    """``{"outlines", "nuclei"}`` -> sha256 of that group of arrays of the
     case's ``points.npz`` as it is on disk now (``""`` for a group it does not have).
 
     A result is made FOR these points: it moved them. A case prepared again with other

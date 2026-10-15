@@ -12,9 +12,7 @@
 #   benchmarks/regbench/slurm/submit_cohort.sh --score-only [--dry-run] \
 #       [--datasets "multiplex"] [-- extra sbatch args]
 #
-# THE DEFAULT is `multiplex`, the cohort. The HyReCo sets are DORMANT: implemented and
-# tested, never part of the default, and submitted only when --datasets names them (the
-# README lists what is known to be wrong with each before any use).
+# THE ONLY DATASET is `multiplex`, the cohort; --datasets names anything else and is refused.
 #
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
@@ -112,36 +110,6 @@
 # ids are, and the scancel line that removes them. Nothing is left half-submitted
 # without that being said.
 #
-# AN EXTERNAL LANDMARK SET (HyReCo) is submitted on its own, never with the cohort:
-#
-#   submit_cohort.sh --prepare --datasets hyreco_a      (then the same without --prepare)
-#   submit_cohort.sh --prepare --datasets hyreco_b      (then the same without --prepare)
-#
-# `hyreco_a` is the TUNING set and `hyreco_b` the REPORT set: subset B is prepared with
-# the settings of the prepared subset-A cases and with nothing else. Such a submission
-# reads its own run list (`runs --dataset <name>`: only the runs with an input rule for
-# brightfield), prepares one pair per array task, submits no tissue job, sends no first
-# unit ahead for a realcheck (both are defined on nuclei), and its scorer writes
-# $REGBENCH_OUT/tables/<name>/ and none of the cohort's tables. Use a REGBENCH_OUT of
-# its own.
-#
-# ANHIR's TRAINING PAIRS are another external landmark set, in two datasets from one
-# prepare (README, "ANHIR: the challenge's training pairs"):
-#
-#   submit_cohort.sh --prepare --datasets anhir         (writes anhir AND anhir_tune)
-#   REGBENCH_ANHIR_TUNE=1 submit_cohort.sh --datasets anhir_tune
-#                                                       the preprocessing candidates
-#                                                       alone, on the tuning side (PAUSED
-#                                                       with stare_prep: refused unless
-#                                                       REGBENCH_ANHIR_TUNE=1)
-#   python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" \
-#       --out "$REGBENCH_OUT" --freeze                  (then commit prep_frozen.json)
-#   submit_cohort.sh --datasets anhir                   every run ANHIR takes, on all 230
-#                                                       training pairs
-#
-# Neither is part of the default. While prep_frozen.json says `provisional`, every
-# submission that holds the preprocessing row says so, in a dry run too.
-#
 # ENVIRONMENT (env.sh has the paths and the images)
 #   REGBENCH_CASES, REGBENCH_OUT      prepared cases; results
 #   REGBENCH_SIF_<image>              one per image of the run list (column `image`)
@@ -192,7 +160,7 @@
 #                                     when it was moved). Default: `default`, the run
 #                                     list's own first runs (`runs --order default`
 #                                     prints the order), on the cohort;
-#                                     set EMPTY, and on an external set, the run list's order.
+#                                     set EMPTY, the run list's order.
 #                                     Nothing but the order of submission changes: not
 #                                     the run list, not a table, not a result
 #   REGBENCH_SCORE_CPUS (8)           per task of the per-case scoring arrays: a case's
@@ -260,24 +228,6 @@
 #   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline
 #                                     shrunk by 10 px (labelled, never exact). Off unless set
 #   REGBENCH_NUCLEI_CPUS (8), REGBENCH_NUCLEI_MEM (128G), REGBENCH_NUCLEI_TIME (08:00:00)
-#   REGBENCH_HYRECO_A                 with --prepare --datasets hyreco_a: the unpacked
-#                                     HyReCo/ folder (it holds HE/ and PHH3/)
-#   REGBENCH_HYRECO_A_ARGS            more `prepare hyreco --subset a` options: the
-#                                     settings being tried (--proxy, --reduce)
-#   REGBENCH_HYRECO_B_HE, REGBENCH_HYRECO_B_PHH3
-#                                     with --prepare --datasets hyreco_b: the HE/ and
-#                                     PHH3/ folders of HyReCo-Additional (two archives)
-#   REGBENCH_HYRECO_TUNED             the cases folder holding the prepared hyreco_a
-#                                     cases subset B takes its settings from (default:
-#                                     REGBENCH_CASES)
-#   REGBENCH_HYRECO_B_ARGS            more `prepare hyreco --subset b` options (never a
-#                                     setting: --proxy and --reduce are refused there)
-#   REGBENCH_ANHIR                    for EVERY ANHIR submission, prepare and runs: the
-#                                     folder holding dataset_medium.csv, images/ and
-#                                     landmarks/ (the challenge's unpacked archives;
-#                                     only read). The cases name its images, so it is
-#                                     bound into every image (env.sh)
-#   REGBENCH_ANHIR_ARGS               more `prepare anhir` options (--allow-incomplete)
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
 # The rungs, 4 CPUs and the 7-day limit are frozen (benchmarks/regbench/ladder.py).
@@ -311,10 +261,8 @@ MAX_SECONDS=$((7 * 24 * 3600))
 export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
-# The cohort (multiplex) is the default. hyreco_* are dormant: only when named.
-# The ANHIR sets (anhir, anhir_tune) are never part of the default either.
+# The cohort (multiplex) is the only dataset.
 DEFAULT_DATASETS="multiplex"
-DORMANT_DATASETS="hyreco_a hyreco_b"
 prepare=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -369,6 +317,13 @@ trap 'on_signal HUP 129' HUP
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+# --datasets is checked up front, before anything is read or submitted: the cohort is
+# the only dataset there is (the external landmark sets were removed).
+[ -n "${datasets// /}" ] || die "--datasets is empty: the only dataset is multiplex. Nothing was submitted."
+for ds in $datasets; do
+    [ "$ds" = multiplex ] || die "--datasets '$ds': the only dataset is multiplex. Nothing was submitted."
+done
+
 # whole numbers of at least <least>: a zero here is an array of no task, or a loop
 # that never ends
 need_int() {
@@ -421,25 +376,6 @@ if [ "$score_only" = 1 ]; then
 fi
 : "${REGBENCH_SUBMISSION:=$(date +%Y%m%dT%H%M%S)-$$}"
 export REGBENCH_SUBMISSION
-for ds in $datasets; do
-    has "$DORMANT_DATASETS" "$ds" && echo "# $ds is DORMANT: submitted because it was named. Read \"Dormant datasets: known defects before any use\" in benchmarks/regbench/README.md first."
-done
-
-# An external landmark set is submitted alone: its own run list, its own tables.
-EXTERNAL="" n_named=0
-for ds in $datasets; do
-    n_named=$((n_named + 1))
-    case "$ds" in hyreco_a|hyreco_b|anhir|anhir_tune) EXTERNAL="$ds" ;; esac
-done
-if [ -n "$EXTERNAL" ] && [ "$n_named" -ne 1 ]; then
-    die "--datasets '$datasets': an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir) is submitted alone, with its own run list and its own tables. hyreco_a and anhir_tune are tuning sets. Nothing was submitted."
-fi
-# ANHIR's tuning side is PAUSED with `stare_prep`, the only row that reads it
-# (variants.TUNING_PAUSED): it is submitted only when asked for by name AND by this variable.
-if [ "$EXTERNAL" = anhir_tune ] && [ "${REGBENCH_ANHIR_TUNE:-0}" != 1 ]; then
-    die "--datasets anhir_tune: ANHIR's tuning side is PAUSED with stare_prep, the only row that reads it (benchmarks/regbench/variants.py, TUNING_PAUSED). Export REGBENCH_ANHIR_TUNE=1 to submit it anyway. Nothing was submitted."
-fi
-
 # seconds <[D-]HH:MM:SS> ; limit <seconds> -> D-HH:MM:SS, never above the site's maximum
 # Every call is a plain assignment made before the first sbatch (`x="$(seconds ...)"`):
 # there a time that is not one stops the script. Nested in another substitution, or in
@@ -582,32 +518,21 @@ fi
 
 # ── the run list, from the harness alone ──────────────────────────────────────────────
 table="$scratch/runs.tsv"
-if [ -n "$EXTERNAL" ]; then
-    regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" > "$table"
-else
-    regbench_py "$REGBENCH_HEAD_IMAGE" runs > "$table"
-fi
+regbench_py "$REGBENCH_HEAD_IMAGE" runs > "$table"
 [ -s "$table" ] || die "the run list is empty (python -m benchmarks.regbench runs)"
 # REGBENCH_RUN_ORDER: the same rows in the order they are to be submitted. Every loop
 # below reads the table top to bottom, and a job only ever waits for a job submitted
 # before it, so the harness never puts a run before the run whose results it reads.
-# Unset, the cohort's default: ASHLAR first. An external set has other runs (no ASHLAR).
-[ -n "$EXTERNAL" ] || : "${REGBENCH_RUN_ORDER=default}"
+# Unset, the cohort's default: ASHLAR first.
+: "${REGBENCH_RUN_ORDER=default}"
 if [ -n "${REGBENCH_RUN_ORDER:-}" ]; then
-    of=()
-    [ -n "$EXTERNAL" ] && of=(--dataset "$EXTERNAL")
-    regbench_py "$REGBENCH_HEAD_IMAGE" runs ${of[@]+"${of[@]}"} --order "$REGBENCH_RUN_ORDER" > "$table.ordered" \
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs --order "$REGBENCH_RUN_ORDER" > "$table.ordered" \
         || die "REGBENCH_RUN_ORDER='$REGBENCH_RUN_ORDER' is not an order of the run list (see the line above). Nothing was submitted."
     mv "$table.ordered" "$table"
     echo "# run order: $(cut -f1 "$table" | paste -sd' ' -)"
-    regbench_py "$REGBENCH_HEAD_IMAGE" runs ${of[@]+"${of[@]}"} --order "$REGBENCH_RUN_ORDER" --order-notes \
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs --order "$REGBENCH_RUN_ORDER" --order-notes \
         | while IFS= read -r note; do echo "# run order: $note"; done
 fi
-if [ -n "$EXTERNAL" ]; then
-    regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$EXTERNAL" --excluded | \
-        while IFS=$'\t' read -r name why; do echo "# $EXTERNAL: $name is not run ($why)"; done
-fi
-[ "$EXTERNAL" = anhir_tune ] && echo "# anhir_tune: the preprocessing candidates and no other run (the tuning side is the only data that choice may look at)"
 REGBENCH_SCORER_IMAGE="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --scorer-image)"
 export REGBENCH_SCORER_IMAGE
 
@@ -631,13 +556,13 @@ if has "$selected" "$prep_run"; then
     if [ "$prep_status" = selected ]; then
         echo "# $prep_run: preprocessing '$prep_candidate', selected on ANHIR's tuning side (prep_frozen.json)"
     else
-        echo "# WARNING $prep_run: its preprocessing ('$prep_candidate') is PROVISIONAL: the selection on ANHIR's tuning side has not been run. Its results will say so, and are run again once prep_frozen.json names the selected candidate (submit_cohort.sh --datasets anhir_tune, then prep-select --freeze)."
+        echo "# WARNING $prep_run: its preprocessing ('$prep_candidate') is PROVISIONAL: the selection has not been made. Its results will say so, and are run again once prep_frozen.json names the selected candidate."
     fi
 fi
 
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
-    [ -n "$EXTERNAL" ] || [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
+    [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
     force=()
     [ "${REGBENCH_PREPARE_FORCE:-0}" = 1 ] && force=(--force)
     alloc=(--cpus-per-task="$CPUS" --mem="${REGBENCH_PREPARE_MEM:-64G}"
@@ -693,37 +618,8 @@ if [ "$prepare" = 1 ]; then
                 fi
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
-            hyreco_a)
-                [ -n "${REGBENCH_HYRECO_A:-}" ] || die "--prepare --datasets hyreco_a needs REGBENCH_HYRECO_A (the unpacked HyReCo/ folder, holding HE/ and PHH3/). Nothing was submitted."
-                # shellcheck disable=SC2206  # the settings being tried, several words
-                tried=(${REGBENCH_HYRECO_A_ARGS:-})
-                what=(hyreco --subset a --data-root "$REGBENCH_HYRECO_A" ${tried[@]+"${tried[@]}"}) ;;
-            hyreco_b)
-                [ -n "${REGBENCH_HYRECO_B_HE:-}" ] && [ -n "${REGBENCH_HYRECO_B_PHH3:-}" ] || die "--prepare --datasets hyreco_b needs REGBENCH_HYRECO_B_HE and REGBENCH_HYRECO_B_PHH3 (the HE/ and PHH3/ folders of HyReCo-Additional). Nothing was submitted."
-                # shellcheck disable=SC2206  # several words; a setting is refused by prepare itself
-                given=(${REGBENCH_HYRECO_B_ARGS:-})
-                what=(hyreco --subset b --ref-dir "$REGBENCH_HYRECO_B_HE" --mov-dir "$REGBENCH_HYRECO_B_PHH3"
-                      --settings-from "${REGBENCH_HYRECO_TUNED:-$REGBENCH_CASES}" ${given[@]+"${given[@]}"}) ;;
-            anhir|anhir_tune)
-                [ -n "${REGBENCH_ANHIR:-}" ] || die "--prepare --datasets $ds needs REGBENCH_ANHIR (the folder holding dataset_medium.csv, images/ and landmarks/). Nothing was submitted."
-                [ "$ds" = anhir_tune ] && echo "# anhir_tune is written by the prepare of anhir: one prepare, both datasets"
-                # shellcheck disable=SC2206  # several words
-                given=(${REGBENCH_ANHIR_ARGS:-})
-                what=(anhir --source "$REGBENCH_ANHIR" ${given[@]+"${given[@]}"}) ;;
-            *) die "--datasets: '$ds' is not one of multiplex, hyreco_a, hyreco_b, anhir, anhir_tune" ;;
+            *) die "--datasets: '$ds' is not multiplex" ;;
         esac
-        if [ -n "$EXTERNAL" ]; then
-            # one pair per task: a HyReCo slide is about 21 gigapixels, and a proxy of
-            # each image is written here
-            case "$ds" in
-                hyreco_*) count=(hyreco --subset "${ds#hyreco_}") ;;
-                *) count=(anhir --source "$REGBENCH_ANHIR") ;;
-            esac
-            n_pairs="$(regbench_py "$REGBENCH_HEAD_IMAGE" prepare "${count[@]}" --cases "$REGBENCH_CASES" \
-                --count)" || die "cannot size the $ds prepare array"
-            array=(--array="0-$((n_pairs - 1))%$REGBENCH_ARRAY_LIMIT")
-            log="$LOG_ARRAY"
-        fi
         submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
             ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
     done
@@ -733,9 +629,6 @@ if [ "$prepare" = 1 ]; then
 fi
 
 # ── refusals, before anything is submitted ────────────────────────────────────────────
-case "$EXTERNAL" in anhir|anhir_tune)
-    [ -n "${REGBENCH_ANHIR:-}" ] || die "--datasets $EXTERNAL needs REGBENCH_ANHIR for the runs too (the folder the cases were prepared from): its cases name the original images inside it, and it is bound into every image from that variable. Nothing was submitted." ;;
-esac
 gpu_runs="" images=""
 while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$selected" "$name" || continue
@@ -1291,31 +1184,24 @@ after_all=()
 submit "rb-settle" "${COMMON[@]}" "$LOG_ONE" ${after_all[@]+"${after_all[@]}"} "${small[@]}" \
     "$HERE/score_cohort.sbatch" settle
 settle_job="$JOB_ID"
-if [ -n "$EXTERNAL" ]; then
-    # no tissue job (it is defined on nuclear channels) and no per-case array (a landmark
-    # set has no pair records: its scorer reads landmarks); the set's own scorer and tables
-    submit "rb-score-$EXTERNAL" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$settle_job" --cpus-per-task="$CPUS" \
-        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score "$EXTERNAL"
-else
-    # one task per case: its rows, kept as a record the scorer reads. afterany: a task
-    # that fails or is killed leaves its case to the scorer, which computes what is missing
-    score_time="$(limit "$score_s")"
-    scored=""
-    for ds in $sized; do
-        n_cases="CASES_$ds"
-        submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
-            --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$REGBENCH_SCORE_CPUS" \
-            --mem="$REGBENCH_SCORE_MEM" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
-        scored="$scored:$JOB_ID"
-    done
-    # each case task also made the tissue pieces of its case: this job makes those of a
-    # case whose task did not, after them (never beside them: two jobs would be writing
-    # the same pieces)
-    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
-        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
-    submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
-        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
-fi
+# one task per case: its rows, kept as a record the scorer reads. afterany: a task
+# that fails or is killed leaves its case to the scorer, which computes what is missing
+score_time="$(limit "$score_s")"
+scored=""
+for ds in $sized; do
+    n_cases="CASES_$ds"
+    submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
+        --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$REGBENCH_SCORE_CPUS" \
+        --mem="$REGBENCH_SCORE_MEM" --time="$score_time" "$HERE/score_cohort.sbatch" case "$ds"
+    scored="$scored:$JOB_ID"
+done
+# each case task also made the tissue pieces of its case: this job makes those of a
+# case whose task did not, after them (never beside them: two jobs would be writing
+# the same pieces)
+submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
+    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
+submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
+    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
 
 [ "$N_LATER" = 0 ] || echo "# retries: none is in the queue. Up to $N_LATER retry array(s) are written down as plans ($REGBENCH_OUT/logs/retry/) and submitted by the chains' watchers (retry.sbatch) only after a failure, for the units that failed"
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
@@ -1334,16 +1220,9 @@ if [ "$score_only" = 1 ]; then
 else
     echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "$REGBENCH_FORCE" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
 fi
-[ -n "$EXTERNAL" ] || echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
+echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
 echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
-if [ -n "$EXTERNAL" ]; then
-    echo "# results     -> $REGBENCH_OUT/tables/$EXTERNAL/summary.md (this set's own tables; none of the cohort's)"
-    [ "$EXTERNAL" = hyreco_a ] && echo "# hyreco_a is the TUNING set: nothing in its tables is a result"
-    [ "$EXTERNAL" = anhir_tune ] && echo "# anhir_tune is the TUNING side: nothing in its tables is a result. When it is done: python -m benchmarks.regbench prep-select --cases $REGBENCH_CASES --out $REGBENCH_OUT --freeze, commit benchmarks/regbench/prep_frozen.json, then submit_cohort.sh --datasets anhir"
-    [ "$EXTERNAL" = anhir ] && echo "# anhir: the challenge's TRAINING pairs; no number is comparable with a leaderboard row (hidden evaluation pairs)"
-else
-    echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
-fi
+echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
 [ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
 [ "$ADVISORY" = 1 ] && echo "# the selfchecks are ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): no run is blocked by one; each verdict is in $REGBENCH_OUT/logs/gates/<run>.tsv and in the summary"
 [ -n "${REGBENCH_ALLOW_INCONSISTENT:-}" ] && echo "# OVERRIDE: allowed to start although the selfcheck is inconsistent: $REGBENCH_ALLOW_INCONSISTENT (the gate record and the summary keep the verdict)"

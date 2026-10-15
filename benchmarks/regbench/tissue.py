@@ -307,7 +307,7 @@ def native_channel(native, case, n_channels):
     return int(channel)
 
 
-# why a brightfield case (HyReCo) has no tissue-level row
+# why a brightfield case has no tissue-level row
 NOT_BRIGHTFIELD = (
     "the tissue-level block compares the nuclear channel of a written image with the "
     "reference's; a brightfield case has no nuclear channel, and what each method "

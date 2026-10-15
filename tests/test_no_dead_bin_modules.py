@@ -134,8 +134,9 @@ def _candidate_modules() -> list[Path]:
     A SHIM (`tests/stare_shims.py`: a docstring, `from stare... import x as _impl`,
     `sys.modules[__name__] = _impl`, nothing else) is not a module with a body that could
     be dead code -- it is a compatibility name over the `stare` package, kept so the flat
-    `from mesh_field import MeshField` convention the tests, bin/warp_seg_qc.py and
-    benchmarks/anhir/warp.py use keeps resolving. The production-importer rule below
+    `from mesh_field import MeshField` convention the tests and bin/warp_seg_qc.py use
+    keeps resolving (`bin/utils/tiled_stage_warp` keeps its two pipeline importers; the
+    benchmarks user it once named, benchmarks/anhir/warp.py, is gone). The production-importer rule below
     would flag six of them (their former production importers moved into the package
     with them) for a reason that does not apply. They get their OWN rule instead,
     `test_every_stare_shim_is_imported_by_something`: a shim nothing under bin/, tests/

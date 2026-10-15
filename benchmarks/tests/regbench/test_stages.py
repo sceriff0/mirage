@@ -1797,30 +1797,6 @@ def test_a_staged_result_is_scored_end_to_end(tmp_path, monkeypatch):
     assert per[(case.group, "stare")]["n_jobs"] == ""
 
 
-def test_the_other_scorers_summarise_a_staged_row_through_the_same_function():
-    """`landmarks.score` and `challenge.score` build their cost rows with
-    `score.resource_row` and `score.summarise_resources`: a staged row without an
-    image goes through both."""
-    from benchmarks.regbench import challenge, landmarks, score
-
-    assert landmarks.cohort is score and challenge.cohort is score
-    jobs = {**stages.summarise(*round_records()), "execution": "jobs"}
-    run = {
-        "ok": True,
-        "method": "stare",
-        "unit": "pair",
-        "launch_id": "9_0",
-        "register_s": 140.0,
-        "resources": {"wall_s": 140.0, "cpu_s": 300.0, "peak_rss_mb": 3900.0},
-        "info": {"jobs": jobs},
-        "native": None,
-    }
-    row = {**score.resource_row(run), "dataset": "hyreco_b", "group": "g"}
-    (rec,) = score.summarise_resources([{**row, "method": "stare_rigid"}])
-    assert rec["n_jobs"] == 6 and math.isnan(rec["write_cpu_h_allocated"])
-    assert math.isnan(rec["write_peak_gb"])
-
-
 # ── the round's last job: the benchmark's allocation, STITCH as its own process ──
 def scripted_stitch(monkeypatch, outcomes):
     """STITCH's process replaced by scripted outcomes, one per attempt: an exit code

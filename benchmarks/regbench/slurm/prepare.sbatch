@@ -8,7 +8,7 @@ set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 dataset="$1"; shift
-# as an array task (submit_cohort.sh --prepare, for HyReCo): one case per task
+# as an array task: one case per task
 index=()
 [ -n "${SLURM_ARRAY_TASK_ID:-}" ] && index=(--index "$SLURM_ARRAY_TASK_ID")
 # REGBENCH_PREPARE_IMAGE: the image to prepare in (submit_cohort.sh sets the scorer's)

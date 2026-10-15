@@ -29,10 +29,6 @@
 #                                job that was lost): the cases that changes are computed
 #                                again here, never read from a record made before it
 #
-#   score_cohort.sbatch score <external dataset>
-#                                an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir), alone:
-#                                its own tables under $REGBENCH_OUT/tables/<dataset>/,
-#                                never the cohort's
 #
 # `case` and `score` read the gates' verdicts from $REGBENCH_OUT/logs/gates. A row is
 # dropped when its own selfcheck failed and it does not gate its method. Both are given
@@ -40,7 +36,7 @@
 # scorer that was (benchmarks/regbench/score.py: case_key).
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
-kind="$1" external="${2:-}"
+kind="$1" dataset="${2:-}"  # `case` is the only kind that takes a dataset
 workers="${SLURM_CPUS_PER_TASK:-1}"
 gates="$REGBENCH_OUT/logs/gates"
 
@@ -109,18 +105,18 @@ if [ "$kind" = case ]; then
     # image; the tissue job and the scorer read them and compute only what is missing).
     # A failure here costs the case nothing: its rows are scored all the same
     regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
-        --out "$REGBENCH_OUT" --dataset "$external" --index "$SLURM_ARRAY_TASK_ID" \
+        --out "$REGBENCH_OUT" --dataset "$dataset" --index "$SLURM_ARRAY_TASK_ID" \
         --workers "$workers" \
-        || echo "tissue $external index $SLURM_ARRAY_TASK_ID: not computed here (the tissue job and the scorer compute whatever is missing)"
+        || echo "tissue $dataset index $SLURM_ARRAY_TASK_ID: not computed here (the tissue job and the scorer compute whatever is missing)"
     regbench_py "$REGBENCH_SCORER_IMAGE" score-case --cases "$REGBENCH_CASES" \
-        --out "$REGBENCH_OUT" --dataset "$external" --index "$SLURM_ARRAY_TASK_ID" \
+        --out "$REGBENCH_OUT" --dataset "$dataset" --index "$SLURM_ARRAY_TASK_ID" \
         --workers "$workers" ${shared[@]+"${shared[@]}"}
     code=$?
-    echo "score-case $external index $SLURM_ARRAY_TASK_ID: python exited $code (the scorer computes whatever is missing)"
+    echo "score-case $dataset index $SLURM_ARRAY_TASK_ID: python exited $code (the scorer computes whatever is missing)"
     if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
         cat "$REGBENCH_END_FILE"
     else
-        echo "REGBENCH_END kind=score_case dataset=$external unit=index_$SLURM_ARRAY_TASK_ID status=no_end_line cause=score_case_unfinished whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+        echo "REGBENCH_END kind=score_case dataset=$dataset unit=index_$SLURM_ARRAY_TASK_ID status=no_end_line cause=score_case_unfinished whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
     fi
     exit "$code"
 fi
@@ -149,19 +145,17 @@ fi
 shared_args
 args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers"
       ${shared[@]+"${shared[@]}"})
-# the gates' verdicts, for the cohort and for an external set alike: a run a gate
-# blocked is not a method failure (ANHIR's scorer lists it apart; HyReCo's ignores it)
+# the gates' verdicts: a run a gate blocked is not a method failure
 args+=(--gates "$gates")
 # the cohort's manifest, for the first column of attrition.csv: REGBENCH_MANIFEST when
 # this job has it, else the copy `submit_cohort.sh --prepare` left beside the cases;
 # copied under the results (which every image can read)
 manifest="${REGBENCH_MANIFEST:-}"
 [ -n "$manifest" ] && [ -r "$manifest" ] || manifest="$REGBENCH_CASES/manifest.csv"
-if [ -z "$external" ] && [ -r "$manifest" ]; then
+if [ -r "$manifest" ]; then
     cp "$manifest" "$REGBENCH_OUT/logs/manifest.csv" \
         && args+=(--manifest "$REGBENCH_OUT/logs/manifest.csv")
 fi
-[ -n "$external" ] && args+=(--dataset "$external")
 regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
 code=$?
 

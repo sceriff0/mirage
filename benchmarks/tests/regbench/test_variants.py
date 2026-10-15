@@ -1049,11 +1049,9 @@ def test_stare_prep_row_is_paused_not_gone():
 
 
 def test_runs_for_honours_regimes():
-    names = {variants.run_name(r) for r in variants.runs_for("hyreco_b")}
-    assert "stare_haem_clahe" in names and "stare_percentile" not in names
-    assert "stare_clahe" not in names  # cyclic_if's alternative, not bf_same's
     cyc = {variants.run_name(r) for r in variants.runs_for("multiplex")}
     assert "stare_clahe" in cyc and "stare_haem_clahe" not in cyc
+    assert "stare_percentile" in cyc
 
 
 def test_the_cohort_is_a_regime_and_takes_no_rgb_only_stare_run():

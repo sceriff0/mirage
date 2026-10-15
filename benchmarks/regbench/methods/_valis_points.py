@@ -193,7 +193,7 @@ def placed_name(path, prefixed):
 
 def placed_names(paths):
     """``{source: placed file name}`` of a patient's slides. Where two DIFFERENT files
-    share a basename (a HyReCo pair is ``HE/29.tif`` and ``PHH3/29.tif``) EVERY slide
+    share a basename (``a/29.tif`` and ``b/29.tif``) EVERY slide
     is placed under its parent folder's name in front, so the names follow one rule.
     Raises ValueError when the placed names still clash (the same folder name over
     different grandparents), because VALIS names a slide by its file name."""

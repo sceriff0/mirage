@@ -188,14 +188,12 @@ def patient_channels(cases):
 
 _LAUNCHES = itertools.count(1)
 
-# Methods with NO input rule for a brightfield case (an RGB image pair: HyReCo, ANHIR),
-# and why. Their adapters refuse such a case with this text (`require_fluorescence`), and
-# the run list leaves their runs out of a brightfield dataset (`variants.runs_for`). A
-# method not named here has a rule: STARE reads the case's one-channel proxy
-# (methods/stare.py), VALIS 1.2.0 reads the original RGB images and picks its own
-# brightfield processing, DeeperHistReg reads the RGB image with its shipped parameters
-# (methods/deeperhistreg.py). A run of such a method can still be left out of ONE
-# dataset (`variants.NOT_ON`).
+# Methods with NO input rule for a brightfield case (an RGB image pair), and why.
+# Their adapters refuse such a case with this text (`require_fluorescence`). A method not
+# named here has a rule: STARE reads the case's one-channel proxy (methods/stare.py),
+# VALIS 1.2.0 reads the original RGB images and picks its own brightfield processing,
+# DeeperHistReg reads the RGB image with its shipped parameters
+# (methods/deeperhistreg.py). Removed with the brightfield rules.
 NO_BRIGHTFIELD = {
     "valis_mirage": "it is the pipeline's own VALIS call, and the pipeline registers "
     "multichannel fluorescence rounds only: there is no shipped brightfield "
@@ -224,7 +222,7 @@ def require_fluorescence(case, method):
 def check_inputs(cases):
     """Refuse a case whose image files cannot be read from here, before the method
     starts. A case names its ORIGINAL slides where they were when it was prepared (the
-    cohort's own folders; ANHIR: ``REGBENCH_ANHIR``); when such a folder is not bound
+    cohort's own folders); when such a folder is not bound
     into the method's container, every unit of every method that reads them would fail
     there and be counted as the method's failure. It is the launch's fault, not a
     method's: ``resources.InputUnreadable``, cause ``infrastructure``."""
@@ -240,7 +238,7 @@ def check_inputs(cases):
                     f"{case.dataset}/{case.case_id}: {path} cannot be read from where "
                     "this run is. Its folder is not bound into the image, or the cases "
                     "were prepared on another machine: name the slides' folder in "
-                    "REGBENCH_BIND (for ANHIR export REGBENCH_ANHIR), with the path "
+                    "REGBENCH_BIND, with the path "
                     "the cases were prepared with."
                 )
 
@@ -870,13 +868,6 @@ def _run(
                         pts.get(f"cells_{side}_xy", np.empty((0, 2))),
                         inside=mapping,
                     ).astype(np.float32),
-                    # the known-truth probes of the side the map starts from, at full
-                    # precision: fn(truth_mov) or fn(truth_ref), never the other way
-                    "truth_xy": _warp_chunked(
-                        pmap.fn,
-                        pts.get(f"truth_{side}", np.empty((0, 2))),
-                        inside=mapping,
-                    ),
                     "grid": _warp_chunked(pmap.fn, grid, inside=mapping).astype(
                         np.float32
                     ),

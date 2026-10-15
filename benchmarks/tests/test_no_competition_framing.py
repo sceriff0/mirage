@@ -15,10 +15,10 @@ docs/superpowers/ (this guard's own plan among them). Same choice, same reason,
 as tests/test_no_legacy_frontends.py. The corollary: a NEW file is invisible to
 this guard until it is `git add`-ed, so run it after staging, not before.
 
-NARROWED 2026-09-12, because the premise moved. `benchmarks/anhir/` is a live
-ANHIR landmark harness again -- it drives the PIPELINE (`--start registration
---stop registration`) and warps landmarks through the transform each backend
-publishes, so it does not depend on the deleted single-task scripts. The bare
+NARROWED 2026-09-12, because the premise moved: `benchmarks/anhir/` was then a live
+ANHIR landmark harness (it drove the PIPELINE and warped landmarks through the
+transform each backend publishes; it has since been removed with regbench's own
+ANHIR and HyReCo sets, whose names the guard still does not forbid). The bare
 `anhir` and `ANHIR/ACROBAT` clauses that used to sit in PATTERN would have
 forbidden the harness's own name; they are gone. What this guard still forbids
 is what is still absent: a PATH into either deleted harness, a bare

@@ -57,32 +57,8 @@ only ever added at the end, so a position never changes.
                        (``coarse,tile,solve,stitch``, with ``prep`` first for the
                        preprocessing row); ``-`` for a run that is one job per unit.
 
-**An external brightfield dataset** has a shorter list (``runs_for(dataset)``), every
-other active run being left out with a reason (``excluded_for(dataset)``: a method
-without an input rule for a brightfield case, ``methods.NO_BRIGHTFIELD``, whose adapter
-refuses such a case in the same words; or a run this dataset does not take,
-``NOT_ON``). ``runs --dataset <name>`` prints the list in the same columns;
-``expected_variants(dataset)`` and ``primary_for(dataset)`` are what its scorer is told.
-
-The STARE runs of a set are its regime's levels x the three strides
-(``regimes.DATASET_REGIME``); ``runs --dataset <name>`` prints the list, and the counts
-below are ``runs_for`` / ``expected_variants`` as of 2026-10-15:
-
-``hyreco_a``, ``hyreco_b``  the 12 STARE runs of ``bf_same`` (``stare`` and
-                           ``stare_s{128,256}_none``; ``haem_clahe``, ``grey_clahe``,
-                           ``haem_percentile`` at each stride), ``valis120``,
-                           ``valis120_hires`` (14 runs, 30 result names)
-``anhir``                  the 12 STARE runs of ``bf_consecutive`` (``none``,
-                           ``grey_clahe``, ``grey_smooth_none``, ``grey_percentile`` at each
-                           stride), ``valis120``, ``valis120_hires`` and the four
-                           DeeperHistReg runs that are not configured for fluorescence (18
-                           runs, 38 result names)
-``anhir_tune``             PAUSED with ``stare_prep``, its only consumer: the
-                           preprocessing candidates of ``stare_prep`` alone
-                           (``TUNING_RUNS``, one run per candidate of
-                           ``regbench.prep.CANDIDATES``), each behind its own selfcheck.
-                           Kept and tested; the launcher submits it only when asked
-                           (``REGBENCH_ANHIR_TUNE=1`` with ``--datasets anhir_tune``)
+The STARE runs of the cohort are its regime's levels x the three strides
+(``regimes.DATASET_REGIME``); ``runs --dataset multiplex`` prints the list.
 
 **The ``stare_prep`` run** (ruling R3.21) is STARE unchanged on a preprocessed copy of the
 image it registers on (``regbench.prep``). Its one option, ``prep``, is the candidate
@@ -109,16 +85,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import (
-    ANHIR,
-    ANHIR_TUNE,
-    EXTERNAL_DATASETS,
-    HYRECO_DATASETS,
-    methods,
-    plugins,
-    prep,
-    regimes,
-)
+from . import methods, plugins, prep, regimes
 from .methods import ashlar as _ashlar
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
@@ -378,38 +345,6 @@ GATE_SUFFIXES = {"deeperhistreg": ("_asdrawn",)}
 # gate reads the run's PRIMARY row; a run of these methods without one has none.
 REALCHECK_METHODS = ("valis_mirage", "valis")
 
-# Runs an external dataset does not take although their method has a brightfield input
-# rule: `[(which runs, why)]` per dataset. HyReCo is dormant and keeps the list it was
-# built with.
-_HYRECO_NOT = (
-    (
-        lambda r: r.method == "deeperhistreg",
-        "its RGB input rule was written for ANHIR's JPEG / PNG images (ruling R3.20) "
-        "and has not been extended to HyReCo's BigTIFF slides; HyReCo is dormant",
-    ),
-)
-NOT_ON = {
-    **{d: _HYRECO_NOT for d in HYRECO_DATASETS},
-    ANHIR: (
-        (
-            lambda r: r.method == "deeperhistreg" and r.opts.get("fluo") == "1",
-            "`fluo=1` is the benchmark's configuration of DeeperHistReg for a "
-            "fluorescence channel (a black pad, no intensity flip); on an RGB "
-            "brightfield image the shipped parameters are the ones to run",
-        ),
-    ),
-}
-for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
-    NOT_ON[_dataset] = tuple(NOT_ON.get(_dataset, ())) + tuple(
-        (lambda r, n=_name: (r.label or r.method) == n, _why)
-        for _name, _why in _left_out.items()
-    )
-TUNING_ONLY = (
-    "the tuning side of ANHIR runs the preprocessing candidates of the stare_prep "
-    "row and nothing else: no other run may be looked at there, and every run of the "
-    "list is scored on those pairs anyway, labelled, in the `anhir` dataset"
-)
-
 # Image -> the build context under containers/ (images.json) for the ones this repository
 # builds, and the upstream reference for the ones it pulls.
 BUILT_HERE = {
@@ -649,44 +584,12 @@ def check():
     names = {run_name(r) for r in RUNS}
     if len(names) != len(RUNS) or names & {run_name(r) for r in TUNING_RUNS}:
         raise ValueError("two runs share a name")
-    for dataset, rules in NOT_ON.items():
-        if dataset not in EXTERNAL_DATASETS:
-            raise ValueError(f"NOT_ON names no external dataset: {dataset!r}")
-        for pick, _ in rules:
-            if not any(pick(r) for r in RUNS):
-                raise ValueError(f"a rule of NOT_ON[{dataset!r}] matches no run")
-    for dataset in EXTERNAL_DATASETS:
-        kept = {run_name(r) for r in runs_for(dataset)}
-        for run in runs_for(dataset):
-            name = run_name(run)
-            for needs in (gated_by(name), run.after):
-                if needs is not None and needs not in kept:
-                    raise ValueError(
-                        f"on {dataset} the run {name!r} needs {needs!r}, which has "
-                        "no brightfield input rule"
-                    )
-
-
-def _not_on(dataset, run):
-    """Why an active run is left out of an external dataset, or None."""
-    if run.method in methods.NO_BRIGHTFIELD:
-        return methods.NO_BRIGHTFIELD[run.method]
-    for pick, why in NOT_ON.get(dataset, ()):
-        if pick(run):
-            return why
-    return None
 
 
 def runs_for(dataset=None):
     """The active runs of a dataset: those whose ``regimes`` take it (``Run.regimes``),
-    the cohort's (``regimes.COHORT_REGIME``) for None; for an external brightfield set, those not left out (``excluded_for``); for
-    ANHIR's tuning side, the preprocessing candidates and nothing else."""
-    if dataset == ANHIR_TUNE:
-        return TUNING_RUNS
-    runs = tuple(r for r in active_runs() if _in_regime(dataset, r))
-    if dataset not in EXTERNAL_DATASETS:
-        return runs
-    return tuple(r for r in runs if _not_on(dataset, r) is None)
+    the cohort's (``regimes.COHORT_REGIME``) for None."""
+    return tuple(r for r in active_runs() if _in_regime(dataset, r))
 
 
 def _in_regime(dataset, run):
@@ -702,18 +605,6 @@ def _in_regime(dataset, run):
     return reg in run.regimes
 
 
-def excluded_for(dataset):
-    """``[(run name, reason)]`` of the active runs left out of ``dataset``. ANHIR's
-    tuning side takes none of them (``TUNING_ONLY``, said once, not per run)."""
-    if dataset not in EXTERNAL_DATASETS or dataset == ANHIR_TUNE:
-        return []
-    return [
-        (run_name(r), _not_on(dataset, r))
-        for r in active_runs()
-        if _not_on(dataset, r) is not None
-    ]
-
-
 def primary_for(dataset=None):
     """The primary rows that exist on ``dataset``, in the order of ``PRIMARY``."""
     written = {v for run in runs_for(dataset) for v in variants_of(run)}
@@ -722,8 +613,7 @@ def primary_for(dataset=None):
 
 def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs. For an external dataset, the names of
-    ``runs_for(dataset)``."""
+    the active runs."""
     check()
     return [v for run in runs_for(dataset) for v in variants_of(run)]
 
@@ -948,8 +838,7 @@ def submission_order(order, runs=None):
 
 def runs_table(paused=False, dataset=None, order=None):
     """One row of strings per active run, in the columns of ``RUNS_COLUMNS``; with
-    ``paused``, the paused runs too, in their place in ``RUNS``. With an external
-    ``dataset``, only the runs of ``runs_for(dataset)``. ``order`` (a list of names,
+    ``paused``, the paused runs too, in their place in ``RUNS``. ``order`` (a list of names,
     possibly empty) puts the rows in ``submission_order``; None leaves them as they are."""
     check()
     table = []
@@ -975,10 +864,7 @@ def runs_table(paused=False, dataset=None, order=None):
                 ",".join(names),
                 "1" if run.active else "0",
                 ",".join(gate_variants(run_name(run))),
-                # the realcheck is made on nuclei; an external landmark case has none
-                NONE
-                if dataset in EXTERNAL_DATASETS
-                else realcheck_gate(run_name(run)) or NONE,
+                realcheck_gate(run_name(run)) or NONE,
                 ",".join(stages_of(run)) or NONE,
             )
         )

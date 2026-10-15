@@ -36,7 +36,7 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # the four attempts of the pipeline's allocation for STITCH where the others have the
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
-# every active run, whatever its dataset: the helpers below are also used on the external sets
+# every active run, whatever its dataset
 STAGED_ALL = {
     variants.run_name(r): variants.stages_of(r)
     for r in variants.active_runs()
@@ -629,10 +629,23 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     jobs, done, _ = dry
     datasets = {j.args[6] for j in jobs.values() if j.script == "run_rung.sbatch"}
     assert datasets == {"multiplex"}
-    assert not [n for n in jobs if "hyreco" in n or "anhir" in n]
     code = code_of(SCRIPT)
     assert 'DEFAULT_DATASETS="multiplex"' in code
-    assert 'DORMANT_DATASETS="hyreco_a hyreco_b"' in code
+
+
+@pytest.mark.parametrize(
+    "named", ["anhir", "anhir_tune", "hyreco_a", "hyreco_b", "synthetic", "multiplex x"]
+)
+def test_a_dataset_other_than_multiplex_is_refused_up_front_in_one_line(site, named):
+    """The cohort is the only dataset: a removed one is refused before anything is read
+    or submitted, in one line naming the allowed value, with no argparse usage and no
+    "cannot list" from a later step."""
+    done, _, _ = launch(site, "--datasets", named, log="ds-bad")
+    assert done.returncode == 2
+    lines = [x for x in done.stderr.splitlines() if x.strip()]
+    assert len(lines) == 1 and "the only dataset is multiplex" in lines[0]
+    assert "usage" not in done.stderr.lower() and "cannot list" not in done.stderr
+    assert not _sbatch_lines(done.stdout)
 
 
 def test_no_job_asks_for_more_than_seven_days(site):
@@ -1031,7 +1044,7 @@ def test_the_case_task_and_the_scorer_are_told_the_same_things():
         code.index('if [ "$kind" = case ]') : code.index('if [ "$kind" = tissue ]')
     ]
     assert "score-case" in case and '--index "$SLURM_ARRAY_TASK_ID"' in case
-    assert '--dataset "$external"' in case and '--workers "$workers"' in case
+    assert '--dataset "$dataset"' in case and '--workers "$workers"' in case
     assert '${shared[@]+"${shared[@]}"}' in case
     scorer = code[code.index("args=(score ") :]
     assert '${shared[@]+"${shared[@]}"}' in scorer.split("\n\n")[0]
@@ -2757,7 +2770,7 @@ def test_prepare_is_a_step_of_its_own(site, tmp_path):
     gone, _, _ = launch(
         site, "--prepare", "--datasets", "synthetic", env=env, log="gone"
     )
-    assert gone.returncode == 2 and "is not one of multiplex" in gone.stderr
+    assert gone.returncode == 2 and "the only dataset is multiplex" in gone.stderr
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
     assert none.returncode == 2 and "REGBENCH_MANIFEST" in none.stderr
     assert not _sbatch_lines(none.stdout)

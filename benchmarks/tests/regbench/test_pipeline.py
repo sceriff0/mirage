@@ -1001,7 +1001,7 @@ def test_a_result_for_an_earlier_version_of_the_case_is_not_reused_and_not_a_fai
     method = fake("m", ["m"], register)
     assert methods.run_case(method, case, out, resume=True) == ["m"]
     made_for = run_json(out, "m", case)["points_sha256"]
-    assert made_for["outlines"] and made_for["nuclei"] == "" == made_for["truth"]
+    assert made_for["outlines"] and made_for["nuclei"] == ""
     assert methods.run_case(method, case, out, resume=True) == ["m"]
     assert calls == ["P1_r1"]  # the same case: reused, nothing run
     assert scorer._load_run(out, "m", case)[3] == ""

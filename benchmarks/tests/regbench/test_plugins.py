@@ -39,7 +39,6 @@ SEAM_OWNERS = (NAME,)
 SELFCHECK_SIZES = {NAME: [((512, 640), None)]}
 SELFCHECK_OPTS = {NAME: {"checked_with": "its own options"}}
 SELFCHECK_GATED_BY = {"fakeprivate_r2": NAME}
-NOT_ON = {"hyreco_a": {NAME: "not here", "fakeprivate_r2": "not here"}}
 COST_COLUMNS = {"model_s": "seconds_of_model"}
 """
 
@@ -57,8 +56,7 @@ out = {
     "sizes": "fakeprivate" in selfcheck.SIZES,
     "family": variants.family("fakeprivate_r2"),
     "gated_by": variants.gated_by("fakeprivate_r2") if "fakeprivate_r2" in names else None,
-    "hyreco": [variants.run_name(r) for r in variants.runs_for("hyreco_a")],
-    "anhir": [variants.run_name(r) for r in variants.runs_for("anhir")],
+    "cohort": [variants.run_name(r) for r in variants.runs_for("multiplex")],
     "loaded": plugins.load() is not None,
 }
 if "fakeprivate" in names:
@@ -147,7 +145,7 @@ def test_an_enabled_plugin_is_picked_up_everywhere(tmp_path):
     assert got["cli_methods"][-1] == "fakeprivate"
     assert got["seam_owners"][-1] == "fakeprivate" and got["sizes"]
     assert got["family"] == "fakeprivate" and got["gated_by"] == "fakeprivate"
-    assert "fakeprivate" not in got["hyreco"] and "fakeprivate" in got["anhir"]
+    assert "fakeprivate" in got["cohort"]
     assert got["scope"] == "pair" and got["variants"] == ["fakeprivate_r2"]
     assert got["cost"] == 2.5
 

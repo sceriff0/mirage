@@ -440,9 +440,11 @@ def test_list_sizes_counts_cases_patients_and_the_largest_patient(tmp_path, caps
         == 0
     )
     assert capsys.readouterr().out.split() == ["4", "2", "3"]
-    # a dataset with no prepared case: three zeros
+    # a cases folder with no prepared case: three zeros
     assert (
-        cli.main(["list", "--cases", str(root), "--dataset", "hyreco_a", "--sizes"])
+        cli.main(
+            ["list", "--cases", str(tmp_path / "none"), "--dataset", "multiplex", "--sizes"]
+        )
         == 0
     )
     assert capsys.readouterr().out.split() == ["0", "0", "0"]

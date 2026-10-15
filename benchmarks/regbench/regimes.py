@@ -75,10 +75,6 @@ REGIMES = {
 
 DATASET_REGIME = {
     "multiplex": "cyclic_if",
-    "hyreco_a": "bf_same",
-    "hyreco_b": "bf_same",
-    "anhir_tune": "bf_consecutive",
-    "anhir": "bf_consecutive",
 }
 
 

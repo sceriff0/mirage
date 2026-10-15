@@ -15,7 +15,7 @@ from benchmarks.regbench import DATASETS
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 RB = ROOT / "benchmarks" / "regbench"
-REMOVED = ("synthetic", "semisynth")
+REMOVED = ("synthetic", "semisynth", "anhir", "anhir_tune", "hyreco_a", "hyreco_b")
 
 sys.path.insert(0, str(ROOT / "tests"))
 strip_line_comment = importlib.import_module("ci_actions").strip_line_comment
@@ -54,3 +54,12 @@ def test_no_launcher_or_cli_choice_names_a_removed_dataset(name):
 def test_the_known_truth_scorer_is_gone():
     assert not (RB / "truth.py").exists()
     assert not (RB / "truth_spec.json").exists()
+
+
+@pytest.mark.parametrize("module", ["challenge", "landmarks", "notrun"])
+def test_the_external_scorers_are_gone(module):
+    assert not (RB / f"{module}.py").exists()
+
+
+def test_no_benchmarks_anhir_directory():
+    assert not (ROOT / "benchmarks" / "anhir").exists()

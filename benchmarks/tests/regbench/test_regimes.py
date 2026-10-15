@@ -34,8 +34,8 @@ def test_brightfield_regimes_have_three_levels():
 
 
 def test_each_dataset_maps_to_a_regime():
-    from benchmarks.regbench import ALL_DATASETS
-    for d in ALL_DATASETS:
+    from benchmarks.regbench import DATASETS
+    for d in DATASETS:
         assert rg.regime_of(d) in rg.REGIMES
 
 

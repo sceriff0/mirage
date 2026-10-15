@@ -445,7 +445,7 @@ GPU_MEMORY_ERRORS = ("CUDA out of memory",)
 #                  whose region is in micrometres) on a case without one: the dataset's
 #                  gap, not a method failure
 #   proxy_mismatch the adapter refused a `proxy=grey` run on a case prepared with
-#                  another proxy (HyReCo with `--proxy haematoxylin`): its name would
+#                  another proxy: its name would
 #                  lie about its input; a prepare-time choice, not a method failure
 CAUSES = (
     "exception",

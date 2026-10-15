@@ -71,8 +71,8 @@ WHOSE = {
     "identical_overlap": BENCHMARK,
     # a prepare-time choice of the benchmark, not a method failure
     "reduced_proxy": BENCHMARK,
-    # a level that needs a pixel size, on a case without one (STARE's CLAHE on
-    # ANHIR's mammary glands)
+    # a level that needs a pixel size, on a case without one (STARE's CLAHE on a
+    # case whose pixel size is not established)
     "no_pixel_size": BENCHMARK,
     # a `proxy=grey` run on a case prepared with another proxy: its name would lie
     "proxy_mismatch": BENCHMARK,
