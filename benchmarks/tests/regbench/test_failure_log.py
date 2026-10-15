@@ -110,6 +110,9 @@ EXPECTED = {
     "benchmark": ("benchmark_points", "benchmark", "lost"),
     "infrastructure": ("register", "infrastructure", "lost"),
     "not_submitted": ("register", "launcher", "lost"),
+    # the benchmark's own doing, found while the method was registering
+    "identical_overlap": ("register", "benchmark", "lost"),
+    "reduced_proxy": ("register", "benchmark", "lost"),
 }
 
 

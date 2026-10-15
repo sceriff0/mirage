@@ -454,3 +454,26 @@ def test_selfcheck_is_ok(tmp_path, monkeypatch):
         assert (
             m0.shape == (3, 3) and np.isfinite(m0).all()
         )  # what an anchored row reads
+
+
+def test_a_preprocessing_row_on_a_reduced_proxy_is_the_benchmarks_refusal(
+    synthetic_cases, tmp_path
+):
+    """HyReCo prepared with `--reduce 2` lists the `haem` cells; the adapter refuses them,
+    and the refusal is the benchmark's (`reduced_proxy`), not a failure of STARE."""
+    from benchmarks.regbench import failure_log, resources
+
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = dataclasses.replace(
+        case, extra={**case.extra, "settings": {"proxy": "grey", "reduce": 2}}
+    )
+    with pytest.raises(ValueError, match="reduced proxy") as err:
+        adapter.Round(case, tmp_path / "r", {"proxy": "haem"})
+    assert resources.classify_error(err.value) == "reduced_proxy"
+    out = tmp_path / "out"
+    methods.run_group("stare", [case], out, {"proxy": "haem"}, label="stare_haem")
+    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
+    assert runs and all(r["ok"] is False for r in runs)
+    assert {r["cause"] for r in runs} == {"reduced_proxy"}
+    assert failure_log.WHOSE["reduced_proxy"] == failure_log.BENCHMARK
+    assert "reduced_proxy" in resources.NOT_THE_METHOD

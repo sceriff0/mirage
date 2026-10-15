@@ -436,6 +436,11 @@ GPU_MEMORY_ERRORS = ("CUDA out of memory",)
 #                  (moving the nuclei through the map): not the method's failure
 #   infrastructure the scheduler lost the attempt (node failure, preemption, a cancelled
 #                  job, a task that never started): not the method's failure
+#   identical_overlap  ASHLAR's error metric raised on pixel-identical overlaps, which
+#                  exist only because the benchmark cuts its tiles from a stitched slide
+#                  (ruling R6): not the method's failure
+#   reduced_proxy  the adapter refused a preprocessing row on a reduced proxy: a
+#                  prepare-time choice of the benchmark, not a method failure
 CAUSES = (
     "exception",
     "killed",
@@ -453,11 +458,20 @@ CAUSES = (
     # the benchmark's own step failed or was ended, and not for memory: moving the
     # points, or the last job of a round whose registration ran in other jobs
     "benchmark",
+    "identical_overlap",
+    "reduced_proxy",
 )
 # more memory is the remedy: the unit goes up a rung (regbench.ladder)
 MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
 # counted apart from a method's failures in every table that counts failures
-NOT_THE_METHOD = ("infrastructure", "benchmark_oom", "not_submitted", "benchmark")
+NOT_THE_METHOD = (
+    "infrastructure",
+    "benchmark_oom",
+    "not_submitted",
+    "benchmark",
+    "identical_overlap",
+    "reduced_proxy",
+)
 
 
 def classify_text(text):

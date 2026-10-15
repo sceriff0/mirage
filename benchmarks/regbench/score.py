@@ -198,9 +198,18 @@ CAUSES = (
     "infrastructure",
     "not_submitted",
     "benchmark",
-    "not_run",
+    "identical_overlap",
+    "reduced_proxy",
+    "not_run",  # last: `CAUSES[:-1]` below names the causes of a launch that ran
 )
-NOT_THE_METHOD = ("benchmark_oom", "infrastructure", "not_submitted", "benchmark")
+NOT_THE_METHOD = (
+    "benchmark_oom",
+    "infrastructure",
+    "not_submitted",
+    "benchmark",
+    "identical_overlap",
+    "reduced_proxy",
+)
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every
 # method; it is counted and named, and its row stays in cells.csv. "impute": it is

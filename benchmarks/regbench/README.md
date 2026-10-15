@@ -206,7 +206,7 @@ primary rows:
 - **HyReCo prepared with `--reduce 2`.** `runs_for` has no case data, so it still lists the
   `haem` / `grey_smooth` proxy cells; on a reduced proxy the adapter refuses them ("the
   preprocessing row is not defined on a reduced proxy") and each pair records that refusal as
-  its failure. The refusal, not a listing rule, keeps them from running; prepare HyReCo
+  its failure, with the benchmark's cause `reduced_proxy`. The refusal, not a listing rule, keeps them from running; prepare HyReCo
   without `--reduce` to run them.
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
@@ -342,6 +342,8 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 | `gpu_oom`, `timeout` | as named | no | the method's |
 | `killed` | the process died, and the scheduler's end state for its task names no cause (`FAILED`, `COMPLETED`) | no | the method's |
 | `killed`, no end state | the process died and the scheduler's accounting named no end state for its task within the wait (`REGBENCH_ACCT_WAIT_S`) | not as a memory cause: the `climb` task runs the unit once more at its own rung, and `cause_from` says so | the method's while it stands |
+| `identical_overlap` | ASHLAR's error metric raised `correlation > total_amplitude` on pixel-identical overlaps, which exist only because the benchmark cuts tiles from a stitched slide | no | NOT the method's |
+| `reduced_proxy` | the STARE adapter refused a preprocessing row on a reduced proxy (HyReCo prepared with `--reduce 2`): a prepare-time choice of the benchmark | no | NOT the method's |
 | `benchmark_oom` | the BENCHMARK's own lines ran out of memory with the clock stopped (the lattice, the arrays and the files around the method's point mapping; never the mapping itself) | yes | NOT the method's |
 | `benchmark` | the benchmark's own lines around the method's point mapping failed for another reason | no | NOT the method's |
 | `not_submitted` | a stage job of a registration in several jobs never reached the queue, or was left without the attempt the pipeline would have given it next (the tile submitter was refused or did not finish) | no | NOT the method's (the launcher's) |
@@ -1729,7 +1731,7 @@ code can write against it, so a new cause cannot be added unclassified):
 | whose | causes | means |
 |---|---|---|
 | `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its point mapping or its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting names a cause (memory, time, a lost node) or the task's script noted a Python ended by signal 9 |
-| `benchmark` | `benchmark_oom`, `benchmark`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
+| `benchmark` | `benchmark_oom`, `benchmark`, `identical_overlap`, `reduced_proxy`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
 | `infrastructure` | `infrastructure`, `selfcheck_lost` | the scheduler or the node lost the attempt |
 | `launcher` | `gate_blocked`, `dropped_row`, `not_run`, `not_submitted` | a gate kept the run from starting, a row was dropped, the unit was never submitted, a stage job never reached the queue |
 
@@ -4017,7 +4019,17 @@ per pixel, and the overlap is the owner's ruling (`ashlar.TILE`, `ashlar.OVERLAP
   catches `ProcessingError` only (`scripts/ashlar.py:231`), and only the reference cycle's
   edge alignment can raise (`:261-262`). So the two clean rows fail together, per patient,
   where they fail; the adapter catches the exception and the patient's rows carry its
-  message (`info["ashlar_raise"]`). A memory error is not caught: it stays `oom`.
+  message (`info["ashlar_raise"]`) and the cause `identical_overlap` (the benchmark's: the
+  identical overlaps exist only because it cuts tiles from a stitched slide). Any other
+  `RuntimeError` stays `exception`; a memory error is not caught: it stays `oom`.
+- *Silent fallbacks* are flagged, never blocking. `info["ashlar_warnings"]` holds ASHLAR's
+  `DataWarning`s; `fallback_stage_positions` is true when the reference stitch printed
+  "Could not align enough edges, proceeding anyway with original stage positions."
+  (`reg.py:698-699`, `fit_model`), `zero_overlap` when it printed "No tiles overlap, ..."
+  or "Some neighboring tiles have zero overlap." (`reg.py:545-547`, `check_overlaps`).
+  Per round, `discard_frac` is the share of the cycle's tiles that ASHLAR replaced by its
+  linear model, and `cycle_fully_modelled` is true at 1.0: the cycle's own alignment
+  decided nothing.
 - *The anchor* (`affine=stare`): each moving tile is cut, unrotated and uninterpolated,
   where STARE's rigid matrix (`info["m0"]` in `<out>/stare/<dataset>/<case>/run.json`) puts
   the matching reference tile's centre; ASHLAR is told the regular grid. A round whose

@@ -66,6 +66,11 @@ WHOSE = {
     "writer_oom": METHOD,
     "benchmark_oom": BENCHMARK,
     "benchmark": BENCHMARK,  # its own step failed or was ended, not for memory
+    # pixel-identical overlaps exist only because the benchmark cuts tiles from a
+    # stitched slide (ruling R6)
+    "identical_overlap": BENCHMARK,
+    # a prepare-time choice of the benchmark, not a method failure
+    "reduced_proxy": BENCHMARK,
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended

@@ -556,6 +556,13 @@ def stage_dir_of(out, label, case):
     return result_dir(out, variant_names("stare", label)[-1], case) / "stages"
 
 
+class ReducedProxy(ValueError):
+    """A preprocessing row asked of a reduced proxy: the benchmark prepared the dataset
+    with ``--reduce``, so the run cannot exist. The benchmark's cause, not the method's."""
+
+    regbench_cause = "reduced_proxy"
+
+
 class Round:
     """One moving round: its parameters, its stage commands, and its job records."""
 
@@ -570,7 +577,7 @@ class Round:
         self.inputs = None
         if self.candidate:
             if slides(case)[3] != 1:
-                raise ValueError(
+                raise ReducedProxy(
                     f"{case.case_id}: the preprocessing row is not defined on a "
                     "reduced proxy"
                 )

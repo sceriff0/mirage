@@ -320,6 +320,8 @@ def test_discards_are_counted_once_each_by_a_fixed_precedence():
         "discard_over_budget": 1,
         "n_tiles": 6,
         "n_discarded": 3,
+        "discard_frac": 0.5,
+        "cycle_fully_modelled": False,
         "discard_rebuild_matches": True,
     }
     # an infinite error far over the budget is still counted once, as infinite
@@ -1061,7 +1063,7 @@ def test_an_ashlar_exception_fails_the_patient_with_its_message(tmp_path, pair, 
     assert done == {"P1_r1": [], "P1_r2": []}
     for case in cases:
         run = run_json(out, "ashlar_clean", case)
-        assert not run["ok"] and run["cause"] == "exception"
+        assert not run["ok"] and run["cause"] == "identical_overlap"
         assert run["error"] == f"RuntimeError: {fa.RAISE_TEXT}"
         assert run["info"]["ashlar_raise"] == run["error"]
         assert run["info"]["noise"] == "none" and "retile_s" in run["info"]
@@ -1271,3 +1273,83 @@ def test_edge_stitches_are_compared_only_at_the_same_tiles_and_shift(tmp_path):
         call("affine_ashlar_clean", 15.0, edge_a) is True
     )  # same shift, plain vs anchored
     assert call("ashlar_astare_n0_s60", 60.0, edge_a) is False  # same shift, differs
+
+
+# ── failure causes and silent fallbacks (C4) ──────────────────────────────────
+def test_identical_overlap_is_the_benchmarks(tmp_path, pair, small):
+    """ASHLAR's `correlation > total_amplitude` (utils.py:84-86) on pixel-identical
+    overlaps: the benchmark's tiles, not the method's failure."""
+    from benchmarks.regbench import failure_log, resources, score
+
+    fa.configure(raise_in="edge")
+    cases = patient(tmp_path, pair)
+    methods.run_group(
+        "ashlar", cases, tmp_path / "out", {"noise": "none"}, label="ashlar_clean"
+    )
+    run = run_json(tmp_path / "out", "ashlar_clean", cases[0])
+    assert run["ok"] is False and run["cause"] == "identical_overlap"
+    assert failure_log.WHOSE["identical_overlap"] == failure_log.BENCHMARK
+    assert "identical_overlap" in resources.NOT_THE_METHOD
+    assert score.CAUSES[-1] == "not_run" and "identical_overlap" in score.CAUSES[:-1]
+
+
+def test_another_runtime_error_stays_the_methods(tmp_path, pair, small, monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("something else")
+
+    monkeypatch.setattr(original, "run_ashlar", boom)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    assert run_json(tmp_path / "out", "ashlar", cases[0])["cause"] == "exception"
+
+
+def test_the_fallback_to_stage_positions_is_flagged(tmp_path, pair, small):
+    text = (
+        "Could not align enough edges, proceeding anyway with original stage positions."
+    )
+    fa.configure(warn=text)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    run = run_json(tmp_path / "out", "ashlar", cases[0])
+    assert run["ok"] is True
+    assert run["info"]["fallback_stage_positions"] is True
+    assert run["info"]["zero_overlap"] is False
+    assert run["info"]["ashlar_warnings"] == [text]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "No tiles overlap, attempting alignment anyway.",
+        "Some neighboring tiles have zero overlap.",
+    ],
+)
+def test_a_zero_overlap_warning_is_flagged(tmp_path, pair, small, text):
+    fa.configure(warn=text)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    info = run_json(tmp_path / "out", "ashlar", cases[0])["info"]
+    assert info["zero_overlap"] is True and info["fallback_stage_positions"] is False
+
+
+def test_no_warning_leaves_the_flags_false(tmp_path, pair, small):
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    info = run_json(tmp_path / "out", "ashlar", cases[0])["info"]
+    assert info["ashlar_warnings"] == []
+    assert info["fallback_stage_positions"] is False and info["zero_overlap"] is False
+
+
+def test_a_fully_modelled_cycle_is_flagged(tmp_path, pair, small):
+    fa.configure(layer_errors=lambda cycle, n: np.full(n, np.inf))
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    info = run_json(tmp_path / "out", "ashlar", cases[0])["info"]
+    assert info["discard_frac"] == 1.0 and info["cycle_fully_modelled"] is True
+
+
+def test_a_cycle_with_some_tiles_kept_is_not_fully_modelled(tmp_path, pair, small):
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    info = run_json(tmp_path / "out", "ashlar", cases[0])["info"]
+    assert info["discard_frac"] < 1.0 and info["cycle_fully_modelled"] is False

@@ -192,6 +192,19 @@ def _truthy(v):
     return str(v).lower() in ("1", "true", "yes", "on")
 
 
+# `ashlar/utils.py:84-86` (v1.20.0): the metric's own raise on pixel-identical overlaps
+IDENTICAL_OVERLAP = "correlation > total_amplitude"
+# `ashlar/reg.py:698-699` (`EdgeAligner.fit_model`): the reference stitch found
+# too few edges and kept the metadata (stage) positions
+FALLBACK_WARNING = "Could not align enough edges"
+# `reg.py:545` and `reg.py:547` (`EdgeAligner.check_overlaps`)
+ZERO_OVERLAP_WARNINGS = ("No tiles overlap", "zero overlap")
+
+
+def _identical_overlap(exc):
+    return isinstance(exc, RuntimeError) and IDENTICAL_OVERLAP in str(exc)
+
+
 def _error(exc):
     return f"{type(exc).__name__}: {exc}"
 
@@ -478,6 +491,14 @@ def discards(layer, edge, max_shift_px):
         "discard_over_budget": int((over & ~zero & ~infinite).sum()),
         "n_tiles": int(len(meta)),
         "n_discarded": int(np.asarray(layer["discard"], dtype=bool).sum()),
+        # every tile of the cycle was replaced by the reference stitch's linear model:
+        # the cycle's own alignment decided nothing
+        "discard_frac": float(np.asarray(layer["discard"], dtype=bool).mean())
+        if len(meta)
+        else 0.0,
+        "cycle_fully_modelled": bool(
+            len(meta) and np.asarray(layer["discard"], dtype=bool).all()
+        ),
         # the rebuilt flag against the one ASHLAR kept: False means this reading is wrong
         "discard_rebuild_matches": bool(
             np.array_equal(combined, np.asarray(layer["discard"], dtype=bool))
@@ -802,7 +823,11 @@ def register_group(cases, work, opts):
             # clean tiles' RuntimeError first of all, fails the patient with its message
             if resources.classify_error(exc) != "exception":
                 raise
-            ready = failed(_error(exc), ashlar_raise=_error(exc))
+            ready = failed(
+                _error(exc),
+                ashlar_raise=_error(exc),
+                **({"cause": "identical_overlap"} if _identical_overlap(exc) else {}),
+            )
         else:
             mon.pause()
             write_s = time.perf_counter() - seen.get("write_t0", time.perf_counter())
@@ -864,6 +889,11 @@ def _results(
     shared = {
         **base,
         "warnings": warned,
+        # ASHLAR's DataWarnings, and the two that mean it silently did something else:
+        # the reference stitch kept the stage positions; tiles that do not overlap
+        "ashlar_warnings": list(warned),
+        "fallback_stage_positions": any(FALLBACK_WARNING in m for m in warned),
+        "zero_overlap": any(z in m for m in warned for z in ZERO_OVERLAP_WARNINGS),
         "edge_s": edge_s,
         "layer_s": layer_s,
         "edge_positions_identical": identical,
