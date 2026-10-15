@@ -217,6 +217,17 @@ def _read_tile(row, illum, rows=slice(None), cols=slice(None)):
 _FROM_CYCLE = object()
 
 
+def placed_origins(rows, positions) -> np.ndarray:
+    """``(n, 2)`` int64 (x, y): where :func:`write_mosaic` pastes each of ``rows`` -- the
+    positions rounded to whole pixels, then moved to a zero origin. The ONE definition of
+    "on its pixels": nuclei carried into the mosaic use it too (``stitching.py``)."""
+    xy = np.array([positions[r.tile] for r in rows], dtype=float)
+    if not np.isfinite(xy).all():
+        raise ValueError("non-finite tile position")
+    o = np.rint(xy).astype(np.int64)
+    return o - o.min(axis=0)
+
+
 def write_mosaic(cycle: tiles.Cycle, positions, out, *, out_tile: int = OUT_TILE,
                  illumination=_FROM_CYCLE) -> Path:
     """The cycle's mosaic at ``positions`` (``tile -> (x, y)`` px) as a tiled, one-channel
@@ -233,11 +244,7 @@ def write_mosaic(cycle: tiles.Cycle, positions, out, *, out_tile: int = OUT_TILE
         extra = sorted(set(positions) - ids)
         raise ValueError(f"positions lack tile(s) {lack} / name tile(s) the cycle lacks {extra}")
     illum = Illumination.of(cycle) if illumination is _FROM_CYCLE else illumination
-    xy = np.array([positions[r.tile] for r in rows], dtype=float)
-    if not np.isfinite(xy).all():
-        raise ValueError("non-finite tile position")
-    o = np.rint(xy).astype(np.int64)
-    o -= o.min(axis=0)
+    o = placed_origins(rows, positions)
     hw = np.array([[r.w, r.h] for r in rows], np.int64)
     boxes = np.concatenate([o, o + hw], axis=1)  # x0, y0, x1, y1
     out_h, out_w = int(boxes[:, 3].max()), int(boxes[:, 2].max())
