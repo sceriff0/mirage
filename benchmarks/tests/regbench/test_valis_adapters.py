@@ -483,11 +483,20 @@ def test_one_reference_and_one_name_per_slide(tmp_path, pair):
     ]
     with pytest.raises(ValueError, match="2 reference slides"):
         vp.patient_slides(two_refs)
+    # two different files of one basename are placed apart (parent folder in front) ...
     clash = tmp_path / "elsewhere" / "round1.ome.tif"
     shutil.copyfile(pair["moving"], clash)
     same_name = [cases[0], case_of(tmp_path / "c3", pair, "P1_r8", clash)]
-    with pytest.raises(ValueError, match="would both be the VALIS slide 'round1'"):
-        vp.patient_slides(same_name)
+    assert vp.patient_slides(same_name)[1]["P1_r8"] == str(clash)
+    # ... and refused only where even that leaves two of one VALIS name
+    twin = tmp_path / "x" / "elsewhere" / "round1.ome.tif"
+    twin.parent.mkdir(parents=True)
+    shutil.copyfile(pair["moving"], twin)
+    cases3 = [*same_name, case_of(tmp_path / "c4", pair, "P1_r7", twin)]
+    with pytest.raises(
+        ValueError, match="would both be the VALIS slide 'elsewhere_round1'"
+    ):
+        vp.patient_slides(cases3)
 
 
 def test_slides_are_linked_or_copied_never_symlinked(tmp_path, pair, monkeypatch):

@@ -457,7 +457,9 @@ def test_subset_b_is_prepared_with_the_tuning_sets_settings(tmp_path, data):
     assert case.extra["settings"] == {
         "proxy": "haematoxylin",
         "reduce": 2,
-        "version": 1,
+        "version": hyreco.SETTINGS_VERSION,
+        "pixel_size_um": None,
+        "keep_shared_ids": False,
     }
     assert case.ref_nuclear.endswith("HE/8.haematoxylin.r2.ome.tif")
     assert case.extra["proxy_hw"]["ref"] == [48, 64] and case.ref_hw == list(HW)
@@ -518,12 +520,17 @@ def test_keep_shared_ids_puts_the_four_back(tmp_path, data, prepared):
         index=hyreco.SUBSET_B_IDS.index("29"),
         keep_shared_ids=True,
     )
+    # the flag is a setting of the A/B pair: B may not use it unless A carries it
+    with pytest.raises(SystemExit, match="keep_shared_ids"):
+        hyreco.prepare(b)
+    tuned = tmp_path / "tuned"
+    assert hyreco.prepare(args(tuned, "a", data.a, keep_shared_ids=True)) == 0
+    b.settings_from = str(tuned)
     assert hyreco.prepare(b) == 0
     (case,) = list_cases(tmp_path, "hyreco_b")
     assert case.case_id == "29" and case.extra["report_set"] is True
     assert case.extra["shared_id_with_subset_a"] is True
-    with pytest.raises(SystemExit, match="belongs to --subset b"):
-        hyreco.prepare(args(tmp_path, "a", data.a, keep_shared_ids=True))
+    assert case.extra["settings"]["keep_shared_ids"] is True
 
 
 def test_a_refused_case_makes_prepare_fail_and_the_others_are_kept(tmp_path, capsys):
@@ -656,11 +663,12 @@ def test_a_run_that_failed_or_never_ran_is_a_row_at_the_unregistered_pose(tmp_pa
     out = tmp_path / "out"
     assert methods.run_case(shifter(4.0), cases[0], out) == ["m"]
     got = landmarks.score(tmp_path / "cases", out, "hyreco_a", expected=["m", "ghost"])
+    # never started: the pair is listed apart and is in no median of the method
     missing = row(got["pairs"], method="m", case_id="108")
-    assert missing["imputed_initial"] is True and missing["cause"] == "not_run"
-    assert row(got["summary"], method="m")["n_ok"] == 1
-    ghost = row(got["summary"], method="ghost")
-    assert ghost["n_ok"] == 0 and ghost["n_landmarks"] == 8
+    assert missing["not_run"] is True and missing["cause"] == "not_run"
+    s = row(got["summary"], method="m")
+    assert (s["n_ok"], s["n_pairs"], s["n_not_run"], s["n_landmarks"]) == (1, 1, 1, 2)
+    assert not [r for r in got["summary"] if r["method"] == "ghost"]
     assert row(got["failures"], method="ghost")["rounds_not_run"] == 2
 
 
@@ -688,8 +696,10 @@ def test_a_point_a_method_could_not_map_counts_against_it(tmp_path):
 def test_the_report_set_leaves_out_the_shared_ids_and_all_pairs_keeps_them(tmp_path):
     spec = (("29", 2, 10.0), ("8", 6, 1.0), ("31", 6, 1.0))
     cases, shifts = crafted(tmp_path, "hyreco_b", spec)
+    tuned = tmp_path / "tuned"  # the prepared tuning set the report set names
+    crafted(tuned, "hyreco_a", tuple((i, 2, 1.0) for i in hyreco.SUBSET_A_IDS))
     for case in cases:  # as `prepare --subset b` records it
-        case.extra["settings_from"] = str(tmp_path / "tuned")
+        case.extra["settings_from"] = str(tuned / "cases")
         write_case(tmp_path / "cases", case, *[load_points(case)["truth_mov"]] * 2)
     out = run_crafted(tmp_path, cases, shifts)
     got = landmarks.score(tmp_path / "cases", out, "hyreco_b")
@@ -722,7 +732,7 @@ def test_the_tables_are_the_sets_own(tmp_path):
             "hyreco_resources.csv",
             "hyreco_summary_resources.csv",
             "hyreco_excluded.csv",
-        ]
+        ]  # hyreco_not_run.csv only when there is something in it
     )
     assert not list((out / "tables").glob("*.csv"))  # none of the cohort's tables
     text = (tables / "summary.md").read_text()
@@ -860,7 +870,7 @@ def test_the_cli_scores_an_external_set_into_its_own_tables(tmp_path, capsys):
     assert cli.main(["score", *argv, "--dataset", "hyreco_a"]) == 0
     text = (out / "tables" / "hyreco_a" / "summary.md").read_text()
     # the set's own expected rows: VALIS 1.2.0's are "not run", ASHLAR's are not rows
-    assert "| valis120_hires | 0 | 2 |" in text and "| ashlar |" not in text
+    assert "| valis120_hires | not_run |" in text and "| ashlar |" not in text
     assert not (out / "tables" / "summary.md").exists()
     with pytest.raises(SystemExit, match="tissue: not computed for hyreco_a"):
         cli.main(["tissue", *argv, "--dataset", "hyreco_a"])
@@ -1167,3 +1177,201 @@ def test_valis120_is_given_the_original_slides_of_a_brightfield_case(
         assert row(scored["pairs"], method="valis120")["frame"] == "moving"
     finally:
         fv.configure()
+
+
+# ── defect 1: HE/29.tif and PHH3/29.tif share a basename ──────────────────────
+def _same_basename_case(tmp_path):
+    root = tmp_path / "HyReCo"
+    write_pair(root, "29")
+    assert (
+        hyreco.prepare(args(tmp_path / "cases", "a", root, allow_incomplete=True)) == 0
+    )
+    (case,) = list_cases(tmp_path / "cases", "hyreco_a")
+    assert Path(case.ref_image).name == Path(case.mov_image).name == "29.tif"
+    return case
+
+
+def test_two_slides_of_one_basename_are_placed_apart(tmp_path):
+    from benchmarks.regbench.methods import _valis_points as vp
+
+    case = _same_basename_case(tmp_path)
+    ref, moving = vp.patient_slides([case])  # no refusal: they are different files
+    assert (ref, moving) == (case.ref_image, {"29": case.mov_image})
+    placed, how = vp.place_slides([ref, *moving.values()], tmp_path / "in")
+    a, b = Path(placed[ref]), Path(placed[case.mov_image])
+    assert a != b and a.name != b.name and a.is_file() and b.is_file()
+    assert vp.slide_name(a) != vp.slide_name(b)  # what VALIS will call them
+    assert os.stat(a).st_ino == os.stat(ref).st_ino
+    assert os.stat(b).st_ino == os.stat(case.mov_image).st_ino
+    assert set(how) == {a.name, b.name}
+    assert vp.slides_source(placed) == {a.name: ref, b.name: case.mov_image}
+    # a TRUE duplicate (one file twice) is still refused, and so is a moving slide
+    # that is the reference
+    twin = dataclasses.replace(case, case_id="30", group="30")
+    twin = dataclasses.replace(twin, mov_image=case.ref_image)
+    with pytest.raises(ValueError, match="is the reference slide"):
+        vp.patient_slides([twin])
+
+
+def test_valis_is_given_both_same_basename_slides_and_records_where_they_came_from(
+    tmp_path, monkeypatch
+):
+    from . import fake_valis as fv
+
+    monkeypatch.setenv("MPLCONFIGDIR", os.environ.get("MPLCONFIGDIR", "/tmp/mpl"))
+    fv.install(monkeypatch.setitem)
+    try:
+        case = _same_basename_case(tmp_path)
+        out = tmp_path / "out"
+        done = methods.run_group("valis", [case], out, {"workers": 1}, label="valis120")
+        # (the stand-in's writer cannot write a 3-band slide: the rigid result is the
+        # one that registers; the placement is the same record on all three)
+        assert "valis120_rigid" in done["29"]
+        run = json.loads(
+            (result_dir(out, "valis120_rigid", case) / "run.json").read_text()
+        )
+        source = run["info"]["slides_source"]
+        assert sorted(source.values()) == sorted([case.ref_image, case.mov_image])
+        assert len(source) == 2 and set(run["info"]["slides_placed"]) == set(source)
+    finally:
+        fv.configure()
+
+
+# ── defect 2: the A/B split covers every setting ──────────────────────────────
+def test_the_settings_hash_covers_the_pixel_size_and_the_shared_ids_flag():
+    base = hyreco.make_settings()
+    assert set(base) == {
+        "proxy",
+        "reduce",
+        "version",
+        "pixel_size_um",
+        "keep_shared_ids",
+    }
+    other = [
+        hyreco.make_settings(pixel_size_um=0.243),
+        hyreco.make_settings(keep_shared_ids=True),
+    ]
+    hashes = {hyreco.settings_hash(s) for s in [base, *other]}
+    assert len(hashes) == 3
+
+
+def test_subset_b_may_not_choose_a_pixel_size_or_the_shared_ids_alone(
+    tmp_path, data, prepared
+):
+    b = dict(settings_from=str(prepared), index=0)
+    with pytest.raises(SystemExit, match="pixel_size_um"):
+        hyreco.prepare(args(tmp_path / "x", "b", data.b, pixel_size_um=0.243, **b))
+    with pytest.raises(SystemExit, match="keep_shared_ids"):
+        hyreco.prepare(args(tmp_path / "x", "b", data.b, keep_shared_ids=True, **b))
+    # the same values on both sides are accepted
+    tuned = tmp_path / "tuned"
+    assert hyreco.prepare(args(tuned, "a", data.a, pixel_size_um=0.243)) == 0
+    same = args(
+        tmp_path / "y",
+        "b",
+        data.b,
+        pixel_size_um=0.243,
+        settings_from=str(tuned),
+        index=0,
+    )
+    assert hyreco.prepare(same) == 0
+    (case,) = list_cases(tmp_path / "y", "hyreco_b")
+    assert case.extra["settings"]["pixel_size_um"] == 0.243
+    assert case.pixel_size_um == 0.243
+
+
+def test_scoring_a_report_set_without_its_tuning_folder_is_refused(tmp_path, data):
+    tuned, cases = tmp_path / "tuned", tmp_path / "cases"
+    assert hyreco.prepare(args(tuned, "a", data.a)) == 0
+    b = args(cases, "b", data.b, settings_from=str(tuned), index=0)
+    assert hyreco.prepare(b) == 0
+    import shutil
+
+    shutil.rmtree(tuned)
+    with pytest.raises(SystemExit, match="tuning set .* is not there"):
+        landmarks.score(cases, tmp_path / "out", "hyreco_b")
+
+
+# ── defect 3: a run that never started is not the method's failure ────────────
+class Reverse:
+    """A reference -> moving pair method that fails on the named cases."""
+
+    SCOPE = "pair"
+
+    def __init__(self, name, fail=()):
+        self.NAME, self.VARIANTS, self.fail = name, (name,), set(fail)
+
+    def register(self, case, work, opts):
+        if case.case_id in self.fail:
+            raise RuntimeError("no registration for this pair")
+        yield self.NAME, PointMap(lambda xy: np.asarray(xy, float), REF_TO_MOV), {}
+
+
+def test_a_gate_blocked_or_never_started_pair_is_listed_apart(tmp_path):
+    cases, _ = crafted(tmp_path)
+    out = tmp_path / "out"
+    for case in cases:
+        methods.run_case(shifter(0.0, name="stare"), case, out)
+        methods.run_case(shifter(0.0, name="valis120_hires"), case, out)
+    methods.run_case(shifter(0.0, name="stare_x"), cases[0], out)  # 108 never ran
+    gates = out / "logs" / "gates"
+    gates.mkdir(parents=True)
+    (gates / "valis120_hires.tsv").write_text(
+        "valis120_hires\tinconsistent\t-\t1\t-\t-\n"
+    )
+    got = landmarks.score(
+        tmp_path / "cases",
+        out,
+        "hyreco_a",
+        expected=["stare", "valis120_hires", "stare_x"],
+        gates=gates,
+    )
+    lost = {(r["method"], r["cause"]): r for r in got["not_run"]}
+    assert lost[("valis120_hires", "gate_blocked")]["n_pairs"] == 2
+    assert lost[("stare_x", "not_run")]["n_pairs"] == 1
+    assert (
+        "blocked by its selfcheck gate"
+        in lost[("valis120_hires", "gate_blocked")]["why"]
+    )
+    # in no median, and not an imputed failure
+    assert not [r for r in got["summary"] if r["method"] == "valis120_hires"]
+    x = row(got["summary"], method="stare_x", set="tuning")
+    assert (x["n_pairs"], x["n_not_run"], x["n_ok"]) == (1, 1, 1)
+    assert row(got["summary"], method="stare", set="tuning")["n_not_run"] == 0
+    assert all(p["method"] != "valis120_hires" or p["not_run"] for p in got["pairs"])
+    kept = {(p["method"], p["case_id"]) for p in got["points"]}
+    assert not {m for m, _ in kept} & {"valis120_hires"}
+    assert ("stare_x", "108") not in kept
+    tables = Path(got["tables"])
+    assert "valis120_hires" in (tables / "hyreco_not_run.csv").read_text()
+    text = (tables / "summary.md").read_text()
+    assert "## Not run, for a reason that is not the method's" in text
+    assert "| valis120_hires | gate_blocked |" in text
+
+
+def test_a_failed_pairs_frame_is_never_defaulted_to_the_reference(tmp_path):
+    cases, _ = crafted(tmp_path)
+    out = tmp_path / "out"
+    for case in cases:
+        methods.run_case(Reverse("reverse", fail={"108"}), case, out)
+        methods.run_case(Reverse("dead", fail={"29", "108"}), case, out)
+    got = landmarks.score(tmp_path / "cases", out, "hyreco_a")
+    failed = row(got["pairs"], method="reverse", case_id="108")
+    assert failed["imputed_initial"] is True and failed["not_run"] is False
+    assert failed["frame"] == "moving"  # the row's other pair registered the other way
+    dead = {r["frame"] for r in got["pairs"] if r["method"] == "dead"}
+    assert dead == {landmarks.UNKNOWN_FRAME}
+    # a method's own failure counts, at the unregistered pose
+    s = row(got["summary"], method="dead", set="tuning")
+    assert (s["n_pairs"], s["n_ok"], s["n_not_run"]) == (2, 0, 0)
+
+
+def test_the_not_run_causes_agree_with_whose():
+    from benchmarks.regbench import failure_log, notrun, resources
+
+    attempts = (*resources.CAUSES, "not_run", "gate_blocked")
+    for cause in attempts:
+        owner = failure_log.WHOSE[cause]
+        if owner in (failure_log.LAUNCHER, failure_log.INFRASTRUCTURE):
+            assert cause in notrun.NOT_RUN_CAUSES, cause
+    assert landmarks.NOT_RUN_CAUSES is notrun.NOT_RUN_CAUSES  # one definition

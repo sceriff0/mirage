@@ -267,6 +267,7 @@ def register_group(cases, work, opts):
         "workers_seen": int(valtils.get_ncpus_available()),
         "constructor": {k: _jsonable(v) for k, v in kwargs.items()},
         "slides_placed": how,
+        "slides_source": vp.slides_source(placed),
         "place_s": place_s,  # the benchmark's own, clock paused: in no cost
         "jvm_cache": jvm_cache,
         "jvm_heap_gb": heap,
@@ -308,7 +309,9 @@ def register_group(cases, work, opts):
             else "valis.warp_tools.warp_xy_from_to as Slide.warp_xy_from_to calls it",
             "benchmark_side": [
                 "the patient's original multichannel slides hard-linked (or copied) "
-                "into one folder under their own names and listed through img_list",
+                "into one folder under their own names (under their parent folder's name in "
+                "front where two slides share a basename, `info.slides_source`) and "
+                "listed through img_list",
                 "the reference slide fixed (reference_img_f)",
                 "points: the reference-grid pixel plus the writer's crop origin, then "
                 "valis.warp_tools.warp_xy_inv with the slide's own M, shapes and "

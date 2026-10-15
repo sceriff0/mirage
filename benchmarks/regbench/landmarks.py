@@ -50,6 +50,13 @@ from . import HYRECO_DATASETS, truth, variants
 from . import score as cohort
 from .cases import list_cases, load_points
 from .mapping import FRAME, MOV_TO_REF
+from .notrun import (
+    NOT_RUN_CAUSES,
+    UNKNOWN_FRAME,
+    blocked_rows,
+    not_run_rows,
+    settle_frames,
+)
 
 TUNING, REPORT = HYRECO_DATASETS
 LOTZ = (
@@ -133,6 +140,7 @@ TABLES = (
     "hyreco_resources",
     "hyreco_summary_resources",
     "hyreco_excluded",
+    "hyreco_not_run",
 )
 
 
@@ -195,12 +203,22 @@ def _score_case(job):
                 case, points, None
             )
         imputed = v != "initial" and warped is None
+        if imputed and not cause:
+            cause = "exception"
+        if imputed:
+            # a failed pair has no map, hence no direction of its own: the run's record
+            # says it when there is one, else `settle_frames` takes it from the row's
+            # other pairs; never a default
+            declared = str((run or {}).get("direction") or "")
+            direction = declared if declared in FRAME else ""
         jac = truth.jacobian_stats(warped)
         pairs.append(
             {
                 **base,
                 "method": v,
-                "frame": FRAME[direction],
+                "frame": FRAME.get(direction, ""),
+                "failed": imputed,
+                "not_run": imputed and cause in NOT_RUN_CAUSES,
                 **truth.error_stats(mapped, target, source, px),
                 **jac,
                 "pixel_size_um": px,
@@ -250,6 +268,10 @@ def summarise(pairs, points):
             for m in dict.fromkeys(r["method"] for r in pairs):
                 mine = [r for r in pairs if (r["dataset"], r["method"]) == (ds, m)]
                 mine = [r for r in mine if keep(r)]
+                n_not_run = sum(bool(r.get("not_run")) for r in mine)
+                # a pair never registered for a reason that is not the method's is in
+                # no statistic of it (`n_not_run` counts it)
+                mine = [r for r in mine if not r.get("not_run")]
                 if not mine:
                     continue
                 ids = {r["case_id"] for r in mine}
@@ -268,6 +290,7 @@ def summarise(pairs, points):
                         "method": m,
                         "n_pairs": len(mine),
                         "n_ok": sum(not r["imputed_initial"] for r in mine),
+                        "n_not_run": n_not_run,
                         "n_landmarks": len(mp),
                         "per_pair_median_tre_um_med": _median(per_pair),
                         "per_pair_median_tre_um_min": float(np.min(per_pair)),
@@ -316,15 +339,20 @@ def _tuned_check(cases, settings_hash):
             "`prepare hyreco --subset b`"
         )
     source = next(iter(sources))
-    if Path(source, TUNING).is_dir():
-        tuned = hyreco.tuned_settings(source)
-        if hyreco.settings_hash(tuned) != settings_hash:
-            raise SystemExit(
-                f"the {REPORT} cases were prepared with settings {settings_hash[:12]}, "
-                f"and the tuning set at {source} now carries "
-                f"{hyreco.settings_hash(tuned)[:12]}: the report set does not follow "
-                "the tuning set"
-            )
+    if not Path(source, TUNING).is_dir():
+        raise SystemExit(
+            f"the {REPORT} cases name the tuning set at {source}, and its {TUNING} "
+            "folder is not there: whether the report set follows it cannot be checked. "
+            "Restore it (or prepare both sets again); there is no silent skip."
+        )
+    tuned = hyreco.tuned_settings(source)
+    if hyreco.settings_hash(tuned) != settings_hash:
+        raise SystemExit(
+            f"the {REPORT} cases were prepared with settings {settings_hash[:12]}, "
+            f"and the tuning set at {source} now carries "
+            f"{hyreco.settings_hash(tuned)[:12]}: the report set does not follow "
+            "the tuning set"
+        )
     return source
 
 
@@ -336,6 +364,7 @@ SUMMARY_COLUMNS = (
     "method",
     "n_ok",
     "n_pairs",
+    "n_not_run",
     "n_landmarks",
     "initial_pooled_median_tre_um",
     "per_pair_median_tre_um_med",
@@ -375,7 +404,9 @@ def like_for_like(summary, dataset):
     return own + quoted
 
 
-def markdown(dataset, cases, settings, sha, source, summary, fails, primary):
+def markdown(
+    dataset, cases, settings, sha, source, summary, fails, primary, lost=(), frames=None
+):
     floor = ANNOTATION_FLOOR
     n_landmarks = sum(int(c.extra.get("n_landmarks", 0)) for c in cases)
     px_sources = sorted({str(c.extra.get("pixel_size_source", "")) for c in cases})
@@ -428,6 +459,23 @@ def markdown(dataset, cases, settings, sha, source, summary, fails, primary):
         f"{floor['basis']}; {floor['source']}). A difference between two methods "
         "below about 0.5 um is annotation noise: no ranking is claimed.\n"
     )
+    if lost:
+        parts.append("## Not run, for a reason that is not the method's\n")
+        parts.append(
+            "These pairs were never registered: the run was blocked by its gate, the "
+            "task never started, or the attempt was lost to the scheduler or to the "
+            "benchmark's own step (`hyreco_not_run.csv`). They are in NO median below "
+            "(`n_not_run`); a row with no other pair is in no table at all. A pair the "
+            "METHOD failed on is different: it counts at its unregistered landmarks "
+            "(`n_ok` is less than `n_pairs`).\n"
+        )
+        parts += [_table(list(lost), list(lost[0])), ""]
+    unknown = sorted(m for m, f in (frames or {}).items() if f == [UNKNOWN_FRAME])
+    if unknown:
+        parts.append(
+            "No pair of " + ", ".join(f"`{m}`" for m in unknown) + " registered, so "
+            "the frame its map is in is unknown (a failed pair has no map).\n"
+        )
     order = list(primary or [])
     for name, _ in sets_of(dataset):
         block = [r for r in summary if r["set"] == name]
@@ -488,10 +536,21 @@ def markdown(dataset, cases, settings, sha, source, summary, fails, primary):
     return "\n".join(parts) + "\n"
 
 
-def score(cases_root, out, dataset, workers=1, expected=None, primary=None, dropped=()):
+def score(
+    cases_root,
+    out,
+    dataset,
+    workers=1,
+    expected=None,
+    primary=None,
+    dropped=(),
+    gates=None,
+):
     """Score one external dataset; writes ``<out>/tables/<dataset>/`` and returns the
     rows. ``expected`` and ``primary`` are ``variants.expected_variants(dataset)`` and
-    ``variants.primary_for(dataset)`` (None scores only what has results)."""
+    ``variants.primary_for(dataset)`` (None scores only what has results). ``gates`` is
+    the launcher's gate records (``<out>/logs/gates``): a run a gate blocked is listed
+    apart, as in ANHIR's scorer."""
     if dataset not in HYRECO_DATASETS:
         raise SystemExit(f"{dataset!r} is not a HyReCo set {HYRECO_DATASETS}")
     cases = list_cases(cases_root, dataset)
@@ -511,6 +570,15 @@ def score(cases_root, out, dataset, workers=1, expected=None, primary=None, drop
     pairs = [r for d in done for r in d[0]]
     points = [r for d in done for r in d[1]]
     res = [r for d in done for r in d[2]]
+    frames = settle_frames(pairs, blocked_rows(gates))
+    for r in pairs:  # ANHIR's columns, meaningless here
+        r.pop("challenge_quantity", None)
+        r.pop("robustness", None)
+        if r["not_run"]:
+            r["imputed_initial"] = True
+    lost = not_run_rows(pairs)
+    never = {(r["method"], r["case_id"]) for r in pairs if r["not_run"]}
+    points = [p for p in points if (p["method"], p["case_id"]) not in never]
     summary = summarise(pairs, points)
     fails = cohort.failures(res)
     res_summary = cohort.summarise_resources(res)
@@ -531,7 +599,10 @@ def score(cases_root, out, dataset, workers=1, expected=None, primary=None, drop
     cohort.write_csv(tables / "hyreco_resources.csv", res)
     cohort.write_csv(tables / "hyreco_summary_resources.csv", res_summary)
     cohort.write_csv(tables / "hyreco_excluded.csv", excluded)
-    text = markdown(dataset, cases, settings, sha, source, summary, fails, primary)
+    cohort.write_csv(tables / "hyreco_not_run.csv", lost)
+    text = markdown(
+        dataset, cases, settings, sha, source, summary, fails, primary, lost, frames
+    )
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -544,6 +615,8 @@ def score(cases_root, out, dataset, workers=1, expected=None, primary=None, drop
         "resources": res,
         "summary_resources": res_summary,
         "excluded": excluded,
+        "not_run": lost,
+        "frames": frames,
         "settings": settings,
         "tables": str(tables),
     }

@@ -130,7 +130,7 @@ REDUCTIONS = (1, 2)
 LUMA = (0.299, 0.587, 0.114)
 HAEMATOXYLIN_MAX, HAEMATOXYLIN_SCALE = 6.5535, 10000.0
 TILE = 1024
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2  # 2: pixel_size_um and keep_shared_ids joined the hash
 
 LICENCE = "CC BY-SA 4.0 (dataset page and paper; DataCite says CC BY 4.0)"
 CITATION = (
@@ -144,14 +144,29 @@ class Refused(ValueError):
 
 
 # ── settings ──────────────────────────────────────────────────────────────────
-def make_settings(proxy=None, reduce=None):
+def make_settings(proxy=None, reduce=None, pixel_size_um=None, keep_shared_ids=False):
+    """Every choice that reaches a result: the proxy, its reduction, a stated pixel size
+    (None: the file's own) and whether subset B keeps the four ids subset A also has.
+    Subset B takes the tuning set's, unchanged (``_settings_for``)."""
     proxy = DEFAULT_PROXY if proxy is None else str(proxy)
     reduce = 1 if reduce is None else int(reduce)
     if proxy not in PROXIES:
         raise SystemExit(f"--proxy {proxy!r}: expected one of {PROXIES}")
     if reduce not in REDUCTIONS:
         raise SystemExit(f"--reduce {reduce!r}: expected one of {REDUCTIONS}")
-    return {"proxy": proxy, "reduce": reduce, "version": SETTINGS_VERSION}
+    if pixel_size_um is not None:
+        pixel_size_um = float(pixel_size_um)
+        if not pixel_size_um > 0:
+            raise SystemExit(
+                f"--pixel-size-um {pixel_size_um!r}: expected a positive number"
+            )
+    return {
+        "proxy": proxy,
+        "reduce": reduce,
+        "version": SETTINGS_VERSION,
+        "pixel_size_um": pixel_size_um,
+        "keep_shared_ids": bool(keep_shared_ids),
+    }
 
 
 def settings_hash(settings):
@@ -177,6 +192,12 @@ def tuned_settings(cases_root):
             "prepare the tuning set under one setting per cases folder"
         )
     settings = dict(cases[0].extra["settings"])
+    if settings.get("version") != SETTINGS_VERSION:
+        raise SystemExit(
+            f"{cases_root}: the {TUNING} cases were prepared with settings version "
+            f"{settings.get('version')}, this code writes {SETTINGS_VERSION} (the hash "
+            "now covers the pixel size and the shared-ids flag): prepare them again"
+        )
     if settings_hash(settings) != hashes.pop():
         raise SystemExit(f"{cases_root}: {TUNING} settings do not match their hash")
     return settings
@@ -502,10 +523,12 @@ def _dirs(a):
 
 
 def _settings_for(a, subset):
+    pixel = getattr(a, "pixel_size_um", None)
+    keep = bool(getattr(a, "keep_shared_ids", False))
     if subset == "a":
         if a.settings_from:
             raise SystemExit("--settings-from belongs to --subset b")
-        return make_settings(a.proxy, a.reduce), ""
+        return make_settings(a.proxy, a.reduce, pixel, keep), ""
     if a.proxy is not None or a.reduce is not None:
         raise SystemExit(
             "--subset b takes no --proxy and no --reduce: nothing is chosen on subset "
@@ -519,6 +542,16 @@ def _settings_for(a, subset):
             "subset B is prepared with"
         )
     settings = tuned_settings(a.settings_from)
+    for key, asked in (("pixel_size_um", pixel), ("keep_shared_ids", keep)):
+        if key == "pixel_size_um" and asked is not None:
+            asked = float(asked)
+        if asked != settings[key]:
+            raise SystemExit(
+                f"--subset b: {key} is {asked!r} here and {settings[key]!r} in the "
+                f"tuning set ({a.settings_from}). Nothing is chosen on subset B: give "
+                f"the tuning set's value, or prepare `--subset a` with {key} {asked!r} "
+                "first and start the tuning again."
+            )
     sha = settings_hash(settings)
     for case in list_cases(a.cases, REPORT):
         if case.extra.get("settings_sha256") != sha:
@@ -538,8 +571,6 @@ def prepare(a):
     if getattr(a, "count", False):
         print(len(SUBSET_IDS[subset]))
         return 0
-    if getattr(a, "keep_shared_ids", False) and subset != "b":
-        raise SystemExit("--keep-shared-ids belongs to --subset b")
     ref_dir, mov_dir = _dirs(a)
     ids, complete = subset_ids(subset, ref_dir, mov_dir, a.allow_incomplete)
     settings, settings_from = _settings_for(a, subset)
@@ -549,7 +580,7 @@ def prepare(a):
     dataset, bad = DATASET[subset], 0
     for cid in ids:
         report = subset == "b" and (
-            cid not in SHARED_IDS or bool(getattr(a, "keep_shared_ids", False))
+            cid not in SHARED_IDS or bool(settings["keep_shared_ids"])
         )
         try:
             d = prepare_one(
@@ -559,7 +590,7 @@ def prepare(a):
                 ref_dir,
                 mov_dir,
                 settings,
-                a.pixel_size_um,
+                settings["pixel_size_um"],
                 a.force,
                 report,
                 settings_from,

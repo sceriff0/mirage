@@ -471,7 +471,9 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         slide = None
         with contextlib.suppress(Exception):
             slide = registrar.get_slide(placed[path])
-        names[cid] = str(slide.name) if slide is not None else vp.slide_name(path)
+        names[cid] = (
+            str(slide.name) if slide is not None else vp.slide_name(placed[path])
+        )
     seen = multiprocessing.cpu_count()  # what bound_cpu_count left for VALIS's pools
     torch = sys.modules.get("torch")
     info = {
@@ -502,6 +504,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         "cost_after_register": state.get("cost_after_register"),
         "capture_error": state.get("capture_error", ""),
         "slides_placed": how,
+        "slides_source": vp.slides_source(placed),
         "place_s": state.get("place_s"),  # the benchmark's own, clock paused
         "slides_written": sorted(state["written"]),
         "slides_expected": sorted(Path(p).name for p in placed.values()),
@@ -520,7 +523,8 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
             else "valis.warp_tools.warp_xy_from_to as Slide.warp_xy_from_to calls it",
             "benchmark_side": [
                 "the patient's original multichannel slides hard-linked (or copied) "
-                "into preprocessed/ under their own names",
+                "into preprocessed/ under their own names (under their parent folder's name in "
+                "front where two slides share a basename, `info.slides_source`)",
                 "Valis.register, Valis.register_micro and Slide.warp_and_save_slide "
                 "wrapped for the duration of the call: fields and matrices are copied "
                 "out, the writer runs with the clock paused; no argument or result is "

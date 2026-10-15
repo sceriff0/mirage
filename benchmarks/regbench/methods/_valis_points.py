@@ -184,10 +184,46 @@ def slide_name(path):
     return os.path.splitext(name)[0]
 
 
+def placed_name(path, prefixed):
+    """The file name a slide is placed under: its own, or with its parent folder's name
+    in front (``HE_29.tif``) where the patient's slides share a basename."""
+    p = Path(str(path))
+    return f"{p.parent.name}_{p.name}" if prefixed else p.name
+
+
+def placed_names(paths):
+    """``{source: placed file name}`` of a patient's slides. Where two DIFFERENT files
+    share a basename (a HyReCo pair is ``HE/29.tif`` and ``PHH3/29.tif``) EVERY slide
+    is placed under its parent folder's name in front, so the names follow one rule.
+    Raises ValueError when the placed names still clash (the same folder name over
+    different grandparents), because VALIS names a slide by its file name."""
+    paths = [str(p) for p in dict.fromkeys(str(p) for p in paths)]
+    base = [Path(p).name for p in paths]
+    prefixed = len(set(base)) != len(base)
+    out = {p: placed_name(p, prefixed) for p in paths}
+    seen = {}
+    for src, name in out.items():
+        other = seen.setdefault(slide_name(name), src)
+        if other != src:
+            raise ValueError(
+                f"{other} and {src} would both be the VALIS slide {slide_name(name)!r}; "
+                "VALIS names a slide by its file name"
+            )
+    return out
+
+
+def slides_source(placed):
+    """``{placed file name: source path}``: where each slide VALIS was given came from
+    (recorded in ``run.json``, so a point finds its slide)."""
+    return {Path(dst).name: str(src) for src, dst in placed.items()}
+
+
 def patient_slides(cases):
     """``(reference path, {case_id: moving path})`` of one patient's cases: the ORIGINAL
-    multichannel slides. Refuses two reference slides, and two slides VALIS would give the
-    same name."""
+    multichannel slides. Refuses two reference slides, a moving slide that IS the
+    reference (the same file), and slides VALIS would give the same name even after
+    ``placed_names``. Two different files of one basename are not refused: they are
+    placed apart."""
     refs = {str(c.ref_image) for c in cases}
     if len(refs) != 1:
         raise ValueError(
@@ -196,31 +232,26 @@ def patient_slides(cases):
         )
     ref = refs.pop()
     moving = {c.case_id: str(c.mov_image) for c in cases}
-    names = {}
-    for path in [ref, *moving.values()]:
-        other = names.setdefault(slide_name(path), path)
-        if other != path:
-            raise ValueError(
-                f"{other} and {path} would both be the VALIS slide {slide_name(path)!r}; "
-                "VALIS names a slide by its basename"
-            )
-    if len(names) != len(moving) + 1:
+    if any(Path(m).resolve() == Path(ref).resolve() for m in moving.values()):
         raise ValueError(
             f"patient {cases[0].group!r}: a moving slide is the reference slide"
         )
+    placed_names([ref, *moving.values()])
     return ref, moving
 
 
 def place_slides(paths, dst_dir):
-    """Put the slides in ``dst_dir`` under their own basenames: a hard link, or a copy
-    where a link is not possible. Never a symlink (the pipeline copies for that reason,
-    ``modules/local/register.nf``). Returns ``({source: placed path}, {name: how})``."""
+    """Put the slides in ``dst_dir``: a hard link, or a copy where a link is not
+    possible. Never a symlink (the pipeline copies for that reason,
+    ``modules/local/register.nf``). Each keeps its own basename, except where the
+    slides share one: ``placed_names``. Returns ``({source: placed path}, {name: how})``."""
     dst_dir = Path(dst_dir)
     dst_dir.mkdir(parents=True, exist_ok=True)
+    names = placed_names(paths)
     placed, how = {}, {}
     for src in paths:
         real = Path(src).resolve()
-        dst = dst_dir / Path(src).name
+        dst = dst_dir / names[str(src)]
         if dst.exists() or dst.is_symlink():
             dst.unlink()
         try:

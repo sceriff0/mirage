@@ -371,11 +371,6 @@ _HYRECO_NOT = (
         "its RGB input rule was written for ANHIR's JPEG / PNG images (ruling R3.20) "
         "and has not been extended to HyReCo's BigTIFF slides; HyReCo is dormant",
     ),
-    (
-        lambda r: run_name(r) == prep.ROW,
-        "the preprocessing row is defined for ANHIR, the cohort and the synthetic "
-        "suite (ruling R3.21); HyReCo is dormant and keeps its own proxy settings",
-    ),
 )
 NOT_ON = {
     **{d: _HYRECO_NOT for d in HYRECO_DATASETS},

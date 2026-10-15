@@ -3110,7 +3110,8 @@ run list, as for the cohort. The split is enforced, not only stated:
 whether they are the same slides. They are prepared in `hyreco_b`, left OUT of its
 report set (50 pairs), and kept in the pooled line over all 54 pairs, which is the
 published definition's set. `--keep-shared-ids` puts them back, for use only once the
-files have shown they are different slides.
+files have shown they are different slides; it is a setting of the A/B pair, so subset
+B takes it only if the tuning set was prepared with it.
 
 ### The files, and what is assumed about them
 
@@ -3192,6 +3193,7 @@ failed or never ran is scored at the unregistered pose and counted (`n_ok`).
 | `hyreco_summary.csv` | set and variant | `dataset, set, method, n_pairs, n_ok, n_landmarks, per_pair_median_tre_um_med / _min / _max, per_pair_p90_tre_um_med, pooled_median_tre_um, pooled_p90_tre_um, pooled_frac_under_1um, pooled_frac_improved, initial_pooled_median_tre_um, n_nonfinite, fold_pct_max` |
 | `hyreco_published.csv` | quoted number | `dataset, set, method, n_pairs, n_landmarks, pooled_median_tre_um, status, conditions, source` |
 | `hyreco_excluded.csv` | run that is not run | `dataset, run, reason` |
+| `hyreco_not_run.csv` | per result name and cause: the pairs never registered for a reason that is not the method's (in no median); written only when there are some | as `anhir_not_run.csv` |
 | `hyreco_failures.csv`, `hyreco_resources.csv`, `hyreco_summary_resources.csv` | as the cohort's `failures`, `resources`, `summary_resources` | the same columns |
 | `summary.md` | | the block below |
 
@@ -3568,46 +3570,51 @@ among all submitted methods), which needs the other methods' results on the same
 `semisynth`, `hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
 and its tests are kept, the default submission never includes them, and
 `submit_cohort.sh --datasets <name>` is the only way to submit one. The independent
-review of 2026-10-11 found the defects below. **None of them is fixed.** Each must be
+review of 2026-10-11 found the defects below. **Those the subsection does not list as fixed are open.** Each must be
 fixed, or ruled acceptable by the owner, before a number from that dataset is read. Where
 a sentence elsewhere in this README disagrees with this section, this section is right.
 
 ### `hyreco_a`, `hyreco_b` (review items 1 and 10)
 
-1. **VALIS fails on every HyReCo pair, and is then scored as unregistered.** A HyReCo
-   pair is `HE/<id>.tif` and `PHH3/<id>.tif`: both slides have the same basename.
-   `methods/_valis_points.py::patient_slides` refuses two slides of one name ("VALIS
-   names a slide by its basename"), so every VALIS row on every pair is `ok: false` and
-   imputed at the initial pose. The table is then STARE against a competitor that never
-   ran. Removing the refusal is not enough: `place_slides` links by basename into one
-   folder and would overwrite the first slide with the second. The HyReCo section's "yes,
-   by construction" for `valis120` / `valis120_hires` and its expectation of `n_ok` equal
-   to `n_pairs` cannot hold as built. The test that should catch it builds its VALIS case
-   with distinct names.
-2. **The A/B split is enforced per cases folder only, and the method's configuration is
-   not frozen.**
-   - The settings hash holds `{proxy, reduce, version}` and nothing else. `run --dataset
-     hyreco_b --opt ... --label ...` is accepted, and the scorer scores any result
-     folder it finds.
-   - Several B folders can be prepared from several A settings; each prints "REPORT SET.
-     Nothing was chosen on it."
-   - `--pixel-size-um` and `--keep-shared-ids` are free on B; inside the 2 % pixel-size
-     window that moves a TRE by micrometres.
-   - The tuned-set check is skipped when the tuning folder is absent.
-   - A refused pair leaves every denominator instead of being scored at the initial
-     pose; only the like-for-like block notices.
-   - `--reduce` is in effect a STARE hyperparameter (it doubles the lattice and the
-     capture range in micrometres). VALIS has no equivalent, and its primary row there
-     is the one most likely to end for memory on 21-gigapixel slides.
+Three of the defects found are fixed (C6): same-basename slides, the settings hash and
+the A/B split's coverage, and a run that never started. **A HyReCo cases folder prepared
+before the fix must be prepared again**: the settings hash now covers `pixel_size_um` and
+`keep_shared_ids` (settings version 2), so an older folder's hash no longer matches and
+`prepare --subset b` / `score` refuse it by name. The dataset is dormant, so no live
+data is affected. What is left:
 
-3. **A blocked or never-started run reads as a method that fails everywhere.**
-   `regbench.landmarks` (HyReCo's scorer) scores every pair of every expected row, and a
-   pair without a result counts at the unregistered pose whatever the reason: a run its
-   selfcheck gate blocked, an array task that never started and a method's own failure
-   look the same in `hyreco_summary.csv`. ANHIR's scorer reads the gates and lists such
-   pairs apart (`anhir_not_run.csv`); HyReCo's was left as it is while the set is
-   dormant. It also takes the frame of a failed pair of a reference -> moving method
-   to be `reference` (the same default ANHIR's scorer no longer has).
+- **The A/B split is enforced per cases folder only, and the method's configuration is
+  not frozen.** `run --dataset hyreco_b --opt ... --label ...` is accepted, and the
+  scorer scores any result folder it finds. Several B folders can be prepared from
+  several A settings; each prints "REPORT SET. Nothing was chosen on it."
+- A refused pair leaves every denominator instead of being scored at the initial pose;
+  only the like-for-like block notices.
+- `--reduce` is in effect a STARE hyperparameter (it doubles the lattice and the capture
+  range in micrometres). VALIS has no equivalent, and its primary row there is the one
+  most likely to end for memory on 21-gigapixel slides.
+
+What changed:
+
+1. **Same-basename slides.** A HyReCo pair is `HE/<id>.tif` and `PHH3/<id>.tif`. Where a
+   patient's slides share a basename, `methods/_valis_points.py::place_slides` places
+   EVERY slide under its parent folder's name in front (`HE_29.tif`, `PHH3_29.tif`), so
+   VALIS sees two slides; `patient_slides` refuses only a moving slide that is the
+   reference file itself, or names that still clash after the prefix. The mapping is
+   `info.slides_source` in each VALIS `run.json` (`{placed name: source path}`); the
+   adapters find a slide by its source path, so nothing else changed.
+2. **The settings hash** holds `{proxy, reduce, version, pixel_size_um,
+   keep_shared_ids}`. `prepare hyreco --subset b` refuses a `--pixel-size-um` or
+   `--keep-shared-ids` that the tuning set did not carry (both flags are accepted on
+   `--subset a`, where they are recorded; on A `--keep-shared-ids` changes nothing). `score
+   --dataset hyreco_b` refuses when the tuning folder its cases name is absent.
+3. **A blocked or never-started run** is listed apart (`hyreco_not_run.csv`, and a block
+   in `summary.md`) and is in no median (`n_not_run`), exactly as ANHIR's scorer does:
+   the shared definition is `regbench/notrun.py` (`NOT_RUN_CAUSES`, `settle_frames`,
+   `not_run_rows`, `blocked_rows`), whose causes agree with `failure_log.WHOSE`
+   (launcher, infrastructure, and the benchmark's own). `score` reads the launcher's gate
+   records (`--gates`). A pair the method itself failed on still counts at the
+   unregistered pose, and its frame is the one of the row's registered pairs, else the
+   run's declared direction, else "unknown", never `reference` by default.
 
 ### `semisynth` (review item 9)
 
