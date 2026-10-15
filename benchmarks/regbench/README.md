@@ -177,7 +177,11 @@ primary rows:
   different options is refused at import. So each regime runs strides x levels runs and
   the plain `stare` is in every one (the defaults are in every cross). A STARE run is
   gated by `stare`'s selfcheck (one adapter, one pointing path); the runs that use a
-  `haem` or `grey_smooth` proxy have a `prep` job before the four stages.
+  `haem` or `grey_smooth` proxy have a `prep` job before the four stages. It reads a
+  whole-slide RGB TIFF (HyReCo's `HE/<id>.tif`) by tiles and writes its proxy tile by
+  tile: its peak memory is a tile's working set, measured flat over two slide sizes 8x
+  apart (`test_prep.py`). The job is the benchmark's own step, so whatever ends it is the
+  cause `benchmark` (or `benchmark_oom`), never the method's.
 - **`stare_prep` is PAUSED** (2026-10-14; `active=False`). Its ruling (R3.21) and the
   tuning side of ANHIR (`TUNING_RUNS`, `anhir_tune`) are unchanged and tested: the
   regimes' `sprep` levels replace it in the cohort. It is the same package, version and

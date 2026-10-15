@@ -95,6 +95,12 @@ def write_channel_tiles(path, hw, dtype, tiles, tile, names, pixel_size_um=None)
             compression="zlib",
             photometric="minisblack",
             metadata=_ome_meta(names, pixel_size_um),
+            # one encoder thread is a memory bound, not a tuning choice: tifffile's
+            # default pool encodes ahead of the writer, and the tiles it queues grow
+            # with the slide (measured on tifffile 2023.4.12: 58 / 199 / 269 MiB peak
+            # for 48 / 192 / 384 tiles of 1024 px; tests/test_merge_pyramid_streaming.py
+            # pins the same argument for the pipeline's pyramid writer)
+            maxworkers=1,
         ),
     )
 
@@ -175,9 +181,11 @@ def pixel_size_um(path):
     return float(px) if px else None
 
 
-def _rgb_view(level):
-    """``(array-like (H, W, 3), (H, W))`` of one TIFF pyramid level, read lazily if zarr is
-    installed and whole otherwise."""
+def _rgb_view(level, lazy_only=False):
+    """``(read, (H, W))`` of one TIFF pyramid level: ``read(y0, y1, x0=0, x1=W)`` gives
+    that rectangle as ``(h, w, 3)``. Read lazily (only the TIFF's tiles or strips the
+    rectangle touches) if zarr is installed, and whole otherwise; ``lazy_only`` refuses
+    the whole read (``ImportError``) for a caller that must stream."""
     axes = level.axes.replace("S", "C")
     if set(axes) != set("YXC") or level.shape[axes.index("C")] < 3:
         raise ValueError(
@@ -190,11 +198,14 @@ def _rgb_view(level):
 
         arr = zarr.open(level.aszarr(), mode="r")
     except ImportError:
+        if lazy_only:
+            raise
         arr = level.asarray()
 
-    def read(y0, y1):
+    def read(y0, y1, x0=0, x1=None):
         idx = [slice(None)] * 3
         idx[order[0]] = slice(y0, y1)
+        idx[order[1]] = slice(x0, w if x1 is None else x1)
         return np.transpose(np.asarray(arr[tuple(idx)]), order)[..., :3]
 
     return read, (h, w)

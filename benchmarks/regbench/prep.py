@@ -52,9 +52,16 @@ CLAHE       OpenCV's ``createCLAHE(clipLimit=2.0)`` with square contextual regio
 smooth      ``scipy.ndimage.gaussian_filter(sigma=2)`` in float32, rounded back to the
             input's type.
 
-The image is processed in blocks of 2048 px with a 512 px halo, on a grid of contextual
-regions fixed to the image origin and with the image mirrored beyond its edges, so the
-result does not depend on the block size (a test compares two block sizes).
+The image is processed in blocks (the written tile, 1024 px) with a 512 px halo, on a grid
+of contextual regions fixed to the image origin and with the image mirrored beyond its
+edges, so the result does not depend on the block size (a test compares two block sizes).
+
+**Memory.** Nothing is ever read or held whole but a JPEG / PNG (ANHIR's images, which
+PIL decodes whole): a whole-slide RGB TIFF (HyReCo) and a fluorescence channel are read
+in rectangles, each block is computed with its halo and written as one tile, the bases
+work a few rows at a time, and the writer encodes on one thread (tifffile's default pool
+queues tiles in proportion to the slide). A test measures the peak at two slide sizes 8x
+apart: it does not grow.
 
 **The frozen choice** (``prep_frozen.json``, tracked, hashed). ``selected`` is the
 candidate the ``stare_prep`` row runs with, on every dataset. It is chosen on ANHIR's
@@ -121,7 +128,12 @@ PROVISIONAL_NOTE = (
 
 
 class Refused(ValueError):
-    """An input this module will not preprocess, with the reason."""
+    """An input this module will not preprocess, or a preprocessing that did not give
+    what it must (an output off the slide's frame or shape), with the reason. The
+    preprocessing is the benchmark's own step, so its cause is the benchmark's
+    (``resources.classify_error`` reads ``regbench_cause``), never the method's."""
+
+    regbench_cause = "benchmark"
 
 
 def candidate(name):
@@ -229,17 +241,31 @@ def rank(rows):
 
 
 # ── the operations ────────────────────────────────────────────────────────────
+# the bases work in floats: a few rows at a time bound their temporaries (per pixel:
+# the rows change nothing)
+BASE_ROWS = 64
+
+
 def grey_plane(rgb):
     """Inverted luminance of ``(h, w, 3)`` uint8 as uint8: the plain row's input."""
-    lum = np.asarray(rgb, np.float32)[..., :3] @ np.asarray(GREY_LUMA, np.float32)
-    return (255.0 - lum).round().clip(0, 255).astype(np.uint8)
+    rgb = np.asarray(rgb)
+    luma = np.asarray(GREY_LUMA, np.float32)
+    out = np.empty(rgb.shape[:2], np.uint8)
+    for y0 in range(0, rgb.shape[0], BASE_ROWS):
+        lum = np.asarray(rgb[y0 : y0 + BASE_ROWS], np.float32)[..., :3] @ luma
+        out[y0 : y0 + BASE_ROWS] = (255.0 - lum).round().clip(0, 255)
+    return out
 
 
 def haem_plane(rgb):
     from skimage.color import rgb2hed
 
-    hed = rgb2hed(np.asarray(rgb)[..., :3])[..., 0]
-    return (np.clip(hed, 0.0, HAEM_MAX) * HAEM_SCALE).round().astype(np.uint8)
+    rgb = np.asarray(rgb)[..., :3]
+    out = np.empty(rgb.shape[:2], np.uint8)
+    for y0 in range(0, rgb.shape[0], BASE_ROWS):  # rgb2hed works in float64
+        hed = rgb2hed(rgb[y0 : y0 + BASE_ROWS])[..., 0]
+        out[y0 : y0 + BASE_ROWS] = (np.clip(hed, 0.0, HAEM_MAX) * HAEM_SCALE).round()
+    return out
 
 
 BASES = {"grey": grey_plane, "haem": haem_plane}
@@ -263,12 +289,48 @@ def array_reader(a):
 
 
 def read_rgb(path):
-    """A JPEG / PNG (ANHIR) whole, as ``(H, W, 3)`` uint8."""
+    """A JPEG / PNG (ANHIR) whole, as ``(H, W, 3)`` uint8. PIL decodes these formats
+    whole; a whole-slide TIFF goes through ``rgb_tiff_reader`` instead."""
     from PIL import Image
 
     Image.MAX_IMAGE_PIXELS = None  # these are whole sections, not an attack
     with Image.open(str(path)) as im:
         return np.asarray(im.convert("RGB"))
+
+
+def rgb_tiff_reader(path):
+    """An RGB TIFF (HyReCo's slides) read in rectangles from its full-resolution level:
+    only the TIFF tiles (or strips) a rectangle touches are decoded, so the memory is a
+    block's, whatever the slide's size. The reader is ``imageio._rgb_view``, the one
+    ``datasets/hyreco.py`` streams its proxies with. Refused: not 8-bit RGB, or no
+    lazy reader (zarr) installed, which would read the slide whole."""
+    import tifffile
+
+    from .imageio import _rgb_view
+
+    tif = tifffile.TiffFile(str(path))
+    try:
+        level = tif.series[0].levels[0]
+        read, hw = _rgb_view(level, lazy_only=True)
+        if np.dtype(level.dtype) != np.uint8:
+            raise Refused(f"{path}: expected 8-bit RGB, found {level.dtype}")
+    except ImportError as exc:
+        tif.close()
+        raise Refused(
+            f"{path}: no lazy TIFF reader ({exc}); reading the slide whole is refused"
+        ) from None
+    except (ValueError, IndexError) as exc:
+        tif.close()
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(f"{path}: not an RGB image in its first series ({exc})") from None
+    return Reader(
+        hw,
+        np.uint8,
+        lambda y0, y1, x0, x1: read(y0, y1, x0, x1),
+        True,
+        tif.close,
+    )
 
 
 def channel_reader(path, channel):
@@ -295,10 +357,11 @@ def _window_top(reader):
         return 255.0
     h, w = reader.hw
     s, parts = CLAHE_WINDOW_STEP, []
-    for y0 in range(0, h, BLOCK):
-        band = reader.read(y0, min(y0 + BLOCK, h), 0, w)
-        first = (-y0) % s  # the rows y with y % s == 0, whatever the band
-        parts.append(np.asarray(band)[first::s, ::s].ravel())
+    for y0 in range(0, h, BLOCK):  # BLOCK x BLOCK rectangles: never a whole row band
+        first = (-y0) % s  # the rows y with y % s == 0, whatever the block
+        for x0 in range(0, w, BLOCK):  # BLOCK is a multiple of s: columns stay aligned
+            block = reader.read(y0, min(y0 + BLOCK, h), x0, min(x0 + BLOCK, w))
+            parts.append(np.asarray(block)[first::s, ::s].ravel())
     values = np.concatenate(parts) if parts else np.zeros(1)
     return max(float(np.percentile(values, CLAHE_WINDOW_PERCENTILE)), 1.0)
 
@@ -324,9 +387,10 @@ def _smooth(block):
     from scipy.ndimage import gaussian_filter
 
     out = gaussian_filter(block.astype(np.float32), SMOOTH_SIGMA, mode="reflect")
-    if block.dtype.kind in "ui":
+    if block.dtype.kind in "ui":  # in place: one float32 copy of the block at a time
         info = np.iinfo(block.dtype)
-        return out.round().clip(info.min, info.max).astype(block.dtype)
+        np.round(out, out=out)
+        np.clip(out, info.min, info.max, out=out)
     return out.astype(block.dtype)
 
 
@@ -337,8 +401,11 @@ def out_dtype(name, reader):
     return reader.dtype
 
 
-def bands(reader, name, block=BLOCK):
-    """The preprocessed image as ``(y0, band)`` in order, ``band`` of shape ``(rows, W)``.
+def blocks(reader, name, block=BLOCK):
+    """The preprocessed image as ``(y0, x0, core)`` in row-major order of ``block`` x
+    ``block`` cores (smaller at the right and bottom edges). One core and its halo are
+    in memory at a time: with ``block`` equal to the written tile, nothing larger than
+    a tile's working set ever is (the memory contract), whatever the slide's size.
 
     ``block`` is the core size (a multiple of the contextual region and of the halo); the
     result does not depend on it."""
@@ -350,13 +417,13 @@ def bands(reader, name, block=BLOCK):
     h, w = reader.hw
     top = _window_top(reader) if op == "clahe" else None
     full = block + 2 * HALO
+    dtype = out_dtype(name, reader)
     for y0 in range(0, h, block):
         y1 = min(y0 + block, h)
-        band = np.empty((y1 - y0, w), out_dtype(name, reader))
         for x0 in range(0, w, block):
             x1 = min(x0 + block, w)
             if op is None:
-                band[:, x0:x1] = base(reader.read(y0, y1, x0, x1))
+                yield y0, x0, np.asarray(base(reader.read(y0, y1, x0, x1)), dtype)
                 continue
             ry0, rx0 = max(y0 - HALO, 0), max(x0 - HALO, 0)
             ry1, rx1 = min(y0 + block + HALO, h), min(x0 + block + HALO, w)
@@ -370,8 +437,25 @@ def bands(reader, name, block=BLOCK):
             # than the image, so a small image is as well defined as a large one
             part = np.pad(part, pad, mode="reflect") if any(map(any, pad)) else part
             done = _clahe(_to8(part, top)) if op == "clahe" else _smooth(part)
-            band[:, x0:x1] = done[HALO : HALO + y1 - y0, HALO : HALO + x1 - x0]
-        yield y0, band
+            core = done[HALO : HALO + y1 - y0, HALO : HALO + x1 - x0]
+            yield y0, x0, np.ascontiguousarray(core, dtype)
+
+
+def bands(reader, name, block=BLOCK):
+    """The preprocessed image as ``(y0, band)`` in order, ``band`` of shape
+    ``(rows, W)``: ``blocks`` put side by side (tests and small images; the writer
+    streams ``blocks`` itself)."""
+    h, w = reader.hw
+    band, band_y0 = None, 0
+    for y0, x0, core in blocks(reader, name, block):
+        if x0 == 0:
+            if band is not None:
+                yield band_y0, band
+            band_y0 = y0
+            band = np.empty((core.shape[0], w), core.dtype)
+        band[:, x0 : x0 + core.shape[1]] = core
+    if band is not None:
+        yield band_y0, band
 
 
 def to_array(reader, name, block=BLOCK):
@@ -390,16 +474,14 @@ def write(reader, name, out, pixel_size_um=None):
     h, w = reader.hw
     dtype = out_dtype(name, reader)
 
-    def tiles():
-        for _, band in bands(reader, name):
-            for ty in range(0, band.shape[0], TILE):
-                for x0 in range(0, w, TILE):
-                    yield band[ty : ty + TILE, x0 : x0 + TILE]
+    def tiles():  # one core per written tile, in the writer's row-major order
+        for _, _, core in blocks(reader, name, TILE):
+            yield core
 
     imageio.write_nuclear_tiles(out, (h, w), dtype, tiles(), TILE, pixel_size_um)
     got = imageio.shape_of(out)
     if tuple(got[1:]) != (h, w):
-        raise RuntimeError(
+        raise Refused(
             f"{out}: the preprocessed image is {got[1:]}, its input {(h, w)}: the "
             "frame of the transform would not be the slide's"
         )
@@ -462,7 +544,7 @@ def frame_check(name, brightfield, hw=(700, 900), seed=0, process=None):
     else:
         image = (g * 20000).round().astype(np.uint16)
     reader = array_reader(image)
-    out = (process or to_array)(reader, name)
+    out = (process or (lambda r, n: to_array(r, n, TILE)))(reader, name)
     if out.shape != tuple(hw):
         return {
             "dx": math.nan,
@@ -520,13 +602,14 @@ def write_inputs(case, dest, name, channel=0):
     """Both images of a case, preprocessed, under ``dest``. Returns ``{"reference",
     "moving", "record"}``: the two files STARE is given (channel 0 of each) and what was
     done. A brightfield case is read from its RGB images (``ref_image`` /
-    ``mov_image``, JPEG or PNG); a fluorescence case from channel ``channel`` of its
-    original slides."""
+    ``mov_image``): a whole-slide TIFF (HyReCo) by tiles (``rgb_tiff_reader``), a JPEG
+    or PNG (ANHIR) whole; a fluorescence case from channel ``channel`` of its original
+    slides. Every refusal is ``Refused``: the benchmark's cause."""
     c = candidate(name)
     brightfield = case.modality == "brightfield"
     check = frame_check(name, brightfield)
     if not check["ok"]:
-        raise RuntimeError(
+        raise Refused(
             f"prep={name}: the preprocessing moves image content ({check}): the "
             "transform STARE estimates would not be in the slide's frame"
         )
@@ -537,11 +620,9 @@ def write_inputs(case, dest, name, channel=0):
         src = getattr(case, f"{side}_image")
         if brightfield:
             if str(src).lower().endswith((".tif", ".tiff")):
-                raise Refused(
-                    f"{case.case_id}: the preprocessing row reads a brightfield case's "
-                    "JPEG / PNG image whole; a whole-slide RGB TIFF has no reader here"
-                )
-            reader = array_reader(read_rgb(src))
+                reader = rgb_tiff_reader(src)
+            else:
+                reader = array_reader(read_rgb(src))
         else:
             reader = channel_reader(src, channel)
         path = input_paths(dest, name)[side == "mov"]
@@ -551,7 +632,7 @@ def write_inputs(case, dest, name, channel=0):
             reader.close()
         want = getattr(case, f"{side}_hw")
         if want and tuple(int(v) for v in want) != tuple(shapes[side]):
-            raise RuntimeError(
+            raise Refused(
                 f"{case.case_id}: the {side} image is {shapes[side]}, the case says "
                 f"{tuple(want)}"
             )

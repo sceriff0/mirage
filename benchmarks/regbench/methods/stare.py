@@ -128,7 +128,18 @@ from ..regimes import PROXIES, SPREPS
 
 SCOPE = "pair"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
-OPTIONS = ("prep", "proxy", "sprep", "stride", "tile", "halo", "out_tile", "max_dim", "model", "max_disp")
+OPTIONS = (
+    "prep",
+    "proxy",
+    "sprep",
+    "stride",
+    "tile",
+    "halo",
+    "out_tile",
+    "max_dim",
+    "model",
+    "max_disp",
+)
 VARIANTS = ("stare_rigid", "stare")
 REF_NAME, MOV_NAME = "reference", "moving"
 # STITCH needs a pixel size for the header of the image it writes and uses it for nothing
@@ -715,11 +726,16 @@ def _run_prep(rnd, attempt, execution):
             rnd.case, rnd.dir / "prep", rnd.candidate, slides(rnd.case)[2]
         )
     except (Exception, SystemExit) as exc:
+        # the preprocessing is the benchmark's own step: whatever ended it is the
+        # benchmark's cause (`prep.Refused` says so itself), never STARE's
+        cause = resources.classify_error(exc)
+        if cause not in resources.NOT_THE_METHOD:
+            cause = "benchmark_oom" if cause in resources.MEMORY_CAUSES else "benchmark"
         rec = {
             **base,
             "ok": False,
             "exit": 137 if isinstance(exc, MemoryError) else 1,
-            "cause": resources.classify_error(exc),
+            "cause": cause,
             "error": f"{type(exc).__name__}: {exc}",
             "ended": time.time(),
         }

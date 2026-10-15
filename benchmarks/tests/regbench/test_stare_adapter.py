@@ -230,7 +230,9 @@ def flag(argv, name):
 
 
 def test_sprep_reaches_coarse_and_reg_tile_argv(synthetic_cases, tmp_path):
-    argv = adapter.stage_argv(synthetic_cases["rigid"], {"sprep": "percentile"}, tmp_path)
+    argv = adapter.stage_argv(
+        synthetic_cases["rigid"], {"sprep": "percentile"}, tmp_path
+    )
     for stage in ("coarse", "reg-tile"):
         assert flag(argv[stage], "--prep") == "percentile", stage
 
@@ -242,7 +244,10 @@ def test_default_run_passes_prep_none_and_the_pixel_size(synthetic_cases, tmp_pa
         assert flag(argv[stage], "--prep") == "none"
         assert flag(argv[stage], "--pixel-size") == str(case.pixel_size_um)
     unknown = dataclasses.replace(synthetic_cases["rigid"], pixel_size_um=None)
-    assert flag(adapter.stage_argv(unknown, {}, tmp_path)["coarse"], "--pixel-size") == "auto"
+    assert (
+        flag(adapter.stage_argv(unknown, {}, tmp_path)["coarse"], "--pixel-size")
+        == "auto"
+    )
 
 
 def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(
@@ -309,7 +314,9 @@ def test_proxy_recorded_as_benchmark_side(synthetic_cases, tmp_path):
     # sprep is STARE's own option: not a departure; the default proxy is not either
     assert not any("clahe" in x for x in haem["implementation"]["benchmark_side"])
     assert not any("proxy `" in x for x in plain["implementation"]["benchmark_side"])
-    assert plain["input"]["sprep"] == "none" and plain["input"]["proxy_option"] == "grey"
+    assert (
+        plain["input"]["sprep"] == "none" and plain["input"]["proxy_option"] == "grey"
+    )
 
 
 # ── real runs ─────────────────────────────────────────────────────────────────
@@ -477,3 +484,55 @@ def test_a_preprocessing_row_on_a_reduced_proxy_is_the_benchmarks_refusal(
     assert {r["cause"] for r in runs} == {"reduced_proxy"}
     assert failure_log.WHOSE["reduced_proxy"] == failure_log.BENCHMARK
     assert "reduced_proxy" in resources.NOT_THE_METHOD
+
+
+def tif_rgb_case(case, tmp_path):
+    """``rgb_case`` with whole-slide RGB TIFFs (HyReCo's ``HE/<id>.tif``) for slides."""
+    import tifffile
+    from PIL import Image
+
+    case = rgb_case(case, tmp_path)
+    paths = {}
+    for side in ("ref", "mov"):
+        rgb = np.asarray(Image.open(getattr(case, f"{side}_image")).convert("RGB"))
+        paths[side] = tmp_path / f"{side}.tif"
+        tifffile.imwrite(paths[side], rgb, photometric="rgb", tile=(256, 256))
+    return dataclasses.replace(
+        case, ref_image=str(paths["ref"]), mov_image=str(paths["mov"])
+    )
+
+
+@pytest.mark.parametrize("proxy", ["haem", "grey_smooth"])
+def test_a_proxy_of_a_whole_slide_rgb_tiff_is_written(synthetic_cases, tmp_path, proxy):
+    """HyReCo: the `haem` / `grey_smooth` levels read the original RGB TIFF; the
+    preprocessing job writes their proxy instead of refusing the slide."""
+    case = tif_rgb_case(synthetic_cases["rigid"], tmp_path)
+    rnd = adapter.Round(case, tmp_path / "r", {"proxy": proxy})
+    (done,) = adapter.run_stage(case, rnd.dir, rnd.opts, stages.PREP, rnd=rnd)
+    rec = done[4]
+    assert rec["ok"], rec["error"]
+    assert rec["made"]["candidate"] == proxy
+    assert rnd.done(stages.PREP)
+
+
+@pytest.mark.parametrize(
+    "exc, cause",
+    [(MemoryError(), "benchmark_oom"), (RuntimeError("a bug"), "benchmark")],
+)
+def test_a_failed_preprocessing_job_is_the_benchmarks_cause(
+    synthetic_cases, tmp_path, monkeypatch, exc, cause
+):
+    """The preprocessing is the benchmark's own step: whatever ends it, the round's
+    cause is the benchmark's, never STARE's `exception` / `oom`."""
+    from benchmarks.regbench import failure_log, prep
+
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    rnd = adapter.Round(case, tmp_path / "r", {"proxy": "haem"})
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(prep, "write_inputs", boom)
+    rec = adapter._run_prep(rnd, 1, adapter.LOCAL)
+    assert rec["ok"] is False and rec["cause"] == cause
+    assert failure_log.WHOSE[cause] == failure_log.BENCHMARK

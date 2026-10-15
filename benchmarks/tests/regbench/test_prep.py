@@ -317,3 +317,156 @@ def test_a_result_cannot_be_stored_under_another_candidates_name(ran):
     run = json.loads((d / "run.json").read_text())
     assert run["ok"] is False and "another row's name" in run["error"]
     assert not (d / "warped.npz").exists()
+
+
+# ── a whole-slide brightfield TIFF (HyReCo): read and written by tiles ────────
+def write_rgb_tiff(path, hw, tile=512, seed=0):
+    """A tiled RGB TIFF written from a generator of tiles (never held whole): a smooth
+    texture, shifted per tile so no two tiles are equal."""
+    import tifffile
+
+    rng = np.random.default_rng(seed)
+    from scipy.ndimage import gaussian_filter
+
+    texture = np.stack(
+        [gaussian_filter(rng.random((tile * 2, tile * 2)), 3) for _ in range(3)], -1
+    )
+    texture = ((texture - texture.min()) / np.ptp(texture) * 255).astype(np.uint8)
+    h, w = hw
+
+    def tiles():
+        for ty in range(0, h, tile):
+            for tx in range(0, w, tile):
+                oy, ox = (ty * 7 + tx * 3) % tile, (tx * 5 + ty) % tile
+                yield np.ascontiguousarray(texture[oy : oy + tile, ox : ox + tile])
+
+    tifffile.imwrite(
+        path,
+        tiles(),
+        shape=(h, w, 3),
+        dtype=np.uint8,
+        tile=(tile, tile),
+        photometric="rgb",
+        compression="zlib",
+        bigtiff=True,
+    )
+    return path
+
+
+def bf_case(tif, hw):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        case_id="bf_tif",
+        modality="brightfield",
+        ref_image=str(tif),
+        mov_image=str(tif),
+        ref_hw=list(hw),
+        mov_hw=list(hw),
+        pixel_size_um=0.24,
+    )
+
+
+@pytest.mark.parametrize("name", ["haem", "grey_smooth", "haem_clahe"])
+def test_a_brightfield_tiff_is_preprocessed_like_the_whole_image(tmp_path, name):
+    """HyReCo's slides are RGB TIFFs: the preprocessing reads them by tiles and gives
+    the pixels the whole-image path gives (a size that is not a multiple of a tile)."""
+    import tifffile
+
+    hw = (1500, 2300)
+    tif = write_rgb_tiff(tmp_path / "he.tif", hw)
+    made = prep.write_inputs(bf_case(tif, hw), tmp_path / "out", name)
+    got = tifffile.imread(made["moving"])
+    want = prep.to_array(prep.array_reader(tifffile.imread(tif)), name)
+    assert got.shape == hw and np.array_equal(got, want)
+    assert made["record"]["hw"] == {"ref": list(hw), "mov": list(hw)}
+
+
+MEMORY_BOUND = 64 * 2**20
+
+
+def prep_peak(tif, hw, out, name):
+    """tracemalloc's peak (numpy, zarr and tifffile buffers) over ``write_inputs``."""
+    import tracemalloc
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        prep.write_inputs(bf_case(tif, hw), out, name)
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+@pytest.fixture(scope="module")
+def two_slides(tmp_path_factory):
+    d = tmp_path_factory.mktemp("bf_memory")
+    small, big = (2048, 3072), (6144, 8192)  # the big one has 8x the pixels
+    return d, {
+        hw: write_rgb_tiff(d / f"{hw[0]}x{hw[1]}.tif", hw) for hw in (small, big)
+    }
+
+
+@pytest.mark.parametrize("name", ["haem", "grey_smooth", "haem_clahe"])
+def test_a_brightfield_tiff_is_preprocessed_in_memory_bounded_by_a_tile(
+    two_slides, name
+):
+    """The memory contract (stitching / mosaic / every reader streams): the peak is a
+    tile's working set, not the slide's. Measured at two slide sizes, 8x apart in pixels:
+    the peak does not grow with the slide, and it stays under a bound that a whole-slide
+    read of the big fixture alone (H x W x 3 bytes, before any float conversion) exceeds
+    more than twice over."""
+    d, slides = two_slides
+    (small, big) = sorted(slides, key=lambda hw: hw[0] * hw[1])
+    whole_read = big[0] * big[1] * 3
+    assert whole_read > 2 * MEMORY_BOUND  # a whole-slide read could not pass
+    peaks = {
+        hw: prep_peak(slides[hw], hw, d / f"out_{name}_{hw[0]}", name)
+        for hw in (small, big)
+    }
+    mib = {hw: round(p / 2**20, 1) for hw, p in peaks.items()}
+    print(
+        f"{name}: peak MiB {mib}; whole read of the big slide {whole_read / 2**20:.0f}"
+    )
+    assert peaks[big] < MEMORY_BOUND, mib
+    assert peaks[big] <= peaks[small] + 8 * 2**20, (
+        f"the peak grows with the slide: {mib}"
+    )
+
+
+def test_the_tile_writer_uses_one_encoder_thread(tmp_path, monkeypatch):
+    """tifffile's default encoder pool runs ahead of the writer and queues tiles in
+    proportion to the slide (58 / 199 / 269 MiB for 48 / 192 / 384 tiles, measured on
+    2023.4.12): `maxworkers=1` is a memory bound. Asserted on the argument, which holds
+    at every tifffile version (as tests/test_merge_pyramid_streaming.py does)."""
+    import tifffile
+
+    from benchmarks.regbench import imageio
+
+    seen = []
+    real = tifffile.TiffWriter.write
+
+    def spy(self, data=None, **kwargs):
+        seen.append(kwargs.get("maxworkers", "<default>"))
+        return real(self, data, **kwargs)
+
+    monkeypatch.setattr(tifffile.TiffWriter, "write", spy)
+    tiles = (np.zeros((64, 64), np.uint8) for _ in range(4))
+    imageio.write_nuclear_tiles(tmp_path / "t.ome.tif", (128, 128), np.uint8, tiles, 64)
+    assert seen == [1]
+
+
+def test_a_preprocessing_refusal_is_the_benchmarks_cause(tmp_path):
+    """What the preprocessing still refuses (here: a 16-bit 'RGB' TIFF) is the
+    benchmark's own step failing, never the method's exception."""
+    import tifffile
+
+    from benchmarks.regbench import failure_log, resources
+
+    tif = tmp_path / "rgb16.tif"
+    tifffile.imwrite(tif, np.zeros((64, 64, 3), np.uint16), photometric="rgb")
+    with pytest.raises(prep.Refused) as err:
+        prep.write_inputs(bf_case(tif, (64, 64)), tmp_path / "out", "haem")
+    cause = resources.classify_error(err.value)
+    assert cause in resources.NOT_THE_METHOD
+    assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
