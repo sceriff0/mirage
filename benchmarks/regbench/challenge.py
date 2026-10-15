@@ -8,10 +8,11 @@ cohort's scorer and writes ``<out>/tables/<dataset>/``. Nothing here enters
 pairs, whose landmarks are public. The challenge's leaderboard ranks methods on the
 hidden evaluation pairs (and shows a training column beside it); nothing here is
 comparable row for row with a leaderboard entry, nothing is exported for submission and
-no rank among published methods is claimed. The ``stare_prep`` row's preprocessing was
-chosen on the tuning side of this same training set (``regbench.prep``), so its
-tuning-side numbers are fitted, and its report-side numbers are from sets it did not see
-but from the same challenge data. STARE is built for re-imaged sections with the same
+no rank among published methods is claimed. The ``stare_prep`` row (whose preprocessing
+would be chosen on the tuning side of this same training set, ``regbench.prep``) is PAUSED
+and not run, and so is the tuning side (``anhir_tune``) that chooses it: were it run, its
+tuning-side numbers would be fitted. The STARE rows' preprocessing levels
+(``regimes.py``) were chosen by reasoning, not on these pairs. STARE is built for re-imaged sections with the same
 nuclei in both rounds; consecutive, differently stained sections at 1 to 9 um per pixel
 are outside what it was designed for.
 
@@ -408,15 +409,18 @@ def markdown(
         "**These are the challenge's TRAINING pairs.** Published leaderboard numbers "
         "are computed on the hidden evaluation pairs (with a training column beside "
         "them) and are not comparable row for row with anything here; no submission "
-        "was made and no rank among published methods is claimed. **The `stare_prep` "
-        "row's preprocessing was chosen on the tuning side of this same training "
-        "set.** STARE is not designed for consecutive sections: its rows here are an "
-        "out-of-domain test.\n"
+        "was made and no rank among published methods is claimed. The STARE rows' "
+        "preprocessing levels (`regimes.py`, `bf_consecutive`) were chosen by "
+        "reasoning, not on these pairs; the `stare_prep` row, whose candidate would be "
+        "chosen on the tuning side of this same training set, is PAUSED and not run "
+        "here, and so is its tuning side. STARE is not designed for consecutive "
+        "sections: its rows here are an out-of-domain test.\n"
     )
     if dataset == ANHIR_TUNE:
         parts.append(
             "**TUNING SIDE. Nothing on this page is a result.** Only the preprocessing "
-            "candidates of the `stare_prep` row run here; the choice is made by "
+            "candidates of the `stare_prep` row run here (paused with that row: run "
+            "only on request); the choice is made by "
             f"this rule: {prep.CRITERION}.\n"
         )
     parts.append(
@@ -433,8 +437,9 @@ def markdown(
     parts.append(
         "STARE reads one channel: the plain `stare` row is given each image as "
         "inverted luminance (`255 - (0.299 R + 0.587 G + 0.114 B)`, 8 bit, full "
-        "resolution), written by the benchmark; `stare_prep` is given the frozen "
-        "candidate instead. VALIS and DeeperHistReg read the RGB images.\n"
+        "resolution), written by the benchmark; the STARE levels that name another "
+        "proxy or STARE's own `--prep` say so in their names (`regimes.py`). VALIS "
+        "and DeeperHistReg read the RGB images.\n"
     )
     if no_um:
         parts.append(
