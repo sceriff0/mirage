@@ -280,11 +280,31 @@ def reader_of(cycle: tiles.Cycle, illumination=None):
     ``cycle.nuclear_channel``. Needs ``ashlar`` importable (the ASHLAR image)."""
     reg = importlib.import_module("ashlar.reg")
     rows = cycle.tiles
+    nuclear = int(cycle.nuclear_channel)
+    n_channels = max(len(cycle.channels), nuclear + 1)
+
+    class TileSeriesReader(reg.Reader):
+        def __init__(self):
+            self.metadata = _series_metadata(reg, cycle, n_channels)
+
+        def read(self, series, c):
+            if int(c) != nuclear:
+                raise ValueError(
+                    f"{cycle.dir}: the tile files hold only the nuclear channel {nuclear}; "
+                    f"channel {c} was asked for"
+                )
+            return _read_tile(rows[int(series)], illumination)
+
+    return TileSeriesReader()
+
+
+def _series_metadata(reg, cycle, n_channels):
+    """A ``reg.Metadata`` of the tile series: the zero-origin stage positions as (row,
+    col) px, the pixel size, the tile size and dtype, ``n_channels`` channels."""
+    rows = cycle.tiles
     stage = stage_positions(cycle)
     pos_rc = np.array([[stage[r.tile][1], stage[r.tile][0]] for r in rows], dtype=float)
     dtype = _tile_dtype(cycle)
-    nuclear = int(cycle.nuclear_channel)
-    n_channels = max(len(cycle.channels), nuclear + 1)
     pixel_size = float(cycle.pixel_size_um)
 
     class TileSeriesMetadata(reg.Metadata):
@@ -294,7 +314,7 @@ def reader_of(cycle: tiles.Cycle, illumination=None):
 
         @property
         def num_channels(self):
-            return n_channels
+            return int(n_channels)
 
         @property
         def pixel_size(self):
@@ -310,19 +330,46 @@ def reader_of(cycle: tiles.Cycle, illumination=None):
         def tile_size(self, i):
             return np.array([rows[i].h, rows[i].w])
 
-    class TileSeriesReader(reg.Reader):
-        def __init__(self):
-            self.metadata = TileSeriesMetadata()
+    return TileSeriesMetadata()
+
+
+SERIES_READER = "regbench_tiles"
+
+
+def series_reader_class():
+    """The reader ASHLAR's own COMMAND reads a tile series with (the ``@raw`` cases of
+    ``methods/ashlar.py``): a ``reg.Reader`` subclass built from a cycle folder,
+    ``Reader(path)``, registered in ``ashlar.scripts.ashlar.readers`` under
+    ``SERIES_READER`` so that the argument ``regbench_tiles|<cycle folder>`` selects it
+    (ASHLAR's documented ``reader|path`` syntax, ``scripts/ashlar.py:342-376``).
+
+    It serves EVERY channel the tile files hold -- one plane, the nuclear channel, served
+    as channel 0 -- uncorrected (ASHLAR as published applies flat-/dark-field profiles in
+    its ``Mosaic`` only, never to alignment), and it is NOT uncached: ASHLAR's own
+    ``EdgeAligner`` wraps it in its ``CachingReader`` as it wraps any reader, and the
+    method's memory is a measured result. ``reader_of`` (the front-end's reader) is
+    unchanged. Needs ``ashlar`` importable (the ASHLAR image)."""
+    reg = importlib.import_module("ashlar.reg")
+
+    class TileSeriesFileReader(reg.Reader):
+        def __init__(self, path, **kwargs):
+            if kwargs:
+                raise ValueError(
+                    f"{SERIES_READER} takes a cycle folder and no options, got {kwargs}"
+                )
+            self.path = str(path)
+            self.cycle = tiles.read_cycle(path)
+            self.metadata = _series_metadata(reg, self.cycle, 1)
 
         def read(self, series, c):
-            if int(c) != nuclear:
+            if int(c) != 0:
                 raise ValueError(
-                    f"{cycle.dir}: the tile files hold only the nuclear channel {nuclear}; "
-                    f"channel {c} was asked for"
+                    f"{self.path}: the tile files hold one plane (the nuclear channel, "
+                    f"served as channel 0); channel {c} was asked for"
                 )
-            return _read_tile(rows[int(series)], illumination)
+            return _read_tile(self.cycle.tiles[int(series)], None)
 
-    return TileSeriesReader()
+    return TileSeriesFileReader
 
 
 def _ashlar_edge(cycle, max_shift_um, illum):

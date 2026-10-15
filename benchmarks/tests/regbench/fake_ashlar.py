@@ -130,21 +130,27 @@ class FilePatternReader:
         return img[c] if img.ndim == 3 else img
 
 
+# ``scripts/ashlar.py:342-347``: the module-level table ``build_reader`` looks a reader
+# name up in (a test or the adapter may add one, as the real one allows)
+readers = {"filepattern": FilePatternReader}
+
+
 def build_reader(spec):
-    """``scripts/ashlar.py:356-394``: ``reader|path|key=value|...``, values parsed as
-    floats where they can be."""
-    name, path, rest = spec.split("|", 2)
-    if name != "filepattern":
+    """``scripts/ashlar.py:351-376``: ``reader|path|key=value|...``, values parsed as
+    floats where they can be; the reader class from ``readers``."""
+    name, path, *rest = spec.split("|", 2)
+    reader_class = readers.get(name)
+    if reader_class is None:
         raise ProcessingError(f"Unknown reader: {name}")
     kwargs = {}
-    for piece in rest.split("|"):
+    for piece in (rest[0].split("|") if rest else []):
         key, value = piece.split("=")
         try:
             value = float(value)
         except ValueError:
             pass
         kwargs[key] = value
-    return FilePatternReader(path, **kwargs)
+    return reader_class(path, **kwargs)
 
 
 # ── the Bio-Formats reader ────────────────────────────────────────────────────
@@ -335,11 +341,16 @@ class EdgeAligner:
             reader.thumbnail = np.zeros((6, 8), np.uint8)
             reader.thumbnail_scale = 0.05
             self.positions = np.array(CONFIG["edge_positions"](m), dtype=float)
+            self.shifts = self.positions - m.positions
             # reg.py:713-716
             self.origin = self.positions.min(axis=0)
             self.positions = self.positions - self.origin
             self.lr = _Model(-self.origin)
             self.centers = self.positions + m.size / 2
+            self.max_error = 1.0
+            self.neighbors_graph = _Graph(max(m.num_images - 1, 0))
+            self.spanning_tree = _Graph(max(m.num_images - 1, 0))
+            _STATE["cycle"] = 0
             return
         shifts = np.zeros((m.num_images, 2))
         if CONFIG["edge_shifts"] is not None:
@@ -390,9 +401,9 @@ class LayerAligner:
         self.reference_idx = np.argmin(dist, 0)
         self.reference_positions = reference_positions[self.reference_idx]
         self.reference_aligner_positions = ref.positions[self.reference_idx]
-        shifts = (CONFIG["layer_shifts"] or default_layer_shifts)(
-            cycle, m.height, m.width
-        )
+        # a reader that is not the file-pattern one has no grid: one row of all its tiles
+        n_rows, n_cols = getattr(m, "height", 1), getattr(m, "width", m.num_images)
+        shifts = (CONFIG["layer_shifts"] or default_layer_shifts)(cycle, n_rows, n_cols)
         self.shifts = np.asarray(shifts, dtype=float)
         self.errors = np.full(m.num_images, 0.5)
         if CONFIG["layer_errors"] is not None:
@@ -589,7 +600,14 @@ def modules():
         Warning=Warning,
         DataWarning=DataWarning,
     )
-    cli = _module("ashlar.scripts.ashlar", main=main, ProcessingError=ProcessingError)
+    readers.clear()
+    readers["filepattern"] = FilePatternReader
+    cli = _module(
+        "ashlar.scripts.ashlar",
+        main=main,
+        ProcessingError=ProcessingError,
+        readers=readers,
+    )
     scripts = _module("ashlar.scripts", ashlar=cli)
     pkg = _module("ashlar", __version__=CONFIG["version"], reg=reg, scripts=scripts)
     pkg.__file__ = __file__

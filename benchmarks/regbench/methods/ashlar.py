@@ -40,6 +40,17 @@ every cell) once per slide, cycle and tile origins (``moving_tiles``); ASHLAR's 
 stitch is not shared, each command does its own. The cause ``identical_overlap`` is given
 only on a cell without noise: with noise the same raise is ASHLAR's own (``exception``).
 
+**Raw tiles** (``case.extra["tiles"]``: the ``<name>@raw`` case sets of
+``datasets/rawtiles.py``; ``_register_raw``). There the tiles ARE the input: nothing is
+cut, no noise is added and no anchor is used (user ruling 2026-10-15: ASHLAR as
+published; the run list keeps ``ashlar_clean`` and the ``max_shift_um`` cross only). Each
+cycle's tile series is read by ``frontends.series_reader_class``, registered in ASHLAR's
+own ``readers`` table as ``regbench_tiles`` for the time of the command, so the command
+is ASHLAR's (``EdgeAligner`` with its own ``CachingReader``, ``LayerAligner``,
+``PyramidWriter``) with ``-c 0 -m <shift>``. ``true_positions_yx`` are each cycle's stage
+layout at whole pixels, where the case's nuclei were placed; the point map below is the
+same, and a tile may be rectangular (``[h, w]``, ``regbench.tilemap``).
+
 **Points: exactly where ASHLAR drew each tile.** ``Mosaic.assemble_channel`` pastes tile
 ``i`` at ``aligner.positions[i]`` (``reg.py:1147-1153``) and ``utils.paste`` puts tile
 pixel ``l`` on mosaic pixel ``position + l`` (``utils.py:149-194``). The wrapper records
@@ -442,6 +453,15 @@ def tile_order(metadata_positions_yx, grid):
     from those positions instead of assuming it, and refuses anything that is not the grid.
     """
     pos = np.asarray(metadata_positions_yx, dtype=float)
+    if grid.get("kind") == SERIES_KIND:
+        told = np.asarray(grid["told_positions_yx"], dtype=float)
+        if pos.shape != told.shape or not np.allclose(pos, told, atol=1e-6):
+            raise RuntimeError(
+                f"ASHLAR's {len(pos)} tile positions are not the {len(told)} stage "
+                f"positions the tile-series reader of {grid.get('dir')} gave it: the "
+                "tiles cannot be told apart"
+            )
+        return np.arange(len(pos))
     rc = np.rint(pos / float(grid["stride"])).astype(int)
     index = rc[:, 0] * int(grid["n_cols"]) + rc[:, 1]
     n = int(grid["n_rows"]) * int(grid["n_cols"])
@@ -464,7 +484,7 @@ def placement_of(edge, layer, ref_grid, mov_grid):
     ref_true = ref_true[ref_order]
     mov_true = mov_true[tile_order(layer["metadata_positions_yx"], mov_grid)]
     out = {
-        "tile": int(mov_grid["tile_size"]),
+        "tile": _tile_value(mov_grid["tile_size"]),
         "mov_true_yx": mov_true.tolist(),
         "mov_pos_yx": np.asarray(layer["positions_yx"], dtype=float).tolist(),
         "ref_true_yx": ref_true.tolist(),
@@ -606,7 +626,7 @@ def SELFCHECK_REFERENCE(info, native, pair):
     if not spec:
         return None
     placement = info["placement"]
-    tile = float(placement["tile"])
+    tile = tilemap.tile_spec(placement["tile"])
     ref_pos, ref_true = placement["ref_pos_yx"], placement["ref_true_yx"]
     back = tilemap.tile_point_map(
         ref_pos, tile, np.asarray(ref_true, dtype=float) - np.asarray(ref_pos)
@@ -694,6 +714,166 @@ def _edge_identity(cache_dir, tiles_name, base, edge):
     return same
 
 
+# ── raw tiles (the `<name>@raw` case sets, datasets/rawtiles.py) ──────────────
+SERIES_KIND = "tile_series"
+RAW_AS_PUBLISHED = (
+    "ASHLAR runs as published on raw tiles (user ruling 2026-10-15): no noise (real "
+    "tiles are never pixel-identical; the noise factor exists only for tiles cut from "
+    "stitched slides) and no STARE affine"
+)
+
+
+def _tile_value(size):
+    """A grid's ``tile_size`` as the placement stores it: one int, or ``[h, w]``."""
+    if np.ndim(size) == 0:
+        return int(size)
+    return [int(v) for v in size]
+
+
+def series_grid(cycle_dir):
+    """What the raw-mode bookkeeping needs of one tile-series cycle (``regbench.tiles``),
+    in the shape of a ``grid.json``: ``told_positions_yx`` (what the reader gives ASHLAR:
+    the zero-origin stage positions, ``frontends.stage_positions``),
+    ``true_positions_yx`` (where each tile's pixels sit in the case's frame: the same
+    positions at whole pixels, ``frontends.placed_origins`` -- the origins the case's
+    nuclei were placed at), the tile size ((h, w) unless square), one channel."""
+    from .. import frontends, tiles
+
+    cyc = tiles.read_cycle(cycle_dir)
+    stage = frontends.stage_positions(cyc)
+    told = [[stage[r.tile][1], stage[r.tile][0]] for r in cyc.tiles]
+    true = frontends.placed_origins(cyc.tiles, stage)[:, ::-1].astype(float)
+    h, w = cyc.tiles[0].h, cyc.tiles[0].w
+    return {
+        "kind": SERIES_KIND,
+        "dir": str(cycle_dir),
+        "tile_ids": [int(r.tile) for r in cyc.tiles],
+        "told_positions_yx": told,
+        "true_positions_yx": true.tolist(),
+        "tile_size": int(h) if h == w else [int(h), int(w)],
+        "n_channels": 1,
+        "pixel_size_um": float(cyc.pixel_size_um),
+        "profiles": bool(cyc.ffp or cyc.dfp),
+    }
+
+
+def _register_raw(cases, work, opts, ashlar, version, frac, affine, shift, label, mon):
+    """ASHLAR's own command on the raw tiles of one patient (``case.extra["tiles"]``:
+    ``{"ref": cycle folder, "mov": cycle folder}``), as published: the tile series of
+    each cycle is read by ``frontends.series_reader_class`` (registered in ASHLAR's
+    ``readers`` table as ``regbench_tiles`` for the time of the command), whose stage
+    positions ASHLAR stitches (``EdgeAligner``, its own ``CachingReader`` included) and
+    aligns (``LayerAligner``), and its ``PyramidWriter`` writes the mosaic. ``-c 0`` (the
+    tile files hold the nuclear plane only) and ``-m`` are the only flags.
+
+    The points: the case's nuclei sit in each cycle's STAGE layout at whole pixels
+    (``series_grid``: ``true_positions_yx``); ``point_map`` moves a moving nucleus by its
+    tile's (ASHLAR position - stage origin) into ASHLAR's mosaic, then back by the
+    reference tile drawn there. That second step makes the comparison the one in ASHLAR's
+    mosaic frame, where the reference nuclei are placed by ASHLAR's cycle-1 positions
+    (``datasets/rawtiles.py``, "Case sets")."""
+    import importlib
+
+    from .. import frontends
+
+    if frac != 0 or affine != "none":
+        raise ValueError(f"{cases[0].dataset}: {RAW_AS_PUBLISHED}")
+    if not all(c.extra.get("tiles") for c in cases):
+        raise ValueError("one patient mixes raw-tile cases with slide cases")
+    refs = sorted({str(c.extra["tiles"]["ref"]) for c in cases})
+    if len(refs) != 1:
+        raise ValueError(
+            f"one patient has one reference cycle, got {len(refs)}: {refs}"
+        )
+    dirs = [refs[0], *[str(c.extra["tiles"]["mov"]) for c in cases]]
+    for d in dirs:
+        if "|" in d:
+            raise ValueError(
+                f"tile folder {d} contains '|', which ASHLAR's reader syntax uses as "
+                "a separator"
+            )
+    grids = [series_grid(d) for d in dirs]
+    px = float(grids[0]["pixel_size_um"])
+    side = [
+        "tiles: the dataset's raw tiles exported once to regbench's tile series (one "
+        "nuclear plane per tile; the best-focus z where the vendor stores a stack: "
+        "regbench.readers) and read by a minimal reg.Reader registered in ASHLAR's "
+        f"command as `{frontends.SERIES_READER}` (ashlar.scripts.ashlar.readers); it "
+        "gives ASHLAR the stage positions at a zero origin",
+        "EdgeAligner.run and LayerAligner.run wrapped to be OBSERVED after they "
+        "return: positions, shifts, errors, discards, seconds",
+        "the mosaic's planes of each cycle copied into one OME-TIFF per cycle "
+        "(pixels untouched)",
+        "the clock and the memory peak paused from the last aligner's return on "
+        "(ASHLAR's writer)",
+    ]
+    if any(g["profiles"] for g in grids):
+        side.append(
+            "the cycles' flat-/dark-field profiles are not passed (--ffp/--dfp): ASHLAR "
+            "applies them only when writing its mosaic, never to the alignment"
+        )
+    base = {
+        "version": version,
+        "source": str(Path(getattr(ashlar, "__file__", "?")).parent),
+        "label": label,
+        "input": "raw tiles (case.extra.tiles)",
+        "noise": "none",
+        "affine": affine,
+        "tile": grids[0]["tile_size"],
+        "overlap": None,
+        "max_shift_um": shift,
+        "noise_frac": 0.0,
+        "noise_min_counts": 0.0,
+        "seed": None,
+        "align_channel": 0,
+        "pixel_size_um": px,
+        "workers_seen": "ASHLAR has no core-count option; none is set",
+        "implementation": {
+            "package": "ashlar",
+            "registration": "ashlar.scripts.ashlar.main(['ashlar', "
+            f"'{frontends.SERIES_READER}|<cycle>', ..., '-o', mosaic, '-c', '0', '-m', "
+            "'<max_shift_um>'])",
+            "parameters": "ASHLAR's defaults",
+            "point_warp": "one translation per tile, from the positions ASHLAR's own "
+            "aligners hold when its writer pastes the tiles (regbench.tilemap)",
+            "benchmark_side": side,
+        },
+        "retile_s": 0.0,
+        "retile_moving_s": 0.0,
+        "retile_reference_s": 0.0,
+        "reference_tiles": refs[0],
+        "moving_tiles": dirs[1:],
+        "rounds_in_command": [c.case_id for c in cases],
+        "reference_stitch_against": "the stage layout (raw tiles have no truth)",
+    }
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
+    mosaic = work / "ashlar_output.ome.tif"
+    argv = [
+        "ashlar",
+        *[f"{frontends.SERIES_READER}|{d}" for d in dirs],
+        "-o",
+        str(mosaic),
+        "-c",
+        "0",
+        "-m",
+        repr(float(shift)),
+    ]
+    cli = importlib.import_module("ashlar.scripts.ashlar")
+    had = frontends.SERIES_READER in cli.readers
+    before = cli.readers.get(frontends.SERIES_READER)
+    cli.readers[frontends.SERIES_READER] = frontends.series_reader_class()
+    try:
+        yield from _command(
+            cases, {}, grids, argv, mosaic, base, opts, mon, False, None, 0.0
+        )
+    finally:
+        if had:
+            cli.readers[frontends.SERIES_READER] = before
+        else:
+            cli.readers.pop(frontends.SERIES_READER, None)
+
+
 def register_group(cases, work, opts):
     work = Path(work)
     frac, affine, shift = settings(opts)
@@ -714,6 +894,11 @@ def register_group(cases, work, opts):
             f"this adapter is ASHLAR {VERSION} as shipped; the installed ashlar is "
             f"{version}"
         )
+    if any(c.extra.get("tiles") for c in cases):
+        yield from _register_raw(
+            cases, work, opts, ashlar, version, frac, affine, shift, label, mon
+        )
+        return
     refs = sorted({str(c.ref_image) for c in cases})
     if len(refs) != 1:
         raise ValueError(
@@ -846,6 +1031,19 @@ def register_group(cases, work, opts):
     work.mkdir(parents=True, exist_ok=True)
     grids = [ref_grid, *mov_grids]
     argv = original.ashlar_argv([ref_dir, *mov_dirs], grids, mosaic, channel, shift)
+    yield from _command(
+        included, anchors, grids, argv, mosaic, base, opts, mon, selfcheck, cache, frac
+    )
+
+
+def _command(included, anchors, grids, argv, mosaic, base, opts, mon, selfcheck, cache, frac):
+    """ASHLAR's own command on the rounds ``included`` (reference first), then one result
+    per round (``_results``); the clock and the memory peak are paused from the last
+    aligner's return on."""
+    from benchmarks.ashlar import original
+
+    work = Path(mosaic).parent
+    variant = VARIANTS[0]
     base["command"] = argv
     n_cycles = len(grids)
     seen = {}
@@ -1022,8 +1220,10 @@ def _results(
                 placement["ref_true_yx"],
                 layer["reference_idx"],
             )
-            jumps = tilemap.neighbour_jumps(
-                d_yx, int(grid["n_rows"]), int(grid["n_cols"])
+            jumps = (
+                tilemap.neighbour_jumps(d_yx, int(grid["n_rows"]), int(grid["n_cols"]))
+                if grid.get("n_rows")
+                else np.empty(0)  # a tile series has no row-major grid
             )
             case_points = load_points(case)
             band = nucleus_band(placement, case_points)

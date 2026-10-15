@@ -49,16 +49,46 @@ def anchor_tile_origins(m0, ref_origins_yx, tile_size):
     return np.round(c_mov_xy[:, ::-1] - half).astype(np.int64)
 
 
+def half_size_xy(tile_size):
+    """Half a tile, ``(x, y)``: ``tile_size`` is one number (a square tile, the retiled
+    slides) or ``(h, w)`` (a camera's tile, e.g. 1008 x 1344 on CODEX: the raw-tile
+    case sets)."""
+    t = np.asarray(tile_size, dtype=float)
+    if t.ndim == 0:
+        return np.array([float(t), float(t)]) / 2.0
+    if t.shape != (2,):
+        raise ValueError(f"tile size must be one number or (h, w), got {tile_size!r}")
+    return np.array([t[1], t[0]]) / 2.0
+
+
 def _signed_depths(origins_yx, tile_size, xy, k):
     """``(depth (N, k), tile (N, k))``: how deep each point lies inside its ``k`` nearest
-    tiles (max-norm), negative outside; ``-inf`` and tile ``-1`` for a missing neighbour."""
+    tiles (max-norm), negative outside; ``-inf`` and tile ``-1`` for a missing neighbour.
+
+    A rectangular tile: its depth is the distance to its nearest edge, ``min(w/2 - |dx|,
+    h/2 - |dy|)``; the ``k`` candidates are the nearest in the max-norm scaled to the tile
+    (every tile that holds the point is among them) and come deepest first."""
     from scipy.spatial import cKDTree
 
-    centres_xy = np.asarray(origins_yx, dtype=float)[:, ::-1] + tile_size / 2.0
+    half = half_size_xy(tile_size)
+    centres_xy = np.asarray(origins_yx, dtype=float)[:, ::-1] + half
     k = min(k, len(centres_xy))
-    dist, idx = cKDTree(centres_xy).query(xy, k=k, p=np.inf)
-    dist, idx = dist.reshape(len(xy), k), idx.reshape(len(xy), k)
-    return tile_size / 2.0 - dist, np.where(np.isfinite(dist), idx, -1)
+    if half[0] == half[1]:
+        dist, idx = cKDTree(centres_xy).query(xy, k=k, p=np.inf)
+        dist, idx = dist.reshape(len(xy), k), idx.reshape(len(xy), k)
+        return half[0] - dist, np.where(np.isfinite(dist), idx, -1)
+    scale = half.max() / half
+    _, idx = cKDTree(centres_xy * scale).query(np.asarray(xy) * scale, k=k, p=np.inf)
+    idx = np.asarray(idx).reshape(len(xy), k)
+    found = idx < len(centres_xy)
+    safe = np.where(found, idx, 0)
+    off = np.abs(np.asarray(xy, dtype=float)[:, None, :] - centres_xy[safe])
+    depth = np.min(half - off, axis=2)
+    depth[~found] = -np.inf
+    order = np.argsort(-depth, axis=1, kind="stable")
+    depth = np.take_along_axis(depth, order, axis=1)
+    idx = np.take_along_axis(np.where(found, idx, -1), order, axis=1)
+    return depth, idx
 
 
 def _depths(mov_origins_yx, tile_size, xy, k=4):
@@ -112,6 +142,13 @@ def single_cover(origins_yx, tile_size, xy, margin=0.0):
     return inside & (depth[:, 1] < -margin)
 
 
+def tile_spec(tile):
+    """A placement's ``tile``: one number (square) or ``[h, w]``."""
+    if np.ndim(tile) == 0:
+        return float(tile)
+    return tuple(float(v) for v in tile)
+
+
 def placement_maps(placement):
     """``(to_reference, to_mosaic)`` of one moving cycle (module docstring).
 
@@ -120,7 +157,7 @@ def placement_maps(placement):
     ``ref_pos_yx`` (where ASHLAR drew it in the mosaic), and ``tile``. ``to_mosaic`` is
     moving slide -> mosaic; ``to_reference`` is moving slide -> reference slide.
     """
-    tile = float(placement["tile"])
+    tile = tile_spec(placement["tile"])
     mov_true = np.asarray(placement["mov_true_yx"], dtype=float)
     mov_pos = np.asarray(placement["mov_pos_yx"], dtype=float)
     ref_true = np.asarray(placement["ref_true_yx"], dtype=float)
@@ -149,7 +186,7 @@ def on_seam(placement, xy, margin=1.0):
     xy = np.asarray(xy, dtype=float).reshape(-1, 2)
     if not len(xy):
         return np.zeros(0, dtype=bool)
-    tile = float(placement["tile"])
+    tile = tile_spec(placement["tile"])
     _, to_mosaic = placement_maps(placement)
     m = to_mosaic(xy)
     clean = (
