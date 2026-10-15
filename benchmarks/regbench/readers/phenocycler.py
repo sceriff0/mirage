@@ -24,7 +24,7 @@ from pathlib import Path
 import tifffile
 
 from .. import tiles
-from ._common import BestFocus, snake_rowcol
+from ._common import BestFocus, need, snake_rowcol
 
 TILE_RE = re.compile(r"^(\d+)_(\d+)_Z(\d+)_CH(\d+)\.tif$", re.IGNORECASE)
 CYCLE_RE = re.compile(r"^cyc(\d+)_reg(\d+)$", re.IGNORECASE)
@@ -38,18 +38,19 @@ def _find_experiment(root: Path) -> Path:
     raise FileNotFoundError(f"no experiment.json under {root}")
 
 
-def _grid(exp: dict):
-    mode = exp.get("tilingMode")
+def _grid(exp: dict, where="experiment.json"):
+    mode = need(exp, "tilingMode", where)
     if mode != "snakerows":
-        raise ValueError(f"experiment.json tilingMode {mode!r}: only 'snakerows' is read")
-    w, h = int(exp["regionWidth"]), int(exp["regionHeight"])
-    pitch_x = float(exp["tileWidth"]) * (1.0 - float(exp["tileOverlapX"]))
-    pitch_y = float(exp["tileHeight"]) * (1.0 - float(exp["tileOverlapY"]))
+        raise ValueError(f"{where} tilingMode {mode!r}: only 'snakerows' is read")
+    w, h = int(need(exp, "regionWidth", where)), int(need(exp, "regionHeight", where))
+    pitch_x = float(need(exp, "tileWidth", where)) * (1.0 - float(need(exp, "tileOverlapX", where)))
+    pitch_y = float(need(exp, "tileHeight", where)) * (1.0 - float(need(exp, "tileOverlapY", where)))
     return w, h, pitch_x, pitch_y
 
 
-def _export_cycle(cdir: Path, exp: dict, names, dest: Path) -> tiles.Cycle:
-    n_cols, n_rows, pitch_x, pitch_y = _grid(exp)
+def _export_cycle(cdir: Path, exp: dict, names, dest: Path, where="experiment.json") -> tiles.Cycle:
+    n_cols, n_rows, pitch_x, pitch_y = _grid(exp, where)
+    pixel_size_um = float(need(exp, "xyResolution", where)) / 1000.0
     by_tile: dict[int, dict[int, Path]] = {}
     chans = set()
     for p in sorted(cdir.iterdir()):
@@ -78,7 +79,7 @@ def _export_cycle(cdir: Path, exp: dict, names, dest: Path) -> tiles.Cycle:
     return tiles.write_cycle(
         dest,
         planes(),
-        pixel_size_um=float(exp["xyResolution"]) / 1000.0,
+        pixel_size_um=pixel_size_um,
         channels=names,
         nuclear_channel=0,
         extra={
@@ -95,6 +96,8 @@ def export(root, dest) -> list[tiles.Cycle]:
     root, dest = Path(root), Path(dest)
     exp_path = _find_experiment(root)
     exp = json.loads(exp_path.read_text())
+    _grid(exp, exp_path)  # every key the grid needs, refused by name before any tile is read
+    need(exp, "xyResolution", exp_path)
     base = root / "MICROSCOPE_OUTPUT" if (root / "MICROSCOPE_OUTPUT").is_dir() else root
     cdirs = sorted(p for p in base.iterdir() if p.is_dir() and CYCLE_RE.match(p.name))
     if not cdirs:
@@ -110,5 +113,5 @@ def export(root, dest) -> list[tiles.Cycle]:
         per = max(chans)
         cyc = int(CYCLE_RE.match(cdir.name)[1])
         names = all_names[(cyc - 1) * per : cyc * per] or [f"CH{c}" for c in sorted(chans)]
-        out.append(_export_cycle(cdir, exp, names, dest / cdir.name))
+        out.append(_export_cycle(cdir, exp, names, dest / cdir.name, exp_path))
     return out

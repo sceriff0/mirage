@@ -6,6 +6,14 @@ import numpy as np
 from scipy import ndimage
 
 
+def need(doc: dict, key: str, where) -> object:
+    """``doc[key]``, or a refusal naming the key and the file (never a bare KeyError)."""
+    try:
+        return doc[key]
+    except (KeyError, TypeError):
+        raise ValueError(f"{where}: no {key!r} (the reader needs it)") from None
+
+
 def snake_rowcol(index: int, n_cols: int) -> tuple[int, int]:
     """(row, col) of the ``index``-th (0-based) tile of a snake: row r runs left to right
     when r is even and right to left when odd."""

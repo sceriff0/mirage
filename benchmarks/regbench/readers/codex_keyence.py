@@ -25,7 +25,7 @@ from pathlib import Path
 import tifffile
 
 from .. import tiles
-from ._common import BestFocus, snake_rowcol
+from ._common import BestFocus, need, snake_rowcol
 
 TILE_RE = re.compile(r"^(\d+)_(\d+)_Z(\d+)_CH(\d+)\.tif$", re.IGNORECASE)
 CYCLE_RE = re.compile(r"Cyc(\d+)_reg(\d+)", re.IGNORECASE)
@@ -92,12 +92,14 @@ class _Source:
 def export(cycle_zip_or_dir, experiment_json, dest) -> tiles.Cycle:
     src, exp_path, dest = Path(cycle_zip_or_dir), Path(experiment_json), Path(dest)
     exp = json.loads(exp_path.read_text())
-    mode = exp.get("tiling_mode")
+    mode = need(exp, "tiling_mode", exp_path)
     if mode != "snake":
-        raise ValueError(f"Experiment.json tiling_mode {mode!r}: only 'snake' is read")
-    n_cols, n_rows = int(exp["region_width"]), int(exp["region_height"])
-    pitch_x = float(exp["tile_width"]) - float(exp["tile_overlap_X"])
-    pitch_y = float(exp["tile_height"]) - float(exp["tile_overlap_Y"])
+        raise ValueError(f"{exp_path} tiling_mode {mode!r}: only 'snake' is read")
+    n_cols = int(need(exp, "region_width", exp_path))
+    n_rows = int(need(exp, "region_height", exp_path))
+    pitch_x = float(need(exp, "tile_width", exp_path)) - float(need(exp, "tile_overlap_X", exp_path))
+    pitch_y = float(need(exp, "tile_height", exp_path)) - float(need(exp, "tile_overlap_Y", exp_path))
+    pixel_size_um = float(need(exp, "per_pixel_XY_resolution", exp_path)) / 1000.0
     names_all = _sample_channel_names(exp_path.parent)  # refuses a conflicting pair
     source = _Source(src)
     try:
@@ -129,7 +131,7 @@ def export(cycle_zip_or_dir, experiment_json, dest) -> tiles.Cycle:
         return tiles.write_cycle(
             dest,
             planes(),
-            pixel_size_um=float(exp["per_pixel_XY_resolution"]) / 1000.0,
+            pixel_size_um=pixel_size_um,
             channels=names,
             nuclear_channel=0,
             extra={

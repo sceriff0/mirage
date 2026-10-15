@@ -183,6 +183,52 @@ def test_codex_refuses_a_sample_folder_with_both_spellings(tmp_path):
         codex_keyence.export(src, exp, tmp_path / "out")
 
 
+def test_codex_refuses_both_spellings_whatever_the_file_system(tmp_path, monkeypatch):
+    """The sample folder's listing and the two files' texts are given, not read: the
+    refusal is tested on a case-insensitive file system too (D1 carry-in)."""
+    texts = {"channelNames.txt": "A\nB\n", "channelnames.txt": "A\nC\n", "x.tif": ""}
+    monkeypatch.setattr(codex_keyence.os, "listdir", lambda folder: list(texts))
+    monkeypatch.setattr(
+        codex_keyence.Path, "read_text", lambda self, *a, **k: texts[self.name]
+    )
+    with pytest.raises(ValueError, match="different content"):
+        codex_keyence._sample_channel_names(tmp_path)
+    texts["channelNames.txt"] = "A\nC\n"  # the same content twice is one list
+    assert codex_keyence._sample_channel_names(tmp_path) == ["A", "C"]
+
+
+def test_codex_refuses_another_tiling_mode(tmp_path):
+    src, exp, _ = write_codex(tmp_path / "raw" / "sample")
+    exp.write_text(exp.read_text().replace('"snake"', '"rows"'))
+    with pytest.raises(ValueError, match="tiling_mode 'rows': only 'snake'"):
+        codex_keyence.export(src, exp, tmp_path / "out")
+
+
+@pytest.mark.parametrize(
+    "key", ["region_width", "tile_overlap_Y", "tiling_mode", "per_pixel_XY_resolution"]
+)
+def test_codex_refuses_a_missing_experiment_key_by_name(tmp_path, key):
+    src, exp, _ = write_codex(tmp_path / "raw" / "sample")
+    doc = json.loads(exp.read_text())
+    del doc[key]
+    exp.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match=f"no '{key}'"):
+        codex_keyence.export(src, exp, tmp_path / "out")
+    assert not (tmp_path / "out" / "tiles.csv").exists()
+
+
+@pytest.mark.parametrize("key", ["regionHeight", "tileOverlapX", "tilingMode", "xyResolution"])
+def test_phenocycler_refuses_a_missing_experiment_key_by_name(tmp_path, key):
+    write_pheno(tmp_path / "raw")
+    p = tmp_path / "raw" / "MICROSCOPE_OUTPUT" / "experiment.json"
+    doc = json.loads(p.read_text())
+    del doc[key]
+    p.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match=f"no '{key}'"):
+        phenocycler.export(tmp_path / "raw", tmp_path / "out")
+    assert not (tmp_path / "out").exists()  # refused before any tile is written
+
+
 # ── Bio-Formats (through ASHLAR's reader) ────────────────────────────────────
 def test_bioformats_positions_are_pixels_row_col(tmp_path, monkeypatch):
     """ashlar 1.20.0 ``reg.py:349-389``: stage (Y, X) um, y flipped, / pixel_size -> pixels
