@@ -441,6 +441,9 @@ GPU_MEMORY_ERRORS = ("CUDA out of memory",)
 #                  (ruling R6): not the method's failure
 #   reduced_proxy  the adapter refused a preprocessing row on a reduced proxy: a
 #                  prepare-time choice of the benchmark, not a method failure
+#   no_pixel_size  the adapter refused a level that needs a pixel size (STARE's CLAHE,
+#                  whose region is in micrometres) on a case without one: the dataset's
+#                  gap, not a method failure
 CAUSES = (
     "exception",
     "killed",
@@ -460,6 +463,7 @@ CAUSES = (
     "benchmark",
     "identical_overlap",
     "reduced_proxy",
+    "no_pixel_size",
 )
 # more memory is the remedy: the unit goes up a rung (regbench.ladder)
 MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
@@ -471,6 +475,7 @@ NOT_THE_METHOD = (
     "benchmark",
     "identical_overlap",
     "reduced_proxy",
+    "no_pixel_size",
 )
 
 

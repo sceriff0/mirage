@@ -200,7 +200,7 @@ primary rows:
   is written by `prep.write_inputs` before COARSE (the `prep` job) and IS a departure,
   listed in `info.implementation.benchmark_side`; its STITCH image is still the case's
   own proxy. Refused: `channel` on an RGB case, any other proxy on a fluorescence one,
-  values outside `PROXIES`/`SPREPS`, `sprep=clahe` where the pixel size is unknown, and
+  values outside `PROXIES`/`SPREPS`, `sprep=clahe` where the pixel size is unknown (cause `no_pixel_size`, the benchmark's), and
   `prep` (the label-bound row above) together with either. A run with neither option
   differs from the earlier ones only by `--prep none` in the two stage commands.
 - **What a selfcheck gate does not exercise.** A generated STARE cell is gated by `stare`'s
@@ -348,6 +348,7 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 | `killed`, no end state | the process died and the scheduler's accounting named no end state for its task within the wait (`REGBENCH_ACCT_WAIT_S`) | not as a memory cause: the `climb` task runs the unit once more at its own rung, and `cause_from` says so | the method's while it stands |
 | `identical_overlap` | ASHLAR's error metric raised `correlation > total_amplitude` on pixel-identical overlaps, which exist only because the benchmark cuts tiles from a stitched slide | no | NOT the method's |
 | `reduced_proxy` | the STARE adapter refused a preprocessing row on a reduced proxy (HyReCo prepared with `--reduce 2`): a prepare-time choice of the benchmark | no | NOT the method's |
+| `no_pixel_size` | the STARE adapter refused a level that needs a pixel size (`sprep=clahe`: STARE's CLAHE region is in micrometres) on a case without one (ANHIR's mammary glands): the dataset's gap. Its round contributes no tile to `stages --due`, so the feeder still submits the other cases' tiles | no | NOT the method's |
 | `benchmark_oom` | the BENCHMARK's own lines ran out of memory with the clock stopped (the lattice, the arrays and the files around the method's point mapping; never the mapping itself) | yes | NOT the method's |
 | `benchmark` | the benchmark's own lines around the method's point mapping failed for another reason | no | NOT the method's |
 | `not_submitted` | a stage job of a registration in several jobs never reached the queue, or was left without the attempt the pipeline would have given it next (the tile submitter was refused or did not finish) | no | NOT the method's (the launcher's) |
@@ -1735,7 +1736,7 @@ code can write against it, so a new cause cannot be added unclassified):
 | whose | causes | means |
 |---|---|---|
 | `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its point mapping or its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting names a cause (memory, time, a lost node) or the task's script noted a Python ended by signal 9 |
-| `benchmark` | `benchmark_oom`, `benchmark`, `identical_overlap`, `reduced_proxy`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
+| `benchmark` | `benchmark_oom`, `benchmark`, `identical_overlap`, `reduced_proxy`, `no_pixel_size`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
 | `infrastructure` | `infrastructure`, `selfcheck_lost` | the scheduler or the node lost the attempt |
 | `launcher` | `gate_blocked`, `dropped_row`, `not_run`, `not_submitted` | a gate kept the run from starting, a row was dropped, the unit was never submitted, a stage job never reached the queue |
 

@@ -245,7 +245,7 @@ def settings(opts, case):
             f"({', '.join(p for p in PROXIES if p != 'channel')})"
         )
     if sprep == "clahe" and not case.pixel_size_um:
-        raise ValueError(
+        raise NoPixelSize(
             f"sprep=clahe: {case.case_id} has no established pixel size, and CLAHE's "
             "region is in micrometres"
         )
@@ -567,6 +567,14 @@ def stage_dir_of(out, label, case):
     return result_dir(out, variant_names("stare", label)[-1], case) / "stages"
 
 
+class NoPixelSize(ValueError):
+    """STARE's CLAHE asked of a case whose pixel size is not established (ANHIR's
+    mammary glands): its region is in micrometres, so the run cannot exist there. The
+    dataset's, i.e. the benchmark's, cause, not the method's."""
+
+    regbench_cause = "no_pixel_size"
+
+
 class ReducedProxy(ValueError):
     """A preprocessing row asked of a reduced proxy: the benchmark prepared the dataset
     with ``--reduce``, so the run cannot exist. The benchmark's cause, not the method's."""
@@ -823,8 +831,15 @@ def run_stage(
 def tiles_due(case, stage_dir, opts, attempt, force=False):
     """The plan rows of a round whose tile job is due at ``attempt``
     (``stages.decide``): what the launcher's tile submitter puts into the queue.
-    None of a round whose COARSE (or preprocessing) is not ok."""
-    rnd = Round(case, stage_dir, opts)
+    None of a round whose COARSE (or preprocessing) is not ok, and none of a round the
+    adapter refuses with a typed cause (``NoPixelSize``, ``ReducedProxy``: the run
+    records that refusal itself); any other error is raised."""
+    try:
+        rnd = Round(case, stage_dir, opts)
+    except Exception as exc:
+        if getattr(exc, "regbench_cause", None) in resources.CAUSES:
+            return []
+        raise
     if (rnd.candidate and not rnd.done(stages.PREP)) or not rnd.done(stages.COARSE):
         return []
     submission = resources.host_info()["submission"]

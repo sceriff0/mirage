@@ -536,3 +536,101 @@ def test_a_failed_preprocessing_job_is_the_benchmarks_cause(
     rec = adapter._run_prep(rnd, 1, adapter.LOCAL)
     assert rec["ok"] is False and rec["cause"] == cause
     assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
+
+
+def test_clahe_without_a_pixel_size_is_the_benchmarks_refusal(synthetic_cases, tmp_path):
+    """ANHIR's mammary glands have no established pixel size and STARE's CLAHE region is
+    in micrometres: the `clahe` level cannot exist there. That is the benchmark's
+    cause (`no_pixel_size`), never STARE's `exception`."""
+    from benchmarks.regbench import failure_log, resources, score
+
+    case = rgb_case(synthetic_cases["rigid"], tmp_path)
+    case = dataclasses.replace(case, pixel_size_um=None)
+    with pytest.raises(ValueError, match="no established pixel size") as err:
+        adapter.Round(case, tmp_path / "r", {"sprep": "clahe"})
+    assert resources.classify_error(err.value) == "no_pixel_size"
+    out = tmp_path / "out"
+    methods.run_group("stare", [case], out, {"sprep": "clahe"}, label="stare_clahe")
+    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
+    assert runs and all(r["ok"] is False for r in runs)
+    assert {r["cause"] for r in runs} == {"no_pixel_size"}
+    assert failure_log.WHOSE["no_pixel_size"] == failure_log.BENCHMARK
+    assert "no_pixel_size" in resources.NOT_THE_METHOD
+    assert "no_pixel_size" in score.NOT_THE_METHOD
+    assert "no_pixel_size" in score.CAUSES and score.CAUSES[-1] == "not_run"
+
+
+def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
+    synthetic_cases, tmp_path, monkeypatch
+):
+    """`stages --due` is what the tile feeder submits: one case the adapter refuses
+    (its refusal is recorded by its own run) must not make the command fail, or the
+    feeder submits every tile of every case."""
+    import contextlib
+    import io
+
+    from benchmarks.regbench import cli
+    from benchmarks.regbench.cases import write_case
+
+    cases = tmp_path / "cases"
+    base = synthetic_cases["rigid"]
+    ids = ["a_ok", "b_refused", "c_ok"]
+    for cid in ids:
+        write_case(cases, dataclasses.replace(base, case_id=cid, ref_hw=[4096, 5120]))
+    real = adapter.Round
+
+    class Fake:
+        """A round whose COARSE is ok, none of whose tiles has run."""
+
+        def __init__(self, case, stage_dir, opts):
+            if case.case_id == "b_refused":
+                raise adapter.NoPixelSize("sprep=clahe: no established pixel size")
+            self.candidate = None
+
+        def done(self, stage, row=None):
+            return {"ok": True}
+
+        def plan(self):
+            return [{}] * n
+
+        def record(self, stage, row=None):
+            return None
+
+        def command(self, stage, row=None):
+            return ["x", str(row)]
+
+        def identity(self, stage, row=None):
+            return "i"
+
+    layout = tmp_path / "layout.tsv"
+    sized = ["stages", "--cases", str(cases), "--dataset", "synthetic"]
+    sized += ["--method", "stare", "--layout", str(layout)]
+    assert cli.main(sized) == 0
+    n = adapter.tile_count(load_case_by_id(cases, "a_ok"), {"label": ""})
+    assert n > 1
+    monkeypatch.setattr(adapter, "Round", Fake)
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        code = cli.main([*sized, "--out", str(tmp_path / "out"), "--due", "1"])
+    monkeypatch.setattr(adapter, "Round", real)
+    assert code == 0
+    rows = [int(v) for v in said.getvalue().split()]
+    # the first case's tiles, nothing of the second, the third's
+    assert rows == [*range(n), *range(2 * n, 3 * n)]
+    # and tiles_due itself: [] for the refused case, an error of any other kind raised
+    refused = dataclasses.replace(base, case_id="b_refused")
+    monkeypatch.setattr(adapter, "Round", Fake)
+    assert adapter.tiles_due(refused, tmp_path / "r", {}, 1) == []
+
+    def broken(*a, **k):
+        raise RuntimeError("a bug is not a refusal")
+
+    monkeypatch.setattr(adapter, "Round", broken)
+    with pytest.raises(RuntimeError):
+        adapter.tiles_due(refused, tmp_path / "r", {}, 1)
+
+
+def load_case_by_id(cases, cid):
+    from benchmarks.regbench.cases import list_cases
+
+    return next(c for c in list_cases(cases, "synthetic") if c.case_id == cid)

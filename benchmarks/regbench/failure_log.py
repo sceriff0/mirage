@@ -71,6 +71,9 @@ WHOSE = {
     "identical_overlap": BENCHMARK,
     # a prepare-time choice of the benchmark, not a method failure
     "reduced_proxy": BENCHMARK,
+    # a level that needs a pixel size, on a case without one (STARE's CLAHE on
+    # ANHIR's mammary glands)
+    "no_pixel_size": BENCHMARK,
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended
