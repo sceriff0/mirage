@@ -802,7 +802,7 @@ def test_resource_row_carries_the_flags_and_an_absent_one_is_none():
 
 
 def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ashlar():
-    fails = score.failures(
+    rows = (
         [_res("a", "", "1", ok=True), _res("a", "oom", "2"),
          _res("a", "identical_overlap", "3"), _res("a", "gate_blocked", ""),
          _res("a", "not_run", ""),
@@ -815,7 +815,9 @@ def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ash
     summary = score.summarise_cells(cells)
     a = by(summary, method="a", subset="all")
     b = by(summary, method="ashlar", subset="all")
-    lines = score._summary_table([a, b], ["a", "ashlar"], fails).splitlines()
+    lines = score._summary_table(
+        [a, b], ["a", "ashlar"], score.run_failures(rows)
+    ).splitlines()
     header = [c.strip() for c in lines[0].strip("|").split("|")]
     cells = [[c.strip() for c in ln.strip("|").split("|")] for ln in lines[2:]]
     assert all(len(c) == len(header) for c in cells)
@@ -828,3 +830,66 @@ def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ash
     assert got == ["0", "1", "1"]
     # without `fails` the table is the old one
     assert "top cause" not in score._summary_table([a], ["a"])
+
+
+def _cells_of(table):
+    lines = table.splitlines()
+    header = [c.strip() for c in lines[0].strip("|").split("|")]
+    return header, [[c.strip() for c in ln.strip("|").split("|")] for ln in lines[2:]]
+
+
+def test_a_failure_in_one_family_is_counted_in_that_family_only():
+    from benchmarks.tests.regbench.test_score_units import cell
+
+    rows = [
+        _res("a", "", "1", ok=True, dataset="synthetic", family="affine"),
+        _res("a", "oom", "2", dataset="synthetic", family="affine"),
+        _res("a", "", "3", ok=True, dataset="synthetic", family="warp"),
+    ]
+    cells = [
+        cell("a", f"P{k}", f"P{k}", dataset="synthetic", family=fam)
+        for k, fam in enumerate(("affine", "affine", "warp"))
+    ]
+    summary = [r for r in score.summarise_cells(cells) if r["subset"] == "all"]
+    table = score._summary_table(summary, ["a"], score.run_failures(rows))
+    header, got = _cells_of(table)
+    by_family = {c[header.index("family")]: c for c in got}
+    assert by_family["affine"][header.index("failed (method)")] == "1"
+    assert by_family["affine"][header.index("top cause")] == "oom"
+    assert by_family["warp"][header.index("failed (method)")] == "0"
+    assert by_family["warp"][header.index("top cause")] == ""
+
+
+def test_the_failure_cells_are_blank_on_the_common_subset_and_on_non_rows():
+    from benchmarks.tests.regbench.test_score_units import cell
+
+    rows = [_res("a", "oom", "1"), _res("a", "", "2", ok=True)]
+    cells = [cell("a", f"P{k}_r1", f"P{k}") for k in range(2)]
+    summary = score.summarise_cells(cells)
+    run = score.run_failures(rows)
+    common = [r for r in summary if r["subset"] == "common"]
+    assert common
+    header, got = _cells_of(score._summary_table(common, ["a"], run))
+    assert got[0][header.index("failed (method)")] == ""
+    assert got[0][header.index("top cause")] == ""
+    non = [{**r, "method": f"a{score.NON}ashlar", "subset": "all"} for r in summary[:1]]
+    header, got = _cells_of(score._summary_table(non, ["a"], run))
+    assert got[0][header.index("failed (method)")] == ""
+    assert len(got[0]) == len(header)
+
+
+def test_failures_csv_has_the_new_columns_and_no_is_ashlar():
+    (rec,) = score.failures([_res("a", "oom", "1")])
+    assert "n_failed_method" in rec and "top_cause" in rec
+    assert "is_ashlar" not in rec
+
+
+def test_the_counting_unit_is_stated_under_the_table():
+    from benchmarks.tests.regbench.test_score_units import cell
+
+    summary = score.summarise_cells([cell("a", "P0_r1", "P0")])
+    text = score.summary_markdown(
+        summary, [], [], run_fails=score.run_failures([_res("a", "oom", "1")])
+    )
+    assert "count CASES" in text
+    assert "count CASES" not in score.summary_markdown(summary, [], [])

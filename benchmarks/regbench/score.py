@@ -2429,12 +2429,46 @@ def run_failure_columns(mine):
     rec["n_cycle_fully_modelled"] = sum(
         bool(r.get("cycle_fully_modelled")) for r in mine
     )
-    rec["is_ashlar"] = any(
-        "ashlar" in str(r.get("method", ""))
-        or r.get("fallback_stage_positions") is not None
-        for r in mine
-    )
     return rec
+
+
+def run_failures(res_rows):
+    """``run_failure_columns`` per (dataset, family, method): the counts beside a
+    summary row, over exactly the cases that row summarises (the family stratum on a
+    known-truth dataset, the whole dataset elsewhere, as ``_stratum``). ``is_ashlar``
+    says whether the cells ``fallback`` / ``fully modelled`` apply; it is read by the
+    table only and is in no CSV."""
+    out = {}
+    keys = dict.fromkeys((r["dataset"], _stratum(r), r["method"]) for r in res_rows)
+    for ds, fam, m in keys:
+        mine = [
+            r
+            for r in res_rows
+            if (r["dataset"], _stratum(r), r["method"]) == (ds, fam, m)
+        ]
+        out[(ds, fam, m)] = {
+            **run_failure_columns(mine),
+            "is_ashlar": any(
+                "ashlar" in str(r.get("method", ""))
+                or r.get("fallback_stage_positions") is not None
+                for r in mine
+            ),
+        }
+    return out
+
+
+FAILURE_COLUMN_RULE = (
+    "`failed (method)`, `failed (benchmark)` and `not run / blocked` count CASES "
+    "(rounds) of the run that did not register, by whose cause it was "
+    "(`failure_log.WHOSE`): the method's; the benchmark's; or the launcher's, the "
+    "infrastructure's or a result nobody ran. They count the same cases as `ok/cases` "
+    "beside them, per family on a known-truth dataset. `top cause` is the most frequent "
+    "of them. `fallback` and `fully modelled` (ASHLAR runs only) count rounds whose "
+    "reference stitch kept the stage positions, and whose cycle was entirely replaced "
+    "by the linear model. The cells are blank on an off-seam view row (its failures are "
+    "its run's own row's) and in the table of cases every row registered (the counts "
+    "are of all cases).\n"
+)
 
 
 def cpu_instruments_line(res_summary):
@@ -2744,13 +2778,13 @@ def _check_text(value):
     return value or "-"
 
 
-def _summary_table(rows, primary, fails=None):
+def _summary_table(rows, primary, run_fails=None):
     """Markdown rows: each headline as ``median (mean) [minimum over cases]`` with
-    ``ok/cases`` on the same line, its null beside it. With ``fails`` (``failures``),
-    each row also carries its run's failures beside its scores: ``failed (method)``,
+    ``ok/cases`` on the same line, its null beside it. With ``run_fails``
+    (``run_failures``), each row also carries its run's failures beside its scores: ``failed (method)``,
     ``failed (benchmark)``, ``not run / blocked`` (rounds), ``top cause``, and for an
     ASHLAR run ``fallback`` and ``fully modelled`` (rounds; empty on other rows)."""
-    by_run = {(f["dataset"], f["method"]): f for f in fails or []}
+
     order = [p.split(NON)[0] for p in primary or []]
     families = list(dict.fromkeys(r.get("family", "") for r in rows))
     rows = sorted(
@@ -2805,8 +2839,12 @@ def _summary_table(rows, primary, fails=None):
         line["cases on inexact objects (shrunk outlines)"] = (
             f"{r.get('n_inexact_cases', 0)} ({r.get('n_shrunk_cases', 0)})"
         )
-        if fails is not None:
-            f = by_run.get((r["dataset"], r["method"].split(NON)[0]), {})
+        if run_fails is not None:
+            # the counts are of all cases of the run: blank beside a subset, and on a
+            # `:non_` view (its failures are the base run's own row's)
+            own = r.get("subset", "all") == "all" and NON not in r["method"]
+            f = run_fails.get((r["dataset"], r.get("family", ""), r["method"]), {})
+            f = f if own else {}
             ashlar = bool(f.get("is_ashlar"))
             line["failed (method)"] = f.get("n_failed_method", "")
             line["failed (benchmark)"] = f.get("n_failed_benchmark", "")
@@ -3530,6 +3568,7 @@ def summary_markdown(
     nuclei=None,
     masks=None,
     attrition_rows=None,
+    run_fails=None,
 ):
     nuc, nuclei_missing, n_cases = nuclei or ({}, [], 0)
     nuc_summary = nuc.get("summary_cells") or []
@@ -3598,15 +3637,17 @@ def summary_markdown(
         if block:
             parts += [
                 "### All cases\n",
-                _summary_table(block, primary, fails),
+                _summary_table(block, primary, run_fails),
                 "",
             ]
+            if run_fails is not None:
+                parts += [FAILURE_COLUMN_RULE]
             parts += _side_by_side(block, nuc_summary, primary)
         parts.append("### Cases every compared row registered\n")
         parts += _common_lines(common or [], ds)
         block = [r for r in of_ds if r["subset"] == "common"]
         if block:
-            parts += [_summary_table(block, primary, fails), ""]
+            parts += [_summary_table(block, primary, run_fails), ""]
             parts += _side_by_side(block, nuc_summary, primary)
         parts += _paired_markdown(paired or [], ds)
     if by_family:
@@ -4016,6 +4057,7 @@ def score(
         summarise_nonband(nuc["nonband_cells"], primary, blocked), NUCLEI
     )
     fails = failures(res)  # every run, the frozen known-truth cases included
+    run_fails = run_failures(res)
     lost_rounds = attrition(
         jobs, cells, nuc["cells"], nuclei_missing, res, manifest_rounds(manifest)
     )
@@ -4163,6 +4205,7 @@ def score(
         (nuc, nuclei_missing, len(jobs)),
         (mask_flags, selfcheck_masks),
         lost_rounds,
+        run_fails=run_fails,
     )
     (tables / "summary.md").write_text(text)
     print(text)
