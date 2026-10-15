@@ -5,9 +5,9 @@ Three steps, none of which holds an image across tiles:
 
 * :func:`tile_nuclei` segments each tile of a cycle ONCE (method-independent, one tile read
   and segmented at a time), keeping only polygons in TILE pixels, cached per tile;
-* :func:`mosaic_nuclei` carries them into a front-end's mosaic at the SAME whole-pixel
-  origins :func:`frontends.write_mosaic` pastes at (``frontends.placed_origins``) and keeps
-  one copy of every nucleus that lies in an overlap;
+* :func:`owned` keeps one copy of every nucleus that lies in an overlap, decided once on the
+  stage layout; :func:`mosaic_nuclei` carries that set into a front-end's mosaic at the SAME
+  whole-pixel origins :func:`frontends.write_mosaic` pastes at (``frontends.placed_origins``);
 * :func:`seam_error` pairs, for every neighbour pair, the nuclei both tiles saw in their
   overlap -- placed by the front-end's own (float) positions -- and reports how far apart
   the two copies land. That distance is the front-end's stitching error.
@@ -22,7 +22,7 @@ Neighbour rule of :func:`seam_error` (consistent with ``stare.stages.mosaic.neig
 of STARE 1.3.0 [PARTIAL: read the function, not the solver]): two placed tiles are neighbours
 when they overlap by at least ``min_overlap_px`` (32) on BOTH axes and, on one axis, over at
 least half the smaller tile -- a strip along a shared edge, not a diagonal corner square.
-Ownership in :func:`mosaic_nuclei` is geometric (which tile's centre is nearest) and looks
+Ownership (:func:`owned`, used by :func:`mosaic_nuclei`) is geometric, on the stage layout, (which tile's centre is nearest) and looks
 at EVERY overlapping tile, corners included.
 """
 
@@ -222,24 +222,20 @@ def _check(tile_polys, positions, tiles):
 
 
 # ── mosaic nuclei ─────────────────────────────────────────────────────────────
-def mosaic_nuclei(tile_polys, positions, tiles):
-    """The nuclei of a front-end's mosaic as one ``cells.Polys``, in mosaic pixels.
+def owned(tile_polys, tiles):
+    """``{tile: cells.Polys}``: the polygons each tile OWNS, still in TILE pixels.
 
-    Each tile's polygons move by the whole-pixel origin ``write_mosaic`` pastes the tile at
-    (``frontends.placed_origins``). Ownership is GEOMETRIC, with no matching and no radius:
-    a polygon is kept iff, among the tiles whose placed rectangle contains its mosaic
-    centroid, its own tile's centre is the nearest; an exact tie (within 1e-9 px) goes to
-    the lower tile id. The result is a deterministic function of the positions.
-
-    Exactly placed tiles give every nucleus once. A badly placed tile never makes a
-    nucleus count twice by pairing failure: its polygons are judged by where they LAND, so
-    a misplaced nucleus may be dropped (its landing spot is owned by another tile) and, when
-    the two tiles' copies land in different tiles' cells, the two copies can both survive --
-    those are then two nuclei at two places, which is what the mosaic shows. Only
-    polygons are read."""
+    Ownership is decided once, on the cycle's STAGE layout (``tiles.csv`` positions through
+    ``frontends.placed_origins``), so it does not depend on any front-end: a polygon is kept
+    iff, among the tiles whose stage rectangle contains its stage-mosaic centroid, its own
+    tile's centre is the nearest; an exact tie (within 1e-9 px) goes to the lower tile id.
+    No matching, no radius. Compute it once per cycle and reuse it for every front-end.
+    Only polygons are read."""
     tiles = tuple(tiles)
-    _check(tile_polys, positions, tiles)
-    origins = frontends.placed_origins(tiles, positions)
+    ids = [r.tile for r in tiles]
+    if set(tile_polys) != set(ids):
+        raise ValueError(f"tile_polys and the tiles disagree: {sorted(tile_polys)} vs {sorted(ids)}")
+    origins = frontends.placed_origins(tiles, {r.tile: (r.x_px, r.y_px) for r in tiles})
     boxes = np.array([[*origins[k], origins[k, 0] + r.w, origins[k, 1] + r.h]
                       for k, r in enumerate(tiles)], dtype=float).reshape(-1, 4)
     mids = np.stack([(boxes[:, 0] + boxes[:, 2]) / 2.0, (boxes[:, 1] + boxes[:, 3]) / 2.0], 1)
@@ -260,11 +256,23 @@ def mosaic_nuclei(tile_polys, positions, tiles):
             closer = other < own - 1e-9
             tied = (np.abs(other - own) <= 1e-9) & (tiles[j].tile < r.tile)
             keep[k] &= ~(inside & (closer | tied))
-    parts = [
-        _shifted(tile_polys[r.tile].take(np.flatnonzero(keep[k])), *origins[k])
-        for k, r in enumerate(tiles)
-    ]
-    return cells.concat(parts)
+    return {r.tile: tile_polys[r.tile].take(np.flatnonzero(keep[k])) for k, r in enumerate(tiles)}
+
+
+def mosaic_nuclei(tile_polys, positions, tiles, owned_polys=None):
+    """The nuclei of a front-end's mosaic as one ``cells.Polys``, in mosaic pixels.
+
+    The SET of nuclei is :func:`owned` (decided on the stage layout, the same for every
+    front-end; pass ``owned_polys`` to reuse it); each is moved by the whole-pixel origin
+    ``write_mosaic`` pastes its tile at (``frontends.placed_origins`` of ``positions``). A
+    front-end's misplacement therefore shows up as the nuclei's POSITION error, never as a
+    different population: the count is the stage layout's for every front-end. Only
+    polygons are read."""
+    tiles = tuple(tiles)
+    _check(tile_polys, positions, tiles)
+    kept = owned(tile_polys, tiles) if owned_polys is None else owned_polys
+    origins = frontends.placed_origins(tiles, positions)
+    return cells.concat([_shifted(kept[r.tile], *origins[k]) for k, r in enumerate(tiles)])
 
 
 # ── stitching error ───────────────────────────────────────────────────────────

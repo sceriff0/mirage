@@ -207,22 +207,31 @@ def test_mosaic_nuclei_sit_on_the_pixels_write_mosaic_pastes(tmp_path):
         assert img[int(cy), int(cx)] >= 9000
 
 
-def test_a_tile_placed_far_off_is_judged_by_where_its_nuclei_land():
+def test_every_front_end_gets_the_same_nuclei_whatever_its_positions():
     tp = cut(SCENE)
-    assert len(stitching.mosaic_nuclei(tp, POS, rows())) == len(SCENE)
+    stage = rows()
+    kept = stitching.owned(tp, stage)
+    assert sum(len(p) for p in kept.values()) == len(SCENE)
+    base = stitching.mosaic_nuclei(tp, POS, stage)
+    assert len(base) == len(SCENE)
     for dx, dy in ((20.0, 0.0), (0.0, 20.0), (20.0, 20.0), (-20.0, 0.0), (35.0, -20.0)):
         moved = dict(POS)
         moved[3] = (60.0 + dx, 60.0 + dy)
-        rs = rows(moved)
-        out = stitching.mosaic_nuclei(tp, moved, rs)
-        assert len(stitching.mosaic_nuclei(tp, moved, rs[::-1])) == len(out)
-        o = frontends.placed_origins(rs, moved)
-        _, c = cells.area_centroid(out)
-        for cx, cy in c:  # every survivor lies on some placed tile
-            assert any(o[k][0] <= cx < o[k][0] + TILE and o[k][1] <= cy < o[k][1] + TILE
-                       for k in range(4))
-        # no polygon is kept by two tiles at one spot: no two survivors share a centroid
-        assert len({(round(x, 6), round(y, 6)) for x, y in c}) == len(out)
+        out = stitching.mosaic_nuclei(tp, moved, stage)
+        assert len(out) == len(base)
+        # the identity set: the same (tile, polygon)s, each moved by its tile's placed origin
+        o = frontends.placed_origins(stage, moved)
+        want = cells.concat([
+            kept[r.tile].with_xy(kept[r.tile].xy + o[k]) for k, r in enumerate(stage)
+        ])
+        np.testing.assert_array_equal(out.xy, want.xy)
+        np.testing.assert_array_equal(out.off, want.off)
+        # order of the tile list changes nothing about WHICH nuclei are kept
+        again = stitching.owned(tp, stage[::-1])
+        assert all(np.array_equal(again[t].xy, kept[t].xy) for t in kept)
+    # passing the ownership in (computed once per cycle) gives the same mosaic
+    again = stitching.mosaic_nuclei(tp, POS, stage, owned_polys=kept)
+    np.testing.assert_array_equal(again.xy, base.xy)
 
 
 # ── tile_nuclei ──────────────────────────────────────────────────────────────
