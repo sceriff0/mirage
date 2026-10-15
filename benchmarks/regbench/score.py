@@ -3912,8 +3912,17 @@ def score(
     fresh=False,
     manifest=None,
     accounting=None,
+    tables_dir=None,
+    tag=None,
+    extra_markdown=None,
 ):
     """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``expected`` may be a dict ``{dataset: [names]}`` (each dataset its own run list:
+    the raw-tile case sets, ``score_rawtiles``). ``tables_dir`` writes the tables there
+    instead of ``<out>/tables``; ``tag(row)`` is applied to every row of the tables
+    whose columns are not fixed, before they are written (``front_end``);
+    ``extra_markdown`` is appended to ``summary.md``.
 
     ``accounting`` is the scheduler's accounting of the jobs (the file ``sacct -n -P
     -o JobID,State,ElapsedRaw,TotalCPU`` wrote, with the jobs' steps; default ``<out>/logs/
@@ -3969,7 +3978,14 @@ def score(
     current, other_spec = truth.load_spec()[truth.HASH_KEY], []
     for ds in datasets or DATASETS:
         made = case_jobs(
-            cases_root, out, ds, dev, expected, dropped, owners, row_checks
+            cases_root,
+            out,
+            ds,
+            dev,
+            expected.get(ds) if isinstance(expected, dict) else expected,
+            dropped,
+            owners,
+            row_checks,
         )
         if made:
             variants_of[ds] = made[0][2]
@@ -4089,7 +4105,11 @@ def score(
         {(r["dataset"], r["method"]): r["n_patients"] for r in cost_summary},
     )
 
-    tables = Path(out) / ("tables_dev" if dev else "tables")
+    tables = (
+        Path(tables_dir)
+        if tables_dir is not None
+        else Path(out) / ("tables_dev" if dev else "tables")
+    )
     tables.mkdir(parents=True, exist_ok=True)
     for name in (
         "cells",
@@ -4136,6 +4156,28 @@ def score(
     ):
         if mask_flags is not None:  # a score outside the launcher has no selfcheck
             flag_rows(rows, mask_flags)
+    if tag is not None:
+        for rows in (
+            cells,
+            summary,
+            paired,
+            fails,
+            res,
+            res_summary,
+            cost_summary,
+            common,
+            paired_summary,
+            excluded,
+            truth_rows,
+            by_family,
+            non_cells,
+            non_summary,
+            non_truth,
+            nuclei_missing,
+            *(nuc[name] for name in NUCLEI_TABLES),
+        ):
+            for r in rows:
+                tag(r)
     (tables / "selfcheck_masks.csv").unlink(missing_ok=True)
     if selfcheck_masks is not None:
         write_csv(tables / "selfcheck_masks.csv", list(selfcheck_masks))
@@ -4212,6 +4254,8 @@ def score(
         lost_rounds,
         run_fails=run_fails,
     )
+    if extra_markdown:
+        text = text + "\n" + extra_markdown
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -4245,3 +4289,125 @@ def score(
         "attrition": lost_rounds,
         **tis,
     }
+
+
+# ── raw-tile datasets (datasets/rawtiles.py) ─────────────────────────────────
+STITCHING_SUMMARY_COLUMNS = (
+    "front_end",
+    "n_units",
+    "n_cycles",
+    "n_pairs",
+    "n_matched",
+    "disp_um_p50_med",
+    "disp_um_p90_max",
+    "n_nuclei",
+)
+
+
+def front_end_tag(row):
+    """``front_end``: the part of a row's dataset after ``@`` (raw-tile case sets)."""
+    ds = str(row.get("dataset", ""))
+    if "@" in ds:
+        row["front_end"] = ds.partition("@")[2]
+
+
+def summarise_stitching(rows):
+    """One row per front-end of ``stitching.csv``: the median over cycles of the per-
+    cycle median displacement, the largest p90, the pairs and matches summed, and the
+    nuclei summed over cycles (equal for every front-end: the population is decided on
+    the stage layout)."""
+    out = []
+    for fe in dict.fromkeys(r["front_end"] for r in rows):
+        mine = [r for r in rows if r["front_end"] == fe]
+
+        def vals(key, mine=mine):
+            v = [_f(r.get(key)) for r in mine]
+            return np.array([x for x in v if x == x], dtype=float)
+
+        p50, p90 = vals("disp_um_p50"), vals("disp_um_p90")
+        out.append(
+            {
+                "front_end": fe,
+                "n_units": len({r["unit"] for r in mine}),
+                "n_cycles": len(mine),
+                "n_pairs": int(sum(int(r["n_pairs"]) for r in mine)),
+                "n_matched": int(sum(int(r["n_matched"]) for r in mine)),
+                "disp_um_p50_med": float(np.median(p50)) if p50.size else math.nan,
+                "disp_um_p90_max": float(np.max(p90)) if p90.size else math.nan,
+                "n_nuclei": int(sum(int(r["n_nuclei"]) for r in mine)),
+            }
+        )
+    return out
+
+
+def stitching_markdown(summary):
+    """The ``summary.md`` block "Stitching error by front-end"."""
+    lines = [
+        "## Stitching error by front-end",
+        "",
+        "Neighbour tiles of ONE cycle, placed by the front-end's own positions: the "
+        "nuclei both tiles saw in their overlap, paired, and how far apart the two "
+        "copies land (um; `stitching.seam_error`). Computed at prepare time, the same "
+        "for every method of a case set. `n_nuclei` is the population of every "
+        "mosaic, decided on the stage layout: it must be equal for every front-end. "
+        "`@raw` is stitched by ASHLAR inside its run and has no row here.",
+        "",
+    ]
+    if not summary:
+        return "\n".join(lines + ["(no stitching.csv under the case sets)", ""])
+    counts = {r["n_nuclei"] for r in summary}
+    lines += [
+        markdown(summary, list(STITCHING_SUMMARY_COLUMNS)),
+        "",
+        "n_nuclei equal for every front-end: "
+        + ("yes" if len(counts) == 1 else f"NO ({sorted(counts)})"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def score_rawtiles(cases_root, out, name, workers=1, expected=None, primary=None,
+                   only=None, **kw):
+    """Score every case set ``<name>@<front end>`` present under ``cases_root`` (or the
+    one front-end ``only``) into ``<out>/tables/<name>/``: the tables of ``score`` with a
+    ``front_end`` column, ``stitching.csv`` (per front-end x cycle, from each case set's
+    own) and ``stitching_summary.csv``, and the block "Stitching error by front-end"
+    in ``summary.md``. Never pooled with the cohort. ``expected`` is ``{case set:
+    [names]}``; ``primary`` the union of the case sets' primary rows."""
+    from . import RAW_FRONT_ENDS
+    from .datasets import rawtiles
+
+    sets = [
+        f"{name}@{fe}"
+        for fe in RAW_FRONT_ENDS
+        if (only is None or fe == only) and list_cases(cases_root, f"{name}@{fe}")
+    ]
+    if not sets:
+        raise SystemExit(f"no prepared {name}@<front end> case set under {cases_root}")
+    tables = Path(out) / "tables" / name
+    rows = []
+    for ds in sets:
+        for r in rawtiles.stitching_rows(cases_root, ds):
+            rows.append({"dataset": ds, **r})
+    summary = summarise_stitching(rows)
+    tables.mkdir(parents=True, exist_ok=True)
+    for f in ("stitching.csv", "stitching_summary.csv"):
+        (tables / f).unlink(missing_ok=True)
+    write_csv(tables / "stitching.csv", rows)
+    write_csv(tables / "stitching_summary.csv", summary)
+    got = score(
+        cases_root,
+        out,
+        sets,
+        workers,
+        expected=expected,
+        primary=primary,
+        with_tissue=False,
+        tables_dir=tables,
+        tag=front_end_tag,
+        extra_markdown=stitching_markdown(summary),
+        **kw,
+    )
+    got["stitching"] = rows
+    got["stitching_summary"] = summary
+    return got

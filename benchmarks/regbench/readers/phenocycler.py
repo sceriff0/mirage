@@ -91,9 +91,11 @@ def _export_cycle(cdir: Path, exp: dict, names, dest: Path, where="experiment.js
     )
 
 
-def export(root, dest) -> list[tiles.Cycle]:
-    """Every ``cycNNN_regRRR`` folder under ``root`` -> ``dest/<folder>/``, as cycles."""
-    root, dest = Path(root), Path(dest)
+def cycle_sources(root):
+    """``[(cycle folder, cycle number, region number, channel names)]`` of every
+    ``cycNNN_regRRR`` folder under ``root``, in folder order, and the ``experiment.json``
+    path, checked for every key the grid needs before any tile is read."""
+    root = Path(root)
     exp_path = _find_experiment(root)
     exp = json.loads(exp_path.read_text())
     _grid(exp, exp_path)  # every key the grid needs, refused by name before any tile is read
@@ -110,8 +112,26 @@ def export(root, dest) -> list[tiles.Cycle]:
             for p in cdir.iterdir()
             if (m := TILE_RE.match(p.name))
         }
-        per = max(chans)
-        cyc = int(CYCLE_RE.match(cdir.name)[1])
+        per = max(chans) if chans else 1
+        m = CYCLE_RE.match(cdir.name)
+        cyc, reg = int(m[1]), int(m[2])
         names = all_names[(cyc - 1) * per : cyc * per] or [f"CH{c}" for c in sorted(chans)]
-        out.append(_export_cycle(cdir, exp, names, dest / cdir.name, exp_path))
-    return out
+        out.append((cdir, cyc, reg, names))
+    return out, exp_path
+
+
+def export_cycle(cdir, exp_path, names, dest) -> tiles.Cycle:
+    """One ``cycNNN_regRRR`` folder -> one tile-series cycle in ``dest``."""
+    exp_path = Path(exp_path)
+    exp = json.loads(exp_path.read_text())
+    return _export_cycle(Path(cdir), exp, names, Path(dest), exp_path)
+
+
+def export(root, dest) -> list[tiles.Cycle]:
+    """Every ``cycNNN_regRRR`` folder under ``root`` -> ``dest/<folder>/``, as cycles."""
+    sources, exp_path = cycle_sources(root)
+    dest = Path(dest)
+    return [
+        export_cycle(cdir, exp_path, names, dest / cdir.name)
+        for cdir, _, _, names in sources
+    ]

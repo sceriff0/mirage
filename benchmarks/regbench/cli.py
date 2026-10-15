@@ -61,7 +61,14 @@ import builtins
 import contextlib
 import os
 
-from . import ALL_DATASETS, DATASETS, EXTERNAL_DATASETS, plugins
+from . import (
+    ALL_DATASETS,
+    DATASETS,
+    EXTERNAL_DATASETS,
+    RAW_FRONT_ENDS,
+    RAW_TILE_DATASETS,
+    plugins,
+)
 from . import METHODS as PUBLIC_METHODS
 from .resources import n_cpus
 
@@ -325,6 +332,58 @@ def build_parser():
         "--count",
         action="store_true",
         help="print the number of training pairs and exit (sizes a prepare array)",
+    )
+
+    rt = prep.add_parser(
+        "rawtiles",
+        help="raw-tile cyclic IF (benchmarks/regbench/datasets/rawtiles.py): one case "
+        "set <dataset>@<front end> per stitching front-end, or @raw (ASHLAR's tiles)",
+    )
+    common(rt)
+    rt.add_argument(
+        "--dataset", dest="raw_dataset", required=True, choices=RAW_TILE_DATASETS
+    )
+    rt.add_argument(
+        "--source",
+        default=None,
+        help="one unit's folder (a patient's tiles over its cycles), or a folder of them",
+    )
+    rt.add_argument(
+        "--front-end",
+        dest="front_end",
+        default=None,
+        choices=RAW_FRONT_ENDS,
+        help="stage | ashlar_edge | stare_mosaic: stitch every cycle into a mosaic; "
+        "raw: keep the tiles (ASHLAR reads them natively)",
+    )
+    rt.add_argument(
+        "--patients", nargs="*", default=None, help="only these units (default: all)"
+    )
+    rt.add_argument(
+        "--max-shift-um",
+        dest="max_shift_um",
+        type=float,
+        default=15.0,
+        help="the front-ends' maximum shift between neighbour tiles (ASHLAR's -m default)",
+    )
+    rt.add_argument(
+        "--nuclear-channel",
+        dest="nuclear_channel",
+        type=int,
+        default=0,
+        help="mcmicro / rashid: the nuclear channel of the Bio-Formats files",
+    )
+    rt.add_argument(
+        "--export-only",
+        dest="export_only",
+        action="store_true",
+        help="only export the tiles to the tile series (mcmicro / rashid: in the ASHLAR "
+        "image, before any front-end)",
+    )
+    rt.add_argument(
+        "--image",
+        action="store_true",
+        help="print the image this command runs in (REGBENCH_PREPARE_IMAGE) and exit",
     )
 
     ps = sub.add_parser(
@@ -1311,7 +1370,9 @@ def split_datasets(names):
     The two kinds are never scored together: an external landmark set has its own
     tables, and the cohort's default never includes one."""
     names = list(names or [])
-    external = [d for d in names if d in EXTERNAL_DATASETS]
+    external = [
+        d for d in names if d in EXTERNAL_DATASETS or d in RAW_TILE_DATASETS
+    ]
     if not external:
         return (names or None), None
     if len(names) != 1:
@@ -1703,12 +1764,36 @@ def _main(a):
             + " (results that said `killed`, by the scheduler's accounting)"
         )
         return 0
-    from . import score, variants
+    from . import case_set, is_raw_tiles, score, variants
 
     if getattr(a, "submission", None):
         os.environ[score.SUBMISSION_ENV] = a.submission
 
     cohort, external = split_datasets(a.dataset)
+    if external and is_raw_tiles(external):
+        from . import RAW_FRONT_ENDS
+
+        base, only = case_set(external)
+        sets = [f"{base}@{fe}" for fe in RAW_FRONT_ENDS if only in (None, fe)]
+        primary = []
+        for ds in sets:
+            primary += [v for v in variants.primary_for(ds) if v not in primary]
+        score.score_rawtiles(
+            a.cases,
+            a.out,
+            base,
+            a.workers,
+            expected=None
+            if a.only_run
+            else {ds: variants.expected_variants(ds) for ds in sets},
+            primary=None if a.only_run else primary,
+            only=only,
+            dropped=_dropped(a.drop),
+            gates=a.gates,
+            run_variants=variants.run_variants(),
+            fresh=a.fresh,
+        )
+        return 0
     if external:
         from . import ANHIR_DATASETS, challenge, landmarks
 
