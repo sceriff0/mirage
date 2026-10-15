@@ -64,20 +64,32 @@ refuses such a case in the same words; or a run this dataset does not take,
 ``NOT_ON``). ``runs --dataset <name>`` prints the list in the same columns;
 ``expected_variants(dataset)`` and ``primary_for(dataset)`` are what its scorer is told.
 
-``hyreco_a``, ``hyreco_b``  ``stare``, ``valis120``, ``valis120_hires``
-``anhir``                  ``stare``, ``stare_prep``, ``valis120``, ``valis120_hires`` and
-                           the four DeeperHistReg runs that are not configured for
-                           fluorescence (8 runs, 18 result names)
-``anhir_tune``             none of the cohort's runs: the preprocessing candidates of
-                           ``stare_prep`` alone (``TUNING_RUNS``, one run per candidate of
-                           ``regbench.prep.CANDIDATES``), each behind its own selfcheck
+The STARE runs of a set are its regime's levels x the three strides
+(``regimes.DATASET_REGIME``); ``runs --dataset <name>`` prints the list, and the counts
+below are ``runs_for`` / ``expected_variants`` as of 2026-10-15:
+
+``hyreco_a``, ``hyreco_b``  the 12 STARE runs of ``bf_same`` (``stare`` and
+                           ``stare_s{128,256}_none``; ``haem_clahe``, ``grey_clahe``,
+                           ``haem_percentile`` at each stride), ``valis120``,
+                           ``valis120_hires`` (14 runs, 30 result names)
+``anhir``                  the 12 STARE runs of ``bf_consecutive`` (``none``,
+                           ``grey_clahe``, ``grey_smooth_none``, ``grey_percentile`` at each
+                           stride), ``valis120``, ``valis120_hires`` and the four
+                           DeeperHistReg runs that are not configured for fluorescence (18
+                           runs, 38 result names)
+``anhir_tune``             PAUSED with ``stare_prep``, its only consumer: the
+                           preprocessing candidates of ``stare_prep`` alone
+                           (``TUNING_RUNS``, one run per candidate of
+                           ``regbench.prep.CANDIDATES``), each behind its own selfcheck.
+                           Kept and tested; the launcher submits it only when asked
+                           (``REGBENCH_ANHIR_TUNE=1`` with ``--datasets anhir_tune``)
 
 **The ``stare_prep`` run** (ruling R3.21) is STARE unchanged on a preprocessed copy of the
 image it registers on (``regbench.prep``). Its one option, ``prep``, is the candidate
 frozen in ``prep_frozen.json``, read when this module is imported: the run list always
 names the candidate itself, so a result made with another candidate is never reused as
-this one. It is an active, non-primary row of STARE's family on the cohort's datasets
-and on ``anhir``.
+this one. It is PAUSED (2026-10-14, ``active=False``): the regimes' ``proxy`` / ``sprep``
+levels replace it, and with it the tuning side of ANHIR that chooses its candidate.
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -210,8 +222,8 @@ def _ashlar_runs():
 RUNS = (
     *_stare_runs(),
     # STARE unchanged, on the frozen benchmark-side preprocessing of its input. PAUSED
-    # (2026-10-14): the regimes' `sprep` levels replace it; kept and tested, and
-    # `TUNING_RUNS` / `anhir_tune` still use it.
+    # (2026-10-14): the regimes' `sprep` levels replace it; kept and tested, and so is
+    # its tuning side (`TUNING_RUNS` / `anhir_tune`), paused with it.
     Run(
         "stare",
         prep.ROW,
@@ -296,11 +308,15 @@ RUNS = (
 RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
 
 # The tuning side of ANHIR (`anhir_tune`) runs these and nothing else: one run per
-# preprocessing candidate, so the choice can look at no other data.
+# preprocessing candidate, so the choice can look at no other data. PAUSED with
+# `stare_prep`, their only consumer (2026-10-15): kept and tested, submitted by the
+# launcher only on request (`REGBENCH_ANHIR_TUNE=1`, `TUNING_PAUSED`).
 TUNING_RUNS = tuple(
     Run("stare", f"{prep.ROW}_{c}", {"prep": c}, "STARE_REGBENCH", False, None)
     for c in prep.CANDIDATES
 )
+TUNING_PAUSED = True  # slurm/submit_cohort.sh refuses `--datasets anhir_tune` without
+# REGBENCH_ANHIR_TUNE=1 while this is True (a test holds the two together)
 
 # Ruling R3.12 (2026-10-11): the high-resolution row is primary for both methods that
 # have one. Each is one line to switch back to upstream's default setting:

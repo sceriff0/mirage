@@ -39,6 +39,8 @@ def submitted(specs):
 
 
 SOURCE = {"REGBENCH_ANHIR": "/data/anhir"}  # bound into every image: the cases name it
+# the tuning side is PAUSED (variants.TUNING_PAUSED): submitted only when asked for
+ASKED = {**SOURCE, "REGBENCH_ANHIR_TUNE": "1"}
 
 
 @pytest.fixture(scope="module")
@@ -108,8 +110,24 @@ def test_the_paused_preprocessing_row_is_not_submitted_and_so_not_warned_about(s
     )
 
 
+def test_the_tuning_side_is_paused_and_submitted_only_when_asked_for(site):
+    """`anhir_tune` is paused with `stare_prep`, the only row that reads it: the
+    launcher refuses it, submitting nothing, unless REGBENCH_ANHIR_TUNE=1 asks for it
+    (the explicit path, whose jobs the next test counts)."""
+    assert variants.TUNING_PAUSED
+    for env in (SOURCE, {**SOURCE, "REGBENCH_ANHIR_TUNE": "0"}):
+        done, log, _ = launch(site, "--datasets", "anhir_tune", env=env, log="paused")
+        assert done.returncode == 2 and "PAUSED" in done.stderr
+        assert "REGBENCH_ANHIR_TUNE=1" in done.stderr
+        assert not log.exists() and "sbatch" not in done.stdout
+    # ANHIR's report runs are not paused
+    done, _, _ = launch(site, "--datasets", "anhir", env=SOURCE, log="notpaused")
+    assert done.returncode == 0, done.stderr
+
+
 def test_the_tuning_side_runs_the_candidates_and_nothing_else(site):
-    done, _, out = launch(site, "--datasets", "anhir_tune", env=SOURCE, log="tune")
+    """The explicit path (REGBENCH_ANHIR_TUNE=1): the job count of the paused side."""
+    done, _, out = launch(site, "--datasets", "anhir_tune", env=ASKED, log="tune")
     assert done.returncode == 0, done.stderr
     jobs = jobs_of(done)
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
@@ -178,7 +196,8 @@ def test_the_runs_need_the_source_folder_too(site):
     DeeperHistReg and the preprocessing row would fail every pair while plain STARE
     (cached grey images) would not."""
     for ds in ("anhir", "anhir_tune"):
-        done, log, _ = launch(site, "--datasets", ds, log="nosource")
+        env = {"REGBENCH_ANHIR_TUNE": "1"}  # the paused side, asked for
+        done, log, _ = launch(site, "--datasets", ds, env=env, log="nosource")
         assert (
             done.returncode == 2
             and "needs REGBENCH_ANHIR for the runs too" in done.stderr

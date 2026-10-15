@@ -183,7 +183,8 @@ primary rows:
   apart (`test_prep.py`). The job is the benchmark's own step, so whatever ends it is the
   cause `benchmark` (or `benchmark_oom`), never the method's.
 - **`stare_prep` is PAUSED** (2026-10-14; `active=False`). Its ruling (R3.21) and the
-  tuning side of ANHIR (`TUNING_RUNS`, `anhir_tune`) are unchanged and tested: the
+  tuning side of ANHIR (`TUNING_RUNS`, `anhir_tune`, paused with it: submitted only with
+  `REGBENCH_ANHIR_TUNE=1`) are unchanged and tested: the
   regimes' `sprep` levels replace it in the cohort. It is the same package, version and
   parameters on a benchmark-side preprocessing of STARE's input (`prep.py`: a closed
   candidate list; the candidate in force is frozen in `prep_frozen.json`, the run's one
@@ -3368,7 +3369,11 @@ unpacked image archive under `images/` and the unpacked landmark archive under
   where the two files differ in length (the official rule). Each pair is its own group:
   a set has several targets, so VALIS registers pair by pair with the target fixed,
   which is not how a groupwise leaderboard entry is made.
-- `anhir_tune`: the tuning-side pairs again, alone.
+- `anhir_tune`: the tuning-side pairs again, alone. **PAUSED** (2026-10-15) with
+  `stare_prep`, the only row that reads its result (the choice of a preprocessing
+  candidate): the cases are still written by the prepare, the runs (`TUNING_RUNS`) and
+  the selection are kept and tested, and the launcher refuses `--datasets anhir_tune`
+  unless `REGBENCH_ANHIR_TUNE=1` is exported (`variants.TUNING_PAUSED`).
 
 **The split is by tissue SET, never by pair** (pairs of one set share images, and most
 sets also hold hidden evaluation pairs), and nobody picked it: inside each tissue the
@@ -3492,6 +3497,7 @@ S=benchmarks/regbench/slurm; export REGBENCH_ANHIR=/data/anhir   # dataset_mediu
 #    cannot read them is refused at its start, cause `infrastructure`, not the method's)
 export REGBENCH_CASES=/scratch/anhir_cases REGBENCH_OUT=/scratch/anhir_out   # of their own
 $S/submit_cohort.sh --prepare --datasets anhir      # 230 tasks; writes anhir AND anhir_tune
+export REGBENCH_ANHIR_TUNE=1                        # the tuning side is PAUSED: asked for by name
 $S/submit_cohort.sh --dry-run --datasets anhir_tune && $S/submit_cohort.sh --datasets anhir_tune
 #    the five candidates on the 82 tuning pairs, each behind its own selfcheck
 #    -> $REGBENCH_OUT/tables/anhir_tune/summary.md (nothing in it is a result)

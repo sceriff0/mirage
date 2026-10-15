@@ -131,8 +131,11 @@
 # prepare (README, "ANHIR: the challenge's training pairs"):
 #
 #   submit_cohort.sh --prepare --datasets anhir         (writes anhir AND anhir_tune)
-#   submit_cohort.sh --datasets anhir_tune              the preprocessing candidates
-#                                                       alone, on the tuning side
+#   REGBENCH_ANHIR_TUNE=1 submit_cohort.sh --datasets anhir_tune
+#                                                       the preprocessing candidates
+#                                                       alone, on the tuning side (PAUSED
+#                                                       with stare_prep: refused unless
+#                                                       REGBENCH_ANHIR_TUNE=1)
 #   python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" \
 #       --out "$REGBENCH_OUT" --freeze                  (then commit prep_frozen.json)
 #   submit_cohort.sh --datasets anhir                   every run ANHIR takes, on all 230
@@ -435,6 +438,11 @@ for ds in $datasets; do
 done
 if [ -n "$EXTERNAL" ] && [ "$n_named" -ne 1 ]; then
     die "--datasets '$datasets': an external landmark set (hyreco_a, hyreco_b, anhir_tune, anhir) is submitted alone, with its own run list and its own tables. hyreco_a and anhir_tune are tuning sets. Nothing was submitted."
+fi
+# ANHIR's tuning side is PAUSED with `stare_prep`, the only row that reads it
+# (variants.TUNING_PAUSED): it is submitted only when asked for by name AND by this variable.
+if [ "$EXTERNAL" = anhir_tune ] && [ "${REGBENCH_ANHIR_TUNE:-0}" != 1 ]; then
+    die "--datasets anhir_tune: ANHIR's tuning side is PAUSED with stare_prep, the only row that reads it (benchmarks/regbench/variants.py, TUNING_PAUSED). Export REGBENCH_ANHIR_TUNE=1 to submit it anyway. Nothing was submitted."
 fi
 
 # seconds <[D-]HH:MM:SS> ; limit <seconds> -> D-HH:MM:SS, never above the site's maximum
