@@ -1903,6 +1903,61 @@ def test_the_tile_queue_ceiling_is_a_total_split_over_the_runs_with_a_submitter(
     assert code.index("export REGBENCH_STAGE_QUEUE_RUN") < code.index("sc_time=")
 
 
+@pytest.mark.parametrize("lanes", [4, 2, 20])
+def test_the_tile_queue_is_split_over_the_runs_that_feed_at_once(site, lanes):
+    """With REGBENCH_RUN_LANES=L at most L runs are in flight, so at most L tile
+    submitters feed at once: the total is divided by min(runs with a submitter, L), and
+    the dry run prints that share. More lanes than such runs: divided by the runs."""
+    fed = [
+        variants.run_name(r)
+        for r in variants.runs_for(None)
+        if "tile" in variants.stages_of(r)
+    ]
+    assert len(fed) == 9  # the cohort's STARE runs
+    total = 100
+    env = {"REGBENCH_STAGE_QUEUE_MAX": str(total), "REGBENCH_RUN_LANES": str(lanes)}
+    done, _, _ = launch(site, env=env, log=f"lanes-share-{lanes}")
+    assert done.returncode == 0, done.stderr
+    feeding = min(len(fed), lanes)
+    share = total // feeding
+    lines = done.stdout.splitlines()
+    assert (
+        f"# tile queue: REGBENCH_STAGE_QUEUE_MAX={total} split over {feeding} tile "
+        f"submitter(s) feeding at once ({len(fed)} run(s) with one, "
+        f"REGBENCH_RUN_LANES={lanes}): {share} each"
+    ) in lines
+    for name in fed:
+        line = next(ln for ln in lines if ln.startswith(f"# {name} on "))
+        assert f"at most {share} in the queue (its share of the total {total})" in line
+    said = next(ln for ln in lines if ln.startswith("# the most in the queue at once"))
+    if feeding < len(fed):
+        assert (
+            f"at most {share} tile task(s) for each of the {feeding} of the {len(fed)} "
+            "run(s) with a tile submitter that feed at once" in said
+        )
+    else:
+        assert f"for each of the {len(fed)} run(s) with a tile submitter" in said
+    assert feeding * share <= total  # the total stays a ceiling
+
+
+def test_a_runs_subset_divides_the_tile_queue_by_the_subset(site):
+    """`--runs` with two STARE runs and four lanes: two submitters feed at once, so each
+    gets half the total, not a ninth of it."""
+    env = {"REGBENCH_STAGE_QUEUE_MAX": "100", "REGBENCH_RUN_LANES": "4"}
+    done, _, _ = launch(
+        site, "--runs", "stare stare_clahe palom", env=env, log="lanes-subset"
+    )
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert (
+        "# tile queue: REGBENCH_STAGE_QUEUE_MAX=100 split over 2 tile submitter(s) "
+        "feeding at once (2 run(s) with one, REGBENCH_RUN_LANES=4): 50 each"
+    ) in lines
+    for name in ("stare", "stare_clahe"):
+        line = next(ln for ln in lines if ln.startswith(f"# {name} on "))
+        assert "at most 50 in the queue (its share of the total 100)" in line
+
+
 @pytest.mark.parametrize(
     "name, value",
     [

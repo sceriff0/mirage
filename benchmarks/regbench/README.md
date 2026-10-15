@@ -2431,7 +2431,7 @@ script names no method.
    | `rb-<run>-<ds>-prep-a1..a4` (the runs with a `haem` / `grey_smooth` proxy only; brightfield sets) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
    | `rb-<run>-<ds>-coarse-a1..a4` | 4 arrays of R tasks | 2; 2, 4, 6, 8 GB; 2, 4, 6, 8 h |
    | `rb-<run>-<ds>-feed-1..2` | the TILE SUBMITTERS (`feed_tiles.sbatch`), `REGBENCH_STAGE_FEEDERS` of them chained: not a tile job, the job that submits them | 1; 1 GB; 7 days |
-   | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most its share of `REGBENCH_STAGE_QUEUE_MAX` (a total over the launch, 200: 22 each for 9 runs) of them pending or running | 2; 4 GB; 2 h |
+   | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most its share of `REGBENCH_STAGE_QUEUE_MAX` (a total over the launch, split over the runs feeding at once: 200 is 22 each for 9 runs without lanes; 100 over 4 lanes is 25 each) of them pending or running | 2; 4 GB; 2 h |
    | `rb-<run>-<ds>-tile-a<2..4>-o<n>` (the same) | a RETRY JOB: one task per round that has a tile the pipeline would retry; it runs that round's due tiles one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
    | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
    | `rb-<run>-<ds>-last-<16,64,256,512>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
@@ -2669,7 +2669,7 @@ round).
 | `REGBENCH_ACCT_WAIT_S`, `REGBENCH_ACCT_POLL_S` | how long a ladder task waits for the scheduler's accounting to name the end state of an earlier task whose result still says `killed`, and the seconds between two looks ("The ladder") | `600`, `30` |
 | `REGBENCH_ARRAY_LIMIT` (above), `REGBENCH_STAGE_ARRAY_MAX`, `REGBENCH_STAGE_QUEUE_MAX`, `REGBENCH_STAGE_FEED_MIN`, `REGBENCH_STAGE_POLL_S`, `REGBENCH_STAGE_FEEDERS` | must be whole numbers of at least 1: the script refuses anything else before it submits | |
 | `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round | `100` |
-| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks pending or running at a time in the WHOLE LAUNCH: a total, divided by the number of runs with a tile submitter (every STARE run is such a run: 9 on the cohort, 12 on a brightfield set; floor, at least 1 each) and each submitter keeps to its share (`REGBENCH_STAGE_QUEUE_RUN` inside the submitter, which the launcher sets; do not set it yourself). It was a per-run ceiling of 100 when two runs had a submitter; the default total is 200 = 2 x 100, so the cluster load of a launch is what it was, however many runs it holds | `200` |
+| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks pending or running at a time in the WHOLE LAUNCH: a total, divided by the number of runs with a tile submitter that feed at once (every STARE run is such a run: 9 on the cohort, 12 on a brightfield set; `REGBENCH_RUN_LANES` when that is fewer, since at most that many runs are in flight; floor, at least 1 each) and each submitter keeps to its share (`REGBENCH_STAGE_QUEUE_RUN` inside the submitter, which the launcher sets; do not set it yourself). It was a per-run ceiling of 100 when two runs had a submitter; the default total is 200 = 2 x 100, so the cluster load of a launch is what it was, however many runs it holds | `200` |
 | `REGBENCH_STAGE_FEED_MIN` | free slots the tile submitter waits for before it submits an array (fewer when fewer tiles are left) | `25` |
 | `REGBENCH_STAGE_POLL_S` | seconds between two looks at the queue | `60` |
 | `REGBENCH_STAGE_FEEDERS`, `REGBENCH_STAGE_FEED_TIME` | tile submitters chained per run and dataset, and the time limit of each | `2`, `7-00:00:00` |
@@ -2777,12 +2777,19 @@ reports.
   run whose registration is several jobs per round (every STARE run, 9 on the cohort and
   12 on a brightfield set) has a tile submitter of its own; a run's datasets follow one
   another, so a run is one submitter's worth of queue. The launcher divides the total by
-  the number of such runs it submits (floor, at least 1) and gives every submitter that
-  share as its ceiling: at the default 200, 22 each on the cohort (9 runs) and 16 each
-  on a brightfield set (12), never more than 200 tile tasks in all, on top of everything
-  the launcher itself queued. (A minimum of 1 each means a total below the number of runs
-  is exceeded by the difference.) The dry run's last lines give the share and the sum to
-  hold against the site's limit.
+  the number of such runs that can FEED AT ONCE: the runs it submits, or
+  `REGBENCH_RUN_LANES` when that is fewer (floor, at least 1), and gives every submitter
+  that share as its ceiling. Without lanes: at the default 200, 22 each on the cohort (9
+  runs) and 16 each on a brightfield set (12). With lanes (`launch.sbatch`: 4 lanes, a
+  total of 100): 25 each. The total stays a ceiling because a laned run's jobs, its
+  feeders included, wait for the LAST job of the run before it on its lane, and that job
+  waits for that run's last feeder, which ends only once each of its tile tasks has left
+  the queue: at most `lanes` submitters feed at a time. (Not so when a submitter GIVES UP
+  or is ended at its time limit with tasks still queued: those tasks stay, uncounted by
+  the next run on the lane.) A `--runs` subset divides by the runs in it. A minimum of 1
+  each means a total below that number is exceeded by the difference. The dry run prints
+  the share (`# tile queue: ...`) and, in its last lines, the sum to hold against the
+  site's limit.
 - **A subset submitted into a results folder makes every other run `not run` there.**
   The scorer takes what the LAST submission into `REGBENCH_OUT` ran or reused and
   nothing else (`--submission`). `--runs "stare ashlar"` into a folder that holds a

@@ -75,6 +75,7 @@ export REGBENCH_REPO="$repo"
 : "${REGBENCH_SELFCHECK_ADVISORY:=1}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
 : "${REGBENCH_STAGE_QUEUE_MAX:=100}"  # tile tasks pending or running, in the whole launch (a total)
+# ... split over the runs feeding at once, at most the lanes: 100 over 4 lanes is 25 each
 # the site
 : "${REGBENCH_SITE_CONFIG:=$repo/conf/ieo.config}"
 # the images: REGBENCH_IMAGES is where the site keeps its images (default: the

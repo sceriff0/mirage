@@ -162,8 +162,9 @@
 #   REGBENCH_STAGE_ARRAY_MAX (100)    the most tasks in one tile array
 #   REGBENCH_STAGE_QUEUE_MAX (200)    the most tile tasks pending or running at a time
 #                                     in the WHOLE LAUNCH: a total, split evenly over the
-#                                     runs that have a tile submitter (floor, at least 1
-#                                     each); each submitter's ceiling is its share
+#                                     runs with a tile submitter that feed at once (all
+#                                     of them, or REGBENCH_RUN_LANES when fewer; floor,
+#                                     at least 1 each); each submitter's ceiling is its share
 #   REGBENCH_STAGE_FEED_MIN (25)      the submitter waits for that many free slots
 #                                     before it submits an array (fewer when fewer
 #                                     tiles are left)
@@ -926,12 +927,23 @@ for ds in $sized; do
     done < "$table"
 done
 # THE TILE QUEUE CEILING IS A TOTAL: REGBENCH_STAGE_QUEUE_MAX is divided by the number of
-# runs that have a tile submitter (floor, at least 1) and each submitter is given its
-# share, REGBENCH_STAGE_QUEUE_RUN, which feed_tiles.sbatch reads. Set before the first sbatch.
+# runs with a tile submitter that can feed AT ONCE (floor, at least 1) and each submitter
+# is given its share, REGBENCH_STAGE_QUEUE_RUN, which feed_tiles.sbatch reads. Set before
+# the first sbatch. That number is N_TILE_RUNS, or REGBENCH_RUN_LANES when fewer: every
+# job of a laned run (its feeders included) waits `afterany` for the LAST job of the run
+# before it on its lane (LANE_LAST_<lane>, below), and that last job (stitch) waits for
+# the run's last feeder, which ends only once each of its tile tasks has left the queue
+# (feed_tiles.sbatch drains before it writes `.done`). So at most `lanes` submitters feed
+# at a time, and `lanes` shares stay within the total.
+N_FEEDING="$N_TILE_RUNS"
+if [ "$REGBENCH_RUN_LANES" -gt 0 ] && [ "$REGBENCH_RUN_LANES" -lt "$N_FEEDING" ]; then
+    N_FEEDING="$REGBENCH_RUN_LANES"
+fi
 STAGE_QUEUE_RUN="$REGBENCH_STAGE_QUEUE_MAX"
-if [ "$N_TILE_RUNS" -gt 0 ]; then
-    STAGE_QUEUE_RUN=$((REGBENCH_STAGE_QUEUE_MAX / N_TILE_RUNS))
+if [ "$N_FEEDING" -gt 0 ]; then
+    STAGE_QUEUE_RUN=$((REGBENCH_STAGE_QUEUE_MAX / N_FEEDING))
     [ "$STAGE_QUEUE_RUN" -ge 1 ] || STAGE_QUEUE_RUN=1
+    echo "# tile queue: REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX split over $N_FEEDING tile submitter(s) feeding at once ($N_TILE_RUNS run(s) with one, REGBENCH_RUN_LANES=$REGBENCH_RUN_LANES): $STAGE_QUEUE_RUN each"
 fi
 export REGBENCH_STAGE_QUEUE_RUN="$STAGE_QUEUE_RUN"
 # ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
@@ -1317,7 +1329,11 @@ echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was
 if [ "$N_FED" -gt 0 ]; then
     n_fed_runs="$(wc -w <<< "$FED_RUNS" | tr -d ' ')"
     echo "# later, by the tile submitters (feed_tiles.sbatch): $N_FED tile task(s), one per tile, in arrays of at most $REGBENCH_STAGE_ARRAY_MAX; plus, per attempt 2 to 4, one retry task per round that has a tile to retry"
-    echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $STAGE_QUEUE_RUN tile task(s) for each of the $n_fed_runs run(s) with a tile submitter (${FED_RUNS# }; REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX is the total they share): $((N_TASKS + n_fed_runs * STAGE_QUEUE_RUN)) task(s)"
+    if [ "$N_FEEDING" -lt "$n_fed_runs" ]; then
+        echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $STAGE_QUEUE_RUN tile task(s) for each of the $N_FEEDING of the $n_fed_runs run(s) with a tile submitter that feed at once (${FED_RUNS# }; REGBENCH_RUN_LANES=$REGBENCH_RUN_LANES; REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX is the total they share): $((N_TASKS + N_FEEDING * STAGE_QUEUE_RUN)) task(s)"
+    else
+        echo "# the most in the queue at once: the $N_TASKS task(s) above plus at most $STAGE_QUEUE_RUN tile task(s) for each of the $n_fed_runs run(s) with a tile submitter (${FED_RUNS# }; REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX is the total they share): $((N_TASKS + n_fed_runs * STAGE_QUEUE_RUN)) task(s)"
+    fi
 fi
 [ "$DRY" = 1 ] || echo "# job ids    -> $IDS_FILE (this call's, one per line; cancel everything: scancel \$(cat \"$IDS_FILE\"))"
 if [ "$score_only" = 1 ]; then
