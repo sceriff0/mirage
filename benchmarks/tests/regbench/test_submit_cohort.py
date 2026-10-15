@@ -29,12 +29,19 @@ REPO = Path(__file__).resolve().parents[3]
 SLURM = REPO / "benchmarks" / "regbench" / "slurm"
 SCRIPT = SLURM / "submit_cohort.sh"
 GPU = "--gres=gpu:nvidia_h200:1"
-RUNS = {variants.run_name(r): r for r in variants.active_runs()}
+# the cohort's list: its regime's runs (the bf-only STARE runs are not submitted for it)
+RUNS = {variants.run_name(r): r for r in variants.runs_for(None)}
 GATING = sorted({variants.gated_by(n) for n in RUNS})
 # the runs whose registration is several jobs per round: their last job (the writer) has
 # the four attempts of the pipeline's allocation for STITCH where the others have the
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
+# every active run, whatever its dataset: the helpers below are also used on the external sets
+STAGED_ALL = {
+    variants.run_name(r): variants.stages_of(r)
+    for r in variants.active_runs()
+    if variants.stages_of(r)
+}
 FEEDERS = 2  # tile submitters chained per staged run and dataset
 # the default submission on the fixture (two cohort datasets, `multiplex` and `synthetic`),
 # derived from the run list: per run its gate and, per dataset, the ladder's first array and
@@ -257,7 +264,7 @@ def rung_gb(run):
 
 
 def _last(run, suffix):
-    return suffix + ("-last" if run in STAGED else "")
+    return suffix + ("-last" if run in STAGED_ALL else "")
 
 
 def rungs(jobs, run, dataset="multiplex", suffix=""):
@@ -501,7 +508,7 @@ def test_the_script_names_no_method():
 def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     jobs, _, _ = dry
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
-    assert laddered == set(RUNS) and len(RUNS) == len(variants.active_runs())
+    assert laddered == set(RUNS) and len(RUNS) == len(variants.runs_for(None))
     gated = {j.args[1] for j in jobs.values() if j.args[:1] == ["selfcheck"]}
     assert gated == set(RUNS)
 
@@ -719,7 +726,7 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
 
     done, _, _ = launch(site, env={"REGBENCH_RUN_LANES": str(lanes)}, log="lanes")
     jobs = jobs_of(done)
-    runs = [r for r in variants.RUNS if r.active]
+    runs = list(variants.runs_for(None))
     names = [variants.run_name(r) for r in runs]
     last = {n: last_job(n) for n in names}
     for k, name in enumerate(names):
@@ -1630,13 +1637,9 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     assert after(jobs["rb-stare-multiplex-solve-a1"]) == {
         f"rb-stare-multiplex-feed-{FEEDERS}"
     }
-    # the preprocessing is the benchmark's own step, with the benchmark's allocation
-    # (a proxy the adapter writes itself, `haem`, has it; the plain run does not)
-    prep = attempts(jobs, "stare_haem_clahe", "prep")
-    assert [(j.opt("--cpus-per-task"), j.opt("--mem")) for j in prep] == [
-        ("4", "16G"), ("4", "32G"), ("4", "48G"), ("4", "64G")
-    ]  # fmt: skip
-    assert "rb-stare-multiplex-prep-a1" not in jobs
+    # the cohort is fluorescence: no run of it has a proxy to write, so no prep job
+    assert not any("prep" in st for st in STAGED.values())
+    assert not [n for n in jobs if "-prep-" in n]
 
 
 @pytest.fixture(scope="module")
@@ -1657,7 +1660,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
         "REGBENCH_STAGE_ARRAY_MAX": "7",
         "REGBENCH_STAGE_QUEUE_MAX": "30",
     }
-    done, _, _ = launch(site, "--runs", "stare stare_haem_clahe", env=env, log="totals")
+    done, _, _ = launch(site, "--runs", "stare stare_clahe", env=env, log="totals")
     jobs = jobs_of(done)
     tasks = sum(
         int(r.split("-")[1]) - int(r.split("-")[0]) + 1
@@ -1684,7 +1687,7 @@ def test_the_dry_run_says_what_is_submitted_now_and_what_is_fed_in_later(site, s
     assert (
         f"# the most in the queue at once: the {tasks} task(s) above plus at most 30 "
         f"tile task(s) for each of the 2 run(s) with a tile submitter (stare "
-        f"stare_haem_clahe): {tasks + 2 * 30} task(s)" in said
+        f"stare_clahe): {tasks + 2 * 30} task(s)" in said
     )
     # no tile task is among what is submitted now
     assert not [n for n in jobs if "-tile-" in n]

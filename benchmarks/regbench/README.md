@@ -144,9 +144,12 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-60 active runs, 4 on a GPU, 27 per patient (the totals are `variants.counts()`; the
-list is generated from tables, so they move with the tables and no test pins a literal).
-`score` expects exactly the active runs' result names and opens its summary on the six
+60 active runs, 4 on a GPU, 27 per patient (`variants.counts()`, over every active run;
+the list is generated from tables, so the totals move with the tables and no test pins a
+literal). The COHORT (dataset None: the user's cyclic-IF patients, `regimes.COHORT_REGIME`)
+and each dataset take the runs of their own regime (`runs_for`): the cohort list that `runs`,
+the launcher and `score` use has 45 runs, with no RGB-proxy STARE run (`runs --all` prints every
+run). `score` expects exactly that list's result names and opens its summary on the six
 primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.

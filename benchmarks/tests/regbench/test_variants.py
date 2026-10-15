@@ -26,6 +26,17 @@ def _stare_names():
     return list(out)
 
 
+def _cohort_stare_names():
+    """The STARE runs of the cohort's regime (``regimes.COHORT_REGIME``)."""
+    from benchmarks.regbench import regimes as rg_
+
+    return [
+        variants.stare_cell(s_, k, lv)[0]
+        for k, lv in rg_.stare_levels(rg_.COHORT_REGIME)
+        for s_ in variants.STARE_STRIDES
+    ]
+
+
 def _stare_variants(name):
     """The result names of one STARE run: the label replaces the method's name in both."""
     return [f"{name}_rigid", name]
@@ -63,7 +74,12 @@ OTHER_FIRST = [
 N_OTHER_RUNS = 12  # 3 VALIS + 8 DeeperHistReg + PALOM
 # `stare_prep` is paused: it writes nothing and is not expected
 EXPECTED = [
-    *[v for n in _stare_names() for v in _stare_variants(n)],
+    *[
+        v
+        for n in _stare_names()
+        for v in _stare_variants(n)
+        if n in _cohort_stare_names()
+    ],
     *OTHER_FIRST,
     *ashlar.ASHLAR_CELLS,
     "palom_affine",
@@ -421,20 +437,22 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert COLUMNS[:12] == FIRST_TWELVE == variants.RUNS_COLUMNS[:12]
     assert FIRST_TWELVE[0] == "name" and FIRST_TWELVE[11] == "variants"
     got = rows(capsys)
-    assert len(got) == len(variants.active_runs())
+    assert len(got) == len(variants.runs_for(None))
     assert all(len(r) == len(COLUMNS) == 16 for r in got)
     # the runs whose registration is several scheduler jobs per round: every STARE run,
     # with a prep job before the rest for the proxies the adapter writes itself
     staged = {r[0]: r[15] for r in got if r[15] != "-"}
-    assert set(staged) == set(_stare_names())
-    for run in variants.active_runs():
+    assert set(staged) == set(_cohort_stare_names())
+    for run in variants.runs_for(None):
         if run.method != "stare":
             continue
         want = "coarse,tile,solve,stitch"
         if run.opts.get("proxy") in variants.PREP_PROXIES:
             want = "prep," + want
         assert staged[variants.run_name(run)] == want
-    assert [r[0] for r in got] == [variants.run_name(r) for r in variants.active_runs()]
+    assert [r[0] for r in got] == [
+        variants.run_name(r) for r in variants.runs_for(None)
+    ]
     # no empty field: bash's `read` with a tab IFS merges consecutive tabs
     assert all(field for r in got for field in r)
 
@@ -516,7 +534,7 @@ def test_a_runs_line_round_trips_into_a_run_command(capsys):
 
 def test_runs_header_names_the_columns(capsys):
     got = rows(capsys, "--header")
-    assert tuple(got[0]) == COLUMNS and len(got) == len(variants.active_runs()) + 1
+    assert tuple(got[0]) == COLUMNS and len(got) == len(variants.runs_for(None)) + 1
 
 
 # ── `score` on the command line expects the whole list ────────────────────────
@@ -583,7 +601,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert variants.family("valis120_micro") == "valis120"
 
     got = rows(capsys)
-    assert len(got) == n_runs - 2
+    assert len(got) == len(variants.runs_for(None))
     assert "valis120" not in [r[0] for r in got]
     assert {r[12] for r in got} == {"1"}
     everything = rows(capsys, "--all")
@@ -822,7 +840,7 @@ def test_the_realcheck_gates_the_primary_rows_of_the_two_valis_adapters(capsys):
     rest of a run. Only a run with a primary row has one."""
     gated = {
         variants.run_name(r): variants.realcheck_gate(variants.run_name(r))
-        for r in variants.active_runs()
+        for r in variants.runs_for(None)
     }
     assert {k: v for k, v in gated.items() if v} == {
         "valis_mirage": "valis_mirage",
@@ -1036,3 +1054,24 @@ def test_runs_for_honours_regimes():
     assert "stare_clahe" not in names  # cyclic_if's alternative, not bf_same's
     cyc = {variants.run_name(r) for r in variants.runs_for("synthetic")}
     assert "stare_clahe" in cyc and "stare_haem_clahe" not in cyc
+
+
+def test_the_cohort_is_a_regime_and_takes_no_rgb_only_stare_run():
+    cohort = variants.runs_for(None)
+    stare = [r for r in cohort if r.method == "stare"]
+    assert stare and all(r.opts.get("proxy", "channel") == "channel" for r in stare)
+    # the cohort shares cyclic_if with every dataset of that regime (derived)
+    same = [d for d in rg.DATASET_REGIME if rg.DATASET_REGIME[d] == rg.COHORT_REGIME]
+    assert same
+    for d in same:
+        assert {variants.run_name(r) for r in variants.runs_for(d)} == {
+            variants.run_name(r) for r in cohort
+        }
+    assert [r[0] for r in variants.runs_table()] == [
+        variants.run_name(r) for r in cohort
+    ]
+    assert len(variants.expected_variants()) == sum(
+        len(variants.variants_of(r)) for r in cohort
+    )
+    # --all still lists every run, paused or not
+    assert len(variants.runs_table(paused=True)) == len(variants.RUNS)

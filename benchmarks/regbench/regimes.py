@@ -41,11 +41,36 @@ _FLUO = Level("channel", "none")
 _RGB = Level("grey", "none")
 
 REGIMES = {
-    "cyclic_if": {"baseline": _FLUO, "default": _FLUO, "alt": Level("channel", "clahe"), "pct": Level("channel", "percentile")},
-    "bf_same": {"baseline": _RGB, "default": Level("haem", "clahe"), "alt": Level("grey", "clahe"), "pct": Level("haem", "percentile")},
-    "bf_consecutive": {"baseline": _RGB, "default": Level("grey", "clahe"), "alt": Level("grey_smooth", "none"), "pct": Level("grey", "percentile")},
-    "dapi_he": {"baseline": _RGB, "default": Level("haem", "clahe"), "alt": Level("grey", "clahe"), "pct": Level("haem", "percentile")},
-    "cytassist": {"baseline": _RGB, "default": Level("grey", "clahe"), "alt": Level("haem", "clahe"), "pct": Level("grey", "percentile")},
+    "cyclic_if": {
+        "baseline": _FLUO,
+        "default": _FLUO,
+        "alt": Level("channel", "clahe"),
+        "pct": Level("channel", "percentile"),
+    },
+    "bf_same": {
+        "baseline": _RGB,
+        "default": Level("haem", "clahe"),
+        "alt": Level("grey", "clahe"),
+        "pct": Level("haem", "percentile"),
+    },
+    "bf_consecutive": {
+        "baseline": _RGB,
+        "default": Level("grey", "clahe"),
+        "alt": Level("grey_smooth", "none"),
+        "pct": Level("grey", "percentile"),
+    },
+    "dapi_he": {
+        "baseline": _RGB,
+        "default": Level("haem", "clahe"),
+        "alt": Level("grey", "clahe"),
+        "pct": Level("haem", "percentile"),
+    },
+    "cytassist": {
+        "baseline": _RGB,
+        "default": Level("grey", "clahe"),
+        "alt": Level("haem", "clahe"),
+        "pct": Level("grey", "percentile"),
+    },
 }
 
 DATASET_REGIME = {
@@ -59,11 +84,16 @@ DATASET_REGIME = {
 }
 
 
+COHORT_REGIME = "cyclic_if"  # the cohort (dataset None) is cyclic IF; a non-IF cohort would need its own entry
+
+
 def regime_of(dataset):
     try:
         return DATASET_REGIME[dataset]
     except KeyError:
-        raise KeyError(f"dataset {dataset!r} has no regime in regimes.DATASET_REGIME") from None
+        raise KeyError(
+            f"dataset {dataset!r} has no regime in regimes.DATASET_REGIME"
+        ) from None
 
 
 def stare_levels(regime):

@@ -483,7 +483,9 @@ def row_checks(selfcheck_dir, mine=None):
 
     out = {}
     root = Path(selfcheck_dir) if selfcheck_dir else None
-    for run in active_runs():  # a paused run writes no results
+    for run in runs_for(
+        None
+    ):  # a paused run writes no results; nor does a run of another regime
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -513,7 +515,9 @@ def _gate_records(selfcheck_dir, mine=None):
 
     root = Path(selfcheck_dir) if selfcheck_dir else None
     out = []
-    for run in active_runs():  # a paused run writes no results
+    for run in runs_for(
+        None
+    ):  # a paused run writes no results; nor does a run of another regime
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -664,27 +668,27 @@ def _not_on(dataset, run):
 
 def runs_for(dataset=None):
     """The active runs of a dataset: those whose ``regimes`` take it (``Run.regimes``),
-    all of them for None; for an external brightfield set, those not left out (``excluded_for``); for
+    the cohort's (``regimes.COHORT_REGIME``) for None; for an external brightfield set, those not left out (``excluded_for``); for
     ANHIR's tuning side, the preprocessing candidates and nothing else."""
     if dataset == ANHIR_TUNE:
         return TUNING_RUNS
-    runs = active_runs()
-    if dataset is not None:
-        runs = tuple(r for r in runs if _in_regime(dataset, r))
+    runs = tuple(r for r in active_runs() if _in_regime(dataset, r))
     if dataset not in EXTERNAL_DATASETS:
         return runs
     return tuple(r for r in runs if _not_on(dataset, r) is None)
 
 
 def _in_regime(dataset, run):
-    """Whether the run's ``regimes`` take this dataset (None takes every dataset). A
-    dataset with no regime (``regimes.DATASET_REGIME``) takes only the runs that name none."""
+    """Whether the run's ``regimes`` take this dataset (None takes every dataset). The
+    cohort (``dataset`` None) is ``regimes.COHORT_REGIME``. A dataset with no regime
+    (``regimes.DATASET_REGIME``) takes only the runs that name none."""
     if run.regimes is None:
         return True
     try:
-        return regimes.regime_of(dataset) in run.regimes
+        reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
     except KeyError:
         return False
+    return reg in run.regimes
 
 
 def excluded_for(dataset):
@@ -897,7 +901,7 @@ def submission_order(order, runs=None):
 
     This is the order of SUBMISSION only: ``RUNS``, ``runs_table`` without an order,
     every table and every result are untouched."""
-    runs = list(active_runs() if runs is None else runs)
+    runs = list(runs_for(None) if runs is None else runs)
     by_name = {run_name(r): r for r in runs}
     families = {}
     for r in runs:
@@ -938,9 +942,7 @@ def runs_table(paused=False, dataset=None, order=None):
     possibly empty) puts the rows in ``submission_order``; None leaves them as they are."""
     check()
     table = []
-    listed = RUNS if paused else active_runs()
-    if dataset in EXTERNAL_DATASETS:
-        listed = runs_for(dataset)
+    listed = RUNS if paused else runs_for(dataset)
     if order is not None:
         listed, _ = submission_order(order, listed)
     for run in listed:

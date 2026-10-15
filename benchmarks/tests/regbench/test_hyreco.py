@@ -933,9 +933,9 @@ def test_the_run_list_of_an_external_set():
         for r in variants.active_runs()
         if r.regimes is None or "cyclic_if" in r.regimes
     )
-    assert len(variants.runs_table()) == len(variants.active_runs())
+    assert len(variants.runs_table()) == len(variants.runs_for(None))
     assert len(variants.expected_variants()) == sum(
-        len(variants.variants_of(r)) for r in variants.active_runs()
+        len(variants.variants_of(r)) for r in variants.runs_for(None)
     )
     assert variants.primary_for() == list(variants.PRIMARY)
 
@@ -963,7 +963,7 @@ def test_runs_prints_an_external_sets_list(capsys):
     left = capsys.readouterr().out.splitlines()
     assert {ln.split("\t")[0] for ln in left} == _left_out_of_hyreco()
     assert cli.main(["runs"]) == 0
-    assert len(capsys.readouterr().out.splitlines()) == len(variants.active_runs())
+    assert len(capsys.readouterr().out.splitlines()) == len(variants.runs_for(None))
 
 
 def brightfield(tmp_path, **kw):
