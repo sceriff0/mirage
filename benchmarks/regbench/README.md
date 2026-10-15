@@ -199,6 +199,15 @@ primary rows:
   values outside `PROXIES`/`SPREPS`, `sprep=clahe` where the pixel size is unknown, and
   `prep` (the label-bound row above) together with either. A run with neither option
   differs from the earlier ones only by `--prep none` in the two stage commands.
+- **What a selfcheck gate does not exercise.** A generated STARE cell is gated by `stare`'s
+  selfcheck and an ASHLAR cell by that of `ashlar` (affine none) or `affine_ashlar` (affine
+  stare), which run the 15 um / 0.002 cell. The gate checks the adapter's pointing path, not the
+  other proxies, `--prep` levels, shifts or noises: those cells run on trust in that path.
+- **HyReCo prepared with `--reduce 2`.** `runs_for` has no case data, so it still lists the
+  `haem` / `grey_smooth` proxy cells; on a reduced proxy the adapter refuses them ("the
+  preprocessing row is not defined on a reduced proxy") and each pair records that refusal as
+  its failure. The refusal, not a listing rule, keeps them from running; prepare HyReCo
+  without `--reduce` to run them.
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
   `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the
@@ -2399,7 +2408,7 @@ script names no method.
      done before the known-truth cases start. The anchored ASHLAR rows also wait for
      STARE's last array on the same dataset.
    **A run whose registration is several jobs per round** (`runs`, column `stages`:
-   `stare` and `stare_prep`) has, per dataset, a chain of stage jobs in place of that
+   every STARE run: `variants.stages_of`, the generated set, 9 on the cohort and 12 per brightfield regime) has, per dataset, a chain of stage jobs in place of that
    ladder, every job after the one before it (`afterany`) and all of them behind the
    run's gate. With R rounds and T tiles in all (a round's tile count is
    `ceil(H / 2048) x ceil(W / 2048)` of its reference, known before anything runs:
@@ -2408,7 +2417,7 @@ script names no method.
 
    | jobs | what | CPUs, memory, time per task |
    |---|---|---|
-   | `rb-<run>-<ds>-prep-a1..a4` (`stare_prep` only) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
+   | `rb-<run>-<ds>-prep-a1..a4` (the runs with a `haem` / `grey_smooth` proxy only; brightfield sets) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
    | `rb-<run>-<ds>-coarse-a1..a4` | 4 arrays of R tasks | 2; 2, 4, 6, 8 GB; 2, 4, 6, 8 h |
    | `rb-<run>-<ds>-feed-1..2` | the TILE SUBMITTERS (`feed_tiles.sbatch`), `REGBENCH_STAGE_FEEDERS` of them chained: not a tile job, the job that submits them | 1; 1 GB; 7 days |
    | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most `REGBENCH_STAGE_QUEUE_MAX` (100) of them pending or running | 2; 4 GB; 2 h |
@@ -2649,7 +2658,7 @@ round).
 | `REGBENCH_ACCT_WAIT_S`, `REGBENCH_ACCT_POLL_S` | how long a ladder task waits for the scheduler's accounting to name the end state of an earlier task whose result still says `killed`, and the seconds between two looks ("The ladder") | `600`, `30` |
 | `REGBENCH_ARRAY_LIMIT` (above), `REGBENCH_STAGE_ARRAY_MAX`, `REGBENCH_STAGE_QUEUE_MAX`, `REGBENCH_STAGE_FEED_MIN`, `REGBENCH_STAGE_POLL_S`, `REGBENCH_STAGE_FEEDERS` | must be whole numbers of at least 1: the script refuses anything else before it submits | |
 | `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round | `100` |
-| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks of ONE such run pending or running at a time (two such runs, `stare` and `stare_prep`, have a ceiling each) | `100` |
+| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks of ONE such run pending or running at a time (every STARE run is such a run: 9 on the cohort, 12 on a brightfield set, each with a ceiling of its own, so the effective ceiling scales with the number of stage-chain runs; sizing it is task C7's) | `100` |
 | `REGBENCH_STAGE_FEED_MIN` | free slots the tile submitter waits for before it submits an array (fewer when fewer tiles are left) | `25` |
 | `REGBENCH_STAGE_POLL_S` | seconds between two looks at the queue | `60` |
 | `REGBENCH_STAGE_FEEDERS`, `REGBENCH_STAGE_FEED_TIME` | tile submitters chained per run and dataset, and the time limit of each | `2`, `7-00:00:00` |
@@ -2754,7 +2763,7 @@ reports.
   written there as soon as its `sbatch` returns): `scancel $(cat <that file>)`, and
   submit again.
 - **`REGBENCH_STAGE_QUEUE_MAX` is per run, not for the submission.** Each run whose
-  registration is several jobs per round (`stare`, `stare_prep`) has, on each dataset,
+  registration is several jobs per round (every STARE run, 9 on the cohort and 12 on a brightfield set) has, on each dataset,
   a tile submitter of its own with a ceiling of its own; a run's datasets follow one
   another, so the most tile tasks in the queue at once is the ceiling times the number
   of such runs (two: 200 at the default 100), on top of everything the launcher itself
@@ -3153,7 +3162,7 @@ words, before it imports its package, so no method can run on a wrong channel by
 | `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
 | `valis120`, `valis120_hires` | listed, but as built they FAIL on every pair (both slides of a pair have the same basename and the adapter refuses that: "Dormant datasets", item 1); never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
 | `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
-| `stare_prep` | no | the preprocessing row is defined for ANHIR, the cohort and the synthetic suite (R3.21); HyReCo is dormant and keeps its own proxy settings (`variants.NOT_ON`) |
+| `stare_prep` | no (and paused everywhere) | the preprocessing row is defined for ANHIR, the cohort and the synthetic suite (R3.21); HyReCo is dormant and keeps its own proxy settings (`variants.NOT_ON`) |
 | `deeperhistreg_*` (8 runs) | no | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section). The adapter's RGB input rule was written for ANHIR's JPEG / PNG images (R3.20) and has not been extended to these BigTIFF slides: the adapter refuses a brightfield TIFF, and the runs are left out here by name (`variants.NOT_ON`) |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
 | `palom` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
@@ -3391,7 +3400,7 @@ with reasons (also in `anhir_excluded.csv`). Eight runs, 18 result names.
 | run | on ANHIR | what it is given |
 |---|---|---|
 | `stare` | yes | each image as ONE channel, written by `prepare`: **inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, 8 bit, full resolution** (`prep.grey_plane`). `stare register` reads one channel per slide, so this conversion is part of the benchmark's input, not STARE's. The image it writes is that grey image, registered. For the mammary glands STITCH's header gets a placeholder pixel size of 1.0 (STARE uses the pixel size for nothing else) |
-| `stare_prep` | yes | the frozen candidate of `prep.py` instead of that grey image; STARE unchanged; the image it writes is the same plain grey image moved by its own transform |
+| `stare_prep` | PAUSED (not run) | the frozen candidate of `prep.py` instead of that grey image; STARE unchanged; the image it writes is the same plain grey image moved by its own transform |
 | `valis120`, `valis120_hires` | yes | the ORIGINAL RGB images (JPEG; PNG for the lung lobes), as for the cohort: upstream defaults, the target as the reference. VALIS picks its own brightfield processing. Never executed here; whether its reader opens these files as the adapter places them is by reading only |
 | `deeperhistreg_gpu`, `_cpu`, `_hr_gpu`, `_hr_cpu` | yes | the RGB image WHOLE, with the shipped parameter set as it stands (see below) |
 | `deeperhistreg_*_fluo_*` (4 runs) | no | `fluo=1` is the benchmark's configuration for a fluorescence channel (a black pad, no intensity flip); on RGB the shipped parameters are the ones to run |
@@ -4017,7 +4026,13 @@ per pixel, and the overlap is the owner's ruling (`ashlar.TILE`, `ashlar.OVERLAP
 - Reference tiles are cut once per noise level and shared by the plain and the anchored
   row, under `<out>/cache/ashlar_tiles/<dataset>__<patient>/` (delete it when both rows
   have run; it is large). ASHLAR's reference STITCH is not shared: each command does its
-  own, and `info["edge_positions_identical"]` says whether the two came out equal.
+  own, and `info["edge_positions_identical"]` says whether the two came out equal. The
+  reference tiles depend on the noise level only, so they are shared by every cell of one
+  `noise_frac` (six cells: 2 affine x 3 `max_shift_um`); the stitch comparison is made only
+  between cells at the same tiles AND the same `max_shift_um` (the edge files are keyed by
+  both), because a different shift can stitch the same tiles differently. The cache name of
+  the tiles changed with the factorial (`ref_n<frac>_...`, was `ref_ref_` / `ref_none_`): an
+  existing cache misses once and the tiles are re-cut (outside the clock).
 
 **The point map is where ASHLAR drew each tile, exactly.** `Mosaic.assemble_channel`
 pastes tile `i` at `aligner.positions[i]` (`reg.py:1147-1153`) and `utils.paste` puts tile

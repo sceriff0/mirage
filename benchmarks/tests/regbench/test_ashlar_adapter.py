@@ -1251,3 +1251,23 @@ def test_nuclei_on_ashlars_seams_are_marked_and_every_method_is_scored_off_them(
     assert not [r for r in res["cells"] if ":non_" in r["method"]]
     # the shared tiles under <out>/cache are not taken for a method
     assert {r["method"] for r in res["cells"]} == {"initial", "ashlar"}
+
+
+def test_edge_stitches_are_compared_only_at_the_same_tiles_and_shift(tmp_path):
+    """The reference tiles are shared by every cell of one noise level; a cell of another
+    maximum shift may stitch them differently and is never compared with."""
+    edge_a = {"positions_yx": [[0.0, 0.0], [1755.0, 0.0]]}
+    edge_b = {"positions_yx": [[0.0, 0.0], [1754.0, 0.0]]}
+
+    def call(label, shift, edge):
+        base = {"label": label, "max_shift_um": shift}
+        return am._edge_identity(tmp_path, "ref_n0_x", base, edge)
+
+    assert call("ashlar_clean", 15.0, edge_a) is None  # nothing to compare with yet
+    assert (
+        call("ashlar_anone_n0_s60", 60.0, edge_b) is None
+    )  # other shift: not compared
+    assert (
+        call("affine_ashlar_clean", 15.0, edge_a) is True
+    )  # same shift, plain vs anchored
+    assert call("ashlar_astare_n0_s60", 60.0, edge_a) is False  # same shift, differs

@@ -597,10 +597,13 @@ def _edge_identity(cache_dir, tiles_name, base, edge):
     if cache_dir is None:
         return None
     label = base["label"]
+    # the tiles are shared by every cell of the same noise, whatever its maximum shift, and a
+    # different shift can stitch differently: compare only at the same tiles AND shift
+    stem = f"{tiles_name}.s{float(base['max_shift_um']):g}"
     mine = np.asarray(edge["positions_yx"], dtype=float)
     same = None
-    for other in sorted(Path(cache_dir).glob(f"{tiles_name}.edge_*.json")):
-        if other.name == f"{tiles_name}.edge_{label}.json":
+    for other in sorted(Path(cache_dir).glob(f"{stem}.edge_*.json")):
+        if other.name == f"{stem}.edge_{label}.json":
             continue
         try:
             theirs = np.asarray(json.loads(other.read_text()), dtype=float)
@@ -608,7 +611,7 @@ def _edge_identity(cache_dir, tiles_name, base, edge):
             continue
         same = bool(theirs.shape == mine.shape and np.array_equal(theirs, mine))
     try:
-        path = Path(cache_dir) / f"{tiles_name}.edge_{label}.json"
+        path = Path(cache_dir) / f"{stem}.edge_{label}.json"
         path.write_text(json.dumps(mine.tolist()))
     except OSError:
         pass
@@ -657,7 +660,9 @@ def register_group(cases, work, opts):
         "version": version,
         "source": str(Path(getattr(ashlar, "__file__", "?")).parent),
         "label": label,
-        "noise": "none" if frac == 0 else ("ref" if frac == NOISE_FRAC else "other"),
+        "noise": "none"
+        if frac == 0
+        else ("ref" if frac == NOISE_FRAC else f"{frac:g}"),
         "affine": affine,
         "tile": TILE,
         "overlap": OVERLAP,
