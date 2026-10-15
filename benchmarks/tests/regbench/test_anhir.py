@@ -725,6 +725,9 @@ def test_a_blocked_or_never_started_run_is_not_a_method_failure(
         for r in result["summary"]
         if (r["side"], r["tissue"]) == ("all", "all")
     }
+    # the older results on disk are not these pairs': no error statistic of them stays
+    old = [r for r in result["pairs"] if r["method"] == "valis120_hires"]
+    assert old and all(math.isnan(r["rtre_median"]) for r in old)
     # in no median: no row at all for a run that registered nothing
     assert "valis120_hires" not in summary
     assert "deeperhistreg_hr_gpu_asdrawn" not in summary

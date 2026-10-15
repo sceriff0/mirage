@@ -173,6 +173,16 @@ def settings_hash(settings):
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
 
 
+def check_version(settings, who):
+    """SystemExit when ``settings`` were written by another settings version."""
+    if settings.get("version") != SETTINGS_VERSION:
+        raise SystemExit(
+            f"{who} were prepared with settings version {settings.get('version')}, "
+            f"this code writes {SETTINGS_VERSION} (the hash now covers the pixel size "
+            "and the shared-ids flag): prepare them again"
+        )
+
+
 def tuned_settings(cases_root):
     """The settings of the prepared ``hyreco_a`` cases under ``cases_root``: all nine
     pairs, one settings hash. This is the only way a setting reaches subset B."""
@@ -192,12 +202,7 @@ def tuned_settings(cases_root):
             "prepare the tuning set under one setting per cases folder"
         )
     settings = dict(cases[0].extra["settings"])
-    if settings.get("version") != SETTINGS_VERSION:
-        raise SystemExit(
-            f"{cases_root}: the {TUNING} cases were prepared with settings version "
-            f"{settings.get('version')}, this code writes {SETTINGS_VERSION} (the hash "
-            "now covers the pixel size and the shared-ids flag): prepare them again"
-        )
+    check_version(settings, f"{cases_root}: the {TUNING} cases")
     if settings_hash(settings) != hashes.pop():
         raise SystemExit(f"{cases_root}: {TUNING} settings do not match their hash")
     return settings

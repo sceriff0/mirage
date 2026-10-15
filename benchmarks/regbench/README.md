@@ -3163,9 +3163,9 @@ words, before it imports its package, so no method can run on a wrong channel by
 | run | on HyReCo | what it is given |
 |---|---|---|
 | `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
-| `valis120`, `valis120_hires` | listed, but as built they FAIL on every pair (both slides of a pair have the same basename and the adapter refuses that: "Dormant datasets", item 1); never executed | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
+| `valis120`, `valis120_hires` | yes (both slides of a pair share a basename, so the adapter places them under their parent folder's name, `HE_29.tif` / `PHH3_29.tif`: "Dormant datasets", item 1, fixed); not yet run on real HyReCo slides | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
 | `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
-| `stare_prep` | no (and paused everywhere) | the preprocessing row is defined for ANHIR, the cohort and the synthetic suite (R3.21); HyReCo is dormant and keeps its own proxy settings (`variants.NOT_ON`) |
+| `stare_prep` | no (paused everywhere) | the row is paused in the run list for every dataset (its job is done by the regime cells of `regimes.py`), so HyReCo needs no exclusion of it any more; HyReCo keeps its own proxy settings (`prepare --proxy`) |
 | `deeperhistreg_*` (8 runs) | no | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section). The adapter's RGB input rule was written for ANHIR's JPEG / PNG images (R3.20) and has not been extended to these BigTIFF slides: the adapter refuses a brightfield TIFF, and the runs are left out here by name (`variants.NOT_ON`) |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
 | `palom` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
@@ -3580,7 +3580,7 @@ Three of the defects found are fixed (C6): same-basename slides, the settings ha
 the A/B split's coverage, and a run that never started. **A HyReCo cases folder prepared
 before the fix must be prepared again**: the settings hash now covers `pixel_size_um` and
 `keep_shared_ids` (settings version 2), so an older folder's hash no longer matches and
-`prepare --subset b` / `score` refuse it by name. The dataset is dormant, so no live
+`prepare --subset b` and `score` (both `hyreco_a` and `hyreco_b`) refuse it by name. The dataset is dormant, so no live
 data is affected. What is left:
 
 - **The A/B split is enforced per cases folder only, and the method's configuration is
@@ -3602,6 +3602,12 @@ What changed:
    reference file itself, or names that still clash after the prefix. The mapping is
    `info.slides_source` in each VALIS `run.json` (`{placed name: source path}`); the
    adapters find a slide by its source path, so nothing else changed.
+   **This is general, not HyReCo's alone.** Every pose round of the `synthetic` and
+   `semisynth` known-truth suites is `<family>_<pose>/mov.ome.tif`, one basename for the
+   whole group, so before this fix every `valis120*` / `valis_mirage*` group there was
+   REFUSED and imputed as failed. They now run, as `<family>_<pose>_mov`; **any VALIS
+   result on those suites from before this fix is an imputed failure and must be re-run.**
+   Two cases that name one moving file are still refused.
 2. **The settings hash** holds `{proxy, reduce, version, pixel_size_um,
    keep_shared_ids}`. `prepare hyreco --subset b` refuses a `--pixel-size-um` or
    `--keep-shared-ids` that the tuning set did not carry (both flags are accepted on

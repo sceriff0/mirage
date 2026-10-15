@@ -11,6 +11,8 @@ pair the method itself failed on counts at its unregistered landmarks. The cause
 
 from __future__ import annotations
 
+import math
+
 from . import resources, variants
 from . import score as cohort
 from .mapping import FRAME, MOV_TO_REF
@@ -23,6 +25,8 @@ from .mapping import FRAME, MOV_TO_REF
 # landmarks, as the challenge counts a missing registration.
 NOT_RUN_CAUSES = ("not_run", "gate_blocked", *resources.NOT_THE_METHOD)
 UNKNOWN_FRAME = "unknown (no pair of this row registered)"
+# the floats of a pair row that describe the CASE, not a result
+KEEP_NUMBERS = ("diagonal_px", "pixel_size_um")
 
 
 def settle_frames(pairs, blocked=None):
@@ -46,6 +50,10 @@ def settle_frames(pairs, blocked=None):
         if why and r["method"] != "initial":
             r.update(failed=True, not_run=True, cause="gate_blocked", problem=why[:200])
             r["robustness"] = 0.0
+            # an older result on disk is not this pair's: no error statistic of it stays
+            for k, v in r.items():
+                if isinstance(v, float) and k not in KEEP_NUMBERS:
+                    r[k] = math.nan
         if not r["failed"]:
             continue
         known = frames.get(r["method"]) or ({r["frame"]} if r["frame"] else set())

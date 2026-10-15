@@ -323,6 +323,11 @@ def _settings(cases):
             f"({', '.join(str(h)[:12] for h in hashes)}). One result rests on one "
             "setting, chosen on subset A."
         )
+    from .datasets import hyreco
+
+    hyreco.check_version(
+        dict(cases[0].extra["settings"]), f"the {cases[0].dataset} cases"
+    )
     return cases[0].extra["settings"], next(iter(hashes))
 
 

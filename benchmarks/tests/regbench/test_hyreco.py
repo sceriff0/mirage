@@ -1339,6 +1339,12 @@ def test_a_gate_blocked_or_never_started_pair_is_listed_apart(tmp_path):
     assert (x["n_pairs"], x["n_not_run"], x["n_ok"]) == (1, 1, 1)
     assert row(got["summary"], method="stare", set="tuning")["n_not_run"] == 0
     assert all(p["method"] != "valis120_hires" or p["not_run"] for p in got["pairs"])
+    # an older result on disk (here: exact, 0 um) is not this pair's: its statistics go
+    blocked = [p for p in got["pairs"] if p["method"] == "valis120_hires"]
+    assert blocked and all(
+        math.isnan(p["tre_um_p50"]) and p["imputed_initial"] for p in blocked
+    )
+    assert all(p["pixel_size_um"] == 0.25 for p in blocked)
     kept = {(p["method"], p["case_id"]) for p in got["points"]}
     assert not {m for m, _ in kept} & {"valis120_hires"}
     assert ("stare_x", "108") not in kept
@@ -1375,3 +1381,27 @@ def test_the_not_run_causes_agree_with_whose():
         if owner in (failure_log.LAUNCHER, failure_log.INFRASTRUCTURE):
             assert cause in notrun.NOT_RUN_CAUSES, cause
     assert landmarks.NOT_RUN_CAUSES is notrun.NOT_RUN_CAUSES  # one definition
+
+
+def test_a_failed_pairs_declared_direction_names_its_frame(tmp_path):
+    cases, _ = crafted(tmp_path)
+    out = tmp_path / "out"
+    for case in cases:
+        methods.run_case(Reverse("dead", fail={"29", "108"}), case, out)
+        path = result_dir(out, "dead", case) / "run.json"
+        run = json.loads(path.read_text())
+        assert "direction" not in run or not run["direction"]
+        path.write_text(json.dumps({**run, "direction": REF_TO_MOV}))
+    got = landmarks.score(tmp_path / "cases", out, "hyreco_a")
+    assert {r["frame"] for r in got["pairs"] if r["method"] == "dead"} == {"moving"}
+
+
+def test_an_older_settings_version_is_refused_for_both_sets(tmp_path):
+    cases, _ = crafted(tmp_path)
+    old = {**cases[0].extra["settings"], "version": 1}
+    for case in cases:
+        case.extra.update(settings=old, settings_sha256=hyreco.settings_hash(old))
+        xy = load_points(case)["truth_mov"]
+        write_case(tmp_path / "cases", case, xy, xy)
+    with pytest.raises(SystemExit, match="settings version 1.*prepare them again"):
+        landmarks.score(tmp_path / "cases", tmp_path / "out", "hyreco_a")

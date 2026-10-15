@@ -488,6 +488,10 @@ def test_one_reference_and_one_name_per_slide(tmp_path, pair):
     shutil.copyfile(pair["moving"], clash)
     same_name = [cases[0], case_of(tmp_path / "c3", pair, "P1_r8", clash)]
     assert vp.patient_slides(same_name)[1]["P1_r8"] == str(clash)
+    # two cases naming ONE moving file are refused, with their own message
+    shared = [cases[0], case_of(tmp_path / "c5", pair, "P1_r6", cases[0].mov_image)]
+    with pytest.raises(ValueError, match="two cases name the same moving slide"):
+        vp.patient_slides(shared)
     # ... and refused only where even that leaves two of one VALIS name
     twin = tmp_path / "x" / "elsewhere" / "round1.ome.tif"
     twin.parent.mkdir(parents=True)
@@ -497,6 +501,37 @@ def test_one_reference_and_one_name_per_slide(tmp_path, pair):
         ValueError, match="would both be the VALIS slide 'elsewhere_round1'"
     ):
         vp.patient_slides(cases3)
+
+
+def test_the_known_truth_layout_runs_and_is_read_back_under_the_prefixed_names(
+    tmp_path, pair
+):
+    """Every pose round of the synthetic suites is `<family>_<pose>/mov.ome.tif`: one
+    basename for the whole group. It used to be refused (every valis row imputed as
+    failed); now each is placed under its folder's name, VALIS registers them, and the
+    scorer's reader finds each result by the case, never by a bare basename."""
+    from benchmarks.regbench import score as cohort
+
+    cases = []
+    for pose in ("blob_f_shift", "blob_f_rot"):
+        mov = tmp_path / pose / "mov.ome.tif"
+        mov.parent.mkdir()
+        shutil.copyfile(pair["moving"], mov)
+        cases.append(case_of(tmp_path / "cases", pair, pose, mov, group="blob_f"))
+    out = tmp_path / "out"
+    done = methods.run_group("valis", cases, out, {"workers": 1}, label="valis120")
+    assert done == {c.case_id: list(V120) for c in cases}
+    imgs = run_json(out, "valis120", cases[0])["info"]["slides_placed"]
+    assert len(imgs) == 3 and "blob_f_shift_mov.ome.tif" in imgs
+    for case in cases:
+        run = run_json(out, "valis120", case)
+        assert run["ok"] and run["info"]["slides_source"][
+            f"{case.case_id}_mov.ome.tif"
+        ] == str(case.mov_image)
+        (path,) = run["native"]["files"]
+        assert Path(path).name == f"{case.case_id}_mov.ome.tiff" and Path(path).exists()
+        _, warped, problem, cause = cohort._load_run(out, "valis120", case)
+        assert warped is not None and not problem and not cause
 
 
 def test_slides_are_linked_or_copied_never_symlinked(tmp_path, pair, monkeypatch):

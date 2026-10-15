@@ -232,6 +232,14 @@ def patient_slides(cases):
         )
     ref = refs.pop()
     moving = {c.case_id: str(c.mov_image) for c in cases}
+    again = sorted(
+        {str(m) for m in moving.values() if list(moving.values()).count(m) > 1}
+    )
+    if again:
+        raise ValueError(
+            f"patient {cases[0].group!r}: two cases name the same moving slide "
+            f"({', '.join(again)}); VALIS registers each slide once"
+        )
     if any(Path(m).resolve() == Path(ref).resolve() for m in moving.values()):
         raise ValueError(
             f"patient {cases[0].group!r}: a moving slide is the reference slide"
