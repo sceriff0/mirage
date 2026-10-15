@@ -54,6 +54,11 @@ CONFIG = {
     # BioformatsReader: {"positions": (n, 2) (row, col) in PIXELS, "pixel_size": um,
     # "planes": f(series, c) -> 2-D array, "num_channels": int}
     "bioformats": None,
+    # f(metadata) -> (n, 2) (row, col) px: what EdgeAligner.run() finds for a reader that
+    # is not the file-pattern one (a ``reg.Reader`` subclass, e.g. regbench's front-end);
+    # run() then reads every tile of its channel through ``self.reader`` twice, as the real
+    # one does (``make_thumbnail``, then the pairs), so a cache would hold them all
+    "edge_positions": None,
 }
 DEFAULTS = dict(CONFIG)
 RAISE_TEXT = "correlation > total_amplitude (diff=3.0517578125e-05)"
@@ -184,6 +189,94 @@ class BioformatsReader:
         return self._planes(series, c)
 
 
+# ── ASHLAR's reader interface (reg.py:58-119, 186-189, 436-462) ──────────────
+class Metadata:
+    """``reg.Metadata``: a subclass gives ``_num_images``, ``num_channels``, ``pixel_size``,
+    ``pixel_dtype``, ``tile_position(i)`` (row, col px) and ``tile_size(i)``; the rest is
+    derived here exactly as ``reg.py:83-119`` derives it."""
+
+    @property
+    def _num_images(self):
+        raise NotImplementedError
+
+    @property
+    def num_channels(self):
+        raise NotImplementedError
+
+    @property
+    def pixel_size(self):
+        raise NotImplementedError
+
+    @property
+    def pixel_dtype(self):
+        raise NotImplementedError
+
+    def tile_position(self, i):
+        raise NotImplementedError
+
+    def tile_size(self, i):
+        raise NotImplementedError
+
+    @property
+    def num_images(self):
+        return self._num_images
+
+    @property
+    def positions(self):
+        if not hasattr(self, "_positions"):
+            self._positions = np.vstack(
+                [self.tile_position(i) for i in range(self._num_images)]
+            )
+        return self._positions
+
+    @property
+    def size(self):
+        if not hasattr(self, "_size"):
+            s0 = self.tile_size(0)
+            image_ids = range(1, self._num_images)
+            if any(any(self.tile_size(i) != s0) for i in image_ids):
+                raise ValueError("Image series must all have the same dimensions")
+            self._size = s0
+        return self._size
+
+    @property
+    def centers(self):
+        return self.positions + self.size / 2
+
+    @property
+    def origin(self):
+        return self.positions.min(axis=0)
+
+
+class Reader:
+    """``reg.Reader``: ``read(series, c)`` and a ``metadata`` attribute."""
+
+    def read(self, series, c):
+        raise NotImplementedError
+
+
+class CachingReader(Reader):
+    """``reg.py:436-462``: keeps every tile of ``channel`` it has read, forever."""
+
+    def __init__(self, reader, channel):
+        self.reader = reader
+        self.channel = channel
+        self._cache = {}
+
+    @property
+    def metadata(self):
+        return self.reader.metadata
+
+    def read(self, series, c):
+        if c == self.channel and series in self._cache:
+            img = self._cache[series]
+        else:
+            img = self.reader.read(series, c)
+        if c == self.channel and series not in self._cache:
+            self._cache[series] = img
+        return img
+
+
 # ── the aligners ──────────────────────────────────────────────────────────────
 class Warning(UserWarning):  # noqa: A001 - ASHLAR's own name (reg.py:1372)
     pass
@@ -215,9 +308,12 @@ class _Model:
 class EdgeAligner:
     def __init__(self, reader, **kwargs):
         record("EdgeAligner", **kwargs)
-        self.reader, self.channel = reader, kwargs.get("channel", 0)
+        self.channel = kwargs.get("channel", 0)
+        # reg.py:502: the aligner wraps whatever reader it is given in a CachingReader
+        self.reader = CachingReader(reader, self.channel)
+        # reg.py:505-506: "Unit is micrometers."
         self.max_shift = kwargs.get("max_shift", 15)
-        self.max_shift_pixels = self.max_shift / reader.metadata.pixel_size
+        self.max_shift_pixels = self.max_shift / self.metadata.pixel_size
 
     @property
     def metadata(self):
@@ -229,6 +325,19 @@ class EdgeAligner:
         if CONFIG["warn"]:
             _warnings.warn(CONFIG["warn"], DataWarning, stacklevel=1)
         m = self.metadata
+        if CONFIG["edge_positions"] is not None:
+            reader = self.reader
+            record("EdgeAligner.run", reader=type(reader).__name__)
+            for _pass in range(2):  # make_thumbnail, then register_all (reg.py:517-524)
+                for i in range(m.num_images):
+                    reader.read(series=i, c=self.channel)
+            self.positions = np.array(CONFIG["edge_positions"](m), dtype=float)
+            # reg.py:713-716
+            self.origin = self.positions.min(axis=0)
+            self.positions = self.positions - self.origin
+            self.lr = _Model(-self.origin)
+            self.centers = self.positions + m.size / 2
+            return
         shifts = np.zeros((m.num_images, 2))
         if CONFIG["edge_shifts"] is not None:
             shifts = np.asarray(CONFIG["edge_shifts"](m.height, m.width), dtype=float)
@@ -466,6 +575,9 @@ def _module(name, **attrs):
 def modules():
     reg = _module(
         "ashlar.reg",
+        Metadata=Metadata,
+        Reader=Reader,
+        CachingReader=CachingReader,
         EdgeAligner=EdgeAligner,
         LayerAligner=LayerAligner,
         Mosaic=Mosaic,

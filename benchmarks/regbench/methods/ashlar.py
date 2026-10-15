@@ -204,6 +204,12 @@ FALLBACK_WARNING = "Could not align enough edges"
 ZERO_OVERLAP_WARNINGS = ("No tiles overlap", "zero overlap")
 
 
+def fallback_stage_positions(warned):
+    """Whether ASHLAR's reference stitch kept the stage positions, from the texts of the
+    ``reg.Warning`` s it raised (``FALLBACK_WARNING``)."""
+    return any(FALLBACK_WARNING in m for m in warned)
+
+
 def _identical_overlap(exc):
     return isinstance(exc, RuntimeError) and IDENTICAL_OVERLAP in str(exc)
 
@@ -943,7 +949,7 @@ def _results(
         # ASHLAR's DataWarnings, and the two that mean it silently did something else:
         # the reference stitch kept the stage positions; tiles that do not overlap
         "ashlar_warnings": list(warned),
-        "fallback_stage_positions": any(FALLBACK_WARNING in m for m in warned),
+        "fallback_stage_positions": fallback_stage_positions(warned),
         "zero_overlap": any(z in m for m in warned for z in ZERO_OVERLAP_WARNINGS),
         "edge_s": edge_s,
         "layer_s": layer_s,

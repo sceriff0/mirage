@@ -22,7 +22,10 @@ import numpy as np
 from .. import tiles
 
 
-def export(path, dest, nuclear_channel: int, channels=None) -> tiles.Cycle:
+def export(path, dest, nuclear_channel: int, channels=None, ffp=None, dfp=None) -> tiles.Cycle:
+    """``ffp``/``dfp``: the cycle's flat-/dark-field profiles (MCMICRO ships one pair per
+    cycle beside the raw files), recorded in ``cycle.json`` as given; the stitching
+    front-ends correct every tile with them (``frontends.Illumination``)."""
     reg = importlib.import_module("ashlar.reg")
     reader = reg.BioformatsReader(str(path))
     md = reader.metadata
@@ -43,5 +46,7 @@ def export(path, dest, nuclear_channel: int, channels=None) -> tiles.Cycle:
         pixel_size_um=float(md.pixel_size),
         channels=names,
         nuclear_channel=int(nuclear_channel),
+        ffp=ffp,
+        dfp=dfp,
         extra={"source": str(path), "reader": "bioformats_tiles", "ashlar": "positions px (row, col)"},
     )

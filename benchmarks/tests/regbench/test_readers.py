@@ -212,6 +212,21 @@ def test_bioformats_positions_are_pixels_row_col(tmp_path, monkeypatch):
     assert {c["c"] for c in fake_ashlar.calls("BioformatsReader.read")} == {1}
 
 
+def test_bioformats_passes_the_cycles_illumination_profiles_through(tmp_path, monkeypatch):
+    """MCMICRO ships per-cycle flat-/dark-field profiles beside the raw files: ``export``
+    records them in ``cycle.json`` (the front-ends correct with them); none by default."""
+    fake_ashlar.install(
+        monkeypatch.setitem,
+        bioformats={"positions": [[0, 0]], "pixel_size": 1.0, "num_channels": 1,
+                    "planes": lambda s, c: np.zeros((8, 8), np.uint16)},
+    )
+    cyc = bioformats_tiles.export(tmp_path / "x", tmp_path / "a", 0,
+                                  ffp=tmp_path / "ffp.tif", dfp=tmp_path / "dfp.tif")
+    assert (cyc.ffp, cyc.dfp) == (tmp_path / "ffp.tif", tmp_path / "dfp.tif")
+    cyc = bioformats_tiles.export(tmp_path / "x", tmp_path / "b", 0)
+    assert (cyc.ffp, cyc.dfp) == (None, None)
+
+
 def test_bioformats_refuses_a_nuclear_channel_the_file_lacks(tmp_path, monkeypatch):
     fake_ashlar.install(
         monkeypatch.setitem,
