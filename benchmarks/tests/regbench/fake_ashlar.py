@@ -51,6 +51,9 @@ CONFIG = {
     "raise_in": None,  # "edge", or a cycle number: raise ASHLAR's clean-tile RuntimeError
     "exit_code": 0,  # non-zero: the command prints an error and returns it, no mosaic
     "warn": None,  # a DataWarning text raised by the reference stitch
+    # BioformatsReader: {"positions": (n, 2) (row, col) in PIXELS, "pixel_size": um,
+    # "planes": f(series, c) -> 2-D array, "num_channels": int}
+    "bioformats": None,
 }
 DEFAULTS = dict(CONFIG)
 RAISE_TEXT = "correlation > total_amplitude (diff=3.0517578125e-05)"
@@ -137,6 +140,48 @@ def build_reader(spec):
             pass
         kwargs[key] = value
     return FilePatternReader(path, **kwargs)
+
+
+# ── the Bio-Formats reader ────────────────────────────────────────────────────
+def stage_to_positions(stage_yx_um, pixel_size, format_name="Zeiss"):
+    """``BioformatsMetadata.tile_position`` (``reg.py:349-389``, ashlar 1.20.0), for the
+    stage coordinates Bio-Formats hands over as (Y, X) micrometres::
+
+        position_microns *= [-1, 1]            # the y-axis flipped (not for InCell 1000/2000)
+        position_pixels = position_microns / self.pixel_size
+
+    so ``ashlar.reg``'s ``metadata.positions`` are in PIXELS of the image, ordered
+    (row, col) = (Y, X)."""
+    pos = np.array(stage_yx_um, dtype=float)
+    if format_name != "InCell 1000/2000":
+        pos = pos * [-1, 1]
+    return pos / pixel_size
+
+
+class _BioformatsMetadata:
+    def __init__(self, cfg):
+        self.positions = np.asarray(cfg["positions"], dtype=float)
+        self.pixel_size = float(cfg["pixel_size"])
+        self.num_images = len(self.positions)
+        self.num_channels = int(cfg.get("num_channels", 1))
+
+
+class BioformatsReader:
+    """``ashlar.reg.BioformatsReader(path)``: the geometry and the planes come from
+    ``CONFIG["bioformats"]`` (nothing is opened)."""
+
+    def __init__(self, path, plate=None, well=None):
+        cfg = CONFIG["bioformats"]
+        if cfg is None:
+            raise RuntimeError("fake_ashlar: CONFIG['bioformats'] is not set")
+        record("BioformatsReader", path=str(path))
+        self.path = path
+        self.metadata = _BioformatsMetadata(cfg)
+        self._planes = cfg["planes"]
+
+    def read(self, series, c):
+        record("BioformatsReader.read", series=series, c=c)
+        return self._planes(series, c)
 
 
 # ── the aligners ──────────────────────────────────────────────────────────────
@@ -424,6 +469,7 @@ def modules():
         EdgeAligner=EdgeAligner,
         LayerAligner=LayerAligner,
         Mosaic=Mosaic,
+        BioformatsReader=BioformatsReader,
         PyramidWriter=PyramidWriter,
         Warning=Warning,
         DataWarning=DataWarning,
