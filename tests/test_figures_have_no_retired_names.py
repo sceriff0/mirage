@@ -86,7 +86,7 @@ RETIRED = {
         "its public correspondences back a measured, evaluated, validated, "
         "scored or benchmarked accuracy result",
         "benchmarks/registration_eval/ exists on no branch; benchmarks/README.md "
-        "section B (on the benchmarking branch) is its removal record. Acrobat's "
+        "section `Removed harnesses` is its removal record. Acrobat's "
         "one theoretically legitimate bare mention -- DISK+LightGlue provenance "
         "-- is still not written by any figure, so nothing is lost by narrowing "
         "this the same way as anhir.",
@@ -95,7 +95,7 @@ RETIRED = {
         "the ANHIR/ACROBAT landmark harness is deleted -- no figure may claim an "
         "external landmark dataset backs any accuracy signal",
         "benchmarks/registration_eval/ exists on no branch; benchmarks/README.md "
-        "section B (on the benchmarking branch) is its removal record. 'ground "
+        "section `Removed harnesses` is its removal record. 'ground "
         "truth for that slide' in registration-schematic.html's reg_qc=2 panel is "
         "a distinct, legitimate sense of the word -- same-slide segmentation used "
         "as a LOCAL reference, not an external dataset. Scoped to the CLAIMING "

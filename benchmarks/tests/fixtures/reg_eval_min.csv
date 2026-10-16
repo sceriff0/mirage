@@ -1,5 +1,0 @@
-pair_id,mode,true_median_px,true_mean_px,true_p90_px,true_median_rtre,true_median_um,true_p90_um,valis_rtre,stare_coarse_tre_px,stare_rigid_p50_px,stare_final_p50_px,stare_mesh_refined,seg_stage,seg_dice_matched,seg_median_displacement_um,seg_n_pairs
-pair_lung_01,valis,3.10,3.44,6.02,0.0021,1.008,1.956,0.0024,,,,,micro,0.83,1.11,142
-pair_lung_02,valis,3.62,3.90,7.11,0.0025,1.177,2.311,0.0027,,,,,micro,0.81,1.24,131
-pair_breast_01,tiled,4.85,5.20,9.44,0.0033,1.576,3.068,,7.9,5.2,4.9,True,micro,0.77,1.61,118
-pair_breast_02,tiled,5.21,5.63,10.02,0.0036,1.693,3.257,,8.4,5.6,5.3,True,micro,0.75,1.72,109

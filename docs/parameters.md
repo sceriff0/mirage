@@ -336,9 +336,7 @@ the same masks, polygons, measurements and QC. Full store layout:
 
 `SEG_QUALITY_EVAL` scores the shipped cell+nucleus masks against the reference
 image with the [CellSegmentationEvaluator][cse] (vendored 1.5.19 subset), giving a
-composite `QualityScore` with **no ground-truth annotation**. It is the signal the
-segmentation arm of `benchmarks/configs/arms.yaml` uses to rank backends on real
-tissue.
+composite `QualityScore` with **no ground-truth annotation**.
 
 It is **off by default** (`skip_seg_quality_eval = true`) for one operational
 reason: it needs the `segeval` image on Docker Hub, and `.github/workflows/containers.yml`

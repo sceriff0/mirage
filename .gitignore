@@ -63,9 +63,6 @@ notebooks/*
 .venv-bench/
 bench_matrix/
 bench_runs/
-benchmarks/paper_data/
-benchmarks/analysis/figures/
-benchmarks/_handoff/
 illum_bench/
 challenge/
 

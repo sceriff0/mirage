@@ -26,7 +26,7 @@ is what is still absent: a PATH into either deleted harness, a bare
 and `registration_eval`'s own tools (`aggregate_eval`, `prepare_pairs.py`,
 `run_registration.sh`) -- a prose sentence naming one of these without the
 `benchmarks/` prefix used to slip past a path-only check, which is exactly how a
-LIVE instruction survived in benchmarks/configs/sweep.yaml. `acrobat` was never
+LIVE instruction survived in a (since removed) sweep config. `acrobat` was never
 forbidden as a bare word (`bin/utils/coarse_align.py` cites it as the provenance
 of the DISK+LightGlue front-end that ships) and still is not.
 

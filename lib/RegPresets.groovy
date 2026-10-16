@@ -59,9 +59,8 @@ class RegPresets {
      * `tile` + 2*`halo` is the per-task window that drives TILED_REG_TILE's memory request, and
      * `out_tile` drives TILED_STITCH's, so these three are the memory axis. `coarse_max_dim` is
      * the resolution the global transform is solved at -- STARE's counterpart to VALIS's
-     * `reg_max_image_dim`, and its dominant runtime-and-accuracy knob. (The guard that ties this
-     * axis to VALIS's is benchmarks/tests/test_build_run_plan.py, which exists only on the
-     * `benchmarking` branch -- there is no benchmarks/ directory on this one.)
+     * `reg_max_image_dim`, and its dominant runtime-and-accuracy knob. (These presets are
+     * restated nowhere else.)
      *
      * Gating and resolution knobs -- reg_tiled_max_disp, reg_tiled_stride, reg_tiled_nuclear_index --
      * are deliberately NOT tiered. The range gate sets what counts as an acceptable displacement

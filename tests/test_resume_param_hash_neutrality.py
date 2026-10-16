@@ -1,23 +1,23 @@
-"""A resumed benchmark run may change these params without re-running any task.
+"""A resumed run may change these params without re-running any task.
 
-The benchmark launchers (benchmarks/run_arms.sh, run_sweep.sh) change a run's
-params between a stop and a resume: they pin ``cleanup_work`` false into the
-reused params file, and the operator may lower or raise the head count and the
-job ceiling (``concurrency`` / ``max_forks`` / ``queue_size``) for the resumed
-launch. That is only free because Nextflow hashes the params a process
-``script:`` block REFERENCES: ``params.foo`` is itemised, and only a script that
-references the bare ``params`` object hashes the whole map.
+The benchmark launchers that resumed runs (the arms and sweep launchers) are
+removed; regbench's two Nextflow launchers never pass -resume. The property
+below still protects an operator's own -resume: a stop and resume may change
+``cleanup_work`` and the head count / job ceiling (``concurrency`` /
+``max_forks`` / ``queue_size``). That is free only because Nextflow hashes the
+params a process ``script:`` block REFERENCES: ``params.foo`` is itemised, and
+only a script that references the bare ``params`` object hashes the whole map.
 
 Measured on Nextflow 25.04.7, non-stub, 2026-09-14, on a minimal pipeline with
 one process reading ``params.a`` and one interpolating ``${params}``: changing
 ``b`` and ``cleanup_work`` on resume left the first task cached and re-ran the
 second; changing ``a`` re-ran both.
 
-So the property these tests pin is: no process script reads a launcher-changed
+So the property these tests pin is: no process script reads a changed-on-resume
 param, and no process script references the whole map (as an interpolation,
 ``$params``, or a value passed to a call). If either ever becomes true, a
-stop-and-resume of the benchmark silently re-runs every such task -- REGISTER
-among them, hours per patient -- while every run still ends green.
+stop-and-resume silently re-runs every such task -- REGISTER among them, hours
+per patient -- while every run still ends green.
 
 Reads the model in tests/nfmodel: ``Process.script_body`` keeps string contents
 (a script command is a string, and ``${params.cleanup_work}`` would live inside
@@ -27,14 +27,18 @@ it), and ``strip_comments`` removes comments without blanking strings.
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ci_actions import strip_line_comment  # noqa: E402
 
 from tests.nfmodel import param_refs, processes, strip_comments
 
 REPO = Path(__file__).resolve().parents[1]
 
-# The params the launchers change on resume. Keep in step with the launchers: the
-# last test below fails when a launcher pins a key this tuple does not cover.
+# The params an operator changes on resume.
 LAUNCHER_CHANGED_PARAMS = ("cleanup_work", "concurrency", "max_forks", "queue_size")
 
 # The whole map referenced as a value: `${params}`, `$params`, `f(params)`,
@@ -100,18 +104,20 @@ def test_no_process_script_references_the_whole_params_map():
     )
 
 
-def test_every_key_a_launcher_pins_on_resume_is_covered_here():
-    pinned = set()
-    for launcher in ("run_arms.sh", "run_sweep.sh"):
-        text = (REPO / "benchmarks" / launcher).read_text()
-        keys = set(re.findall(r'd\["(\w+)"\]\s*=', text))
-        assert keys, (
-            f"{launcher}: no pinned key found -- the pin heredoc moved or was renamed"
-        )
-        pinned |= keys
-    uncovered = pinned - set(LAUNCHER_CHANGED_PARAMS)
-    assert not uncovered, (
-        f"the launchers pin {sorted(uncovered)} into a resumed run's params file, but this "
-        "guard does not check that no process script reads them: add them to "
-        "LAUNCHER_CHANGED_PARAMS"
+def test_no_benchmark_launcher_resumes_a_pipeline_run():
+    """regbench's Nextflow launchers never pass -resume to the pipeline."""
+    tracked = subprocess.run(
+        ["git", "ls-files", "benchmarks"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.split()
+    launchers = [f for f in tracked if f.endswith((".sbatch", ".sh"))]
+    names = {Path(f).name for f in launchers}
+    assert {"inputs.sbatch", "compute_all.sbatch"} <= names, (
+        f"the scan found {sorted(names)}: it no longer sees the two Nextflow launchers"
     )
+    offenders = []
+    for f in launchers:
+        for n, line in enumerate((REPO / f).read_text().splitlines(), 1):
+            code = strip_line_comment(line)
+            if re.search(r"\bnextflow\b", code) and re.search(r"(?<![\w-])-resume\b", code):
+                offenders.append(f"{f}:{n}: {code.strip()}")
+    assert not offenders, "a benchmark launcher resumes a pipeline run:\n  " + "\n  ".join(offenders)

@@ -97,22 +97,6 @@ def test_an_undeclared_param_is_reported_not_dropped(capsys):
     assert "not declared" in capsys.readouterr().err
 
 
-def test_the_old_module_path_still_works_until_the_arms_are_removed(tmp_path):
-    """run_arms.sh / run_sweep.sh call `python3 -m benchmarks.params_json`: a shim."""
-    from benchmarks import params_json as old
-
-    assert old.build is params_json.build and old.main is params_json.main
-    out = tmp_path / "p.json"
-    done = subprocess.run(
-        [sys.executable, "-m", "benchmarks.params_json", "--out", str(out), "reg_qc=1"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    assert done.returncode == 0, done.stderr
-    assert json.loads(out.read_text()) == {"reg_qc": 1}
-
-
 def test_the_cli_writes_a_usable_params_file(tmp_path):
     out = tmp_path / "p.json"
     rc = subprocess.run(

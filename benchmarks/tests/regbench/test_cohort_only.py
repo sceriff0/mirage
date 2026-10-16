@@ -72,3 +72,26 @@ def test_no_prep_module():
     assert not (RB / "prep.py").exists()
     assert not (RB / "prep_frozen.json").exists()
     assert set(regimes.REGIMES) == {"cyclic_if"}
+
+
+def test_the_arms_and_sweep_layers_are_gone():
+    gone = (
+        "run_arms.sh",
+        "run_sweep.sh",
+        "configs",
+        "analysis",
+        "reg_mosaic.py",
+        "run_ashlar_arm.sh",
+        "params_json.py",
+    )
+    present = [g for g in gone if (ROOT / "benchmarks" / g).exists()]
+    assert not present, f"removed harness files are back: {present}"
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "benchmarks"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    allowed = ("benchmarks/__init__.py", "benchmarks/README.md")
+    allowed_dirs = ("benchmarks/ashlar/", "benchmarks/regbench/", "benchmarks/tests/")
+    stray = [f for f in tracked if f not in allowed and not f.startswith(allowed_dirs)]
+    assert not stray, f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,regbench,tests}}: {stray}"

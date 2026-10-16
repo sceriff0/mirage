@@ -2,8 +2,8 @@
 
 WHY THIS EXISTS. On 2026-08-26 and 2026-08-27 the stare-bench job failed in ~25 s with
 `Interrupted: 4 errors during collection` and exit code 2. Nothing was wrong with any
-test: benchmarks/analysis/lib/regress.py imports sklearn and test_plotting.py imports
-matplotlib, and the job's `pip install` line named neither. pytest died during COLLECTION,
+test: a benchmarks module imported sklearn and a test imported
+matplotlib (both since removed with the analysis layer), and the job's `pip install` line named neither. pytest died during COLLECTION,
 so ZERO tests ran -- and the run looked like an ordinary red build rather than a job that
 never started. It stayed that way for five days.
 
@@ -18,7 +18,7 @@ There used to be a SECOND leg -- bin/tiled_{coarse,reg_tile,solve}.py, which the
 deleted synthetic ground-truth rung's run script shelled out to, scanned at EVERY
 import level because those scripts were EXECUTED BARE IN CI. It went with that
 rung; see the long note above _installed_distributions for why re-pointing it
-at benchmarks/run_ashlar_arm.sh is wrong,
+at a bin/ script is wrong,
 and for the zarr failure that makes the every-level scan worth restoring if a benchmarks/
 test ever executes a bin/ script in CI again.
 """
@@ -165,12 +165,10 @@ def _bin_module_path(name: str) -> Path | None:
 # bin/utils/tiled_io.py imports zarr inside a function. That premise died with the
 # rung's removal: nothing under benchmarks/ runs a pipeline entry point in CI any more.
 #
-# The one remaining subprocess caller is benchmarks/run_ashlar_arm.sh (warp_seg_qc.py),
-# and it runs ON THE CLUSTER, INSIDE CONTAINERS -- QC_EXEC selects the pipeline's tiled
-# image, which is where warp_seg_qc.py's dependencies are supposed to live. Re-pointing
-# the scanner at it (tried, and reverted) makes this job demand `pip install valis` and
-# `scyjava`, because warp_seg_qc.py's VALIS branch is statically visible even though the
-# tiled branch never takes it. That is a CI job asserting a contract it does not have.
+# No benchmarks/ code calls a bin/ script any more (the ASHLAR arm driver that ran
+# warp_seg_qc.py on the cluster is removed). Re-pointing the scanner at one would make this
+# job demand `pip install valis` and `scyjava`, because warp_seg_qc.py's VALIS branch is
+# statically visible even though the tiled branch never takes it.
 #
 # If a benchmarks/ test ever executes a bin/ script bare again, bring the every-level scan
 # back with it -- the zarr failure it caught is real and invisible to a top-level scan.
@@ -196,7 +194,8 @@ def test_benchmarks_yml_installs_every_module_benchmarks_imports():
 def test_the_scanner_actually_finds_imports():
     """A scanner that silently returns nothing would make the guard above vacuous."""
     mods = _top_level_imports()
-    assert len(mods) >= 5, sorted(mods)
+    # 4 since the analysis layer went (numpy, pytest, scipy, tifffile); was 5 before.
+    assert len(mods) >= 4, sorted(mods)
     assert "numpy" in mods, sorted(mods)
 
 
