@@ -18,8 +18,8 @@ realcheck are reported and never gate a run.
 
 The arms, sweep, figure and ASHLAR-arm launchers and the analysis layer were
 removed when `regbench` became the only harness. They are kept at the git tag
-`archive/benchmarks-arms-sweep` (to be tagged at 2413456d, the last commit
-before the removal). Check that tag out to read or run any of them.
+`archive/benchmarks-arms-sweep` (at 774e1c9d, the tip of `benchmarking` before
+regbench landed, which also holds the last arms commits). Check that tag out to read or run any of them.
 
 Removed:
 

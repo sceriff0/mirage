@@ -56,8 +56,10 @@ class RegPresets {
     /*
      * STARE / tiled cost tiers.
      *
-     * `tile` + 2*`halo` is the per-task window that drives TILED_REG_TILE's memory request, and
-     * `out_tile` drives TILED_STITCH's, so these three are the memory axis. `coarse_max_dim` is
+     * `tile` + 2*max(`halo`, 3*stride) is what TILED_REG_TILE's memory request is sized for
+     * (the task itself reads `tile` + 2*3*stride: the halo stopped being a read margin with the
+     * window-vector grid), and `out_tile` drives TILED_STITCH's. `halo` is otherwise SOLVE's
+     * range gate (reg_tiled_max_disp's default) and COARSE's warning threshold. `coarse_max_dim` is
      * the resolution the global transform is solved at -- STARE's counterpart to VALIS's
      * `reg_max_image_dim`, and its dominant runtime-and-accuracy knob. (These presets are
      * restated nowhere else.)
@@ -73,10 +75,12 @@ class RegPresets {
      * RSS for the whole TILED_COARSE stage at 512 / 1024 / 2048 px, band reads of a 16k x 16k
      * tiled OME-TIFF included (the retired DISK+LightGlue U-Net needed ~1.1 + 7.3 * Mpx GB, i.e.
      * ~32 GB at 2048). Above 1024 it buys nothing the pipeline needs: the anchor only has to land
-     * inside the per-tile halo, and SOLVE's robust affine absorbs any rotation left over. At
-     * 1024 its quantisation bound (half a 0.25 deg step at the half-diagonal) is ~1.6 thumbnail
-     * px, i.e. ~65 px full-res on a 40k slide -- inside every tier's halo. So `high` and `medium`
-     * share 1024 and `low` keeps 512 (half the CPU of the ~50 refine evaluations).
+     * inside REG_TILE's pass-1 capture (about +-reg_tiled_stride px), and SOLVE's robust affine
+     * absorbs any rotation left over. At 1024 its quantisation bound (half a 0.25 deg step at
+     * the half-diagonal) is ~1.6 thumbnail px, i.e. ~65 px full-res at the corners of a 40k
+     * slide -- AT the +-64 px capture of the default stride 64 (derived, not measured; the
+     * sub-pixel phase correlation usually lands far inside it). So `high` and `medium` share
+     * 1024 and `low` keeps 512 (half the CPU of the ~50 refine evaluations).
      */
     static final Map<String, Map<String, Integer>> STARE = [
         high  : [tile: 2048, halo: 256, out_tile: 1024, coarse_max_dim: 1024],
