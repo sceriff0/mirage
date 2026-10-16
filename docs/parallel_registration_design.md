@@ -285,8 +285,8 @@ regularise → densify*. `stare.solve` now does the same, on the control grid, n
 mesh byte-for-byte (the STARE repository's `tests/test_solve.py` pins it against a verbatim copy of
 the old stage). The solver's name and diagnostics are recorded in the manifest and in
 `*_tre.json` under `solve`. Because the mesh — and therefore every downstream accuracy number —
-changes with the solver, the arm benchmark carries it as an axis rather than silently moving the
-default: `docs/benchmarks_real.md`, "Re-running a subset after a code change".
+changes with the solver, the default is not moved silently; the benchmark harness is
+`benchmarks/regbench/README.md`.
 
 **Since 2026-09-27 the default is `dctpls`**, not `robust`. On the 16-tile synthetic slide
 `robust` scored 8.7 px median against 2.2 px for the raw tile vectors, for conceptual rather

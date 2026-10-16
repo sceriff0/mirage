@@ -630,7 +630,11 @@ def markdown(task_rows, summary) -> list[str]:
         "end line (`logs/compute/<backend>/<patient>.end`) is listed but kept out of "
         "the `all` row. Each run was alone on its lane, after the benchmark's own jobs "
         "(`submit_cohort.sh --compute-all`); `seg_method=stardist` and "
-        "`pixel_size=0.325` (rulings of 2026-10-15), everything else at the pipeline's shipped defaults and the site profile.",
+        "`pixel_size=0.325` (rulings of 2026-10-15), everything else at the pipeline's shipped defaults and the site profile. "
+        "Registration runs at the shipped tier `memory_mode='high'` unless the site profile overrides it. "
+        "In the `all` row, `wall h` (and `registration_wall_s` and `input_gb` in the csv) is the SUM of the "
+        "per-patient values, not the wall time of one run; wall time includes SLURM queue time, "
+        "while the realtime-based CPU-h columns do not.",
         "",
     ]
     return parts

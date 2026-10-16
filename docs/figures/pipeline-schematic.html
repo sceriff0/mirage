@@ -718,9 +718,11 @@
   <section class="panel">
     <span class="plabel">g</span>
     <div class="panel-head"><h2>Benchmarking</h2>
-      <p>A separate <code>benchmarking</code> branch changes no pipeline code; it sweeps parameters over the
-        unmodified pipeline and harvests QC the pipeline already writes.</p></div>
-    <div class="bnote"><b>0</b> changes to workflows / subworkflows / modules / nextflow.config — the sweep
+      <p><code>regbench</code> (<code>benchmarks/regbench/</code>) is the benchmarking harness. It changes no
+        pipeline code: it judges registration methods on the cohort and traces the unmodified pipeline. The
+        signals and tables below are those of the earlier parameter-sweep harness (git tag
+        <code>archive/benchmarks-arms-sweep</code>).</p></div>
+    <div class="bnote"><b>0</b> changes to workflows / subworkflows / modules / nextflow.config — the
       harness lives entirely under <code>benchmarks/</code> and drives the pipeline as a black box.</div>
     <div class="harness">
       <span class="h">regbench</span><span class="a">→</span>
@@ -735,7 +737,7 @@
         <ul><li>Instance-F1 between backends on a shared cell population</li><li>Foreground IoU</li><li>instantseg / stardist / cellsam</li></ul></div>
     </div>
     <div class="tbl-scroll"><table class="dl">
-      <thead><tr><th>paper_data table</th><th>one row per</th><th>carries</th></tr></thead>
+      <thead><tr><th>table of the earlier sweep harness</th><th>one row per</th><th>carries</th></tr></thead>
       <tbody>
         <tr><td class="k">runs_master.csv</td><td>run</td><td>input dims, per-stage peak RAM / wall-time, cost</td></tr>
         <tr><td class="k">scaling_fits.csv</td><td>stage</td><td>slope, intercept, r² for RAM and runtime vs input GiB</td></tr>
@@ -848,9 +850,9 @@
     attempt under global ceilings; the seven quality-control processes are gating — they retry, then fail the
     run — and only the two opt-in segmentation evaluators are dropped rather than fatal. <b>(g)</b> An
     incremental mode folds a new imaging cycle into a completed run, reusing the prior reference, masks, and
-    quantification. <b>(h)</b> A separate branch benchmarks the unmodified pipeline by parameter sweep,
-    harvesting resource, registration-accuracy, and segmentation-stability signals from QC the pipeline
-    already emits. No external ground-truth dataset is used. <b>(i)</b> Default parameters.
+    quantification. <b>(h)</b> The <code>regbench</code> harness benchmarks registration methods on the cohort and
+    traces the cost of the unmodified pipeline; the earlier parameter-sweep harness is archived at a git tag.
+    No external ground-truth dataset is used. <b>(i)</b> Default parameters.
     Supplementary Figure <b>S2</b> takes registration apart backend by backend; Supplementary Figure <b>S3</b>
     does the same for the quality-control architecture summarised in <b>(c)</b> and <b>(f)</b>.
     <span class="footnote">Parameter defaults, published paths, and resource requests are taken verbatim from the

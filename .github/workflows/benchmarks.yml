@@ -1,10 +1,12 @@
 # =============================================================================
-# benchmarks/ — the harness that lives only on this branch
+# benchmarks/ -- regbench, the official benchmarking harness
 # =============================================================================
-# `benchmarking` is `dev` plus `benchmarks/`, so ci.yml's whole blocking gate
-# already runs here (see its `on:` block for why that was added). THIS workflow
-# covers the one thing that gate cannot: `benchmarks/tests/`, which exists on no
-# other branch and is therefore in no other workflow's scope.
+# `benchmarks/` holds `regbench` (benchmarks/regbench/, its README) and the guards
+# of the harness, in `benchmarks/tests/`. The arms, sweep, figure and ASHLAR-arm
+# launchers and the analysis layer were removed (git tag
+# `archive/benchmarks-arms-sweep`, see benchmarks/README.md). ci.yml's blocking
+# gate runs the pipeline's own suite; THIS workflow covers the one thing that gate
+# cannot: `benchmarks/tests/`, which is in no other workflow's scope.
 #
 # THE INSTALL GOES THROUGH `requirements/`, NOT AN INLINE pip LINE. It used to
 # read `pip install numpy==1.26.4 scipy==1.15.3 ...`, a second copy of pins that
@@ -44,35 +46,32 @@ concurrency:
 jobs:
   benchmarks:
     runs-on: ubuntu-latest
-    # 45. It was 15, set when what ran here was the plan/analysis layer on tiny
-    # fixtures (~5 s). benchmarks/tests/regbench now runs STARE for real, twice through
-    # its whole selfcheck, and scores small known-truth suites: the whole directory was
-    # measured at 17-22 minutes locally, so 15 could only time out. 45 is about twice
-    # the measured time, for a slower runner, and still fails a hang within the hour.
-    # Every test runs: the ones that take tens of seconds carry the `slow` marker
-    # (benchmarks/tests/conftest.py) so that a developer can leave them out locally with
-    # `-m "not slow"`; this job never does, and
+    # 45, unchanged. It was 15, set when what ran here was the plan/analysis layer on
+    # tiny fixtures (~5 s). benchmarks/tests/regbench runs STARE for real, twice
+    # through its whole selfcheck, and scores small suites. The whole directory was
+    # measured at 17-22 minutes locally (2026-10-11), and again at 1185 s (19 min
+    # 45 s) for the full suite after the selfcheck/realcheck were made report-only
+    # (2026-10-16): not under 10 minutes, so the limit is not lowered. 45 is about
+    # twice the measured time, for a slower runner, and still fails a hang within
+    # the hour. Every test runs: the ones that take tens of seconds carry the `slow`
+    # marker (benchmarks/tests/conftest.py) so that a developer can leave them out
+    # locally with `-m "not slow"`; this job never does, and
     # benchmarks/tests/test_ci_time_budget.py fails if a deselection appears here.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      # scikit-learn + matplotlib are for the ANALYSIS layer:
-      # benchmarks/analysis/lib/regress.py imports sklearn.linear_model and
-      # test_plotting.py imports matplotlib. Without them pytest dies during
-      # COLLECTION with exit 2 -- four ImportErrors, zero tests run -- which is
-      # how this job failed on 2026-08-26 and 2026-08-27 while looking like an
-      # ordinary red build. Both now arrive through requirements/ci.txt's
-      # `-r segeval.txt`, and the guard named in the header keeps them in step.
+      # scikit-learn and matplotlib are in the environment because requirements/ci.txt
+      # pulls them in through `-r segeval.txt`; nothing under benchmarks/ imports them
+      # at the top level now that the analysis layer is gone, and the guard named in
+      # the header keeps the install and the imports in step in both directions.
       #
-      # torch + kornia + zarr/numcodecs/imagecodecs are not needed here -- they went
-      # with the deleted synthetic ground-truth rung, which drove bin/tiled_*.py
-      # IN-PROCESS, outside any container. Nothing under benchmarks/ executes a
-      # pipeline entry point in CI any more. benchmarks/run_ashlar_arm.sh does, but
-      # it runs on the cluster inside the images that already carry those deps --
-      # see the note in the test file.
-      # (requirements/ci.txt pulls zarr in anyway via `-r stare.txt`; that is the cost
-      # of reading one shared file instead of maintaining a seventh pin list.)
+      # torch + kornia + zarr/numcodecs/imagecodecs are not needed here: nothing under
+      # benchmarks/ executes a pipeline entry point in CI. regbench's methods run on
+      # the cluster inside the images that carry their packages; here they run against
+      # recording stand-ins (benchmarks/tests/regbench/fake_*.py), and STARE for real
+      # where it is installed (requirements/ci.txt pulls it in through `-r stare.txt`,
+      # the cost of reading one shared file instead of maintaining a seventh pin list).
       - name: Install
         uses: ./.github/actions/setup-python-env
         with:

@@ -31,60 +31,60 @@ each method's section give them in full. In short:
   the `_asdrawn` rows re-state the writer's arithmetic, so that the image on disk is
   what is scored.
 
-## State of this port
+## State
 
-This package is being ported in steps. What exists now:
+`regbench` is the official, and the only, benchmarking harness of Mirage. It scores
+registration methods on ONE dataset, the user's cyclic-IF cohort (`multiplex`); there is no
+other dataset, no synthetic rung and no external landmark set. **Nothing here has run on the
+cluster**: every part is tested against stand-ins (small trees laid out like the pipeline's
+published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for each
+method's package) and through the launcher's dry run. The earlier harnesses (arms, sweep,
+figures, the ASHLAR arm) were removed; `benchmarks/README.md` names the tag that keeps them.
 
 | part | state |
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
-| scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
-| the cohort's inputs and cases (`slurm/inputs.sbatch`, `manifest.py`, `outlines.py`, `nuclei.py`, `datasets/multiplex.py`) | here: regbench's OWN pipeline preprocessing of the cohort (`launch.sbatch --inputs`) and its own StarDist outlines (nuclei on the nuclear channel, grown by 10 px, traced as the pipeline's QC traces them: see "What the cohort's nuclei are"). Built and tested against small trees laid out like the pipeline's published output and a stand-in `segment.py` / `nextflow`; never run on the cohort itself |
-| adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
-| adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
-| adapter `initial` | here (the identity) |
-| adapter `deeperhistreg` (DeeperHistReg 1.0.1, the software that ships RegWSI: eight labels, each with an estimated-field row and an `_asdrawn` row) | here, as in "DeeperHistReg" below. **Written against DeeperHistReg's and libvips' source and never run with either** (DeeperHistReg, SimpleITK and pyvips are not installed where this was written): tested with a recording stand-in that draws the warped image the way the package's writer is written to. Its first real runs are the settling measurement and the selfcheck inside the DeeperHistReg image |
-| selfcheck and realcheck (`selfcheck.py`) | here. Really run for `stare` only (its package is the one installed where this was written); for every other method the check has only been exercised with fake methods |
-| adapter `ashlar` (ASHLAR 1.20.0, its own command per patient: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean`) | here, as in "ASHLAR" below. **Written against ASHLAR's source and never run with ASHLAR** (it is not installed where this was written): tested with a recording stand-in that draws the mosaic the way ASHLAR's writer is written to. Its first real run is the selfcheck inside `labsyspharm/ashlar:1.20.0` |
-| adapter `palom` (PALOM 2026.4.1 by its README recipe, one run: `palom`) | here, as in "PALOM" below. **Written against PALOM's source and never run with PALOM** (it is not installed where this was written): tested with a recording stand-in that draws the registered image the way PALOM's writer is written to. Its first real runs are the single-level read test, the pixel-for-pixel writer test and the selfcheck inside a PALOM image |
-| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask (nuclei through `band_ref`) |
-| tissue-level agreement of the written images (`tissue.py`: ACCREDIT's score and its pieces, secondary) | here, as in "Tissue-level agreement of the written images" below. Run on drawn images and on fake methods' written images only; never on a real method's output or on the cohort |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here, as in "The run list" below: 60 runs (STARE strides x preprocessing levels generated per modality regime, ASHLAR's 24-cell factorial, one paused row), six primary rows, a flag that pauses a run, a `regimes` filter that gives a dataset only the runs of its modality |
-| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster" below: every run behind its own gate; for a run that is one job per unit, eight chained job arrays per run and dataset (four rungs, each with one retry for an attempt the scheduler lost); for a run whose registration is several jobs per round (STARE), four arrays per stage, its tile submitters, and the same eight arrays for each round's last job; the scorer last. **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
-| the cost-by-step view (`cost.py`, `cost_end_to_end.csv`) | here, as in "Cost" below. Every number in it is measured by this benchmark; nothing is read from a pipeline run (the import of a Nextflow trace was removed on 2026-10-12) |
-| HyReCo, the external landmark set (`datasets/hyreco.py`, `landmarks.py`: `hyreco_a` to tune, `hyreco_b` to report) | here, as in "HyReCo" below. **Written against the dataset page's layout and never run on the files**: they are not on this machine (740 GB behind a login). Tested on stand-in files the tests write in that layout; STARE really registers one such pair. `stare`, `valis120` and `valis120_hires` have an input rule for it; the other methods refuse it, each with its reason |
-
-Nothing here has run on the cluster.
+| the cohort's inputs and cases (`slurm/inputs.sbatch`, `manifest.py`, `outlines.py`, `nuclei.py`, `datasets/multiplex.py`) | here: regbench's OWN pipeline preprocessing of the cohort (`submit_cohort.sh --inputs`, `pixel_size` pinned at 0.325 µm by user ruling) and its own StarDist outlines (the cell mask traced as the pipeline's QC traces it: see "What the cohort's nuclei are"). Inputs carry fingerprints. Never run on the cohort itself |
+| scoring (`pairs.py`, `score.py`) and cost (`resources.py`, `billing.py`) | here |
+| adapters `stare` (the pipeline's `high` tier on the original slides, its own STITCH deferred until the clock has stopped, the option `stride`), `valis_mirage` (VALIS 1.0.0 through the pipeline's function), `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`), `initial` (the identity), `deeperhistreg` (1.0.1: eight labels, each with an estimated-field row and an `_asdrawn` row), `ashlar` (1.20.0: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` and a 20-cell factorial), `palom` (2026.4.1, one run) | here, as in "Methods" and each method's section. **Only `stare` has ever been run with its package** (the only one installed where this was written); the others are written against the package's source and tested with a recording stand-in. Their first real run is the selfcheck inside each method's image |
+| selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
+| off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
+| tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 45 runs (STARE strides x preprocessing levels, ASHLAR's 24 cells, VALIS, DeeperHistReg, PALOM), six primary rows |
+| the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster". **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
+| cost by step (`cost.py`, `cost_end_to_end.csv`, secondary) | here: every number in it is measured by this benchmark |
+| full pipeline cost (`compute_all.py`, `trace.py`, `slurm/compute_all.sbatch`, `pipeline_cost*.csv`, secondary) | here, as in "Cost". Reads Nextflow traces of the whole pipeline run per patient and backend; tested on generated traces, never run |
 
 ## Layout
 
 ```
 mapping.py     PointMap: a point mapping and the direction it was estimated in
 cases.py       the on-disk contract: case.json + points.npz in, warped.npz + run.json out
-cells.py       nuclei of a native slide: the built-in segmenter, label images, cell GeoJSON
+scene.py       the cohort's slides as a scene: what a patient's rounds are and which is the reference
 manifest.py    the cohort as a `prepare multiplex` manifest, one row per moving round, from
-               regbench's own preprocessing (slurm/inputs.sbatch)
+               regbench's own preprocessing (slurm/inputs.sbatch); replaces `arms_manifest`
+               (a `rounds.csv` of the old kind is still read: REGBENCH_MANIFEST)
 outlines.py    a StarDist cell mask traced to outlines by bin/mask_to_geojson.py itself
 nuclei.py      nuclei and outlines per native slide: the pipeline's StarDist, run by
                regbench, its cell mask traced to the slide's outlines ("Bare nuclei")
 params_json.py a Nextflow -params-file typed against nextflow_schema.json
+cells.py       nuclei of a native slide: label images, cell GeoJSON
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      multiplex writes the cohort's cases; hyreco and anhir write
-               the external landmark sets (hyreco_a, hyreco_b; anhir, anhir_tune)
-prep.py        the stare_prep row: the preprocessing candidates, the frozen choice
-               (prep_frozen.json), the check that none of them moves image content
+datasets/      multiplex writes the cohort's cases
 score.py       reads files only; writes <out>/tables, and keeps what it computed for each
                case under <out>/cache/scores ("Records: a case is scored once")
-landmarks.py   the scorer of HyReCo: <out>/tables/<dataset>/, never the cohort's tables
-challenge.py   the scorer of ANHIR's training pairs (rTRE, robustness, micrometres), its
-               own tables too; and the choice of the stare_prep preprocessing
-selfcheck.py   do a method's points follow the image its own writer produced? (a gate)
+selfcheck.py   do a method's points follow the image its own writer produced?
+               (REPORTED, never a gate)
 tissue.py      the written images against the reference at 4000 px (ACCREDIT's score; secondary)
+variants.py    the run list; regimes.py the cohort's preprocessing levels for STARE
 ladder.py      the memory ladder's rule: a unit goes up a rung only when it ran out of memory
 billing.py     CPU-hours and memory-hours: one definition of an attempt for every method
 cost.py        cost by step, from the cohort's files to each method's own image (secondary)
+trace.py       a Nextflow trace.txt read into typed rows
+compute_all.py the whole pipeline per patient and backend, traced; pipeline_cost*.csv (secondary)
+failure_log.py every failed or lost event, and whose it is
 slurm/         the cohort launcher (submit_cohort.sh) and what its jobs run
 ```
 
@@ -104,10 +104,23 @@ python -m benchmarks.regbench run --cases CASES --out OUT --dataset multiplex \
 python -m benchmarks.regbench tissue --cases CASES --out OUT   # needs OpenCV; see below
 python -m benchmarks.regbench score --cases CASES --out OUT
 python -m benchmarks.regbench selfcheck --method stare --work WORK
+python -m benchmarks.regbench runs                     # the run list
 ```
 
-The cohort: regbench's OWN inputs (it no longer reads the arms' results). On the cluster
-`launch.sbatch --inputs` then `launch.sbatch --prepare` do all of this; by hand:
+The order for the cohort, on the cluster (`submit_cohort.sh`, "Running the cohort on a
+cluster" has each step's job graph):
+
+1. `submit_cohort.sh --inputs`: the input step, the pipeline's own preprocessing of the
+   cohort's samplesheet (`REGBENCH_INPUT`), one Nextflow head job.
+2. `submit_cohort.sh --prepare`: StarDist and the trace of every slide's outlines, then the
+   cases (`prepare multiplex`).
+3. `submit_cohort.sh` (the main submission; `--dry-run` first): every run on its memory
+   ladder, the selfchecks beside them, then the scorer.
+4. `submit_cohort.sh --compute-all` (or `--compute-only` for a results folder that is
+   already scored): the whole pipeline once per patient and backend, traced, alone on its
+   lanes after the scorer ("Full pipeline cost").
+
+By hand, the same inputs and cases:
 
 ```bash
 # the input step: the pipeline's preprocessing of the cohort's samplesheet, ONE Nextflow
@@ -119,8 +132,8 @@ python -m benchmarks.regbench prepare multiplex --manifest rounds.csv --cases CA
 ```
 
 The input step runs `--start preprocessing --stop preprocessing` at the shipped defaults
-but one: `pixel_size` is pinned to 0.325 µm, as the arms ran it (user ruling 2026-10-15),
-through a `-params-file` (`params_json.py`: Nextflow 26 delivers a command-line param as a
+but one: `pixel_size` is pinned to 0.325 µm (user ruling 2026-10-15), through a
+`-params-file` (`params_json.py`: Nextflow 26 delivers a command-line param as a
 String). `cleanup_level` stays `none`, so `csv/preprocessed.csv` is written; `cleanup_work`
 stays on (the published tree is what is read). It refuses to run over an earlier one
 unless `REGBENCH_INPUTS_FORCE=1`, which moves it to `preprocess.replaced/<time>/`.
@@ -134,18 +147,21 @@ substring match of `DAPI` or `CELLTOX`; `--nuclear` narrows it) are dropped, eac
 with its reason and path; the exit code is non-zero only when no row is left. The pixel
 size is the checkpoint's `pixel_size` column, 0.325 µm where a row has none
 (`pixel_size_source` says which). `prepare multiplex` DROPS a round whose outlines were
-not traced (`outlines not traced yet: run the nuclei step (launch.sbatch --prepare)`), or
+not traced (`outlines not traced yet: run the nuclei step (submit_cohort.sh --prepare)`), or
 were traced from another file than the slide is now; it never reads them as an empty set.
+Each case carries a fingerprint of its inputs (`cases.file_fingerprint`: a file's size,
+modification time and a sha256 over 16 sampled blocks), so a case prepared from other files
+than the ones now on disk is recognised.
 
 **A `rounds.csv` written from the arms' results before 2026-10-16** (the old
-`arms_manifest --root <arm_results>`) has the same columns and is still read as it was:
-export `REGBENCH_MANIFEST=<it>` and `--prepare` takes it as it is. Its `*_cells` name the
+`arms_manifest`) has the same columns and is still read as it was: export
+`REGBENCH_MANIFEST=<it>` and `--prepare` takes it as it is. Its `*_cells` name the
 arm's published GeoJSON; the nuclei step never rewrites a GeoJSON it did not trace (no
 `.traced.json` beside it) and compares its StarDist run with it as before
-(`outlines_from: "manifest"`). Its `*_nuclei` columns (label images offered by the removed
-`--nuclei-glob` / `--seg-arm`) are no longer read. Cases already prepared stay scoreable;
-preparing a case again from OTHER inputs (regbench's own) into the same cases folder is
-refused with the reason, unless `REGBENCH_PREPARE_FORCE=1` or another `REGBENCH_ROOT`.
+(`outlines_from: "manifest"`). Its `*_nuclei` columns are no longer read. Cases already
+prepared stay scoreable; preparing a case again from OTHER inputs (regbench's own) into the
+same cases folder is refused with the reason, unless `REGBENCH_PREPARE_FORCE=1` or another
+`REGBENCH_ROOT`.
 
 The second writes the cases. Each one names the original multichannel slides
 (`ref_image`, `mov_image`; `extra["ref_channel"]`, `["mov_channel"]`, `["channels_ref"]`,
@@ -169,13 +185,10 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-60 active runs, 4 on a GPU, 27 per patient (`variants.counts()`, over every active run;
-the list is generated from tables, so the totals move with the tables and no test pins a
-literal). The COHORT (dataset None: the user's cyclic-IF patients, `regimes.COHORT_REGIME`)
-and each dataset take the runs of their own regime (`runs_for`): the cohort list that `runs`,
-the launcher and `score` use has 45 runs, with no RGB-proxy STARE run (`runs --all` prints every
-run). `score` expects exactly that list's result names and opens its summary on the six
-primary rows:
+45 runs, 4 on a GPU, 27 per patient (`variants.counts()`; the list is generated from
+tables, so the totals move with the tables and no test pins a literal). The cohort has one
+regime (`regimes.COHORT_REGIME`, cyclic IF). `score` expects exactly that list's result
+names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
 
@@ -187,66 +200,36 @@ primary rows:
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
-- **STARE runs are generated: stride x preprocessing level, per modality regime**
-  (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. Every regime
-  has up to four levels, `baseline` (STARE unchanged), `default`, `alt` and `pct`
-  (percentile), deduplicated within a regime (`regimes.stare_levels`); a dataset takes the
-  regime `regimes.DATASET_REGIME` names. A run is named `stare` (stride 64, baseline),
-  `stare_<level>` (stride 64) or `stare_s<stride>_<level>`, where the level key
-  (`regimes.level_key`) is `none` for BOTH baselines, so a baseline run is the same run
-  in every regime: it carries `{"stride": s}` alone (no proxy, no `--prep`; the adapter's
-  own default picks the proxy for the modality) and has `regimes=None`, i.e. every
-  dataset. Another level carries `proxy` and `sprep` and a `regimes` tuple naming the
-  regimes whose levels produced it; `runs_for(dataset)` keeps it only when
-  `regimes.regime_of(dataset)` is in that tuple. Two regimes producing one name with
-  different options is refused at import. So each regime runs strides x levels runs and
-  the plain `stare` is in every one (the defaults are in every cross). A STARE run is
-  gated by `stare`'s selfcheck (one adapter, one pointing path); the runs that use a
-  `haem` or `grey_smooth` proxy have a `prep` job before the four stages. It reads a
-  whole-slide RGB TIFF (HyReCo's `HE/<id>.tif`) by tiles and writes its proxy tile by
-  tile: its peak memory is a tile's working set, measured flat over two slide sizes 8x
-  apart (`test_prep.py`). The job is the benchmark's own step, so whatever ends it is the
-  cause `benchmark` (or `benchmark_oom`), never the method's.
-- **`stare_prep` is PAUSED** (2026-10-14; `active=False`). Its ruling (R3.21) and the
-  tuning side of ANHIR (`TUNING_RUNS`, `anhir_tune`, paused with it: submitted only with
-  `REGBENCH_ANHIR_TUNE=1`) are unchanged and tested: the
-  regimes' `sprep` levels replace it in the cohort. It is the same package, version and
-  parameters on a benchmark-side preprocessing of STARE's input (`prep.py`: a closed
-  candidate list; the candidate in force is frozen in `prep_frozen.json`, the run's one
-  option `prep=<candidate>`), chosen on ANHIR's tuning pairs and nothing else. **The
-  frozen candidate is PROVISIONAL (`grey_clahe`, chosen by no evidence).**
-- **STARE's run options `proxy` and `sprep`** (STARE 1.3.0; levels named in
-  `regimes.py`). `sprep=<none|clahe|percentile>` is STARE's OWN `--prep`, passed to
-  `stare coarse` and `stare reg-tile` (default `none`; `--pixel-size` goes with it, as
-  the case's size, else `auto`). It is the package's option, so it is NOT a benchmark-side
-  departure and is not listed in `benchmark_side`; it is recorded in `info.input.sprep`.
-  `proxy=<channel|grey|haem|grey_smooth>` is the benchmark-side one-channel image STARE
-  reads: `channel` on a fluorescence case, `grey` (the case's own inverted luminance) on
-  an RGB one when unset, i.e. today's input. A non-default proxy (`haem`, `grey_smooth`)
-  is written by `prep.write_inputs` before COARSE (the `prep` job) and IS a departure,
-  listed in `info.implementation.benchmark_side`; its STITCH image is still the case's
-  own proxy. Refused: `channel` on an RGB case, any other proxy on a fluorescence one,
-  values outside `PROXIES`/`SPREPS`, `sprep=clahe` where the pixel size is unknown (cause `no_pixel_size`, the benchmark's),
-  a named `proxy=grey` on a case whose own proxy is not inverted luminance (HyReCo prepared
-  with `--proxy haematoxylin`: cause `proxy_mismatch`, the benchmark's; the run would carry
-  a grey name on a haematoxylin image), and
-  `prep` (the label-bound row above) together with either. A run with neither option
-  differs from the earlier ones only by `--prep none` in the two stage commands.
-- **What a selfcheck gate does not exercise.** A generated STARE cell is gated by `stare`'s
-  selfcheck and an ASHLAR cell by that of `ashlar` (affine none) or `affine_ashlar` (affine
-  stare), which run the 15 um / 0.002 cell. The gate checks the adapter's pointing path, not the
-  other proxies, `--prep` levels, shifts or noises: those cells run on trust in that path.
-- **HyReCo prepared with `--reduce 2`.** `runs_for` has no case data, so it still lists the
-  `haem` / `grey_smooth` proxy cells; on a reduced proxy the adapter refuses them ("the
-  preprocessing row is not defined on a reduced proxy") and each pair records that refusal as
-  its failure, with the benchmark's cause `reduced_proxy`. The refusal, not a listing rule, keeps them from running; prepare HyReCo
-  without `--reduce` to run them.
+- **DeeperHistReg's primary row follows its writer (option A).** Its `_asdrawn` row (the
+  image its writer puts on disk) is primary, and the estimated-field row beside it is
+  kept in every table whatever its selfcheck says.
+- **STARE runs are generated: stride x preprocessing level**
+  (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. The cohort's
+  regime has the levels `baseline` (STARE unchanged: the fluorescence channel as it is),
+  `default` (the same), `alt` (CLAHE) and `pct` (percentile), deduplicated
+  (`regimes.stare_levels`) to `none`, `clahe` and `percentile`: nine runs. A run is named
+  `stare` (stride 64, no preprocessing), `stare_<level>` (stride 64) or
+  `stare_s<stride>_<level>`. A STARE run is checked by `stare`'s selfcheck (one adapter,
+  one pointing path).
+- **STARE's run options `proxy` and `sprep`** (STARE 1.3.0). `sprep=<none|clahe|percentile>`
+  is STARE's OWN `--prep`, passed to `stare coarse` and `stare reg-tile` (default `none`;
+  `--pixel-size` goes with it, as the case's size, else `auto`). It is the package's
+  option, so it is NOT a benchmark-side departure and is not listed in `benchmark_side`;
+  it is recorded in `info.input.sprep`. `proxy=channel` is the one-channel image STARE
+  reads, the case's nuclear channel. Refused: any other proxy, values outside
+  `PROXIES`/`SPREPS`, and `sprep=clahe` where the pixel size is unknown (the run
+  raises, so its round is the method's `exception`).
+- **What a selfcheck does not exercise.** A generated STARE cell is checked by `stare`'s
+  selfcheck and an ASHLAR cell by that of `ashlar` (affine none) or `affine_ashlar`
+  (affine stare), which run the 15 um / 0.002 cell. The check covers the adapter's
+  pointing path, not the other `--prep` levels, shifts or noises: those cells run on
+  trust in that path, and their verdict is the one of the run that checks them.
 - **A run can be paused** (`active=False` on its entry). A paused run stays implemented
   and tested and its names still resolve, but it is not launched, not expected by
   `score`, not counted and not printed by `runs`; `runs --all` prints it with `0` in the
-  `active` column. Only `stare_prep` is paused. A list in which a paused run writes a primary row,
-  gates an active run's selfcheck or is what an active run waits for is refused
-  (`variants.check`, at import).
+  `active` column. No run is paused now. A list in which a paused run writes a primary row,
+  is what an active run's selfcheck belongs to or is what an active run waits for is
+  refused (`variants.check`, at import).
 - **Images** (the `image` column is the suffix of `REGBENCH_SIF_<image>`, the variable
   that holds an image's path on the cluster). Built here, the suffix being the directory
   under `containers/` in capitals with `-` written `_`: `STARE_REGBENCH` (the `stare`
@@ -263,33 +246,21 @@ primary rows:
   cluster ended with `"python": executable file not found in $PATH`. That Dockerfile
   also sets `ENV OMP_NUM_THREADS 1`: the harness sets no thread variable, but this one
   comes with the image ("Cost", "Threads the method's own image sets").
-- **Which rows gate a run** (`gate_variants`, the last column). A failed selfcheck blocks
-  the method. For every method but one that means any of the run's rows. DeeperHistReg's
-  gate reads its `_asdrawn` row alone, the row of the image its writer puts on disk: when
-  only the estimated-field row fails, that row is reported, left out of the results
-  (`variants.dropped_variants`) and the method still runs. `variants.gate_status(name,
-  selfcheck_record)` is the status that decides. From a shell:
-
-  ```bash
-  python -m benchmarks.regbench gate --name deeperhistreg_hr_cpu --selfcheck W/deeperhistreg_hr_cpu/selfcheck.json
-  # prints "<status>\t<rows to drop, comma-joined, or ->"; exit 0 ok, 1 inconsistent,
-  # 2 not_checked, 3 crashed (the status of the gating rows, not of the whole record)
-  python -m benchmarks.regbench score --cases CASES --out OUT --drop deeperhistreg_hr_cpu
-  ```
-
-  A dropped row is in no table; `dropped.csv` and the summary's "Rows left out" name it,
-  so a row is never missing without a reason. `--drop` refuses a name that is no result
-  name of the run list, and a row that gates its run.
-- **Which runs have a realcheck as a second gate** (`realcheck`, column 15): the primary
-  rows of the two VALIS adapters, `valis_mirage` and `valis120_hires`
-  (`variants.realcheck_gate`, `variants.REALCHECK_METHODS`). Their point path is derived
-  by the benchmark from VALIS's matrices and fields, so it is checked once more on a real
-  case before the cohort is spent on it: the launcher sends the run's first patient
-  ahead with `run --realcheck`, and `python -m benchmarks.regbench realgate` reads that
-  row's own `realcheck.json` (not the exit code of `run --realcheck`, which is also 3
-  when a non-primary row is flagged). Only a measured flag blocks; a first patient that
-  failed, or wrote no image, is `realcheck_not_checked` and the run goes on. `valis120`
-  has no primary row and no such gate.
+- **Which rows a run's selfcheck status is read from** (`variants.checked_rows`,
+  column `checked_rows`). For every method but one that is all of the run's rows.
+  DeeperHistReg's status is read from its `_asdrawn` row alone, the row of the image its
+  writer puts on disk; the estimated-field row is checked and reported all the same, with
+  its own verdict beside its numbers (`selfcheck_row`). Nothing is dropped:
+  `variants.selfcheck_status(name, record)` is the status that is REPORTED, and no row
+  is ever left out of a table because of it.
+- **Which runs have a realcheck** (`realcheck`, column 15): the primary rows of the two
+  VALIS adapters, `valis_mirage` and `valis120_hires` (`variants.REALCHECK_METHODS`).
+  Their point path is derived by the benchmark from VALIS's matrices and fields, so it
+  is checked once more on a real case: the launcher sends the run's first patient
+  ahead with `run --realcheck`, beside the rest of the run, which does not wait for it.
+  The verdict (`variants.realcheck_status`) is read from that row's own `realcheck.json`
+  and is reported in `verdicts.tsv`; a first patient that failed or wrote no image is
+  `realcheck_not_checked`. `valis120` has no primary row and no realcheck.
 
 ## The contract
 
@@ -297,8 +268,7 @@ primary rows:
 two slides, the pixel size, `group` (the PATIENT, in every dataset) and, kept so an old file loads,
 `family` and `pose` (empty on the cohort). `points.npz` holds the nuclei segmented on each NATIVE slide as
 full polygon sets (`cells_<side>_xy`, `_ring_off`, `_ring_feat`, `_ring_hole`, `_n`; `side`
-is `ref` or `mov`), read back with `cases.polys(points, side)`. The external landmark sets (HyReCo, ANHIR) hold paired landmarks instead:
-`truth_mov` and `truth_ref`.
+is `ref` or `mov`), read back with `cases.polys(points, side)`.
 
 Since 2026-10-11 a side has **two polygon sets** (`cases.SETS`). The arrays above are the
 **outlines**; the **bare nuclei** are a second set with the same five arrays under
@@ -346,8 +316,7 @@ nuclei for `mov_to_ref`, the reference nuclei for `ref_to_mov`), writes `warped.
 (`cells_xy`, and `nuclei_xy` = the bare nuclei of the same side through the same map;
 `direction`, `band` when `info["band_mov"]` is given and `band_ref` when
 `info["band_ref"]` is: a method's own seam mask, one bool per moving or per reference
-nucleus; `truth_xy` = the map
-applied to the landmarks of the side it starts from (the external sets), and `grid`, `grid_shape`,
+nucleus; `grid`, `grid_shape`,
 `grid_step` = the map on a lattice for the Jacobian statistics; `band_nuc` /
 `band_ref_nuc` = the owner's seam mask on the bare nuclei, see "Off the seams"), writes
 `run.json` (`nuclei_band` says how that mask was got), and calls `on_variant`. The second
@@ -375,9 +344,6 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 | `killed` | the process died, and the scheduler's end state for its task names no cause (`FAILED`, `COMPLETED`) | no | the method's |
 | `killed`, no end state | the process died and the scheduler's accounting named no end state for its task within the wait (`REGBENCH_ACCT_WAIT_S`) | not as a memory cause: the `climb` task runs the unit once more at its own rung, and `cause_from` says so | the method's while it stands |
 | `identical_overlap` | ASHLAR's error metric raised `correlation > total_amplitude` on pixel-identical overlaps, which exist only because the benchmark cuts tiles from a stitched slide (a cell without noise only; with noise the same raise is `exception`) | no | NOT the method's |
-| `reduced_proxy` | the STARE adapter refused a preprocessing row on a reduced proxy (HyReCo prepared with `--reduce 2`): a prepare-time choice of the benchmark | no | NOT the method's |
-| `no_pixel_size` | the STARE adapter refused a level that needs a pixel size (`sprep=clahe`: STARE's CLAHE region is in micrometres) on a case without one (ANHIR's mammary glands): the dataset's gap. Its round contributes no tile to `stages --due`, so the feeder still submits the other cases' tiles | no | NOT the method's |
-| `proxy_mismatch` | the STARE adapter refused a `proxy=grey` level (`stare_grey_*`) on a case prepared with another proxy (HyReCo with `--proxy haematoxylin`): `grey` is the case's own proxy, so the run would register on haematoxylin under a grey name. The baseline `stare` (no proxy option) runs on the case's own proxy. Prepare with the luminance proxy to run the grey levels | no | NOT the method's |
 | `benchmark_oom` | the BENCHMARK's own lines ran out of memory with the clock stopped (the lattice, the arrays and the files around the method's point mapping; never the mapping itself) | yes | NOT the method's |
 | `benchmark` | the benchmark's own lines around the method's point mapping failed for another reason | no | NOT the method's |
 | `not_submitted` | a stage job of a registration in several jobs never reached the queue, or was left without the attempt the pipeline would have given it next (the tile submitter was refused or did not finish) | no | NOT the method's (the launcher's) |
@@ -412,12 +378,12 @@ adapter lives in `benchmarks/regbench/private/` (ignored by git), with a `plugin
 declares its methods, runs, seam owners, selfcheck cases and dataset exclusions
 (`plugins.py` lists the names). It is read only with `REGBENCH_PRIVATE=1`; without the
 variable, or without the folder, the run list, the counts, the tables and the tests are
-exactly those of this document. With it, `runs`, `run`, `selfcheck`, `gate`, `score` and
+exactly those of this document. With it, `runs`, `run`, `selfcheck`, `verdict`, `score` and
 the launcher pick the plug-in's runs up through that one hook: an image is named like any
 other (`REGBENCH_SIF_<image>`), and the launcher's jobs inherit the environment. A
 plug-in's rows are never primary. Nothing of a plug-in is built, pushed or tested by CI.
 
-## Methods (the design; see "State of this port" for what exists)
+## Methods (the design; see "State" for what exists)
 
 | variant(s) | software | run unit | native transform | how nuclei are moved |
 |---|---|---|---|---|
@@ -463,15 +429,18 @@ A method is scored through its point mapping. That is only fair if the mapping I
 transform of the image the method wrote to disk. Two checks measure exactly that;
 registration accuracy enters neither.
 
-### selfcheck (a gate)
+### selfcheck (reported, never a gate)
 
 ```bash
 python -m benchmarks.regbench selfcheck --method M [--label L] [--opt k=v ...] --work W \
     [--mask overlap|seams] [--m0-from DIR] [--size HxW[:HxW[:HxW]] ...]
 ```
 
-Exit 0 `ok`, 1 `inconsistent`, 2 `not_checked`, 3 `crashed`. **Anything but 0 blocks the
-method** on the cohort. It writes `W/selfcheck.json`: `cases` (each case's folder, group
+Exit 0 `ok`, 1 `inconsistent`, 2 `not_checked`, 3 `crashed`. **The exit code is REPORTED
+and gates nothing** (user ruling: run, report, never gate): on the cohort no run waits for
+its selfcheck, no run is kept from starting and no row is left out of a table because of
+it. `regbench verdict` collects what every run's selfcheck and realcheck said into
+`<out>/logs/verdicts.tsv`, and `score --verdicts` puts it in the tables. It writes `W/selfcheck.json`: `cases` (each case's folder, group
 and number of rounds) and `pairs`, every variant's numbers per ROUND and per 512 px block
 (one entry for a pair, one per moving round for a patient, each with `case_id`, `group`,
 `round`, `rounds`).
@@ -479,13 +448,12 @@ and number of rounds) and `pairs`, every variant's numbers per ROUND and per 512
 **Every round carries every row of the run** (`selfcheck.every_row`). A round whose
 process died, or that has no entry for a row, gets that row with the round's own status
 when it blocks and `not_checked` otherwise (`"filled": true`), and a round's status is
-never better than its rows'. The gate (`regbench gate`, `variants.gate_status`) reads
-its gating rows twice, from the record's summary and from every round of every case, a
-missing row counting as `not_checked`: its verdict is never better than what any case
+never better than its rows'. The reported status (`variants.selfcheck_status`) reads
+its rows twice, from the record's summary and from every round of every case, a
+missing row counting as `not_checked`: the status is never better than what any case
 says. A case that died can therefore not pass as checked through the rows of another
-case. `REGBENCH_ALLOW_UNCHECKED` lets a run start on `not_checked` from a selfcheck that
-ran, and on nothing else: `inconsistent`, `crashed`, a flagged realcheck and a missing
-record (or another submission's) block it all the same.
+case. A missing record (or another submission's) is `not_checked`, with the reason in the
+verdict's `log` column.
 
 **The pair** (`selfcheck.make_pair`): two-channel 16-bit OME-TIFFs at 0.325 µm per pixel,
 channel 0 nuclei (`DAPI`), channel 1 `dots`, on a canvas that is not square (2048 x 2560 by
@@ -521,7 +489,7 @@ cohort takes. Their `SIZES` now hold a case of the form `(reference, moving, mov
 one reference and two moving rounds that share it (`selfcheck.make_group`; round 2 keeps
 the tissue and has its own rotation, shift, smooth field and dots: -1.0 degree, (-14, 9)
 px). The whole patient goes to the driver in ONE `run_group` call, natively, and **each
-moving round is checked against the gate on its own**: its points against its image.
+moving round is checked on its own**: its points against its image.
 
 | rows | the patient | what it adds to the pairs |
 |---|---|---|
@@ -603,16 +571,16 @@ image's right edge and outside the tissue, STARE's mesh has nothing to hold on t
 shrinks the image to 0.64 x 0.89; ONE dot of 8891 is drawn there 1.19 px wide, 0.09 px
 from where STARE's own map puts it. With a lower bound of 1.2 px it is not counted as a
 dot, its 512 px block reads 28 of 29 found, and STARE reads `inconsistent` with every
-whole-image number inside the gate. Detections under 1.2 px are counted in the record
+whole-image number inside the thresholds. Detections under 1.2 px are counted in the record
 (`n_narrow`), so a writer that shrinks dots is visible (per checked result in
-`selfcheck_masks.csv`, and by name in the block "What the gates decided" of
+`selfcheck_masks.csv`, and by name in the block "What the selfchecks said" of
 `summary.md`); each of them is held to both
 checks like any other, so a narrow fragment a writer leaves where the map puts no dot
 fails. Tests: `test_selfcheck.py::test_a_dot_the_writer_shrank_is_still_a_dot`,
 `::test_a_shrunk_dot_in_the_wrong_place_is_still_inconsistent`,
 `::test_what_is_narrower_than_half_a_dot_is_not_a_dot`.
 
-**The gate (frozen).** 95th percentile of the residual at most 0.40 px, mean signed
+**The thresholds (frozen).** 95th percentile of the residual at most 0.40 px, mean signed
 residual at most 0.15 px per axis, at least 99 % of the points found: on the whole image
 AND in every 512 px block holding at least 8 of them.
 
@@ -644,19 +612,19 @@ check (1) only:
   the masked share (`masked_frac`). The scorer writes them as `selfcheck_masks.csv`
   (one row per run, case, result name and set) and the summary shows them under
   "Selfcheck masks".
-- **Its cap is a flag, not a gate** (`selfcheck.MASK_MAX`, frozen: `overlap` 0.50,
-  `seams` 0.10 of the dots). A row whose mask hid more than the cap KEEPS its verdict:
-  the run starts on every dataset and is scored. It is flagged instead
+- **Its cap is a flag, not a verdict** (`selfcheck.MASK_MAX`, frozen: `overlap` 0.50,
+  `seams` 0.10 of the dots). A row whose mask hid more than the cap KEEPS its verdict
+  (and, like every verdict, it gates nothing: the run starts and is scored). It is flagged instead
   (`mask_over_cap` in the record; column `selfcheck_mask_over_cap` on every row of
   every table: `no`, or `yes: 0.57 masked, cap 0.50`, with `(via <run>)` for a run
-  gated by another run's selfcheck), and `summary.md` names it. What still blocks is
-  unchanged: the accuracy thresholds on the unmasked dots (95th percentile at most
+  checked by another run's selfcheck), and `summary.md` names it. What still fails the
+  selfcheck is unchanged: the accuracy thresholds on the unmasked dots (95th percentile at most
   0.40 px, mean offset at most 0.15 px per axis, at least 99 % found, per block too),
   the coverage of the drawn dots and the image's shape. Until this ruling a share
-  above the cap read `not_checked`, which blocked the run.
+  above the cap read `not_checked`.
 - **The verdict under a fixed list of caps** (`selfcheck.MASK_CAPS`): `overlap`: none,
   0.70, 0.50, 0.45; `seams`: none, 0.10, 0.05. One column per cap (`caps` in the record,
-  `passes_cap_<cap>` in the table): would the row pass the accuracy gate on its
+  `passes_cap_<cap>` in the table): would the row pass the accuracy thresholds on its
   unmasked dots if the mask could hide at most that share. `passes_cap_none` is the
   verdict in force.
   - **`overlap` 0.50**, beside shares measured on ASHLAR's only selfcheck canvas (8192
@@ -681,8 +649,8 @@ check (1) only:
     The share grows with the shifts because a moving tile drawn away from where it was
     cut lies over other reference tiles; an anchored tile is cut where it belongs and
     is drawn within the map's non-rigid residual (under 10 px here) of the grid. The
-    cap stands 0.22 above the worst case within ASHLAR's own limit; it is a flag, never
-    a gate, and at least half of the dots are always judged. What ASHLAR really does on
+    cap stands 0.22 above the worst case within ASHLAR's own limit; it is a flag, and at
+    least half of the dots are always judged. What ASHLAR really does on
     this canvas is not known until it runs: a share above 0.50 is flagged on every row
     of the run, with the share, and the numbers on all dots and on the masked dots
     alone are in the record either way.
@@ -707,20 +675,22 @@ grid is checked only where a method redraws the reference (ASHLAR:
 `SELFCHECK_REFERENCE`, `expect_origin_xy`).
 
 **A stage that was never checked says so in every table.** `run.json:
-selfcheck_status` is the run's gate, which `stare_rigid` shares with `stare`. The scorer
-therefore reads each ROW's own status from the selfcheck records
-(`variants.row_checks`) into a column of its own, `selfcheck_row`, in `cells.csv`,
+selfcheck_status` is now always `not_checked`: a run is never told its selfcheck's verdict,
+because it does not wait for it. The tables' `selfcheck_status` column comes from
+`logs/verdicts.tsv` (`regbench verdict`, read by `score --verdicts`), the run's verdict,
+which `stare_rigid` shares with `stare`. The scorer also reads each ROW's own status from
+the selfcheck records (`variants.row_checks`) into a column of its own, `selfcheck_row`, in `cells.csv`,
 `summary_cells.csv` and the off-seam tables, and
 `summary.md` prints it beside the row's name: `ok`, `no_stage_image` (shown as **NEVER
-CHECKED**), `via <run>: <status>` for a row whose run is gated by another run's selfcheck
+CHECKED**), `via <run>: <status>` for a row whose run is checked by another run's selfcheck
 (`ashlar_clean`), or `no selfcheck record`.
 
-| status | meaning | blocks the method |
+| status | meaning | gates anything |
 |---|---|---|
-| `ok` | the gate holds | no |
-| `inconsistent` | the points do not follow the image | yes |
-| `crashed` | the method raised | yes |
-| `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` | yes |
+| `ok` | the thresholds hold | no |
+| `inconsistent` | the points do not follow the image | no |
+| `crashed` | the method raised | no |
+| `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` | no |
 | `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: STITCH writes one image). Reported, never counted as checked | no |
 
 The overall status is the worst over the checked variants.
@@ -744,7 +714,7 @@ changed, on the 2048 x 2560 pair:
 | mapping checked against STARE's image | status | found | p95 px | mean x px | blocks failed |
 |---|---|---|---|---|---|
 | STARE's own | `ok` | 537 / 537 | 0.090 | +0.003 | 0 / 20 |
-| + 0.10 px on x | `ok` (inside the gate) | 537 / 537 | 0.175 | +0.103 | 0 / 20 |
+| + 0.10 px on x | `ok` (inside the thresholds) | 537 / 537 | 0.175 | +0.103 | 0 / 20 |
 | + 0.15 px on x | `inconsistent` | 537 / 537 | 0.224 | +0.153 | 12 / 20 |
 | + 0.30 px on x | `inconsistent` | 537 / 537 | 0.373 | +0.303 | 20 / 20 |
 | + 0.5 px on both axes | `inconsistent` | 538 / 538 | 0.781 | +0.503 | 20 / 20 |
@@ -773,9 +743,9 @@ drawn):
 | a mask hiding 93 % of the dots, nothing else wrong | `ok`, flagged `mask_over_cap` (R3.22; `not_checked` between 2026-10-11 and that ruling) | `ok` | `ok`, flagged |
 | 12 stray detections outside a mask that hides a quarter | not looked at before, `inconsistent` now | | |
 
-So the smallest constant offset the gate objects to is 0.15 px per axis, the detector's
+So the smallest constant offset the selfcheck objects to is 0.15 px per axis, the detector's
 own floor being 0.09 px at the 95th percentile. The row "1 px wrong on 4 % of dots" is
-caught by one block alone, with every whole-image number inside the gate.
+caught by one block alone, with every whole-image number inside the thresholds.
 
 **What it cannot see.** A defect the writer and the point path SHARE passes (both read
 the same wrong field); a stage with no image of its own is not checked; the default pair
@@ -809,10 +779,12 @@ true when a crop's mean offset exceeds 0.3 px on an axis or its matched fraction
 0.7 of the baseline's; `status` is `ok`, `flagged` or `not_checked` (no crop held 20
 nuclei). The median distance is shown and not used: it measures segmentation noise.
 `run.json: realcheck` repeats `status` and `flag`. For the VALIS primary rows the flag is
-a gate (it is the only check at cohort field scales): `slurm/submit_cohort.sh` runs the
-first unit of such a run ahead with `--realcheck`, and a gate job (`regbench realgate`)
-blocks the rest when that realcheck is flagged ("Running the cohort on a cluster", step
-4). It has only run on generated slides, and the gate has never run on a scheduler.
+REPORTED (it is the only check at cohort field scales), never a gate:
+`slurm/submit_cohort.sh` runs the first unit of such a run ahead with `--realcheck`,
+in a ladder of its own beside the rest of the run, which does not wait for it
+("Running the cohort on a cluster", step 4). `regbench verdict` writes its status into
+`logs/verdicts.tsv` and the summary prints it. It has only run on generated slides, and
+never on a scheduler.
 
 ## Scoring
 
@@ -821,8 +793,7 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
 (`pairs.py` loads that one file; `bin/utils` is not put on `sys.path`).
 
 - **Two polygon sets, every number on both.** The **outlines** are the headline: on the
-  cohort, each nucleus grown by 10 px, which is what the pipeline's QC publishes and what
-  the arms benchmark scores; every table and column that existed means the outlines and
+  cohort, each nucleus grown by 10 px, which is what the pipeline's QC publishes; every table and column that existed means the outlines and
   is unchanged. The **bare nuclei** get the same numbers in tables of their own (below,
   "Outlines and bare nuclei"). Neither set depends on any method.
 - **Gate:** `1.5 x median_equivalent_radius` of the two native sets, once per case, the same
@@ -923,11 +894,11 @@ independent unit (`score.UNIT_IS`, column `unit` of `cells.csv`), not the case's
 
 **The common block** (`subset=common`, `common_block.csv`) is the cases every COMPARED row
 registered. A row is compared when it is a primary row (any registration row when no
-primary list is given) that ran in what is being scored: no gate blocked its run (the
-launcher's gate records, `score --gates`) and at least one of its cases has a record of
-this submission. A primary run that was blocked, or never launched (`submit_cohort.sh
---runs "stare ashlar"`), is named with its reason and is not allowed to empty the block
-for everyone, which it did before. The block is always printed, even when it is empty.
+primary list is given) that ran in what is being scored: at least one of its cases has a record of
+this submission. A primary run that was never launched (`submit_cohort.sh
+--runs "stare ashlar"`) is named with its reason and is not allowed to empty the block
+for everyone. What a selfcheck said never takes a row out: the checks are reported, never a
+gate. The block is always printed, even when it is empty.
 
 **Uncertainty** (`paired_summary.csv`, "Differences against `stare`" in `summary.md`): for
 each row, the median over units of its paired difference against the `stare` row (each
@@ -951,26 +922,24 @@ landmarks on real slides.
 
 ### What the cohort's nuclei are
 
-Read from the repository on 2026-10-11 (review section D; nothing was run, and the site
-overlay `conf/ieo.config` is not in the repository, so a setting it overrides would not
-show here):
-
-| step | what | where |
-|---|---|---|
-| the file (until 2026-10-16) | `<arm>/<patient>/qc/registration/geojson/<slide>.geojson`, arm `valis_high_micro2` | the removed `arms_manifest.py` |
-| the file (regbench's own, now) | `<inputs>/outlines/<patient>/<slide>.geojson`, traced by the nuclei step | `manifest.py`, `nuclei.py`, `outlines.py` |
-| the arm's QC | `reg_qc: 2`, `seg_method: stardist` (the site's StarDist model, not the pipeline's default InstanSeg) | `benchmarks/configs/arms.yaml:42-51`; the arm varies only the micro-registration |
-| what is segmented | each NATIVE slide, before registration, by the run's own segmenter | `subworkflows/local/seg_qc.nf:8-20, 136` (`SEG_QC_SEGMENT` is `SEGMENT` under an alias) |
-| on which channel | ONE channel, index 0, which must be the nuclear marker (the run refuses otherwise) | `lib/SegBackends.groovy:93-117` (`segment.py --dapi-channel 0`) |
-| which mask is traced | the **cell** mask, not the nuclei mask | `subworkflows/local/seg_qc.nf:140` (`SEG_QC_GEOJSON(SEG_QC_SEGMENT.out.cell_mask)`); `modules/local/segment.nf:51-52` emits both |
-| what the cell mask is | the StarDist nuclei labels grown by `seg_expand_distance` px, no label growing into another | `bin/segment.py:162, 223-225` (`expand_labels_tiled`); `conf/modules.config:1046`; default 10 px (`nextflow.config:275`), not set in `arms.yaml` or `benchmark.config` |
+**The definition (regbench's own, since 2026-10-16; user ruling 2026-10-15: the pipeline's
+StarDist model and settings, nuclei grown by 10 px).** The nuclei step
+(`nuclei.py`, `slurm/nuclei.sbatch`) segments ONE channel of each native slide, the nuclear
+marker, with `bin/segment.py` in the pipeline's StarDist image, with every flag
+SEGMENT's `ext.args` renders for StarDist and the same params (the site's model and model
+folder, `seg_expand_distance`, default 10 px), on the preprocessed slides of regbench's own
+input step (the pipeline's preprocessing, `pixel_size` pinned to 0.325 µm). Its
+`*_cell_mask.tif` (the StarDist nuclei labels grown by `seg_expand_distance` px, no label
+growing into another) is traced to outlines by the `write_geojson` of
+`bin/mask_to_geojson.py` at the pipeline's `simplify_tolerance` (`outlines.py`). That
+GeoJSON is the slide's outline set, `ref_cells` / `mov_cells` of the case. The bare nuclei
+are the same run's nuclei mask (next section).
 
 So the outlines are **nuclei found on the nuclear channel alone, each grown by 10 px (3.25
 µm at 0.325 µm per pixel) until it meets a neighbour**. They are not whole cells found on
-membrane or marker channels: the review's worry that outlines differ between rounds
-because the markers differ does not apply to this arm (it would at the pipeline's default
-segmenter, InstanSeg on every channel). They are also not bare nuclei, and three things
-follow for every method alike:
+membrane or marker channels, so outlines do not differ between rounds because the markers
+differ (they would at the pipeline's default segmenter, InstanSeg on every channel). They
+are also not bare nuclei, and three things follow for every method alike:
 
 - the gate (1.5 x the median equivalent radius) and the null's shift (4 radii) are sized
   from the GROWN outline, so both are larger than a nuclear radius would make them;
@@ -981,18 +950,13 @@ follow for every method alike:
   isolated nucleus, pulled away from it where neighbours block the growth on one side.
   `within_1um` inherits that.
 
-A nuclear mask is NOT among the arm's published files: `SEG_QC_SEGMENT` publishes nothing
-(`conf/modules.config:1140-1149`), and only the GeoJSON of the cell mask is published.
-
-**Regbench's own outlines are DEFINED to be the arm's** (since 2026-10-16; user ruling
-2026-10-15: same model and settings, grown 10 px). The nuclei step runs the same
-`bin/segment.py` with the same flags on preprocessed slides of a NEW preprocessing run
-(regbench's input step: the same pipeline code, `pixel_size` pinned to 0.325 µm as the
-arms ran it; not the arms' files) and traces its own
-`*_cell_mask.tif` with the same `write_geojson` of `bin/mask_to_geojson.py` at the same
-`simplify_tolerance`, so by construction it gives the outline the arm would have published
-from such an image with the same model and settings. This is DERIVED from the code, link by link, and
-was NOT measured on cohort slides. `test_outline_definition.py` pins each link:
+**Its equivalence to the outlines the pipeline publishes is DERIVED from the code, link by
+link, and was NOT measured on cohort slides.** The pipeline's QC (`reg_qc: 2`) segments each
+native slide before registration (`SEG_QC_SEGMENT` is `SEGMENT` under an alias,
+`subworkflows/local/seg_qc.nf`), on channel 0 (`lib/SegBackends.groovy`), traces the **cell**
+mask (`SEG_QC_GEOJSON`), and publishes only that GeoJSON. Regbench's run gives the outline
+the pipeline would have published from such an image with the same model and settings.
+`test_outline_definition.py` pins each link:
 
 | link | pinned by |
 |---|---|
@@ -1004,13 +968,12 @@ was NOT measured on cohort slides. `test_outline_definition.py` pins each link:
 
 What no test can pin: the site's model files (the same name and folder are rendered, the
 files are the site's), the library versions inside the images (the trace runs in the
-scorer's image, the arm's in `bolt3x/mirage-quantify`), a GPU's run-to-run
-differences, and `REGBENCH_STARDIST_CPU=1`, which drops `--use-gpu` (the arm ran on the
-GPU, `seg_gpu = true`): StarDist on CPU need not give the GPU's labels. `--dapi-channel` is the one rendered difference: the pipeline passes 0 (and
+scorer's image, the pipeline's in `bolt3x/mirage-quantify`), a GPU's run-to-run
+differences, and `REGBENCH_STARDIST_CPU=1`, which drops `--use-gpu` (the pipeline's QC
+runs on the GPU, `seg_gpu = true`): StarDist on CPU need not give the GPU's labels.
+`--dapi-channel` is the one rendered difference: the pipeline passes 0 (and
 refuses a slide whose channel 0 is not nuclear), regbench the manifest's nuclear index,
 which is 0 on every slide the pipeline would segment.
-
-The bare nuclei are the same run's nuclei mask: next section.
 
 ### Outlines and bare nuclei
 
@@ -1018,7 +981,7 @@ The bare nuclei are the same run's nuclei mask: next section.
 
 | set | on the cohort |
 |---|---|
-| `outlines` (headline) | the arm's published QC outline of each native slide: a StarDist nucleus grown by 10 px until it meets a neighbour |
+| `outlines` (headline) | regbench's own outline of each native slide, defined to be the pipeline's QC outline: a StarDist nucleus grown by 10 px until it meets a neighbour |
 | `nuclei` | the StarDist nuclei themselves, from the first source below that applies |
 
 **Why both.** Matched Dice on grown outlines is dominated by the rim: at a nuclear radius
@@ -1026,13 +989,11 @@ of about 12 px a 10 px rim is roughly two thirds of the outline's area, so a giv
 displacement costs a grown outline a smaller share of its area than it costs the nucleus,
 and in dense tissue the outline's shape is clipped by its neighbours and not by the
 nucleus at all. Dice on the bare nuclei is stricter per micrometre and has no clipping.
-The outlines stay the headline because they are what the pipeline's own QC and the arms
-benchmark report; the nuclei say how much of an outline number is rim. Both sets are
+The outlines stay the headline because they are what the pipeline's own QC reports; the nuclei say how much of an outline number is rim. Both sets are
 segmented on the NATIVE slides before any registration, so neither depends on a method.
 
 **Where the nuclei and outlines of a cohort slide come from** (since 2026-10-16 the one
-source; the label images an arm's work directory or a segmentation arm offered are gone
-with the arms):
+source; the label images an arm's work directory or a segmentation arm offered are no longer read):
 
 1. **A StarDist run** (`python -m benchmarks.regbench nuclei`, `slurm/nuclei.sbatch`:
    an array over SLIDES): the pipeline's `bin/segment.py`, unchanged, on the native slide,
@@ -1049,21 +1010,21 @@ with the arms):
    | word | from |
    |---|---|
    | `segment.py --image … --output-dir …` | `lib/SegBackends.groovy:100` (`entrypoint`), `modules/local/segment.nf:77-79` |
-   | `--dapi-channel` | `lib/SegBackends.groovy:101`, `modules/local/segment.nf:80`: the pipeline passes `0`, its preprocessing having put the nuclear channel first; here it is the manifest's `ref_channel` / `mov_channel`, which is 0 on the arms' slides |
-   | `--model-dir`, `--model-name` | `conf/modules.config:1021-1022` (`segmentation_model_dir`, `segmentation_model`); the arms take them from the site overlay `conf/ieo.config`, which is not in the repository: the two environment variables, or, when they are unset, that file's two keys (below) |
+   | `--dapi-channel` | `lib/SegBackends.groovy:101`, `modules/local/segment.nf:80`: the pipeline passes `0`, its preprocessing having put the nuclear channel first; here it is the manifest's `ref_channel` / `mov_channel`, which is 0 on every slide the pipeline segments |
+   | `--model-dir`, `--model-name` | `conf/modules.config:1021-1022` (`segmentation_model_dir`, `segmentation_model`); the site takes them from its overlay (`conf/ieo.config` at IEO), which is not in the repository: the two environment variables, or, when they are unset, that file's two keys (below) |
    | `--n-tiles 16 16` | `conf/modules.config:1023`; `nextflow.config:273-274` |
    | `--expand-distance 10` | `conf/modules.config:1024`; `nextflow.config:275` |
    | `--pmin 1.0 --pmax 99.8` | `conf/modules.config:1025-1026`; `nextflow.config:268-269` |
    | `--prob-thresh` | absent: `conf/modules.config:1029`, `nextflow.config:272` (`null`); `REGBENCH_STARDIST_PROB_THRESH` adds it if the site sets one |
    | `--use-gpu` | `conf/modules.config:1057`, `nextflow.config:267` (`seg_gpu = true`); `REGBENCH_STARDIST_CPU=1` drops it |
 
-   None of these is set in `benchmarks/configs/arms.yaml` or `benchmark.config`
+   None of these is set by the benchmark itself
    (`test_nuclei_cohort.py::test_the_rerun_follows_the_pipelines_own_configuration` reads
    the defaults out of `nextflow.config` and the flag list out of `conf/modules.config`).
    The outlines are the trace of the cell mask the same call grows from its nuclei, so
    the comparison below is a SELF-CONSISTENCY check (a mismatch is a tracing bug, not
    another segmentation; with an old manifest's published outlines it is the comparison
-   with the arm, as before): the counts within 1 %, and at least
+   with those, as before): the counts within 1 %, and at least
    0.99 of the outlines' centroids with a re-grown centroid within 1 px
    (`RERUN_MATCH_PX`, `EXACT_MATCH`), beside the one-nucleus share above. What a re-run
    is then (user ruling 2026-10-11):
@@ -1196,15 +1157,14 @@ pipeline's `SEGMENT` block (`conf/modules.config:1062-1067`: 8 CPUs, 32 to 128 G
 size, 4 h per attempt) at its upper end; `REGBENCH_NUCLEI_CPUS`, `_MEM`, `_TIME` change it.
 
 **Not verified until the cluster** (none of it was run: StarDist is not installed where
-this was written, the site's model is not in the repository, no arm's files were read):
+this was written, the site's model is not in the repository):
 that the re-run reproduces the published outlines at all (same model, same image, the
 site's settings as its config's plain `key = value` lines give them: the `REFUSED` and
 `DISAGREEMENT` lines and `exact` will say); that the site overlay is readable that way
 (the real file was never read here: a key set in two profiles, or by an expression, is
 refused with a message, not guessed); that `bolt3x/mirage-stardist:1.0.0` runs `bin/segment.py` from a bound
 checkout under `apptainer exec --cleanenv --nv`; that StarDist is deterministic enough
-between two GPU runs for the 0.99 thresholds; that a segmentation arm's mask passes for
-its reference slide; what a work directory still holds; the memory and time of tracing
+between two GPU runs for the 0.99 thresholds; what a work directory still holds; the memory and time of tracing
 two label images of a whole slide in the scorer's image (`cells.polys_from_label_image`,
 tile by tile).
 
@@ -1242,10 +1202,10 @@ Scoring a slide is slow (measured below), so the scorer keeps what it computes, 
   assignment's bound among them), and `score.RECORD_VERSION`.
   A case record's key: all of that for every result the case reads (`run.json` AND
   `warped.npz`, by content), plus `case.json`, the list of variants in order, the seam
-  owners, each row's selfcheck, the dropped rows, the submission being scored
+  owners, each row's selfcheck status, the submission being scored
   (`--submission`), every file of the package's top level and every module `score.py`
   imports inside the package, followed through. So a re-run of a method, a changed
-  run list, another `--drop` or another submission makes the case's ROWS again, in
+  run list or another submission makes the case's ROWS again, in
   seconds to minutes, and computes only the pair records whose inputs changed: a
   `run.json` that says something else changes rows and no pair record.
   A record that is cut short, damaged or made for other inputs is computed again and
@@ -1254,7 +1214,7 @@ Scoring a slide is slow (measured below), so the scorer keeps what it computes, 
 - **`score-case`** scores one case and writes no table:
   `python -m benchmarks.regbench score-case --cases CASES --out OUT --dataset multiplex
   --index 3 --workers 8` (or `--case-id`). `score` then reads that case's record,
-  provided it is given the same `--drop`, `--submission` and `--only-run`; it computes
+  provided it is given the same `--submission` and `--only-run`; it computes
   every case that has no valid record itself, and saves each as it finishes, so an
   interrupted `score` keeps the cases it finished and a killed `score-case` keeps the
   pair records it finished.
@@ -1308,7 +1268,6 @@ it is scoring.
 | `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept and `within_ceiling`: what the mask alone lets `within_*um` reach for any method |
 | `cells_nuclei.csv`, `summary_cells_nuclei.csv`, `common_block_nuclei.csv`, `paired_vs_primary_nuclei.csv`, `paired_summary_nuclei.csv`, `nonband_cells_nuclei.csv`, `nonband_summary_nuclei.csv` | as the table of the same name | the same columns on the BARE NUCLEI (`set = nuclei`), with their own gate, null and shared subset. Absent when no case has nuclei. See "Outlines and bare nuclei" |
 | `nuclei_missing.csv` | case, or case x variant | why there is no nuclei row: `dataset, case_id, group, …, method, reason`. `method` is empty when the CASE has no nuclei on a side (the prepared reason), and names a result that was made before its case had them |
-| `dropped.csv` | variant | written only when `score --drop` names rows: `variant, reason, had_results`. Rows whose own selfcheck failed without blocking their method; they are in no other table |
 | `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
 | `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`; `n_fallback_cases`, `fallback_frac_max` and the exact assignment's `pair_fraction_exact_med`, `dice_matched_exact_med`, `n_exact` (extra numbers, never ranked); `n_inexact_cases`, `n_shrunk_cases` (cases scored on objects marked `set_inexact` / `set_shrunk`). `subset=common` repeats it on the cases every compared row registered |
 | `common_block.csv` | dataset x primary row | `in_common_block`, `why_not`, `n_cases_common`, `n_cases` |
@@ -1317,18 +1276,18 @@ it is scoring.
 | `excluded_rounds.csv` | lost round | written only when a round was lost for a cause that is not the method's: `dataset, method, case_id, group, cause` |
 | `selfcheck_masks.csv` | selfcheck run x case (round) x variant x dot set | the selfcheck's numbers on `all` dots, the `unmasked` dots and the `masked` dots alone (`n_dots, found_frac, err_px_p95, err_px_mean, worst_block_err_px_p95, worst_block_found_frac, passes_accuracy`), `masked_frac, mask_cap, mask_over_cap`, the comparison's `n_detected` and `n_narrow` (what the detector took for a dot in the written image, and how many of those were narrower than 1.2 px), and one `passes_cap_<cap>` column per cap of `selfcheck.MASK_CAPS`. Written when the scorer is given the selfchecks (the launcher's `score`). Every table with a `method` column also carries `selfcheck_mask_over_cap` then |
 | `attrition.csv` | dataset x registration row | where the rounds go: `manifest_rounds` (the rounds of the cohort's manifest; blank unless the scorer is given it, `score --manifest`: the launcher's score job gives it `REGBENCH_MANIFEST` when that is set, else `$REGBENCH_CASES/manifest.csv`, the copy `submit_cohort.sh --prepare` leaves beside the cases it prepares), `prepared`, `with_outlines`, `with_nuclei`, then per row `run` (a record that is not `not run`), `registered` (`ok`), `scored` and `scored_nuclei` (the row is its own result: not the unregistered pose, not left out). Also a table of `summary.md` |
-| `failures.csv` | variant | launches made, launches failed by cause, rounds lost |
+| `failures.csv` | variant | launches made, launches failed by cause, rounds lost; `n_failed_method`, `n_failed_benchmark` and `n_not_run_or_lost` (the launcher's and the infrastructure's: `not_run`, `not_submitted`, a lost attempt; the summary's column is `not run / lost`) count CASES. A selfcheck's verdict is in none of them |
 | `failure_log.csv` | failed or lost EVENT | always written (a header alone when nothing failed). See "The failure log" |
 | `resources.csv` | case x variant | the cost recorded at that variant's yield, with the billing columns of "CPU-hours: one definition for every method" |
 | `summary_resources.csv` | patient x variant | the billing columns per patient ("CPU-hours: one definition for every method"), `jvm_heap_asked_gb` and `jvm_max_heap_gb` for a method that starts a JVM; sum over rounds for a pair method, the launch's total for a per-patient one; `write_s` and `total_to_image_s` are the patient's totals for both; peaks are maxima, never divided by rounds; `complete` (every round registered), `launched` |
 | `cost_summary.csv` | dataset x variant | the median and the mean over patients of each cost twice: over the patients this row completed (`n_patients_complete` of `n_patients`; `*_med`, `*_mean`) and over the patients every compared row completed (`*_common_med`, `*_common_mean`, `n_patients_common`); CPU-hours first, `device`, `gpu_model`; for a row in several jobs `time_unlimited_parallel_tiles_s_*`, `to_image_unlimited_parallel_tiles_s_*` and `peak_cpus_at_once` in place of `register_s_*` and `total_to_image_s_*` |
 | `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
-| `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `benchmark_prep_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
+| `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
 | `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step and of `measured_here_s`, the largest peaks (`estimate_peak_gb_max`, `job_peak_gb_max`), `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
 | `pipeline_cost.csv` | task of a compute-all trace (backend x patient x Nextflow task) | written only when there is a trace under `<out>/compute`. Nextflow's own figures and three products of them; see "Full pipeline cost, per backend (compute-all)" |
 | `pipeline_cost_summary.csv` | backend x patient, and backend (`patient = all`) | counts, completeness, wall time, CPU-h, GB-h, peak, registration share, input size; see the same section |
 | `pipeline_cost_by_process.csv` | backend x process | the tasks of the patients in the backend's `all` row, per process; see the same section |
-| `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
+| `launch.csv` | run | written only with `score --verdicts`: what each run's selfcheck and realcheck said, from `logs/verdicts.tsv` (`run, selfcheck, realcheck, reference, log`). Reported, never a gate: no run and no row is left out because of it |
 | `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the failure log's section, cost on survivors and on the common patients |
 
 ### Off the seams
@@ -1397,10 +1356,10 @@ header alone when nothing failed).
 - every failed attempt of every unit: the attempt a result ended with, and every earlier
   attempt of the memory ladder kept in `run.json: previous_attempts`, even when the unit
   ended `ok` at a higher rung;
-- every run a gate blocked (`gate_blocked`) and every row a gate dropped (`dropped_row`);
 - every selfcheck attempt that did not end `ok` (`selfcheck_inconsistent`,
   `selfcheck_not_checked`, `selfcheck_crashed`) and every flagged realcheck
-  (`realcheck_flagged`);
+  (`realcheck_flagged`), from `logs/verdicts.tsv`: reported, never a gate, so the run went
+  on and its rows are scored (such an event ends no unit and is never a method failure);
 - every written image the tissue block could not score because of an error
   (`tissue_missing`), every record the scorer could not parse (`unreadable_record`), and,
   folded into one row per result name, the results nobody ran (`not_run`).
@@ -1411,10 +1370,10 @@ rounds joined in `case_id`.
 Columns: `dataset, run, variant, unit, group, case_id, attempt, rung_gb, retry, submission,
 launch_id, stage` (`selfcheck | gate | realcheck | register | writer | benchmark_points |
 tissue | score`), `cause, whose, cause_from` (how the cause was decided: the attempt's own
-record, the scheduler's state, a gate's record), `scheduler_state, exit_code, elapsed_s,
+record, the scheduler's state, a verdict), `scheduler_state, exit_code, elapsed_s,
 peak_rss_gb, message` (the first line of the error), `log_path` (the scheduler's log of
 that task), `climbed_to` (the next rung, "the same rung again", or `-` when the unit ended
-there), `final_outcome_of_unit` (`ok at rung N | failed | lost | blocked`).
+there), `final_outcome_of_unit` (`ok at rung N | failed | lost | reported; the run went on`).
 
 **`whose` is total and is one table** (`failure_log.WHOSE`; a test walks every cause the
 code can write against it, so a new cause cannot be added unclassified):
@@ -1422,9 +1381,9 @@ code can write against it, so a new cause cannot be added unclassified):
 | whose | causes | means |
 |---|---|---|
 | `method` | `exception`, `oom`, `gpu_oom`, `timeout`, `writer`, `writer_oom`, `killed` | the package under test raised, ran out of memory or time, its point mapping or its writer failed, its process died. `killed` is a process that died with nobody saying why; `regbench settle` renames it when the scheduler's accounting names a cause (memory, time, a lost node) or the task's script noted a Python ended by signal 9 |
-| `benchmark` | `benchmark_oom`, `benchmark`, `identical_overlap`, `reduced_proxy`, `no_pixel_size`, `proxy_mismatch`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
+| `benchmark` | `benchmark_oom`, `benchmark`, `identical_overlap`, `selfcheck_inconsistent`, `selfcheck_not_checked`, `selfcheck_crashed`, `realcheck_flagged`, `tissue_missing`, `unreadable_record` | the benchmark's own step or check. A selfcheck that does not pass means the benchmark cannot show that ITS points follow the method's image; it is not evidence that the method registers badly |
 | `infrastructure` | `infrastructure`, `selfcheck_lost` | the scheduler or the node lost the attempt |
-| `launcher` | `gate_blocked`, `dropped_row`, `not_run`, `not_submitted` | a gate kept the run from starting, a row was dropped, the unit was never submitted, a stage job never reached the queue |
+| `launcher` | `not_run`, `not_submitted` | the unit was never submitted, a stage job never reached the queue |
 
 `summary.md` has a "Failures: every event, and whose it is" section: the count of events
 per run, stage, cause and whose; then every unit whose FINAL outcome is not ok, with its
@@ -1436,8 +1395,8 @@ derives the task's own log name from the scheduler's variables by the launcher's
 (`$REGBENCH_OUT/logs/%x-%A_%a.log` for an array task, `%x-%j.log` otherwise) and exports
 it as `REGBENCH_LOG`. The driver writes it into `run.json` (`log_path`, and into each
 `previous_attempts` entry with that attempt's error text, phase and peak), the selfcheck
-into `selfcheck.json` (`log_path`, and per attempt with `why`), and the gate into its
-record (a sixth tab-separated field). It was not checked on a cluster that `%x` equals
+into `selfcheck.json` (`log_path`, and per attempt with `why`), and the verdict into
+`verdicts.tsv` (its `log` column). It was not checked on a cluster that `%x` equals
 `SLURM_JOB_NAME` for these jobs ("Not verified").
 
 **The same words in the logs.** Every batch script ends with one machine-readable line:
@@ -1446,8 +1405,8 @@ record (a sixth tab-separated field). It was not checked on a cluster that `%x` 
 REGBENCH_END kind=run run=palom dataset=multiplex unit=P03_r2 rung=2 status=failed cause=writer_oom whose=method log=/.../rb-palom-multiplex-r2-812_4.log
 ```
 
-`kind` is `run`, `selfcheck`, `gate`, `tissue` or `score`; `status` is `ok`, `failed`
-(the method's), `lost` (anything else), `blocked`, `may_start`, a selfcheck status, or
+`kind` is `run`, `selfcheck`, `tissue` or `score`; `status` is `ok`, `failed`
+(the method's), `lost` (anything else), a selfcheck status, or
 `no_end_line`. The Python step writes the line; the script repeats it as the log's last
 line, and writes a fallback itself (`status=no_end_line cause=killed whose=method
 exit=<code>`) when the step died before it could. `grep -h REGBENCH_END
@@ -1793,7 +1752,7 @@ can read (`cpu_instrument` of the first rows says).
   submission's id (`submissions`, `reused_by`). `REGBENCH_FORCE=1` or `run --force` runs
   it anyway. The cost tables open with `reused: N of M results`.
   A result is also made FOR its case's points: `run.json: points_sha256` holds a hash of
-  each group of arrays of the case's `points.npz` (`outlines`, `nuclei`, and `truth` for the landmark sets). A
+  each group of arrays of the case's `points.npz` (`outlines` and `nuclei`). A
   case prepared again with other points (a forced re-prepare; outlines whose meaning
   changed) makes its earlier results stale: they are not reused, and the scorer counts
   them as `not_run` ("made for an earlier version of this case"), never as a failure of
@@ -1868,15 +1827,6 @@ call; it is then part of the estimate and no number is guessed for it.
 | `ashlar` | inside the clock: ASHLAR's reading of the tiles it is given | `retile_s` | the command up to the last aligner; a round's share is its `layer_s` plus the reference stitch over the rounds | ASHLAR's writer, inside the same command, timed from the last aligner; then the benchmark's split of the mosaic per round, timed apart (`native.write_parts_s`) | one pyramidal OME-TIFF for the patient, every cycle's channels (BigTIFF, deflate); the benchmark's per-round copies have no pyramid |
 | `palom` | inside the clock: PALOM's reader, lazily, on the cohort's OME-TIFFs | none | `Aligner.coarse_register_affine`, `compute_shifts`, `constrain_shifts` | `block_affine_transformed_moving_img` and `write_pyramid`, timed on their own | one pyramidal OME-TIFF per round, every channel (BigTIFF, zlib) |
 
-**The `stare_prep` row** runs the `stare` adapter, so its line is `stare`'s, with one
-step before it: both images are preprocessed by the benchmark (`prep.py`) BEFORE the
-registration clock starts. Its registration cost (CPU-hours and time) is therefore STARE's
-alone and does not hold that step, while DeeperHistReg's and VALIS's own preprocessing
-are inside their clocks. So the step is recorded apart (`run.json: info.prep.prep_s`,
-`peak_rss_mb`), shown as `benchmark_prep_s` / `benchmark_prep_peak_gb` in
-`cost_end_to_end.csv`, and added to that row's `measured_here_s`: read that total, not
-`register_s`, to compare `stare_prep`'s cost with another method's.
-
 What a writer leaves is described twice: here from each package's source (the tags are
 in `cost.py`), and per run from the file itself (`run.json: native.written`: channels,
 pyramid levels, compression, tile, bytes, read with tifffile after the writer has
@@ -1932,8 +1882,7 @@ each and every other attempt is in `info.jobs.wasted_*` and in the row's `wasted
 A round that FAILED shows what its stage jobs cost (`info.jobs`, kept with the
 failure), not this job's own clock. A writer that fails after a good registration does
 not make the registration a wasted attempt. Every retried or failed stage attempt is a
-row of `failure_log.csv` (`retry` = `stage`, the job named in `message`): a failed
-`prep` job is the benchmark's (`benchmark`, `benchmark_oom`); a stage job that never
+row of `failure_log.csv` (`retry` = `stage`, the job named in `message`): a stage job that never
 recorded its end is `timeout` when the next attempt of that job started no earlier than
 its start plus its time limit (the attempts are chained, so that is when it ended), and
 `killed` otherwise, also when there is no later attempt to compare with.
@@ -1960,10 +1909,9 @@ every step in its own column, per patient and per result that wrote an image:
 | column | what | measured |
 |---|---|---|
 | `method_convert_s` | a conversion the method needs before it can read the slides: DeeperHistReg's single-page TIFFs (`convert_s`, plus the further channels its writer needs), ASHLAR's tiles (`retile_s`, once per patient). `none` when it reads the cohort's files as they are; `not separable` for VALIS | here, 4 CPUs, clock paused |
-| `benchmark_prep_s` | the `stare_prep` row only (`none` elsewhere): the benchmark's preprocessing of both images before STARE starts (`run.json: info.prep.prep_s`), with the process's peak at its end in `benchmark_prep_peak_gb`. It is outside the registration clock and INSIDE this row's `measured_here_s`: the other methods' own preprocessing is inside their clocks | here, 4 CPUs |
 | `estimate_s` | the registration clock | here, 4 CPUs |
 | `write_s` | the package's own writer | here, 4 CPUs, clock paused |
-| `measured_here_s` | `method_convert_s + benchmark_prep_s + estimate_s + write_s`: the total measured time of that result, from the cohort's files to the image it wrote | here |
+| `measured_here_s` | `method_convert_s + estimate_s + write_s`: the total measured time of that result, from the cohort's files to the image it wrote | here |
 | `benchmark_copy_s` | the benchmark's own copying of a package's output (ASHLAR, DeeperHistReg). In NO total | here |
 | `estimate_peak_gb`, `job_peak_gb` | the process tree's peak while registering; the whole job's peak, writer included (the cgroup's) | here |
 | `written` | what the method's writer left: channels, pyramid or not, compression, size | the file |
@@ -2014,12 +1962,13 @@ submission, like `--score-only`.
   `nextflow_schema.json`): `registration_method`; `enable_trace=true`, its shipped
   default restated so a site profile cannot switch the measurement off; and
   two rulings that are NOT the shipped defaults: `seg_method=stardist` (the user's
-  ruling of 2026-10-15: the benchmark's nuclei are StarDist's, as the arms' compute run
-  was; shipped `instantseg`) and `pixel_size=0.325` (the input step's ruling, extended
+  ruling of 2026-10-15: the benchmark's nuclei are StarDist's; shipped `instantseg`) and `pixel_size=0.325` (the input step's ruling, extended
   to compute-all: the scale of the inputs the benchmark scores, and no run stopped by a
   slide without metadata; shipped `auto`, which the pipeline's preflight refuses when it
   cannot read a scale). Everything else is the shipped default and the site profile
-  (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`).
+  (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`). **Registration therefore runs at the
+  shipped tier `memory_mode='high'` unless the site profile overrides it**, which may
+  differ from the settings the site uses in production (caveat 12).
   `test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default`
   fails when a pinned name is not a schema param, a value is not of its schema type,
   enum, pattern or bounds, a restated value is no longer the shipped default, or the
@@ -2086,6 +2035,12 @@ success, no cached task and a `status=ok` end line; the `all` row sums those pat
 only (`n_patients` says how many; its counts are sums over them) and its own
 `complete_run` is 1 when that is every patient listed.
 
+**Reading the `all` row.** Its `wall_s`, `registration_wall_s` and `input_gb` are the SUM of
+the per-patient values (over the patients in the row), not the wall time of one run: the
+heads run on `REGBENCH_COMPUTE_LANES` lanes, so the elapsed time of the whole is shorter.
+A patient's `wall_s` is measured from its first task's submission, so it **includes SLURM
+queue time**; the CPU-h and GB-h columns are built on Nextflow's `realtime`, which does not.
+
 `pipeline_cost_by_process.csv` (`compute_all.BY_PROCESS_COLUMNS`): per (backend,
 process) over the patients of the `all` row: `is_registration, n_patients, n_tasks,
 n_failed, realtime_s, cpu_h_used, cpu_h_reserved, gb_h_reserved, pcpu_weighted` (`%cpu`
@@ -2109,30 +2064,30 @@ its jobs apply (`test_ladder.py`, `test_failures.py`, `test_verdicts.py`).
 The run list comes from `python -m benchmarks.regbench runs` and from nowhere else; the
 script names no method.
 
-1. **Selfchecks**, one per run that gates a run (16), in that run's image with that run's
-   options and mask (`overlap` for ASHLAR, `seams` for PALOM), at 64 GB and 4 CPUs. Two
-   more attempts wait behind it at 256 and 512 GB; each runs only when the one before
+1. **Selfchecks**, one per run that checks a run (15; `checked_by`), in that run's image
+   with that run's options and mask (`overlap` for ASHLAR, `seams` for PALOM), at 64 GB
+   and 4 CPUs. **Reported, never a gate: no ladder waits for a selfcheck, no run is kept
+   from starting and no row is left out because of one** (user ruling: run, report,
+   never gate; the gate jobs, their records and the switches that let a run past one are
+   gone). Two more
+   attempts wait behind the first at 256 and 512 GB; each runs only when the one before
    ended for memory or left no record of this submission (it was lost to the scheduler,
    or never started: `selfcheck --retry-memory`), and otherwise leaves the record as it
    is. `selfcheck.json: attempts` holds the allocation and outcome of each. The anchored
-   ASHLAR rows' selfcheck waits for STARE's and reads its work (`--m0-from`), case by
-   case: STARE's selfcheck runs ASHLAR's patient of three slides too, for that reason.
-   One job per run covers all of its cases, the patient included, so the number of jobs
-   and the rungs (64 / 256 / 512 GB) are unchanged. Records:
-   `<out>/logs/selfcheck/<run>/selfcheck.json`.
-2. **A gate per run** (18; `gate.sbatch`, `regbench gate`). It fails when the selfcheck
-   that gates the run is anything but `ok`, a selfcheck that left no record included.
-   Then that run, and only that run, never starts: every one of its arrays waits for its
-   gate with `afterok`, and every job carries `--kill-on-invalid-dep=yes` so that it is
-   cancelled instead of pending for ever. Every job, the tile jobs included, also
-   carries `--no-requeue`: the scheduler never starts a task a second time, so a task
-   on a failed node ends as `NODE_FAIL` and the `-again` array of the ladder is the one
-   retry (sbatch manual, `--no-requeue`: "the batch job should never be requeued under
-   any circumstances" `[PARTIAL: read the --no-requeue, --requeue, --kill-on-invalid-dep
-   and --dependency entries; missing the rest of the page]`; the manual notes that a
-   site's `ForceRequeueOnFail` prolog flag overrides it). The task itself reads the gate's record again
-   before it runs. `<out>/logs/gates/<run>.tsv`: run, status, rows to drop, blocked,
-   the reference comparison.
+   ASHLAR rows' selfcheck waits for STARE's (`afterany`: whatever it said) and reads its
+   work (`--m0-from`), case by case: STARE's selfcheck runs ASHLAR's patient of three
+   slides too, for that reason. One job per run covers all of its cases, the patient
+   included. Records: `<out>/logs/selfcheck/<run>/selfcheck.json`. Every job carries
+   `--kill-on-invalid-dep=yes`, so that a job whose dependency can never be met is
+   cancelled instead of pending for ever, and `--no-requeue`: the scheduler never starts
+   a task a second time, so a task on a failed node ends as `NODE_FAIL` and the `-again`
+   array of the ladder is the one retry (sbatch manual, `--no-requeue`: "the batch job
+   should never be requeued under any circumstances" `[PARTIAL: read the --no-requeue,
+   --requeue, --kill-on-invalid-dep and --dependency entries; missing the rest of the
+   page]`; the manual notes that a site's `ForceRequeueOnFail` prolog flag overrides it).
+2. **(There is no step 2 any more.)** The gate job per run was removed; the step number is
+   kept so that the numbering of the steps below, and the scripts' own comments, stay
+   what they were.
 3. **The ladder**: per run and dataset, the rungs are 16, 64, 256 and 512 GB at 4 CPUs,
    each with an attempt (`run --ladder first` at 16 GB, `climb` above) and `-again`, the
    same rung once more (`run --ladder again`). One task is one case for a run that works
@@ -2150,8 +2105,7 @@ script names no method.
    `CLIMB_CAUSES`). A ladder whose units are all ok puts nothing more in the queue.
    That reading is a filter and not the decision: the task that is submitted decides
    for itself by the two rules below, as before. Everything that waited for a ladder's
-   last array waits for its watcher. The attempts 2 to 4 of a stage job (PREP, COARSE,
-   SOLVE) are submitted the same way, by that stage's watcher. The selfchecks' three
+   last array waits for its watcher. The attempts 2 to 4 of a stage job (COARSE, SOLVE) are submitted the same way, by that stage's watcher. The selfchecks' three
    rungs are still three chained jobs. A watcher that is refused by `sbatch`, or cannot
    read the queue 30 times in a row, stops (exit 1): the steps after it are not
    submitted and what is downstream goes on.
@@ -2195,16 +2149,14 @@ script names no method.
      `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
    - The anchored ASHLAR rows wait for STARE's last array on the same dataset.
    **A run whose registration is several jobs per round** (`runs`, column `stages`:
-   every STARE run: `variants.stages_of`, the generated set, 9 on the cohort and 12 per brightfield regime) has, per dataset, a chain of stage jobs in place of that
-   ladder, every job after the one before it (`afterany`) and all of them behind the
-   run's gate. With R rounds and T tiles in all (a round's tile count is
+   every STARE run: `variants.stages_of`, the generated set, 9 on the cohort) has, per dataset, a chain of stage jobs in place of that
+   ladder, every job after the one before it (`afterany`). With R rounds and T tiles in all (a round's tile count is
    `ceil(H / 2048) x ceil(W / 2048)` of its reference, known before anything runs:
    `regbench stages` writes one line per round to
    `<out>/logs/stages/<submission>/<run>-<dataset>.tsv`):
 
    | jobs | what | CPUs, memory, time per task |
    |---|---|---|
-   | `rb-<run>-<ds>-prep-a1..a4` (the runs with a `haem` / `grey_smooth` proxy only; brightfield sets) | 4 arrays of R tasks | 4; 16, 32, 48, 64 GB; 1 to 4 days |
    | `rb-<run>-<ds>-coarse-a1..a4` | 4 arrays of R tasks | 2; 2, 4, 6, 8 GB; 2, 4, 6, 8 h |
    | `rb-<run>-<ds>-feed-1..2` | the TILE SUBMITTERS (`feed_tiles.sbatch`), `REGBENCH_STAGE_FEEDERS` of them chained: not a tile job, the job that submits them | 1; 1 GB; 7 days |
    | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most its share of `REGBENCH_STAGE_QUEUE_MAX` (a total over the launch, split over the runs feeding at once: 200 is 22 each for 9 runs without lanes; 100 over 4 lanes is 25 each) of them pending or running | 2; 4 GB; 2 h |
@@ -2323,14 +2275,14 @@ script names no method.
    SOLVE and the last jobs run, and every round with a tile that is not done ends as
    `not_submitted`. Release or cancel the held tasks and submit again: what is ok is
    reused.
-4. **The realcheck gate** of `valis_mirage` and `valis120_hires`: the first patient of
-   the first dataset goes alone, on its own ladder, with `run --realcheck`; a second gate
-   job reads the primary row's `realcheck.json`; everything else of that run waits for
-   it.
+4. **The realcheck** of `valis_mirage` and `valis120_hires` (reported, never a gate): the
+   first patient of the first dataset goes alone, on its own ladder
+   (`rb-<run>-<ds>-first-<rung>g`), with `run --realcheck`, SUBMITTED BESIDE the rest of
+   the run, which does not wait for it. What waits for the run waits for both.
 5. **`settle`, per-case scoring and `tissue`, then `score`**, in the scorer's image
    (`variants.SCORER_IMAGE`), after everything, whatever failed. FIRST one small job,
    `rb-settle` (`score_cohort.sbatch settle`, 1 CPU, 4 GB, one hour), which waits for
-   every ladder and every gate with `afterany`: it asks the scheduler's accounting what
+   every ladder and every selfcheck with `afterany`: it asks the scheduler's accounting what
    became of every job of the submission and gives each result that still says `killed`
    the cause and the elapsed time the scheduler names (`regbench settle`: the last rung
    has no later task to ask). That rewrites those results' `run.json`, so every scoring
@@ -2357,14 +2309,31 @@ script names no method.
    (`test_score_records.py::test_a_record_made_before_a_result_was_settled_is_never_reused`,
    `test_submit_cohort.py::test_the_killed_results_are_settled_before_any_case_is_scored`).
    `score` is given
-   `--submission` (below), `--drop` for every row a gate said to drop and `--gates` (the
-   summary's block "What the gates decided" names every blocked run and every dropped
-   row).
+   `--submission` (below) and `--verdicts`: the scorer FIRST writes what every run's
+   selfcheck and realcheck said (`regbench verdict` -> `<out>/logs/verdicts.tsv`, reading
+   `logs/submitted/<submission>.runs` for the runs of the submission), and the tables
+   then carry it: every row has its run's `selfcheck_status` from `verdicts.tsv`, and
+   the summary's block "What the selfchecks said" lists each run's selfcheck and
+   realcheck. No row is dropped.
+6. **With `--compute-all`**, after the scorer: compute-all, the WHOLE pipeline traced per
+   patient and registration backend (`slurm/compute_all.sbatch`, one Nextflow head job
+   per run, `rb-compute-<backend>-<patient>`; `python -m benchmarks.regbench compute-all
+   plan` lists them, every valis patient then every tiled one). The heads are dealt
+   onto `REGBENCH_COMPUTE_LANES` lanes (default 2): each waits (`afterany`) for the head
+   before it on its lane, and the first of each lane for the scorer of step 5. So they run
+   LAST and ALONE: a cost measured under contention the benchmark made itself is not a
+   cost. Needs `REGBENCH_INPUT`. "Full pipeline cost" has what is pinned and what is
+   written.
+7. **`rb-score-compute`**, the scorer again (`score_cohort.sbatch score`) after every
+   head: the case records are kept, so it only adds `pipeline_cost*.csv` and their block
+   of `summary.md`.
 
-**What is submitted by default: `multiplex`.** The two
-HyReCo sets are DORMANT (ruling R3.14): implemented and tested, never part of the default,
-and submitted only when `--datasets` names them, with a line saying so. Read "Dormant
-datasets: known defects before any use" first.
+`--compute-only` submits steps 6 and 7 and nothing else, for a results folder whose
+benchmark is done: the heads start at once (on their lanes) and the scorer scores the LAST
+submission into `REGBENCH_OUT`, as `--score-only` does.
+
+**The only dataset is `multiplex`**, the cohort; `--datasets` naming anything else is
+refused.
 
 **One submission, one id, and no stale record.** Each call of the script has an id
 (`REGBENCH_SUBMISSION`, default the time and the process id) that every job carries into
@@ -2373,15 +2342,15 @@ defaults to the commit, so a second submission at the same commit writes into th
 folder; these rules keep one from answering for the other:
 
 - a selfcheck removes the record in its folder before it runs and writes its own last; a
-  later attempt (`--retry-memory`) and the gate take a record of another submission as
+  later attempt (`--retry-memory`) and the verdict take a record of another submission as
   no record. A selfcheck attempt the scheduler lost, or that never started, is run again
   at the next of its three attempts, not read as `not_checked`;
-- the gate records of the selected runs are removed when the script submits;
-- an attempt removes `realcheck.json` before the method starts, and the realcheck gate
+- an attempt removes `realcheck.json` before the method starts, and the verdict
   counts a realcheck only beside an `ok` result of this submission;
 - the ladder takes a result of another submission as no record;
 - the scorer is given `--submission`: a result this submission neither ran nor reused is
-  `not run`. A blocked run's older folders are therefore not scored as if it had run.
+  `not run`. A run this submission did not select, with older folders, is therefore not
+  scored as if it had run.
   Reuse is the exception that is meant: a unit already `ok` for the same configuration is
   not run again, its records gain this submission's id, and it is scored
   (`REGBENCH_FORCE=1` runs everything again).
@@ -2401,7 +2370,7 @@ folder; these rules keep one from answering for the other:
   `methods.stare.Round.identity`) is reused only for the same command AND the same
   STARE version AND the same bytes of what it reads: the two slides for COARSE and a
   tile, the anchor and the tile plan for a tile, the anchor and every control file for
-  SOLVE, and for `prep` the slides, the candidate and a sha256 of `prep.py`. A stage
+  SOLVE. A stage
   whose stage before it ran again and wrote other bytes is therefore run again too.
 - *A file's fingerprint* (`cases.file_fingerprint`) is its size, its modification time
   and a sha256 over 16 blocks of 64 KiB spread evenly from its first byte to its last.
@@ -2434,7 +2403,7 @@ round).
 | variable | what | default |
 |---|---|---|
 | `REGBENCH_CASES` | prepared cases | `$HOME/regbench_cases` |
-| `REGBENCH_OUT` | results, logs, gates | `$HOME/regbench_results/mirage-<commit>` |
+| `REGBENCH_OUT` | results, logs | `$HOME/regbench_results/mirage-<commit>` |
 | `REGBENCH_BIND` | paths to bind into every image, comma-separated: where the cohort's slides and nuclei live | none |
 | `REGBENCH_WORK` | scratch for a method's intermediates | `$TMPDIR` |
 | `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS_MIRAGE`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the six images of the run list (a seventh, `REGBENCH_SIF_STARDIST`, is for `--prepare` only); the script refuses to submit when one a selected run needs is missing. Local `.sif` paths: "Before the first real submission" | none |
@@ -2445,7 +2414,7 @@ round).
 | `REGBENCH_ACCT_WAIT_S`, `REGBENCH_ACCT_POLL_S` | how long a ladder task waits for the scheduler's accounting to name the end state of an earlier task whose result still says `killed`, and the seconds between two looks ("The ladder") | `600`, `30` |
 | `REGBENCH_ARRAY_LIMIT` (above), `REGBENCH_STAGE_ARRAY_MAX`, `REGBENCH_STAGE_QUEUE_MAX`, `REGBENCH_STAGE_FEED_MIN`, `REGBENCH_STAGE_POLL_S`, `REGBENCH_STAGE_FEEDERS` | must be whole numbers of at least 1: the script refuses anything else before it submits | |
 | `REGBENCH_STAGE_ARRAY_MAX` | the most tasks in one tile array of a run that is several jobs per round | `100` |
-| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks pending or running at a time in the WHOLE LAUNCH: a total, divided by the number of runs with a tile submitter that feed at once (every STARE run is such a run: 9 on the cohort, 12 on a brightfield set; `REGBENCH_RUN_LANES` when that is fewer, since at most that many runs are in flight; floor, at least 1 each) and each submitter keeps to its share (`REGBENCH_STAGE_QUEUE_RUN` inside the submitter, which the launcher sets; do not set it yourself). It was a per-run ceiling of 100 when two runs had a submitter; the default total is 200 = 2 x 100, so the cluster load of a launch is what it was, however many runs it holds | `200` |
+| `REGBENCH_STAGE_QUEUE_MAX` | the most tile tasks pending or running at a time in the WHOLE LAUNCH: a total, divided by the number of runs with a tile submitter that feed at once (every STARE run is such a run: 9 on the cohort; `REGBENCH_RUN_LANES` when that is fewer, since at most that many runs are in flight; floor, at least 1 each) and each submitter keeps to its share (`REGBENCH_STAGE_QUEUE_RUN` inside the submitter, which the launcher sets; do not set it yourself). It was a per-run ceiling of 100 when two runs had a submitter; the default total is 200 = 2 x 100, so the cluster load of a launch is what it was, however many runs it holds | `200` |
 | `REGBENCH_STAGE_FEED_MIN` | free slots the tile submitter waits for before it submits an array (fewer when fewer tiles are left) | `25` |
 | `REGBENCH_STAGE_POLL_S` | seconds between two looks at the queue | `60` |
 | `REGBENCH_STAGE_FEEDERS`, `REGBENCH_STAGE_FEED_TIME` | tile submitters chained per run and dataset, and the time limit of each | `2`, `7-00:00:00` |
@@ -2454,22 +2423,22 @@ round).
 | `REGBENCH_STAGE_STALL_S`, `REGBENCH_STAGE_STALL_MAX_S` | read by the tile submitter: seconds without a tile task leaving the queue before it lists what is left (and gives up on a held one); and before it gives up whatever the reasons | `3600`, `172800` |
 | `REGBENCH_STAGE_WAIT_REASONS` | the scheduler's reasons the tile submitter takes for "only waiting its turn": while every tile task left has one of them the time is not counted towards `REGBENCH_STAGE_STALL_MAX_S`; empty counts every stretch | `Priority Resources QOSMaxJobsPerUserLimit AssocMaxJobsLimit BeginTime Dependency None` |
 | `REGBENCH_STAGE_HELD_REASONS` | the scheduler's reasons the tile submitter takes for "does not leave the queue by itself", space-separated | `JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure` |
-| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty, and on an external set: the run list's order |
+| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty: the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id. Set it only with `--score-only` (the submission to score) or to run a unit by hand under a submission's id: the launcher refuses an id the folder already holds a submission of | time and process id |
 | `REGBENCH_SCORE_WHILE_QUEUED` | `1`: `--score-only` although jobs of an earlier call into the folder are still pending or running | `0` (refused) |
-| `REGBENCH_ALLOW_UNCHECKED` | run names that start although their selfcheck RAN and could not decide (`not_checked`); the verdict is still recorded and shown. Nothing else is let through: `inconsistent`, `crashed`, a flagged realcheck and a selfcheck that left no record of this submission block the run all the same | none |
 | `REGBENCH_MANIFEST` | with `--prepare`: the cohort's `rounds.csv` | none |
 | `REGBENCH_PREPARE_ARGS`, `REGBENCH_PREPARE_FORCE`, `REGBENCH_PREPARE_MEM`, `REGBENCH_PREPARE_TIME` | with `--prepare`: more `prepare multiplex` options; `1` to redo cases that exist; the allocation | none, `0`, `64G`, `24:00:00` |
 | `REGBENCH_NUCLEI` | with `--prepare`: where each slide's bare nuclei are kept ("Outlines and bare nuclei") | `$REGBENCH_CASES/_nuclei` |
-| `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the arms ran (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | the site config's `segmentation_model` and `segmentation_model_dir`; a name is required from one of the two |
+| `REGBENCH_STARDIST_MODEL`, `REGBENCH_STARDIST_MODEL_DIR` | with `--prepare`: the StarDist model the pipeline's QC runs (the pipeline's `segmentation_model` and `segmentation_model_dir`, from the site's config); the folder is bound into the images | the site config's `segmentation_model` and `segmentation_model_dir`; a name is required from one of the two |
 | `REGBENCH_SITE_CONFIG` | with `--prepare`: the site config the StarDist model and any override of the StarDist settings are read from when the two variables above are unset; `none` reads no file | `conf/ieo.config` of the checkout, if it is there |
 | `REGBENCH_SIF_STARDIST` | the pipeline's StarDist image (`bolt3x/mirage-stardist:1.0.0`), for the re-run only | none |
-| `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`, as the arms did); a detection threshold, only if the site's config sets one | `0`, none |
+| `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`); a detection threshold, only if the site's config sets one | `0`, none |
 | `REGBENCH_NUCLEI_FALLBACK` | `shrink`: the shrunk outline for a slide still without nuclei (the nuclei step itself is never left out: it traces the outlines) | none |
 | `REGBENCH_INPUT`, `REGBENCH_INPUTS` | `--inputs`: the cohort's samplesheet; the input folder (preprocess/, rounds.csv, outlines/) | none; `$REGBENCH_ROOT/inputs` (launch.sbatch) |
-| `REGBENCH_NF_PROFILE`, `REGBENCH_INPUTS_TIME`, `REGBENCH_INPUTS_FORCE` | `--inputs`: the pipeline's profile; the head job's time; `1` runs it again over an earlier one (moved aside) | `singularity,ieo`, `2-00:00:00`, `0` |
+| `REGBENCH_NF_PROFILE`, `REGBENCH_INPUTS_TIME`, `REGBENCH_INPUTS_FORCE` | `--inputs` and compute-all: the pipeline's profile; the head job's time; `1` runs the input step again over an earlier one (moved aside) | `singularity,ieo`, `2-00:00:00`, `0` |
+| `REGBENCH_COMPUTE_LANES`, `REGBENCH_COMPUTE_TIME` | `--compute-all` / `--compute-only`: compute-all heads in flight at once (each is a Nextflow head whose processes are jobs of their own); the time limit of one head | `2`, `7-00:00:00` |
 | `REGBENCH_NUCLEI_CPUS`, `REGBENCH_NUCLEI_MEM`, `REGBENCH_NUCLEI_TIME` | the allocation of one slide's task | `8`, `128G`, `08:00:00` |
 | `REGBENCH_SCORE_CPUS` | CPUs of one task of the per-case scoring arrays: a case's pair records are computed on that many processes. The `tissue` and `score` jobs keep 4 | `8` |
 | `REGBENCH_SCORE_MEM` | memory of one task of those arrays, and of the `tissue` and `score` jobs | `64G` |
@@ -2551,13 +2520,13 @@ reports.
   written there as soon as its `sbatch` returns): `scancel $(cat <that file>)`, and
   submit again.
 - **`REGBENCH_STAGE_QUEUE_MAX` is a total for the submission, split over the runs.** Each
-  run whose registration is several jobs per round (every STARE run, 9 on the cohort and
-  12 on a brightfield set) has a tile submitter of its own; a run's datasets follow one
+  run whose registration is several jobs per round (every STARE run, 9 on the cohort)
+  has a tile submitter of its own; a run's datasets follow one
   another, so a run is one submitter's worth of queue. The launcher divides the total by
   the number of such runs that can FEED AT ONCE: the runs it submits, or
   `REGBENCH_RUN_LANES` when that is fewer (floor, at least 1), and gives every submitter
   that share as its ceiling. Without lanes: at the default 200, 22 each on the cohort (9
-  runs) and 16 each on a brightfield set (12). With lanes (`launch.sbatch`: 4 lanes, a
+  runs). With lanes (`launch.sbatch`: 4 lanes, a
   total of 100): 25 each. The total stays a ceiling because a laned run's jobs, its
   feeders included, wait for the LAST job of the run before it on its lane, and that job
   waits for that run's last feeder, which ends only once each of its tile tasks has left
@@ -2622,8 +2591,9 @@ benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets mult
 #    be made now", then "# later, by the tile submitters: T tile task(s) ..." and
 #    "# the most in the queue at once: ... task(s)": that last number must be within the
 #    site's submit limits, "What the site must allow")
-#    ok: $REGBENCH_OUT/logs/gates/stare.tsv and ashlar.tsv read "<run> ok - 0 -";
-#        every $REGBENCH_OUT/<stare|ashlar>/multiplex/<case>/run.json has "ok": true;
+#    after it: $REGBENCH_OUT/logs/verdicts.tsv says what each run's selfcheck said (reported,
+#    never a gate)
+#    ok: every $REGBENCH_OUT/<stare|ashlar>/multiplex/<case>/run.json has "ok": true;
 #        every $REGBENCH_OUT/stare/multiplex/<case>/stages/jobs/ holds coarse.json,
 #        solve.json, stitch.json and one tile_<row>.json per tile, each "ok": true, and
 #        that run.json has info.jobs.execution "jobs", n_tiles = the tile count and
@@ -2633,7 +2603,7 @@ benchmarks/regbench/slurm/submit_cohort.sh --runs "stare ashlar" --datasets mult
 
 # 3b. only if the scoring has to be done again (a score job that ran out of time, a
 #     changed scorer): the scoring alone, for the registrations that are there. No
-#     selfcheck, gate or registration is submitted; a case whose record is still valid
+#     selfcheck or registration is submitted; a case whose record is still valid
 #     is not computed again
 benchmarks/regbench/slurm/submit_cohort.sh --score-only --datasets multiplex -- <site options>
 
@@ -2642,6 +2612,12 @@ REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --p
 benchmarks/regbench/slurm/submit_cohort.sh --preflight
 benchmarks/regbench/slurm/submit_cohort.sh --dry-run -- <site options> | less
 benchmarks/regbench/slurm/submit_cohort.sh -- <site options>
+
+# 5. the cost of the whole pipeline, per patient and backend (steps 6 and 7 of the job
+#    graph), once the benchmark is scored: alone on its lanes, then scored again
+#    (REGBENCH_INPUT = the samplesheet)
+benchmarks/regbench/slurm/submit_cohort.sh --compute-only -- <site options>
+#    (or --compute-all in the main submission: the heads then wait for its scorer)
 ```
 
 `--score-only` scores what the LAST submission into `$REGBENCH_OUT` ran or reused: its
@@ -2649,15 +2625,15 @@ id is kept in `$REGBENCH_OUT/logs/submission`. For a folder filled before that f
 written, the script takes the id its selfcheck records carry when they all carry the
 same one, and otherwise asks for `REGBENCH_SUBMISSION=<id>` (the id is printed by every
 submission as `# submission  -> ...` and is in every `run.json`, key `submissions`). The
-records are parsed, each `logs/selfcheck/<run>/selfcheck.json` by the reader the gates
-use (`python -m benchmarks.regbench submissions --out OUT`, `ladder.submissions_of`);
+records are parsed, each `logs/selfcheck/<run>/selfcheck.json` by the reader
+`verdict` uses (`python -m benchmarks.regbench submissions --out OUT`, `ladder.submissions_of`);
 until 2026-10-12 the id was searched for as text. A record that cannot be read, or that
 names no submission (a selfcheck run by hand), is evidence of none. When the id being
 scored, exported or read from `logs/submission`, is one no selfcheck record carries
 while records of other submissions are there, the script says so in a `# WARNING` line
 and goes on with the id it was given: a file of another submission is never taken for
 it. It submits `rb-settle`, the case arrays, `rb-tissue` and `rb-score`; it reads the
-gate records that submission left, and it needs `REGBENCH_SIF_STARE_REGBENCH` and
+selfcheck records that submission left, and it needs `REGBENCH_SIF_STARE_REGBENCH` and
 nothing else.
 
 `rounds.csv`'s fourth column is the patient (`group`); the `awk` line keeps the first
@@ -2761,7 +2737,7 @@ the submission it scores, and `--prepare` keeps its job ids in
 
 **One submission at a time into a results folder.** A second `submit_cohort.sh` into a
 `REGBENCH_OUT` whose earlier jobs are still pending or running is REFUSED before
-anything is touched: it would remove the gate records those jobs' tasks read. The
+anything is touched: it would replace the stage files and retry plans those jobs read. The
 refusal names the jobs and the `scancel` line. So the cohort is not submitted patient
 by patient into one folder while the first patient runs: wait for it, or give each its
 own `REGBENCH_OUT`. A queue that cannot be read (`squeue` fails) refuses too.
@@ -2786,7 +2762,7 @@ for Priority, Resources, Dependency, BeginTime, None and the QOS* and Assoc* fam
 missing the rest of the list]`). None of the following was observed:
 
 - **A job cancelled for an invalid dependency satisfies `afterany`.** The scorer waits
-  `afterany` on every array and every gate; if a cancelled job did not release it, the
+  `afterany` on every array and every selfcheck; if a cancelled job did not release it, the
   scorer would be cancelled too. Three dummy jobs show it:
   `a=$(sbatch --parsable --wrap 'exit 1'); b=$(sbatch --parsable --dependency=afterok:$a --kill-on-invalid-dep=yes --wrap true); sbatch --dependency=afterany:$b --kill-on-invalid-dep=yes --wrap 'echo ran'`:
   the second must end `CANCELLED` and the third must run.
@@ -2857,569 +2833,6 @@ missing the rest of the list]`). None of the following was observed:
 - **`%j`, `%A_%a` in `--output`** and `--export=ALL` carrying the `REGBENCH_*` variables
   into the job.
 
-## HyReCo: an external landmark set (its own tables)
-
-HyReCo is the one public dataset found in which the SAME section was imaged twice and
-annotated by hand: H&E, bleached, re-stained PHH3, scanned again, with landmarks placed
-on nuclei. It is brightfield RGB, human tongue, one lab, about 95,000 x 220,000 px per
-slide at 0.24 um. Dataset: van der Laak, Lotz, Weiss, Heldmann, IEEE DataPort 2021,
-doi:10.21227/pzj5-bs61 `[FULL: the dataset page's text, fetched 2026-10-10; no data file
-was ever opened]`. Paper: Lotz et al. 2023, J Med Imaging 10(6):067501,
-doi:10.1117/1.JMI.10.6.067501 `[PARTIAL: the Europe PMC text searched for the pixel size,
-the landmarks, the grey-scale conversion, MTRE and the observer errors, and those
-paragraphs read; figures and supplement not seen]`. Treated as CC BY-SA 4.0 (page and
-paper; the DataCite record of the same DOI says CC BY 4.0). ANHIR, whose sets are made
-of different (consecutive) sections, is a separate external set with its own section
-below.
-
-**It is never part of the cohort's results.** `score` without `--dataset` reads the
-cohort's datasets only; `score --dataset hyreco_b` writes `<out>/tables/hyreco_b/` and
-nothing else; the two kinds cannot be named in one call, in `score` or in the launcher.
-No HyReCo number is in the cohort's tables, in a paired comparison with them or in a
-ranking.
-
-### The rule: tuned on subset A, reported on subset B
-
-| dataset | what | role |
-|---|---|---|
-| `hyreco_a` | subset A's nine re-stained H&E / PHH3 pairs (ids 29, 108, 361, 464, 533, 611, 628, 644, 679) | the TUNING set: every setting is chosen here. Its tables say "nothing on this page is a result" |
-| `hyreco_b` | subset B ("HyReCo-Additional"): 54 re-stained pairs | the REPORT set: nothing is chosen on it |
-
-What can be chosen is what `prepare hyreco --subset a` takes: `--proxy` (the one-channel
-image STARE is given: `luminance`, the pre-declared default, or `haematoxylin`) and
-`--reduce` (1, or 2 for a 2 x 2 block average). A method's own options are fixed by the
-run list, as for the cohort. The split is enforced, not only stated:
-
-- A folder is accepted for a subset only when its case ids are that subset's (the two
-  lists of the dataset page, in `datasets/hyreco.py`). Subset B's folder cannot be
-  prepared as the tuning set, and subset A's cannot be reported.
-- `prepare hyreco --subset b` has no setting of its own: `--proxy` and `--reduce` are
-  refused there. It copies the settings of the prepared `hyreco_a` cases
-  (`--settings-from <cases folder>`), which must be all nine pairs under one setting.
-- Subset B cannot be prepared a second time under other settings (the cases folder is
-  refused until `hyreco_b` and its results are removed), and `score --dataset hyreco_b`
-  refuses cases of two settings, cases that name no tuning set, and a tuning set that
-  no longer carries the settings the report set was prepared with.
-- To try a second setting on subset A, prepare it into a cases folder of its own and
-  score it into an output folder of its own; then point subset B at the one chosen.
-
-**The four shared ids.** 29, 108, 361 and 464 are in both lists; no source read says
-whether they are the same slides. They are prepared in `hyreco_b`, left OUT of its
-report set (50 pairs), and kept in the pooled line over all 54 pairs, which is the
-published definition's set. `--keep-shared-ids` puts them back, for use only once the
-files have shown they are different slides; it is a setting of the A/B pair, so subset
-B takes it only if the tuning set was prepared with it.
-
-### The files, and what is assumed about them
-
-```
-HyReCo/{CD45,CD8,HE,KI67,PHH3}/<id>.tif|.csv    subset A   HyReCo.zip                    233 GB
-HyReCo-Additional/HE/<id>.tif|.csv              subset B   HyReCo-Additional-HE.zip      274 GB
-HyReCo-Additional/PHH3/<id>.tif|.csv            subset B   HyReCo-Additional-PHH3.zip    233 GB
-```
-
-Verified on the dataset page: the tree above, the two id lists, BigTIFF plus one CSV per
-image, and "Each line describes a point annotation in world coordinates (x,y,z). The
-unit is mm. The origin of the coordinate system is the upper left corner of the image."
-Verified in the paper: 0.24 um per pixel. Everything else is an assumption, listed in
-the module's docstring; each one is checked on the files and REFUSES the case when it
-does not hold:
-
-| assumed | what happens when it does not hold |
-|---|---|
-| the first TIFF series' first level is the full-resolution image, RGB, 8 bit | the case is refused |
-| landmarks are paired by line (the page implies it, does not say it) | the two files of a pair must have the same number of points, else the case is refused (never truncated). A line that is not `x,y[,z]` refuses the case wherever it is, except one header line; so does a blank line between points, and a file with more than three columns (it would have to be paired by an id) |
-| pixel = mm / pixel size, no half-pixel term | not checkable; the same convention on both slides moves both landmarks of a pair alike |
-| the pixel size is the FILE's (resolution tags in inch or cm, or `MPP = ` in the description) and agrees with the paper's 0.24 within 2 % | refused when it disagrees. A file that states none falls back to 0.24 exactly, and the summary says so in bold: 1 % of pixel size moves a landmark 50 mm from the origin by 2000 px. `--pixel-size-um` states a measured value, under the same check |
-| the two slides of a pair have one pixel size (within 0.1 %) | the case is refused |
-| every landmark lies inside its image | the case is refused: the pixel size or the origin is wrong |
-| only `HE/` (reference: scanned first) and `PHH3/` (moving) are a pair | any other folder name is refused; subset A's consecutive sections are not part of this module |
-
-A refused case is printed as `REFUSED` with the reason, the other cases are prepared,
-and `prepare` exits 1. **Look at the first prepared case before any array is
-submitted:**
-
-```bash
-python -m benchmarks.regbench.datasets.hyreco --cases $REGBENCH_CASES \
-    --dataset hyreco_a --case-id 29 --out look/
-```
-
-writes, for the first eight landmarks, the crop of each slide around its landmark, side
-by side (H&E left, PHH3 right) with a cross on it. The two crosses must sit on the same
-nucleus. If they do not, an assumption above is wrong and no number means anything.
-
-### Which methods run on it, and what each is given
-
-It is brightfield, and the rule of this benchmark holds: a method is fed as its package
-intends. `python -m benchmarks.regbench runs --dataset hyreco_b` prints the runs;
-`--excluded` prints the rest with their reasons (`methods.NO_BRIGHTFIELD` for a method
-without a brightfield rule, `variants.NOT_ON` for a run this set does not take; also in
-`hyreco_excluded.csv`). An adapter without a rule REFUSES a brightfield case in the same
-words, before it imports its package, so no method can run on a wrong channel by hand.
-
-| run | on HyReCo | what it is given |
-|---|---|---|
-| `stare` | yes | a ONE-CHANNEL PROXY of each slide, written by `prepare` (benchmark-side preprocessing, recorded in `run.json: info.input` and `benchmark_side`): `stare register` reads one channel per slide. Default: inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, which is what the dataset's authors feed their own method ("converted from color to gray scale and inverted to obtain a black background", Lotz et al. 2023 `[PARTIAL]`) and what STARE's archived harness did (`benchmarks/regbench/datasets/hyreco.py` at the tag `archive/benchmarking-2026-10-08` of sceriff0/stare, local copy `[FULL: that file]`). On a reduced proxy STARE works in the reduced frame and the adapter scales its map; the image it writes is the registered proxy |
-| `valis120`, `valis120_hires` | yes (both slides of a pair share a basename, so the adapter places them under their parent folder's name, `HE_29.tif` / `PHH3_29.tif`: "Dormant datasets", item 1, fixed); not yet run on real HyReCo slides | the ORIGINAL RGB slides, as for the cohort. VALIS decides how to process a slide from the slide itself; its default for brightfield is `preprocessing.OD` (valis-wsi 1.2.0 `registration.py:63-64` `[PARTIAL: lines 63-66, 2679-2682, 4593-4596]`). The adapter adds nothing. Whether VALIS's reader opens these BigTIFFs is not known |
-| `valis_mirage` | no | it is the pipeline's own VALIS call, and the pipeline registers multichannel fluorescence rounds only: there is no shipped brightfield configuration of it |
-| `stare_prep` | no (paused everywhere) | the row is paused in the run list for every dataset (its job is done by the regime cells of `regimes.py`), so HyReCo needs no exclusion of it any more; HyReCo keeps its own proxy settings (`prepare --proxy`) |
-| `deeperhistreg_*` (8 runs) | no | the package IS built for brightfield RGB (RegWSI reports a HyReCo result, arXiv:2404.13108, per the port's HyReCo report `[PARTIAL]`; not re-read for this section). The adapter's RGB input rule was written for ANHIR's JPEG / PNG images (R3.20) and has not been extended to these BigTIFF slides: the adapter refuses a brightfield TIFF, and the runs are left out here by name (`variants.NOT_ON`) |
-| `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | no | ruled out (R3.8). ASHLAR "requires unstitched individual tile images as input" (its README at v1.20.0, as quoted in `methods/ashlar.py` by the task that read it `[PARTIAL: lines 1-60]`; not re-read for this section) and places each tile by one translation; a pair of whole slides re-mounted between two scans is not that |
-| `palom` | no, not yet | PALOM does apply to a pair of whole slides and has colour modes of its own for an RGB slide (`palom/color.py`, `HaxProcessor`: `grayscale`, `hematoxylin`, `aec`, `dab`; palom 2026.4.1 sdist `[PARTIAL: lines 1-40]`; its `palom-align-he` command is documented for an IF reference and an H&E moving slide, per the port's PALOM report), but this adapter follows the README recipe on one channel BY INDEX: on an RGB slide that would be the red channel, chosen by nobody. Which colour mode is the input rule is undecided |
-
-So three runs, eight result rows: `stare_rigid`, `stare`, `valis120_rigid`, `valis120`,
-`valis120_micro`, `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires`.
-The selfcheck gate applies as for the cohort, but it is made on a synthetic
-FLUORESCENCE pair: it says nothing about reading RGB. The realcheck gate and the
-tissue-level block are not applied (both are defined on nuclear channels and nuclei,
-`run.json: tissue.skipped`), and there are no off-seam rows (no nuclei, and neither
-seam owner runs).
-
-### Scoring and tables (`<out>/tables/<dataset>/`)
-
-Target registration error in micrometres: a method's map moves the landmarks of the side
-it starts from (PHH3 for a moving -> reference map, H&E for a reference -> moving one)
-and each is compared with its partner, through `landmarks.error_stats`. A point a method could not map has an infinite error; a run that
-failed or never ran is scored at the unregistered pose and counted (`n_ok`).
-
-| table | one row per | columns |
-|---|---|---|
-| `hyreco_pairs.csv` | pair and variant | `dataset, case_id, group, report_set, shared_id_with_subset_a, method, frame, n_probes, n_nonfinite, tre_um_p50, tre_um_p90, tre_um_max, frac_under_1um, frac_under_2um, initial_tre_um_p50, frac_improved, fold_pct, sd_log_jac, pixel_size_um, pixel_size_source, imputed_initial, problem, cause` |
-| `hyreco_points.csv` | landmark and variant | `..., landmark, tre_um, initial_tre_um, imputed_initial` |
-| `hyreco_summary.csv` | set and variant | `dataset, set, method, n_pairs, n_ok, n_landmarks, per_pair_median_tre_um_med / _min / _max, per_pair_p90_tre_um_med, pooled_median_tre_um, pooled_p90_tre_um, pooled_frac_under_1um, pooled_frac_improved, initial_pooled_median_tre_um, n_nonfinite, fold_pct_max` |
-| `hyreco_published.csv` | quoted number | `dataset, set, method, n_pairs, n_landmarks, pooled_median_tre_um, status, conditions, source` |
-| `hyreco_excluded.csv` | run that is not run | `dataset, run, reason` |
-| `hyreco_not_run.csv` | per result name and cause: the pairs never registered for a reason that is not the method's (in no median); written only when there are some | as `anhir_not_run.csv` |
-| `hyreco_failures.csv`, `hyreco_resources.csv`, `hyreco_summary_resources.csv` | as the cohort's `failures`, `resources`, `summary_resources` | the same columns |
-| `summary.md` | | the block below |
-
-**Two aggregations, never mixed.** `per_pair_*` is each pair's median error, then the
-median, minimum and maximum over pairs. `pooled_*` is ONE median over all landmarks of
-all pairs of the set, which weights a pair by its landmark count. Sets (`set`):
-`tuning` for `hyreco_a`; for `hyreco_b`, `report` (50 pairs) and `all_pairs` (all 54).
-
-**The one published number, like for like.** Lotz et al. define "MTRE" as the median
-"over all N_images image pairs and over all available landmarks". Their own method,
-HistokatFusion (Fraunhofer MEVIS), reaches **0.9 um** deformable and 1.7 um affine on
-subset B (54 pairs, 2357 landmark pairs; best results at a pixel size <= 1.9 um;
-parameters set on ANHIR, not tuned on HyReCo), and 2.2 um on subset A's nine re-stained
-pairs at 1.0 um/px (`[PARTIAL]`, as above). The summary's "Like for like" table sets
-`pooled_median_tre_um` of every run made here on `all_pairs` beside those rows, which
-are marked **published, not reproduced here**: the software is licensed, has no public
-code, and was not run. When fewer than 54 pairs are scored the table says "NOT like for
-like". The landmark count found in the files is printed next to it (the page and the
-preprint say 2303, the paper 2357). CORE's 0.41 um is not in the table: its
-aggregation ("AMTRE") is not defined and its subset is not stated. Neither CORE nor
-HistokatFusion is run. RegWSI's 0.59 um and CORE's VALIS 2.50 um are not quoted either
-(subset or configuration unstated).
-
-**The annotation floor.** Two observers differ by 0.57 +- 0.36 um on the same section
-(intra-observer 0.53 +- 0.32 um; about 20 landmarks; Lotz et al. 2023 `[PARTIAL]`). It
-is printed above every table. A difference between two methods below about 0.5 um is
-annotation noise; no ranking is claimed.
-
-**What these numbers are not.** Not fluorescence accuracy (brightfield, and for STARE
-through a proxy); not a blind test (the landmarks are public: the frozen split is what
-makes it credible); not a reproduction of any published number (resolution, parameters
-and, for STARE, the input differ); nothing about low-contrast tissue (the authors note
-landmarks sit where contrast is high).
-
-### Running it, once the data is downloaded
-
-Download the three archives from the dataset page in a browser (it needs an IEEE
-login; nothing in this repository downloads them) and unpack them so the tree above
-exists. Subset B is two archives: its `HE/` and `PHH3/` folders are given separately.
-
-```bash
-S=benchmarks/regbench/slurm
-export REGBENCH_BIND=/data/hyreco                       # wherever the slides are
-export REGBENCH_CASES=/scratch/hyreco_cases
-export REGBENCH_SIF_STARE_REGBENCH=... REGBENCH_SIF_VALIS120=...
-
-# 1. the tuning set
-export REGBENCH_HYRECO_A=/data/hyreco/HyReCo            # holds HE/ and PHH3/
-export REGBENCH_OUT=/scratch/hyreco_out_a
-$S/submit_cohort.sh --prepare --datasets hyreco_a       # 1 job: an array of 9, one pair each
-python -m benchmarks.regbench list --cases $REGBENCH_CASES --dataset hyreco_a   # 9
-python -m benchmarks.regbench.datasets.hyreco --cases $REGBENCH_CASES \
-    --dataset hyreco_a --case-id 29 --out look/         # and LOOK at the crops
-$S/submit_cohort.sh --dry-run --datasets hyreco_a       # 25 jobs, nothing submitted
-$S/submit_cohort.sh --datasets hyreco_a
-#    -> $REGBENCH_OUT/tables/hyreco_a/summary.md
-#    another setting: a cases folder and an output folder of its own, e.g.
-#    REGBENCH_CASES=/scratch/hyreco_cases_r2 REGBENCH_OUT=/scratch/hyreco_out_a_r2 \
-#    REGBENCH_HYRECO_A_ARGS="--reduce 2" $S/submit_cohort.sh --prepare --datasets hyreco_a
-
-# 2. the report set, once, with the cases folder of the setting that was chosen
-export REGBENCH_CASES=/scratch/hyreco_cases             # the chosen tuning cases are here
-export REGBENCH_HYRECO_B_HE=/data/hyreco/HyReCo-Additional/HE
-export REGBENCH_HYRECO_B_PHH3=/data/hyreco/HyReCo-Additional/PHH3
-export REGBENCH_OUT=/scratch/hyreco_out_b
-$S/submit_cohort.sh --prepare --datasets hyreco_b       # 1 job: an array of 54
-$S/submit_cohort.sh --dry-run --datasets hyreco_b
-$S/submit_cohort.sh --datasets hyreco_b
-#    -> $REGBENCH_OUT/tables/hyreco_b/summary.md
-```
-
-`REGBENCH_HYRECO_TUNED` names the chosen tuning cases when they are not under
-`REGBENCH_CASES`. By hand, without a scheduler: `python -m benchmarks.regbench prepare
-hyreco --subset a --data-root ... --cases ...`, `run --dataset hyreco_a --method stare
---index 0`, `score --dataset hyreco_a`.
-
-What `ok` looks like. Each prepare task prints `hyreco_a/<id> -> <folder>` and
-`hyreco_a (tuning set): 1/1 case(s) prepared ...`, and exits 0; a `REFUSED` line is a
-failed task with its reason. `list` prints 9 (54). The dry run prints `# hyreco_b: 54
-case(s), 54 patient(s), at most 1 round(s) per patient`, one `# hyreco_b: <run> is not
-run (<reason>)` line per excluded run (15), and 25 `sbatch` lines: per run three
-selfcheck attempts, one gate and the four rungs of the ladder (16 / 64 / 256 / 512 GB,
-4 CPUs, an array of 54), then `rb-score-hyreco_b`. The summary then has a row per run,
-an `initial` row far above the runs that registered, and for `hyreco_b` the "Like for
-like" table. As built, only `stare` can have `n_ok` equal to `n_pairs`: both VALIS rows
-fail on every pair and are scored at the initial pose ("Dormant datasets", item 1), so
-the table is not a comparison until that is fixed.
-
-### Storage and memory to expect (none of it measured)
-
-- **Download**: 233 GB (subset A), 506 GB (subset B), no checksums published. Unpacked
-  size unknown; if the TIFFs are already compressed, about the same again. Budget
-  0.5 TB for A and 1.0 to 1.5 TB for B, or delete each archive once unpacked.
-- **Proxies** (`<cases>/_cache/hyreco_*/`): one 8-bit plane per slide, about 21 GB
-  uncompressed at 95,000 x 220,000 px, written tiled and zlib-compressed. 18 slides for
-  A, 108 for B: at most 0.4 TB and 2.3 TB uncompressed; how far compression takes that
-  down depends on how much of a slide is glass. A quarter of it with `--reduce 2`;
-  twice with `--proxy haematoxylin` (16 bit).
-- **Written images** are the larger risk. VALIS writes a registered full-resolution
-  slide per pair for `valis120`, `valis120_micro`, `valis120_hires_nonrigid` and
-  `valis120_hires` (about 63 GB each before compression); STARE one registered proxy
-  per pair. Size `REGBENCH_OUT` from the tuning set before submitting 54 pairs.
-- **Preparing**: one band of 1024 rows in memory (about 3 GB at 220,000 px wide); the
-  prepare job's 64 GB is ample. Time per slide unknown.
-- **Registering**: a slide is about 21 gigapixels, seven times a 55,000 px cohort
-  slide. STARE at stride 64 measures about 5 million windows per pair at full
-  resolution. Expect units to leave the 16 GB rung; the ladder takes each up one rung
-  per out-of-memory end, and each failed attempt costs its time. The dataset's authors
-  report more than 180 GB for their own method below about 1 um/px (`[PARTIAL]`), which
-  says nothing about these methods. `REGBENCH_TIME` (24 h per unit) may be too short.
-  Run two or three pairs of the tuning set by hand first (`run --index`), and decide
-  `--reduce` from them.
-
-## ANHIR: the challenge's training pairs (its own tables)
-
-ANHIR (Automatic Non-rigid Histological Image Registration, ISBI 2019,
-https://anhir.grand-challenge.org) registers differently stained CONSECUTIVE sections:
-481 pairs in 49 tissue sets (lung lesions and lobes, mammary glands, mouse and human
-kidney, colon adenocarcinoma, gastric, breast), at about 1 to 9 um per pixel in its
-"medium" archive. The 230 pairs marked `training` in its cover table have public
-landmarks on both images; the 251 `evaluation` pairs do not, and are not part of this
-benchmark. Sources: the challenge's Data page and Evaluation page `[FULL: saved copies of
-both, fetched 2026-10-10]`; its evaluation code, Borda/BIRL at `f1648b29` `[PARTIAL: the
-functions that compute TRE, robustness and the aggregate scores; listed in
-challenge.py]`; the challenge paper, Borovec et al. 2020, IEEE TMI 39(10),
-doi:10.1109/TMI.2020.2986331 `[MEMORY: not read for this section; nothing here rests on
-it but the citation]`. Licence CC BY-NC-SA.
-
-**What these numbers are, and are not.**
-
-- They are computed on TRAINING pairs. Published leaderboard numbers are on the hidden
-  evaluation pairs (with a training column beside them) and are **not comparable row for
-  row** with anything here. Nothing is exported for submission and no rank among
-  published methods is claimed.
-- **The `stare_prep` row's preprocessing is tuned on part of this same training set.**
-  Its tuning-side numbers are fitted; its report-side numbers come from tissue sets the
-  choice never saw, but from the same challenge's public data. Neither side is blind.
-- STARE is built for re-imaged sections that hold the same nuclei in both rounds.
-  Consecutive sections do not, and at these pixel sizes a nucleus is a few pixels: both
-  STARE rows are an out-of-domain test here.
-- It is never part of the cohort's results and never part of the default submission: it
-  runs when named, alone (`--datasets anhir`), into `<out>/tables/anhir/`.
-
-### The cases, and the split
-
-`prepare anhir --source DIR` (`DIR` holds the cover table `dataset_medium.csv`, the
-unpacked image archive under `images/` and the unpacked landmark archive under
-`landmarks/`; it is only read) writes two datasets:
-
-- `anhir`: the 230 training pairs. The cover table's `Source image` is the moving image,
-  its `Target image` the reference; landmarks are paired by row, the common prefix
-  where the two files differ in length (the official rule). Each pair is its own group:
-  a set has several targets, so VALIS registers pair by pair with the target fixed,
-  which is not how a groupwise leaderboard entry is made.
-- `anhir_tune`: the tuning-side pairs again, alone. **PAUSED** (2026-10-15) with
-  `stare_prep`, the only row that reads its result (the choice of a preprocessing
-  candidate): the cases are still written by the prepare, the runs (`TUNING_RUNS`) and
-  the selection are kept and tested, and the launcher refuses `--datasets anhir_tune`
-  unless `REGBENCH_ANHIR_TUNE=1` is exported (`variants.TUNING_PAUSED`).
-
-**The split is by tissue SET, never by pair** (pairs of one set share images, and most
-sets also hold hidden evaluation pairs), and nobody picked it: inside each tissue the
-sets are ordered by `sha256("regbench-anhir-split-v1:" + set name)`, the first
-`ceil(n / 4)` are the tuning side, and a tissue with one set is wholly on the report
-side. It is frozen in `anhir_split.json` (sha256 `c0fb810e29f2...`): **15 sets and 82
-pairs on the tuning side, 34 sets and 148 pairs on the report side.**
-
-| tissue | tuning side | pairs (tune / report) |
-|---|---|---|
-| COAD | `COAD_02`, `_08`, `_10`, `_11`, `_14` | 25 / 59 |
-| breast | `breast_3`, `_4` | 2 / 3 |
-| gastric | `gastric_2`, `_4`, `_5` | 5 / 8 |
-| kidney | `kidney_1`, `_5` | 2 / 3 |
-| lung-lesion | `lung-lesion_3` | 10 / 20 |
-| lung-lobes | `lung-lobes_2` | 10 / 30 |
-| mammary-gland | `mammary-gland_2` | 28 / 10 |
-| mice-kidney | none (one set) | 0 / 15 |
-
-`prepare` recomputes the split from the cover table and refuses a table that gives
-another; the scorer refuses cases of another split. **Headline numbers are the report
-side's.** The tuning side and both sides together are shown beside it, labelled.
-
-### Pixel size, per tissue
-
-The Data page gives one resolution per tissue, of the ORIGINAL image; the archive holds
-each set at the percentage its folder names. Micrometres per pixel are that resolution
-divided by the folder's fraction: derived arithmetic, recorded as such in every case.
-
-| tissue | original, um/px (Data page) | folder | um/px used | status |
-|---|---|---|---|---|
-| lung-lesion | 0.174 | 25 % / 50 % | 0.696 / 0.348 | derived |
-| lung-lobes | 1.274 | 100 % | 1.274 | as stated |
-| mice-kidney | 0.227 | 25 % | 0.908 | derived |
-| COAD | 0.468 | 25 % | 1.872 | derived |
-| gastric | 0.2528 | 15 % | 1.685 | derived |
-| breast | 0.2528 | 20 % | 1.264 | derived |
-| kidney | 0.2528 | 25 % | 1.011 | derived |
-| mammary-gland | 2.294 | 25 % | **none** | **NOT established: pixels only** |
-
-For the mammary glands the page states 2.294 um/pixel and, in the same paragraph, that
-the images "were acquired with the same microscope and set of acquisition parameters as
-the mice lung lobes" (1.274 um/pixel, the same 10x objective). Both cannot hold, and no
-other official source read settles it. Those 38 pairs are in every rTRE and pixel
-column and in no micrometre column (`n_pairs_um` says how many pairs a micrometre
-number rests on).
-
-### Which runs, and what each is given
-
-`python -m benchmarks.regbench runs --dataset anhir` prints them; `--excluded` the rest
-with reasons (also in `anhir_excluded.csv`). Eight runs, 18 result names.
-
-| run | on ANHIR | what it is given |
-|---|---|---|
-| `stare` | yes | each image as ONE channel, written by `prepare`: **inverted luminance, `255 - (0.299 R + 0.587 G + 0.114 B)`, 8 bit, full resolution** (`prep.grey_plane`). `stare register` reads one channel per slide, so this conversion is part of the benchmark's input, not STARE's. The image it writes is that grey image, registered. For the mammary glands STITCH's header gets a placeholder pixel size of 1.0 (STARE uses the pixel size for nothing else) |
-| `stare_prep` | PAUSED (not run) | the frozen candidate of `prep.py` instead of that grey image; STARE unchanged; the image it writes is the same plain grey image moved by its own transform |
-| `valis120`, `valis120_hires` | yes | the ORIGINAL RGB images (JPEG; PNG for the lung lobes), as for the cohort: upstream defaults, the target as the reference. VALIS picks its own brightfield processing. Never executed here; whether its reader opens these files as the adapter places them is by reading only |
-| `deeperhistreg_gpu`, `_cpu`, `_hr_gpu`, `_hr_cpu` | yes | the RGB image WHOLE, with the shipped parameter set as it stands (see below) |
-| `deeperhistreg_*_fluo_*` (4 runs) | no | `fluo=1` is the benchmark's configuration for a fluorescence channel (a black pad, no intensity flip); on RGB the shipped parameters are the ones to run |
-| `valis_mirage` | no | the pipeline's own VALIS call registers multichannel fluorescence rounds only |
-| `ashlar` (4 runs) | no | ASHLAR stitches unstitched tiles by one translation each; two whole images of two sections are not its input |
-| `palom` | no | the adapter follows PALOM's README recipe on one channel by index (on RGB: the red channel, chosen by nobody); which of PALOM's own colour modes would be the input rule is undecided, and its README describes it as made for re-imaged slides of the same section |
-
-**DeeperHistReg's brightfield input rule**, from its own repository (MWod/DeeperHistReg
-main @ `42e7c9d` `[PARTIAL: README.md:1-128, registration_params.py:484-520 and 652-690,
-tiff_loader.py:20-120, general_preprocessing.py:1-66, dhr_utils/utils.py:25-37 and
-374-375, input_output.py; never executed]`): the package takes the source and the target
-image by path; the shipped sets load through `'tiff'` (`pyvips.Image.tiffload`), pad
-with 255, normalise each channel to its own range, convert to grey, invert and apply
-CLAHE. So the adapter hands over the RGB image, three 8-bit channels, values untouched,
-and changes no parameter beyond the two every row changes (device, `save_final_images`).
-Its one benchmark-side step is the container: each JPEG / PNG is decoded and written as
-a tiled, uncompressed RGB TIFF with one top-level page (clock paused, `convert_s`),
-because the shipped loader reads TIFF; switching the loader to the package's `'pil'`
-one would have been a changed parameter. The package's writer then draws the RGB image
-once and its own file is kept.
-
-The selfcheck gate applies as for the cohort, on a synthetic FLUORESCENCE pair: it says
-nothing about reading RGB. No realcheck gate, no tissue-level block, no off-seam rows
-(all three are defined on nuclei).
-
-### The `stare_prep` preprocessing: candidates, criterion, what is frozen
-
-STARE is not changed. Before it runs, both images are rewritten as one-channel files by
-one candidate; STARE registers those; the transform is applied to the original.
-
-| candidate | on an RGB image | on one channel (DAPI, synthetic) |
-|---|---|---|
-| `grey` | inverted luminance, nothing else (= the `stare` row) | identity (= the `stare` row) |
-| `haem` | the haematoxylin channel of a colour deconvolution (`skimage.color.rgb2hed`, channel 0, clipped to [0, 0.255], 8 bit) | identity: there is no colour to separate |
-| `grey_clahe` | CLAHE on `grey` | CLAHE on the channel |
-| `haem_clahe` | CLAHE on `haem` | CLAHE on the channel (the same as `grey_clahe`) |
-| `grey_smooth` | a Gaussian, sigma 2 px, on `grey` | the same Gaussian on the channel |
-
-CLAHE is OpenCV's, clip limit 2.0, contextual regions of 256 px, on 8 bits; a 16-bit
-channel is first mapped linearly to 0..255 between 0 and its own 99.9th percentile, so on
-the cohort the CLAHE candidates also reduce DAPI to 8 bits (stated, not hidden). The
-list is closed and was declared before any run. Why these five: `grey` so the choice
-can end on "nothing helps"; `haem` because the counterstain is the one signal two stains
-may share (whether every stain of these sets has one is not established by any source
-read); CLAHE to even out a pale and a dark section; `grey_smooth` to drop detail that
-consecutive sections do not share. No candidate resamples, crops or shifts:
-`prep.frame_check` measures, before every case, how far each candidate moves drawn dots
-(gate 0.02 px) and the run is refused otherwise, and the output's shape must be the
-input's. The selfcheck of the row compares, as for `stare`, the points with the image
-STARE's writer draws.
-
-**Criterion** (`prep.CRITERION`), on the tuning-side pairs only: the lowest median over
-pairs of the per-pair median rTRE, a pair that did not register counting at its
-unregistered landmarks; ties by the higher mean robustness, then by the order of the
-list. One candidate for all tissues.
-
-**Frozen today: `grey_clahe`, PROVISIONAL.** The selection has not been run. That value
-was chosen by no evidence, only because it is not the identity on either modality, so
-the row can be told from `stare` everywhere. To run the selection:
-
-```bash
-S=benchmarks/regbench/slurm; export REGBENCH_ANHIR=/data/anhir   # dataset_medium.csv, images/, landmarks/
-#    REGBENCH_ANHIR stays exported for EVERY step below: the cases name the original
-#    images inside it, and it is bound into every image from that variable (a run that
-#    cannot read them is refused at its start, cause `infrastructure`, not the method's)
-export REGBENCH_CASES=/scratch/anhir_cases REGBENCH_OUT=/scratch/anhir_out   # of their own
-$S/submit_cohort.sh --prepare --datasets anhir      # 230 tasks; writes anhir AND anhir_tune
-export REGBENCH_ANHIR_TUNE=1                        # the tuning side is PAUSED: asked for by name
-$S/submit_cohort.sh --dry-run --datasets anhir_tune && $S/submit_cohort.sh --datasets anhir_tune
-#    the five candidates on the 82 tuning pairs, each behind its own selfcheck
-#    -> $REGBENCH_OUT/tables/anhir_tune/summary.md (nothing in it is a result)
-python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT"            # the table
-python -m benchmarks.regbench prep-select --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --freeze   # writes prep_frozen.json
-#    put benchmarks/regbench/prep_frozen.json under version control: the choice, with its evidence table
-$S/submit_cohort.sh --datasets anhir                # every run ANHIR takes, on all 230 pairs
-#    -> $REGBENCH_OUT/tables/anhir/summary.md
-```
-
-`prep-select` refuses to choose while any candidate lacks a result on any tuning pair,
-or while the prepared tuning side is not the whole of the split's. The run list names
-the candidate itself (`prep=<candidate>`), and a reused result must have the same
-options: a `stare_prep` result made with another candidate, on the cohort too, is run
-again, never reused. A cohort submitted BEFORE the selection carries `stare_prep` rows
-made with the provisional candidate (marked in `run.json: info.prep.frozen` and in the
-summary); resubmitting after the freeze re-runs that one run.
-
-A pilot on this laptop (two tuning pairs of one set, `mammary-gland_2`; all five
-candidates through the installed STARE 1.2.1, about a minute each) ran end to end and
-is the proof that the machinery works, nothing more: two pairs choose nothing.
-
-### Scores and tables (`<out>/tables/anhir/`)
-
-Per pair, by the challenge's definitions (`challenge.py` cites the page and the code):
-TRE is the distance between a landmark's target position and its position after
-registration; **rTRE** is TRE over the diagonal of the target image; **robustness** is
-the share of a pair's landmarks whose TRE is strictly below their initial TRE. Per group,
-the official aggregates: the mean and the median over pairs of the per-pair median, mean
-and maximum rTRE and of robustness, and the same over the "robust" pairs (robustness
-above 0.5). Beside them, the landmark error in micrometres where the pixel size is
-established, and in pixels everywhere.
-
-**Failures, the official way and apart.** "All missing or incomplete registrations in
-the submission are considered to have the initial rTRE": a pair the METHOD did not
-register counts at its unregistered landmarks with robustness 0 in every official
-column, and a landmark returned as non-finite counts at its unregistered position.
-`n_failed`, `n_nonfinite`, the `*_registered` columns (the same statistic over the pairs
-that did register) and `anhir_failures.csv` show them separately. In the micrometre
-column a pair that lost most of its landmarks has an infinite median and COUNTS (it is
-the worst there is); only a pair without a pixel size is left out of it.
-
-**Not run is not failed.** A pair that was never registered for a reason that is not the
-method's is in NO median: its run was blocked by its selfcheck gate (the scorer reads
-the launcher's gates, as the cohort's does), its task never started, the attempt was
-lost to the scheduler or to the benchmark's own step, or its images could not be read
-where the run was (`infrastructure`: the source folder not bound into the image). Such
-pairs are counted (`n_not_run`), listed by cause in `anhir_not_run.csv` and in a block
-of `summary.md`; a row with no other pair is in no table at all, so a blocked run can
-never read as "fails on every pair". This is a departure from the challenge's rule for
-those pairs only, and it is why `n_pairs` can be below the side's pair count.
-
-**Frame.** STARE maps moving to reference: its numbers are the challenge's own quantity.
-VALIS and DeeperHistReg map reference to moving: the target landmarks are moved into the
-source image and compared there, exactly and with no inverted transform, but in the
-source image's pixels (column `frame`; the summary names those rows). A pair that did
-not register has no map of its own: its row takes the frame of the same result name's
-registered pairs, else the direction its run record declares, else `unknown`; never a
-default, so a failed pair of a reference -> moving method is not called the challenge's
-quantity.
-
-Not computed: the challenge's ranking criterion (a method's average RANK by median rTRE
-among all submitted methods), which needs the other methods' results on the same pairs.
-
-| file | content |
-|---|---|
-| `summary.md` | the report side first, then the tuning side, then both; what these numbers are not; the frozen preprocessing and whether it is provisional |
-| `anhir_pairs.csv` | one row per pair and result name: `rtre_median/mean/max`, `robustness`, `tre_um_p50/p90`, `tre_px_p50`, `frame`, `failed`, `cause` |
-| `anhir_summary.csv` | one row per side (`report`, `tune`, `all`), tissue (each, and `all`) and result name: the official aggregates, the robust subset, the registered-only columns, micrometres |
-| `anhir_by_set.csv` | the same per tissue SET, with the set's side |
-| `anhir_failures.csv`, `anhir_resources.csv`, `anhir_summary_resources.csv` | failures and cost, as for the cohort |
-| `anhir_excluded.csv` | the runs left out, each with its reason |
-| `anhir_not_run.csv` | per result name and cause: the pairs never registered for a reason that is not the method's (in no median) |
-| `anhir_prep_evidence.csv` | `anhir_tune` only: the candidates in the criterion's order |
-
-### Not verified (nothing of this ran outside this laptop)
-
-- **No ANHIR pair was registered by VALIS or DeeperHistReg** (neither is installed
-  here). By reading only: that VALIS 1.2.0 reads the JPEG / PNG files as placed; that
-  `pyvips.Image.tiffload` reads the adapter's RGB TIFF as three bands; that the package's
-  writer writes a three-channel file of the reference's size; every DeeperHistReg
-  number on RGB.
-- **Only 57 of the 245 images are unpacked on the laptop** (22 of the 49 sets). The
-  cover table, all 160 landmark files and the split were checked in full; the prepare
-  of the other 172 pairs was not.
-- **The selection.** Five candidates on 82 pairs have not run. Time and memory per pair
-  on the cluster are unmeasured; the laptop's pairs (20 megapixels) took about a minute
-  with 4 workers, and the largest images are 258 megapixels.
-- **CLAHE on a cohort slide** (about 2 gigapixels, 16 bit): the block-wise code is
-  tested for independence of the block size on small images only; its time and memory
-  on a whole slide are unmeasured (it runs with the clock paused, `info.prep.prep_s`).
-- The mammary glands' pixel size.
-
-## Dormant datasets: known defects before any use
-
-`hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
-and its tests are kept, the default submission never includes them, and
-`submit_cohort.sh --datasets <name>` is the only way to submit one. The independent
-review of 2026-10-11 found the defects below. **Those the subsection does not list as fixed are open.** Each must be
-fixed, or ruled acceptable by the owner, before a number from that dataset is read. Where
-a sentence elsewhere in this README disagrees with this section, this section is right.
-
-### `hyreco_a`, `hyreco_b` (review items 1 and 10)
-
-Three of the defects found are fixed (C6): same-basename slides, the settings hash and
-the A/B split's coverage, and a run that never started. **A HyReCo cases folder prepared
-before the fix must be prepared again**: the settings hash now covers `pixel_size_um` and
-`keep_shared_ids` (settings version 2), so an older folder's hash no longer matches and
-`prepare --subset b` and `score` (both `hyreco_a` and `hyreco_b`) refuse it by name. The dataset is dormant, so no live
-data is affected. What is left:
-
-- **The A/B split is enforced per cases folder only, and the method's configuration is
-  not frozen.** `run --dataset hyreco_b --opt ... --label ...` is accepted, and the
-  scorer scores any result folder it finds. Several B folders can be prepared from
-  several A settings; each prints "REPORT SET. Nothing was chosen on it."
-- A refused pair leaves every denominator instead of being scored at the initial pose;
-  only the like-for-like block notices.
-- `--reduce` is in effect a STARE hyperparameter (it doubles the lattice and the capture
-  range in micrometres). VALIS has no equivalent, and its primary row there is the one
-  most likely to end for memory on 21-gigapixel slides.
-
-What changed:
-
-1. **Same-basename slides.** A HyReCo pair is `HE/<id>.tif` and `PHH3/<id>.tif`. Where a
-   patient's slides share a basename, `methods/_valis_points.py::place_slides` places
-   EVERY slide under its parent folder's name in front (`HE_29.tif`, `PHH3_29.tif`), so
-   VALIS sees two slides; `patient_slides` refuses only a moving slide that is the
-   reference file itself, or names that still clash after the prefix. The mapping is
-   `info.slides_source` in each VALIS `run.json` (`{placed name: source path}`); the
-   adapters find a slide by its source path, so nothing else changed.
-   **This is general, not HyReCo's alone**: a group whose rounds share one basename is
-   placed under its folders' names (`<folder>_mov`), and a result is found by the case.
-   Two cases that name one moving file are still refused.
-2. **The settings hash** holds `{proxy, reduce, version, pixel_size_um,
-   keep_shared_ids}`. `prepare hyreco --subset b` refuses a `--pixel-size-um` or
-   `--keep-shared-ids` that the tuning set did not carry (both flags are accepted on
-   `--subset a`, where they are recorded; on A `--keep-shared-ids` changes nothing). `score
-   --dataset hyreco_b` refuses when the tuning folder its cases name is absent.
-3. **A blocked or never-started run** is listed apart (`hyreco_not_run.csv`, and a block
-   in `summary.md`) and is in no median (`n_not_run`), exactly as ANHIR's scorer does:
-   the shared definition is `regbench/notrun.py` (`NOT_RUN_CAUSES`, `settle_frames`,
-   `not_run_rows`, `blocked_rows`), whose causes agree with `failure_log.WHOSE`
-   (launcher, infrastructure, and the benchmark's own). `score` reads the launcher's gate
-   records (`--gates`). A pair the method itself failed on still counts at the
-   unregistered pose, and its frame is the one of the row's registered pairs, else the
-   run's declared direction, else "unknown", never `reference` by default.
-
 ## Caveats that travel with the results
 
 1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
@@ -3440,40 +2853,39 @@ What changed:
 4. **Self-consistency, not accuracy** on real slides.
 5. **The ladder:** methods need not finish at the same rung, so they need not have had the
    same memory request; the tables show each run's rung.
-7. **About a fifth to two fifths of ASHLAR's nuclei are scored through an interpolated
+6. **About a fifth to two fifths of ASHLAR's nuclei are scored through an interpolated
    map** (the tile overlaps; see "ASHLAR", "What the overlap bands cost"). It has no bias
    when a round needs only a translation, and it is optimistic for ASHLAR when a rotation
    is left inside its tiles: at 0.5 degrees, 5.2 px of map error against 8.8 px for the
    copies the image shows. The selfcheck masks exactly those points. The
    `<variant>:non_ashlar` rows are the measure of how much it matters.
-8. **DeeperHistReg's primary row follows its writer, not its registration.** By the
+7. **DeeperHistReg's primary row follows its writer, not its registration.** By the
    adapter's reading the written image sits half a field pixel right and down of the
    registration: 2.5 px (0.81 µm) per axis, 1.15 µm along the diagonal, at the primary
    8192 px set; 4.9 px (1.59 µm) per axis at the 4096 px set. `within_1um` of
    `deeperhistreg_hr_gpu_asdrawn` can therefore be low with a perfect registration. The
    estimated-field row `deeperhistreg_hr_gpu` beside it shows the registration itself.
-9. **The cohort's "nuclei" are StarDist nuclei grown by 10 px** ("What the cohort's nuclei
+8. **The cohort's "nuclei" are StarDist nuclei grown by 10 px** ("What the cohort's nuclei
    are"): Dice and `within_1um` have a ceiling that is not registration, the same for
    every method.
-10. **No ranking is statistically supported.** The paired differences carry a bootstrap
+9. **No ranking is statistically supported.** The paired differences carry a bootstrap
    interval over patients, which is coarse with few of them; there is no test and no
    p-value.
-11. **The tissue-level block is secondary**: ACCREDIT's score on same-modality
+10. **The tissue-level block is secondary**: ACCREDIT's score on same-modality
    fluorescence, outside what it was validated for, by its released code where that
    differs from the preprint's text. It ranks nothing.
-12. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
+11. **Nothing here has run on the cluster.** The cgroup counter path and whether a site
    confines cores are unverified.
+12. **Compute-all is at the shipped defaults and may differ from the site's production
+   settings.** The full-pipeline cost (`pipeline_cost*.csv`, secondary) runs the pipeline
+   with `seg_method=stardist` and `pixel_size=0.325` (rulings) and everything else at the
+   shipped defaults and the site profile; registration is at the shipped tier
+   `memory_mode='high'` unless the site profile overrides it. A site that runs production
+   at another tier, another segmenter or another resource profile has another cost. The
+   `all` row's wall time is a sum over patients that includes SLURM queue time, and the
+   realtime-based CPU-h does not; the two clocks are never added.
 
 ### STARE (`methods/stare.py`)
-
-**Two rows.** Everything below is the `stare` row. The `stare_prep` row is the same
-adapter with `--label stare_prep --opt prep=<frozen candidate>`: both images are first
-rewritten by `prep.py` (a job of its own before COARSE, with the benchmark's allocation:
-4 CPUs, 16 GB; `info.prep`), STARE registers those files at index 0 with the same
-parameters in the same jobs, and STITCH draws what the plain row draws (the original
-moving slide; on a brightfield case its plain grey image) with this row's transform. A label and its option come together: `stare_prep` takes the frozen candidate
-and no other, `stare_prep_<candidate>` (ANHIR's tuning runs) that candidate, and `prep`
-without one of these labels is refused. See "ANHIR: the challenge's training pairs".
 
 **STARE runs the way the pipeline runs it** (`subworkflows/local/adapters/tiled_adapter.nf`):
 per moving round, `stare coarse`, then one `stare reg-tile` process per tile, then
@@ -3541,7 +2953,7 @@ table and `test_stages.py` works each number out again from the text of
   `regbench run` touches no record and ends with `REGBENCH_END ... status=lost
   cause=not_submitted whose=launcher`, and nothing is registered in the stage jobs'
   place. `run.json: info.jobs.execution` names the launcher that ran. The selfcheck
-  therefore gates the path the cohort's results are made by: the same commands, the
+  therefore checks the path the cohort's results are made by: the same commands, the
   same records, the same collector.
 - **Both launchers give one transform.** `test_stages.py` registers the 2048 x 2560
   pair through `regbench stage`, one call per stage as `slurm/stage.sbatch` makes it,
@@ -3974,11 +3386,11 @@ term of the wrong sign are each reported `inconsistent` (`test_ashlar_adapter.py
 **Not checked by reading alone:** nothing here has run ASHLAR. Unverified until the
 selfcheck runs in the image: that ASHLAR 1.20.0 stitches the noisy tiles of the selfcheck
 pair at all; how often the clean rows raise on the cluster's BLAS; the rounding of
-`scipy.ndimage.shift` at the pinned SciPy against the 0.15 px gate; run time and memory.
+`scipy.ndimage.shift` at the pinned SciPy against the 0.15 px threshold; run time and memory.
 
 **First commands in the image** (`labsyspharm/ashlar:1.20.0`, from the repository root,
 with the pinned STARE release, `tifffile` and `zarr` importable: `benchmarks/ashlar`
-imports `stare.manifest`, as `run_ashlar_original_arm.sh:63-80` arranges):
+imports `stare.manifest`):
 
 ```bash
 python -m benchmarks.regbench selfcheck --method ashlar --mask overlap --work W/ashlar
@@ -4000,14 +3412,12 @@ mosaic); in each entry, `variants.<row>.reference.status` is `ok` too and `maske
 is at most 0.50 (expected 0.19 to 0.28, anchored rows 0.20 to 0.25: see "selfcheck"). A
 clean row may end `crashed` with
 ASHLAR's `correlation > total_amplitude`: that is the known numerical failure, it is
-published, and it does not block (`ashlar_clean` is gated on `ashlar`'s check,
+published and reported (`ashlar_clean` is checked by `ashlar`'s selfcheck,
 `affine_ashlar_clean` on `affine_ashlar`'s: the point-map code is the same).
 
 ### DeeperHistReg (`methods/deeperhistreg.py`)
 
-**On a brightfield case (ANHIR)** the adapter hands the package the RGB image whole,
-with the shipped parameters: "ANHIR: the challenge's training pairs", "Which runs, and
-what each is given". Everything below describes the cohort's one-channel path.
+Everything below describes the cohort's one-channel path.
 
 **The software is DeeperHistReg 1.0.1; the method is RegWSI** (Wodzinski et al. 2024,
 doi:10.1016/j.cmpb.2024.108187). There is no separate RegWSI code: the paper says the
@@ -4027,8 +3437,8 @@ writer is run afterwards, outside the clock, as the package's own example does).
 
 | rows | factory | working size (short side) | in the paper |
 |---|---|---|---|
-| `deeperhistreg_gpu`, `_cpu` | `default_initial_nonrigid` | 4096 px, 8 levels, 900 iterations | the 4096 px point of its resolution ablation: 1.01 µm median error on re-stained HyReCo |
-| `deeperhistreg_hr_gpu`, `_cpu` | `default_initial_nonrigid_high_resolution` | 8192 px, 9 levels, 1100 iterations | the resolution of its 0.59 µm result on re-stained HyReCo |
+| `deeperhistreg_gpu`, `_cpu` | `default_initial_nonrigid` | 4096 px, 8 levels, 900 iterations | the 4096 px point of its resolution ablation: 1.01 µm median error on the paper's re-stained-tissue landmark set |
+| `deeperhistreg_hr_gpu`, `_cpu` | `default_initial_nonrigid_high_resolution` | 8192 px, 9 levels, 1100 iterations | the resolution of its 0.59 µm result on that set |
 | the same four with `_fluo` | the same, plus `pad_value = 0` and `flip_intensity = False` | | not in the paper: configured by the benchmark |
 
 - **These are the shipped sets, not the paper's.** The paper's exact parameters are not
@@ -4068,9 +3478,11 @@ writer is run afterwards, outside the clock, as the package's own example does).
   one, `deeperhistreg_hr_gpu_asdrawn`, by the user's ruling of 2026-10-11 (it is the
   resolution of the paper's headline result); the 4096 px rows stand beside it in every
   table. `variants.PRIMARY_DEEPERHISTREG` is the one line that names it.
-- **The selfcheck gate reads the `_asdrawn` row only** (`variants.gate_variants`). The
-  estimated-field row is still checked and reported; when it alone fails it is left out
-  of the results and the method runs.
+- **The selfcheck status is read from the `_asdrawn` row only**
+  (`variants.CHECKED_BY_SUFFIX`). The estimated-field row is still checked and reported,
+  with its own verdict beside it (`selfcheck_row`); it is never left out, whatever the
+  check says (option A: the as-drawn row is primary and the estimated-field row is kept
+  beside it).
 
 **Inputs.** The package does not read OME-TIFF (issue #4 `[FULL]`) and its TIFF loader
 counts top-level pages as pyramid levels (`tiff_loader.py:34-38`). Each slide's nuclear
@@ -4307,10 +3719,10 @@ down-factors differ), in files with 2048 px tiles, the cohort's layout: 16384 x 
 so the blocks are the 2048 px ones of the cohort row. If under 10 %
 of the blocks have a shift of at least 0.5 px (`MIN_SHIFT_PX`; `run.json:
 info.shift_meaningful_fraction`) the `palom` variant is `not_checked`: the block map
-then equals the affine map to within the gate and a wrong sign or block order could not
+then equals the affine map to within the threshold and a wrong sign or block order could not
 show. Until 2026-10-11 the guard counted every non-zero shift, which a block filled from
 PALOM's regression with a few hundredths of a pixel satisfies while testing nothing; at
-0.5 px a reversed sign moves a dot by 1 px, 2.5 times the gate.
+0.5 px a reversed sign moves a dot by 1 px, 2.5 times the threshold.
 
 What the dots cannot see, and what covers it:
 
@@ -4373,13 +3785,6 @@ answers (identical, a known shift, a known rotation, concentric discs, a blank i
 image off the reference grid, a bright fill outside the valid box), the reduction against
 `cv2.INTER_AREA` and a brute-force integral, and the block's place in the scorer with fake
 methods that write images; it needs OpenCV and skips without it.
-`test_hyreco.py` writes stand-in files in the dataset page's layout (small RGB TIFFs,
-millimetre CSVs) and checks the module's rules on them: the subset split, pairing by
-line, the millimetre conversion, every refusal, the two aggregations, the tables'
-separation from the cohort's; it registers one stand-in pair with the installed STARE
-(at full resolution and on a 2 x reduced proxy) and runs the VALIS 1.2.0 adapter on a
-brightfield case against `fake_valis.py`. `test_submit_hyreco.py` reads the job graph
-of `submit_cohort.sh --datasets hyreco_b` off its dry run.
 `test_nuclei_sets.py` checks the two polygon sets on hand-made squares (a nucleus inside
 each outline): the contract and its backward compatibility, the driver moving both, the
 nuclei's own gate, the seam mask by inheritance and by geometry, the side-by-side lines
@@ -4388,16 +3793,12 @@ the slide is used, one of another size or another frame is refused with the reas
 rendered `segment.py` call against `nextflow.config` and `conf/modules.config`, and the
 re-run itself against a STAND-IN `segment.py` that writes the two masks under the real
 script's names (StarDist is not installed here; the real script was never executed).
-`test_anhir.py` builds a stand-in for the challenge's folder (a cover table, small JPEG /
-PNG images, landmark files) and checks the split and its hash, the roles, the common
-prefix, the pixel sizes, the grey conversion, the run lists, the scores against a
-transcription of the official evaluation's functions, failures, the tables' wording and
-the choice of the preprocessing with its refusals; one test reads the real cover table
-when it is on this machine and skips otherwise. `test_prep.py` checks every candidate
-(no shift, independence of the block size, the identity where stated), the frozen file,
-and registers one synthetic pair three times with the installed STARE (plain, the
-identity candidate, CLAHE). `test_submit_anhir.py` reads the job graphs of
-`--datasets anhir` and `--datasets anhir_tune` off the dry run.
+`test_compute_all.py`, `test_trace.py` and `test_params_json.py` check compute-all on generated Nextflow
+traces (the tables, the pins against the schema, the plan of the runs, the `-params-file`),
+`test_inputs_launcher.py`, `test_manifest.py`, `test_outline_definition.py` and
+`test_scene.py` the input step, the manifest and the outline definition, and
+`test_docs_are_cohort_only.py` that this README, `benchmarks/README.md` and `docs/benchmarks.md`
+name nothing that was removed and only `submit_cohort.sh` flags that exist.
 `test_selfcheck.py` runs STARE once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's selfcheck on its own two pairs and two real
 registrations; `test_stages.py` registers the 2048 x 2560 pair stage by stage, as the

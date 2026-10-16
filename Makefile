@@ -11,7 +11,7 @@
 #   nf-test installed (https://www.nf-test.com/)
 #   Docker running (for real/integration tests)
 
-.PHONY: testdata test test-stub test-real test-integration test-python test-validation test-lint test-all clean-test help
+.PHONY: testdata test test-stub test-real test-integration test-python test-validation test-lint test-all clean-test help regbench-test regbench-runs regbench-dry
 
 # Default target
 test: test-stub test-python
@@ -28,6 +28,9 @@ help:
 	@echo "  make test-all          Run everything"
 	@echo "  make testdata          Generate test data"
 	@echo "  make clean-test        Remove test artifacts"
+	@echo "  make regbench-test     The full regbench (benchmarks/) test suite"
+	@echo "  make regbench-runs     regbench's run list (python -m benchmarks.regbench runs)"
+	@echo "  make regbench-dry      regbench's launcher dry run (submits nothing)"
 
 # Generate test data (prerequisite for all test targets)
 testdata:
@@ -80,3 +83,17 @@ clean-test:
 	rm -rf .nf-test test_results test_results_stub test_results_full
 	rm -rf work/ .nextflow.log* .nextflow/
 	@echo "Test artifacts cleaned"
+
+# regbench, the official benchmarking harness (benchmarks/regbench/README.md).
+# REGBENCH_STARE_SRC: a STARE source tree that has the stare-prep-mosaic modules the
+# benchmark tests import; override it for another checkout.
+REGBENCH_STARE_SRC ?= /Users/valer/Desktop/Github/packages/stare-prep-mosaic/src
+
+regbench-test:
+	PYTHONPATH=$(REGBENCH_STARE_SRC) python -m pytest benchmarks/tests -q -p no:cacheprovider
+
+regbench-runs:
+	python -m benchmarks.regbench runs
+
+regbench-dry:
+	bash benchmarks/regbench/slurm/submit_cohort.sh --dry-run

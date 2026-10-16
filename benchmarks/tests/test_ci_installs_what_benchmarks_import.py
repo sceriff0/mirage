@@ -2,10 +2,10 @@
 
 WHY THIS EXISTS. On 2026-08-26 and 2026-08-27 the stare-bench job failed in ~25 s with
 `Interrupted: 4 errors during collection` and exit code 2. Nothing was wrong with any
-test: a benchmarks module imported sklearn and a test imported
-matplotlib (both since removed with the analysis layer), and the job's `pip install` line named neither. pytest died during COLLECTION,
-so ZERO tests ran -- and the run looked like an ordinary red build rather than a job that
-never started. It stayed that way for five days.
+test: a benchmarks module imported sklearn and a test imported matplotlib (both modules
+have since been removed, with the analysis layer), and the job's `pip install` line named
+neither. pytest died during COLLECTION, so ZERO tests ran -- and the run looked like an
+ordinary red build rather than a job that never started. It stayed that way for five days.
 
 This is the CI-side twin of tests/test_fixtures_have_a_producer.py: a test can only run
 where the thing it needs exists. That guard covers fixtures; this one covers imports.

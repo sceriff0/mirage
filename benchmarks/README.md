@@ -1,8 +1,18 @@
 # Mirage benchmarking
 
-`regbench` (`benchmarks/regbench/`) is the only benchmarking harness. Its own
-README is `benchmarks/regbench/README.md`; this file only points there and
-records what was removed.
+`regbench` (`benchmarks/regbench/`) is the official, and the only, benchmarking harness.
+It runs registration methods (STARE, VALIS, DeeperHistReg, ASHLAR, PALOM), each through its
+own entry point and its own shipped parameters, on the user's cyclic-IF cohort, and judges
+them on the same nuclei: pairing, Dice, displacement, and registration-only cost, plus the
+cost of the whole pipeline per patient and backend (compute-all). The selfcheck and the
+realcheck are reported and never gate a run.
+
+- Its README is `benchmarks/regbench/README.md`: the design, every number's definition,
+  the cluster launcher (`slurm/submit_cohort.sh`) and the caveats. This file only points
+  there and records what was removed.
+- The overview page of the documentation is `docs/benchmarks.md`.
+- `make regbench-test`, `make regbench-runs` and `make regbench-dry` run its tests, print
+  its run list and print the launcher's dry run.
 
 ## Removed harnesses
 
