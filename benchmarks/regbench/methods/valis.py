@@ -78,6 +78,7 @@ from pathlib import Path
 import numpy as np
 
 from . import _valis_points as vp
+from . import require_fluorescence
 
 SCOPE = "group"
 VARIANTS = ("valis_rigid", "valis", "valis_micro")
@@ -222,6 +223,8 @@ def register_group(cases, work, opts):
         )
     stage_images = vp.truthy(opts.get("stage_images", 0))
     mon = vp.monitor_of(opts)
+    for case in cases:
+        require_fluorescence(case, "valis")  # before valis is imported
 
     # matplotlib (imported by valis) builds a font cache under $HOME, read-only on a node
     os.environ.setdefault("MPLCONFIGDIR", str(work / "mplconfig"))

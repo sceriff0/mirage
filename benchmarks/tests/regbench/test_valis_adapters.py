@@ -1316,3 +1316,15 @@ def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
         assert "vp.place_slides(" not in source
     for name in ("valis", "valis_mirage"):
         assert "info.place_s" in cost.CLOCK[name]["reading"]
+
+
+# ── a brightfield case is not part of this benchmark ──────────────────────────
+@pytest.mark.parametrize("module", [valis120, valis_mirage])
+def test_a_brightfield_case_is_refused(tmp_path, pair, module):
+    import dataclasses
+
+    cases = [
+        dataclasses.replace(c, modality="brightfield") for c in patient(tmp_path, pair)
+    ]
+    with pytest.raises(ValueError, match="brightfield cases are not part of this"):
+        next(iter(module.register_group(cases, tmp_path / "work", {})))

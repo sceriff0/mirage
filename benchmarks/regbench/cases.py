@@ -80,7 +80,7 @@ class Case:
     mov_nuclear: str
     ref_image: str  # what a method that reads the original modality should use
     mov_image: str
-    modality: str  # "fluorescence" | "brightfield"
+    modality: str  # "fluorescence": every adapter refuses another (require_fluorescence)
     diagonal: float  # of the reference image, px
     pixel_size_um: float | None = None
     ref_hw: list | None = None  # full-resolution (H, W) of each slide
