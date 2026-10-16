@@ -718,34 +718,17 @@
   <section class="panel">
     <span class="plabel">g</span>
     <div class="panel-head"><h2>Benchmarking</h2>
-      <p><code>regbench</code> (<code>benchmarks/regbench/</code>) is the benchmarking harness. It changes no
-        pipeline code: it judges registration methods on the cohort and traces the unmodified pipeline. The
-        signals and tables below are those of the earlier parameter-sweep harness (git tag
-        <code>archive/benchmarks-arms-sweep</code>).</p></div>
+      <p>The benchmark is <code>regbench</code> (<code>benchmarks/regbench/</code>): it judges registration
+        methods on the cohort and traces the cost of the unmodified pipeline. It changes no pipeline code.
+        One figure draws the whole harness, from inputs to tables:
+        <a href="regbench-harness.html">regbench-harness.html</a>. The earlier parameter-sweep and arms
+        harness is archived under the git tag <code>archive/benchmarks-arms-sweep</code>.</p></div>
     <div class="bnote"><b>0</b> changes to workflows / subworkflows / modules / nextflow.config — the
       harness lives entirely under <code>benchmarks/</code> and drives the pipeline as a black box.</div>
     <div class="harness">
       <span class="h">regbench</span><span class="a">→</span>
       <span class="h pipe">unmodified pipeline</span><span class="a">→</span><span class="h">regbench tables</span>
     </div>
-    <div class="sigs">
-      <div class="sig"><h4>Resource scaling</h4><div class="src">← trace.txt + size_logs</div>
-        <ul><li>Linear fit per stage: <code>peak_rss ~ input_gb</code>, <code>realtime ~ input_gb</code></li><li>Slope = marginal cost per input GiB</li><li>Intercept = fixed overhead</li></ul></div>
-      <div class="sig"><h4>Registration accuracy</h4><div class="src">← reg_qc=2 seg_qc.json · VALIS summary · STARE intrinsic TRE</div>
-        <ul><li>Seg-based Dice + centroid displacement per stage</li><li>Δ-vs-rigid isolates registration from segmentation noise</li><li>VALIS feature rTRE and STARE intrinsic TRE as method-native second signals</li><li><b>No ground truth of any kind.</b> Every number here is a reference-free agreement measure on tissue: it ranks configurations against each other, and cannot say any of them is correct. See <a href="accuracy-schematic.html">S6</a>.</li></ul></div>
-      <div class="sig"><h4>Segmentation stability</h4><div class="src">← cross-method agreement</div>
-        <ul><li>Instance-F1 between backends on a shared cell population</li><li>Foreground IoU</li><li>instantseg / stardist / cellsam</li></ul></div>
-    </div>
-    <div class="tbl-scroll"><table class="dl">
-      <thead><tr><th>table of the earlier sweep harness</th><th>one row per</th><th>carries</th></tr></thead>
-      <tbody>
-        <tr><td class="k">runs_master.csv</td><td>run</td><td>input dims, per-stage peak RAM / wall-time, cost</td></tr>
-        <tr><td class="k">scaling_fits.csv</td><td>stage</td><td>slope, intercept, r² for RAM and runtime vs input GiB</td></tr>
-        <tr><td class="k">registration_accuracy.csv</td><td>run × slide × stage</td><td>matched Dice, centroid displacement (µm), Δ vs rigid</td></tr>
-        <tr><td class="k">registration_valis_rtre.csv</td><td>run × slide</td><td>VALIS's own feature-based rTRE</td></tr>
-        <tr><td class="k">segmentation_agreement.csv</td><td>method pair</td><td>instance-F1, foreground IoU</td></tr>
-        <tr><td class="k">param_matrix.csv</td><td>run</td><td>every knob's cost <i>and</i> quality, joined wide</td></tr>
-      </tbody></table></div>
   </section>
 
   <!-- i — PARAMETERS -->
