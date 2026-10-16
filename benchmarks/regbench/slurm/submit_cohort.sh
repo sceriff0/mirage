@@ -320,6 +320,12 @@ extra=("$@")
 [ "$DRY" = 0 ] || DRY=1
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
+# the verdict lines of a preflight's output; none is a legitimate answer (the grep exits 1)
+preflight_lines() {
+    local lines
+    lines="$(grep -E '^preflight( FAIL)? \[' <<< "$1" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$')" || lines=""
+    [ -z "$lines" ] || printf '%s\n' "$lines"
+}
 # However this script ends once a job of this call is queued, short of its last line
 # (FINISHED is set just before it): say what is queued and how to remove it (and, in a
 # dry run, remove the scratch folder). The exit code is not what decides: a signal
@@ -589,7 +595,7 @@ else
         && ! { [ "$score_only" = 1 ] && [ "${REGBENCH_SCORE_WHILE_QUEUED:-0}" = 1 ]; }; then
         in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
             || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
-        still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' - || true)"
+        still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' -)" || still=""
         if [ -n "$still" ] && [ "$compute_only" = 1 ]; then
             die "--compute-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). compute-all runs ALONE, after them: a cost measured beside them is not a cost. Wait for them; or cancel them:  scancel $still ; or use --compute-all in the submission itself. Nothing was submitted."
         elif [ -n "$still" ] && [ "$score_only" = 1 ]; then
@@ -814,7 +820,7 @@ preflight() {
         has "$seen" "$key" && continue
         seen="$seen $key"
         out="$(regbench_py "$image" preflight --method "$method" --image "$image" "${where[@]}" "${slides[@]}" 2>&1)" && code=0 || code=$?
-        grep -E '^preflight( FAIL)? \[' <<< "$out" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$' || true
+        preflight_lines "$out"
         if [ "$code" != 0 ]; then
             failed=1
             grep -q '^preflight FAIL \[' <<< "$out" \
@@ -823,7 +829,7 @@ preflight() {
     done < "$table"
     image="$REGBENCH_SCORER_IMAGE"
     out="$(regbench_py "$image" preflight --scorer --image "$image" --writable "$REGBENCH_OUT" 2>&1)" && code=0 || code=$?
-    grep -E '^preflight( FAIL)? \[' <<< "$out" | grep -E 'FAIL| (ok|[0-9]+ failure\(s\))$' || true
+    preflight_lines "$out"
     if [ "$code" != 0 ]; then
         failed=1
         grep -q '^preflight FAIL \[' <<< "$out" \

@@ -116,8 +116,22 @@ def test_no_benchmark_launcher_resumes_a_pipeline_run():
     )
     offenders = []
     for f in launchers:
+        # comment-stripped, then backslash-continued physical lines joined, so a
+        # -resume on a continuation line of a multi-line `nextflow ... \\` call is seen
+        joined: list[tuple[int, str]] = []
+        carry, start = "", 0
         for n, line in enumerate((REPO / f).read_text().splitlines(), 1):
-            code = strip_line_comment(line)
+            code = strip_line_comment(line).rstrip()
+            if not carry:
+                start = n
+            if code.endswith("\\"):
+                carry += code[:-1] + " "
+                continue
+            joined.append((start, carry + code))
+            carry = ""
+        if carry:
+            joined.append((start, carry))
+        for n, code in joined:
             if re.search(r"\bnextflow\b", code) and re.search(r"(?<![\w-])-resume\b", code):
                 offenders.append(f"{f}:{n}: {code.strip()}")
     assert not offenders, "a benchmark launcher resumes a pipeline run:\n  " + "\n  ".join(offenders)

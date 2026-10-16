@@ -117,7 +117,9 @@ regbench_fetch_stare() {
         mkdir -p "$(dirname "$src")" || return 1
         tmp="$(mktemp -d "$(dirname "$src")/dl.XXXXXX")" || return 1
         if curl -fsSL "$url" | tar -xz -C "$tmp" --strip-components=1 && [ -d "$tmp/src" ]; then
-            mv -n "$tmp/src" "$src" 2>/dev/null || true
+            # losing the race to another job that fetched the same release is fine:
+            # it left $src, and that is what is asked next
+            mv -n "$tmp/src" "$src" 2>/dev/null || [ -d "$src" ]
         fi
         rm -rf "$tmp"
     fi
@@ -180,7 +182,7 @@ regbench_exec() (
         local runtime bind v nv=() tmpfs=()
         # no runtime is said, never a bare exit: a caller under `set -e` would stop
         # here without a word (the modules of a login shell are not a job's)
-        runtime="$(command -v apptainer || command -v singularity || true)"
+        runtime="$(command -v apptainer || command -v singularity)" || runtime=""
         if [ -z "$runtime" ]; then
             echo "regbench: neither apptainer nor singularity is on PATH here ($(hostname)), and $method runs in the image $sif. Load the site's container module before the call (a job has not the modules of a login shell)." >&2
             return 127
@@ -189,7 +191,8 @@ regbench_exec() (
         # otherwise ("mount source ... doesn't exist"), also for the first call of all,
         # which is the one that fills the cases folder
         mkdir -p "$REGBENCH_CASES" "$REGBENCH_OUT" ${REGBENCH_WORK:+"$REGBENCH_WORK"} \
-            ${REGBENCH_NUCLEI:+"$REGBENCH_NUCLEI"} ${REGBENCH_INPUTS:+"$REGBENCH_INPUTS"} 2>/dev/null || true
+            ${REGBENCH_NUCLEI:+"$REGBENCH_NUCLEI"} ${REGBENCH_INPUTS:+"$REGBENCH_INPUTS"} 2>/dev/null \
+            || echo "regbench: could not create every folder to bind; the runtime names the one that is missing." >&2
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
         # the input folder: the preprocessed slides, rounds.csv and the outlines the
         # nuclei step traces (launch.sbatch --inputs / --prepare). Not twice: under a

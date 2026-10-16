@@ -761,4 +761,11 @@
 # = 2084 collected, 0 failed. main measured 2061 on the same suite; the +23 are this branch's
 # own benchmarks/tests/ cases (the harness lives only here) and the two benchmarks.yml
 # parametrisations. Branch-specific, like every entry above.
-2084
+#
+# RE-MEASURED 2026-10-16 on `regbench-official` (arms/sweep removed; regbench is the only
+# benchmark harness): 2279 collected. The count was already 2279 BEFORE the removal, i.e.
+# 195 above the 2084 recorded on 2026-09-13: the guards and tests added to tests/ since then
+# (STARE package split, the launch rules, the regbench work) were never ratcheted in, and
+# conftest.py rejects a floor more than 50 below the count. The removal moved nothing here:
+# it deleted only benchmarks/tests/, which this pipeline-side count does not collect.
+2279
