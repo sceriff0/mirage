@@ -277,9 +277,39 @@ def _names(row, key, image):
 INPUT_KEYS = ("reference", "moving", "ref_cells", "mov_cells")
 
 
+NOT_REPLACED = (
+    "It is not replaced unasked (results made on it would no longer match it): "
+    "prepare again with --force (REGBENCH_PREPARE_FORCE=1), or into another cases "
+    "folder"
+)
+
+
+def input_fingerprints(row):
+    """What each input of a row IS, not only where it is: the two slides'
+    ``file_fingerprint``, and for each outlines file the fingerprint of the cell mask it
+    was traced from (its ``.traced.json``; a re-trace of the same run keeps it), else of
+    the file itself. A slide rewritten in place (``REGBENCH_INPUTS_FORCE=1`` re-runs the
+    preprocessing into the same paths) is another input under the same name."""
+    from ..cases import file_fingerprint
+
+    out = {}
+    for k in INPUT_KEYS:
+        path = row.get(k) or ""
+        if not path:
+            out[k] = None
+            continue
+        made = nuclei.traced_record(path) if k.endswith("_cells") else None
+        if made and made.get("cell_mask_fingerprint"):
+            out[k] = {"cell_mask": made["cell_mask_fingerprint"]}
+        else:
+            out[k] = file_fingerprint(path) if Path(path).is_file() else None
+    return out
+
+
 def _prepared_from_other_inputs(d, row):
     """``""``, or why the case under ``d`` is not of this row: it was prepared from
-    other slides or outlines (``case.json: extra``)."""
+    other slides or outlines, by path or, where the case recorded them, by content
+    (``case.json: extra``, ``input_fingerprints``)."""
     import json
 
     try:
@@ -290,10 +320,18 @@ def _prepared_from_other_inputs(d, row):
         if k in extra and (extra[k] or "") != (row.get(k) or ""):
             return (
                 f"the case under {d} was prepared from {k} {extra[k] or '(none)'} and "
-                f"the manifest names {row.get(k) or '(none)'}. It is not replaced "
-                "unasked (results made on it would no longer match it): prepare again "
-                "with --force (REGBENCH_PREPARE_FORCE=1), or into another cases folder"
+                f"the manifest names {row.get(k) or '(none)'}. {NOT_REPLACED}"
             )
+    had = extra.get("input_fingerprints")
+    if had:
+        now = input_fingerprints(row)
+        for k in INPUT_KEYS:
+            if k in had and had[k] != now.get(k):
+                return (
+                    f"the case under {d} was prepared from another file than "
+                    f"{row.get(k) or '(none)'} ({k}) is now: it was rewritten in "
+                    f"place since. {NOT_REPLACED}"
+                )
     return ""
 
 
@@ -325,6 +363,7 @@ def prepare_one(cases_root, row, a):
             raise ValueError(other)
         return d
     _require_outlines(row)
+    fingerprints = input_fingerprints(row)  # before anything is read
     if a.max_cells and cells.is_geojson(row.get("mov_cells") or ""):
         raise ValueError(
             f"{row['mov_cells']}: --max-cells does not apply to nuclei given as GeoJSON"
@@ -392,6 +431,7 @@ def prepare_one(cases_root, row, a):
             "cells": "provided" if row.get("ref_cells") else "builtin",
             "diameter": a.diameter,
             "cell_sets": {"ref": ref_sets, "mov": mov_sets},
+            "input_fingerprints": fingerprints,
         },
     )
     more = {}

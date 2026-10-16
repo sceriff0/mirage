@@ -986,10 +986,12 @@ A nuclear mask is NOT among the arm's published files: `SEG_QC_SEGMENT` publishe
 
 **Regbench's own outlines are DEFINED to be the arm's** (since 2026-10-16; user ruling
 2026-10-15: same model and settings, grown 10 px). The nuclei step runs the same
-`bin/segment.py` with the same flags on the same preprocessed slides and traces its own
+`bin/segment.py` with the same flags on preprocessed slides of a NEW preprocessing run
+(regbench's input step: the same pipeline code, `pixel_size` pinned to 0.325 µm as the
+arms ran it; not the arms' files) and traces its own
 `*_cell_mask.tif` with the same `write_geojson` of `bin/mask_to_geojson.py` at the same
 `simplify_tolerance`, so by construction it gives the outline the arm would have published
-from the same image, model and settings. This is DERIVED from the code, link by link, and
+from such an image with the same model and settings. This is DERIVED from the code, link by link, and
 was NOT measured on cohort slides. `test_outline_definition.py` pins each link:
 
 | link | pinned by |
@@ -1002,8 +1004,9 @@ was NOT measured on cohort slides. `test_outline_definition.py` pins each link:
 
 What no test can pin: the site's model files (the same name and folder are rendered, the
 files are the site's), the library versions inside the images (the trace runs in the
-scorer's image, the arm's in `bolt3x/mirage-quantify`), and a GPU's run-to-run
-differences. `--dapi-channel` is the one rendered difference: the pipeline passes 0 (and
+scorer's image, the arm's in `bolt3x/mirage-quantify`), a GPU's run-to-run
+differences, and `REGBENCH_STARDIST_CPU=1`, which drops `--use-gpu` (the arm ran on the
+GPU, `seg_gpu = true`): StarDist on CPU need not give the GPU's labels. `--dapi-channel` is the one rendered difference: the pipeline passes 0 (and
 refuses a slide whose channel 0 is not nuclear), regbench the manifest's nuclear index,
 which is 0 on every slide the pipeline would segment.
 

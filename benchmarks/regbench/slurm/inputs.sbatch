@@ -64,9 +64,15 @@ if ! PYTHONPATH="$REGBENCH_REPO${PYTHONPATH:+:$PYTHONPATH}" python3 -m benchmark
     refuse params_file "could not type the parameters against nextflow_schema.json."
 fi
 
-# a run name Nextflow takes: a letter first, then letters, digits, - and _ (lower case)
-name="rb-inputs-$(printf '%s' "$REGBENCH_SUBMISSION" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-')"
-name="${name:0:80}"
+# A run name Nextflow takes (a letter first; letters and digits, a single - or _ between
+# them; at most 80), made unique by the job's id: a submission id used twice never hits
+# "run name already used" in this launch directory's history.
+sub="$(printf '%s' "$REGBENCH_SUBMISSION" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' \
+    | tr -s '-' | sed -E 's/^-+//; s/-+$//')"
+job="${SLURM_JOB_ID:-$$}"
+name="rb-inputs-${sub:+$sub-}"
+name="${name:0:$((79 - ${#job}))}"
+name="$(printf '%s' "$name" | sed -E 's/-+$//')-$job"
 export NXF_VER="${NXF_VER:-25.04.7}"
 # one head JVM in an 8 G job: a bounded heap (the JVM default is a quarter of the node)
 export NXF_OPTS="${NXF_OPTS:--Xms256m -Xmx4g}"
@@ -77,8 +83,11 @@ export SINGULARITY_DISABLE_CACHE="${SINGULARITY_DISABLE_CACHE:-$APPTAINER_DISABL
 echo "regbench-inputs: preprocessing $REGBENCH_INPUT into $d/results (profile $REGBENCH_NF_PROFILE, site config ${site:-none}, run $name, Nextflow $NXF_VER)"
 echo "regbench-inputs: params $(tr -d '\n ' < "$d/params.json")"
 
-# no -resume: the step is run once, from the start (a forced re-run starts over)
-nextflow -q run "$REGBENCH_REPO" \
+# no -resume: the step is run once, from the start (a forced re-run starts over).
+# Without PYTHONPATH: the launcher's env.sh exports the repository root on it (and the job
+# inherits it, --export=ALL); it must not reach the pipeline's tasks, which SLURM starts
+# with the head's environment and Singularity passes into their containers
+env -u PYTHONPATH nextflow -q run "$REGBENCH_REPO" \
     -profile "$REGBENCH_NF_PROFILE" \
     ${site:+-c "$site"} \
     -work-dir "$d/work" \

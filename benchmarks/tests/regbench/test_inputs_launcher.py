@@ -88,6 +88,7 @@ def _fake_nextflow(tmp_path, fail=False):
         'printf "%s\\n" "$@" > "$NF_LOG.argv"\n'
         'pwd > "$NF_LOG.cwd"\n'
         'echo "${NXF_VER:-}" > "$NF_LOG.ver"\n'
+        'echo "${PYTHONPATH-unset}" > "$NF_LOG.pythonpath"\n'
         'out=""; pf=""\n'
         'while [ $# -gt 0 ]; do case "$1" in\n'
         '  --outdir) out="$2"; shift 2 ;;\n'
@@ -114,6 +115,8 @@ def _run(tmp_path, bin_, **more):
         REGBENCH_INPUTS=str(tmp_path / "inputs"),
         REGBENCH_SITE_CONFIG="none",
         REGBENCH_SUBMISSION="20261016T101010-77",
+        SLURM_JOB_ID="4242",
+        PYTHONPATH=str(REPO),  # as the launcher's env.sh exports it
         NF_LOG=str(tmp_path / "nf"),
     )
     env.update(more)
@@ -137,7 +140,9 @@ def test_the_input_step_refuses_to_overwrite_and_moves_aside_when_forced(tmp_pat
     assert argv[argv.index("--trace_dir") + 1] == str(d / "trace")
     assert argv[argv.index("--input") + 1] == str(tmp_path / "input.csv")
     name = argv[argv.index("-name") + 1]
-    assert name == "rb-inputs-20261016t101010-77"  # a run name Nextflow accepts
+    assert name == "rb-inputs-20261016t101010-77-4242"  # a run name Nextflow accepts
+    # the repository root on PYTHONPATH never reaches the pipeline (nor its tasks)
+    assert (tmp_path / "nf.pythonpath").read_text().strip() == "unset"
     assert (tmp_path / "nf.cwd").read_text().strip() == str(d)
     assert (tmp_path / "nf.ver").read_text().strip() == "25.04.7"
     params = json.loads((tmp_path / "nf.params").read_text())
@@ -339,3 +344,30 @@ def test_prepare_builds_the_rounds_from_the_input_step(tmp_path):
     # REGBENCH_NUCLEI_SKIP is gone: without outlines there is no case
     skip = _launch(tmp_path, "--prepare", REGBENCH_NUCLEI_SKIP="1", **env)
     assert "rb-nuclei" in skip.stdout
+
+
+NF_NAME = re.compile(r"^[a-z](?:[a-z\d]|[-_](?=[a-z\d])){0,79}$")  # Nextflow's rule
+
+
+@pytest.mark.parametrize(
+    "submission,want",
+    [
+        ("a..b", "rb-inputs-a-b-4242"),
+        ("x-", "rb-inputs-x-4242"),
+        ("--A__B--", "rb-inputs-a-b-4242"),
+        ("", None),  # unset or empty: a dated id
+        ("z" * 200, None),
+    ],
+)
+def test_the_run_name_is_one_nextflow_takes_and_unique_per_job(
+    tmp_path, submission, want
+):
+    bin_ = _fake_nextflow(tmp_path)
+    done = _run(tmp_path, bin_, REGBENCH_SUBMISSION=submission)
+    assert done.returncode == 0, done.stdout + done.stderr
+    argv = (tmp_path / "nf.argv").read_text().splitlines()
+    name = argv[argv.index("-name") + 1]
+    assert NF_NAME.match(name), name
+    assert name.endswith("-4242") and len(name) <= 80
+    if want is not None:
+        assert name == want

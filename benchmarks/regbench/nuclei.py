@@ -434,7 +434,7 @@ def trace_outlines(slide, cell_mask):
     """Trace a run's cell mask to the slide's outlines (``outlines.trace``) and leave
     beside them what they were traced from; returns that record."""
     tol = outlines.tolerance()
-    n = outlines.trace(cell_mask, slide["outlines"], tol)
+    path = Path(slide["outlines"])
     made = {
         "outlines_from": "stardist_rerun_cell_mask",
         "cell_mask": str(cell_mask),
@@ -442,10 +442,19 @@ def trace_outlines(slide, cell_mask):
         "image": slide["image"],
         "image_fingerprint": file_fingerprint(slide["image"]),
         "tolerance": tol,
-        "n_outlines": n,
+        "n_outlines": None,
         "traced_by": str(outlines.MASK_TO_GEOJSON),
     }
-    write_json(Path(str(slide["outlines"]) + TRACED), made)
+    # The order is what makes a task ended anywhere here harmless: the old outlines go,
+    # then the record that says what is about to be traced, then the outlines (one
+    # rename). Ended before the last step, the slide has a record and no outlines: they
+    # are this module's (`is_ours`) and are traced on the next look, never left as a
+    # GeoJSON without its record or a record over another trace.
+    path.unlink(missing_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(Path(str(path) + TRACED), made)
+    made["n_outlines"] = outlines.trace(cell_mask, path, tol)
+    write_json(Path(str(path) + TRACED), made)
     return made
 
 

@@ -361,3 +361,26 @@ def test_a_case_prepared_from_other_inputs_is_refused_not_kept(tmp_path, capsys)
     assert multiplex.prepare(_mx_args(cases_root, manifest, force=True)) == 0
     (case,) = list_cases(cases_root, "multiplex")
     assert case.extra["ref_cells"] == str(other)
+
+
+def test_a_slide_rewritten_in_place_is_another_input(tmp_path, capsys):
+    """REGBENCH_INPUTS_FORCE=1 runs the preprocessing again into the SAME paths: a case
+    prepared from the slide that was there before is refused with the reason, never
+    silently kept (its points and nuclear copies are of the old file)."""
+    good = _grid_cells(tmp_path / "good.geojson")
+    manifest, (r1, _) = _cohort_manifest(tmp_path, [("a", good, good)])
+    cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    fp = case.extra["input_fingerprints"]
+    assert set(fp) == set(multiplex.INPUT_KEYS) and fp["reference"]
+    # identical inputs: kept, not blocked
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    capsys.readouterr()
+    data = tifffile.imread(r1)
+    tifffile.imwrite(r1, (data + 1).astype(data.dtype))  # same path, new content
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 1
+    said = capsys.readouterr().out
+    assert "rewritten in place" in said and "(reference)" in said and "--force" in said
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=True)) == 0
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0

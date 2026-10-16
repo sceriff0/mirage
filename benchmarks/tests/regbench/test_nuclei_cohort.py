@@ -634,6 +634,33 @@ def test_setting_aside_never_leaves_a_usable_record_over_missing_polygons(
     assert not Path(ref["outlines"]).exists()
 
 
+def test_a_trace_ended_halfway_never_leaves_outlines_without_their_record(
+    cohort, monkeypatch
+):
+    """The task is ended inside the trace: the slide has the record of what was being
+    traced and NO outlines (so they stay this module's, and the next look traces them),
+    never a GeoJSON without its `.traced.json` (another's, never to be rewritten) nor
+    the old outlines under the new record."""
+    tmp, lab, row = cohort
+    base, ref, store = _one_slide(cohort, monkeypatch, lab)
+    first = Path(ref["outlines"]).read_text()
+
+    def ended(*a, **k):
+        raise KeyboardInterrupt
+
+    real = outlines.trace
+    monkeypatch.setattr(outlines, "trace", ended)
+    with pytest.raises(KeyboardInterrupt):
+        nuclei.trace_outlines(ref, nuclei.expected_masks(ref, store / "rerun")[1])
+    monkeypatch.setattr(outlines, "trace", real)
+    assert not Path(ref["outlines"]).exists()
+    assert nuclei.traced_record(ref["outlines"]) is not None
+    assert nuclei.is_ours(ref["outlines"])
+    assert nuclei.main(args(**base, index=0)) == 0  # the next look, no StarDist
+    assert Path(ref["outlines"]).read_text() == first
+    assert nuclei.traced_record(ref["outlines"])["n_outlines"] == lab.max()
+
+
 def test_outlines_that_are_gone_are_traced_again_without_stardist(
     cohort, monkeypatch, capsys
 ):
