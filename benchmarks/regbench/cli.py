@@ -12,6 +12,8 @@
                        result name of the run list is expected (a missing one is a "not
                        run" row) and the primary rows lead; ``--only-run`` scores just
                        what is there
+``compute-all``        ``plan``, ``params``, ``sheet``: the full pipeline per patient and registration
+                       backend, traced (``compute_all.py``, ``slurm/compute_all.sbatch``)
 ``runs``               the run list, one tab-separated line per run, for the launcher
                        (columns: ``benchmarks/regbench/variants.py``); ``--all`` adds the
                        paused runs
@@ -47,7 +49,7 @@ import builtins
 import contextlib
 import os
 
-from . import DATASETS, plugins
+from . import DATASETS, compute_all, plugins
 from . import METHODS as PUBLIC_METHODS
 from .resources import n_cpus
 
@@ -635,6 +637,34 @@ def build_parser():
         "(column `stages`), one line per stage and attempt: stage, attempt, CPUs, "
         "memory in GB, time limit (the pipeline's allocation of that process)",
     )
+
+    ca = sub.add_parser(
+        "compute-all",
+        help="the full pipeline per patient and registration backend, traced "
+        "(benchmarks/regbench/compute_all.py; slurm/compute_all.sbatch)",
+    ).add_subparsers(dest="compute_cmd", required=True)
+    cp = ca.add_parser(
+        "plan",
+        help="one tab-separated line per run, in the order they are submitted: "
+        "backend, patient, launch folder, run name",
+    )
+    cp.add_argument("--input", required=True, help="the cohort's samplesheet")
+    cp.add_argument("--out", required=True, help="the results folder (REGBENCH_OUT)")
+    cpp = ca.add_parser(
+        "params",
+        help="write one run's -params-file, typed by nextflow_schema.json",
+    )
+    cpp.add_argument("--backend", required=True, choices=compute_all.BACKENDS)
+    cpp.add_argument("--out", required=True)
+    cs = ca.add_parser(
+        "sheet",
+        help="write the samplesheet's header and one patient's rows; with --sizes, "
+        "the sum of that patient's slide files in GB",
+    )
+    cs.add_argument("--input", required=True)
+    cs.add_argument("--patient", required=True)
+    cs.add_argument("--out", required=True)
+    cs.add_argument("--sizes", default=None)
     return ap
 
 
@@ -1361,7 +1391,7 @@ def _tissue(a):
 # array indices). While one of them runs, `sys.stdout` IS the standard error: a library
 # that logs or warns on "stdout" (STARE installs a root handler on it at its first
 # logger) writes there, and only this module's own `print` reaches the real one.
-ANSWERS = ("list", "runs", "stages", "submissions")
+ANSWERS = ("list", "runs", "stages", "submissions", "compute-all")
 _ANSWER = None
 
 
@@ -1388,7 +1418,40 @@ def main(argv=None):
         sys.stdout, _ANSWER = _ANSWER, None
 
 
+def _compute_all(a):
+    import json
+    import sys
+
+    from . import params_json
+
+    try:
+        if a.compute_cmd == "plan":
+            for r in compute_all.plan(a.input, a.out):
+                print(f"{r.backend}\t{r.patient}\t{r.launch_dir}\t{r.name}")
+            return 0
+        if a.compute_cmd == "sheet":
+            n = compute_all.sheet(a.input, a.patient, a.out, a.sizes)
+            print(f"{n}")
+            return 0
+    except ValueError as exc:
+        print(f"compute-all {a.compute_cmd}: {exc}", file=sys.stderr)
+        return 2
+    want = compute_all.params(a.backend)
+    pairs = [
+        f"{k}={str(v).lower() if isinstance(v, bool) else v}" for k, v in want.items()
+    ]
+    got = params_json.build(pairs)
+    if got != want:  # the schema types a value otherwise than compute-all states it
+        print(f"compute-all params: typed {got}, stated {want}", file=sys.stderr)
+        return 2
+    with open(a.out, "w") as fh:
+        fh.write(json.dumps(got, indent=2) + "\n")
+    return 0
+
+
 def _main(a):
+    if a.cmd == "compute-all":
+        return _compute_all(a)
     if a.cmd == "nuclei":
         from . import nuclei
 

@@ -1325,6 +1325,9 @@ it is scoring.
 | `tissue.csv`, `tissue_summary.csv`, `tissue_missing.csv` | see "Tissue-level agreement of the written images" | ACCREDIT's score and its pieces on each written image. Secondary: in no table above, no paired difference, no ranking |
 | `cost_end_to_end.csv` | patient x result that wrote an image | the steps apart, all measured here: `method_convert_s`, `benchmark_prep_s`, `estimate_s`, `write_s`, their sum `measured_here_s`, `benchmark_copy_s`, the peaks, `device`, `gpu_model`, `written`, `merged_image`. Secondary; see "Cost" |
 | `cost_end_to_end_summary.csv` | dataset x result | the median over patients of each step and of `measured_here_s`, the largest peaks (`estimate_peak_gb_max`, `job_peak_gb_max`), `n_patients` of `n_patients_cohort`, and the same medians on the common patients (`*_common`, `n_patients_common`) |
+| `pipeline_cost.csv` | task of a compute-all trace (backend x patient x Nextflow task) | written only when there is a trace under `<out>/compute`. Nextflow's own figures and three products of them; see "Full pipeline cost, per backend (compute-all)" |
+| `pipeline_cost_summary.csv` | backend x patient, and backend (`patient = all`) | counts, completeness, wall time, CPU-h, GB-h, peak, registration share, input size; see the same section |
+| `pipeline_cost_by_process.csv` | backend x process | the tasks of the patients in the backend's `all` row, per process; see the same section |
 | `launch.csv` | gate record | written only with `score --gates`: what each of the launcher's gates decided (`run, gate, status, blocked, dropped, reference, log_path`) |
 | `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the failure log's section, cost on survivors and on the common patients |
 
@@ -1989,6 +1992,79 @@ every step in its own column, per patient and per result that wrote an image:
   number either.
 - **Nothing is decided on a guess.** A run that recorded no description of its file, or
   a case that does not list its channels, reads `not recorded` in `merged_image`.
+
+### Full pipeline cost, per backend (compute-all; `pipeline_cost*.csv`, secondary)
+
+**Not run on the cluster yet**: what is tested is the job graph of the dry run, the head
+job against a stand-in `nextflow`, and the tables on hand-written traces
+(`test_compute_all.py`, `test_trace.py`).
+
+`submit_cohort.sh --compute-all` (or `launch.sbatch --compute-all`; both need
+`REGBENCH_INPUT`, the cohort's samplesheet) adds, after the scorer, one Nextflow head job
+per patient and registration backend (`slurm/compute_all.sbatch`, 2 CPU, 8 G,
+`REGBENCH_COMPUTE_TIME`, default 7 days): the WHOLE pipeline, no `--start`/`--stop`,
+once with `registration_method=valis` and once with `tiled` (STARE), every `valis`
+patient first. The heads are dealt onto `REGBENCH_COMPUTE_LANES` lanes (default 2), each
+after the head before it on its lane and the first ones after the scorer, so they run
+LAST and ALONE; then `rb-score-compute` scores again and adds the tables.
+`--compute-only` submits those jobs alone (the heads start at once) and rescores the last
+submission, like `--score-only`.
+
+- **What is pinned**, through `-params-file` (`regbench compute-all params`, typed by
+  `nextflow_schema.json`): `registration_method`; `enable_trace=true`, its shipped
+  default restated so a site profile cannot switch the measurement off; and
+  `seg_method=stardist` (the user's ruling of 2026-10-15: the benchmark's nuclei are
+  StarDist's, as the arms' compute run was), which is NOT the shipped default
+  (`instantseg`). Everything else is the shipped default and the site profile
+  (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`); `pixel_size` stays `auto`.
+  `test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default`
+  fails when a pinned name is not a schema param, a value is not of its schema type or
+  enum, or a restated value is no longer the shipped default.
+- **One folder per run**: `<out>/compute/<backend>/<patient>/` holds its samplesheet
+  (the header and that patient's rows), `params.json`, `work/`, `trace/`, `results/`,
+  `input_gb.txt` and Nextflow's logs; its run name is unique (submission and job id).
+  It is never resumed: a folder that is there is moved to `<out>/compute/.replaced/`
+  (never deleted), with its end line `<out>/logs/compute/<backend>/<patient>.end`.
+
+`pipeline_cost.csv`, one row per task (`compute_all.COLUMNS`): `backend, patient,
+process` (the last `:` segment), `process_path` (the full name), `task_id, tag, status,
+exit, cpus, memory_gb, realtime_s, duration_s, pcpu` (Nextflow's `%cpu`), `cpu_h_used,
+cpu_h_reserved, gb_h_reserved, peak_rss_gb, peak_vmem_gb, read_gb, write_gb` (`rchar`,
+`wchar`), `submit, start, complete`, `is_registration` (`REGISTER` for valis;
+`TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` for tiled). GB are
+Nextflow's (2^30 bytes). The three products are named as `billing.py` names the methods'
+and defined the same way, from Nextflow's figures:
+
+| column | Nextflow trace | billing.py's definition it mirrors |
+|---|---|---|
+| `cpu_h_used` | `%cpu/100 x realtime / 3600` | CPU time used |
+| `cpu_h_reserved` | `cpus x realtime / 3600` | allocated CPUs x time |
+| `gb_h_reserved` | `memory x realtime / 3600` | requested memory x time |
+
+They are NOT the same measurement: `%cpu` is what Nextflow's task wrapper reports, not
+the cgroup counter, and `realtime` is the task's own run time inside the allocation the
+pipeline asked for. It is a different clock from the methods' registration cost, so
+**no total adds the two**.
+
+`pipeline_cost_summary.csv` (`compute_all.SUMMARY_COLUMNS`), one row per (backend,
+patient) and one per backend with `patient = all`: `n_patients, n_tasks, n_completed,
+n_failed, n_retried` (failed tasks whose task was run again and completed, the
+pipeline's own retry), `n_cached, complete_run, wall_s` (`max(complete) - min(submit)`),
+`cpu_h_used, cpu_h_reserved, gb_h_reserved, peak_rss_gb, registration_wall_s,
+registration_cpu_h_used, registration_cpu_h_reserved, registration_share_cpu_h_used,
+input_gb` (the patient's slide files, written by the head). A failed task was paid for:
+it counts in its patient's row. `complete_run` is 1 only with every failure retried to
+success, no cached task and a `status=ok` end line; the `all` row sums those patients
+only (`n_patients` says how many; its counts are sums over them) and its own
+`complete_run` is 1 when that is every patient listed.
+
+`pipeline_cost_by_process.csv` (`compute_all.BY_PROCESS_COLUMNS`): per (backend,
+process) over the patients of the `all` row: `is_registration, n_patients, n_tasks,
+n_failed, realtime_s, cpu_h_used, cpu_h_reserved, gb_h_reserved, pcpu_weighted` (`%cpu`
+weighted by run time), the peaks and the I/O.
+
+`summary.md` has the block `## Full pipeline cost, per backend (secondary)` when there is
+a trace, and otherwise the one line "Full pipeline cost: not measured".
 
 ## Running the cohort on a cluster
 

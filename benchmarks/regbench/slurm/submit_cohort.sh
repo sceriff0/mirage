@@ -84,6 +84,21 @@
 #      tables. The tables are the same whether the array ran, half of it did, or none
 #      of it.
 #
+#   6. with --compute-all, after the scorer: compute-all, the WHOLE pipeline traced per
+#      patient and registration backend (compute_all.sbatch, one Nextflow head job per
+#      run; `python -m benchmarks.regbench compute-all plan` lists them, every valis
+#      patient then every tiled one). The heads are dealt onto REGBENCH_COMPUTE_LANES
+#      lanes: each waits (afterany) for the head before it on its lane, and the first of
+#      each lane for the scorer of step 5. So they run LAST and ALONE: a cost measured
+#      under contention the benchmark made itself is not a cost.
+#   7. then `rb-score-compute`, the scorer again (score_cohort.sbatch score) after every
+#      head: the case records are kept, so it only adds pipeline_cost*.csv and their
+#      block of summary.md.
+#
+# --compute-only submits steps 6 and 7 and nothing else, for a results folder whose
+# benchmark is done: the heads start at once (on their lanes), and the scorer scores the
+# LAST submission into REGBENCH_OUT, as --score-only does. Both need REGBENCH_INPUT.
+#
 # --score-only submits step 5 and nothing before it: no selfcheck, no gate, no
 # registration. It scores what the LAST submission into REGBENCH_OUT ran or reused
 # (its id is kept in $REGBENCH_OUT/logs/submission; REGBENCH_SUBMISSION names another),
@@ -196,8 +211,12 @@
 #                                     else is let through: not `inconsistent`, not
 #                                     `crashed`, not a flagged realcheck, not a
 #                                     selfcheck that left no record
-#   REGBENCH_INPUT                    with --inputs: the cohort's samplesheet (the
-#                                     pipeline's --input)
+#   REGBENCH_INPUT                    with --inputs, --compute-all, --compute-only: the
+#                                     cohort's samplesheet (the pipeline's --input)
+#   REGBENCH_COMPUTE_LANES (2)        with --compute-all/--compute-only: compute-all heads
+#                                     in flight at once (each is a Nextflow head whose
+#                                     processes are jobs of their own)
+#   REGBENCH_COMPUTE_TIME (7-00:00:00)  the time limit of one compute-all head
 #   REGBENCH_INPUTS                   the input folder: the input step writes
 #                                     preprocess/ into it, --prepare writes rounds.csv
 #                                     and outlines/ there (launch.sbatch: inputs/ of
@@ -205,8 +224,8 @@
 #   REGBENCH_INPUTS_TIME (2-00:00:00) with --inputs: the head job's time limit
 #   REGBENCH_INPUTS_FORCE=1           with --inputs: run it again, the earlier one moved
 #                                     to preprocess.replaced/ (never deleted)
-#   REGBENCH_NF_PROFILE               with --inputs: the pipeline's -profile (default
-#                                     singularity,ieo, as the arms ran)
+#   REGBENCH_NF_PROFILE               with --inputs and compute-all: the pipeline's
+#                                     -profile (default singularity,ieo, as the arms ran)
 #   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv. Unset, it
 #                                     is $REGBENCH_INPUTS/rounds.csv, written here from
 #                                     the input step's preprocessed.csv
@@ -281,12 +300,15 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the only dataset.
 DEFAULT_DATASETS="multiplex"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
+compute_all=0 compute_only=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --inputs) inputs=1; shift ;;
         --prepare) prepare=1; shift ;;
         --score-only) score_only=1; shift ;;
+        --compute-all) compute_all=1; shift ;;
+        --compute-only) compute_only=1; shift ;;
         --preflight) preflight_only=1; shift ;;
         --runs) only_runs="$2"; shift 2 ;;
         --datasets) datasets="$2"; shift 2 ;;
@@ -368,29 +390,47 @@ done
 [ "$preflight_only" = 1 ] && DRY=0   # it starts the images; it submits nothing
 [ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
 [ "$inputs" = 1 ] && [ "$prepare$score_only$preflight_only" != 000 ] && die "--inputs and --prepare/--score-only/--preflight are two different steps; name one. Nothing was submitted."
+# compute-all: after the benchmark (--compute-all), or alone (--compute-only)
+computing=0
+if [ "$compute_all" = 1 ] || [ "$compute_only" = 1 ]; then
+    computing=1
+    [ "$compute_all$compute_only" != 11 ] || die "--compute-all and --compute-only: name one (--compute-only is compute-all without the benchmark before it). Nothing was submitted."
+    [ "$inputs$prepare$score_only$preflight_only" = 0000 ] || die "--compute-all/--compute-only and --inputs/--prepare/--score-only/--preflight are two different steps; name one. Nothing was submitted."
+    [ -n "${REGBENCH_INPUT:-}" ] || die "--compute-all/--compute-only need REGBENCH_INPUT: the cohort's samplesheet (the pipeline's --input). Nothing was submitted."
+    [ -f "$REGBENCH_INPUT" ] || die "REGBENCH_INPUT=$REGBENCH_INPUT is not there. Nothing was submitted."
+    : "${REGBENCH_COMPUTE_LANES:=2}"
+    need_int REGBENCH_COMPUTE_LANES 1
+    : "${REGBENCH_NF_PROFILE:=singularity,ieo}"
+    export REGBENCH_INPUT REGBENCH_NF_PROFILE
+fi
+# what is scored is an EARLIER submission's: --score-only, and --compute-only
+scoring_earlier=0
+{ [ "$score_only" = 1 ] || [ "$compute_only" = 1 ]; } && scoring_earlier=1
+step_flag="--score-only"
+[ "$compute_only" = 1 ] && step_flag="--compute-only"
 
 # one id per call: every record of this submission carries it. --score-only makes no
 # record of its own: it scores an EARLIER submission, the last one into REGBENCH_OUT
 # unless REGBENCH_SUBMISSION names another.
-if [ "$score_only" = 1 ]; then
+if [ "$scoring_earlier" = 1 ]; then
     # The ids the folder's selfcheck records carry, each record PARSED by the reader the
     # gates use (`regbench submissions`, benchmarks/regbench/ladder.py): one id per line.
     found="$(regbench_py "$REGBENCH_HEAD_IMAGE" submissions --out "$REGBENCH_OUT" | cut -f1)" \
-        || die "--score-only: cannot read the selfcheck records under $REGBENCH_OUT/logs/selfcheck (python -m benchmarks.regbench submissions). Nothing was submitted."
+        || die "$step_flag: cannot read the selfcheck records under $REGBENCH_OUT/logs/selfcheck (python -m benchmarks.regbench submissions). Nothing was submitted."
     if [ -z "${REGBENCH_SUBMISSION:-}" ]; then
         if [ -s "$REGBENCH_OUT/logs/submission" ]; then
             REGBENCH_SUBMISSION="$(head -n 1 "$REGBENCH_OUT/logs/submission")"
         else
             # a folder filled before that file was written: the id is in its selfcheck records
-            [ -n "$found" ] || die "--score-only: no submission to score under $REGBENCH_OUT (no logs/submission, and no selfcheck record names one). Export REGBENCH_SUBMISSION=<the id an earlier submit_cohort.sh printed as '# submission  -> ID'; it is also in every run.json, key 'submissions'>. Nothing was submitted."
-            [ "$(wc -l <<< "$found")" -eq 1 ] || die "--score-only: $REGBENCH_OUT holds records of more than one submission ($(paste -sd' ' - <<< "$found")) and no logs/submission says which was last. Export REGBENCH_SUBMISSION=<one of them>. Nothing was submitted."
+            [ -n "$found" ] || die "$step_flag: no submission to score under $REGBENCH_OUT (no logs/submission, and no selfcheck record names one). Export REGBENCH_SUBMISSION=<the id an earlier submit_cohort.sh printed as '# submission  -> ID'; it is also in every run.json, key 'submissions'>. Nothing was submitted."
+            [ "$(wc -l <<< "$found")" -eq 1 ] || die "$step_flag: $REGBENCH_OUT holds records of more than one submission ($(paste -sd' ' - <<< "$found")) and no logs/submission says which was last. Export REGBENCH_SUBMISSION=<one of them>. Nothing was submitted."
             REGBENCH_SUBMISSION="$found"
         fi
-        echo "# --score-only: scoring submission $REGBENCH_SUBMISSION"
+        echo "# $step_flag: scoring submission $REGBENCH_SUBMISSION"
     fi
     # the id is the user's, or the file's: said aloud when no selfcheck record is of it
     if [ -n "$found" ] && ! grep -qxF -- "$REGBENCH_SUBMISSION" <<< "$found"; then
-        echo "# WARNING --score-only: no selfcheck record under $REGBENCH_OUT is of submission $REGBENCH_SUBMISSION (the records there are of: $(paste -sd' ' - <<< "$found")). The scorer takes only what $REGBENCH_SUBMISSION ran or reused, so every row may read 'not run': check the id."
+        echo "# WARNING $step_flag: no selfcheck record under $REGBENCH_OUT is of submission $REGBENCH_SUBMISSION (the records there are of: $(paste -sd' ' - <<< "$found")). The scorer takes only what $REGBENCH_SUBMISSION ran or reused, so every row may read 'not run': check the id."
     fi
 fi
 : "${REGBENCH_SUBMISSION:=$(date +%Y%m%dT%H%M%S)-$$}"
@@ -458,7 +498,7 @@ submit() {
     # the last submission that ran anything into this folder: what --score-only scores.
     # Written with the first job the scheduler took: a call that queued nothing (stopped
     # by the preflight, a check, or a refused first sbatch) is not a submission.
-    if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$inputs" != 1 ] && [ "$score_only" != 1 ]; then
+    if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$inputs" != 1 ] && [ "$scoring_earlier" != 1 ]; then
         echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
     fi
     printf '%s\t%s\n' "$name" "$JOB_ID"
@@ -539,6 +579,8 @@ else
     IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.ids"
     # the jobs of --prepare are not a submission's: their ids have a file of their own
     [ "$prepare" = 1 ] && IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.prepare.ids"
+    # nor those of --compute-only, which runs after a submission and scores it again
+    [ "$compute_only" = 1 ] && IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.compute.ids"
     export REGBENCH_IDS_FILE="$IDS_FILE"
     # A second submission while jobs of an earlier one are still in the queue: their
     # tasks read the gate records and the stage files this call would replace. And a
@@ -548,7 +590,9 @@ else
         in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
             || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
         still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' - || true)"
-        if [ -n "$still" ] && [ "$score_only" = 1 ]; then
+        if [ -n "$still" ] && [ "$compute_only" = 1 ]; then
+            die "--compute-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). compute-all runs ALONE, after them: a cost measured beside them is not a cost. Wait for them; or cancel them:  scancel $still ; or use --compute-all in the submission itself. Nothing was submitted."
+        elif [ -n "$still" ] && [ "$score_only" = 1 ]; then
             die "--score-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). Scoring now would score what is there so far and settle the results of tasks that have not ended, so it is refused. Wait for them; or cancel them:  scancel $still ; or score what is there all the same with REGBENCH_SCORE_WHILE_QUEUED=1. Nothing was submitted."
         elif [ -n "$still" ]; then
             die "$(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier submission into $REGBENCH_OUT are still pending or running ($still). A second submission would replace the gate records and stage files their tasks read, so it is refused. Wait for them; or cancel them:  scancel $still ; or submit into another REGBENCH_OUT. Nothing was submitted."
@@ -556,7 +600,7 @@ else
     fi
     # An id is one submission's: the stage files, the tile submitters' lists and the job
     # ids of an earlier call under the same id would be taken for this call's.
-    if [ "$prepare" != 1 ] && [ "$score_only" != 1 ] && [ "$preflight_only" != 1 ] && [ -e "$IDS_FILE" ]; then
+    if [ "$prepare" != 1 ] && [ "$scoring_earlier" != 1 ] && [ "$preflight_only" != 1 ] && [ -e "$IDS_FILE" ]; then
         die "the submission id '$REGBENCH_SUBMISSION' was already used for a submission into $REGBENCH_OUT ($IDS_FILE). A second one under the same id is refused: its tile submitters would find the first one's lists of what is due and what was fed ($REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/) and feed nothing. Unset REGBENCH_SUBMISSION (every call then gets an id of its own) or export a new one; every unit that is ok is reused whatever the id. Nothing was submitted."
     fi
 fi
@@ -590,9 +634,20 @@ done
 for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_UNCHECKED: no run named '$r'"; done
 for r in ${REGBENCH_ALLOW_INCONSISTENT:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_INCONSISTENT: no run named '$r'"; done
 # --score-only: no run is selected, so nothing of steps 1 to 4 is submitted
-if [ "$score_only" = 1 ]; then
-    [ -z "$only_runs" ] || echo "# --score-only: --runs is not used (the scorer scores every run of the submission)"
+if [ "$scoring_earlier" = 1 ]; then
+    [ -z "$only_runs" ] || echo "# $step_flag: --runs is not used (the scorer scores every run of the submission)"
     selected=""
+fi
+# compute-all's runs, read before the first sbatch: (backend, patient) in the order
+# they are submitted
+COMPUTE_PLAN=""
+if [ "$computing" = 1 ]; then
+    COMPUTE_PLAN="$(regbench_py "$REGBENCH_HEAD_IMAGE" compute-all plan --input "$REGBENCH_INPUT" \
+        --out "$REGBENCH_OUT")" \
+        || die "compute-all: cannot list the runs of $REGBENCH_INPUT (python -m benchmarks.regbench compute-all plan; see above). Nothing was submitted."
+    [ -n "$COMPUTE_PLAN" ] || die "compute-all: $REGBENCH_INPUT names no patient. Nothing was submitted."
+    compute_s="$(seconds "${REGBENCH_COMPUTE_TIME:-7-00:00:00}")"
+    echo "# compute-all: $(wc -l <<< "$COMPUTE_PLAN" | tr -d ' ') run(s) of the whole pipeline ($REGBENCH_INPUT, profile $REGBENCH_NF_PROFILE), on $REGBENCH_COMPUTE_LANES lane(s), after $([ "$compute_only" = 1 ] && echo "nothing (--compute-only)" || echo "the scorer")"
 fi
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
@@ -1214,6 +1269,8 @@ for ds in $sized; do
 done
 
 # ── 5. per-case scoring and tissue, then the scorer, in the scorer's image ────────────
+SCORER_JOB=""
+if [ "$compute_only" != 1 ]; then
 dep=""
 for j in $finals; do dep="${dep:+$dep:}$j"; done
 while IFS=$'\t' read -r name _; do
@@ -1250,6 +1307,34 @@ submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --
     --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
 submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
     --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
+SCORER_JOB="$JOB_ID"
+fi
+
+# ── 6 and 7. compute-all: the whole pipeline per patient and backend, last and alone ──
+if [ "$computing" = 1 ]; then
+    i=0 heads=""
+    while IFS=$'\t' read -r backend patient _ _; do
+        [ -n "$backend" ] || continue
+        lane=$((i % REGBENCH_COMPUTE_LANES))
+        prev="COMPUTE_LANE_$lane"
+        deps=()
+        if [ -n "${!prev:-}" ]; then
+            deps=(--dependency="afterany:${!prev}")
+        elif [ -n "$SCORER_JOB" ]; then
+            deps=(--dependency="afterany:$SCORER_JOB")
+        fi
+        submit "rb-compute-$backend-$patient" "${COMMON[@]}" "$LOG_ONE" ${deps[@]+"${deps[@]}"} \
+            --cpus-per-task=2 --mem=8G --time="$(limit "$compute_s")" \
+            "$HERE/compute_all.sbatch" "$backend" "$patient"
+        printf -v "$prev" '%s' "$JOB_ID"
+        heads="${heads:+$heads:}$JOB_ID"
+        i=$((i + 1))
+    done <<< "$COMPUTE_PLAN"
+    submit "rb-score-compute" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$heads" \
+        --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
+        "$HERE/score_cohort.sbatch" score
+    echo "# compute-all: $i head(s) -> $REGBENCH_OUT/compute/<backend>/<patient>/ (trace/trace.txt); their end lines in $REGBENCH_OUT/logs/compute/; the tables pipeline_cost*.csv from rb-score-compute"
+fi
 
 [ "$N_LATER" = 0 ] || echo "# retries: none is in the queue. Up to $N_LATER retry array(s) are written down as plans ($REGBENCH_OUT/logs/retry/) and submitted by the chains' watchers (retry.sbatch) only after a failure, for the units that failed"
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
@@ -1263,7 +1348,7 @@ if [ "$N_FED" -gt 0 ]; then
     fi
 fi
 [ "$DRY" = 1 ] || echo "# job ids    -> $IDS_FILE (this call's, one per line; cancel everything: scancel \$(cat \"$IDS_FILE\"))"
-if [ "$score_only" = 1 ]; then
+if [ "$scoring_earlier" = 1 ]; then
     echo "# submission  -> $REGBENCH_SUBMISSION (scored as it is under $REGBENCH_OUT: nothing is run again)"
 else
     echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "$REGBENCH_FORCE" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"

@@ -139,6 +139,8 @@ def test_the_cli_writes_a_usable_params_file(tmp_path):
 
 
 RUNNERS = ("benchmarks/regbench/slurm/inputs.sbatch",)
+# compute-all's heads: the whole pipeline per patient and backend
+RUNNERS += ("benchmarks/regbench/slurm/compute_all.sbatch",)
 
 # Path-like flags that stay on the command line. They are `"type": "string"` in
 # the schema, so a String IS the right type for them, and they are per-run
@@ -210,7 +212,8 @@ def test_every_runner_actually_uses_the_params_file():
     defaults -- a benchmark that measures one configuration N times."""
     for rel in RUNNERS:
         text = "\n".join(line for _, line in _code_lines(rel))
-        assert "benchmarks.regbench.params_json" in text, (
-            f"{rel} no longer builds a typed params file"
-        )
+        # directly, or through `regbench compute-all params` (params_json.build)
+        assert (
+            "benchmarks.regbench.params_json" in text or "compute-all params" in text
+        ), f"{rel} no longer builds a typed params file"
         assert "-params-file" in text, f"{rel} no longer passes -params-file"

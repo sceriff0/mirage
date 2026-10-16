@@ -57,6 +57,11 @@ in ``tissue_missing.csv``.
 ``cost_end_to_end.csv`` and ``cost_end_to_end_summary.csv`` are a second, secondary view
 of cost (``regbench.cost``): the method's own conversion, the estimate and the write in
 separate columns and their sum, all measured here; nothing is read from another run.
+``pipeline_cost.csv``, ``pipeline_cost_summary.csv`` and ``pipeline_cost_by_process.csv``
+are a THIRD, separate one (``regbench.compute_all``): the whole pipeline per patient
+and registration backend, read from the Nextflow traces of compute-all
+(``<out>/compute/<backend>/<patient>/trace/trace.txt``), a different clock that no
+total adds to the ones above.
 ``launch.csv`` lists what the launcher's gates decided (``gates``).
 
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
@@ -87,6 +92,7 @@ import numpy as np
 from . import (
     DATASETS,
     billing,
+    compute_all,
     cost,
     failure_log,
     pairs,
@@ -3293,6 +3299,7 @@ def summary_markdown(
     masks=None,
     attrition_rows=None,
     run_fails=None,
+    pipeline=None,
 ):
     nuc, nuclei_missing, n_cases = nuclei or ({}, [], 0)
     nuc_summary = nuc.get("summary_cells") or []
@@ -3577,6 +3584,17 @@ def summary_markdown(
         ]
     if end_to_end:
         parts += cost.markdown(*end_to_end, markdown)
+    # the whole pipeline per backend (compute-all): its own block, its own clock
+    if pipeline is not None:
+        pipe, pipe_summary = pipeline
+        if pipe:
+            parts += compute_all.markdown(pipe, pipe_summary)
+        else:
+            parts += [
+                "Full pipeline cost: not measured (no <out>/compute/*/*/trace/trace.txt; "
+                "submit_cohort.sh --compute-all).",
+                "",
+            ]
     return "\n".join(parts)
 
 
@@ -3719,6 +3737,10 @@ def score(
         {ds: got[0] for ds, got in common_patients(res_summary, primary).items()},
         {(r["dataset"], r["method"]): r["n_patients"] for r in cost_summary},
     )
+    # the whole pipeline per patient and backend, from compute-all's traces
+    pipe = compute_all.rows(out)
+    pipe_summary = compute_all.summarise(pipe)
+    pipe_by_process = compute_all.by_process(pipe, pipe_summary)
 
     tables = Path(out) / ("tables_dev" if dev else "tables")
     tables.mkdir(parents=True, exist_ok=True)
@@ -3734,6 +3756,9 @@ def score(
         "nonband_missing",
         "cost_end_to_end",
         "cost_end_to_end_summary",
+        "pipeline_cost",
+        "pipeline_cost_summary",
+        "pipeline_cost_by_process",
         "launch",
         "common_block",
         "paired_summary",
@@ -3786,6 +3811,17 @@ def score(
     write_csv(tables / "excluded_rounds.csv", excluded)
     write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
     write_csv(tables / "cost_end_to_end_summary.csv", e2e_summary)
+    write_csv(tables / "pipeline_cost.csv", list(pipe), list(compute_all.COLUMNS))
+    write_csv(
+        tables / "pipeline_cost_summary.csv",
+        pipe_summary,
+        list(compute_all.SUMMARY_COLUMNS),
+    )
+    write_csv(
+        tables / "pipeline_cost_by_process.csv",
+        pipe_by_process,
+        list(compute_all.BY_PROCESS_COLUMNS),
+    )
     write_csv(tables / "launch.csv", launch)
     write_csv(tables / "nonband_cells.csv", non_cells)
     write_csv(tables / "nonband_summary.csv", non_summary)
@@ -3835,6 +3871,7 @@ def score(
         (mask_flags, selfcheck_masks),
         lost_rounds,
         run_fails=run_fails,
+        pipeline=(pipe, pipe_summary),
     )
     (tables / "summary.md").write_text(text)
     print(text)
@@ -3857,6 +3894,9 @@ def score(
         "dropped": dropped_rows,
         "cost_end_to_end": e2e,
         "cost_end_to_end_summary": e2e_summary,
+        "pipeline_cost": list(pipe),
+        "pipeline_cost_summary": pipe_summary,
+        "pipeline_cost_by_process": pipe_by_process,
         "cores_confined": confined,
         "cost_header": cost_header,
         "launch": launch,

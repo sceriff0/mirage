@@ -386,7 +386,7 @@ def test_only_the_answer_of_a_command_a_script_reads_is_on_stdout(
     assert said.out == answer
     assert "a line some library printed" in said.err
     assert "UserWarning: the file is not what it says" in said.err
-    assert cli.ANSWERS == ("list", "runs", "stages", "submissions")
+    assert cli.ANSWERS == ("list", "runs", "stages", "submissions", "compute-all")
     assert sys.stdout is not sys.stderr  # put back
 
 

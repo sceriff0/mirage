@@ -514,8 +514,11 @@ def test_score_writes_the_table_and_the_summary_block(tmp_path, capsys):
         total = float(cells["total_to_image_s: complete / common"].split(" / ")[0])
         estimate = float(cells["register_s: complete / common"].split(" / ")[0])
         assert written == 2.0 and total == pytest.approx(estimate + written, rel=1e-3)
+    # the per-method cost blocks import nothing from a pipeline run; compute-all's
+    # block (or its "not measured" line) comes after them, its own clock
+    methods_cost = text[text.index("## Resources") : text.index("Full pipeline cost")]
     for word in ("pipeline_", "trace", "total_s", "not available"):
-        assert word not in text[text.index("## Resources") :], word
+        assert word not in methods_cost, word
 
     # the same through the command line
     capsys.readouterr()

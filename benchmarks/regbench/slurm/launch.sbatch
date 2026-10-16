@@ -12,6 +12,13 @@
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch             (the launch)
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --dry-run   (prints, submits nothing)
 #
+# and the WHOLE pipeline's cost per patient and registration backend (compute-all,
+# slurm/compute_all.sbatch: run last and alone, after the scorer), with the launch or
+# on its own for a benchmark that is done; both need REGBENCH_INPUT:
+#
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --compute-all
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --compute-only
+#
 # FROM ANY FOLDER: the folder it is submitted from is where the benchmark lives
 # (regbench/ under it: inputs, cases, results); the repository is found from the path
 # given to sbatch.
@@ -75,9 +82,12 @@ export REGBENCH_REPO="$repo"
 # the input folder: the input step's preprocessing (preprocess/), the rounds
 # (rounds.csv) and the outlines the nuclei step traces (outlines/)
 : "${REGBENCH_INPUTS:=$REGBENCH_ROOT/inputs}"
-# --inputs: the cohort's samplesheet (the pipeline's --input; required for --inputs)
+# --inputs, --compute-all, --compute-only: the cohort's samplesheet (the pipeline's
+# --input; required for them)
 # REGBENCH_INPUT=/path/to/input.csv
-# --inputs: the pipeline's profile (the arms' ARMS_PROFILE)
+# --compute-all, --compute-only: compute-all heads at once (REGBENCH_COMPUTE_LANES,
+# default 2) and the time limit of each (REGBENCH_COMPUTE_TIME, default 7-00:00:00)
+# --inputs and compute-all: the pipeline's profile (the arms' ARMS_PROFILE)
 : "${REGBENCH_NF_PROFILE:=singularity,ieo}"
 : "${REGBENCH_CASES:=$REGBENCH_ROOT/cases}"
 : "${REGBENCH_OUT:=$REGBENCH_ROOT/out}"
@@ -105,6 +115,16 @@ VALIS_MIRAGE   docker://bolt3x/mirage-valis100:1.0.0
 STARDIST       docker://bolt3x/mirage-stardist:1.0.0
 "
 # -----------------------------------------------------------------------------------
+
+# compute-all runs the pipeline on the cohort's samplesheet: no launch without it
+case " $* " in
+    *" --compute-all "*|*" --compute-only "*)
+        if [ -z "${REGBENCH_INPUT:-}" ]; then
+            echo "regbench-launch: --compute-all/--compute-only need REGBENCH_INPUT, the cohort's samplesheet (the pipeline's --input): export it, or set it in the SETTINGS. Nothing was submitted." >&2
+            exit 2
+        fi
+        ;;
+esac
 
 # site_value KEY: the quoted value the site config gives KEY (comment lines are not read)
 site_value() {
