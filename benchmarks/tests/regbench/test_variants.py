@@ -9,25 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from benchmarks.regbench import METHODS, cli, methods, prep, variants
+from benchmarks.regbench import METHODS, cli, methods, variants
 from benchmarks.regbench.methods import ashlar, palom, valis
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
 
 def _stare_names():
-    """The STARE runs, from the tables: every stride x level of every regime, by name."""
-    from benchmarks.regbench import regimes as rg_
-
-    out = {}
-    for reg in rg_.REGIMES:
-        for key, level in rg_.stare_levels(reg):
-            for s_ in variants.STARE_STRIDES:
-                out.setdefault(variants.stare_cell(s_, key, level)[0], None)
-    return list(out)
-
-
-def _cohort_stare_names():
-    """The STARE runs of the cohort's regime (``regimes.COHORT_REGIME``)."""
+    """The STARE runs, from the table: every stride x level of the cohort's regime
+    (``regimes.COHORT_REGIME``), by name."""
     from benchmarks.regbench import regimes as rg_
 
     return [
@@ -72,14 +61,8 @@ OTHER_FIRST = [
     "deeperhistreg_hr_fluo_cpu_asdrawn",
 ]
 N_OTHER_RUNS = 12  # 3 VALIS + 8 DeeperHistReg + PALOM
-# `stare_prep` is paused: it writes nothing and is not expected
 EXPECTED = [
-    *[
-        v
-        for n in _stare_names()
-        for v in _stare_variants(n)
-        if n in _cohort_stare_names()
-    ],
+    *[v for n in _stare_names() for v in _stare_variants(n)],
     *OTHER_FIRST,
     *ashlar.ASHLAR_CELLS,
     "palom_affine",
@@ -120,10 +103,16 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
         variants.expected_variants()
 
 
+# the run list of the cohort, as `python -m benchmarks.regbench runs` prints it (measured
+# 2026-10-15 after the stare_prep row and the brightfield regimes were removed: the same
+# 45 as before, the paused row never counted)
+N_RUNS = 45
+
+
 def test_counts():
     n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
-    assert len(variants.active_runs()) == n_runs == len(variants.RUNS) - 1  # stare_prep
+    assert n_runs == len(variants.RUNS) == N_RUNS
     assert {variants.run_name(r) for r in variants.RUNS if r.gpu} == GPU
     per_patient = {
         variants.run_name(r)
@@ -137,15 +126,11 @@ def test_run_names_are_unique_and_the_stride_runs_are_exactly_the_generated_set(
     names = [variants.run_name(r) for r in variants.RUNS]
     assert len(names) == len(set(names)) == len(variants.RUNS)
     stare = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
-    assert sorted(stare) == sorted([*_stare_names(), prep.ROW])
+    assert sorted(stare) == sorted(_stare_names())
     stride = {n for n in names if n.startswith("stare_s")}
     # stare_s<stride>_<level>: one per non-default stride and level, no more
     levels = {n.split("_", 2)[2] for n in stride}
     assert len(stride) == (len(variants.STARE_STRIDES) - 1) * len(levels)
-    # the preprocessing row is paused, the plain row (and every other) is not
-    assert [r.opts for r in variants.RUNS if variants.run_name(r) == prep.ROW] == [
-        {"prep": prep.selected()}
-    ]
     assert [r.opts for r in variants.RUNS if variants.run_name(r) == "stare"] == [{}]
 
 
@@ -361,7 +346,7 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
     from pathlib import Path
 
     both = [r for r in variants.RUNS if r.method == "stare"]
-    assert {variants.run_name(r) for r in both} == {*_stare_names(), prep.ROW}
+    assert {variants.run_name(r) for r in both} == set(_stare_names())
     for stare in both:
         assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
     assert "STARE" not in variants.BUILT_HERE  # the pipeline's image runs no row here
@@ -439,17 +424,13 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     got = rows(capsys)
     assert len(got) == len(variants.runs_for(None))
     assert all(len(r) == len(COLUMNS) == 16 for r in got)
-    # the runs whose registration is several scheduler jobs per round: every STARE run,
-    # with a prep job before the rest for the proxies the adapter writes itself
+    # the runs whose registration is several scheduler jobs per round: every STARE run
     staged = {r[0]: r[15] for r in got if r[15] != "-"}
-    assert set(staged) == set(_cohort_stare_names())
+    assert set(staged) == set(_stare_names())
     for run in variants.runs_for(None):
         if run.method != "stare":
             continue
-        want = "coarse,tile,solve,stitch"
-        if run.opts.get("proxy") in variants.PREP_PROXIES:
-            want = "prep," + want
-        assert staged[variants.run_name(run)] == want
+        assert staged[variants.run_name(run)] == "coarse,tile,solve,stitch"
     assert [r[0] for r in got] == [
         variants.run_name(r) for r in variants.runs_for(None)
     ]
@@ -568,19 +549,19 @@ def pause(monkeypatch, *names):
     monkeypatch.setattr(variants, "RUNS", paused)
 
 
-def test_every_run_is_active_but_the_paused_preprocessing_row():
-    assert variants.Run._fields[-2:] == ("active", "regimes")
-    assert variants.Run._field_defaults == {"active": True, "regimes": None}
-    assert [variants.run_name(r) for r in variants.RUNS if not r.active] == [prep.ROW]
-    assert variants.paused_names() == [prep.ROW]
-    assert variants.active_runs() == tuple(r for r in variants.RUNS if r.active)
+def test_no_run_is_paused_today():
+    assert variants.Run._fields[-1] == "active"
+    assert variants.Run._field_defaults == {"active": True}
+    assert [r for r in variants.RUNS if not r.active] == []
+    assert variants.paused_names() == []
+    assert variants.active_runs() == variants.RUNS
     variants.check()
 
 
 def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, capsys):
     pause(monkeypatch, "valis120", "deeperhistreg_fluo_gpu")
     variants.check()
-    assert variants.paused_names() == [prep.ROW, "valis120", "deeperhistreg_fluo_gpu"]
+    assert variants.paused_names() == ["valis120", "deeperhistreg_fluo_gpu"]
     gone = {
         "valis120_rigid",
         "valis120",
@@ -653,7 +634,7 @@ def test_reactivating_is_one_field(monkeypatch):
         ),
     )
     assert variants.expected_variants() == EXPECTED
-    assert variants.counts()[0] == len(variants.RUNS) - 1  # the preprocessing row
+    assert variants.counts()[0] == len(variants.RUNS)
 
 
 @pytest.mark.parametrize(
@@ -862,9 +843,8 @@ def test_every_run_passes_only_options_its_adapter_reads():
     import re
     from pathlib import Path
 
-    runs = [*variants.RUNS, *getattr(variants, "TUNING_RUNS", ())]
-    assert runs
-    for run in runs:
+    assert variants.RUNS
+    for run in variants.RUNS:
         items = [f"{k}={v}" for k, v in (run.opts or {}).items()]
         assert methods.parse_opts(items, run.method) == dict(run.opts or {})
     # the constant is what the adapter's own code reads (the driver's keys aside)
@@ -904,56 +884,43 @@ from benchmarks.regbench.methods import ashlar as ashlar_adapter  # noqa: E402
 
 
 def _generated_stare():
-    return [
-        r
-        for r in variants.RUNS
-        if r.method == "stare" and r.active and r.label != "stare_prep"
-    ]
+    return [r for r in variants.RUNS if r.method == "stare"]
 
 
-def test_stare_runs_are_strides_times_levels_per_regime():
-    for reg in rg.REGIMES:
-        names = {
-            variants.run_name(r)
-            for r in _generated_stare()
-            if r.regimes is None or reg in r.regimes
-        }
-        assert len(names) == len(variants.STARE_STRIDES) * len(rg.stare_levels(reg)), (
-            reg
-        )
-        assert "stare" in names  # the default cell is always present (R4)
+def test_stare_runs_are_strides_times_levels_of_the_cohort_regime():
+    names = {variants.run_name(r) for r in _generated_stare()}
+    assert len(names) == len(variants.STARE_STRIDES) * len(
+        rg.stare_levels(rg.COHORT_REGIME)
+    )
+    assert "stare" in names  # the default cell is always present (R4)
 
 
-def test_every_regime_has_the_baseline_at_every_stride():
-    """The defaults are in every cross: STARE unchanged at each stride, on every dataset."""
-    for reg in rg.REGIMES:
-        have = {
-            (r.opts or {}).get("stride", "64")
-            for r in _generated_stare()
-            if (r.regimes is None or reg in r.regimes)
-            and "proxy" not in r.opts
-            and "sprep" not in r.opts
-        }
-        assert have == {str(s) for s in variants.STARE_STRIDES}, reg
+def test_the_regime_has_the_baseline_at_every_stride():
+    """The defaults are in the cross: STARE unchanged at each stride."""
+    have = {
+        (r.opts or {}).get("stride", "64")
+        for r in _generated_stare()
+        if "proxy" not in r.opts and "sprep" not in r.opts
+    }
+    assert have == {str(s) for s in variants.STARE_STRIDES}
 
 
-def test_a_baseline_run_carries_no_proxy_and_applies_everywhere():
+def test_a_baseline_run_carries_no_proxy():
     for r in _generated_stare():
         if "proxy" not in r.opts:
-            assert set(r.opts) <= {"stride"} and r.regimes is None
+            assert set(r.opts) <= {"stride"}
             assert (
                 variants.run_name(r).endswith("none") or variants.run_name(r) == "stare"
             )
 
 
 def test_a_generated_name_maps_to_exactly_one_opts_dict():
-    """Two regimes producing the same name must produce the same options."""
+    """Two cells producing the same name must produce the same options."""
     seen = {}
-    for reg in rg.REGIMES:
-        for key, level in rg.stare_levels(reg):
-            for s in variants.STARE_STRIDES:
-                name, opts = variants.stare_cell(s, key, level)
-                assert seen.setdefault(name, opts) == opts, (reg, name)
+    for key, level in rg.stare_levels(rg.COHORT_REGIME):
+        for s in variants.STARE_STRIDES:
+            name, opts = variants.stare_cell(s, key, level)
+            assert seen.setdefault(name, opts) == opts, name
     assert seen.keys() == {variants.run_name(r) for r in _generated_stare()}
 
 
@@ -969,20 +936,6 @@ def test_level_key_is_injective_over_non_baseline_levels():
     assert (
         "none" not in keys
     )  # "none" names the two baselines, which are not in the set
-
-
-def test_stare_runs_carry_the_regimes_that_produced_them():
-    for r in _generated_stare():
-        if r.regimes is None:
-            continue
-        for reg in r.regimes:
-            names = {
-                variants.stare_cell(s, k, lv)[0]
-                for k, lv in rg.stare_levels(reg)
-                for s in variants.STARE_STRIDES
-            }
-            assert variants.run_name(r) in names
-        assert tuple(r.regimes) == tuple(sorted(r.regimes))
 
 
 def test_ashlar_is_the_full_factorial():
@@ -1042,19 +995,14 @@ def test_ashlar_gates_and_families_follow_the_affine_factor():
         assert r.after == ("stare" if anchored else None)
 
 
-def test_stare_prep_row_is_paused_not_gone():
-    r = [r for r in variants.RUNS if r.label == "stare_prep"]
-    assert len(r) == 1 and r[0].active is False
-    assert "stare_prep" not in {variants.run_name(x) for x in variants.active_runs()}
+def test_runs_for_takes_the_cohorts_dataset_and_no_other():
+    names = {variants.run_name(r) for r in variants.runs_for("multiplex")}
+    assert "stare_clahe" in names and "stare_percentile" in names
+    with pytest.raises(KeyError):
+        variants.runs_for("anhir")
 
 
-def test_runs_for_honours_regimes():
-    cyc = {variants.run_name(r) for r in variants.runs_for("multiplex")}
-    assert "stare_clahe" in cyc and "stare_haem_clahe" not in cyc
-    assert "stare_percentile" in cyc
-
-
-def test_the_cohort_is_a_regime_and_takes_no_rgb_only_stare_run():
+def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
     cohort = variants.runs_for(None)
     stare = [r for r in cohort if r.method == "stare"]
     assert stare and all(r.opts.get("proxy", "channel") == "channel" for r in stare)
@@ -1072,4 +1020,4 @@ def test_the_cohort_is_a_regime_and_takes_no_rgb_only_stare_run():
         len(variants.variants_of(r)) for r in cohort
     )
     # --all still lists every run, paused or not
-    assert len(variants.runs_table(paused=True)) == len(variants.RUNS)
+    assert len(variants.runs_table(paused=True)) == len(variants.RUNS) == N_RUNS

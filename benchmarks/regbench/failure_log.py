@@ -69,13 +69,6 @@ WHOSE = {
     # pixel-identical overlaps exist only because the benchmark cuts tiles from a
     # stitched slide (ruling R6)
     "identical_overlap": BENCHMARK,
-    # a prepare-time choice of the benchmark, not a method failure
-    "reduced_proxy": BENCHMARK,
-    # a level that needs a pixel size, on a case without one (STARE's CLAHE on a
-    # case whose pixel size is not established)
-    "no_pixel_size": BENCHMARK,
-    # a `proxy=grey` run on a case prepared with another proxy: its name would lie
-    "proxy_mismatch": BENCHMARK,
     "infrastructure": INFRASTRUCTURE,
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended
@@ -296,15 +289,14 @@ def run_events(run, dataset="", case_id="", variant=""):
 
 
 # a stage of a registration that runs as several scheduler jobs -> the table's stage
-STAGE_OF_JOB = {"stitch": "writer", "prep": "benchmark_points"}
+STAGE_OF_JOB = {"stitch": "writer"}
 
 
 def stage_events(run, head):
     """One row per stage attempt that did not end its job ok, for a registration that
     ran as several scheduler jobs per round (``run.json: info.jobs.failed_attempts``,
     ``native.stitch_job.failed_attempts``): a retried attempt of a round that ended
-    ok is there too. A failed ``prep`` job is the benchmark's own (``benchmark``,
-    ``benchmark_oom``); a job that never recorded its end is ``timeout`` where the
+    ok is there too. A job that never recorded its end is ``timeout`` where the
     next attempt's start shows it ran to its limit, else ``killed``
     (``stages.attempt_cause``). The rows carry ``retry`` = ``stage`` so that they are
     told from the rungs of the memory ladder, and are listed once per round."""
@@ -318,9 +310,7 @@ def stage_events(run, head):
     out = []
     for a in listed:
         job, cause = str(a.get("stage") or ""), str(a.get("cause") or "exception")
-        if job == "prep":
-            cause = "benchmark_oom" if cause == "oom" else "benchmark"
-        elif job == "stitch":
+        if job == "stitch":
             cause = "writer_oom" if cause == "oom" else "writer"
         where = job.upper() + (f" row {a['row']}" if a.get("row") is not None else "")
         out.append(

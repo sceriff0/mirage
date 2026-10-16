@@ -439,14 +439,6 @@ GPU_MEMORY_ERRORS = ("CUDA out of memory",)
 #   identical_overlap  ASHLAR's error metric raised on pixel-identical overlaps, which
 #                  exist only because the benchmark cuts its tiles from a stitched slide
 #                  (ruling R6): not the method's failure
-#   reduced_proxy  the adapter refused a preprocessing row on a reduced proxy: a
-#                  prepare-time choice of the benchmark, not a method failure
-#   no_pixel_size  the adapter refused a level that needs a pixel size (STARE's CLAHE,
-#                  whose region is in micrometres) on a case without one: the dataset's
-#                  gap, not a method failure
-#   proxy_mismatch the adapter refused a `proxy=grey` run on a case prepared with
-#                  another proxy: its name would
-#                  lie about its input; a prepare-time choice, not a method failure
 CAUSES = (
     "exception",
     "killed",
@@ -465,9 +457,6 @@ CAUSES = (
     # points, or the last job of a round whose registration ran in other jobs
     "benchmark",
     "identical_overlap",
-    "reduced_proxy",
-    "no_pixel_size",
-    "proxy_mismatch",
 )
 # more memory is the remedy: the unit goes up a rung (regbench.ladder)
 MEMORY_CAUSES = ("oom", "writer_oom", "benchmark_oom")
@@ -478,9 +467,6 @@ NOT_THE_METHOD = (
     "not_submitted",
     "benchmark",
     "identical_overlap",
-    "reduced_proxy",
-    "no_pixel_size",
-    "proxy_mismatch",
 )
 
 

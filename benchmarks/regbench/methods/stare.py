@@ -44,37 +44,11 @@ channel, read by STARE's own reader. ``--nuclear-index`` is ``case.extra["mov_ch
 (0 when the case names none). STARE takes ONE index for both slides, so a case whose
 reference has its nuclei at another index is refused.
 
-**A brightfield case** (HyReCo, ANHIR: ``case.modality == "brightfield"``). STARE reads
-ONE channel per slide, so an RGB slide cannot be handed over as it is.
-The case carries a one-channel proxy of each slide, written by its dataset module
-(``case.ref_nuclear`` / ``case.mov_nuclear``; ``datasets/hyreco.py``: inverted luminance
-by default; ``datasets/anhir.py``: inverted luminance, ``regbench.prep.grey_plane``), and
-that is what STARE is given, at index 0. This is benchmark-side
-preprocessing and is recorded as such (``info["input"]``,
-``implementation.benchmark_side``). STARE's archived benchmark harness did the same
-(``benchmarks/regbench/datasets/hyreco.py`` at the tag ``archive/benchmarking-2026-10-08``
-of sceriff0/stare, read from a local copy ``[FULL: that file; its methods/stare.py only
-searched for the two slide arguments]``: an inverted-luminance OME-TIFF per slide, passed
-as ``--reference`` / ``--moving``). When the proxy is reduced
-(``case.extra["settings"]["reduce"]`` = f > 1, block-averaged), STARE works in the reduced
-frame: ``--pixel-size`` is f times the slide's, and each point map takes a full-resolution
-point to the reduced frame (``(x - (f - 1) / 2) / f``, the centre of an f x f block),
-through STARE's own warper, and back. The written image is then the registered PROXY at
-the reduced size (``native["reduced_by"]``), not an RGB slide.
-
-**The preprocessing row** (``--label stare_prep --opt prep=<candidate>``, ruling R3.21).
-STARE is unchanged: same package, same parameters, same stages. Before COARSE, both
-images are rewritten as one-channel files by a candidate of ``regbench.prep`` (the stage
-``prep``: a job of its own on the cohort with the benchmark's allocation, unbilled,
-``info["prep"]["prep_s"]``) and STARE registers THOSE, at index 0. STITCH is
-then run on what the plain row would stitch (the original moving slide; for a brightfield
-case its plain grey proxy), so the written image is never the preprocessed pixels and
-both rows write the same kind of image. A candidate changes no pixel grid
-(``prep.frame_check``, run before every case, refuses otherwise), so the manifest is in
-the slide's own frame. A label and its option come together: ``stare_prep`` takes the
-candidate frozen in ``prep_frozen.json`` and no other, ``stare_prep_<candidate>`` (the
-tuning runs) takes that candidate, and ``prep`` without one of these labels is refused,
-so a preprocessed result can never be stored as ``stare``.
+**Proxy and sprep.** ``--opt proxy=channel`` names the one-channel image STARE reads (the
+cohort is fluorescence: the channel itself, the only value), and ``--opt sprep=none|clahe|
+percentile`` is STARE's own ``--prep`` on it (STARE 1.3.0, not a departure): the cohort's
+crossed preprocessing factor. ``sprep=clahe`` needs the case's pixel size (CLAHE's region is
+in micrometres). A brightfield case is not part of this benchmark: the adapter refuses it.
 
 **Parameters.** ``TIER_HIGH_STRIDE64``: the ``high`` row of the STARE table in
 ``lib/RegPresets.groovy`` plus stride 64, i.e. the pipeline's ``tiled_high_s64`` arm. All
@@ -117,19 +91,18 @@ import io
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
 
-from .. import imageio, ladder, prep, resources, stages
+from .. import imageio, ladder, resources, stages
 from ..mapping import MOV_TO_REF, PointMap
 from ..regimes import PROXIES, SPREPS
+from . import require_fluorescence
 
 SCOPE = "pair"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
 OPTIONS = (
-    "prep",
     "proxy",
     "sprep",
     "stride",
@@ -142,11 +115,6 @@ OPTIONS = (
 )
 VARIANTS = ("stare_rigid", "stare")
 REF_NAME, MOV_NAME = "reference", "moving"
-# STITCH needs a pixel size for the header of the image it writes and uses it for nothing
-# else (`stare/cli.py:163-178`: it is passed to STITCH alone). A brightfield case whose
-# pixel size is not established (ANHIR's mammary glands) gets this placeholder there;
-# the transform and every score are in pixels and do not see it.
-NOMINAL_PIXEL_SIZE = 1.0
 STRIDES = (64, 128, 256)
 # the jobs a round is run as on the cohort (regbench.stages); the launcher reads it
 STAGES = (stages.COARSE, stages.TILE, stages.SOLVE, stages.STITCH)
@@ -173,102 +141,26 @@ _FLAGS = {
 }
 
 
-class _NullMonitor:
-    def pause(self):
-        pass
-
-    def resume(self):
-        pass
-
-
-def prep_of(opts):
-    """The preprocessing candidate of a run, or None (the plain row). Checked against
-    the label (module docstring)."""
-    name = opts.get("prep")
-    label = str(opts.get("label") or "")
-    mine = label == prep.ROW or label.startswith(prep.ROW + "_")
-    if not name:
-        if mine:
-            raise ValueError(
-                f"the label {label!r} names a preprocessing row; it needs --opt "
-                "prep=<candidate>"
-            )
-        return None
-    name = str(name)
-    prep.candidate(name)
-    if label == prep.ROW:
-        frozen = prep.selected()
-        if name != frozen:
-            raise ValueError(
-                f"the row {prep.ROW!r} runs the frozen candidate {frozen!r} "
-                f"(prep_frozen.json), not {name!r}. A label and its option come together"
-            )
-    elif label != f"{prep.ROW}_{name}":
-        raise ValueError(
-            f"prep={name} needs --label {prep.ROW} (the frozen candidate) or --label "
-            f"{prep.ROW}_{name} (a tuning run); with the label {label!r} its result "
-            "would be stored under another row's name"
-        )
-    return name
-
-
 def settings(opts, case):
-    """``(proxy, sprep)`` of a run (module docstring, "Proxy and --prep"). ``proxy`` is the
-    benchmark-side one-channel image STARE reads: ``channel`` on a fluorescence case (the
-    channel itself), ``grey`` on an RGB one (the case's own proxy: today's input) when
-    unset. ``sprep`` is STARE's own ``--prep``, ``none`` when unset. Refused: a value
-    outside ``regimes.PROXIES`` / ``SPREPS``; ``channel`` on an RGB case and any other
-    proxy on a fluorescence case; either option together with ``prep`` (the label-bound
-    preprocessing row); ``sprep=clahe`` where the pixel size is not established (CLAHE's
-    region is in micrometres: ``NoPixelSize``); a named ``proxy=grey`` on an RGB case
-    whose own proxy is not inverted luminance (HyReCo prepared with ``--proxy
-    haematoxylin``: ``ProxyMismatch``), since ``grey`` IS the case's own proxy and the run
-    would carry a name its image is not. The baseline (no ``proxy`` option) runs on the
-    case's own proxy whatever it is."""
-    rgb = case.modality == "brightfield"
-    default = "grey" if rgb else "channel"
-    proxy = str(opts.get("proxy", default)).strip()
+    """``(proxy, sprep)`` of a run (module docstring, "Proxy and sprep"). ``proxy`` is the
+    one-channel image STARE reads: ``channel``, the slide's own nuclear channel, the only
+    value. ``sprep`` is STARE's own ``--prep``, ``none`` when unset. Refused: a value
+    outside ``regimes.PROXIES`` / ``SPREPS``; a brightfield case (not part of this
+    benchmark); ``sprep=clahe`` where the pixel size is not established (CLAHE's region
+    is in micrometres)."""
+    require_fluorescence(case, "stare")
+    proxy = str(opts.get("proxy", "channel")).strip()
     sprep = str(opts.get("sprep", "none")).strip()
     if proxy not in PROXIES:
         raise ValueError(f"proxy={proxy!r}: expected one of {', '.join(PROXIES)}")
     if sprep not in SPREPS:
         raise ValueError(f"sprep={sprep!r}: expected one of {', '.join(SPREPS)}")
-    if opts.get("prep") and ("proxy" in opts or "sprep" in opts):
-        raise ValueError(
-            "prep is the label-bound preprocessing row; it cannot be combined with "
-            "proxy or sprep"
-        )
-    if not rgb and proxy != "channel":
-        raise ValueError(
-            f"proxy={proxy}: {case.case_id} is a fluorescence case, whose proxy is the "
-            "channel itself (proxy=channel)"
-        )
-    if rgb and proxy == "channel":
-        raise ValueError(
-            f"proxy=channel: {case.case_id} is an RGB case and needs a proxy "
-            f"({', '.join(p for p in PROXIES if p != 'channel')})"
-        )
-    prepared = (case.extra.get("settings") or {}).get("proxy")
-    if rgb and "proxy" in opts and proxy == "grey" and not _is_luminance(prepared):
-        raise ProxyMismatch(
-            f"proxy=grey: {case.case_id} was prepared with the proxy {prepared!r}, and "
-            "`grey` is the case's own proxy: this run would register on that image "
-            "under a grey name. Prepare the dataset with the luminance proxy to run it"
-        )
     if sprep == "clahe" and not case.pixel_size_um:
-        raise NoPixelSize(
+        raise ValueError(
             f"sprep=clahe: {case.case_id} has no established pixel size, and CLAHE's "
             "region is in micrometres"
         )
     return proxy, sprep
-
-
-def proxy_candidate(opts, case):
-    """The proxy image STARE reads when the dataset module did not write it (``haem``,
-    ``grey_smooth`` on an RGB case: ``prep.write_inputs`` writes it), else None (``grey``
-    is the case's own default input; ``channel`` is the slide)."""
-    proxy, _ = settings(opts, case)
-    return proxy if proxy not in ("channel", "grey") else None
 
 
 def stride_of(opts):
@@ -292,28 +184,9 @@ def nuclear_index(case):
 
 
 def slides(case):
-    """``(reference, moving, nuclear index, reduction)`` STARE is given for a case: the
-    original slides, or for a brightfield case its one-channel proxies (module
-    docstring)."""
-    if case.modality == "brightfield":
-        f = int((case.extra.get("settings") or {}).get("reduce", 1))
-        if f < 1 or not (case.ref_nuclear and case.mov_nuclear):
-            raise ValueError(
-                f"{case.case_id}: a brightfield case needs a one-channel proxy of each "
-                "slide (ref_nuclear / mov_nuclear) and a reduction of at least 1"
-            )
-        return str(case.ref_nuclear), str(case.mov_nuclear), 0, f
-    return str(case.ref_image), str(case.mov_image), nuclear_index(case), 1
-
-
-def reduced_map(fn, f):
-    """``fn`` (a map between two frames reduced f-fold by block averaging) as a map
-    between the full-resolution frames: block ``i`` is centred on pixel ``i f + (f - 1) /
-    2``."""
-    if f == 1:
-        return fn
-    shift = (f - 1) / 2.0
-    return lambda xy: np.asarray(fn((np.asarray(xy, float) - shift) / f)) * f + shift
+    """``(reference, moving, nuclear index)`` STARE is given for a case: the original
+    slides, every channel."""
+    return str(case.ref_image), str(case.mov_image), nuclear_index(case)
 
 
 def channel_names(case):
@@ -330,29 +203,16 @@ def channel_names(case):
     return [str(n) for n in names]
 
 
-def info_proxy(case):
-    """What a brightfield case's proxy is, in a few words."""
-    settings = case.extra.get("settings") or {}
-    f = int(settings.get("reduce", 1))
-    return f"{settings.get('proxy', 'proxy')}, " + (
-        f"reduced {f} x {f}" if f > 1 else "full resolution"
-    )
-
-
-def command(case, stage_dir, opts, inputs=None):
+def command(case, stage_dir, opts):
     """The parameters of one round, written as the arguments of ``stare register``: the
     package's own parser reads them (``namespace``), so every value has the type and
     the default STARE gives it, and every stage command is built from what it parsed,
     the way ``stare.cli.register`` builds them (``stage_commands``). The list is parsed
-    and never run. ``inputs`` = ``(reference, moving)`` replaces the two files STARE
-    registers on (the preprocessing row: one-channel files, index 0); everything else
-    is the case's."""
+    and never run."""
     stage_dir = Path(stage_dir)
     values = {**TIER_HIGH_STRIDE64, "stride": stride_of(opts)}
     values.update({k: opts[k] for k in _FLAGS if k in opts and k != "stride"})
-    ref, mov, index, reduce = slides(case)
-    if inputs is not None:
-        ref, mov, index = str(inputs[0]), str(inputs[1]), 0
+    ref, mov, index = slides(case)
     argv = [
         "register",
         "--reference",
@@ -380,10 +240,7 @@ def command(case, stage_dir, opts, inputs=None):
         argv += [_FLAGS[key], str(value)]
     argv += ["--prep", settings(opts, case)[1]]
     if case.pixel_size_um:  # none in the case: the command's own default, `auto`
-        argv += ["--pixel-size", repr(float(case.pixel_size_um) * reduce)]
-    elif case.modality == "brightfield":
-        # a proxy written here has no size in its header for `auto` to find
-        argv += ["--pixel-size", repr(NOMINAL_PIXEL_SIZE)]
+        argv += ["--pixel-size", repr(float(case.pixel_size_um))]
     names = channel_names(case)
     if names:
         argv += ["--channel-names", *names]
@@ -410,10 +267,10 @@ def _parse(argv):
 COARSE_MODELS = ("euclidean",)
 
 
-def namespace(case, stage_dir, opts, inputs=None):
+def namespace(case, stage_dir, opts):
     """The parameters of one round, as ``stare register``'s parser types them. A
     ``model`` the first stage would refuse is refused here, before any job runs."""
-    ns = _parse(command(case, stage_dir, opts, inputs))
+    ns = _parse(command(case, stage_dir, opts))
     if ns.model not in COARSE_MODELS:
         raise SystemExit(
             f"model={ns.model}: `stare coarse` accepts {', '.join(COARSE_MODELS)} and "
@@ -548,12 +405,9 @@ def tile_count(case, opts):
         **TIER_HIGH_STRIDE64,
         **{k: opts[k] for k in ("tile", "halo") if k in opts},
     }
-    prep_of(opts)  # a label and its option come together: refused here too
-    if case.modality == "fluorescence" and case.ref_hw:
-        h, w = (
-            case.ref_hw
-        )  # the slide STARE reads, or its preprocessed copy (same grid)
-    else:  # a brightfield case: the proxy STARE is given may be a reduced one
+    if case.ref_hw:
+        h, w = case.ref_hw  # the slide STARE reads
+    else:
         _, h, w = imageio.shape_of(slides(case)[0])
     return len(tile_grid(int(w), int(h), int(values["tile"]), int(values["halo"])))
 
@@ -578,36 +432,6 @@ def stage_dir_of(out, label, case):
     return result_dir(out, variant_names("stare", label)[-1], case) / "stages"
 
 
-def _is_luminance(prepared):
-    """Is a case's own proxy (``extra["settings"]["proxy"]``) inverted luminance?
-    HyReCo says ``luminance``, ANHIR ``grey (inverted luminance)``; a case that names
-    none is taken as the plain row's grey."""
-    name = str(prepared or "grey")
-    return name in ("luminance", "grey") or name.startswith("grey ")
-
-
-class ProxyMismatch(ValueError):
-    """A ``proxy=grey`` run on a case whose own proxy is not inverted luminance: its
-    name would say grey of an image that is not. The benchmark's cause."""
-
-    regbench_cause = "proxy_mismatch"
-
-
-class NoPixelSize(ValueError):
-    """STARE's CLAHE asked of a case whose pixel size is not established (ANHIR's
-    mammary glands): its region is in micrometres, so the run cannot exist there. The
-    dataset's, i.e. the benchmark's, cause, not the method's."""
-
-    regbench_cause = "no_pixel_size"
-
-
-class ReducedProxy(ValueError):
-    """A preprocessing row asked of a reduced proxy: the benchmark prepared the dataset
-    with ``--reduce``, so the run cannot exist. The benchmark's cause, not the method's."""
-
-    regbench_cause = "reduced_proxy"
-
-
 class Round:
     """One moving round: its parameters, its stage commands, and its job records."""
 
@@ -615,28 +439,10 @@ class Round:
         self.case, self.dir, self.opts = case, Path(stage_dir), opts
         self._identity = {}
         self.proxy, self.sprep = settings(opts, case)
-        # the label-bound preprocessing row, or a proxy the dataset module did not
-        # write: both are `prep.write_inputs` before COARSE (the stage `prep`)
-        self.row = prep_of(opts)
-        self.candidate = self.row or proxy_candidate(opts, case)
-        self.inputs = None
-        if self.candidate:
-            if slides(case)[3] != 1:
-                raise ReducedProxy(
-                    f"{case.case_id}: the preprocessing row is not defined on a "
-                    "reduced proxy"
-                )
-            self.inputs = prep.input_paths(self.dir / "prep", self.candidate)
-        self.ns = namespace(case, self.dir, opts, self.inputs)
+        self.ns = namespace(case, self.dir, opts)
         self.argv = stage_commands(self.ns)
 
     def command(self, stage, row=None):
-        if stage == stages.PREP:
-            return [
-                "regbench.prep.write_inputs",
-                self.candidate,
-                *map(str, self.inputs),
-            ]
         if stage == stages.TILE:
             r = self.plan()[row]
             return cli(stage, self.argv[stage](row, int(r["ix"]), int(r["iy"])))
@@ -652,9 +458,8 @@ class Round:
 
     def identity(self, stage, row=None):
         """What a stage job is computed FROM, beyond its command line, as one digest
-        (``stages.decide``): the STARE version; for PREP the slides' bytes
-        (``cases.file_fingerprint``) and the preprocessing code and candidate; for
-        COARSE and a tile the bytes of the two files STARE reads; for a tile also the
+        (``stages.decide``): the STARE version; for COARSE and a tile the bytes
+        (``cases.file_fingerprint``) of the two files STARE reads; for a tile also the
         anchor and the tile plan COARSE wrote; for SOLVE the anchor and every control
         file of the plan. A stage whose inputs were replaced, or whose stage before
         ran again and wrote something else, is another job. The same for every row."""
@@ -674,12 +479,7 @@ class Round:
                 return None
 
         parts = {"stage": stage, "stare": stare.__version__}
-        if stage == stages.PREP:
-            ref, mov, _, _ = slides(self.case)
-            parts["inputs"] = [file_fingerprint(ref), file_fingerprint(mov)]
-            parts["candidate"] = self.candidate
-            parts["code"] = prep.code_sha256()
-        elif stage in (stages.COARSE, stages.TILE):
+        if stage in (stages.COARSE, stages.TILE):
             parts["inputs"] = [
                 file_fingerprint(self.ns.reference),
                 file_fingerprint(self.ns.moving),
@@ -734,60 +534,6 @@ class Round:
         return recs, ""
 
 
-def _run_prep(rnd, attempt, execution):
-    """The benchmark's preprocessing of both images (the `stare_prep` row), with a
-    record like a stage job's."""
-    path = stages.record_path(rnd.dir, stages.PREP)
-    command = rnd.command(stages.PREP)
-    host = resources.host_info()
-    base = {
-        "stage": stages.PREP,
-        "row": None,
-        "attempt": int(attempt),
-        "command": command,
-        "identity": rnd.identity(stages.PREP),
-        "execution": execution,
-        "launch_id": host["launch_id"],
-        "log_path": host["log_path"],
-        "submission": host["submission"],
-        "started": time.time(),
-    }
-    stages._write(
-        path, {**base, "ok": False, "exit": None, "cause": stages.KILLED, "error": ""}
-    )
-    try:
-        made = prep.write_inputs(
-            rnd.case, rnd.dir / "prep", rnd.candidate, slides(rnd.case)[2]
-        )
-    except (Exception, SystemExit) as exc:
-        # the preprocessing is the benchmark's own step: whatever ended it is the
-        # benchmark's cause (`prep.Refused` says so itself), never STARE's
-        cause = resources.classify_error(exc)
-        if cause not in resources.NOT_THE_METHOD:
-            cause = "benchmark_oom" if cause in resources.MEMORY_CAUSES else "benchmark"
-        rec = {
-            **base,
-            "ok": False,
-            "exit": 137 if isinstance(exc, MemoryError) else 1,
-            "cause": cause,
-            "error": f"{type(exc).__name__}: {exc}",
-            "ended": time.time(),
-        }
-        stages._write(path, rec)
-        return rec
-    rec = {
-        **base,
-        "ok": True,
-        "exit": 0,
-        "cause": "",
-        "error": "",
-        "ended": time.time(),
-        "made": made["record"],
-    }
-    stages._write(path, rec)
-    return rec
-
-
 def run_stage(
     case,
     stage_dir,
@@ -799,8 +545,7 @@ def run_stage(
     force=False,
     rnd=None,
 ):
-    """One stage job of one round: ``prep`` (the preprocessing row only), ``coarse``,
-    ``tile`` (one plan row; with ``row=None`` every row that is due, one after another)
+    """One stage job of one round: ``coarse``, ``tile`` (one plan row; with ``row=None`` every row that is due, one after another)
     or ``solve``. Returns ``[(stage, row, ran?, why, record)]``. The one entry of every
     stage process, whoever starts it (``execution``: ``jobs`` or ``local``).
 
@@ -818,20 +563,12 @@ def run_stage(
         command = rnd.command(stage, row)
         identity = rnd.identity(stage)
         go, why = stages.decide(rec, attempt, command, submission, force, identity)
-        if go and stage == stages.PREP:
-            rec = _run_prep(rnd, attempt, execution)
-        elif go:
+        if go:
             rec = stages.run_command(
                 rnd.dir, stage, command, row, attempt, execution, identity=identity
             )
         out.append((stage, row, go, why, rec))
 
-    if stage == stages.PREP:
-        if rnd.candidate:
-            one(stage)
-        return out
-    if rnd.candidate and not rnd.done(stages.PREP):
-        return [(stage, row, False, "the preprocessing is not ok", None)]
     if stage == stages.COARSE:
         rnd.dir.mkdir(parents=True, exist_ok=True)
         one(stage)
@@ -851,22 +588,15 @@ def run_stage(
             return [(stage, row, False, why, None)]
         one(stage)
         return out
-    raise ValueError(f"stage {stage!r}: one of prep, coarse, tile, solve")
+    raise ValueError(f"stage {stage!r}: one of coarse, tile, solve")
 
 
 def tiles_due(case, stage_dir, opts, attempt, force=False):
     """The plan rows of a round whose tile job is due at ``attempt``
     (``stages.decide``): what the launcher's tile submitter puts into the queue.
-    None of a round whose COARSE (or preprocessing) is not ok, and none of a round the
-    adapter refuses with a typed cause (``NoPixelSize``, ``ReducedProxy``: the run
-    records that refusal itself); any other error is raised."""
-    try:
-        rnd = Round(case, stage_dir, opts)
-    except Exception as exc:
-        if getattr(exc, "regbench_cause", None) in resources.CAUSES:
-            return []
-        raise
-    if (rnd.candidate and not rnd.done(stages.PREP)) or not rnd.done(stages.COARSE):
+    None of a round whose COARSE is not ok."""
+    rnd = Round(case, stage_dir, opts)
+    if not rnd.done(stages.COARSE):
         return []
     submission = resources.host_info()["submission"]
     return [
@@ -946,7 +676,7 @@ def _failed(rnd, stage, row, jobs):
     return err
 
 
-def _launch(rnd, workers, mon):
+def _launch(rnd, workers):
     """The local launcher (``REGBENCH_STAGES=local``): start the round's stage processes
     from here, as the scheduler starts the cohort's. Every one goes through
     ``run_stage``, attempt after attempt while ``stages.decide`` says the next one is
@@ -965,13 +695,6 @@ def _launch(rnd, workers, mon):
                 break
         return bool(rec and rec.get("ok"))
 
-    if rnd.candidate:
-        mon.pause()  # benchmark-side work, not STARE's
-        try:
-            if not start(stages.PREP):
-                return
-        finally:
-            mon.resume()
     if not start(stages.COARSE):
         return
     rnd.identity(stages.TILE)  # once, before the pool: the same for every row
@@ -985,8 +708,6 @@ def _collect(rnd, jobs):
     """The round's transform exists: every stage process left an ok record for this
     round's command. Nothing is run here, whoever started the stages (``jobs``: the
     scheduler). Raises for the first stage, in order, that is not ok."""
-    if rnd.candidate and not rnd.done(stages.PREP):
-        raise _failed(rnd, stages.PREP, None, jobs)
     if not rnd.done(stages.COARSE):
         raise _failed(rnd, stages.COARSE, None, jobs)
     for i in range(len(rnd.plan())):
@@ -1050,11 +771,10 @@ def register(case, work, opts):
     else:
         stage_dir = Path(work) / "stages"
     rnd = Round(case, stage_dir, opts)
-    ns, candidate = rnd.ns, rnd.candidate
-    mon = opts.get("monitor") or _NullMonitor()
+    ns = rnd.ns
     try:
         if not jobs:
-            _launch(rnd, ns.workers, mon)
+            _launch(rnd, ns.workers)
         _collect(rnd, jobs)
     except stages.StageFailed as err:
         # a round that failed still cost its stage jobs: what they recorded goes with
@@ -1071,13 +791,6 @@ def register(case, work, opts):
         except Exception:  # the records are unreadable: the failure stands alone
             pass
         raise
-    made = None
-    if candidate:
-        made = {
-            "reference": str(rnd.inputs[0]),
-            "moving": str(rnd.inputs[1]),
-            "record": rnd.record(stages.PREP)["made"],
-        }
     cost = stages.summarise(
         rnd.record(stages.COARSE),
         [rnd.record(stages.TILE, i) for i in range(len(rnd.plan()))],
@@ -1092,50 +805,20 @@ def register(case, work, opts):
         for k in _FLAGS
         if k in opts and getattr(ns, k) != TIER_HIGH_STRIDE64.get(k)
     }
-    ref_in, mov_in, _, reduce = slides(case)
-    plain_mov = mov_in  # what the plain row registers on, and what STITCH draws
-    if made:
-        ref_in, mov_in = made["reference"], made["moving"]
-    proxy = case.modality == "brightfield"
+    ref_in, mov_in, _ = slides(case)
     info = {
         "version": stare.__version__,
         "source": str(Path(stare.__file__).parent),
         # the anchor, moving px -> reference px: the whole of `stare_rigid`, and the same
-        # matrix at every stride (module docstring). In the frame STARE worked in: for
-        # a reduced proxy, the reduced one (`input.reduced_by`)
+        # matrix at every stride (module docstring)
         "m0": entry["M0"],
         "input": {
             "reference": ref_in,
             "moving": mov_in,
-            "kind": (
-                f"benchmark-side proxy `{candidate}` (regbench.prep) of each RGB slide"
-                if made and not rnd.row
-                else f"benchmark-side preprocessing `{candidate}` of the image the plain "
-                "row registers on"
-                if made
-                else "one-channel proxy of an RGB slide"
-                if proxy
-                else "original slides"
-            ),
-            "proxy": (case.extra.get("settings") or {}).get("proxy") if proxy else None,
-            "reduced_by": reduce,
+            "kind": "original slides",
             "proxy_option": rnd.proxy,
             "sprep": rnd.sprep,
         },
-        **(
-            {
-                "prep": {
-                    **made["record"],
-                    "frozen": prep.load_frozen()["status"]
-                    if str(opts.get("label") or "") == prep.ROW
-                    else "a tuning run (not the frozen row)",
-                    "frozen_sha256": prep.load_frozen()["sha256"],
-                }
-            }
-            if made and rnd.row
-            else {}
-        ),
-        **({"proxy_prep": made["record"]} if made and not rnd.row else {}),
         "workers": int(ns.workers),
         "cpu_count": os.cpu_count(),  # what COARSE's FFTs use, whatever the allocation
         "stride": int(ns.stride),
@@ -1172,49 +855,6 @@ def register(case, work, opts):
                     "limit of their own: not the cohort's scheduler jobs, so this "
                     "run's cost is its own process tree's"
                 ),
-                *(
-                    [
-                        "brightfield: STARE is given the case's one-channel proxy of "
-                        f"each RGB slide ({info_proxy(case)}), written by the dataset "
-                        "module before the clock starts; the image it writes is the "
-                        "registered proxy"
-                    ]
-                    if proxy
-                    else []
-                ),
-                *(
-                    [
-                        "no pixel size is established for this case: STITCH is "
-                        f"given {NOMINAL_PIXEL_SIZE} as a placeholder for the header "
-                        "of the image it writes; nothing else reads it"
-                    ]
-                    if proxy and not case.pixel_size_um
-                    else []
-                ),
-                *(
-                    [
-                        f"proxy `{candidate}` (regbench.prep; here: "
-                        f"{'identity' if made['record']['identity_here'] else made['record']['base'] + ', ' + made['record']['operation']}) "
-                        "instead of the case's own grey proxy: both images rewritten "
-                        f"as one-channel files before COARSE (prep_s = "
-                        f"{made['record']['prep_s']:.1f}); STITCH draws the case's own "
-                        "proxy, with this run's transform"
-                    ]
-                    if made and not rnd.row
-                    else []
-                ),
-                *(
-                    [
-                        f"preprocessing `{candidate}` (regbench.prep; here: "
-                        f"{'identity' if made['record']['identity_here'] else made['record']['base'] + ', ' + made['record']['operation']}): "
-                        "both images rewritten as one-channel files before COARSE "
-                        f"(prep_s = {made['record']['prep_s']:.1f}); STARE and "
-                        "its parameters are unchanged; STITCH draws the image the "
-                        "plain row draws, with this row's transform"
-                    ]
-                    if made and rnd.row
-                    else []
-                ),
             ],
         },
     }
@@ -1230,22 +870,25 @@ def register(case, work, opts):
         info["coarse_trusted"] = json.loads(rnd.argv["m0"].read_text()).get(
             "coarse_trusted"
         )
-    rigid = reduced_map(lambda xy: warp(MOV_NAME, xy, "rigid"), reduce)
-    yield "stare_rigid", PointMap(rigid, MOV_TO_REF), info
+    yield (
+        "stare_rigid",
+        PointMap(lambda xy: warp(MOV_NAME, xy, "rigid"), MOV_TO_REF),
+        info,
+    )
     if Path(ns.tre).exists():
         info = {**info, "solve": json.loads(Path(ns.tre).read_text()).get("solve", {})}
     state = {
         "stage_dir": str(rnd.dir),
-        # the preprocessing row: never the preprocessed pixels
         "stitch": rnd.argv[stages.STITCH],
-        "moving": plain_mov if made else ns.moving,
+        "moving": ns.moving,
         "execution": cost["execution"],
         "out_shape": entry["out_shape"],
-        "reduced_by": reduce,
-        "proxy": proxy,
     }
-    refined = reduced_map(lambda xy: warp(MOV_NAME, xy, "refined"), reduce)
-    yield "stare", PointMap(refined, MOV_TO_REF), {**info, "_state": state}
+    yield (
+        "stare",
+        PointMap(lambda xy: warp(MOV_NAME, xy, "refined"), MOV_TO_REF),
+        {**info, "_state": state},
+    )
 
 
 def _own_rss_gb():
@@ -1356,7 +999,4 @@ def write_native(state, case_id, dest_dir):
         # the row's write_s: the attempt that wrote the image (a failed one is wasted)
         "write_s": rec["wall_s"],
     }
-    if state.get("proxy"):  # a brightfield case: not the slide, its registered proxy
-        native["content"] = "the one-channel proxy STARE was given, registered"
-        native["reduced_by"] = int(state.get("reduced_by", 1))
     return native

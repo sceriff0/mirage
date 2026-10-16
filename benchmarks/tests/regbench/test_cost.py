@@ -54,7 +54,6 @@ def test_no_pipeline_trace_is_read_and_no_column_depends_on_one(capsys):
     # what this benchmark measures itself is all still there
     for column in (
         "method_convert_s",
-        "benchmark_prep_s",
         "estimate_s",
         "write_s",
         "benchmark_copy_s",
@@ -238,27 +237,6 @@ def test_cost_by_step_reads_complete_patients_only():
     (head,) = score.summarise_cost(per)
     assert head["n_patients_complete"] == 2 and head["n_patients_partial"] == 1
     assert head["register_s_med"] == line["estimate_s"]
-
-
-def test_the_preprocessing_of_stare_prep_is_its_own_column_and_in_its_total():
-    """Review item 4: the preprocessing runs before the registration clock, so it is not
-    in `estimate_s`; it is in that row's total, as the other methods' own preprocessing
-    is inside their clocks."""
-    plain = _row(cost.end_to_end([res("stare", "P1", "stare")]), "stare")
-    row = res("stare_prep", "P1", "stare", prep_s=33.0, prep_peak_gb=2.5)
-    prep = _row(cost.end_to_end([row]), "stare_prep")
-    assert plain["benchmark_prep_s"] == cost.NONE
-    assert prep["benchmark_prep_s"] == 33.0 and prep["benchmark_prep_peak_gb"] == 2.5
-    assert prep["estimate_s"] == plain["estimate_s"]  # STARE's clock is STARE's alone
-    assert prep["measured_here_s"] == plain["measured_here_s"] + 33.0
-    assert "benchmark_prep" in prep["measured_here"]
-    assert "benchmark_prep" not in plain["measured_here"]
-    assert (
-        "benchmark_prep_s" in cost.COLUMNS
-        and "benchmark_prep_s" in cost.SUMMARY_COLUMNS
-    )
-    (line,) = cost.summarise(cost.end_to_end([row]))
-    assert line["benchmark_prep_s"] == 33.0
 
 
 def test_cpu_and_gpu_rows_share_one_table_with_the_device_in_its_own_column():

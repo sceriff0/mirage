@@ -112,9 +112,6 @@ EXPECTED = {
     "not_submitted": ("register", "launcher", "lost"),
     # the benchmark's own doing, found while the method was registering
     "identical_overlap": ("register", "benchmark", "lost"),
-    "reduced_proxy": ("register", "benchmark", "lost"),
-    "no_pixel_size": ("register", "benchmark", "lost"),
-    "proxy_mismatch": ("register", "benchmark", "lost"),
 }
 
 
@@ -541,7 +538,7 @@ def stage_job(start, wall, **more):
 
 def staged_run(ok=True):
     """A round whose tile 1 was killed for memory and retried, whose tile 2 hit its
-    time limit without recording an end and was retried, whose `prep` failed once."""
+    time limit without recording an end and was retried."""
     from benchmarks.regbench import stages
 
     oom = stage_job(
@@ -618,20 +615,6 @@ def test_a_stage_job_with_no_end_is_a_timeout_only_where_the_evidence_allows():
         "oom",
         "its own record",
     )
-
-
-def test_a_failed_prep_job_is_the_benchmarks(tmp_path):
-    _, run = staged_run()
-    run["info"]["jobs"]["failed_attempts"] = [
-        {"stage": "prep", "attempt": 1, "exit": 1, "cause": "exception", "error": "x"},
-        {"stage": "prep", "attempt": 2, "exit": 137, "cause": "oom", "error": "Killed"},
-    ]
-    run["native"] = None
-    rows = fl.run_events(run)
-    assert [(r["cause"], r["whose"], r["stage"]) for r in rows] == [
-        ("benchmark", "benchmark", "benchmark_points"),
-        ("benchmark_oom", "benchmark", "benchmark_points"),
-    ]
 
 
 def test_a_rounds_stage_attempts_are_listed_once_for_its_two_result_names():

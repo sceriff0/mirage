@@ -150,15 +150,6 @@ SIZES = {
     # rigid matrix of the SAME case and round (`--m0-from`), and they cost STARE three
     # more registrations, of ASHLAR's canvas.
     "stare": [(DEFAULT_HW, None), (LARGE_HW, None), (ASHLAR_HW, None), ASHLAR_PATIENT],
-    # The preprocessing row and its tuning runs (`stare_prep`, `stare_prep_<candidate>`):
-    # STARE's two pairs, without ASHLAR's patient (no row reads their rigid matrix).
-    # What is checked is the same as for `stare`, the points against the image STARE's
-    # writer draws, here from the ORIGINAL moving slide with the transform estimated on
-    # the preprocessed copy. That the preprocessing itself moves nothing is not
-    # something this comparison can see (the map and the image would move together);
-    # `regbench.prep.frame_check` measures it before every case and a failure raises,
-    # which this selfcheck reports as `crashed`.
-    "stare_prep": [(DEFAULT_HW, None), (LARGE_HW, None)],
     # Confirmed from VALIS's source by Task 7 (sdists 1.0.0 and 1.2.0 [PARTIAL: see
     # methods/_valis_points.py]). On the default pair the stages run at or near full
     # resolution (rigid 512 or 2048 px, first field 2048 px on a 2560 px slide), and two

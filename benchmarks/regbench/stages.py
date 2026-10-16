@@ -11,9 +11,7 @@ leaves, the layout of the tile arrays, and the cost of a round summed over its j
 **Allocation** (``ALLOCATION``). The CPUs, memory and time ``conf/modules.config`` gives
 each process at the ``high`` tier and stride 64: the ``withLabel:`` block of the label
 the module declares, and the ``memory`` closure of the process's ``withName:`` block.
-Memory and time are multiplied by the attempt, as there. ``prep`` is not a pipeline
-process: it is the benchmark's own preprocessing of the ``stare_prep`` row and has the
-benchmark's allocation (``ladder.CPUS``, the first rung). ``tests/regbench/
+Memory and time are multiplied by the attempt, as there. ``tests/regbench/
 test_stages.py`` reads both files and fails when this table and they differ.
 
 **Retries** (``RETRY_EXIT``, ``MAX_RETRIES``). None of the four processes sets an
@@ -76,7 +74,7 @@ from pathlib import Path
 
 from . import ladder, resources
 
-PREP, COARSE, TILE, SOLVE, STITCH = "prep", "coarse", "tile", "solve", "stitch"
+COARSE, TILE, SOLVE, STITCH = "coarse", "tile", "solve", "stitch"
 # the jobs up to the transform, in order; STITCH (the writer) is the driver's own job
 TO_TRANSFORM = (COARSE, TILE, SOLVE)
 
@@ -110,14 +108,6 @@ ALLOCATION = {
         "cpus": 4,
         "mem_gb": 4,
         "hours": 4,
-    },
-    # the benchmark's own step, not a pipeline process
-    PREP: {
-        "process": "",
-        "label": "",
-        "cpus": ladder.CPUS,
-        "mem_gb": ladder.RUNGS_GB[0],
-        "hours": 24,
     },
 }
 # conf/base.config: errorStrategy and maxRetries of every process without its own

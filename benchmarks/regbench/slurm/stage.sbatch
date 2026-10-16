@@ -2,9 +2,8 @@
 #SBATCH --job-name=regbench-stage
 # One stage job of one round, for a run whose registration is several scheduler jobs per
 # round, as the pipeline runs it (`runs`, column `stages`; benchmarks/regbench/stages.py):
-# prep (the preprocessing row only), coarse, tile or solve. Submitted by
-# submit_cohort.sh, which gives the allocation (the pipeline's, for that process and
-# attempt) and these arguments:
+# coarse, tile or solve. Submitted by submit_cohort.sh, which gives the allocation (the
+# pipeline's, for that process and attempt) and these arguments:
 #
 #   stage.sbatch <name> <method> <label|-> <opts|-> <image> <dataset> <stage>
 #                <attempt 1-4> <memory GB> <time limit> <layout file|-> <offset|->

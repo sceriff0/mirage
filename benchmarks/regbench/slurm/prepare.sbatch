@@ -3,12 +3,13 @@
 #SBATCH --output=regbench-prepare-%j.log
 # Prepare one dataset's cases. Arguments are passed to `regbench prepare`, e.g.
 #   sbatch -c 4 --mem=64G -t 8:00:00 prepare.sbatch multiplex --manifest rounds.csv --diameter 24
-# Submitted as an array (--array=0-N), each task prepares the case of its index.
+# submit_cohort.sh submits it as ONE job per dataset. Submitted by hand as an array
+# (--array=0-N), each task prepares the case of its index (SLURM_ARRAY_TASK_ID).
 set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 dataset="$1"; shift
-# as an array task: one case per task
+# only when run as an array task by hand: one case per task
 index=()
 [ -n "${SLURM_ARRAY_TASK_ID:-}" ] && index=(--index "$SLURM_ARRAY_TASK_ID")
 # REGBENCH_PREPARE_IMAGE: the image to prepare in (submit_cohort.sh sets the scorer's)

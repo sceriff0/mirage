@@ -549,17 +549,6 @@ if [ "$score_only" = 1 ]; then
     [ -z "$only_runs" ] || echo "# --score-only: --runs is not used (the scorer scores every run of the submission)"
     selected=""
 fi
-# the preprocessing row: said aloud while its preprocessing has not been selected
-IFS=$'\t' read -r prep_status prep_candidate prep_run < <(regbench_py "$REGBENCH_HEAD_IMAGE" runs --prep-status) \
-    || die "cannot read the frozen preprocessing (benchmarks/regbench/prep_frozen.json)"
-if has "$selected" "$prep_run"; then
-    if [ "$prep_status" = selected ]; then
-        echo "# $prep_run: preprocessing '$prep_candidate', selected on ANHIR's tuning side (prep_frozen.json)"
-    else
-        echo "# WARNING $prep_run: its preprocessing ('$prep_candidate') is PROVISIONAL: the selection has not been made. Its results will say so, and are run again once prep_frozen.json names the selected candidate."
-    fi
-fi
-
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
     [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
@@ -754,7 +743,7 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
     any_staged=1
     [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck gate: the launcher sends no first unit ahead for such a run. Nothing was submitted."
     for stage in ${stages//,/ }; do
-        case "$stage" in prep|coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
+        case "$stage" in coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
     done
 done < "$table"
 if [ "$any_staged" = 1 ]; then
@@ -1008,7 +997,7 @@ ladder() {
 # (`regbench stages --allocation`, benchmarks/regbench/stages.py), every job after the one
 # before it (`afterany`); sets LADDER_LAST to the last job of the last stage. Reads the
 # current row's variables.
-#   prep, coarse, solve   attempt 1 as an array over the rounds, and the stage's
+#   coarse, solve         attempt 1 as an array over the rounds, and the stage's
 #                         watcher (retry.sbatch): attempts 2 to 4 are submitted by it,
 #                         only for the rounds whose attempt before was not ok, and
 #                         such a task still exits at once unless that attempt ended
@@ -1055,7 +1044,7 @@ staged() {
     dep="$base"
     for stage in ${stages//,/ }; do
         case "$stage" in
-            prep|coarse|solve)
+            coarse|solve)
                 stage_chain "$stage" "0-$((n_rounds - 1))" "$dep"
                 dep="$base,afterany:$JOB_ID" ;;
             tile)

@@ -45,7 +45,7 @@ COST_COLUMNS = {"model_s": "seconds_of_model"}
 PROBE = """
 import json
 from benchmarks.regbench import cli, methods, plugins, score, selfcheck, variants
-names = [variants.run_name(r) for r in variants.active_runs()]
+names = [variants.run_name(r) for r in variants.RUNS]
 out = {
     "counts": list(variants.counts()),
     "expected": len(variants.expected_variants()),

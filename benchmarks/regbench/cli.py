@@ -59,7 +59,9 @@ def build_parser():
     ap = argparse.ArgumentParser(prog="regbench", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    prep = sub.add_parser("prepare").add_subparsers(dest="dataset", required=True)
+    prepare_sub = sub.add_parser("prepare").add_subparsers(
+        dest="dataset", required=True
+    )
 
     def common(p):
         p.add_argument(
@@ -76,7 +78,7 @@ def build_parser():
             "--force", action="store_true", help="redo cases that already exist"
         )
 
-    m = prep.add_parser("multiplex")
+    m = prepare_sub.add_parser("multiplex")
     common(m)
     m.add_argument(
         "--manifest",
@@ -522,7 +524,7 @@ def build_parser():
     sg = sub.add_parser(
         "stage",
         help="one stage job of one round of a run whose registration is several "
-        "scheduler jobs (`runs`, column `stages`): prep, coarse, tile or solve",
+        "scheduler jobs (`runs`, column `stages`): coarse, tile or solve",
     )
     sg.add_argument("--cases", required=True)
     sg.add_argument("--out", required=True)
@@ -530,9 +532,7 @@ def build_parser():
     sg.add_argument("--method", required=True, choices=METHODS)
     sg.add_argument("--label", default=None)
     sg.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
-    sg.add_argument(
-        "--stage", required=True, choices=("prep", "coarse", "tile", "solve")
-    )
+    sg.add_argument("--stage", required=True, choices=("coarse", "tile", "solve"))
     sg.add_argument(
         "--attempt",
         type=int,
@@ -605,11 +605,6 @@ def build_parser():
         help="print only the image `prepare`, `gate`, `tissue` and `score` run in",
     )
     rn.add_argument(
-        "--all",
-        action="store_true",
-        help="also print the paused runs (0 in the `active` column)",
-    )
-    rn.add_argument(
         "--dataset",
         default=None,
         choices=DATASETS,
@@ -630,17 +625,16 @@ def build_parser():
         "run it reads",
     )
     rn.add_argument(
+        "--all",
+        action="store_true",
+        help="also print the paused runs (0 in the `active` column)",
+    )
+    rn.add_argument(
         "--stage-allocation",
         action="store_true",
         help="print only, for the runs that are several scheduler jobs per round "
         "(column `stages`), one line per stage and attempt: stage, attempt, CPUs, "
         "memory in GB, time limit (the pipeline's allocation of that process)",
-    )
-    rn.add_argument(
-        "--prep-status",
-        action="store_true",
-        help="print only `<status>\t<candidate>\t<run>` of the frozen preprocessing "
-        "(status: provisional or selected; run: the row that uses it)",
     )
     return ap
 
@@ -1070,12 +1064,6 @@ def _runs(a):
                 print(
                     f"{stage}\t{attempt}\t{got['cpus']}\t{got['mem_gb']}\t{got['time']}"
                 )
-        return 0
-    if a.prep_status:
-        from . import prep
-
-        record = prep.load_frozen()
-        print(f"{record['status']}\t{record['selected']}\t{prep.ROW}")
         return 0
     if a.header:
         print("\t".join(variants.RUNS_COLUMNS))

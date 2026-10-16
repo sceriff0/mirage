@@ -91,7 +91,6 @@ from . import (
     failure_log,
     pairs,
     plugins,
-    prep,
     tissue,
 )
 from .cases import (
@@ -184,9 +183,6 @@ CAUSES = (
     "not_submitted",
     "benchmark",
     "identical_overlap",
-    "reduced_proxy",
-    "no_pixel_size",
-    "proxy_mismatch",
     "not_run",  # last: `CAUSES[:-1]` below names the causes of a launch that ran
 )
 NOT_THE_METHOD = (
@@ -195,9 +191,6 @@ NOT_THE_METHOD = (
     "not_submitted",
     "benchmark",
     "identical_overlap",
-    "reduced_proxy",
-    "no_pixel_size",
-    "proxy_mismatch",
 )
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every
@@ -741,10 +734,6 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         else math.nan,
         # where the adapter times the parts of its write step apart: the package's own
         # writer, a conversion that writer needed, and the benchmark's own copying
-        # the stare_prep row: the benchmark's preprocessing of both images, done before
-        # the registration clock starts, and the process's peak when it ended
-        "prep_s": _f((info.get("prep") or {}).get("prep_s")),
-        "prep_peak_gb": _f((info.get("prep") or {}).get("peak_rss_mb")) / 1024.0,
         "write_writer_s": _f(parts.get("writer")),
         "write_convert_s": _f(parts.get("convert")),
         "write_benchmark_s": _f(parts.get("benchmark")),
@@ -3327,14 +3316,6 @@ def summary_markdown(
         "of (its points were compared with nothing), `via <run>` a row whose run is "
         "gated by another run's selfcheck.\n"
     )
-    if any(str(r.get("method", "")).startswith(prep.ROW) for r in summary):
-        parts.append(
-            prep.frozen_summary()
-            + ". STARE and its parameters are the same in `stare` and `stare_prep`; "
-            "only the image it registers on differs (`benchmarks/regbench/prep.py`), "
-            "and the candidate was chosen on ANHIR's tuning-side pairs, not on this "
-            "cohort.\n"
-        )
     parts += mask_section(*(masks or ({}, [])))
     parts += attrition_markdown(attrition_rows or [])
     excluded = excluded or []

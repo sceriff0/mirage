@@ -36,10 +36,10 @@ GATING = sorted({variants.gated_by(n) for n in RUNS})
 # the four attempts of the pipeline's allocation for STITCH where the others have the
 # memory ladder
 STAGED = {n: variants.stages_of(r) for n, r in RUNS.items() if variants.stages_of(r)}
-# every active run, whatever its dataset
+# every run, whatever its dataset
 STAGED_ALL = {
     variants.run_name(r): variants.stages_of(r)
-    for r in variants.active_runs()
+    for r in variants.RUNS
     if variants.stages_of(r)
 }
 FEEDERS = 2  # tile submitters chained per staged run and dataset
@@ -510,8 +510,8 @@ def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     assert gated == set(RUNS)
 
 
-def test_a_paused_run_is_not_submitted(site, monkeypatch, tmp_path):
-    """The script submits what `runs` prints, and `runs` leaves a paused run out."""
+def test_a_run_the_list_leaves_out_is_not_submitted(site, monkeypatch, tmp_path):
+    """The script submits what `runs` prints and nothing else."""
     table = variants.runs_table()
     kept = [row for row in table if row[0] != "deeperhistreg_cpu"]
     stub = tmp_path / "benchmarks" / "regbench"
@@ -546,7 +546,7 @@ def test_a_paused_run_is_not_submitted(site, monkeypatch, tmp_path):
         "elif a[:1] == ['list']:\n"
         "    print('4 2 3' if 'multiplex' in a else '0 0 0')\n"
     )
-    done, _, _ = launch(site, env={"REGBENCH_REPO": str(tmp_path)}, log="paused")
+    done, _, _ = launch(site, env={"REGBENCH_REPO": str(tmp_path)}, log="left-out")
     ran = {j.args[0] for j in jobs_of(done).values() if j.script == "run_rung.sbatch"}
     assert "deeperhistreg_cpu" not in ran and ran == set(RUNS) - {"deeperhistreg_cpu"}
 
@@ -1508,10 +1508,9 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     """COARSE, one REG-TILE task per tile, SOLVE, then the writer: each with the
     allocation the pipeline gives that process, each attempt after the one before."""
     jobs, _, _ = dry
-    # every STARE run, with a prep job in front for the proxies the adapter writes itself
+    # every STARE run
     assert STAGED == {
-        n: (("prep",) if r.opts.get("proxy") in variants.PREP_PROXIES else ())
-        + ("coarse", "tile", "solve", "stitch")
+        n: ("coarse", "tile", "solve", "stitch")
         for n, r in RUNS.items()
         if r.method == "stare"
     }

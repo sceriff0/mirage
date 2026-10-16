@@ -189,42 +189,6 @@ def test_an_argument_error_is_reported_as_an_exception(toy_cases, tmp_path):
 
 
 # ── run options: proxy (benchmark-side) and sprep (STARE's own --prep) ────────
-def rgb_case(case, tmp_path, **extra):
-    """The case as an RGB one: PNG slides, with the case's own one-channel files standing
-    in for the dataset module's grey proxy."""
-    from PIL import Image
-
-    paths = {}
-    for side in ("ref", "mov"):
-        plane = _plane(getattr(case, f"{side}_image"))
-        top = float(plane.max()) or 1.0
-        # haematoxylin-stained: optical density along the stain's own colour vector, so
-        # the colour deconvolution of the `haem` proxy finds the nuclei
-        od = 1.5 * plane.astype(float) / top
-        rgb = 255 * np.exp(-od[..., None] * np.array([0.65, 0.70, 0.29]))
-        paths[side] = tmp_path / f"{side}.png"
-        Image.fromarray(rgb.astype("uint8")).save(paths[side])
-    return dataclasses.replace(
-        case,
-        modality="brightfield",
-        ref_image=str(paths["ref"]),
-        mov_image=str(paths["mov"]),
-        ref_nuclear=case.ref_image,
-        mov_nuclear=case.mov_image,
-        extra={**case.extra, "settings": {"proxy": "grey", "reduce": 1}, **extra},
-    )
-
-
-def _plane(path):
-    from stare.slide_io import open_lazy
-
-    arr, _, close = open_lazy(str(path))
-    try:
-        return np.asarray(arr[0, :, :])
-    finally:
-        close()
-
-
 def flag(argv, name):
     return argv[argv.index(name) + 1]
 
@@ -235,7 +199,7 @@ def test_sprep_reaches_coarse_and_reg_tile_argv(toy_cases, tmp_path):
         assert flag(argv[stage], "--prep") == "percentile", stage
 
 
-def test_default_run_passes_prep_none_and_the_pixel_size(toy_cases, tmp_path):
+def test_default_run_passes_sprep_none_and_the_pixel_size(toy_cases, tmp_path):
     case = multichannel(toy_cases["rigid"])
     argv = adapter.stage_argv(case, {}, tmp_path)
     for stage in ("coarse", "reg-tile"):
@@ -261,8 +225,6 @@ def test_a_run_with_no_option_is_the_run_with_the_defaults_spelled(toy_cases, tm
         ({"proxy": "haem"}, "proxy"),
         ({"proxy": "nope"}, "proxy"),
         ({"sprep": "nope"}, "sprep"),
-        ({"prep": "grey", "sprep": "clahe"}, "prep"),
-        ({"prep": "grey", "proxy": "channel"}, "prep"),
     ],
 )
 def test_refused_option_combinations_on_fluorescence(toy_cases, opts, match):
@@ -270,48 +232,19 @@ def test_refused_option_combinations_on_fluorescence(toy_cases, opts, match):
         adapter.settings(opts, toy_cases["rigid"])
 
 
-def test_proxy_on_an_rgb_case(toy_cases, tmp_path):
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    assert adapter.settings({}, case) == ("grey", "none")
-    assert adapter.settings({"proxy": "haem", "sprep": "clahe"}, case) == (
-        "haem",
-        "clahe",
-    )
-    with pytest.raises(ValueError, match="proxy=channel"):
-        adapter.settings({"proxy": "channel"}, case)
-    unknown = dataclasses.replace(case, pixel_size_um=None)
+def test_a_brightfield_case_is_refused(toy_cases):
+    case = dataclasses.replace(toy_cases["rigid"], modality="brightfield")
+    with pytest.raises(ValueError, match="brightfield cases are not part of this"):
+        adapter.settings({}, case)
+
+
+def test_clahe_needs_the_pixel_size_and_percentile_does_not(toy_cases):
+    unknown = dataclasses.replace(toy_cases["rigid"], pixel_size_um=None)
     with pytest.raises(ValueError, match="pixel size"):
         adapter.settings({"sprep": "clahe"}, unknown)
-    assert adapter.settings({"sprep": "percentile"}, unknown) == ("grey", "percentile")
-
-
-def test_default_grey_proxy_is_not_written_again_but_haem_is(toy_cases, tmp_path):
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    grey = adapter.Round(case, tmp_path / "g", {})
-    assert grey.candidate is None and grey.inputs is None
-    assert adapter.slides(case)[0] == case.ref_nuclear
-    haem = adapter.Round(case, tmp_path / "h", {"proxy": "haem"})
-    assert haem.candidate == "haem" and haem.row is None
-    assert haem.inputs is not None
-    assert str(haem.inputs[0]).endswith("reference.haem.ome.tif")
-    assert flag(haem.argv["coarse"], "--reference") == str(haem.inputs[0])
-
-
-def test_proxy_recorded_as_benchmark_side(toy_cases, tmp_path):
-    case = rgb_case(toy_cases["crop"], tmp_path)
-    info = {}
-    for key, opts in (("haem", {"proxy": "haem", "sprep": "clahe"}), ("plain", {})):
-        out = tmp_path / f"o_{key}"
-        methods.run_case("stare", case, out, opts={**OPTS, **opts}, keep_work=True)
-        info[key] = run_json(out, "stare", case)["info"]
-    haem, plain = info["haem"], info["plain"]
-    assert any("proxy `haem`" in x for x in haem["implementation"]["benchmark_side"])
-    assert haem["input"]["sprep"] == "clahe" and haem["input"]["proxy_option"] == "haem"
-    # sprep is STARE's own option: not a departure; the default proxy is not either
-    assert not any("clahe" in x for x in haem["implementation"]["benchmark_side"])
-    assert not any("proxy `" in x for x in plain["implementation"]["benchmark_side"])
-    assert (
-        plain["input"]["sprep"] == "none" and plain["input"]["proxy_option"] == "grey"
+    assert adapter.settings({"sprep": "percentile"}, unknown) == (
+        "channel",
+        "percentile",
     )
 
 
@@ -409,7 +342,7 @@ def test_selfcheck_is_ok(tmp_path, monkeypatch):
     place in the list and the lookup of their matrices are tested without running them
     (`test_ashlar_adapter.py::test_stares_selfcheck_holds_the_anchors_of_ashlars_own_cases`)."""
     own = [(sc.DEFAULT_HW, None), (sc.LARGE_HW, None)]
-    assert sc.sizes_for("stare")[:2] == own == sc.sizes_for("stare_prep")
+    assert sc.sizes_for("stare")[:2] == own
     # the gate checks the code path that makes the cohort's results: the four stage
     # commands, each a process of its own, and never `stare register`
     import stare.cli
@@ -459,109 +392,10 @@ def test_selfcheck_is_ok(tmp_path, monkeypatch):
         )  # what an anchored row reads
 
 
-def test_a_preprocessing_row_on_a_reduced_proxy_is_the_benchmarks_refusal(
-    toy_cases, tmp_path
-):
-    """HyReCo prepared with `--reduce 2` lists the `haem` cells; the adapter refuses them,
-    and the refusal is the benchmark's (`reduced_proxy`), not a failure of STARE."""
-    from benchmarks.regbench import failure_log, resources
-
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    case = dataclasses.replace(
-        case, extra={**case.extra, "settings": {"proxy": "grey", "reduce": 2}}
-    )
-    with pytest.raises(ValueError, match="reduced proxy") as err:
-        adapter.Round(case, tmp_path / "r", {"proxy": "haem"})
-    assert resources.classify_error(err.value) == "reduced_proxy"
-    out = tmp_path / "out"
-    methods.run_group("stare", [case], out, {"proxy": "haem"}, label="stare_haem")
-    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
-    assert runs and all(r["ok"] is False for r in runs)
-    assert {r["cause"] for r in runs} == {"reduced_proxy"}
-    assert failure_log.WHOSE["reduced_proxy"] == failure_log.BENCHMARK
-    assert "reduced_proxy" in resources.NOT_THE_METHOD
-
-
-def tif_rgb_case(case, tmp_path):
-    """``rgb_case`` with whole-slide RGB TIFFs (HyReCo's ``HE/<id>.tif``) for slides."""
-    import tifffile
-    from PIL import Image
-
-    case = rgb_case(case, tmp_path)
-    paths = {}
-    for side in ("ref", "mov"):
-        rgb = np.asarray(Image.open(getattr(case, f"{side}_image")).convert("RGB"))
-        paths[side] = tmp_path / f"{side}.tif"
-        tifffile.imwrite(paths[side], rgb, photometric="rgb", tile=(256, 256))
-    return dataclasses.replace(
-        case, ref_image=str(paths["ref"]), mov_image=str(paths["mov"])
-    )
-
-
-@pytest.mark.parametrize("proxy", ["haem", "grey_smooth"])
-def test_a_proxy_of_a_whole_slide_rgb_tiff_is_written(toy_cases, tmp_path, proxy):
-    """HyReCo: the `haem` / `grey_smooth` levels read the original RGB TIFF; the
-    preprocessing job writes their proxy instead of refusing the slide."""
-    case = tif_rgb_case(toy_cases["rigid"], tmp_path)
-    rnd = adapter.Round(case, tmp_path / "r", {"proxy": proxy})
-    (done,) = adapter.run_stage(case, rnd.dir, rnd.opts, stages.PREP, rnd=rnd)
-    rec = done[4]
-    assert rec["ok"], rec["error"]
-    assert rec["made"]["candidate"] == proxy
-    assert rnd.done(stages.PREP)
-
-
-@pytest.mark.parametrize(
-    "exc, cause",
-    [(MemoryError(), "benchmark_oom"), (RuntimeError("a bug"), "benchmark")],
-)
-def test_a_failed_preprocessing_job_is_the_benchmarks_cause(
-    toy_cases, tmp_path, monkeypatch, exc, cause
-):
-    """The preprocessing is the benchmark's own step: whatever ends it, the round's
-    cause is the benchmark's, never STARE's `exception` / `oom`."""
-    from benchmarks.regbench import failure_log, prep
-
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    rnd = adapter.Round(case, tmp_path / "r", {"proxy": "haem"})
-
-    def boom(*a, **k):
-        raise exc
-
-    monkeypatch.setattr(prep, "write_inputs", boom)
-    rec = adapter._run_prep(rnd, 1, adapter.LOCAL)
-    assert rec["ok"] is False and rec["cause"] == cause
-    assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
-
-
-def test_clahe_without_a_pixel_size_is_the_benchmarks_refusal(toy_cases, tmp_path):
-    """ANHIR's mammary glands have no established pixel size and STARE's CLAHE region is
-    in micrometres: the `clahe` level cannot exist there. That is the benchmark's
-    cause (`no_pixel_size`), never STARE's `exception`."""
-    from benchmarks.regbench import failure_log, resources, score
-
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    case = dataclasses.replace(case, pixel_size_um=None)
-    with pytest.raises(ValueError, match="no established pixel size") as err:
-        adapter.Round(case, tmp_path / "r", {"sprep": "clahe"})
-    assert resources.classify_error(err.value) == "no_pixel_size"
-    out = tmp_path / "out"
-    methods.run_group("stare", [case], out, {"sprep": "clahe"}, label="stare_clahe")
-    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
-    assert runs and all(r["ok"] is False for r in runs)
-    assert {r["cause"] for r in runs} == {"no_pixel_size"}
-    assert failure_log.WHOSE["no_pixel_size"] == failure_log.BENCHMARK
-    assert "no_pixel_size" in resources.NOT_THE_METHOD
-    assert "no_pixel_size" in score.NOT_THE_METHOD
-    assert "no_pixel_size" in score.CAUSES and score.CAUSES[-1] == "not_run"
-
-
-def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
-    toy_cases, tmp_path, monkeypatch
-):
-    """`stages --due` is what the tile feeder submits: one case the adapter refuses
-    (its refusal is recorded by its own run) must not make the command fail, or the
-    feeder submits every tile of every case."""
+def test_the_due_tiles_of_every_case_are_listed(toy_cases, tmp_path, monkeypatch):
+    """`stages --due` is what the tile feeder submits: the plan rows of every case whose
+    COARSE is ok and whose tiles have not run; an error of a round is raised, not
+    swallowed."""
     import contextlib
     import io
 
@@ -570,7 +404,7 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
 
     cases = tmp_path / "cases"
     base = toy_cases["rigid"]
-    ids = ["a_ok", "b_refused", "c_ok"]
+    ids = ["a_ok", "c_ok"]
     for cid in ids:
         write_case(cases, dataclasses.replace(base, case_id=cid, ref_hw=[4096, 5120]))
     real = adapter.Round
@@ -579,9 +413,7 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
         """A round whose COARSE is ok, none of whose tiles has run."""
 
         def __init__(self, case, stage_dir, opts):
-            if case.case_id == "b_refused":
-                raise adapter.NoPixelSize("sprep=clahe: no established pixel size")
-            self.candidate = None
+            pass
 
         def done(self, stage, row=None):
             return {"ok": True}
@@ -611,56 +443,17 @@ def test_a_refused_case_is_due_no_tile_and_the_others_still_are(
     monkeypatch.setattr(adapter, "Round", real)
     assert code == 0
     rows = [int(v) for v in said.getvalue().split()]
-    # the first case's tiles, nothing of the second, the third's
-    assert rows == [*range(n), *range(2 * n, 3 * n)]
-    # and tiles_due itself: [] for the refused case, an error of any other kind raised
-    refused = dataclasses.replace(base, case_id="b_refused")
-    monkeypatch.setattr(adapter, "Round", Fake)
-    assert adapter.tiles_due(refused, tmp_path / "r", {}, 1) == []
+    assert rows == [*range(n), *range(n, 2 * n)]
 
     def broken(*a, **k):
         raise RuntimeError("a bug is not a refusal")
 
     monkeypatch.setattr(adapter, "Round", broken)
     with pytest.raises(RuntimeError):
-        adapter.tiles_due(refused, tmp_path / "r", {}, 1)
+        adapter.tiles_due(base, tmp_path / "r", {}, 1)
 
 
 def load_case_by_id(cases, cid):
     from benchmarks.regbench.cases import list_cases
 
     return next(c for c in list_cases(cases, "multiplex") if c.case_id == cid)
-
-
-def test_a_grey_cell_on_a_haematoxylin_prepared_case_is_the_benchmarks_refusal(
-    toy_cases, tmp_path
-):
-    """HyReCo prepared with `--proxy haematoxylin`: the case's own proxy is
-    haematoxylin, so a `proxy=grey` cell would register on haematoxylin under a grey
-    name. It is refused, the benchmark's cause (`proxy_mismatch`); the baseline `stare`
-    (no proxy option) still runs on the case's own proxy, and a luminance-prepared case
-    runs the grey cell."""
-    from benchmarks.regbench import failure_log, resources, score
-
-    case = rgb_case(toy_cases["rigid"], tmp_path)
-    haem = dataclasses.replace(
-        case,
-        extra={**case.extra, "settings": {"proxy": "haematoxylin", "reduce": 1}},
-    )
-    opts = {"proxy": "grey", "sprep": "clahe"}
-    with pytest.raises(ValueError, match="haematoxylin") as err:
-        adapter.Round(haem, tmp_path / "r", opts)
-    assert resources.classify_error(err.value) == "proxy_mismatch"
-    assert adapter.settings({}, haem) == ("grey", "none")  # the baseline: no refusal
-    lum = dataclasses.replace(
-        case, extra={**case.extra, "settings": {"proxy": "luminance", "reduce": 1}}
-    )
-    assert adapter.settings(opts, lum) == ("grey", "clahe")
-    out = tmp_path / "out"
-    methods.run_group("stare", [haem], out, opts, label="stare_grey_clahe")
-    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
-    assert runs and {r["cause"] for r in runs} == {"proxy_mismatch"}
-    assert failure_log.WHOSE["proxy_mismatch"] == failure_log.BENCHMARK
-    assert "proxy_mismatch" in resources.NOT_THE_METHOD
-    assert "proxy_mismatch" in score.NOT_THE_METHOD
-    assert score.CAUSES[-1] == "not_run"

@@ -15,8 +15,6 @@ column              what it is
                     given). Clock paused. ``none`` when the method reads the cohort's
                     files as they are; ``not separable`` when its own conversion
                     happens inside its registration call.
-``benchmark_prep``  the benchmark's preprocessing of both images for the row that has
-                    one (``stare_prep``); ``none`` elsewhere.
 ``estimate``        the registration clock (``register_s``).
 ``write``           the method's own writer. Clock paused. Where an adapter times the
                     parts of its write step apart (``native.write_parts_s``), this is
@@ -363,13 +361,11 @@ COLUMNS = (
     "n_rounds",
     "complete",
     "method_convert_s",
-    "benchmark_prep_s",
     "estimate_s",
     "write_s",
     "measured_here_s",
     "benchmark_copy_s",
     "estimate_peak_gb",
-    "benchmark_prep_peak_gb",
     "job_peak_gb",
     "written",
     "merged_image",
@@ -426,12 +422,7 @@ def end_to_end(res_rows):
         # column and the headline `write_s` are one number
         write = _sum(r["write_s"] for r in ok)
         copy = _sum(r.get("write_benchmark_s") for r in ok)
-        # The stare_prep row: the benchmark's preprocessing of both images. It runs
-        # before the registration clock, so it is NOT in `estimate_s`; it is what that
-        # row needs before STARE can start, so it IS in this row's total (the other
-        # methods' own preprocessing is inside their clocks).
-        prep = _sum(r.get("prep_s") for r in ok)
-        here = _sum([convert, prep, estimate, write])
+        here = _sum([convert, estimate, write])
 
         described = [r.get("written") for r in ok if r.get("written")]
         complete = {r.get("written_complete") for r in ok} - {None, ""}
@@ -459,13 +450,11 @@ def end_to_end(res_rows):
                 # the rule of the per-method block, `score.summarise_cost`)
                 "complete": len(ok) == len(mine),
                 "method_convert_s": convert,
-                "benchmark_prep_s": prep if _is_number(prep) else NONE,
                 "estimate_s": estimate,
                 "write_s": write,
                 "measured_here_s": here,
                 "benchmark_copy_s": copy,
                 "estimate_peak_gb": _max(r["peak_rss_gb"] for r in ok),
-                "benchmark_prep_peak_gb": _max(r.get("prep_peak_gb") for r in ok),
                 "job_peak_gb": _max(r["cgroup_peak_gb"] for r in ok),
                 "written": described[0] if described else NOT_AVAILABLE,
                 # is that image already the patient's one merged pyramid (module
@@ -476,7 +465,6 @@ def end_to_end(res_rows):
                 "measured_here": ", ".join(
                     [
                         *(["method_convert"] if _is_number(convert) else []),
-                        *(["benchmark_prep"] if _is_number(prep) else []),
                         "estimate",
                         "write",
                     ]
@@ -531,7 +519,6 @@ def summarise(rows, common=None, cohort=None):
             )
         for key in (
             "method_convert_s",
-            "benchmark_prep_s",
             "estimate_s",
             "write_s",
             "measured_here_s",
@@ -561,7 +548,6 @@ SUMMARY_COLUMNS = (
     "n_patients_cohort",
     "n_patients_common",
     "method_convert_s",
-    "benchmark_prep_s",
     "estimate_s",
     "estimate_s_common",
     "write_s",
@@ -590,7 +576,7 @@ def markdown(rows, summary, table):
         "several scheduler jobs per round (STARE): its `estimate_s` is COARSE + the "
         "longest tile + SOLVE, jobs of 2, 2 and 1 CPUs, many tiles at once, and is not "
         "a 4-CPU time; nothing is taken from another run. "
-        "`measured_here_s` is the sum of `method_convert_s`, `benchmark_prep_s`, "
+        "`measured_here_s` is the sum of `method_convert_s`, "
         "`estimate_s` and `write_s`: the total measured time from the cohort's files "
         "to the image that result wrote. The two peaks are the largest over the "
         "patients: `estimate_peak_gb_max` the process tree while registering (for a "

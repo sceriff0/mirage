@@ -9,14 +9,14 @@ expect (``expected_variants()``) and which are the primary rows (``PRIMARY``).
 Totals are ``counts()`` and ``expected_variants()``; nothing here is a second copy to keep in
 step. The STARE and ASHLAR runs are GENERATED from tables (``regimes.REGIMES`` x
 ``STARE_STRIDES``; ``methods.ashlar.ASHLAR_CELLS``), so a total moves with a table. A run
-may carry ``Run.regimes``: ``runs_for(dataset)`` then keeps it only on a dataset of one of
-those regimes (``regimes.DATASET_REGIME``).
+takes a dataset argument (``runs_for(dataset)``): the only dataset is the cohort's
+``multiplex`` (``regimes.DATASET_REGIME``).
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
 launched, not expected by ``score``, not counted and not printed by ``runs`` (``runs
 --all`` prints it, with ``0`` in column 13). Taking the flag off again is the whole
-re-activation. Only ``stare_prep`` is paused today. ``check()`` refuses a list in which a paused run
+re-activation. No run is paused today. ``check()`` refuses a list in which a paused run
 writes a primary row, gates an active run's selfcheck, or is what an active run waits
 for; it runs at import and before every list this module hands out.
 
@@ -54,18 +54,10 @@ only ever added at the end, so a position never changes.
                        that row's ``realcheck.json`` is not flagged.
 16. ``stages``         for a run whose registration is several scheduler jobs per round
                        (``stages_of()``): their names in order, joined by commas
-                       (``coarse,tile,solve,stitch``, with ``prep`` first for the
-                       preprocessing row); ``-`` for a run that is one job per unit.
+                       (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit.
 
 The STARE runs of the cohort are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``); ``runs --dataset multiplex`` prints the list.
-
-**The ``stare_prep`` run** (ruling R3.21) is STARE unchanged on a preprocessed copy of the
-image it registers on (``regbench.prep``). Its one option, ``prep``, is the candidate
-frozen in ``prep_frozen.json``, read when this module is imported: the run list always
-names the candidate itself, so a result made with another candidate is never reused as
-this one. It is PAUSED (2026-10-14, ``active=False``): the regimes' ``proxy`` / ``sprep``
-levels replace it, and with it the tuning side of ANHIR that chooses its candidate.
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -85,7 +77,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import methods, plugins, prep, regimes
+from . import methods, plugins, regimes
 from .methods import ashlar as _ashlar
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
@@ -103,25 +95,18 @@ class Run(NamedTuple):
     active: bool = (
         True  # False pauses the run: kept and tested, not launched or expected
     )
-    # the regimes (regimes.REGIMES) whose datasets take the run; None = every dataset
-    regimes: tuple[str, ...] | None = None
 
 
 STARE_STRIDES = (64, 128, 256)
 
 
-# the proxies of an RGB slide that `prep.write_inputs` writes (a job of their own); `grey`
-# is the case's own input and `channel` the slide (methods.stare.proxy_candidate)
-PREP_PROXIES = ("haem", "grey_smooth")
-
-
 def stare_cell(stride, key, level):
     """``(run name, opts)`` of one STARE cell: a stride and a preprocessing level.
 
-    The baseline level carries the stride alone (no proxy, no ``--prep``): the adapter's
-    own default picks the modality's proxy, so ONE name (``stare``, ``stare_s128_none``,
-    ``stare_s256_none``) is right in every regime. Any other level names its proxy and
-    ``--prep``. Stride 64 is STARE's default and is left out of the name (and of the
+    The baseline level carries the stride alone (no proxy, no ``sprep``): the adapter's
+    own default is the channel with no preprocessing, so the names ``stare``,
+    ``stare_s128_none`` and ``stare_s256_none`` need no options. Any other level names
+    its proxy and ``sprep``. Stride 64 is STARE's default and is left out of the name (and of the
     options of the plain row)."""
     lk = regimes.level_key(level)
     name = f"stare_{lk}" if stride == 64 else f"stare_s{stride}_{lk}"
@@ -134,21 +119,13 @@ def stare_cell(stride, key, level):
 
 
 def _stare_runs():
-    """The STARE runs: every stride x every level of every regime, deduplicated by name.
-    A baseline run applies to every dataset (``regimes=None``); another level's run lists
-    the regimes whose levels produced it. Two regimes producing one name with different
-    options is a bug and is refused."""
+    """The STARE runs: every stride x every level of the cohort's regime
+    (``regimes.COHORT_REGIME``), deduplicated by name."""
     found = {}
-    for reg in regimes.REGIMES:
-        for key, level in regimes.stare_levels(reg):
-            for s in STARE_STRIDES:
-                name, opts = stare_cell(s, key, level)
-                seen_opts, seen_regs = found.setdefault(name, (opts, set()))
-                if seen_opts != opts:
-                    raise ValueError(
-                        f"{name}: {seen_opts} in one regime, {opts} in {reg}"
-                    )
-                seen_regs.add(reg)
+    for key, level in regimes.stare_levels(regimes.COHORT_REGIME):
+        for s in STARE_STRIDES:
+            name, opts = stare_cell(s, key, level)
+            found.setdefault(name, opts)
     return tuple(
         Run(
             "stare",
@@ -157,10 +134,8 @@ def _stare_runs():
             "STARE_REGBENCH",
             False,
             None,
-            True,
-            None if "proxy" not in opts else tuple(sorted(regs)),
         )
-        for name, (opts, regs) in found.items()
+        for name, opts in found.items()
     )
 
 
@@ -188,18 +163,6 @@ def _ashlar_runs():
 
 RUNS = (
     *_stare_runs(),
-    # STARE unchanged, on the frozen benchmark-side preprocessing of its input. PAUSED
-    # (2026-10-14): the regimes' `sprep` levels replace it; kept and tested, and so is
-    # its tuning side (`TUNING_RUNS` / `anhir_tune`), paused with it.
-    Run(
-        "stare",
-        prep.ROW,
-        {"prep": prep.selected()},
-        "STARE_REGBENCH",
-        False,
-        None,
-        active=False,
-    ),
     Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
@@ -273,17 +236,6 @@ RUNS = (
 
 # Runs of a private method plug-in (regbench.plugins): none unless one is enabled.
 RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
-
-# The tuning side of ANHIR (`anhir_tune`) runs these and nothing else: one run per
-# preprocessing candidate, so the choice can look at no other data. PAUSED with
-# `stare_prep`, their only consumer (2026-10-15): kept and tested, submitted by the
-# launcher only on request (`REGBENCH_ANHIR_TUNE=1`, `TUNING_PAUSED`).
-TUNING_RUNS = tuple(
-    Run("stare", f"{prep.ROW}_{c}", {"prep": c}, "STARE_REGBENCH", False, None)
-    for c in prep.CANDIDATES
-)
-TUNING_PAUSED = True  # slurm/submit_cohort.sh refuses `--datasets anhir_tune` without
-# REGBENCH_ANHIR_TUNE=1 while this is True (a test holds the two together)
 
 # Ruling R3.12 (2026-10-11): the high-resolution row is primary for both methods that
 # have one. Each is one line to switch back to upstream's default setting:
@@ -398,13 +350,8 @@ def variants_of(run):
 
 
 def run_variants():
-    """``{run name: [the result names it writes]}`` for every run, paused or not."""
+    """``{run name: [the result names it writes]}`` for every run."""
     return {run_name(r): list(variants_of(r)) for r in RUNS}
-
-
-def tuning_final(candidate):
-    """The result name of a candidate's FINAL transform on the tuning side."""
-    return f"{prep.ROW}_{candidate}"
 
 
 NO_RECORD = "no selfcheck record"
@@ -429,9 +376,7 @@ def row_checks(selfcheck_dir, mine=None):
 
     out = {}
     root = Path(selfcheck_dir) if selfcheck_dir else None
-    for run in runs_for(
-        None
-    ):  # a paused run writes no results; nor does a run of another regime
+    for run in runs_for(None):
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -461,9 +406,7 @@ def _gate_records(selfcheck_dir, mine=None):
 
     root = Path(selfcheck_dir) if selfcheck_dir else None
     out = []
-    for run in runs_for(
-        None
-    ):  # a paused run writes no results; nor does a run of another regime
+    for run in runs_for(None):
         name = run_name(run)
         gate = gated_by(name)
         record = None
@@ -543,7 +486,7 @@ def paused_names():
 
 def run_of(name):
     """The run stored under ``name``, paused or not; KeyError for a name of no run."""
-    for run in RUNS + TUNING_RUNS:
+    for run in RUNS:
         if run_name(run) == name:
             return run
     raise KeyError(f"no run named {name!r}")
@@ -578,31 +521,18 @@ def check():
             raise ValueError(
                 f"the active run {name!r} waits for {run.after!r}, which is paused"
             )
-    unknown = set(methods.NO_BRIGHTFIELD) - {r.method for r in RUNS}
-    if unknown:
-        raise ValueError(f"NO_BRIGHTFIELD names no method of the list: {unknown}")
     names = {run_name(r) for r in RUNS}
-    if len(names) != len(RUNS) or names & {run_name(r) for r in TUNING_RUNS}:
+    if len(names) != len(RUNS):
         raise ValueError("two runs share a name")
 
 
 def runs_for(dataset=None):
-    """The active runs of a dataset: those whose ``regimes`` take it (``Run.regimes``),
-    the cohort's (``regimes.COHORT_REGIME``) for None."""
-    return tuple(r for r in active_runs() if _in_regime(dataset, r))
-
-
-def _in_regime(dataset, run):
-    """Whether the run's ``regimes`` take this dataset (None takes every dataset). The
-    cohort (``dataset`` None) is ``regimes.COHORT_REGIME``. A dataset with no regime
-    (``regimes.DATASET_REGIME``) takes only the runs that name none."""
-    if run.regimes is None:
-        return True
-    try:
-        reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
-    except KeyError:
-        return False
-    return reg in run.regimes
+    """The active runs of a dataset: the same list for the cohort (None) and for
+    ``multiplex``, the only dataset. A dataset with no regime
+    (``regimes.DATASET_REGIME``) is a KeyError."""
+    if dataset is not None:
+        regimes.regime_of(dataset)
+    return active_runs()
 
 
 def primary_for(dataset=None):
@@ -625,14 +555,8 @@ def scope(method):
 
 def stages_of(run):
     """The scheduler jobs one round of this run is registered in, in order, or ``()``
-    for a run that is one job per unit: the method's ``STAGES``, behind ``prep`` when
-    the run has a benchmark-side preprocessing: the label-bound ``prep`` row, or a proxy
-    the adapter writes itself (``PREP_PROXIES``; ``regbench.stages``)."""
-    names = tuple(getattr(methods.load(run.method), "STAGES", ()) or ())
-    opts = run.opts or {}
-    if names and (opts.get("prep") or opts.get("proxy") in PREP_PROXIES):
-        names = ("prep", *names)
-    return names
+    for a run that is one job per unit: the method's ``STAGES`` (``regbench.stages``)."""
+    return tuple(getattr(methods.load(run.method), "STAGES", ()) or ())
 
 
 def counts():

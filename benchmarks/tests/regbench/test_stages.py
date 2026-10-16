@@ -151,9 +151,8 @@ def test_the_allocation_table_is_the_high_tier_at_stride_64():
         "max_dim": tier["coarse_max_dim"],
         "stride": 64,
     }
-    # the benchmark's own step has the benchmark's allocation
-    prep = stages.ALLOCATION[stages.PREP]
-    assert (prep["cpus"], prep["mem_gb"]) == (ladder.CPUS, ladder.RUNGS_GB[0])
+    # the benchmark has no step of its own among the stages
+    assert set(stages.ALLOCATION) == {"coarse", "tile", "solve", "stitch"}
 
 
 def test_the_retry_rule_is_the_one_those_processes_inherit():
@@ -1254,12 +1253,8 @@ def test_stages_are_not_reused_when_an_input_file_holds_other_bytes(
     assert adapter.Round(case, new, dict(OPTS)).done("coarse")
 
 
-def test_another_stare_version_or_other_preprocessing_code_is_another_job(
-    staged, tmp_path, monkeypatch
-):
+def test_another_stare_version_is_another_job(staged, tmp_path, monkeypatch):
     import stare as package
-
-    from benchmarks.regbench import prep
 
     case = staged["case"]
     _, new = clone(staged, tmp_path)
@@ -1267,15 +1262,6 @@ def test_another_stare_version_or_other_preprocessing_code_is_another_job(
     monkeypatch.setattr(package, "__version__", "0.0.0-other")
     rnd = adapter.Round(case, new, dict(OPTS))
     assert all(rnd.identity(s) != ids[s] for s in ids) and not rnd.done("coarse")
-    monkeypatch.undo()
-    # the preprocessing row: its `prep` job is keyed on the preprocessing code too
-    opts = {"prep": "grey_clahe", "label": f"{prep.ROW}_grey_clahe"}
-    before = adapter.Round(case, tmp_path / "p", dict(opts)).identity("prep")
-    monkeypatch.setattr(prep, "code_sha256", lambda: "other code")
-    assert adapter.Round(case, tmp_path / "p", dict(opts)).identity("prep") != before
-    monkeypatch.undo()
-    other = {"prep": "grey", "label": f"{prep.ROW}_grey"}
-    assert adapter.Round(case, tmp_path / "p", dict(other)).identity("prep") != before
 
 
 def test_a_result_of_the_other_launcher_is_not_reused_as_the_staged_row(staged):
@@ -1306,7 +1292,7 @@ def test_a_result_of_the_other_launcher_is_not_reused_as_the_staged_row(staged):
         assert methods._reuse(*args, host, "x", {**jobs, **change}) is None, change
     # the adapter's code: the driver, the adapter, and what the adapter imports
     files = {p.name for p in methods.code_files("stare")}
-    assert files >= {"__init__.py", "stare.py", "stages.py", "prep.py", "mapping.py"}
+    assert files >= {"__init__.py", "stare.py", "stages.py", "mapping.py"}
     assert "score.py" not in files and "valis.py" not in files
     assert {p.name for p in methods.code_files("valis")} >= {
         "valis.py", "_valis_points.py"
@@ -1477,56 +1463,6 @@ def test_the_stage_command_of_the_cli_runs_a_round(staged, capsys):
         with pytest.raises(SystemExit, match="does not list"):
             tile(0, wrong)
     assert kept == {p: p.read_bytes() for p in sorted(staged["dir"].rglob("*.json"))}
-
-
-def test_the_preprocessing_row_runs_in_the_same_jobs(toy_cases, tmp_path):
-    """`stare_prep` is the same four stages behind a `prep` job of the benchmark's own:
-    STARE registers the preprocessed copies, STITCH draws the original slide."""
-    from benchmarks.regbench import prep
-
-    case = toy_cases["crop"]
-    label = f"{prep.ROW}_grey_clahe"
-    opts = {"prep": "grey_clahe", "label": label}
-    out = tmp_path / "out"
-    stage_dir = adapter.stage_dir_of(out, label, case)
-    assert stage_dir == result_dir(out, label, case) / "stages"
-    # nothing of STARE runs before the preprocessing is ok
-    got = adapter.run_stage(case, stage_dir, dict(opts), "coarse")
-    assert [(go, why) for _, _, go, why, _ in got] == [
-        (False, "the preprocessing is not ok")
-    ]
-    for stage in ("prep", "coarse", "tile", "solve"):
-        got = adapter.run_stage(case, stage_dir, dict(opts), stage)
-        assert [(s, go, rec["ok"]) for s, _, go, _, rec in got] == [(stage, True, True)]
-    made = prep.input_paths(stage_dir / "prep", "grey_clahe")
-    assert all(p.exists() for p in made)
-    coarse = stages.read_record(stage_dir, "coarse")["command"]
-    assert coarse[coarse.index("--reference") + 1] == str(made[0])
-    assert coarse[coarse.index("--moving") + 1] == str(made[1])
-    assert coarse[coarse.index("--nuclear-index") + 1] == "0"
-    with as_jobs():
-        done = methods.run_case(
-            "stare", case, out, opts={"prep": "grey_clahe"}, label=label
-        )
-    assert done == [f"{label}_rigid", label]
-    run = run_json(out, label, case)
-    assert run["info"]["prep"]["candidate"] == "grey_clahe"
-    assert run["info"]["prep"]["prep_s"] > 0 and run["info"]["input"]["moving"] == str(
-        made[1]
-    )
-    assert (
-        run["info"]["jobs"]["execution"] == "jobs"
-        and run["info"]["jobs"]["n_jobs"] == 3
-    )
-    # the written image is the ORIGINAL slide moved by this row's transform
-    stitch = stages.read_record(stage_dir, "stitch")["command"]
-    assert stitch[stitch.index("--moving") + 1] == str(case.mov_image) != str(made[1])
-    # a plain row has no such job, and asking for one does nothing
-    assert adapter.run_stage(case, tmp_path / "plain", dict(OPTS), "prep") == []
-    assert (
-        stages.allocation("prep")["mem_gb"] == 16
-        and stages.allocation("prep", 4)["mem_gb"] == 64
-    )
 
 
 # ── what the tables publish ───────────────────────────────────────────────────
