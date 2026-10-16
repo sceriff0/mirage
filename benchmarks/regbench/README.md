@@ -155,7 +155,7 @@ not traced (`outlines not traced yet: run the nuclei step (submit_cohort.sh --pr
 were traced from another file than the slide is now; it never reads them as an empty set.
 Each case carries a fingerprint of its inputs (`cases.file_fingerprint`: a file's size,
 modification time and a sha256 over 16 sampled blocks), so a case prepared from other files
-than the ones now on disk is recognised.
+than the ones now on disk is recognised. For the outlines the fingerprint is that of the cell mask they were traced from (their `.traced.json`), so a re-trace from a changed mask makes the case stale and `prepare multiplex` refuses it unasked; a case prepared before fingerprints existed records none and is judged by the input paths alone.
 
 **A `rounds.csv` written from the arms' results before 2026-10-16** (the old
 `arms_manifest`) has the same columns and is still read as it was: export
@@ -328,7 +328,7 @@ set costs the method nothing: it is moved with the clock paused, like the first.
 
 **`run.json`**: `ok`, `error`, `cause`, `problem`, `direction`, `launch_id`, `unit`
 (`pair` | `patient`), `group_cases`, `register_s`, `write_s`, `resources`, `native`,
-`selfcheck_status`, `attempt`, `mem_requested_gb`, `cpus_requested`, `cpus_affinity`,
+`selfcheck_status` (vestigial: always `not_checked` since selfchecks stopped gating; the tables' `selfcheck_status` comes from `verdicts.tsv`), `attempt`, `mem_requested_gb`, `cpus_requested`, `cpus_affinity`,
 `blas`, `cpu_model`, `previous_attempts`, `info`, and `realcheck` (`status`, `flag`) when
 `run --realcheck` was given; `retry`, `submissions` (the launcher's id of every submission
 that ran or reused the result), `reused_by`, `time_limit`, `oom_watch` (`readable`,

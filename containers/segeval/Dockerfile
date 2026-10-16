@@ -27,7 +27,7 @@ LABEL description="Mirage SEG_QUALITY_EVAL: vendored CellSegmentationEvaluator (
 #     command -v ps &>/dev/null || { >&2 echo "Command 'ps' required by nextflow ..."; exit 1; }
 # so every task in this image would fail with exit status 1 and empty stdout as soon
 # as the run collected metrics (-with-trace / -with-report -- i.e. every benchmark
-# run, since benchmarks/configs/benchmark.config turns tracing on). python:*-slim
+# run, since the benchmark launchers turn tracing on). python:*-slim
 # ships no procps. Same reason it is installed in containers/tiled and spatialdata.
 #
 # NOTE: libgl1 / libglib2.0-0 used to be installed here. They are OpenCV's runtime

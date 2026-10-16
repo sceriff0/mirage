@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -384,3 +385,57 @@ def test_a_slide_rewritten_in_place_is_another_input(tmp_path, capsys):
     assert "rewritten in place" in said and "(reference)" in said and "--force" in said
     assert multiplex.prepare(_mx_args(cases_root, manifest, force=True)) == 0
     assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+
+
+def test_outlines_traced_from_another_cell_mask_are_another_input(tmp_path, capsys):
+    """Outlines carry their `.traced.json`: a re-trace from a CHANGED cell mask under the
+    same outlines path makes a case prepared before it stale (refused, not kept)."""
+    from benchmarks.regbench.cases import file_fingerprint
+
+    ref_cells = _grid_cells(tmp_path / "ref.geojson")
+    mov_cells = _grid_cells(tmp_path / "mov.geojson", shift=(6.0, -4.0))
+    manifest, (r1, r2) = _cohort_manifest(tmp_path, [("a", ref_cells, mov_cells)])
+
+    def trace(path, slide, mask):
+        Path(str(path) + ".traced.json").write_text(
+            json.dumps(
+                {
+                    "image_fingerprint": file_fingerprint(slide),
+                    "cell_mask_fingerprint": {"sample_sha256": mask},
+                }
+            )
+        )
+
+    trace(ref_cells, r1, "mask-1")
+    trace(mov_cells, r2, "mask-1")
+    cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    assert case.extra["input_fingerprints"]["ref_cells"] == {
+        "cell_mask": {"sample_sha256": "mask-1"}
+    }
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    capsys.readouterr()
+    trace(ref_cells, r1, "mask-2")  # same outlines path, another cell mask
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 1
+    said = capsys.readouterr().out
+    assert "rewritten in place" in said and "(ref_cells)" in said and "--force" in said
+
+
+def test_a_case_prepared_before_fingerprints_is_judged_by_its_paths_only(tmp_path):
+    good = _grid_cells(tmp_path / "good.geojson")
+    manifest, (r1, _) = _cohort_manifest(tmp_path, [("a", good, good)])
+    cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    (cj,) = cases_root.rglob("case.json")
+    rec = json.loads(cj.read_text())
+    rec["extra"].pop("input_fingerprints")
+    cj.write_text(json.dumps(rec))
+    # a slide rewritten in place cannot be told apart: kept, as before fingerprints
+    data = tifffile.imread(r1)
+    tifffile.imwrite(r1, (data + 1).astype(data.dtype))
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    # another PATH is still refused
+    other = _grid_cells(tmp_path / "other" / "good.geojson")
+    manifest.write_text(manifest.read_text().replace(str(good), str(other)))
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 1

@@ -60,6 +60,8 @@ case "$site" in none|-) site="" ;; esac
 
 endfile="$REGBENCH_OUT/logs/compute/$backend/$patient.end"
 d="$REGBENCH_OUT/compute/$backend/$patient"
+# a head killed at its time limit still writes its end line
+trap 'end failed 143' TERM
 # never reused: an earlier run of the same backend and patient is moved aside whole,
 # with its end line
 if [ -e "$d" ] || [ -e "$endfile" ]; then

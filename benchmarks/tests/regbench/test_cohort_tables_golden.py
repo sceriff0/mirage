@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def _dropme(row):
     )
 
 
-def test_the_only_change_from_t0_is_the_formerly_dropped_rows(tmp_path):
+def test_the_dropme_rows_move_no_other_row(tmp_path):
     """The golden minus its `dropme` rows is EXACTLY the snapshot of the same cohort
     without `dropme`'s results: the row it gained moved no other row, no common block
     and no paired row (`dropme` is no primary row)."""
@@ -75,3 +76,26 @@ def test_the_only_change_from_t0_is_the_formerly_dropped_rows(tmp_path):
     # the one column renamed with the blocked state, and nothing named after it
     assert all("n_not_run_or_lost" in r for r in want["failures"])
     assert not any("blocked" in k for rows in want.values() for r in rows for k in r)
+
+
+# sha256 of the T7 golden (7e86bf10) in canonical JSON. Checked equal to the golden here
+# minus its `dropme` rows with `n_not_run_or_lost` renamed back to `n_not_run_or_blocked`
+# before this constant was written; the golden holds no summary header to rename.
+T7_GOLDEN_SHA256 = "3fd78aea36cb84e7d1f731049d671835a35e8fa2a4fa04c279ab21b99928b731"
+
+
+def test_the_golden_minus_dropme_is_the_t7_golden():
+    want = json.loads(GOLDEN.read_text())
+    back = {
+        table: [
+            {
+                ("n_not_run_or_blocked" if k == "n_not_run_or_lost" else k): v
+                for k, v in row.items()
+            }
+            for row in rows
+            if not _dropme(row)
+        ]
+        for table, rows in want.items()
+    }
+    blob = json.dumps(back, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(blob).hexdigest() == T7_GOLDEN_SHA256

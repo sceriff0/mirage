@@ -317,6 +317,12 @@ def test_the_launcher_never_resumes_and_types_every_param():
     assert "compute-all params" in code and "compute-all sheet" in code
 
 
+def test_the_launcher_writes_an_end_line_when_killed_at_its_time_limit():
+    code = "\n".join(code_lines(SBATCH))
+    assert "trap 'end failed 143' TERM" in code
+    assert code.index("endfile=\"$REGBENCH_OUT") < code.index("trap 'end failed 143'")
+
+
 def test_the_launcher_is_executable():
     mode = subprocess.run(
         ["git", "ls-files", "-s", str(SBATCH.relative_to(REPO))],
@@ -644,3 +650,17 @@ def test_launch_sbatch_passes_compute_through_and_needs_the_samplesheet(tmp_path
             done.stderr.startswith("regbench-launch:")
             and "REGBENCH_INPUT" in done.stderr
         )
+
+
+def test_an_ok_end_line_does_not_hide_a_failed_task_never_retried_to_success(tmp_path):
+    out = tmp_path / "out"
+    failed = VALIS_ROWS + [
+        _row(9, "MIRAGE:POSTPROCESS:QUANTIFY", status="FAILED", start_h=4)
+    ]
+    _trace(out, "valis", "P1", failed, end="ok")
+    s = next(
+        x
+        for x in compute_all.summarise(compute_all.rows(out))
+        if x["patient"] == "P1"
+    )
+    assert s["n_failed"] == 1 and s["complete_run"] == 0

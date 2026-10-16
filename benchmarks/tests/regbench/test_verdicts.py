@@ -84,6 +84,13 @@ def test_a_selfcheck_that_left_no_record_is_reported_as_no_selfcheck_record(tmp_
         "palom", "selfcheck", "not_checked", "-",
         ",".join(variants.checked_rows("palom")), "no selfcheck record",
     ]  # fmt: skip
+    # valid JSON that is not a record (a list) is the same, and nothing is raised
+    _record(out, "palom").write_text("[1, 2]")
+    code, _, lines = _verdict(out, "palom")
+    assert code == 0 and _line(lines, "palom")[2::3] == [
+        "not_checked",
+        "no selfcheck record",
+    ]
     # an unreadable one is the same, and nothing is raised
     path = _record(out, "palom")
     path.write_text("{not json")

@@ -43,8 +43,8 @@ prepared from the slides and outlines the row names: one prepared from other inp
 manifest of the arms' results, then one of regbench's own) is refused with the reason,
 never silently kept or replaced.
 
-Without ``ref_cells`` both sets come from the built-in segmenter, as on the known-truth
-datasets: its objects are the nuclei, and the outlines are those labels grown by
+Without ``ref_cells`` both sets come from the built-in segmenter, as on the toy
+cases: its objects are the nuclei, and the outlines are those labels grown by
 ``cells.EXPAND_PX``.
 
 A case points a method at the ORIGINAL multichannel slides (``ref_image`` / ``mov_image``,

@@ -1072,6 +1072,8 @@ def _selfcheck_line(out, name, submission):
     path = Path(out) / "logs" / "selfcheck" / checker / "selfcheck.json"
     try:
         record = json.loads(path.read_text())
+        if not isinstance(record, dict):
+            raise ValueError("not a selfcheck record")
         log = record.get("log_path") or variants.NONE
     except (OSError, ValueError):
         record, log = {}, NO_RECORD
