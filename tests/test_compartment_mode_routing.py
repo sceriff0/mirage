@@ -360,7 +360,10 @@ ALLOWED_LINES = {
         # 1232 -> 1223 (2026-10-01): the ten `overwrite: true` lines left the publishDir
         # rules above this one (tests/test_publish_never_overwrites_on_resume.py).
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1223
-        1223: (
+        # 1223 -> 1229 (2026-10-16): 305216c4's STARE comment fixes (TILED_SOLVE's range
+        # gate, REG_TILE's window note) added a net +6 lines above this one.
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1229
+        1229: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."
