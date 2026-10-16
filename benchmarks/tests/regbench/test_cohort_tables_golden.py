@@ -19,3 +19,59 @@ def test_the_snapshot_has_rows_of_every_table():
     want = json.loads(GOLDEN.read_text())
     assert sorted(want) == sorted(make_cohort_golden.TABLES)
     assert [t for t in want if not want[t]] == []
+
+
+# T8 (the selfcheck runs and reports, never gates): the cohort's `dropme` row, once left
+# out of every table by `score(dropped=...)`, is scored like any other. These are the
+# tables it adds rows to, and how many: nothing else of the golden moved, apart from
+# one column renamed in `failures` (`n_not_run_or_blocked` -> `n_not_run_or_lost`:
+# there is no blocked run any more). Measured against the T7 golden (7e86bf10).
+DROPME_ROWS = {
+    "attrition": 1,
+    "cells": 4,
+    "cells_nuclei": 3,
+    "cost_summary": 1,
+    "failures": 1,
+    "nonband_cells": 7,
+    "nonband_cells_nuclei": 6,
+    "nonband_summary": 2,
+    "nonband_summary_nuclei": 2,
+    "paired_summary": 1,
+    "paired_summary_nuclei": 1,
+    "paired_vs_primary": 3,
+    "paired_vs_primary_nuclei": 2,
+    "resources": 4,
+    "summary_cells": 2,
+    "summary_cells_nuclei": 2,
+    "summary_resources": 3,
+    "tissue_missing": 4,
+}
+
+
+def _dropme(row):
+    return any(
+        str(row.get(k, "")).startswith("dropme") for k in ("variant", "method", "run")
+    )
+
+
+def test_the_only_change_from_t0_is_the_formerly_dropped_rows(tmp_path):
+    """The golden minus its `dropme` rows is EXACTLY the snapshot of the same cohort
+    without `dropme`'s results: the row it gained moved no other row, no common block
+    and no paired row (`dropme` is no primary row)."""
+    want = json.loads(GOLDEN.read_text())
+    got = {t: sum(map(_dropme, rows)) for t, rows in want.items()}
+    assert {t: n for t, n in got.items() if n} == DROPME_ROWS
+
+    def without_dropme(out_dir):
+        import shutil
+
+        root, out, made = make_cohort_golden.scored_cohort.build(out_dir)
+        shutil.rmtree(out / "dropme")
+        return root, out, made
+
+    alone = make_cohort_golden.snapshot(tmp_path, build=without_dropme)
+    for table, rows in want.items():
+        assert alone[table] == [r for r in rows if not _dropme(r)], table
+    # the one column renamed with the blocked state, and nothing named after it
+    assert all("n_not_run_or_lost" in r for r in want["failures"])
+    assert not any("blocked" in k for rows in want.values() for r in rows for k in r)
