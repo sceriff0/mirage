@@ -41,6 +41,10 @@ published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for 
 method's package) and through the launcher's dry run. The earlier harnesses (arms, sweep,
 figures, the ASHLAR arm) were removed; `benchmarks/README.md` names the tag that keeps them.
 
+The whole harness is drawn in one figure, from the inputs to the tables and the caveats:
+`docs/figures/regbench-harness.html` (self-contained; `test_harness_diagram.py` keeps it in
+step with the run list, `score.TABLES` and the launcher's job names).
+
 | part | state |
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |

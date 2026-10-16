@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Regbench Harness Map</title>
+<style>
+/* One reading column of stacked sections: the job graph first, reference tables after. Bench-notebook feel: slide-glass blue on cool paper. Self-contained: system fonts, no external file. */
+:root{
+  --bg:#f5f7f8; --panel:#ffffff; --fg:#17202a; --muted:#5a6772; --line:#d6dde2;
+  --accent:#1f6f8b; --accent-soft:#e3f0f5; --warn:#9a5b00; --warn-soft:#fbf1e1; --ok:#2f7a4a;
+  --f-display:Georgia, "Times New Roman", serif; --f-body:system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --f-mono:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --panel:#182028; --fg:#e4e9ee; --muted:#9aa7b2; --line:#2b3741;
+  --accent:#6bb8d4; --accent-soft:#1c3340; --warn:#e7b25a; --warn-soft:#3a2c14; --ok:#7fcf9a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --panel:#182028; --fg:#e4e9ee; --muted:#9aa7b2; --line:#2b3741;
+  --accent:#6bb8d4; --accent-soft:#1c3340; --warn:#e7b25a; --warn-soft:#3a2c14; --ok:#7fcf9a; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.55}
+.wrap{max-width:1040px;margin:0 auto;padding-block:32px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:36px;grid-template-columns:minmax(0,1fr)}
+section,header{min-width:0}
+header{display:grid;gap:10px}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+h1{font-family:var(--f-display);font-weight:600;font-size:clamp(28px,4vw,40px);line-height:1.1;margin:0;text-wrap:balance}
+h2{font-family:var(--f-display);font-weight:600;font-size:22px;margin:0 0 10px;text-wrap:balance}
+h3{font-size:15px;margin:0 0 6px;font-weight:600}
+p{margin:0 0 8px;max-width:72ch}
+.lede{color:var(--muted);max-width:72ch}
+.status{display:flex;flex-wrap:wrap;gap:8px}
+.pill{font-family:var(--f-mono);font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 10px;background:var(--panel);overflow-wrap:anywhere}
+.pill.warn{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+.pill.now{border-color:var(--ok);color:var(--ok)}
+.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+th{white-space:nowrap;font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.05em;background:var(--accent-soft)}
+tr:last-child td{border-bottom:0}
+code{font-family:var(--f-mono);font-size:12.5px;overflow-wrap:anywhere}
+.tag{font-family:var(--f-mono);font-size:11px;padding:1px 6px;border-radius:4px;background:var(--warn-soft);color:var(--warn);white-space:nowrap}
+.tag.ok{background:var(--accent-soft);color:var(--accent)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.card ul{margin:6px 0 0;padding-left:18px}
+.card li{margin:3px 0}
+ol.caveats{margin:0;padding-left:22px;display:grid;gap:8px;max-width:80ch}
+.note{font-size:13px;color:var(--muted)}
+.nums{font-variant-numeric:tabular-nums}
+/* the job graph */
+.flow{display:grid;gap:0;margin:0;padding:0;list-style:none}
+.step{display:grid;grid-template-columns:36px minmax(0,1fr);gap:12px;position:relative;padding-bottom:18px;min-width:0}
+.step:last-child{padding-bottom:0}
+.step::before{content:"";position:absolute;left:17px;top:36px;bottom:0;width:2px;background:var(--line)}
+.step:last-child::before{display:none}
+.n{width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;font-family:var(--f-mono);font-size:14px;font-weight:500;display:flex;align-items:center;justify-content:center;position:relative}
+.body{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0}
+.body h3{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+.body p{font-size:14px;max-width:none}
+.jobs{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.job{font-family:var(--f-mono);font-size:11.5px;border:1px solid var(--accent);color:var(--accent);background:var(--accent-soft);border-radius:4px;padding:1px 7px;overflow-wrap:anywhere}
+.writes{font-size:13px;color:var(--muted)}
+.writes code{color:var(--fg)}
+.step.last .n{background:var(--warn)}
+@media (max-width:640px){
+  body{font-size:14.5px}
+  .step{grid-template-columns:28px minmax(0,1fr);gap:8px}
+  .n{width:28px;height:28px;font-size:12px}
+  .step::before{left:13px;top:28px}
+  /* tables become stacked cards: each cell carries its column name */
+  .stack table,.stack thead,.stack tbody,.stack tr,.stack td{display:block}
+  .stack thead{position:absolute;left:-9999px}
+  .stack tr{border-bottom:2px solid var(--line);padding:6px 0}
+  .stack tr:last-child{border-bottom:0}
+  .stack td{border:0;padding:3px 10px}
+  .stack td::before{content:attr(data-l);display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">mirage · regbench · the official benchmark</div>
+  <h1>Regbench harness map</h1>
+  <p class="lede">How the registration benchmark turns the cyclic-IF cohort into scores: the inputs it makes for itself, every crossed parameter, where each method's transform comes from, what is scored, what is written, and what the numbers do not say. One dataset, the cohort. The selfcheck and the realcheck are reported beside the numbers and never gate: no run is held back and no row is dropped.</p>
+  <div class="status">
+    <span class="pill warn">Nothing here has run on the cluster: tested on stand-ins and the launcher's dry run</span>
+    <span class="pill now">45 runs · 4 on a GPU · 27 per patient · 6 primary rows</span>
+  </div>
+</header>
+
+<section>
+  <h2>The job graph, end to end</h2>
+  <ol class="flow">
+    <li class="step"><div class="n">0</div><div class="body">
+      <h3>inputs <span class="tag ok">the benchmark's own</span></h3>
+      <div class="jobs"><span class="job">rb-inputs</span></div>
+      <p>The cohort's samplesheet goes through the pipeline's own preprocessing, <code>--start preprocessing --stop preprocessing</code>, at the shipped defaults except <code>pixel_size</code>, pinned at 0.325 µm. One Nextflow head job (<code>inputs.sbatch</code>); the pipeline submits its own process jobs from it.</p>
+      <p class="writes">writes <code>csv/preprocessed.csv</code> and the preprocessed slides. <code>manifest.py</code> reads that checkpoint into <code>rounds.csv</code>: one row per moving round, a patient with exactly one reference, one nuclear channel per slide (<code>DAPI</code> or <code>CELLTOX</code> by name).</p>
+    </div></li>
+    <li class="step"><div class="n">1</div><div class="body">
+      <h3>nuclei and outlines</h3>
+      <div class="jobs"><span class="job">rb-nuclei</span></div>
+      <p>An array, one task per native slide, before any method runs. The pipeline's own <code>segment.py</code> runs StarDist on the nuclear channel, with the flags and params the pipeline renders. Its cell mask (the nuclei grown by 10 px, <code>seg_expand_distance</code>) is traced to outlines by the pipeline's own GeoJSON writer. The bare nuclei are the same run's nuclei mask.</p>
+      <p class="writes">writes the slide's outline GeoJSON and a trace record, so a case cannot silently be built on outlines from another file.</p>
+    </div></li>
+    <li class="step"><div class="n">2</div><div class="body">
+      <h3>prepare the cases</h3>
+      <div class="jobs"><span class="job">rb-prepare-multiplex</span></div>
+      <p>One case per (patient, moving round). A round whose outlines are not traced, or were traced from another file than the slide is now, is refused with its reason, never read as an empty set.</p>
+      <p class="writes">writes <code>case.json</code> and <code>points.npz</code> per case, each with a fingerprint of its inputs (size, modification time, a hash over 16 sampled blocks).</p>
+    </div></li>
+    <li class="step"><div class="n">3</div><div class="body">
+      <h3>selfcheck and realcheck <span class="tag">reported, never gates</span></h3>
+      <div class="jobs"><span class="job">rb-sc-&lt;run&gt;-64g</span><span class="job">rb-sc-&lt;run&gt;-256g</span><span class="job">rb-sc-&lt;run&gt;-512g</span></div>
+      <p>Does a method's point map follow the image its own writer wrote? The selfcheck draws a known pair with dots, runs the method on it and compares. The realcheck does the same on a real case: the first unit of each VALIS primary run goes ahead with <code>--realcheck</code>, beside the rest of the run. It never gates: no ladder waits for either, no run is kept from starting, no row is left out of a table.</p>
+      <p class="writes">writes <code>selfcheck.json</code> and <code>realcheck.json</code>; <code>verdict</code> collects them into <code>logs/verdicts.tsv</code>.</p>
+    </div></li>
+    <li class="step"><div class="n">4</div><div class="body">
+      <h3>the runs, on memory ladders</h3>
+      <div class="jobs"><span class="job">rb-&lt;run&gt;-multiplex</span><span class="job">rb-&lt;run&gt;-multiplex-retry</span></div>
+      <p>Per run, one task per case (a per-pair method) or per patient (a per-patient method), on the ladders 16, 64, 256, 512 GB at 4 CPUs. A unit climbs only after a memory failure; a retry is submitted after a failure, never queued before one. STARE is several jobs per round: coarse, one job per tile, solve, stitch.</p>
+      <p class="writes">writes <code>warped.npz</code> (the moved polygons), <code>run.json</code> (ok, cause, seconds, resources, every departure from the method as shipped) and, for the VALIS primary rows, <code>realcheck.json</code>.</p>
+    </div></li>
+    <li class="step"><div class="n">5</div><div class="body">
+      <h3>settle, then score</h3>
+      <div class="jobs"><span class="job">rb-settle</span><span class="job">rb-score-case-multiplex</span><span class="job">rb-tissue</span><span class="job">rb-score</span></div>
+      <p><code>settle</code> gives each result still marked "killed" the cause the scheduler's accounting names. Then an array scores each case once and keeps its record; the tissue job covers the secondary block; the scorer first runs <code>verdict</code> (<code>verdicts.tsv</code>), then <code>score</code> reads the records and writes the tables. Everything waits for every selfcheck and every ladder to end, whatever they said.</p>
+      <p class="writes">writes <code>tables/*.csv</code> and <code>summary.md</code>.</p>
+    </div></li>
+    <li class="step last"><div class="n">6–7</div><div class="body">
+      <h3>compute-all <span class="tag">after the scorer, alone</span></h3>
+      <div class="jobs"><span class="job">rb-compute-&lt;backend&gt;-&lt;patient&gt;</span><span class="job">rb-score-compute</span></div>
+      <p>The whole Mirage pipeline, no <code>--start</code>/<code>--stop</code>, once per patient and per backend (<code>valis</code>, <code>tiled</code>), traced by Nextflow. Pinned: <code>seg_method=stardist</code>, <code>pixel_size=0.325</code>, <code>enable_trace</code>; everything else at the shipped defaults and the site profile, so registration runs at the shipped <code>memory_mode='high'</code> unless the site profile says otherwise. The heads run on a few lanes, last and alone, so a cost is not measured under contention the benchmark made itself. Step 7 scores again and adds the cost tables.</p>
+      <p class="writes">writes <code>pipeline_cost.csv</code>, <code>pipeline_cost_summary.csv</code>, <code>pipeline_cost_by_process.csv</code>. The <code>all</code> row's wall time is a sum over patients and includes queue time.</p>
+    </div></li>
+  </ol>
+  <p class="note" style="margin-top:12px">Job names are the prefixes <code>submit_cohort.sh</code> submits. <code>--score-only</code> repeats step 5 alone; <code>--compute-only</code> submits steps 6 and 7 alone.</p>
+</section>
+
+<section>
+  <h2>What is crossed</h2>
+  <div class="scroll stack"><table>
+    <thead><tr><th>Method</th><th>Runs</th><th>Factors</th><th>Primary row</th><th>Unit</th></tr></thead>
+    <tbody class="nums">
+      <tr><td data-l="Method"><code>stare</code> (the pipeline's <code>high</code> tier)</td><td data-l="Runs">9</td><td data-l="Factors">stride {64, 128, 256} × prep level {none, clahe, percentile} on the nuclear channel</td><td data-l="Primary row"><code>stare</code> (stride 64, none)</td><td data-l="Unit">pair; coarse, tiles, solve, stitch as separate jobs</td></tr>
+      <tr><td data-l="Method"><code>ashlar</code> 1.20.0</td><td data-l="Runs">24</td><td data-l="Factors">affine {none, stare} × noise on the reference tiles {0, 0.002, 0.01, 0.05} × max shift {15, 60, 240} µm</td><td data-l="Primary row"><code>ashlar</code> (none, 0.002, 15)</td><td data-l="Unit">patient; tiles cut from stitched slides. <code>ashlar_clean</code> (no noise) is ASHLAR as published</td></tr>
+      <tr><td data-l="Method">VALIS</td><td data-l="Runs">3</td><td data-l="Factors"><code>valis_mirage</code> (1.0.0 through the pipeline's function), <code>valis120</code> (1.2.0 default), <code>valis120_hires</code> (1.2.0 high-resolution example)</td><td data-l="Primary row"><code>valis_mirage</code>, <code>valis120_hires</code></td><td data-l="Unit">patient</td></tr>
+      <tr><td data-l="Method"><code>deeperhistreg</code> 1.0.1</td><td data-l="Runs">8</td><td data-l="Factors">device {gpu, cpu} × parameter set {4096 px default, 8192 px <code>hr</code>} × {shipped, <code>fluo</code>}. Each run gives an estimated-field row and an <code>_asdrawn</code> row</td><td data-l="Primary row"><code>deeperhistreg_hr_gpu_asdrawn</code>; the estimated-field row <code>deeperhistreg_hr_gpu</code> is kept beside it</td><td data-l="Unit">pair</td></tr>
+      <tr><td data-l="Method"><code>palom</code> 2026.4.1</td><td data-l="Runs">1</td><td data-l="Factors">the README recipe; rows <code>palom_affine</code>, <code>palom</code></td><td data-l="Primary row"><code>palom</code></td><td data-l="Unit">pair</td></tr>
+      <tr><td data-l="Method"><code>initial</code></td><td data-l="Runs">none</td><td data-l="Factors">the identity: the unregistered pose</td><td data-l="Primary row">the pose a failed round is scored at</td><td data-l="Unit">case</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">The defaults sit inside every cross. The six primary rows are <code>stare</code>, <code>valis_mirage</code>, <code>valis120_hires</code>, <code>deeperhistreg_hr_gpu_asdrawn</code>, <code>ashlar</code>, <code>palom</code>. Private plug-ins can add runs; none ship.</p>
+</section>
+
+<section>
+  <h2>Where each transform comes from</h2>
+  <div class="scroll stack"><table>
+    <thead><tr><th>Method</th><th>Transform source</th><th>Direction</th><th>What is scored</th></tr></thead>
+    <tbody>
+      <tr><td data-l="Method"><code>stare</code></td><td data-l="Source">the solve manifest (affine and B-spline mesh) through STARE's own warper</td><td data-l="Direction">moving to reference</td><td data-l="Scored">the transform that drew the written image</td></tr>
+      <tr><td data-l="Method">VALIS</td><td data-l="Source">the slide's matrices and backward field, through VALIS's own point function <code>warp_xy_inv</code></td><td data-l="Direction">reference to moving</td><td data-l="Scored">the written image's map</td></tr>
+      <tr><td data-l="Method"><code>deeperhistreg</code></td><td data-l="Source">estimated row: the field through <code>warp_landmarks</code> and the coordinate chain of its issue 12. As-drawn row: the writer's arithmetic restated</td><td data-l="Direction">reference to moving</td><td data-l="Scored">the primary is the as-drawn row, the image on disk; it sits half a field pixel from its own registration, so the estimated-field row shows the registration itself</td></tr>
+      <tr><td data-l="Method"><code>ashlar</code></td><td data-l="Source">the per-tile positions ASHLAR pasted with, one shift per tile</td><td data-l="Direction">moving to reference</td><td data-l="Scored">exact off the seams, a weighted mean of two tiles in the overlaps</td></tr>
+      <tr><td data-l="Method"><code>palom</code></td><td data-l="Source">an affine, then one whole-pixel shift per block of the reference</td><td data-l="Direction">reference to moving</td><td data-l="Scored">the written image in closed form, torn at block seams</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Nuclei are moved only in the method's own direction, never through a numerical inverse. The two frames differ slightly: pair fraction by about 1e-4, matched Dice by up to 1e-3.</p>
+</section>
+
+<section>
+  <h2>How a row is scored</h2>
+  <div class="grid2">
+    <div class="card"><h3>Objects</h3><ul>
+      <li>Segmented once per native slide, before any registration</li>
+      <li>Outlines (the headline): StarDist nuclei grown 10 px</li>
+      <li>Bare nuclei: the same numbers in their own <code>_nuclei</code> tables</li>
+    </ul></div>
+    <div class="card"><h3>Pairing</h3><ul>
+      <li>Gate 1.5 × the median equivalent radius, per case and per set</li>
+      <li>The pipeline's <code>match_lsa</code>; mutual nearest neighbour above 5,000 cells per component</li>
+      <li>The exact assignment is shown as <code>*_exact</code> and never ranked</li>
+    </ul></div>
+    <div class="card"><h3>Null and reading rules</h3><ul>
+      <li>Null: one set shifted four radii, in eight directions</li>
+      <li>Dice and displacement are read only where pair fraction clears the null's maximum</li>
+      <li>The common block: the cases every compared primary row registered</li>
+    </ul></div>
+    <div class="card"><h3>Paired differences</h3><ul>
+      <li>Against <code>stare</code>, on the cases both rows have</li>
+      <li>The unit is the patient; its rounds are reduced to their median first</li>
+      <li>Bootstrap interval over patients; "descriptive; no ranking is claimed" at every number of patients</li>
+    </ul></div>
+    <div class="card"><h3>Off-seam rows</h3><ul>
+      <li><code>:non_ashlar</code> and <code>:non_palom</code> repeat every method without the nuclei on those tile or block seams</li>
+      <li>They measure how much of ASHLAR's and PALOM's score rests on an interpolated map</li>
+    </ul></div>
+    <div class="card"><h3>Failures</h3><ul>
+      <li>The method's own failure is scored at the unregistered pose, never a gap</li>
+      <li>A loss that is not the method's (scheduler, the benchmark's own memory, identical overlaps) is left out of the summaries and listed</li>
+      <li>Counted as failed (method), failed (benchmark) and not run / lost; every event is a row of <code>failure_log</code>, with whose it is</li>
+    </ul></div>
+    <div class="card"><h3>Cost</h3><ul>
+      <li>One definition of an attempt for every method: good, wasted, lost</li>
+      <li>CPU-hours from the cgroup counter, reserved CPU-hours, GB-hours, a scheduler cross-check</li>
+      <li>Each method's clock stops at its own written image</li>
+    </ul></div>
+    <div class="card"><h3>Compute-all <span class="tag">secondary</span></h3><ul>
+      <li>Per-task rows from Nextflow's trace: CPU-h used, CPU-h reserved, GB-h reserved</li>
+      <li>A different clock from the methods' registration cost: no total adds the two</li>
+    </ul></div>
+  </div>
+</section>
+
+<section>
+  <h2>Outputs</h2>
+  <div class="scroll stack"><table>
+    <thead><tr><th>Where</th><th>What</th></tr></thead>
+    <tbody>
+      <tr><td data-l="Where"><code>cases/multiplex/&lt;case&gt;/</code></td><td data-l="What"><code>case.json</code> (slides, channels, pixel size, fingerprints) and <code>points.npz</code> (outlines and nuclei, both sides)</td></tr>
+      <tr><td data-l="Where"><code>out/&lt;variant&gt;/multiplex/&lt;case&gt;/</code></td><td data-l="What"><code>warped.npz</code>, <code>run.json</code>, and <code>realcheck.json</code> where a realcheck ran</td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · score</td><td data-l="What"><code>cells</code>, <code>summary_cells</code>, <code>common_block</code>, <code>paired_vs_primary</code>, <code>paired_summary</code>, <code>excluded_rounds</code>, <code>attrition</code>, <code>failures</code>, <code>failure_log</code>, <code>nuclei_missing</code>, <code>launch</code> (what each selfcheck and realcheck said, reported only)</td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · off the seams</td><td data-l="What"><code>nonband_cells</code>, <code>nonband_summary</code>, <code>nonband_missing</code></td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · the bare nuclei</td><td data-l="What"><code>cells_nuclei</code>, <code>summary_cells_nuclei</code>, <code>common_block_nuclei</code>, <code>paired_vs_primary_nuclei</code>, <code>paired_summary_nuclei</code>, <code>nonband_cells_nuclei</code>, <code>nonband_summary_nuclei</code></td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · cost</td><td data-l="What"><code>resources</code>, <code>summary_resources</code>, <code>cost_summary</code>, <code>cost_end_to_end</code>, <code>cost_end_to_end_summary</code></td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · compute-all <span class="tag">secondary</span></td><td data-l="What"><code>pipeline_cost</code>, <code>pipeline_cost_summary</code>, <code>pipeline_cost_by_process</code></td></tr>
+      <tr><td data-l="Where"><code>out/tables/</code> · tissue <span class="tag">secondary</span></td><td data-l="What"><code>tissue</code>, <code>tissue_summary</code>, <code>tissue_missing</code>; also <code>selfcheck_masks</code> and <code>summary.md</code></td></tr>
+      <tr><td data-l="Where"><code>out/cache/scores/</code></td><td data-l="What">a case's record: scored once, rescored only when its inputs or the scoring code change</td></tr>
+      <tr><td data-l="Where"><code>out/logs/</code></td><td data-l="What"><code>verdicts.tsv</code>, selfcheck records, retries, submissions, accounting, settled causes</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>Caveats that travel with the numbers</h2>
+  <ol class="caveats">
+    <li><b>Whose settings.</b> STARE's and the pipeline's VALIS settings were chosen by their authors on this cohort with this metric: <code>stare</code> and <code>valis_mirage</code> are in-sample. The other methods were not tuned on it, but "package defaults" describes only some: <code>valis120_hires</code> is upstream's high-resolution example, <code>deeperhistreg_hr_gpu_asdrawn</code> is a shipped 8192 px set on a GPU, <code>ashlar</code> runs on tiles the benchmark cut from stitched slides with noise added to the empty background, and <code>palom</code> is its documented recipe. This is the largest asymmetry in the comparison.</li>
+    <li><b>Two frames.</b> Methods are scored in the frame their own map leads to; the numbers differ slightly between frames.</li>
+    <li><b>Per-patient and pairwise methods</b> see different problems and fail in different units, so failures are counted both as launches and as rounds.</li>
+    <li><b>Self-consistency, not accuracy.</b> There are no landmarks on real slides.</li>
+    <li><b>The ladder.</b> Methods need not finish at the same rung, so they need not have had the same memory request; the tables show each run's rung.</li>
+    <li><b>ASHLAR's overlaps.</b> About a fifth to two fifths of its nuclei are scored through an interpolated map in the tile overlaps; it is optimistic for ASHLAR when a rotation is left inside its tiles. The <code>:non_ashlar</code> rows measure how much it matters.</li>
+    <li><b>DeeperHistReg's primary row follows its writer, not its registration.</b> The written image sits half a field pixel right and down of the registration, so <code>within_1um</code> can be low with a perfect registration. The estimated-field row beside it shows the registration itself.</li>
+    <li><b>The cohort's "nuclei" are StarDist nuclei grown by 10 px.</b> Dice and <code>within_1um</code> have a ceiling that is not registration, the same for every method; the bare-nuclei tables show how much is rim.</li>
+    <li><b>No ranking is statistically supported.</b> The paired differences carry a bootstrap interval over patients, coarse with few of them; there is no test and no p-value.</li>
+    <li><b>The tissue-level block is secondary.</b> ACCREDIT's score on same-modality fluorescence is outside what it was validated for, and it ranks nothing.</li>
+    <li><b>Nothing here has run on the cluster.</b> Whether the cgroup counter path works and whether a site confines cores are unverified.</li>
+    <li><b>Compute-all is at the shipped defaults</b> but for the two pins (<code>seg_method=stardist</code>, <code>pixel_size=0.325</code>), and may differ from a site's production settings. The <code>all</code> row's wall time is a sum over patients that includes queue time, and the realtime-based CPU-hours do not; the two clocks are never added.</li>
+  </ol>
+</section>
+
+<p class="note">Sources: the regbench README (its "Caveats that travel with the results" section is the source of the list above), <code>variants.py</code>, <code>score.py</code>, <code>compute_all.py</code> and the <code>slurm/</code> scripts of this branch. <code>benchmarks/tests/regbench/test_harness_diagram.py</code> checks that this figure names every primary row, run family and table the code has.</p>
+</div>
+</body>
+</html>

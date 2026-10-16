@@ -146,6 +146,45 @@ NUCLEI_TABLES = (
     "nonband_cells",
     "nonband_summary",
 )
+# Every table the scorer writes (the file is ``<name>.csv`` under ``tables/``), in one list:
+# the loop that clears them before a write iterates it, and the harness figure's test
+# reads it. ``selfcheck_masks`` is written and cleared apart, with the selfcheck records.
+TABLES = (
+    "cells",
+    "summary_cells",
+    "paired_vs_primary",
+    "failures",
+    "resources",
+    "summary_resources",
+    "nonband_cells",
+    "nonband_summary",
+    "nonband_missing",
+    "cost_end_to_end",
+    "cost_end_to_end_summary",
+    "pipeline_cost",
+    "pipeline_cost_summary",
+    "pipeline_cost_by_process",
+    "launch",
+    "common_block",
+    "paired_summary",
+    "excluded_rounds",
+    "cost_summary",
+    "failure_log",
+    "nuclei_missing",
+    "attrition",
+    *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
+    *tissue.TABLES,
+)
+# tables of earlier versions, still cleared from a folder that holds them
+REMOVED_TABLES = (
+    "dropped",
+    "truth",
+    "truth_by_family",
+    "nonband_truth",
+    "nonband_truth_by_family",
+    "tissue_dose",
+    "tissue_dose_summary",
+)
 NO_SEAM_MASK_ON_NUCLEI = (
     "no off-seam row on the bare nuclei for any method: the seam owner's primary run "
     "left no mask on this case's nuclei (it did not register the case, or its result "
@@ -3725,40 +3764,7 @@ def score(
 
     tables = Path(out) / ("tables_dev" if dev else "tables")
     tables.mkdir(parents=True, exist_ok=True)
-    for name in (
-        "cells",
-        "summary_cells",
-        "paired_vs_primary",
-        "failures",
-        "resources",
-        "summary_resources",
-        "nonband_cells",
-        "nonband_summary",
-        "nonband_missing",
-        "cost_end_to_end",
-        "cost_end_to_end_summary",
-        "pipeline_cost",
-        "pipeline_cost_summary",
-        "pipeline_cost_by_process",
-        "launch",
-        "common_block",
-        "paired_summary",
-        "excluded_rounds",
-        "cost_summary",
-        "failure_log",
-        "nuclei_missing",
-        "attrition",
-        *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
-        *tissue.TABLES,
-        # removed tables, still cleared
-        "dropped",
-        "truth",
-        "truth_by_family",
-        "nonband_truth",
-        "nonband_truth_by_family",
-        "tissue_dose",
-        "tissue_dose_summary",
-    ):
+    for name in (*TABLES, *REMOVED_TABLES):
         (tables / f"{name}.csv").unlink(missing_ok=True)
     # what the selfcheck's mask hid for each row's run, on every row of every table
     for rows in (

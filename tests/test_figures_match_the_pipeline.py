@@ -184,8 +184,18 @@ _KV_ROW = re.compile(
 )
 
 
+# Figures of the BENCHMARK harness, not of the pipeline. They name other tools' methods
+# (ashlar, deeperhistreg, palom) and the harness's own flags (--realcheck) as the subject,
+# which these checks would read as a claim that the pipeline ships them. The harness
+# figure has its own guard (benchmarks/tests/regbench/test_harness_diagram.py), and the
+# retired-names guard still scans it (it globs the folder itself).
+BENCHMARK_FIGURES = {"regbench-harness.html"}
+
+
 def _figures():
-    found = sorted(FIGURES_DIR.glob("*.html"))
+    found = sorted(
+        f for f in FIGURES_DIR.glob("*.html") if f.name not in BENCHMARK_FIGURES
+    )
     assert found, f"no figures found under {FIGURES_DIR}"
     return found
 

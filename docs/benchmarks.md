@@ -112,8 +112,9 @@ flowchart LR
     A --> Q2[scorer again: pipeline_cost tables]
 ```
 
-The same flow is drawn in the benchmarking panel of the
-[pipeline figure](figures/pipeline-schematic.html){ target=_blank }.
+The whole harness is drawn in one figure, from the inputs to the tables and the caveats:
+[regbench harness map](figures/regbench-harness.html){ target=_blank }. The benchmarking
+panel of the [pipeline figure](figures/pipeline-schematic.html){ target=_blank } points to it.
 
 Locally, the harness's test suite and the run list:
 
