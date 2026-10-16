@@ -685,13 +685,13 @@ the selfcheck records (`variants.row_checks`) into a column of its own, `selfche
 CHECKED**), `via <run>: <status>` for a row whose run is checked by another run's selfcheck
 (`ashlar_clean`), or `no selfcheck record`.
 
-| status | meaning | gates anything |
-|---|---|---|
-| `ok` | the thresholds hold | no |
-| `inconsistent` | the points do not follow the image | no |
-| `crashed` | the method raised | no |
-| `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` | no |
-| `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: STITCH writes one image). Reported, never counted as checked | no |
+| status | meaning |
+|---|---|
+| `ok` | the thresholds hold |
+| `inconsistent` | the points do not follow the image |
+| `crashed` | the method raised |
+| `not_checked` | nothing could be measured: the dots were not detected, the method wrote no image, or the run ran out of memory or time (`cause` says which). Never reported as `inconsistent` |
+| `no_stage_image` | a stage the method's own writer cannot draw (`stare_rigid`: STITCH writes one image). Reported, never counted as checked |
 
 The overall status is the worst over the checked variants.
 
@@ -1368,7 +1368,7 @@ A per-patient launch that fails loses every round at once: one event per result 
 rounds joined in `case_id`.
 
 Columns: `dataset, run, variant, unit, group, case_id, attempt, rung_gb, retry, submission,
-launch_id, stage` (`selfcheck | gate | realcheck | register | writer | benchmark_points |
+launch_id, stage` (`selfcheck | realcheck | register | writer | benchmark_points |
 tissue | score`), `cause, whose, cause_from` (how the cause was decided: the attempt's own
 record, the scheduler's state, a verdict), `scheduler_state, exit_code, elapsed_s,
 peak_rss_gb, message` (the first line of the error), `log_path` (the scheduler's log of
@@ -2085,7 +2085,7 @@ script names no method.
    should never be requeued under any circumstances" `[PARTIAL: read the --no-requeue,
    --requeue, --kill-on-invalid-dep and --dependency entries; missing the rest of the
    page]`; the manual notes that a site's `ForceRequeueOnFail` prolog flag overrides it).
-2. **(There is no step 2 any more.)** The gate job per run was removed; the step number is
+2. **(Removed; the other steps keep their numbers.)** The gate job per run was removed; the step number is
    kept so that the numbering of the steps below, and the scripts' own comments, stay
    what they were.
 3. **The ladder**: per run and dataset, the rungs are 16, 64, 256 and 512 GB at 4 CPUs,

@@ -85,12 +85,12 @@ clean-test:
 	@echo "Test artifacts cleaned"
 
 # regbench, the official benchmarking harness (benchmarks/regbench/README.md).
-# REGBENCH_STARE_SRC: a STARE source tree that has the stare-prep-mosaic modules the
-# benchmark tests import; override it for another checkout.
-REGBENCH_STARE_SRC ?= /Users/valer/Desktop/Github/packages/stare-prep-mosaic/src
+# REGBENCH_STARE_SRC (empty by default): set it to a stare-prep-mosaic checkout's src
+# folder when the installed stare predates 1.3.0; it is then put on PYTHONPATH.
+REGBENCH_STARE_SRC ?=
 
 regbench-test:
-	PYTHONPATH=$(REGBENCH_STARE_SRC) python -m pytest benchmarks/tests -q -p no:cacheprovider
+	$(if $(REGBENCH_STARE_SRC),PYTHONPATH=$(REGBENCH_STARE_SRC) )python -m pytest benchmarks/tests -q -p no:cacheprovider
 
 regbench-runs:
 	python -m benchmarks.regbench runs

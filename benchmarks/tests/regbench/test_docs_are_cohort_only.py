@@ -38,9 +38,18 @@ FORBIDDEN = (
     "REGBENCH_SELFCHECK_ADVISORY",
     "REGBENCH_ALLOW_UNCHECKED",
     "gate.sbatch",
+    "prep.py",
+    "stare_prep",
+    "n_not_run_or_blocked",
+    "TUNING",
+    "NO_BRIGHTFIELD",
+    "logs/gates",
 )
 # only in a sentence that says it was removed
 REMOVED_ONLY = ("ANHIR",)
+# only in a sentence that records a rename or the back-compatible variable
+RENAMED_ONLY = ("arms_manifest",)
+RENAME_MARKERS = ("REGBENCH_MANIFEST", "renamed")
 REMOVED_SECTION = "## Removed harnesses"
 
 sys.path.insert(0, str(REPO / "tests"))
@@ -89,6 +98,17 @@ def test_a_removed_name_is_only_in_a_sentence_that_says_so(path, term):
             assert "removed" in sentence.lower(), (
                 f"{path.relative_to(REPO)}: {term!r} outside a sentence that says it was "
                 f"removed: {sentence[:160]!r}"
+            )
+
+
+@pytest.mark.parametrize("path", DOCS, ids=lambda p: p.name)
+@pytest.mark.parametrize("term", RENAMED_ONLY)
+def test_a_renamed_module_is_only_named_in_a_rename_sentence(path, term):
+    for sentence in _sentences(_visible(path)):
+        if term in sentence:
+            assert any(m in sentence for m in RENAME_MARKERS), (
+                f"{path.relative_to(REPO)}: {term!r} outside a sentence that names "
+                f"REGBENCH_MANIFEST or says renamed: {sentence[:160]!r}"
             )
 
 
